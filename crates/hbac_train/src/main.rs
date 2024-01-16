@@ -1,3 +1,4 @@
+extern crate tensorflow;
 use tensorflow::{Graph, SavedModelBundle, SessionOptions, SessionRunArgs, Tensor};
 use std::env;
 

@@ -1,4 +1,5 @@
 [target.x86_64-unknown-linux-gnu]
+image = "tensorflow/tensorflow:devel-gpu"
 pre-build = [
-    "apt -y install libssl-dev"
+    "apt update && apt -y install libssl-dev"
 ]
