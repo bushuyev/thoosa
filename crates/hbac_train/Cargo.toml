@@ -5,7 +5,8 @@ edition = "2021"
 
 
 [dependencies]
-burn = {version = "0.11.1", default-features = false, features = ["train", "tch", "cuda"]}
+tch = { version = "0.14.0" }
 
 
 serde = "1"
+anyhow = "1.0.79"
