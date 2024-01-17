@@ -1,0 +1,9 @@
+[target.x86_64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu"
+pre-build = [
+    "apt update && apt -y install libssl-dev && ls /libtorch"
+]
+volumes = [ "/libtorch=/home/bu/dvl/torch/libtorch-2.1.0/"]
+
+[build.env]
+passthrough = ["LIBTORCH=/libtorch/", "LIBTORCH_INCLUDE=/libtorch"]

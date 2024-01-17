@@ -27,7 +27,7 @@ fn main() -> Result<(), GenError>{
 
 
     // let df = LazyFrame::scan_parquet("../data/train.csv", ScanArgsParquet::default())?
-    let df = LazyCsvReader::new("../../../data/train.csv").finish()?
+    let df = LazyCsvReader::new("../../data/train.csv").finish()?
         .with_streaming(true)
         // .group_by([col("eeg_id")])
         // .agg([col("patient_id").count().alias("patient_id counts"), col("patient_id").unique().count().alias("unique patient_id count")])
@@ -43,6 +43,7 @@ fn main() -> Result<(), GenError>{
     for (eeg_id, eeg_label_offset_seconds) in df.column("eeg_id")?.i64()?.into_iter().zip(df.column("eeg_label_offset_seconds")?
         .list()?
         .into_iter())
+        .take(3)
         .map(|(eeg_id, max_eeg_label_offset_seconds)| (eeg_id.unwrap_or_default(), max_eeg_label_offset_seconds.unwrap_or_default())) {
 
             for offset in eeg_label_offset_seconds.f64()? {
