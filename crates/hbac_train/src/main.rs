@@ -1,13 +1,8 @@
-use tch::nn::{Module, OptimizerConfig};
+use tch::nn::{ConvConfig, Module, OptimizerConfig};
 use tch::{kind, nn, Device, Tensor, Kind};
 use tch::data::TextData;
 use tch::TchError::Torch;
 
-fn my_module(p: nn::Path, dim: i64) -> impl nn::Module {
-    let x1 = p.randn("x1", &[dim], 1.0, 5.0);
-    let x2 = p.randn("x2", &[dim], 1.0, 5.0);
-    nn::func(move |xs| xs * &x1 + xs.exp() * &x2)
-}
 
 fn net(vs: &nn::Path) -> impl Module {
 
@@ -75,4 +70,186 @@ fn load_batch(device: Device, batch_size:i64) -> (Tensor, Tensor) {
     tch::Tensor::randn([batch_size, 50 * 200, 20], (Kind::Float, device)), //batch, 20 EEG feats, 50 sec * 200 samples per second,
     tch::Tensor::randn([batch_size, 6], (Kind::Float, device)) //batch, seizure_vote,lpd_vote,gpd_vote, lrda_vote, grda_vote,other_vote, 50 sec * 200 samples per second,
     )
+}
+
+
+
+pub enum Node {
+    Seq {elts: Vec<Node>},
+    Conv {kernel: i64, config: ConvConfig},
+    BatchNorm {num_features: i64},
+    MaxPool { kernel_size:i64, stride:i64, padding:i64}
+}
+
+#[derive(Debug)]
+struct SeqBuilder {
+    elts: Vec<Node>
+}
+
+impl SeqBuilder {
+    pub fn new() -> Self {
+        Self {
+            elts: vec![]
+        }
+    }
+
+    pub fn seq(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn end_seq(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn batch_norm(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn conv(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn max_pool(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn avg_pool(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn dropout(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn linear(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn func<F>(&mut self, func: F) -> &mut Self
+        where F: for<'a> FnMut(&Tensor) -> Tensor {
+        self
+    }
+
+    pub fn n_blocks<F>(&mut self, mut block: F, n:usize) -> &mut Self
+        where F: for <'a> FnMut(&'a mut SeqBuilder) {
+
+        for _ in 0..n {
+            block(self);
+        }
+
+        self
+    }
+
+    pub fn block<F>(&mut self, mut block:F) -> &mut Self
+        where F: for <'a> FnMut(&'a mut SeqBuilder) {
+
+        block(self);
+
+        self
+    }
+
+    pub fn end(&mut self) {
+
+    }
+}
+
+pub fn configure_dense(){
+    let mut builder = crate::SeqBuilder::new();
+
+    let dense_block = |b:&mut SeqBuilder| b
+        .n_blocks(
+    |b:&mut SeqBuilder| b
+                .func(|t|t.elu())
+                .conv()
+                .func(|t|t.elu())
+                .conv()
+                .end(),
+        4)
+        .end();
+
+
+    builder
+        .conv()
+        .func(|t|t.elu())
+        .max_pool()
+        .n_blocks(|b:&mut SeqBuilder| b
+            .block(dense_block)
+            .block(|b:&mut SeqBuilder| b
+                .func(|t|t.elu())
+                .conv()
+                .func(|t|t.elu())
+                .conv()
+                .end())
+            .end(), 4)
+        .block(dense_block)
+        .func(|t|t.relu())
+        .avg_pool()
+        .dropout()
+        .linear()
+        .end();
+
+
+    // println!("x={:?}", (x)(&mut builder));
+
+}
+
+//https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
+pub fn conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
+    (l_in + 2 * c.padding - c.dilation * (k -1 ) -1)/c.stride +1
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use tch::{kind, Tensor};
+    use tch::nn::ConvConfig;
+    use crate::{configure_dense, conv1d_out};
+
+    #[test]
+    pub fn test_conv1_out(){
+        let l_out = conv1d_out(50 * 200, 5, ConvConfig::default());
+
+        assert_eq!(l_out, 9996);
+    }
+
+    #[test]
+    pub fn test_configure_dense(){
+        configure_dense()
+    }
+
+    #[test]
+    pub fn test_seq_in_seq(){
+        crate::SeqBuilder::new().
+            seq()
+                .seq()
+                .linear()
+                .end_seq()
+                .seq()
+                .linear()
+                .end_seq()
+            .end_seq();
+    }
+
+    pub fn test_test(){
+        println!("ZZZZZZZZZZZZZZZZZZB");
+
+        let t1 = Tensor::from_slice(&[4., 6.]);
+        let t2 = Tensor::from_slice(&[15., 5.]);
+
+        let t_stack = Tensor::stack(&[t1.copy(), t2.copy()], 0);
+        let t_column_stack = Tensor::column_stack(&[t1.copy(), t2.copy()]);
+        let t_vstack = Tensor::vstack(&[t1.copy(), t2.copy()]);
+
+
+        println!("t1={:?}, t2={:?}, t_stack={:?} t_column_stack={:?} t_vstack={:?}", t1, t2, t_stack, t_column_stack, t_vstack);
+        t_stack.print();
+        println!("t_stack mean={:?}", t_stack.mean_dim(1, false, kind::Kind::Float));
+
+        t_column_stack.print();
+        println!("t_column_stack mean={:?}", t_column_stack.mean_dim(1, false, kind::Kind::Float));
+
+        t_vstack.print();
+        println!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
+    }
 }
