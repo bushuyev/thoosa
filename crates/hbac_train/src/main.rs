@@ -1,7 +1,10 @@
-use tch::nn::{ConvConfig, Module, OptimizerConfig};
+mod my_tch;
+
+use tch::nn::{ConvConfig, LinearConfig, Module, OptimizerConfig, Sequential};
 use tch::{kind, nn, Device, Tensor, Kind};
 use tch::data::TextData;
 use tch::TchError::Torch;
+use crate::my_tch::MySequential;
 
 
 fn net(vs: &nn::Path) -> impl Module {
@@ -73,35 +76,83 @@ fn load_batch(device: Device, batch_size:i64) -> (Tensor, Tensor) {
 }
 
 
-
+#[derive(Debug)]
 pub enum Node {
     Seq {elts: Vec<Node>},
     Conv {kernel: i64, config: ConvConfig},
     BatchNorm {num_features: i64},
+    Linear {num_features: i64},
     MaxPool { kernel_size:i64, stride:i64, padding:i64}
 }
 
+
+impl Node {
+
+    pub fn build_tch_module(&self, vs: &nn::Path) -> Box<dyn Module>  {
+        match self {
+            Node::Seq { elts } => {
+
+                let layers:Vec<Box<dyn Module>> = elts.iter().fold(Vec::new(), |mut kids, node| {
+                    kids.push(node.build_tch_module(vs));
+                    kids
+                });
+
+
+
+                Box::new(MySequential::new(layers))
+
+            }
+            Node::Conv { .. } => {
+                todo!()
+            }
+            Node::BatchNorm { .. } => {
+                todo!()
+            }
+            Node::Linear { num_features } => {
+                Box::new(nn::linear(vs/ "layer1", *num_features, *num_features, LinearConfig::default()))
+            }
+            Node::MaxPool { .. } => {
+                todo!()
+            }
+        }
+    }
+}
+
+
 #[derive(Debug)]
 struct SeqBuilder {
+    num_features:i64,
     elts: Vec<Node>
 }
 
 impl SeqBuilder {
-    pub fn new() -> Self {
+    pub fn new(num_features:i64) -> Self {
         Self {
+            num_features,
             elts: vec![]
         }
     }
 
-    pub fn seq(&mut self) -> &mut Self {
+    pub fn split<F, G>(&mut self, seq_1:Node, seq_2:Node, split_f:F, glue_f:G) -> &mut Self
+        where F: for<'a> FnMut(&Tensor) -> Tensor,
+              G: for<'a> FnMut(&Tensor) -> Tensor {
         self
     }
 
-    pub fn end_seq(&mut self) -> &mut Self {
-        self
+    pub fn end_seq(&mut self) -> Node {
+        let mut elts = Vec::new();
+
+        std::mem::swap(&mut elts, &mut self.elts);
+
+        Node::Seq {
+            elts
+        }
     }
 
     pub fn batch_norm(&mut self) -> &mut Self {
+        self.elts.push(
+            Node::BatchNorm {num_features:self.num_features}
+        );
         self
     }
 
@@ -122,6 +173,9 @@ impl SeqBuilder {
     }
 
     pub fn linear(&mut self) -> &mut Self {
+        self.elts.push(
+            Node::Linear {num_features:self.num_features}
+        );
         self
     }
 
@@ -154,7 +208,7 @@ impl SeqBuilder {
 }
 
 pub fn configure_dense(){
-    let mut builder = crate::SeqBuilder::new();
+    let mut builder = crate::SeqBuilder::new(10);
 
     let dense_block = |b:&mut SeqBuilder| b
         .n_blocks(
@@ -202,9 +256,9 @@ pub fn conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use tch::{kind, Tensor};
-    use tch::nn::ConvConfig;
-    use crate::{configure_dense, conv1d_out};
+    use tch::{Device, kind, Kind, nn, Tensor};
+    use tch::nn::{ConvConfig, Module};
+    use crate::{configure_dense, conv1d_out, SeqBuilder};
 
     #[test]
     pub fn test_conv1_out(){
@@ -214,21 +268,43 @@ mod tests {
     }
 
     #[test]
+    pub fn test_seq_linear(){
+        let seq = SeqBuilder::new(2)
+            .linear()
+            .end_seq();
+
+        let vs = nn::VarStore::new(Device::Cpu);
+
+        let net = seq.build_tch_module(&vs.root());
+
+        let y_p = net.forward(&tch::Tensor::randn([10, 2], (Kind::Float, Device::Cpu)));
+
+        y_p.print()
+    }
+
+    #[test]
     pub fn test_configure_dense(){
         configure_dense()
     }
 
     #[test]
-    pub fn test_seq_in_seq(){
-        crate::SeqBuilder::new().
-            seq()
-                .seq()
+    pub fn test_res_seq(){
+        let res_seq = SeqBuilder::new(10)
                 .linear()
-                .end_seq()
-                .seq()
-                .linear()
-                .end_seq()
+                .end_seq();
+
+        let conv_seq = SeqBuilder::new(10)
+            .conv()
             .end_seq();
+
+        let main = SeqBuilder::new(10)
+            .split(
+                res_seq,
+                conv_seq,
+                |t|t.copy(),
+                |t|t.copy()
+            ).end_seq();
+
     }
 
     pub fn test_test(){
