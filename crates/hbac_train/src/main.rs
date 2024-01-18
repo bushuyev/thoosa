@@ -36,7 +36,19 @@ fn main() {
 
 
     let vs = nn::VarStore::new(device);
-    let net = net(&vs.root());
+
+    let nth_params = NthConst::new(1000);
+
+    let lin_block = |b: &mut SeqBuilder, i| b
+            .linear_p(i, &nth_params)
+            .end();
+
+    let seq = SeqBuilder::new(10000)
+        .n_blocks(lin_block, 3)
+        .linear_s(6)
+        .end_seq();
+    let net = seq.build_tch_module(&vs.root());
+    // let net = nn::seq().add(nn::linear(vs.root()/ "layer1",10000, 6, LinearConfig::default()));
 
     let mut opt = nn::Sgd::default().build(&vs, 1e-2).unwrap();
 
@@ -81,9 +93,34 @@ pub enum Node {
     Seq {elts: Vec<Node>},
     Conv {kernel: i64, config: ConvConfig},
     BatchNorm {num_features: i64},
-    Linear {num_features: i64},
+    Linear { in_feats: i64, out_feats: i64},
     MaxPool { kernel_size:i64, stride:i64, padding:i64}
 }
+
+trait NthParams {
+    type Params;
+    fn on_nth_layer(&self, i:usize)->Self::Params;
+}
+
+struct NthConst {
+    n:i64
+}
+
+impl NthConst {
+    pub fn new(n: i64) -> Self {
+        Self { n }
+    }
+}
+
+
+impl NthParams for NthConst {
+    type Params = i64;
+
+    fn on_nth_layer(&self, i: usize) -> i64 {
+        self.n
+    }
+}
+
 
 
 impl Node {
@@ -108,8 +145,8 @@ impl Node {
             Node::BatchNorm { .. } => {
                 todo!()
             }
-            Node::Linear { num_features } => {
-                Box::new(nn::linear(vs/ "layer1", *num_features, *num_features, LinearConfig::default()))
+            Node::Linear {in_feats, out_feats} => {
+                Box::new(nn::linear(vs/ "layer1", *in_feats, *out_feats, LinearConfig::default()))
             }
             Node::MaxPool { .. } => {
                 todo!()
@@ -174,8 +211,27 @@ impl SeqBuilder {
 
     pub fn linear(&mut self) -> &mut Self {
         self.elts.push(
-            Node::Linear {num_features:self.num_features}
+            Node::Linear { in_feats:self.num_features, out_feats:self.num_features}
         );
+        self
+    }
+
+    pub fn linear_s(&mut self, out_feats:i64) -> &mut Self {
+        self.elts.push(
+            Node::Linear { in_feats:self.num_features, out_feats}
+        );
+        self.num_features = out_feats;
+
+        self
+    }
+
+    pub fn linear_p(&mut self, n:usize, p:&impl NthParams<Params=i64>) -> &mut Self {
+        let out_feats = p.on_nth_layer(n);
+        self.elts.push(
+            Node::Linear { in_feats:self.num_features, out_feats}
+        );
+        self.num_features = out_feats;
+
         self
     }
 
@@ -185,10 +241,10 @@ impl SeqBuilder {
     }
 
     pub fn n_blocks<F>(&mut self, mut block: F, n:usize) -> &mut Self
-        where F: for <'a> FnMut(&'a mut SeqBuilder) {
+        where F: for <'a> FnMut(&'a mut SeqBuilder, usize) {
 
-        for _ in 0..n {
-            block(self);
+        for i in 0..n {
+            block(self, i);
         }
 
         self
@@ -212,7 +268,7 @@ pub fn configure_dense(){
 
     let dense_block = |b:&mut SeqBuilder| b
         .n_blocks(
-    |b:&mut SeqBuilder| b
+    |b:&mut SeqBuilder, i| b
                 .func(|t|t.elu())
                 .conv()
                 .func(|t|t.elu())
@@ -226,7 +282,7 @@ pub fn configure_dense(){
         .conv()
         .func(|t|t.elu())
         .max_pool()
-        .n_blocks(|b:&mut SeqBuilder| b
+        .n_blocks(|b:&mut SeqBuilder, i| b
             .block(dense_block)
             .block(|b:&mut SeqBuilder| b
                 .func(|t|t.elu())
