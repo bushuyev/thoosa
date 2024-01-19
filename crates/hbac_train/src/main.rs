@@ -1,11 +1,11 @@
 mod my_tch;
 
 use tch::nn::{ConvConfig, LinearConfig, Module, OptimizerConfig, Sequential};
-use tch::{kind, nn, Device, Tensor, Kind};
+use tch::{kind, nn, Device, Tensor, Kind, Reduction, no_grad};
 use tch::data::TextData;
 use tch::TchError::Torch;
 use crate::my_tch::MySequential;
-
+use plotters::prelude::*;
 
 fn net(vs: &nn::Path) -> impl Module {
 
@@ -24,36 +24,110 @@ fn net(vs: &nn::Path) -> impl Module {
 }
 
 
-fn main() {
-    let device = if tch::utils::has_cuda() {
-        Device::Cuda(0)
-    } else {
-        Device::Cpu
-    };
+fn train_x2(device:&Device) {
+    println!("test_x2device={:?}", device);
+    const BATCH_SIZE: i64 = 10i64;
+
+
+    let vs = nn::VarStore::new(device.clone());
+
+    let nth_params = NthConst::new(100);
+
+    let lin_block = |b: &mut SeqBuilder, i| b
+        .linear_p(i, &nth_params)
+        .func(|t|t.elu())
+        .end();
+
+    let seq = SeqBuilder::new(1000)
+        .n_blocks(lin_block, 3)
+        .linear_s(1000)
+        .end_seq();
+    let model = seq.build_tch_module(&vs.root());
+
+    let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
+
+    let x_t = Tensor::from_slice(&(0..1000).map(|v|v as f32).collect::<Vec<f32>>()[..]).to_device(*device);
+    let y_t = x_t.pow_tensor_scalar(2.);
+
+    println!("x_tx_t.device={:?}", x_t.device());
+    println!("y_t.device={:?}", y_t.device());
+
+    // x_t.print();
+    // y_t.print();
+
+    for idx in 1..10_000 {
+        // let (x_t, y_t) = load_batch(device, BATCH_SIZE);
+
+        let pred_y = model.forward(&x_t);
+
+        // println!("pred_y.device={:?}", pred_y.device());
+
+        let loss = pred_y.huber_loss(&y_t, Reduction::Mean, 1.0).sum(kind::Kind::Float);
+
+        opt.backward_step(&loss);
+
+        if idx % 100 == 0 {
+            print!(".");
+        }
+    }
+
+
+
+    no_grad(|| {
+        let y_pred = model.forward(&x_t);
+
+        let pred = x_t.iter::<f64>().unwrap().zip(
+            y_pred.iter::<f64>().unwrap()
+        ).map(|(x, y)|(x as f32, y as f32)).collect::<Vec<(f32, f32)>>();
+
+        let test = x_t.iter::<f64>().unwrap().zip(
+            y_t.iter::<f64>().unwrap()
+        ).map(|(x, y)|(x as f32, y as f32)).collect::<Vec<(f32, f32)>>();
+
+        // println!("test={:?}", test);
+        // println!("pred={:?}", pred);
+
+        plot(
+            vec![
+                ("pred".into(), RED, pred),
+                ("test".into(), GREEN, test),
+            ]
+        ).unwrap();
+    })
+
+}
+
+//
+// plot(
+//     vec![
+//         ("x2".into(), RED,  (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x)).collect::<Vec<(f32, f32)>>()),
+//         ("x3".into(), GREEN, (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x * x)).collect::<Vec<(f32, f32)>>())
+//     ]
+// ).unwrap();
+
+fn train_dense(device:&Device){
 
     println!("device={:?}", device);
     const BATCH_SIZE: i64 = 10i64;
 
 
-    let vs = nn::VarStore::new(device);
+    let vs = nn::VarStore::new(device.clone());
 
-    let nth_params = NthConst::new(1000);
-
-    let lin_block = |b: &mut SeqBuilder, i| b
-            .linear_p(i, &nth_params)
-            .end();
-
-    let seq = SeqBuilder::new(10000)
-        .n_blocks(lin_block, 3)
-        .linear_s(6)
-        .end_seq();
-    let net = seq.build_tch_module(&vs.root());
-    // let net = nn::seq().add(nn::linear(vs.root()/ "layer1",10000, 6, LinearConfig::default()));
+    // let nth_params = NthConst::new(1000);
+    //
+    // let lin_block = |b: &mut SeqBuilder, i| b
+    //     .linear_p(i, &nth_params)
+    //     .end();
+    //
+    // let seq = SeqBuilder::new(10000)
+    //     .n_blocks(lin_block, 3)
+    //     .linear_s(6)
+    //     .end_seq();
+    let net = configure_dense(10, 4, 4, 5).build_tch_module(&vs.root());
 
     let mut opt = nn::Sgd::default().build(&vs, 1e-2).unwrap();
 
     for idx in 1..2 {
-        // Dummy mini-batches made of zeros.
         let (x_t, y_t) = load_batch(device, BATCH_SIZE);
 
         let pred_y = net.forward(&x_t.transpose(1, 2));
@@ -66,12 +140,76 @@ fn main() {
 
         let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
         opt.backward_step(&loss);
+        //
+        // if idx % 1000 == 0 {
+        //     println!("loss={:?}", loss);
+        // }
+    }
+}
 
-        if idx % 1000 == 0 {
-            println!("loss={:?}", loss);
+fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>) -> Result<(), Box<dyn std::error::Error>> {
+    
+    let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
+        if max_min.0 > *x {
+            max_min.0 = *x
         }
+        if max_min.1 < *x {
+            max_min.1 = *x
+        }
+
+        if max_min.2 > *y {
+            max_min.2 = *y
+        }
+        if max_min.3 < *y {
+            max_min.3 = *y
+        }
+
+        max_min
+    });
+
+
+    let root = BitMapBackend::new("0.png", (640, 480)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let mut chart = ChartBuilder::on(&root)
+        .caption("pred/test", ("sans-serif", 50).into_font())
+        .margin(5)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(min_x..max_x, min_y..max_y)?;
+
+    chart.configure_mesh().draw()?;
+
+    for (name, color, x_y) in name_x_y_vec {
+        chart
+            .draw_series(LineSeries::new(
+                x_y,
+                &color,
+            ))?
+            .label(name)
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
     }
 
+    chart
+        .configure_series_labels()
+        .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw()?;
+
+    root.present()?;
+
+    Ok(())
+}
+
+
+fn main() {
+    let device = if tch::utils::has_cuda() {
+        Device::Cuda(0)
+    } else {
+        Device::Cpu
+    };
+
+    // test_1(&device);
+    train_x2(&device);
 
     // gradient_descent();
 
@@ -80,10 +218,10 @@ fn main() {
 
 }
 
-fn load_batch(device: Device, batch_size:i64) -> (Tensor, Tensor) {
+fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
     (
-    tch::Tensor::randn([batch_size, 50 * 200, 20], (Kind::Float, device)), //batch, 20 EEG feats, 50 sec * 200 samples per second,
-    tch::Tensor::randn([batch_size, 6], (Kind::Float, device)) //batch, seizure_vote,lpd_vote,gpd_vote, lrda_vote, grda_vote,other_vote, 50 sec * 200 samples per second,
+    tch::Tensor::randn([batch_size, 50 * 200, 20], (Kind::Float, device.clone())), //batch, 20 EEG feats, 50 sec * 200 samples per second,
+    tch::Tensor::randn([batch_size, 6], (Kind::Float, device.clone())) //batch, seizure_vote,lpd_vote,gpd_vote, lrda_vote, grda_vote,other_vote, 50 sec * 200 samples per second,
     )
 }
 
@@ -91,7 +229,7 @@ fn load_batch(device: Device, batch_size:i64) -> (Tensor, Tensor) {
 #[derive(Debug)]
 pub enum Node {
     Seq {elts: Vec<Node>},
-    Conv {kernel: i64, config: ConvConfig},
+    Conv {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     BatchNorm {num_features: i64},
     Linear { in_feats: i64, out_feats: i64},
     MaxPool { kernel_size:i64, stride:i64, padding:i64}
@@ -134,13 +272,11 @@ impl Node {
                     kids
                 });
 
-
-
                 Box::new(MySequential::new(layers))
 
             }
-            Node::Conv { .. } => {
-                todo!()
+            Node::Conv { kernel, in_channels, out_channels, config} => {
+                Box::new(nn::conv1d(vs/ "cnn", *in_channels, *out_channels, *kernel, *config))
             }
             Node::BatchNorm { .. } => {
                 todo!()
@@ -193,7 +329,14 @@ impl SeqBuilder {
         self
     }
 
-    pub fn conv(&mut self) -> &mut Self {
+    pub fn conv(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
+
+        self.elts.push(
+            Node::Conv {kernel, in_channels, out_channels, config },
+        );
+
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config);
+
         self
     }
 
@@ -263,48 +406,45 @@ impl SeqBuilder {
     }
 }
 
-pub fn configure_dense(){
-    let mut builder = crate::SeqBuilder::new(10);
+pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64) -> Node {
+    let mut builder = crate::SeqBuilder::new(num_features);
 
     let dense_block = |b:&mut SeqBuilder| b
         .n_blocks(
     |b:&mut SeqBuilder, i| b
                 .func(|t|t.elu())
-                .conv()
+                .conv(kernel, kernel, kernel, ConvConfig::default())
                 .func(|t|t.elu())
-                .conv()
+                .conv(kernel, kernel, kernel, ConvConfig::default())
                 .end(),
-        4)
+    num_layers_in_block)
         .end();
 
 
     builder
-        .conv()
+        .conv(kernel, kernel, kernel, ConvConfig::default())
         .func(|t|t.elu())
         .max_pool()
         .n_blocks(|b:&mut SeqBuilder, i| b
             .block(dense_block)
             .block(|b:&mut SeqBuilder| b
                 .func(|t|t.elu())
-                .conv()
+                .conv(kernel, kernel, kernel, ConvConfig::default())
                 .func(|t|t.elu())
-                .conv()
+                .conv(kernel, kernel, kernel, ConvConfig::default())
                 .end())
-            .end(), 4)
+            .end(), num_blocks)
         .block(dense_block)
         .func(|t|t.relu())
         .avg_pool()
         .dropout()
         .linear()
-        .end();
-
-
-    // println!("x={:?}", (x)(&mut builder));
+        .end_seq()
 
 }
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
+pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
     (l_in + 2 * c.padding - c.dilation * (k -1 ) -1)/c.stride +1
 }
 
@@ -314,11 +454,11 @@ pub fn conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
 mod tests {
     use tch::{Device, kind, Kind, nn, Tensor};
     use tch::nn::{ConvConfig, Module};
-    use crate::{configure_dense, conv1d_out, SeqBuilder};
+    use crate::{configure_dense, clc_conv1d_out, SeqBuilder};
 
     #[test]
     pub fn test_conv1_out(){
-        let l_out = conv1d_out(50 * 200, 5, ConvConfig::default());
+        let l_out = clc_conv1d_out(50 * 200, 5, ConvConfig::default());
 
         assert_eq!(l_out, 9996);
     }
@@ -340,7 +480,13 @@ mod tests {
 
     #[test]
     pub fn test_configure_dense(){
-        configure_dense()
+        let vs = nn::VarStore::new(Device::Cpu);
+
+        let model = configure_dense(1000, 4, 4, 20).build_tch_module(&vs.root());
+
+        let _ = model.forward(
+            &Tensor::randn([10, 20, 1000], (Kind::Float, Device::Cpu)) //batch, channels, L in
+        );
     }
 
     #[test]
@@ -350,7 +496,7 @@ mod tests {
                 .end_seq();
 
         let conv_seq = SeqBuilder::new(10)
-            .conv()
+            .conv(5, 5, 5, ConvConfig::default())
             .end_seq();
 
         let main = SeqBuilder::new(10)
@@ -363,6 +509,7 @@ mod tests {
 
     }
 
+    #[test]
     pub fn test_test(){
         println!("ZZZZZZZZZZZZZZZZZZB");
 

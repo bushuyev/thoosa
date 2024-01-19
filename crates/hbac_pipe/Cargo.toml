@@ -6,4 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-polars = { version = "0.36.2", features = ["lazy", "parquet", "csv", "streaming"] }
+polars = { version = "0.36.2", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random"] }
+ctor = "0.2.6"
+tch = { version = "0.14.0" }
+torch-sys = "0.14.0"
