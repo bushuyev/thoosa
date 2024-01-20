@@ -15,7 +15,7 @@ use std::time::Instant;
 use tch::Tensor;
 
 #[derive(Debug)]
-struct GenError {}
+pub struct GenError {}
 
 impl GenError {
     pub fn new() -> Self {
@@ -53,18 +53,21 @@ impl EEGs {
         })
     }
 
-    pub fn load_eegs(&self) -> Result<(), GenError> {
+    pub fn load_eegs(&self) -> Result<Box<Vec<Tensor>>, GenError> {
         let gr_by_eeg_id_df = self
             .df
             .clone()
             .collect()?
-            .sample_n(&Series::new("n", [100_000]), false, true, None)?
+            // .sample_n(&Series::new("n", [100_000]), false, true, None)?
             .lazy()
             .group_by([col("eeg_id")])
             .agg([col("eeg_label_offset_seconds").alias("eeg_label_offset_seconds")])
             .collect()?;
 
-        let mut tensors = Box::new(vec![]);
+        println!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
+
+        let mut tensors = Box::new(Vec::with_capacity(gr_by_eeg_id_df.shape().0));
+
         for (eeg_id, eeg_label_offset_seconds) in gr_by_eeg_id_df
             .column("eeg_id")?
             .i64()?
@@ -79,54 +82,58 @@ impl EEGs {
         {
             // println!("eeg_label_offset_seconds ={:?}", eeg_label_offset_seconds);
 
-            let id_expr = col("id");
+            // let id_expr = col("id");
+            //
+            // let filter_exps = arr_to_expr(
+            //     id_expr,
+            //     eeg_label_offset_seconds
+            //         .f64()?
+            //         .into_iter()
+            //         .map(|v| v.expect("no id :(") as u32)
+            //         .collect::<Vec<u32>>(),
+            //     50 * 200,
+            // );
 
-            let filter_exps = arr_to_expr(
-                id_expr,
-                eeg_label_offset_seconds
-                    .f64()?
-                    .into_iter()
-                    .map(|v| v.expect("no id :(") as u32)
-                    .collect::<Vec<u32>>(),
-                50 * 200,
-            );
+            let mut scan_conf = ScanArgsParquet::default();
+            // scan_conf.cache = false;
 
             let eeg_df = LazyFrame::scan_parquet(
                 format!("{}/train_eegs/{}.parquet", self.base_path, eeg_id),
-                ScanArgsParquet::default(),
+                scan_conf,
             )
-            .unwrap();
+                .unwrap();
             let df = eeg_df
-                .with_row_count("id", None)
-                .filter(filter_exps)
+                // .with_row_count("id", None)
+                // .filter(filter_exps)
                 .collect()?;
 
-            // println!("df={:?}", df.shape());
+            let mut column_tensors = Vec::with_capacity(df.shape().0);
 
             for s in df.get_columns() {
+
                 match s.dtype(){
                     DataType::Boolean => {}
                     DataType::UInt8 => {}
                     DataType::UInt16 => {}
                     DataType::UInt32 => {
-                        tensors.push(Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
+                        column_tensors.push(Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
                     }
                     DataType::UInt64 => {
-                        tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<i64>>().as_slice()));
+                        column_tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
                     }
                     DataType::Int8 => {}
                     DataType::Int16 => {}
                     DataType::Int32 => {
-                        tensors.push(Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
+                        column_tensors.push(Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
                     }
                     DataType::Int64 => {
                         // tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<i64>>().as_slice()));
                     }
                     DataType::Float32 => {
-                        tensors.push(Tensor::from_slice(s.f32()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f32>>().as_slice()));
+                        column_tensors.push(Tensor::from_slice(s.f32()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f32>>().as_slice()));
                     }
                     DataType::Float64 => {
-                        tensors.push(Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f64>>().as_slice()));
+                        column_tensors.push(Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default() as f32).collect::<Vec<f32>>().as_slice()));
                     }
                     // DataType::Decimal(_, _) => {}
                     DataType::String => {}
@@ -146,20 +153,23 @@ impl EEGs {
                 // t.print()
 
             }
+
+            tensors.push(Tensor::stack(column_tensors.as_slice(), 0));
+
             print!(".");
         }
 
-        println!("tensors.len={}", tensors.len());
+        println!("tensors.len={}  size of tensors {}", tensors.len(),  std::mem::size_of_val(&*tensors));
 
-        Ok(())
+        Ok(tensors)
     }
 }
 
 fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
-where
-    T: IntoIterator<Item = X>,
-    X: Add + Into<Expr> + Copy,
-    Expr: From<<X as Add>::Output>,
+    where
+        T: IntoIterator<Item = X>,
+        X: Add + Into<Expr> + Copy,
+        Expr: From<<X as Add>::Output>,
 {
     iter.into_iter()
         .fold(None, |mut expr_op: Option<Expr>, v| {
@@ -181,7 +191,9 @@ fn main() -> Result<(), GenError> {
     let t1 = Instant::now();
     let eegs = EEGs::new("../../data")?;
 
-    println!("eegs={:?}", eegs.load_eegs());
+    let result = eegs.load_eegs()?;
+
+    println!("eegs={:?}", result.len());
 
     println!("done in {}", t1.elapsed().as_millis());
 
@@ -267,10 +279,16 @@ mod tests {
             "col2"  => (0..10).map(|i| i as f64 * 10.).collect::<Vec<f64>>(),
         )?;
 
-        for s in df.get_columns() {
-            let t = Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f64>>().as_slice());
-            t.print()
+        for field in df.clone().lazy().schema()?.iter_fields() {
+            println!("{:?}", field.name);
+            let column_df = df.clone().lazy().select(&[col(field.name.as_str())]).collect()?;
+            // column_df.column(field.name.as_str())?.f64().iter().collect();
         }
+
+        // for s in df.get_columns() {
+        //     let t = Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f64>>().as_slice());
+        //     t.print()
+        // }
 
 
 

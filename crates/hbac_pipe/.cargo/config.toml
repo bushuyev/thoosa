@@ -1,7 +1,0 @@
-[build]
-target = "x86_64-unknown-linux-gnu"
-
-
-[env]
-LIBTORCH="/home/bu/dvl/torch/libtorch-2.1.0"
-LIBTORCH_INCLUDE="/home/bu/dvl/torch/libtorch-2.1.0"

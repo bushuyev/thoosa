@@ -1,11 +1,16 @@
 mod my_tch;
+mod data;
 
+use std::time::Instant;
 use tch::nn::{ConvConfig, LinearConfig, Module, OptimizerConfig, Sequential};
 use tch::{kind, nn, Device, Tensor, Kind, Reduction, no_grad};
 use tch::data::TextData;
 use tch::TchError::Torch;
 use crate::my_tch::MySequential;
 use plotters::prelude::*;
+use crate::data::{EEGs, GenError};
+use std::env;
+
 
 fn net(vs: &nn::Path) -> impl Module {
 
@@ -201,20 +206,34 @@ fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>) -> Result<(), Bo
 }
 
 
-fn main() {
+fn main() -> Result<(), GenError> {
+    let args: Vec<String> = env::args().collect();
+    let base_path = args.get(1).map(|s|s.as_str()).unwrap_or("../../data");
+
     let device = if tch::utils::has_cuda() {
         Device::Cuda(0)
     } else {
         Device::Cpu
     };
 
+    println!("device={:?}, base_path={:?}", device, base_path);
+
+
     // test_1(&device);
-    train_x2(&device);
+    // train_x2(&device);
 
     // gradient_descent();
+    let t1 = Instant::now();
+    let eegs = EEGs::new(base_path)?;
+
+    let result = eegs.load_eegs()?;
+
+    println!("eegs={:?}", result.len());
+
+    println!("done in {}", t1.elapsed().as_millis());
 
 
-    println!("Ok")
+    Ok(())
 
 }
 
