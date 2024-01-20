@@ -276,10 +276,10 @@ mod tests {
         )?;
 
         let rows_in_sec = 1;
-        let mut offsets_sec = vec![0, 3, 8];
+        let mut offsets_sec = vec![0i64, 3i64, 8i64];
 
 
-        let frames = split_frame_by_offsets(df, &mut offsets_sec);
+        let frames = split_frame_by_offsets(df, offsets_sec.into_iter());
 
         for frame in frames {
             println!("frame={:?}", frame);
@@ -305,13 +305,23 @@ mod tests {
         Ok(())
     }
 
-    fn split_frame_by_offsets(mut df: DataFrame, offsets_sec: &mut Vec<usize>) -> PolarsResult<Vec<DataFrame>> {
-        offsets_sec.push(df.shape().0);
+    fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<Vec<DataFrame>> where I: IntoIterator<Item = i64> + Clone {
+        // offsets_sec.push(df.shape().0);
 
         // let offsets_diff = offsets_sec.windows(2).map(|w|w[1]-w[0]).collect::<Vec<usize>>();
 
+        let shape = df.shape();
+        let mut it_1 = offsets_sec.clone().into_iter();
+        let mut it_2 = offsets_sec.into_iter().chain(std::iter::once(shape.0 as i64));
+        it_2.next();
 
-        let ids = offsets_sec.windows(2).map(|w| w[1] - w[0]).into_iter().enumerate().flat_map(|(i, frag)| std::iter::repeat(i as i32).take(frag)).collect::<Vec<i32>>();
+        // let xxxxxx = it_2.zip(it_1).map(|(v2, v1)| v2-v1).collect::<Vec<i64>>();
+        //
+        // println!("xxxxxx={:?}", xxxxxx);
+
+
+        // let ids = offsets_sec.windows(2).map(|w| w[1] - w[0]).into_iter().enumerate().flat_map(|(i, frag)| std::iter::repeat(i as i32).take(frag)).collect::<Vec<i32>>();
+        let ids = it_2.zip(it_1).map(|(v2, v1)| v2-v1).enumerate().flat_map(|(i, frag)| std::iter::repeat(i as i64).take(frag as usize)).collect::<Vec<i64>>();
 
         println!("ids={:?}", ids);
 
