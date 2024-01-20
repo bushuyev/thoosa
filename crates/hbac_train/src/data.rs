@@ -1,17 +1,16 @@
 #![feature(vec_into_raw_parts)]
 
+use std::fmt::{Debug, Formatter};
+use std::ops::Add;
+use std::time::Instant;
+
 use polars::error::PolarsError;
 use polars::io::SerReader;
 use polars::prelude::*;
 use polars::prelude::{
-    col, count, CsvReader, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom,
+    col, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom,
     ScanArgsParquet, Series,
 };
-use polars::series::ops::*;
-use std::fmt::{Debug, Formatter};
-use std::ops::Add;
-use std::ops::ControlFlow;
-use std::time::Instant;
 use tch::Tensor;
 
 #[derive(Debug)]
@@ -44,6 +43,7 @@ impl Debug for EEGs {
 }
 
 impl EEGs {
+
     pub fn new(base_path: &str) -> Result<Self, GenError> {
         Ok(Self {
             df: LazyCsvReader::new(format!("{}/train.csv", base_path))
@@ -58,10 +58,11 @@ impl EEGs {
             .df
             .clone()
             .collect()?
-            // .sample_n(&Series::new("n", [100_000]), false, true, None)?
+            // .sample_n(&Series::new("n", [10]), false, true, None)?
             .lazy()
+            .top_k(10, [col("eeg_id")], [false], false, false)
             .group_by([col("eeg_id")])
-            .agg([col("eeg_label_offset_seconds").alias("eeg_label_offset_seconds")])
+            .agg([col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds")])
             .collect()?;
 
         println!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
@@ -80,19 +81,24 @@ impl EEGs {
                 )
             })
         {
-            // println!("eeg_label_offset_seconds ={:?}", eeg_label_offset_seconds);
 
-            // let id_expr = col("id");
-            //
+
+            let id_expr = col("id");
+
+            let fragments_in_mls = eeg_label_offset_seconds
+                .f64()?
+                .into_iter()
+                .map(|v| v.expect("no id :(") as u32 * 200)
+                .collect::<Vec<u32>>();
+
+
             // let filter_exps = arr_to_expr(
             //     id_expr,
-            //     eeg_label_offset_seconds
-            //         .f64()?
-            //         .into_iter()
-            //         .map(|v| v.expect("no id :(") as u32)
-            //         .collect::<Vec<u32>>(),
+            //     fragments_in_mls,
             //     50 * 200,
             // );
+
+            println!("eeg_id ={:?}, fragments_in_mls={:?}", eeg_id, fragments_in_mls);
 
             let mut scan_conf = ScanArgsParquet::default();
             // scan_conf.cache = false;
@@ -110,47 +116,7 @@ impl EEGs {
             let mut column_tensors = Vec::with_capacity(df.shape().0);
 
             for s in df.get_columns() {
-
-                match s.dtype(){
-                    DataType::Boolean => {}
-                    DataType::UInt8 => {}
-                    DataType::UInt16 => {}
-                    DataType::UInt32 => {
-                        column_tensors.push(Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
-                    }
-                    DataType::UInt64 => {
-                        column_tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
-                    }
-                    DataType::Int8 => {}
-                    DataType::Int16 => {}
-                    DataType::Int32 => {
-                        column_tensors.push(Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice()));
-                    }
-                    DataType::Int64 => {
-                        // tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<i64>>().as_slice()));
-                    }
-                    DataType::Float32 => {
-                        column_tensors.push(Tensor::from_slice(s.f32()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f32>>().as_slice()));
-                    }
-                    DataType::Float64 => {
-                        column_tensors.push(Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default() as f32).collect::<Vec<f32>>().as_slice()));
-                    }
-                    // DataType::Decimal(_, _) => {}
-                    DataType::String => {}
-                    DataType::Binary => {}
-                    DataType::Date => {}
-                    DataType::Datetime(_, _) => {}
-                    DataType::Duration(_) => {}
-                    DataType::Time => {}
-                    // DataType::Array(_, _) => {}
-                    DataType::List(_) => {}
-                    // DataType::Object(_, _) => {}
-                    DataType::Null => {}
-                    // DataType::Categorical(_, _) => {}
-                    // DataType::Struct(_) => {}
-                    DataType::Unknown => {}
-                }
-                // t.print()
+                column_tensors.push(series_to_tensor(s, )?);
 
             }
 
@@ -163,6 +129,37 @@ impl EEGs {
 
         Ok(tensors)
     }
+}
+
+fn series_to_tensor(s: &Series) ->  Result<Tensor, GenError> {
+    Ok(match s.dtype(){
+        // DataType::UInt8 => {}
+        // DataType::UInt16 => {}
+        DataType::UInt32 => {
+            Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())
+        }
+        DataType::UInt64 => {
+            Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())
+        }
+        // DataType::Int8 => {}
+        // DataType::Int16 => {}
+        DataType::Int32 => {
+            Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())
+        }
+        // DataType::Int64 => {
+        //     // tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<i64>>().as_slice()));
+        // }
+        DataType::Float32 => {
+            Tensor::from_slice(s.f32()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f32>>().as_slice())
+        }
+        DataType::Float64 => {
+            Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default() as f32).collect::<Vec<f32>>().as_slice())
+        }
+       _=>{
+           todo!()
+       }
+    })
+
 }
 
 fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
@@ -202,12 +199,10 @@ fn main() -> Result<(), GenError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{arr_to_expr, EEGs, GenError};
-    use ctor::*;
     use polars::prelude::*;
-    use polars::series::ops::*;
-    use tch::Tensor;
-    use torch_sys::C_tensor;
+
+    use crate::{EEGs, GenError};
+    use crate::data::arr_to_expr;
 
     #[ctor::ctor]
     fn init() {
@@ -274,16 +269,32 @@ mod tests {
 
     #[test]
     pub fn test_test() -> Result<(), GenError> {
+
         let mut df = df!(
             "col1"  => (0..10).map(|i| i as f64).collect::<Vec<f64>>(),
             "col2"  => (0..10).map(|i| i as f64 * 10.).collect::<Vec<f64>>(),
         )?;
 
-        for field in df.clone().lazy().schema()?.iter_fields() {
-            println!("{:?}", field.name);
-            let column_df = df.clone().lazy().select(&[col(field.name.as_str())]).collect()?;
-            // column_df.column(field.name.as_str())?.f64().iter().collect();
+        let rows_in_sec = 1;
+        let mut offsets_sec = vec![0, 3, 8];
+
+
+        let frames = split_frame_by_offsets(df, &mut offsets_sec);
+
+        for frame in frames {
+            println!("frame={:?}", frame);
         }
+
+
+        // let fragment_ids =
+
+        // df.with_row_count("id", None).partition_by("id");
+
+        // for field in df.clone().lazy().schema()?.iter_fields() {
+        //     println!("{:?}", field.name);
+        //     let column_df = df.clone().lazy().select(&[col(field.name.as_str())]).collect()?;
+        //     // column_df.column(field.name.as_str())?.f64().iter().collect();
+        // }
 
         // for s in df.get_columns() {
         //     let t = Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f64>>().as_slice());
@@ -291,7 +302,23 @@ mod tests {
         // }
 
 
-
         Ok(())
+    }
+
+    fn split_frame_by_offsets(mut df: DataFrame, offsets_sec: &mut Vec<usize>) -> PolarsResult<Vec<DataFrame>> {
+        offsets_sec.push(df.shape().0);
+
+        // let offsets_diff = offsets_sec.windows(2).map(|w|w[1]-w[0]).collect::<Vec<usize>>();
+
+
+        let ids = offsets_sec.windows(2).map(|w| w[1] - w[0]).into_iter().enumerate().flat_map(|(i, frag)| std::iter::repeat(i as i32).take(frag)).collect::<Vec<i32>>();
+
+        println!("ids={:?}", ids);
+
+        df.with_column(Series::from_vec("frag_id", ids));
+        // df.with_column(Series::from_vec("xxx", (0..10).map(|i| 2. * i as f64).collect::<Vec<f64>>()));
+        println!("df={:?}", df);
+
+         df.partition_by(&["frag_id"], false)
     }
 }

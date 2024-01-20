@@ -888,22 +888,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "hbac_pipe"
-version = "0.1.0"
-dependencies = [
- "ctor",
- "polars",
- "tch",
- "torch-sys",
-]
-
-[[package]]
 name = "hbac_train"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ctor",
- "hbac_pipe",
  "plotters",
  "polars",
  "serde",
