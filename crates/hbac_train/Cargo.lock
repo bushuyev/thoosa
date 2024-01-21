@@ -895,6 +895,7 @@ dependencies = [
  "ctor",
  "plotters",
  "polars",
+ "rand",
  "serde",
  "tch",
  "torch-sys",

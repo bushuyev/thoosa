@@ -110,10 +110,10 @@ fn train_x2(device:&Device) {
 //     ]
 // ).unwrap();
 
-fn train_dense(device:&Device){
+fn train_dense(device:&Device, eegs:Box<EEGs>){
 
     println!("device={:?}", device);
-    const BATCH_SIZE: i64 = 10i64;
+    const BATCH_SIZE: usize = 10usize;
 
 
     let vs = nn::VarStore::new(device.clone());
@@ -133,7 +133,7 @@ fn train_dense(device:&Device){
     let mut opt = nn::Sgd::default().build(&vs, 1e-2).unwrap();
 
     for idx in 1..2 {
-        let (x_t, y_t) = load_batch(device, BATCH_SIZE);
+        let (x_t, y_t) = eegs.batch_tensor(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
 
         let pred_y = net.forward(&x_t.transpose(1, 2));
         println!("pred_y: size={:?}", pred_y.size());
@@ -219,19 +219,15 @@ fn main() -> Result<(), GenError> {
     println!("device={:?}, base_path={:?}", device, base_path);
 
 
-    // test_1(&device);
-    // train_x2(&device);
-
-    // gradient_descent();
     let t1 = Instant::now();
-    let eegs = EEGs::new(base_path)?;
+    let eegs = EEGs::load_all_eegs(base_path)?;
 
-    let result = eegs.load_eegs()?;
 
-    println!("eegs={:?}", result.len());
+    println!("eegs={:?}", eegs.len());
 
     println!("done in {}", t1.elapsed().as_millis());
 
+    train_dense(&device, eegs);
 
     Ok(())
 
