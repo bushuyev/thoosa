@@ -17,7 +17,7 @@ use polars::prelude::{
 use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use rand::{Rng, thread_rng};
-use tch::Tensor;
+use tch::{Kind, Tensor};
 
 #[derive(Debug)]
 pub struct GenError {}
@@ -46,7 +46,7 @@ impl From<WeightedError> for GenError {
 
 #[derive(Debug)]
 pub struct EEG{
-    egg_map:HashMap<String, Vec<f32>>,
+    egg_map:Vec<Vec<f32>>,
     eeg_id: i64,
     fragments_rows: Vec<u32>,
     seizure_vote: u8,
@@ -58,7 +58,7 @@ pub struct EEG{
 }
 
 impl EEG {
-    pub fn new(egg_map:HashMap<String, Vec<f32>>, eeg_id:i64, fragments_rows:Vec<u32>, seizure_vote:u8, lpd_vote:u8, gpd_vote:u8, lrda_vote:u8, grda_vote:u8, other_vote:u8) -> Self {
+    pub fn new(egg_map:Vec<Vec<f32>>, eeg_id:i64, fragments_rows:Vec<u32>, seizure_vote:u8, lpd_vote:u8, gpd_vote:u8, lrda_vote:u8, grda_vote:u8, other_vote:u8) -> Self {
         Self {
             egg_map,
             eeg_id,
@@ -77,12 +77,13 @@ impl EEG {
     }
 
     pub fn votes_tensor(&self) -> Tensor {
-        Tensor::from_slice(&[self.seizure_vote, self.seizure_vote,      self.lpd_vote,      self.gpd_vote,       self.lrda_vote,      self.grda_vote,      self.other_vote])
+        Tensor::from_slice(&[self.seizure_vote,  self.lpd_vote,      self.gpd_vote,       self.lrda_vote,      self.grda_vote,      self.other_vote]).totype(Kind::Float)
     }
 
     pub fn fragment_to_tensor(&self, i_1:usize, i_2:usize) -> Tensor {
+        assert!(i_1 < i_2, "fragment_to_tensor: i_1 < i_2");
 
-        Tensor::stack(self.egg_map.iter().map(|(name, values)| {
+        Tensor::stack(self.egg_map.iter().map(|values| {
             Tensor::from_slice(&values[i_1..i_2])
         }).collect::<Vec<Tensor>>().as_slice(), 0)
 
@@ -108,8 +109,10 @@ impl EEGs {
             .collect()?
             // .sample_n(&Series::new("n", [3]), false, true, None)?
             .lazy()
+            // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
+            // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
             // .filter(col("eeg_id").eq(lit(1345588872)))
-            // .top_k(3, [col("eeg_id")], [false], false, false)
+            .top_k(100, [col("eeg_id")], [false], false, false)
             .group_by([col("eeg_id")])
             .agg([
                 col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds"),
@@ -180,14 +183,18 @@ impl EEGs {
 
             let df = eeg_df.collect()?;
 
-            let mut egg_hash = HashMap::new();
+            let mut eegs_vec = vec![];
+            let mut names_vec = vec![];
+
             for s in df.get_columns() {
+                names_vec.push(s.name().to_owned());
+
                 match s.dtype(){
                     DataType::Float32 => {
-                        egg_hash.insert(s.name().to_owned(), s.f32()?.downcast_iter().flat_map(|arr|arr.into_iter().map(|v| v.map(|v|*v).unwrap_or_default())).collect::<Vec<f32>>());
+                        eegs_vec.push(s.f32()?.downcast_iter().flat_map(|arr|arr.into_iter().map(|v| v.map(|v|*v).unwrap_or(0.0))).collect::<Vec<f32>>());
                     }
                     DataType::Float64 => {
-                        egg_hash.insert(s.name().to_owned(), s.f64()?.downcast_iter().flat_map(|arr|arr.into_iter().map(|v| v.map(|v|*v as f32).unwrap_or_default())).collect::<Vec<f32>>());
+                        eegs_vec.push(s.f64()?.downcast_iter().flat_map(|arr|arr.into_iter().map(|v| v.map(|v|*v as f32).unwrap_or(0.0))).collect::<Vec<f32>>());
                     }
                     _=>{
                         todo!()
@@ -198,7 +205,7 @@ impl EEGs {
 
             eegs.push(
                 EEG::new(
-                    egg_hash,
+                    eegs_vec,
                     eeg_id,
                     fragments_rows,
                     seizure_vote.try_into().expect("seizure_vote"),
@@ -235,7 +242,11 @@ impl EEGs {
         let (eegs, votes) = self.eegs
             .choose_multiple(&mut rng, batch_size)
             .fold((vec![], vec![]), |mut a, eeg| {
-                a.0.push(eeg.random_fragemnt_tensor(&mut rng));
+
+                let fragemnt_tensor = eeg.random_fragemnt_tensor(&mut rng);
+                // println!("random_fragemnt_tensor size: {:?}", tensor.size());
+
+                a.0.push(fragemnt_tensor);
                 a.1.push(eeg.votes_tensor());
 
                 a
@@ -485,10 +496,10 @@ mod tests {
 
     #[test]
     pub fn test_nth_fragment_to_tensor(){
-        let mut eeg_map = HashMap::new();
+        let mut eeg_map = vec![];
 
-        eeg_map.insert("AA".into(), (0..99).map(|v|v as f32).collect::<Vec<f32>>());
-        eeg_map.insert("BB".into(), (0..99).map(|v|(v * 10) as f32).collect::<Vec<f32>>());
+        eeg_map.push( (0..99).map(|v|v as f32).collect::<Vec<f32>>());
+        eeg_map.push( (0..99).map(|v|(v * 10) as f32).collect::<Vec<f32>>());
 
         let eeg = EEG::new(
             eeg_map,

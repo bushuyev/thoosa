@@ -118,37 +118,35 @@ fn train_dense(device:&Device, eegs:Box<EEGs>){
 
     let vs = nn::VarStore::new(device.clone());
 
-    // let nth_params = NthConst::new(1000);
-    //
-    // let lin_block = |b: &mut SeqBuilder, i| b
-    //     .linear_p(i, &nth_params)
-    //     .end();
-    //
-    // let seq = SeqBuilder::new(10000)
-    //     .n_blocks(lin_block, 3)
-    //     .linear_s(6)
-    //     .end_seq();
-    let net = configure_dense(10, 4, 4, 5).build_tch_module(&vs.root());
 
-    let mut opt = nn::Sgd::default().build(&vs, 1e-2).unwrap();
+    let node = configure_dense(50 * 200, 4, 4, 100, 20);
+    let net = node.build_tch_module(&vs.root());
 
-    for idx in 1..2 {
+    let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
+
+    for idx in 1..100 {
+        println!("--------------------------idx={}", idx);
+
         let (x_t, y_t) = eegs.batch_tensor(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
+        // println!("size:  x_t  {:?} y_t ={:?}", x_t.size(), y_t.size());
 
-        let pred_y = net.forward(&x_t.transpose(1, 2));
-        println!("pred_y: size={:?}", pred_y.size());
+        // x_t.print();
+        let pred_y = net.forward(&x_t);
+
+        pred_y.print();
+        // println!("pred_y: size={:?}", pred_y.size());
 
         let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
 
 
-        println!("pred_y_mean: size={:?}", pred_y_mean);
+        // println!("pred_y_mean: size={:?}", pred_y_mean);
 
         let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
         opt.backward_step(&loss);
-        //
-        // if idx % 1000 == 0 {
-        //     println!("loss={:?}", loss);
-        // }
+
+        if idx % 10 == 0 {
+            println!("loss={:?}", loss);
+        }
     }
 }
 
@@ -421,39 +419,39 @@ impl SeqBuilder {
     }
 }
 
-pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64) -> Node {
+pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node {
     let mut builder = crate::SeqBuilder::new(num_features);
 
     let dense_block = |b:&mut SeqBuilder| b
         .n_blocks(
     |b:&mut SeqBuilder, i| b
                 .func(|t|t.elu())
-                .conv(kernel, kernel, kernel, ConvConfig::default())
+                .conv(kernel, channels, channels, ConvConfig::default())
                 .func(|t|t.elu())
-                .conv(kernel, kernel, kernel, ConvConfig::default())
+                .conv(kernel, channels, channels, ConvConfig::default())
                 .end(),
     num_layers_in_block)
         .end();
 
 
     builder
-        .conv(kernel, kernel, kernel, ConvConfig::default())
+        .conv(kernel, channels, channels, ConvConfig::default())
         .func(|t|t.elu())
         .max_pool()
         .n_blocks(|b:&mut SeqBuilder, i| b
             .block(dense_block)
             .block(|b:&mut SeqBuilder| b
                 .func(|t|t.elu())
-                .conv(kernel, kernel, kernel, ConvConfig::default())
+                .conv(kernel, channels, channels, ConvConfig::default())
                 .func(|t|t.elu())
-                .conv(kernel, kernel, kernel, ConvConfig::default())
+                .conv(kernel, channels, channels, ConvConfig::default())
                 .end())
             .end(), num_blocks)
         .block(dense_block)
         .func(|t|t.relu())
         .avg_pool()
         .dropout()
-        .linear()
+        .linear_s(6)
         .end_seq()
 
 }
@@ -467,9 +465,10 @@ pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use tch::{Device, kind, Kind, nn, Tensor};
-    use tch::nn::{ConvConfig, Module};
+    use tch::{Device, kind, Kind, nn, Reduction, Tensor};
+    use tch::nn::{ConvConfig, Module, OptimizerConfig};
     use crate::{configure_dense, clc_conv1d_out, SeqBuilder};
+    use crate::data::EEGs;
 
     #[test]
     pub fn test_conv1_out(){
@@ -497,11 +496,44 @@ mod tests {
     pub fn test_configure_dense(){
         let vs = nn::VarStore::new(Device::Cpu);
 
-        let model = configure_dense(1000, 4, 4, 20).build_tch_module(&vs.root());
+        let model = configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root());
 
-        let _ = model.forward(
-            &Tensor::randn([10, 20, 1000], (Kind::Float, Device::Cpu)) //batch, channels, L in
+        let eegs = EEGs::load_all_eegs("../../data").unwrap();
+
+        let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
+
+
+        // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
+        let (tensor, y_t) = eegs.batch_tensor(10);
+        // println!("size:   {:?}", tensor.size());
+        let pred_y = model.forward(
+            &tensor.totype(Kind::Float) //batch, channels, L in
         );
+        let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
+        println!("1. pred size:   pred_y.size()={:?}     y_t.size()={:?}", pred_y_mean.size(), y_t.size());
+        let loss = y_t.mse_loss(&pred_y_mean, Reduction::None).sum(kind::Kind::Float);;
+        // let loss_1 = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
+        // println!(":::::::::::::::::::::::::::: loss.size()={:?} loss_1={:?}", loss.size(), loss_1.size());
+        loss.print();
+        println!("::::::::::::::::::::::::::::");
+        opt.backward_step(&loss);
+        //
+        // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
+        // let (tensor, y_t) = eegs.batch_tensor(10);
+        // println!("size:   {:?}", tensor.size());
+        // let pred_y = model.forward(
+        //     &tensor //batch, channels, L in
+        // );
+        // println!("2. pred size:   {:?}", pred_y.size());
+        // let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
+        // // let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
+        // let loss = y_t.mse_loss(&pred_y_mean, Reduction::None);
+        // opt.backward_step(&loss);
+        // pred_y.print();
+
+
+
+
     }
 
     #[test]
