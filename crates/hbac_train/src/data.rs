@@ -113,16 +113,29 @@ impl EEGs {
                 // .filter(filter_exps)
                 .collect()?;
 
-            let mut column_tensors = Vec::with_capacity(df.shape().0);
+            let fragment_tensors = split_frame_by_offsets(
+                df,
+                eeg_label_offset_seconds
+                    .f64()?
+                    .into_iter()
+                    .map(|v| v.expect("no id :(") as i64 * 200)
+                    .collect::<Vec<i64>>(),
+            )?;
 
-            for s in df.get_columns() {
-                column_tensors.push(series_to_tensor(s, )?);
-
+            for frag_tensor in fragment_tensors {
+                println!("frag_tensor={:?}", frag_tensor);
             }
 
-            tensors.push(Tensor::stack(column_tensors.as_slice(), 0));
-
-            print!(".");
+            // let mut column_tensors = Vec::with_capacity(df.shape().0);
+            //
+            // for s in df.get_columns() {
+            //     column_tensors.push(series_to_tensor(s, )?);
+            //
+            // }
+            //
+            // tensors.push(Tensor::stack(column_tensors.as_slice(), 0));
+            //
+            // print!(".");
         }
 
         println!("tensors.len={}  size of tensors {}", tensors.len(),  std::mem::size_of_val(&*tensors));
@@ -132,6 +145,7 @@ impl EEGs {
 }
 
 fn series_to_tensor(s: &Series) ->  Result<Tensor, GenError> {
+
     Ok(match s.dtype(){
         // DataType::UInt8 => {}
         // DataType::UInt16 => {}
@@ -197,12 +211,33 @@ fn main() -> Result<(), GenError> {
     Ok(())
 }
 
+fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<Vec<DataFrame>> where I: IntoIterator<Item = i64> + Clone {
+
+    let shape = df.shape();
+    let it_1 = offsets_sec.clone().into_iter();
+    let mut it_2 = offsets_sec.into_iter().chain(std::iter::once(shape.0 as i64));
+    it_2.next();
+
+
+    let ids = it_2.zip(it_1)
+        .map(|(v2, v1)| v2-v1)
+        .enumerate()
+        .flat_map(|(i, frag)| std::iter::repeat(i as i64).take(frag as usize))
+        .collect::<Vec<i64>>();
+
+
+    df.with_column(Series::from_vec("frag_id", ids));
+
+    df.partition_by(&["frag_id"], false)
+}
+
+
 #[cfg(test)]
 mod tests {
     use polars::prelude::*;
 
     use crate::{EEGs, GenError};
-    use crate::data::arr_to_expr;
+    use crate::data::{arr_to_expr, split_frame_by_offsets};
 
     #[ctor::ctor]
     fn init() {
@@ -270,22 +305,6 @@ mod tests {
     #[test]
     pub fn test_test() -> Result<(), GenError> {
 
-        let mut df = df!(
-            "col1"  => (0..10).map(|i| i as f64).collect::<Vec<f64>>(),
-            "col2"  => (0..10).map(|i| i as f64 * 10.).collect::<Vec<f64>>(),
-        )?;
-
-        let rows_in_sec = 1;
-        let mut offsets_sec = vec![0i64, 3i64, 8i64];
-
-
-        let frames = split_frame_by_offsets(df, offsets_sec.into_iter());
-
-        for frame in frames {
-            println!("frame={:?}", frame);
-        }
-
-
         // let fragment_ids =
 
         // df.with_row_count("id", None).partition_by("id");
@@ -305,30 +324,45 @@ mod tests {
         Ok(())
     }
 
-    fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<Vec<DataFrame>> where I: IntoIterator<Item = i64> + Clone {
-        // offsets_sec.push(df.shape().0);
+    #[test]
+    pub fn test_split_frame_by_offsets() -> Result<(), GenError> {
 
-        // let offsets_diff = offsets_sec.windows(2).map(|w|w[1]-w[0]).collect::<Vec<usize>>();
-
-        let shape = df.shape();
-        let mut it_1 = offsets_sec.clone().into_iter();
-        let mut it_2 = offsets_sec.into_iter().chain(std::iter::once(shape.0 as i64));
-        it_2.next();
-
-        // let xxxxxx = it_2.zip(it_1).map(|(v2, v1)| v2-v1).collect::<Vec<i64>>();
-        //
-        // println!("xxxxxx={:?}", xxxxxx);
+        let df = df!(
+            "col1"  => (0..10).map(|i| i as f64).collect::<Vec<f64>>(),
+            "col2"  => (0..10).map(|i| i as f64 * 10.).collect::<Vec<f64>>(),
+        )?;
 
 
-        // let ids = offsets_sec.windows(2).map(|w| w[1] - w[0]).into_iter().enumerate().flat_map(|(i, frag)| std::iter::repeat(i as i32).take(frag)).collect::<Vec<i32>>();
-        let ids = it_2.zip(it_1).map(|(v2, v1)| v2-v1).enumerate().flat_map(|(i, frag)| std::iter::repeat(i as i64).take(frag as usize)).collect::<Vec<i64>>();
+        let mut frames = split_frame_by_offsets(df, [0i64, 3i64, 8i64])?;
 
-        println!("ids={:?}", ids);
+        frames.sort_by(|f1, f2|f1.shape().0.cmp(&f2.shape().0));
 
-        df.with_column(Series::from_vec("frag_id", ids));
-        // df.with_column(Series::from_vec("xxx", (0..10).map(|i| 2. * i as f64).collect::<Vec<f64>>()));
-        println!("df={:?}", df);
+        assert_eq!(
+            &df!(
+                "col1"   => [8.0, 9.0],
+                "col2"   => [80.0, 90.0],
+            )?,
+            &frames[0],
+        );
 
-         df.partition_by(&["frag_id"], false)
+        assert_eq!(
+            &df!(
+                "col1"   => [0.0, 1.0, 2.0],
+                "col2"   => [0.0, 10.0, 20.0],
+            )?,
+            &frames[1],
+        );
+
+        assert_eq!(
+            &df!(
+                "col1"   => [3.0, 4.0, 5.0, 6.0, 7.0],
+                "col2"   => [30.0, 40.0, 50.0, 60.0, 70.0],
+            )?,
+            &frames[2],
+        );
+
+
+        Ok(())
     }
+
 }
