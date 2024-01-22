@@ -1,5 +1,6 @@
 use tch::nn::{Module, Sequential};
 use tch::Tensor;
+use torch_sys::IntList;
 
 #[derive(Debug)]
 pub struct MySequential {
@@ -20,5 +21,61 @@ impl Module for MySequential {
             let xs = self.layers[0].forward(xs);
             self.layers.iter().skip(1).fold(xs, |xs, layer| layer.forward(&xs))
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct MyMaxPool1d {
+    kernel_size: i64,
+    stride: i64,
+    padding: i64,
+    dilation: i64,
+    ceil_mode: bool,
+}
+
+impl MyMaxPool1d {
+    pub fn new(kernel_size: i64, stride: i64, padding: i64) -> Self {
+        Self {
+            kernel_size,
+            stride, padding,
+            dilation: 1,
+            ceil_mode: false
+        }
+    }
+}
+
+impl Module for MyMaxPool1d {
+
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        xs.max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)
+    }
+}
+
+
+
+#[derive(Debug)]
+pub struct MyAvgPool1d {
+    kernel_size: i64,
+    stride: i64,
+    padding: i64,
+    ceil_mode: bool,
+    count_include_pad: bool
+}
+
+impl crate::my_tch::MyAvgPool1d {
+    pub fn new(kernel_size: i64, stride: i64, padding: i64) -> Self {
+        Self {
+            kernel_size,
+            stride, padding,
+            ceil_mode: false,
+            count_include_pad: false
+        }
+    }
+}
+
+impl Module for crate::my_tch::MyAvgPool1d {
+
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        xs.avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad)
     }
 }

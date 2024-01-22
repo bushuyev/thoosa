@@ -1,32 +1,17 @@
 mod my_tch;
 mod data;
+mod builder;
+mod utils;
+mod simp;
 
 use std::time::Instant;
-use tch::nn::{ConvConfig, LinearConfig, Module, OptimizerConfig, Sequential};
-use tch::{kind, nn, Device, Tensor, Kind, Reduction, no_grad};
-use tch::data::TextData;
-use tch::TchError::Torch;
-use crate::my_tch::MySequential;
+use tch::nn::{ConvConfig, Module, OptimizerConfig};
+use tch::{Device, kind, Kind, nn, no_grad, Reduction, Tensor};
 use plotters::prelude::*;
 use crate::data::{EEGs, GenError};
 use std::env;
-
-
-fn net(vs: &nn::Path) -> impl Module {
-
-    nn::seq()
-        .add(
-            nn::conv1d(
-                vs / "layer1",
-                 20,
-                20,
-                5,
-                Default::default(),
-            )
-        )
-        .add_fn(|xs| xs.relu())
-        .add(nn::linear(vs, 9996, 6, Default::default()))
-}
+use builder::{NthConst, SeqBuilder};
+use crate::builder::Node;
 
 
 fn train_x2(device:&Device) {
@@ -92,7 +77,7 @@ fn train_x2(device:&Device) {
         // println!("test={:?}", test);
         // println!("pred={:?}", pred);
 
-        plot(
+        utils::plot(
             vec![
                 ("pred".into(), RED, pred),
                 ("test".into(), GREEN, test),
@@ -110,97 +95,41 @@ fn train_x2(device:&Device) {
 //     ]
 // ).unwrap();
 
-fn train_dense(device:&Device, eegs:Box<EEGs>){
+pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node {
+    let mut builder = crate::SeqBuilder::new(num_features);
 
-    println!("device={:?}", device);
-    const BATCH_SIZE: usize = 10usize;
-
-
-    let vs = nn::VarStore::new(device.clone());
-
-
-    let node = configure_dense(50 * 200, 4, 4, 100, 20);
-    let net = node.build_tch_module(&vs.root());
-
-    let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
-
-    for idx in 1..100 {
-        println!("--------------------------idx={}", idx);
-
-        let (x_t, y_t) = eegs.batch_tensor(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
-        // println!("size:  x_t  {:?} y_t ={:?}", x_t.size(), y_t.size());
-
-        // x_t.print();
-        let pred_y = net.forward(&x_t);
-
-        pred_y.print();
-        // println!("pred_y: size={:?}", pred_y.size());
-
-        let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
+    let dense_block = |b:&mut SeqBuilder| b
+        .n_blocks(
+            |b:&mut SeqBuilder, i| b
+                .func(|t|t.elu())
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .func(|t|t.elu())
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .end(),
+            num_layers_in_block)
+        .end();
 
 
-        // println!("pred_y_mean: size={:?}", pred_y_mean);
+    builder
+        .conv(kernel, channels, channels, ConvConfig::default())
+        .func(|t|t.elu())
+        .max_pool( 3, 2, 1)
+        .n_blocks(|b:&mut SeqBuilder, i| b
+            .block(dense_block)
+            .block(|b:&mut SeqBuilder| b
+                .func(|t|t.elu())
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .func(|t|t.elu())
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .end())
+            .end(), num_blocks)
+        .block(dense_block)
+        .func(|t|t.relu())
+        .avg_pool(7, 3, 0)
+        .dropout()
+        .linear_s(6)
+        .end_seq()
 
-        let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
-        opt.backward_step(&loss);
-
-        if idx % 10 == 0 {
-            println!("loss={:?}", loss);
-        }
-    }
-}
-
-fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>) -> Result<(), Box<dyn std::error::Error>> {
-    
-    let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
-        if max_min.0 > *x {
-            max_min.0 = *x
-        }
-        if max_min.1 < *x {
-            max_min.1 = *x
-        }
-
-        if max_min.2 > *y {
-            max_min.2 = *y
-        }
-        if max_min.3 < *y {
-            max_min.3 = *y
-        }
-
-        max_min
-    });
-
-
-    let root = BitMapBackend::new("0.png", (640, 480)).into_drawing_area();
-    root.fill(&WHITE)?;
-    let mut chart = ChartBuilder::on(&root)
-        .caption("pred/test", ("sans-serif", 50).into_font())
-        .margin(5)
-        .x_label_area_size(30)
-        .y_label_area_size(30)
-        .build_cartesian_2d(min_x..max_x, min_y..max_y)?;
-
-    chart.configure_mesh().draw()?;
-
-    for (name, color, x_y) in name_x_y_vec {
-        chart
-            .draw_series(LineSeries::new(
-                x_y,
-                &color,
-            ))?
-            .label(name)
-            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
-    }
-
-    chart
-        .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
-
-    root.present()?;
-
-    Ok(())
 }
 
 
@@ -224,8 +153,14 @@ fn main() -> Result<(), GenError> {
     println!("eegs={:?}", eegs.len());
 
     println!("done in {}", t1.elapsed().as_millis());
+    let vs = nn::VarStore::new(device.clone());
 
-    train_dense(&device, eegs);
+    utils::train(
+        &device,
+        eegs,
+        configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root()),
+        &vs
+    );
 
     Ok(())
 
@@ -239,235 +174,13 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 }
 
 
-#[derive(Debug)]
-pub enum Node {
-    Seq {elts: Vec<Node>},
-    Conv {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
-    BatchNorm {num_features: i64},
-    Linear { in_feats: i64, out_feats: i64},
-    MaxPool { kernel_size:i64, stride:i64, padding:i64}
-}
-
-trait NthParams {
-    type Params;
-    fn on_nth_layer(&self, i:usize)->Self::Params;
-}
-
-struct NthConst {
-    n:i64
-}
-
-impl NthConst {
-    pub fn new(n: i64) -> Self {
-        Self { n }
-    }
-}
-
-
-impl NthParams for NthConst {
-    type Params = i64;
-
-    fn on_nth_layer(&self, i: usize) -> i64 {
-        self.n
-    }
-}
-
-
-
-impl Node {
-
-    pub fn build_tch_module(&self, vs: &nn::Path) -> Box<dyn Module>  {
-        match self {
-            Node::Seq { elts } => {
-
-                let layers:Vec<Box<dyn Module>> = elts.iter().fold(Vec::new(), |mut kids, node| {
-                    kids.push(node.build_tch_module(vs));
-                    kids
-                });
-
-                Box::new(MySequential::new(layers))
-
-            }
-            Node::Conv { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv1d(vs/ "cnn", *in_channels, *out_channels, *kernel, *config))
-            }
-            Node::BatchNorm { .. } => {
-                todo!()
-            }
-            Node::Linear {in_feats, out_feats} => {
-                Box::new(nn::linear(vs/ "layer1", *in_feats, *out_feats, LinearConfig::default()))
-            }
-            Node::MaxPool { .. } => {
-                todo!()
-            }
-        }
-    }
-}
-
-
-#[derive(Debug)]
-struct SeqBuilder {
-    num_features:i64,
-    elts: Vec<Node>
-}
-
-impl SeqBuilder {
-    pub fn new(num_features:i64) -> Self {
-        Self {
-            num_features,
-            elts: vec![]
-        }
-    }
-
-    pub fn split<F, G>(&mut self, seq_1:Node, seq_2:Node, split_f:F, glue_f:G) -> &mut Self
-        where F: for<'a> FnMut(&Tensor) -> Tensor,
-              G: for<'a> FnMut(&Tensor) -> Tensor {
-        self
-    }
-
-    pub fn end_seq(&mut self) -> Node {
-        let mut elts = Vec::new();
-
-        std::mem::swap(&mut elts, &mut self.elts);
-
-        Node::Seq {
-            elts
-        }
-    }
-
-    pub fn batch_norm(&mut self) -> &mut Self {
-        self.elts.push(
-            Node::BatchNorm {num_features:self.num_features}
-        );
-        self
-    }
-
-    pub fn conv(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
-
-        self.elts.push(
-            Node::Conv {kernel, in_channels, out_channels, config },
-        );
-
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config);
-
-        self
-    }
-
-    pub fn max_pool(&mut self) -> &mut Self {
-        self
-    }
-
-    pub fn avg_pool(&mut self) -> &mut Self {
-        self
-    }
-
-    pub fn dropout(&mut self) -> &mut Self {
-        self
-    }
-
-    pub fn linear(&mut self) -> &mut Self {
-        self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats:self.num_features}
-        );
-        self
-    }
-
-    pub fn linear_s(&mut self, out_feats:i64) -> &mut Self {
-        self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats}
-        );
-        self.num_features = out_feats;
-
-        self
-    }
-
-    pub fn linear_p(&mut self, n:usize, p:&impl NthParams<Params=i64>) -> &mut Self {
-        let out_feats = p.on_nth_layer(n);
-        self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats}
-        );
-        self.num_features = out_feats;
-
-        self
-    }
-
-    pub fn func<F>(&mut self, func: F) -> &mut Self
-        where F: for<'a> FnMut(&Tensor) -> Tensor {
-        self
-    }
-
-    pub fn n_blocks<F>(&mut self, mut block: F, n:usize) -> &mut Self
-        where F: for <'a> FnMut(&'a mut SeqBuilder, usize) {
-
-        for i in 0..n {
-            block(self, i);
-        }
-
-        self
-    }
-
-    pub fn block<F>(&mut self, mut block:F) -> &mut Self
-        where F: for <'a> FnMut(&'a mut SeqBuilder) {
-
-        block(self);
-
-        self
-    }
-
-    pub fn end(&mut self) {
-
-    }
-}
-
-pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node {
-    let mut builder = crate::SeqBuilder::new(num_features);
-
-    let dense_block = |b:&mut SeqBuilder| b
-        .n_blocks(
-    |b:&mut SeqBuilder, i| b
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .end(),
-    num_layers_in_block)
-        .end();
-
-
-    builder
-        .conv(kernel, channels, channels, ConvConfig::default())
-        .func(|t|t.elu())
-        .max_pool()
-        .n_blocks(|b:&mut SeqBuilder, i| b
-            .block(dense_block)
-            .block(|b:&mut SeqBuilder| b
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .end())
-            .end(), num_blocks)
-        .block(dense_block)
-        .func(|t|t.relu())
-        .avg_pool()
-        .dropout()
-        .linear_s(6)
-        .end_seq()
-
-}
-
-//https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
-    (l_in + 2 * c.padding - c.dilation * (k -1 ) -1)/c.stride +1
-}
-
-
-
 #[cfg(test)]
 mod tests {
     use tch::{Device, kind, Kind, nn, Reduction, Tensor};
     use tch::nn::{ConvConfig, Module, OptimizerConfig};
-    use crate::{configure_dense, clc_conv1d_out, SeqBuilder};
+    use crate::builder::SeqBuilder;
+    use crate::builder::clc_conv1d_out;
+    use crate::configure_dense;
     use crate::data::EEGs;
 
     #[test]
@@ -511,11 +224,12 @@ mod tests {
         );
         let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
         println!("1. pred size:   pred_y.size()={:?}     y_t.size()={:?}", pred_y_mean.size(), y_t.size());
-        let loss = y_t.mse_loss(&pred_y_mean, Reduction::None).sum(kind::Kind::Float);;
+        // let loss = y_t.mse_loss(&pred_y_mean, Reduction::Mean); //.sum(kind::Kind::Float);;
+        let loss = y_t.cross_entropy_loss::<Tensor>(&pred_y_mean, None, Reduction::Mean, -100, 0.0);
         // let loss_1 = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
-        // println!(":::::::::::::::::::::::::::: loss.size()={:?} loss_1={:?}", loss.size(), loss_1.size());
+        println!(":::::::::::::::::::::::::::: pred_y.size()={:?} y_t.size()={:?}, pred_y_mean.size()={:?},  loss.size()={:?}", pred_y.size(), y_t.size(), pred_y_mean.size(),  loss.size());
         loss.print();
-        println!("::::::::::::::::::::::::::::");
+        println!("::::::::::::::::::::::::::::: loss={:?}", loss);
         opt.backward_step(&loss);
         //
         // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
@@ -579,3 +293,4 @@ mod tests {
         println!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
     }
 }
+
