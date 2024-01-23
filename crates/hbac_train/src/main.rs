@@ -25,7 +25,7 @@ fn train_x2(device:&Device) {
 
     let lin_block = |b: &mut SeqBuilder, i| b
         .linear_p(i, &nth_params)
-        .func(|t|t.elu())
+        .func(Tensor::elu)
         .end();
 
     let seq = SeqBuilder::new(1000)
@@ -95,36 +95,36 @@ fn train_x2(device:&Device) {
 //     ]
 // ).unwrap();
 
-pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node {
+pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node  {
     let mut builder = crate::SeqBuilder::new(num_features);
 
-    let dense_block = |b:&mut SeqBuilder| b
-        .n_blocks(
-            |b:&mut SeqBuilder, i| b
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .end(),
-            num_layers_in_block)
-        .end();
+    // let dense_block = |b:&mut SeqBuilder| b
+    //     .n_blocks(
+    //         |b:&mut SeqBuilder, i| b
+    //             .func(|t|t.elu())
+    //             .conv(kernel, channels, channels, ConvConfig::default())
+    //             .func(|t|t.elu())
+    //             .conv(kernel, channels, channels, ConvConfig::default())
+    //             .end(),
+    //         num_layers_in_block)
+    //     .end();
 
 
     builder
         .conv(kernel, channels, channels, ConvConfig::default())
-        .func(|t|t.elu())
-        .max_pool( 3, 2, 1)
-        .n_blocks(|b:&mut SeqBuilder, i| b
-            .block(dense_block)
-            .block(|b:&mut SeqBuilder| b
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .func(|t|t.elu())
-                .conv(kernel, channels, channels, ConvConfig::default())
-                .end())
-            .end(), num_blocks)
-        .block(dense_block)
-        .func(|t|t.relu())
+        // .func(|t|t.elu())
+        // .max_pool( 3, 2, 1)
+        // .n_blocks(|b:&mut SeqBuilder, i| b
+        //     .block(dense_block)
+        //     .block(|b:&mut SeqBuilder| b
+        //         .func(|t|t.elu())
+        //         .conv(kernel, channels, channels, ConvConfig::default())
+        //         .func(|t|t.elu())
+        //         .conv(kernel, channels, channels, ConvConfig::default())
+        //         .end())
+        //     .end(), num_blocks)
+        // .block(dense_block)
+        // .func(|t|t.relu())
         .avg_pool(7, 3, 0)
         .dropout()
         .linear_s(6)
@@ -182,6 +182,7 @@ mod tests {
     use crate::builder::clc_conv1d_out;
     use crate::configure_dense;
     use crate::data::EEGs;
+    use crate::utils::DataBatch;
 
     #[test]
     pub fn test_conv1_out(){

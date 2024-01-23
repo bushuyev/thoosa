@@ -18,6 +18,7 @@ use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use rand::{Rng, thread_rng};
 use tch::{Kind, Tensor};
+use crate::utils::DataBatch;
 
 #[derive(Debug)]
 pub struct GenError {}
@@ -236,7 +237,7 @@ impl EEGs {
     }
 
 
-    pub fn batch_tensor(&self, batch_size: usize) -> (Tensor, Tensor) {
+    fn _batch_tensor(&self, batch_size: usize) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
         let (eegs, votes) = self.eegs
@@ -262,6 +263,12 @@ impl EEGs {
                 0,
             )
         )
+    }
+}
+
+impl DataBatch for EEGs {
+    fn batch_tensor(&self, batch_size: usize) -> (Tensor, Tensor) {
+        self._batch_tensor(batch_size)
     }
 }
 

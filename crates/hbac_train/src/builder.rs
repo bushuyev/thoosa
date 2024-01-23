@@ -1,6 +1,9 @@
+use std::fmt;
+use std::fmt::{Debug, Formatter};
+use std::pin::Pin;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
-use crate::my_tch::{MyAvgPool1d, MyMaxPool1d, MySequential};
+use crate::my_tch::{Fp, MyAvgPool1d, MyFuncModule, MyMaxPool1d, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
@@ -16,15 +19,23 @@ pub fn clc_avgpool1d_out(l_in: i64, kernel: i64, padding:i64, stride:i64) -> i64
     (l_in + 2 * padding - kernel) / stride + 1
 }
 
+type TFN = dyn Fn(&Tensor) -> Tensor;
 
-#[derive(Debug)]
 pub enum Node {
     Seq {elts: Vec<Node>},
     Conv {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     BatchNorm {num_features: i64},
     Linear { in_feats: i64, out_feats: i64},
+    Func { func:Fp},
     MaxPool { kernel_size:i64, stride:i64, padding:i64},
     AvgPool { kernel_size:i64, stride:i64, padding:i64}
+}
+
+impl Debug for Node {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Node")
+            .finish()
+    }
 }
 
 trait NthParams {
@@ -80,6 +91,9 @@ impl Node {
             }
             Node::AvgPool { kernel_size, stride, padding } => {
                 Box::new(MyAvgPool1d::new(*kernel_size, *stride, *padding))
+            }
+            Node::Func { func } => {
+                Box::new(MyFuncModule::new(func.clone()))
             }
         }
     }
@@ -195,8 +209,10 @@ impl SeqBuilder {
         self
     }
 
-    pub fn func<F>(&mut self, func: F) -> &mut Self
-        where F: for<'a> FnMut(&Tensor) -> Tensor {
+    pub fn func(&mut self, func: Fp) -> &mut Self {
+        self.elts.push(
+            Node::Func { func }
+        );
         self
     }
 
@@ -217,6 +233,8 @@ impl SeqBuilder {
 
         self
     }
+
+
 
     pub fn end(&mut self) {
 

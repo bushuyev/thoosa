@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use tch::nn::{Module, Sequential};
 use tch::Tensor;
 use torch_sys::IntList;
@@ -73,9 +74,41 @@ impl crate::my_tch::MyAvgPool1d {
     }
 }
 
-impl Module for crate::my_tch::MyAvgPool1d {
+impl Module for MyAvgPool1d {
 
     fn forward(&self, xs: &Tensor) -> Tensor {
         xs.avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad)
+    }
+}
+
+
+pub type Fp = fn(&Tensor)->Tensor;
+
+
+pub struct MyFuncModule {
+    func: Fp
+}
+
+impl Debug for MyFuncModule {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MyFuncModule")
+            .finish()
+    }
+}
+
+
+
+
+impl  MyFuncModule {
+
+    pub fn new(func: Fp) -> Self{
+        Self { func }
+    }
+
+}
+
+impl Module for MyFuncModule {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        (self.func)(xs)
     }
 }
