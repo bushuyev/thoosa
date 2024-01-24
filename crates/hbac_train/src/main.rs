@@ -81,7 +81,7 @@ fn train_x2(device:&Device) {
             vec![
                 ("pred".into(), RED, pred),
                 ("test".into(), GREEN, test),
-            ]
+            ], "pred/test", (640, 480)
         ).unwrap();
     })
 
@@ -98,33 +98,33 @@ fn train_x2(device:&Device) {
 pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node  {
     let mut builder = crate::SeqBuilder::new(num_features);
 
-    // let dense_block = |b:&mut SeqBuilder| b
-    //     .n_blocks(
-    //         |b:&mut SeqBuilder, i| b
-    //             .func(|t|t.elu())
-    //             .conv(kernel, channels, channels, ConvConfig::default())
-    //             .func(|t|t.elu())
-    //             .conv(kernel, channels, channels, ConvConfig::default())
-    //             .end(),
-    //         num_layers_in_block)
-    //     .end();
+    let dense_block = |b:&mut SeqBuilder| b
+        .n_blocks(
+            |b:&mut SeqBuilder, i| b
+                .func(Tensor::elu)
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .func(Tensor::elu)
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .end(),
+            num_layers_in_block)
+        .end();
 
 
     builder
         .conv(kernel, channels, channels, ConvConfig::default())
-        // .func(|t|t.elu())
-        // .max_pool( 3, 2, 1)
-        // .n_blocks(|b:&mut SeqBuilder, i| b
-        //     .block(dense_block)
-        //     .block(|b:&mut SeqBuilder| b
-        //         .func(|t|t.elu())
-        //         .conv(kernel, channels, channels, ConvConfig::default())
-        //         .func(|t|t.elu())
-        //         .conv(kernel, channels, channels, ConvConfig::default())
-        //         .end())
-        //     .end(), num_blocks)
-        // .block(dense_block)
-        // .func(|t|t.relu())
+        .func(|t|t.elu())
+        .max_pool( 3, 2, 1)
+        .n_blocks(|b:&mut SeqBuilder, i| b
+            .block(dense_block)
+            .block(|b:&mut SeqBuilder| b
+                .func(Tensor::elu)
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .func(Tensor::elu)
+                .conv(kernel, channels, channels, ConvConfig::default())
+                .end())
+            .end(), num_blocks)
+        .block(dense_block)
+        .func(Tensor::relu)
         .avg_pool(7, 3, 0)
         .dropout()
         .linear_s(6)
@@ -155,11 +155,15 @@ fn main() -> Result<(), GenError> {
     println!("done in {}", t1.elapsed().as_millis());
     let vs = nn::VarStore::new(device.clone());
 
+
     utils::train(
         &device,
         eegs,
         configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root()),
-        &vs
+        &vs,
+         |pred:&Tensor, target:&Tensor|{
+             pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
+        }
     );
 
     Ok(())
@@ -211,6 +215,7 @@ mod tests {
         let vs = nn::VarStore::new(Device::Cpu);
 
         let model = configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root());
+
 
         let eegs = EEGs::load_all_eegs("../../data").unwrap();
 

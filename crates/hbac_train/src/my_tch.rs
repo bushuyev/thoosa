@@ -83,6 +83,7 @@ impl Module for MyAvgPool1d {
 
 
 pub type Fp = fn(&Tensor)->Tensor;
+pub type LossFp = fn(&Tensor, &Tensor)->Tensor;
 
 
 pub struct MyFuncModule {

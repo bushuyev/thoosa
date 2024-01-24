@@ -54,7 +54,7 @@ impl DataBatch for TestDs {
 mod tests {
     use std::f32::consts::PI;
     use plotters::prelude::{GREEN, RED};
-    use tch::{Device, nn, Tensor};
+    use tch::{Device, nn, Reduction, Tensor};
     use tch::nn::ConvConfig;
     use crate::{configure_dense, utils};
     use crate::simp::TestDs;
@@ -84,7 +84,7 @@ mod tests {
             vec![
                 (format!("{:?}", t_y_0.iter::<f64>().unwrap().collect::<Vec<f64>>()), GREEN, x_0),
                 (format!("{:?}", t_y_1.iter::<f64>().unwrap().collect::<Vec<f64>>()), RED, x_1),
-            ]
+            ], "data", (640, 480)
         ).unwrap();
     }
 
@@ -111,9 +111,14 @@ mod tests {
             &device,
             Box::new(TestDs::new()),
             seq.build_tch_module(&vs.root()),
-            &vs
+            &vs,
+            |pred:&Tensor, target:&Tensor|pred.binary_cross_entropy::<Tensor>(target, None, Reduction::Mean)
         );
 
         println!("OK")
+    }
+
+    pub fn my_loss(pred:&Tensor, target:&Tensor) -> Tensor {
+        pred.binary_cross_entropy::<Tensor>(target, None, Reduction::Mean)
     }
 }

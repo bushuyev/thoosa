@@ -80,3 +80,6 @@ with torch.no_grad():
 
 
 print("Ok")
+
+# torch.cuda.empty_cache()
+

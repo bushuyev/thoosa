@@ -5,7 +5,7 @@ edition = "2021"
 
 
 [dependencies]
-polars = { version = "0.36.2", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in"] }
+polars = { version = "0.36.2", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
 tch = { version = "0.14.0" }
 torch-sys = "0.14.0"
 plotters = "0.3.5"
