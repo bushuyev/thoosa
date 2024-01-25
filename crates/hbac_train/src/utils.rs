@@ -1,3 +1,4 @@
+use std::io::Write;
 use plotters::prelude::{BLACK, Color, IntoFont, LineSeries, RED, RGBColor, WHITE};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -5,7 +6,7 @@ use plotters::element::PathElement;
 use tch::{Device, nn, Reduction, TchError, Tensor};
 use tch::nn::{Module, OptimizerConfig, VarStore};
 use plotters::drawing::IntoDrawingArea;
-use crate::data::EEGs;
+use crate::data::{EEGs, GenError};
 use crate::my_tch::{Fp, LossFp};
 
 #[derive(Debug)]
@@ -20,14 +21,15 @@ impl From<TchError> for MyError {
 }
 
 pub trait DataBatch {
-    fn batch_tensor(&self, batch_size: usize) -> (Tensor, Tensor);
+    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor);
+    fn test(&self) -> (Tensor, Tensor);
 }
 
 pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, MyError> {
     Ok(t.iter::<f64>()?.collect::<Vec<f64>>())
 }
 
-pub fn train(device:&Device, eegs:Box<dyn DataBatch>, net:Box<dyn Module>, vs:&VarStore, loss:LossFp){
+pub fn train(device:&Device, eegs:Box<dyn DataBatch>, model:Box<dyn Module>, vs:&VarStore, loss_fn:LossFp) -> Result<(), GenError>{
 
     println!("device={:?}", device);
     const BATCH_SIZE: usize = 10usize;
@@ -36,21 +38,40 @@ pub fn train(device:&Device, eegs:Box<dyn DataBatch>, net:Box<dyn Module>, vs:&V
 
     for idx in 1..100 {
         print!(".");
+        std::io::stdout().flush()?;
 
-        let (x_t, y_t) = eegs.batch_tensor(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
+        let (x_t, y_t) = eegs.train_batch(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
 
-        let pred_y = net.forward(&x_t.to_device(*device));
+        let pred_y = model.forward(&x_t.to_device(*device));
 
 
         let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
-        let loss = loss(&pred_y_mean, &y_t.to_device(*device)); //.sum(kind::Kind::Float);;
+        let loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
 
         opt.backward_step(&loss);
 
+        tch::no_grad(||{
+            if idx % 10 == 0 {
+                let (x_t, y_t) = eegs.test();
+
+                let pred_y = model.forward(&x_t.to_device(*device));
+
+
+                let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
+                let valid_loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
+                println!("valid loss={:?}", loss);
+                std::io::stdout().flush().unwrap();
+            }
+
+        });
+
         if idx % 10 == 0 {
             println!("loss={:?}", loss);
+            std::io::stdout().flush()?;
         }
     }
+
+    Ok(())
 }
 
 pub fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32)) -> Result<(), Box<dyn std::error::Error>> {

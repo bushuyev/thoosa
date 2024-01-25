@@ -18,7 +18,7 @@ impl TestDs {
 }
 
 impl DataBatch for TestDs {
-    fn batch_tensor(&self, batch_size: usize) -> (Tensor, Tensor) {
+    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor) {
         let (x, y):(Vec<Tensor>, Vec<Tensor>) = (0..batch_size).fold((vec![], vec![]), |mut x_y, i| {
 
             if i % 2 == 0 {
@@ -48,6 +48,10 @@ impl DataBatch for TestDs {
             )
         )
     }
+
+    fn test(&self) -> (Tensor, Tensor) {
+        todo!()
+    }
 }
 
 #[cfg(test)]
@@ -62,7 +66,7 @@ mod tests {
 
     #[test]
     pub fn plot_ds(){
-        let tensors = TestDs::new().batch_tensor(10);
+        let tensors = TestDs::new().train_batch(10);
 
         println!("tensors.0.size()={:?}", tensors.0.size());
         println!("tensors.1.size()={:?}", tensors.1.size());

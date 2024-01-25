@@ -10,6 +10,7 @@ use tch::{Device, kind, Kind, nn, no_grad, Reduction, Tensor};
 use plotters::prelude::*;
 use crate::data::{EEGs, GenError};
 use std::env;
+use polars::prelude::{col, lit, NamedFrom, Series};
 use builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
 
@@ -145,9 +146,16 @@ fn main() -> Result<(), GenError> {
 
     println!("device={:?}, base_path={:?}", device, base_path);
 
+    let good_eegs = EEGs::good_eegs(base_path)?;
 
     let t1 = Instant::now();
-    let eegs = EEGs::load_all_eegs(base_path)?;
+    let eegs = EEGs::load_eegs (
+        base_path,
+        // None,
+        // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
+        Some(col("eeg_id").is_in(lit(good_eegs))),
+        Some(data::ByPatientIdSplitter::new()),
+    )?;
 
 
     println!("eegs={:?}", eegs.len());
@@ -164,9 +172,7 @@ fn main() -> Result<(), GenError> {
          |pred:&Tensor, target:&Tensor|{
              pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
         }
-    );
-
-    Ok(())
+    )
 
 }
 
@@ -223,7 +229,7 @@ mod tests {
 
 
         // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
-        let (tensor, y_t) = eegs.batch_tensor(10);
+        let (tensor, y_t) = eegs.train_batch(10);
         // println!("size:   {:?}", tensor.size());
         let pred_y = model.forward(
             &tensor.totype(Kind::Float) //batch, channels, L in

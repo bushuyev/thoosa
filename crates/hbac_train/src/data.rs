@@ -2,6 +2,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Add;
 use std::time::Instant;
@@ -23,26 +24,36 @@ use tch::{Kind, Tensor};
 use crate::utils::DataBatch;
 
 #[derive(Debug)]
-pub struct GenError {}
+pub struct GenError {
+    msg:String
+}
 
 impl GenError {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(msg:String) -> Self {
+        Self {
+            msg
+        }
     }
 }
 
 impl From<PolarsError> for GenError {
     fn from(value: PolarsError) -> Self {
         print!("value={:?}", value);
-        GenError::new()
+        GenError::new(value.to_string())
     }
 }
 
+impl From<std::io::Error> for GenError {
+    fn from(value: std::io::Error) -> Self {
+        print!("value={:?}", value);
+        GenError::new(value.to_string())
+    }
+}
 
 impl From<WeightedError> for GenError {
     fn from(value: WeightedError) -> Self {
         print!("value={:?}", value);
-        GenError::new()
+        GenError::new(value.to_string())
     }
 }
 
@@ -51,7 +62,7 @@ impl From<WeightedError> for GenError {
 pub struct EEG{
     egg_map:Vec<Vec<f32>>,
     eeg_id: i64,
-    patient_id: i64,
+    set: i32,
     fragments_rows: Vec<u32>,
     seizure_vote: u8,
     lpd_vote: u8,
@@ -62,11 +73,11 @@ pub struct EEG{
 }
 
 impl EEG {
-    pub fn new(egg_map:Vec<Vec<f32>>, eeg_id:i64, patient_id: i64, fragments_rows:Vec<u32>, seizure_vote:u8, lpd_vote:u8, gpd_vote:u8, lrda_vote:u8, grda_vote:u8, other_vote:u8) -> Self {
+    pub fn new(egg_map:Vec<Vec<f32>>, eeg_id:i64, set: i32, fragments_rows:Vec<u32>, seizure_vote:u8, lpd_vote:u8, gpd_vote:u8, lrda_vote:u8, grda_vote:u8, other_vote:u8) -> Self {
         Self {
             egg_map,
             eeg_id,
-            patient_id,
+            set,
             fragments_rows,     seizure_vote,      lpd_vote,      gpd_vote,       lrda_vote,      grda_vote,      other_vote
         }
     }
@@ -79,6 +90,10 @@ impl EEG {
         let i_2 = i_1 + 50 * 200;
 
         self.fragment_to_tensor(i_1, i_2)
+    }
+
+    pub fn all_fragemnts_tensor(&self) -> Vec<Tensor> {
+        self.fragments_rows.iter().map(|i| self.fragment_to_tensor(*i as usize, *i as usize + 50 * 200)).collect()
     }
 
     pub fn votes_tensor(&self) -> Tensor {
@@ -112,6 +127,10 @@ pub trait Splitter {
     type Type;
 
     fn split_to(&self, v:&Self::Type) ->Set;
+
+    fn init(&self, df:LazyFrame) -> Result<LazyFrame, GenError> {
+        Ok(df.clone())
+    }
 }
 
 struct AllTrainSplitter<E> {
@@ -126,18 +145,83 @@ impl <E> Splitter for AllTrainSplitter<E> {
     }
 }
 
-struct ByPatientIdSplitter {}
+pub(crate) struct ByPatientIdSplitter {
+    train_patients:Vec<i64>,
+    test_patients:Vec<i64>
+}
+
+impl ByPatientIdSplitter {
+    pub fn new() -> Self {
+        Self {
+            train_patients: vec![],
+            test_patients: vec![]
+        }
+    }
+}
 
 impl Splitter for ByPatientIdSplitter {
     type Type = EEG;
 
-    fn split_to(&self, v: &Self::Type) -> Set {
-        Set::Train
+    fn split_to(&self, eeg: &Self::Type) -> Set {
+        if eeg.set == 1 {
+            Set::Test
+        } else {
+            Set::Train
+        }
+
+    }
+
+    fn init(&self, df: LazyFrame) -> Result<LazyFrame, GenError>{
+        let mut df_sorted = df.clone().group_by(["patient_id"]).agg([
+            col("seizure_vote").sum(),
+            col("lpd_vote").sum(),
+            col("gpd_vote").sum(),
+            col("lrda_vote").sum(),
+            col("grda_vote").sum(),
+            col("other_vote").sum(),
+        ]).sort_by_exprs([
+             col("seizure_vote")
+                 + col("lpd_vote")
+                 + col("gpd_vote")
+                 + col("lrda_vote")
+                 + col("grda_vote")
+                 + col("other_vote")
+         ],
+         vec![false], true, true
+        )
+        .select([col("patient_id")])
+        .collect()?;
+
+        let df_set = df_sorted.with_column(Series::new("set", (0..df_sorted.shape().0).map(|i| if rand::random::<f32>() > 0.7 { 1i32 } else { 0i32 }).collect::<Vec<_>>()))?;
+
+        Ok(df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)))
+        // Ok(df.clone().with_column(lit(1).alias("set"))) //.collect()?.lazy()
     }
 }
 
 impl EEGs {
 
+    pub fn good_eegs(base_path: &str)  -> Result<Series, GenError>{
+        Ok(LazyCsvReader::new(format!("{}/train.csv", base_path))
+            .finish()?
+            .with_streaming(true)
+            .group_by([col("eeg_id")])
+            .agg([
+                col("seizure_vote").first(),
+                col("lpd_vote").first(),
+                col("gpd_vote").first(),
+                col("lrda_vote").first(),
+                col("grda_vote").first(),
+                col("other_vote").first(),
+            ])
+            .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
+            .filter(
+                col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
+            )
+            .collect()?
+            .column("eeg_id")?.clone())
+
+    }
 
     pub fn load_all_eegs(base_path: &str) -> Result<Box<EEGs>, GenError> {
         EEGs::load_eegs::<_>(base_path, None, None::<AllTrainSplitter<EEG>>)
@@ -147,11 +231,31 @@ impl EEGs {
             .finish()?
             .with_streaming(true);
 
+        let df = match splitter.as_ref() {
+            None => {
+                df
+            }
+            Some(splitter) => {
+                splitter.init(df)?
+            }
+        };
+
+        println!("df={:?}", df.clone().collect()?.head(Some(10)));
+
+
         let gr_by_eeg_id_df = df
             .clone()
             // .collect()?
             // .sample_n(&Series::new("n", [3]), false, true, None)?
             // .lazy()
+            // .with_column(concat_list([
+            //     col("seizure_vote"),
+            //     col("lpd_vote"),
+            //     col("gpd_vote"),
+            //     col("lrda_vote"),
+            //     col("grda_vote"),
+            //     col("other_vote")
+            // ])?.alias("all_votes"))
             .filter(filter.unwrap_or(true.into()))
             // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
             // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
@@ -160,7 +264,7 @@ impl EEGs {
             .group_by([col("eeg_id")])
             .agg([
                 col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds"),
-                col("patient_id").first(),
+                col("set").first(),
                 col("seizure_vote").first(),
                 col("lpd_vote").first(),
                 col("gpd_vote").first(),
@@ -171,13 +275,14 @@ impl EEGs {
             .collect()?;
 
         println!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
+        std::io::stdout().flush()?;
 
         let mut train_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0);//TODO capacity
         let mut test_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0);
 
-        for (eeg_id, patient_id, eeg_label_offset_seconds, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
+        for (eeg_id, set, eeg_label_offset_seconds, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
             .column("eeg_id")?.i64()?.into_iter()
-            .zip(gr_by_eeg_id_df.column("patient_id")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("set")?.i32()?)
             .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
             .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
             .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
@@ -186,7 +291,7 @@ impl EEGs {
             .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
             .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
             .map(|
-                ((((((((eeg_id, patient_id),
+                ((((((((eeg_id, set),
                     eeg_label_offset_seconds),
                     seizure_vote),
                     lpd_vote),
@@ -197,7 +302,7 @@ impl EEGs {
             | {
                 (
                     eeg_id.unwrap_or_default(),
-                    patient_id.unwrap_or_default(),
+                    set.unwrap_or_default(),
                     eeg_label_offset_seconds.unwrap_or_default(),
                     seizure_vote.unwrap_or_default(),
                     lpd_vote.unwrap_or_default(),
@@ -253,7 +358,7 @@ impl EEGs {
             let eeg =   EEG::new(
                 eegs_vec,
                 eeg_id,
-                patient_id,
+                set,
                 fragments_rows,
                 seizure_vote.try_into().expect("seizure_vote"),
                 lpd_vote.try_into().expect("lpd_vote"),
@@ -275,6 +380,7 @@ impl EEGs {
 
 
             print!(".");
+            std::io::stdout().flush()?;
         }
 
         println!("tensors.len={}  size of tensors {}", train_eegs.len(), std::mem::size_of_val(&*train_eegs));
@@ -290,7 +396,11 @@ impl EEGs {
     }
 
 
-    fn _batch_tensor(&self, batch_size: usize) -> (Tensor, Tensor) {
+
+}
+
+impl DataBatch for EEGs {
+    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
         let (eegs, votes) = self.train_set
@@ -317,11 +427,31 @@ impl EEGs {
             )
         )
     }
-}
 
-impl DataBatch for EEGs {
-    fn batch_tensor(&self, batch_size: usize) -> (Tensor, Tensor) {
-        self._batch_tensor(batch_size)
+    fn test(&self) -> (Tensor, Tensor) {
+        let mut rng = thread_rng();
+
+        let (eegs, votes) = self.test_set.iter()
+            .fold((vec![], vec![]), |mut a, eeg| {
+
+                for fragemnt_tensor in eeg.all_fragemnts_tensor() {
+                    a.0.push(fragemnt_tensor);
+                    a.1.push(eeg.votes_tensor());
+                }
+
+                a
+            });
+
+        (
+            Tensor::stack(
+                eegs.as_slice(),
+                0,
+            ),
+            Tensor::stack(
+                votes.as_slice(),
+                0,
+            )
+        )
     }
 }
 
@@ -404,6 +534,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::ops::Div;
     use plotters::prelude::{GREEN, RED};
     use plotters::style::BLACK;
@@ -411,7 +542,7 @@ mod tests {
     use polars::prelude::*;
 
     use crate::{EEGs, GenError};
-    use crate::data::{arr_to_expr, EEG, Set, split_frame_by_offsets, Splitter};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, Set, split_frame_by_offsets, Splitter};
     use rand::thread_rng;
     use rand::seq::SliceRandom;
     use tch::Tensor;
@@ -426,27 +557,24 @@ mod tests {
 
     #[test]
     pub fn test_load_eegs() -> Result<(), GenError> {
+        println!("test_load_eegs");
+        std::io::stdout().flush()?;
 
-        struct TestSplitter {
+        let good_eegs = EEGs::good_eegs("../../data")?;
 
-        }
-        impl Splitter for TestSplitter {
-            type Type = EEG;
-
-            fn split_to(&self, v: &Self::Type) -> Set {
-                Set::Train
-            }
-        }
-
-        let eegs = EEGs::load_eegs::<_>(
+        let eegs = EEGs::load_eegs (
             "../../data",
             // Some(col("eeg_id").eq(lit(1345588872)))
-            Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033])))),
-            None::<TestSplitter>,
+            // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
+            Some(col("eeg_id").is_in(lit(good_eegs))),
+            // None,
+            // Some(col("all_votes").list().max().eq(col("all_votes").list().sum())),
+            Some(ByPatientIdSplitter::new()),
         )?;
 
         // assert_eq!(eegs.len(), 1);
-        println!("eegs={:?}", eegs.len());
+        println!("train eegs={:?}", eegs.train_set.len());
+        println!("test eegs={:?}", eegs.test_set.len());
 
 
         // println!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());
@@ -585,6 +713,50 @@ mod tests {
     #[test]
     pub fn test_test() -> Result<(), GenError> {
 
+        // let df = LazyCsvReader::new("../../data/train.csv")
+        //     .finish()?
+        //     .with_streaming(true);
+        //
+        // let mut df_sorted = df.clone().group_by(["patient_id"]).agg([
+        //     col("seizure_vote").sum(),
+        //     col("lpd_vote").sum(),
+        //     col("gpd_vote").sum(),
+        //     col("lrda_vote").sum(),
+        //     col("grda_vote").sum(),
+        //     col("other_vote").sum(),
+        // ]).sort_by_exprs([
+        //   col("seizure_vote")
+        //   +col("lpd_vote")
+        //   +col("gpd_vote")
+        //   +col("lrda_vote")
+        //   +col("grda_vote")
+        //   +col("other_vote")
+        // ], vec![false], true, true)
+        //     .select([col("patient_id")])
+        //     .collect()?;
+        //
+        // let df_set = df_sorted.with_column(Series::new("set", (0..df_sorted.shape().0).map(|i| if rand::random::<f32>() > 0.7 {1i32} else {0i32}).collect::<Vec<_>>()))?;
+        //
+        // let df_set = df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)).collect()?;
+        //
+        // println!("{:?}", df_set.head(Some(100)));
+
+        /*let df = df!(
+                        // 30   20    40    10    50
+            "field_1" => [ 3,    4,   2,    5,    1],
+            "field_2" => [ 27,  16,   38,   5,    49],
+            "field_3" => ["c",  "b",  "d",  "a", "e"]
+        )?;
+
+        let df_sorted = df.lazy()
+            .sort_by_exprs([
+            col("field_1") + col("field_2")
+            ], vec![false], true, true)
+            .collect()?;
+
+        println!("df_sorted={:?}", df_sorted);*/
+
+
         // let choices = [1, 2, 4, 8, 16, 32, 3, 7];
         // let mut rng = thread_rng();
         //
@@ -599,7 +771,7 @@ mod tests {
         //     if x % 2 == 0 {wen} else {won}
         // } )?.map(|i|*i).collect::<Vec<i32>>());
 
-        let df = DataFrame::new(vec![
+       /* let df = DataFrame::new(vec![
             Series::new("groups", &(0..100).map(|i| if i % 10 == 0 {"a"} else { if i % 3 == 0 {"c"} else {"b"}}).collect::<Vec<&str>>().as_slice()),
             Series::new("values", &(0..100).collect::<Vec<i32>>().as_slice())
         ])?;
@@ -610,7 +782,7 @@ mod tests {
         let dfs = df.partition_by(["set"], false)?;
 
         // println!("df={:?}", df.head(Some(10)));
-        println!("dfs={:?}", dfs);
+        println!("dfs={:?}", dfs);*/
 
         // let df_filt = df
         //     .lazy()
