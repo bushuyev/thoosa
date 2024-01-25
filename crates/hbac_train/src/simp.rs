@@ -49,7 +49,7 @@ impl DataBatch for TestDs {
         )
     }
 
-    fn test(&self) -> (Tensor, Tensor) {
+    fn valid(&self, batch_size:Option<usize>) -> (Tensor, Tensor) {
         todo!()
     }
 }

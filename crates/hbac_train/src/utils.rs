@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::mem;
 use plotters::prelude::{BLACK, Color, IntoFont, LineSeries, RED, RGBColor, WHITE};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -22,7 +23,7 @@ impl From<TchError> for MyError {
 
 pub trait DataBatch {
     fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor);
-    fn test(&self) -> (Tensor, Tensor);
+    fn valid(&self, batch_size:Option<usize>) -> (Tensor, Tensor);
 }
 
 pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, MyError> {
@@ -42,24 +43,28 @@ pub fn train(device:&Device, eegs:Box<dyn DataBatch>, model:Box<dyn Module>, vs:
 
         let (x_t, y_t) = eegs.train_batch(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
 
-        let pred_y = model.forward(&x_t.to_device(*device));
+        let x_t = x_t.to_device(*device);
+        let y_t = y_t.to_device(*device);
+
+        let pred_y = model.forward(&x_t);
 
 
         let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
-        let loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
+
+        let loss = loss_fn(&pred_y_mean, &y_t);
 
         opt.backward_step(&loss);
 
         tch::no_grad(||{
             if idx % 10 == 0 {
-                let (x_t, y_t) = eegs.test();
+                let (x_t, y_t) = eegs.valid(Some(BATCH_SIZE));
 
                 let pred_y = model.forward(&x_t.to_device(*device));
 
 
                 let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
                 let valid_loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
-                println!("valid loss={:?}", loss);
+                println!("valid loss={:?}", valid_loss);
                 std::io::stdout().flush().unwrap();
             }
 
@@ -69,6 +74,11 @@ pub fn train(device:&Device, eegs:Box<dyn DataBatch>, model:Box<dyn Module>, vs:
             println!("loss={:?}", loss);
             std::io::stdout().flush()?;
         }
+
+        drop(x_t);
+        drop(y_t);
+        drop(pred_y_mean);
+        drop(loss);
     }
 
     Ok(())

@@ -113,14 +113,14 @@ impl EEG {
 #[derive(Debug)]
 pub struct EEGs {
     train_set: Vec<EEG>,
-    test_set: Vec<EEG>,
+    valid_set: Vec<EEG>,
 }
 
 #[derive(Default)]
 pub enum Set {
     #[default]
     Train,
-    Test
+    Valid
 }
 
 pub trait Splitter {
@@ -146,13 +146,15 @@ impl <E> Splitter for AllTrainSplitter<E> {
 }
 
 pub(crate) struct ByPatientIdSplitter {
+    train_frac:f32,
     train_patients:Vec<i64>,
     test_patients:Vec<i64>
 }
 
 impl ByPatientIdSplitter {
-    pub fn new() -> Self {
+    pub fn new(train_frac:f32) -> Self {
         Self {
+            train_frac: train_frac,
             train_patients: vec![],
             test_patients: vec![]
         }
@@ -164,7 +166,7 @@ impl Splitter for ByPatientIdSplitter {
 
     fn split_to(&self, eeg: &Self::Type) -> Set {
         if eeg.set == 1 {
-            Set::Test
+            Set::Valid
         } else {
             Set::Train
         }
@@ -192,7 +194,7 @@ impl Splitter for ByPatientIdSplitter {
         .select([col("patient_id")])
         .collect()?;
 
-        let df_set = df_sorted.with_column(Series::new("set", (0..df_sorted.shape().0).map(|i| if rand::random::<f32>() > 0.7 { 1i32 } else { 0i32 }).collect::<Vec<_>>()))?;
+        let df_set = df_sorted.with_column(Series::new("set", (0..df_sorted.shape().0).map(|i| if rand::random::<f32>() > self.train_frac { 1i32 } else { 0i32 }).collect::<Vec<_>>()))?;
 
         Ok(df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)))
         // Ok(df.clone().with_column(lit(1).alias("set"))) //.collect()?.lazy()
@@ -278,7 +280,7 @@ impl EEGs {
         std::io::stdout().flush()?;
 
         let mut train_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0);//TODO capacity
-        let mut test_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0);
+        let mut valid_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0);
 
         for (eeg_id, set, eeg_label_offset_seconds, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
             .column("eeg_id")?.i64()?.into_iter()
@@ -373,8 +375,8 @@ impl EEGs {
                 Set::Train => {
                     train_eegs.push(eeg);
                 }
-                Set::Test => {
-                    test_eegs.push(eeg);
+                Set::Valid => {
+                    valid_eegs.push(eeg);
                 }
             }
 
@@ -383,11 +385,12 @@ impl EEGs {
             std::io::stdout().flush()?;
         }
 
-        println!("tensors.len={}  size of tensors {}", train_eegs.len(), std::mem::size_of_val(&*train_eegs));
+        println!("tensors.len={}  valid_eegs.len={}", train_eegs.len(), valid_eegs.len());
+        std::io::stdout().flush()?;
 
         Ok(Box::new(EEGs{
             train_set: train_eegs,
-            test_set: test_eegs
+            valid_set: valid_eegs
         }))
     }
 
@@ -396,17 +399,35 @@ impl EEGs {
     }
 
 
+    fn all_set(data: &Vec<EEG>) -> (Tensor, Tensor) {
+        let (eegs, votes) = data.iter()
+            .fold((vec![], vec![]), |mut a, eeg| {
+                for fragemnt_tensor in eeg.all_fragemnts_tensor() {
+                    a.0.push(fragemnt_tensor);
+                    a.1.push(eeg.votes_tensor());
+                }
 
-}
+                a
+            });
 
-impl DataBatch for EEGs {
-    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor) {
+        (
+            Tensor::stack(
+                eegs.as_slice(),
+                0,
+            ),
+            Tensor::stack(
+                votes.as_slice(),
+                0,
+            )
+        )
+    }
+
+    fn random_subset(batch_size: usize, data: &Vec<EEG>) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
-        let (eegs, votes) = self.train_set
+        let (eegs, votes) = data
             .choose_multiple(&mut rng, batch_size)
             .fold((vec![], vec![]), |mut a, eeg| {
-
                 let fragemnt_tensor = eeg.random_fragemnt_tensor(&mut rng);
                 // println!("random_fragemnt_tensor size: {:?}", tensor.size());
 
@@ -427,31 +448,23 @@ impl DataBatch for EEGs {
             )
         )
     }
+}
 
-    fn test(&self) -> (Tensor, Tensor) {
-        let mut rng = thread_rng();
+impl DataBatch for EEGs {
+    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor) {
+        Self::random_subset(batch_size, &self.train_set)
+    }
 
-        let (eegs, votes) = self.test_set.iter()
-            .fold((vec![], vec![]), |mut a, eeg| {
+    fn valid(&self, batch_size: Option<usize>) -> (Tensor, Tensor) {
+        match batch_size {
+            None => {
+                Self::all_set(&self.valid_set)
+            }
+            Some(batch_size) => {
+                Self::random_subset(batch_size, &self.valid_set)
+            }
+        }
 
-                for fragemnt_tensor in eeg.all_fragemnts_tensor() {
-                    a.0.push(fragemnt_tensor);
-                    a.1.push(eeg.votes_tensor());
-                }
-
-                a
-            });
-
-        (
-            Tensor::stack(
-                eegs.as_slice(),
-                0,
-            ),
-            Tensor::stack(
-                votes.as_slice(),
-                0,
-            )
-        )
     }
 }
 
@@ -569,12 +582,12 @@ mod tests {
             Some(col("eeg_id").is_in(lit(good_eegs))),
             // None,
             // Some(col("all_votes").list().max().eq(col("all_votes").list().sum())),
-            Some(ByPatientIdSplitter::new()),
+            Some(ByPatientIdSplitter::new(0.7)),
         )?;
 
         // assert_eq!(eegs.len(), 1);
         println!("train eegs={:?}", eegs.train_set.len());
-        println!("test eegs={:?}", eegs.test_set.len());
+        println!("test eegs={:?}", eegs.valid_set.len());
 
 
         // println!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());

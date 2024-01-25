@@ -3,6 +3,7 @@ mod data;
 mod builder;
 mod utils;
 mod simp;
+mod version;
 
 use std::time::Instant;
 use tch::nn::{ConvConfig, Module, OptimizerConfig};
@@ -10,9 +11,11 @@ use tch::{Device, kind, Kind, nn, no_grad, Reduction, Tensor};
 use plotters::prelude::*;
 use crate::data::{EEGs, GenError};
 use std::env;
+use std::io::Write;
 use polars::prelude::{col, lit, NamedFrom, Series};
 use builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
+use crate::version::VERSION;
 
 
 fn train_x2(device:&Device) {
@@ -135,6 +138,9 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 
 
 fn main() -> Result<(), GenError> {
+    println!("VERSION: {}", VERSION);
+    std::io::stdout().flush()?;
+
     let args: Vec<String> = env::args().collect();
     let base_path = args.get(1).map(|s|s.as_str()).unwrap_or("../../data");
 
@@ -154,7 +160,7 @@ fn main() -> Result<(), GenError> {
         // None,
         // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
         Some(col("eeg_id").is_in(lit(good_eegs))),
-        Some(data::ByPatientIdSplitter::new()),
+        Some(data::ByPatientIdSplitter::new(0.7)),
     )?;
 
 
