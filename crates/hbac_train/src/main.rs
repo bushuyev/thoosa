@@ -11,93 +11,18 @@ use tch::{Device, kind, Kind, nn, no_grad, Reduction, Tensor};
 use plotters::prelude::*;
 use crate::data::{EEGs, GenError};
 use std::env;
+use std::fs::File;
 use std::io::Write;
+use log::{debug, info};
 use polars::prelude::{col, lit, NamedFrom, Series};
+use simplelog::*;
 use builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
+use crate::utils::DataBatch;
 use crate::version::VERSION;
 
 
-fn train_x2(device:&Device) {
-    println!("test_x2device={:?}", device);
-    const BATCH_SIZE: i64 = 10i64;
 
-
-    let vs = nn::VarStore::new(device.clone());
-
-    let nth_params = NthConst::new(100);
-
-    let lin_block = |b: &mut SeqBuilder, i| b
-        .linear_p(i, &nth_params)
-        .func(Tensor::elu)
-        .end();
-
-    let seq = SeqBuilder::new(1000)
-        .n_blocks(lin_block, 3)
-        .linear_s(1000)
-        .end_seq();
-    let model = seq.build_tch_module(&vs.root());
-
-    let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
-
-    let x_t = Tensor::from_slice(&(0..1000).map(|v|v as f32).collect::<Vec<f32>>()[..]).to_device(*device);
-    let y_t = x_t.pow_tensor_scalar(2.);
-
-    println!("x_tx_t.device={:?}", x_t.device());
-    println!("y_t.device={:?}", y_t.device());
-
-    // x_t.print();
-    // y_t.print();
-
-    for idx in 1..10_000 {
-        // let (x_t, y_t) = load_batch(device, BATCH_SIZE);
-
-        let pred_y = model.forward(&x_t);
-
-        // println!("pred_y.device={:?}", pred_y.device());
-
-        let loss = pred_y.huber_loss(&y_t, Reduction::Mean, 1.0).sum(kind::Kind::Float);
-
-        opt.backward_step(&loss);
-
-        if idx % 100 == 0 {
-            print!(".");
-        }
-    }
-
-
-
-    no_grad(|| {
-        let y_pred = model.forward(&x_t);
-
-        let pred = x_t.iter::<f64>().unwrap().zip(
-            y_pred.iter::<f64>().unwrap()
-        ).map(|(x, y)|(x as f32, y as f32)).collect::<Vec<(f32, f32)>>();
-
-        let test = x_t.iter::<f64>().unwrap().zip(
-            y_t.iter::<f64>().unwrap()
-        ).map(|(x, y)|(x as f32, y as f32)).collect::<Vec<(f32, f32)>>();
-
-        // println!("test={:?}", test);
-        // println!("pred={:?}", pred);
-
-        utils::plot(
-            vec![
-                ("pred".into(), RED, pred),
-                ("test".into(), GREEN, test),
-            ], "pred/test", (640, 480)
-        ).unwrap();
-    })
-
-}
-
-//
-// plot(
-//     vec![
-//         ("x2".into(), RED,  (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x)).collect::<Vec<(f32, f32)>>()),
-//         ("x3".into(), GREEN, (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x * x)).collect::<Vec<(f32, f32)>>())
-//     ]
-// ).unwrap();
 
 pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node  {
     let mut builder = crate::SeqBuilder::new(num_features);
@@ -138,7 +63,14 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 
 
 fn main() -> Result<(), GenError> {
-    println!("VERSION: {}", VERSION);
+    CombinedLogger::init(
+        vec![
+            TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+            WriteLogger::new(LevelFilter::Debug, Config::default(), File::create("hbac.log")?),
+        ]
+    )?;
+
+    info!("VERSION: {}", VERSION);
     std::io::stdout().flush()?;
 
     let args: Vec<String> = env::args().collect();
@@ -150,7 +82,7 @@ fn main() -> Result<(), GenError> {
         Device::Cpu
     };
 
-    println!("device={:?}, base_path={:?}", device, base_path);
+    debug!("device={:?}, base_path={:?}", device, base_path);
 
     let good_eegs = EEGs::good_eegs(base_path)?;
 
@@ -164,21 +96,46 @@ fn main() -> Result<(), GenError> {
     )?;
 
 
-    println!("eegs={:?}", eegs.len());
+    debug!("eegs={:?}", eegs.len());
 
-    println!("done in {}", t1.elapsed().as_millis());
+    debug!("done in {}", t1.elapsed().as_millis());
     let vs = nn::VarStore::new(device.clone());
 
 
-    utils::train(
-        &device,
-        eegs,
-        configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root()),
-        &vs,
-         |pred:&Tensor, target:&Tensor|{
-             pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
+
+    for num_blocks in [16, 32, 64] { //[2, 4, 6, 8, 16]
+
+        for kernel in [3, 5, 10, 20, 50, 100] { //[5, 7, 10, 20, 50, 100]
+            debug!("---------------------------------------num_blocks={:?} kernel={:?}", num_blocks, kernel);
+
+            match configure_dense(50 * 200, num_blocks, 4, kernel, 20).build_tch_module(&vs.root()) {
+                Ok(model) => {
+                    match utils::train(
+                        &device,
+                        eegs.as_ref() as &dyn DataBatch,
+                        model,
+                        &vs,
+                        |pred: &Tensor, target: &Tensor| {
+                            pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
+                        }
+                    ){
+                        Ok(_) => {
+                            debug!("num_blocks={:?} kernel={:?} done", num_blocks, kernel);
+                        }
+                        Err(e) => {
+                            debug!("num_blocks={:?} kernel={:?} train failed: {:?}", num_blocks, kernel, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("num_blocks={:?} kernel={:?} build_tch_module failed: {:?}", num_blocks, kernel, e);
+                }
+            };
+
         }
-    )
+    }
+
+    Ok(())
 
 }
 
@@ -192,6 +149,7 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use tch::{Device, kind, Kind, nn, Reduction, Tensor};
     use tch::nn::{ConvConfig, Module, OptimizerConfig};
     use crate::builder::SeqBuilder;
@@ -215,7 +173,7 @@ mod tests {
 
         let vs = nn::VarStore::new(Device::Cpu);
 
-        let net = seq.build_tch_module(&vs.root());
+        let net = seq.build_tch_module(&vs.root()).unwrap();
 
         let y_p = net.forward(&tch::Tensor::randn([10, 2], (Kind::Float, Device::Cpu)));
 
@@ -226,7 +184,7 @@ mod tests {
     pub fn test_configure_dense(){
         let vs = nn::VarStore::new(Device::Cpu);
 
-        let model = configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root());
+        let model = configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root()).unwrap();
 
 
         let eegs = EEGs::load_all_eegs("../../data").unwrap();
@@ -236,27 +194,27 @@ mod tests {
 
         // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
         let (tensor, y_t) = eegs.train_batch(10);
-        // println!("size:   {:?}", tensor.size());
+        // debug!("size:   {:?}", tensor.size());
         let pred_y = model.forward(
             &tensor.totype(Kind::Float) //batch, channels, L in
         );
         let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
-        println!("1. pred size:   pred_y.size()={:?}     y_t.size()={:?}", pred_y_mean.size(), y_t.size());
+        debug!("1. pred size:   pred_y.size()={:?}     y_t.size()={:?}", pred_y_mean.size(), y_t.size());
         // let loss = y_t.mse_loss(&pred_y_mean, Reduction::Mean); //.sum(kind::Kind::Float);;
         let loss = y_t.cross_entropy_loss::<Tensor>(&pred_y_mean, None, Reduction::Mean, -100, 0.0);
         // let loss_1 = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
-        println!(":::::::::::::::::::::::::::: pred_y.size()={:?} y_t.size()={:?}, pred_y_mean.size()={:?},  loss.size()={:?}", pred_y.size(), y_t.size(), pred_y_mean.size(),  loss.size());
+        debug!(":::::::::::::::::::::::::::: pred_y.size()={:?} y_t.size()={:?}, pred_y_mean.size()={:?},  loss.size()={:?}", pred_y.size(), y_t.size(), pred_y_mean.size(),  loss.size());
         loss.print();
-        println!("::::::::::::::::::::::::::::: loss={:?}", loss);
+        debug!("::::::::::::::::::::::::::::: loss={:?}", loss);
         opt.backward_step(&loss);
         //
         // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
         // let (tensor, y_t) = eegs.batch_tensor(10);
-        // println!("size:   {:?}", tensor.size());
+        // debug!("size:   {:?}", tensor.size());
         // let pred_y = model.forward(
         //     &tensor //batch, channels, L in
         // );
-        // println!("2. pred size:   {:?}", pred_y.size());
+        // debug!("2. pred size:   {:?}", pred_y.size());
         // let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
         // // let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
         // let loss = y_t.mse_loss(&pred_y_mean, Reduction::None);
@@ -290,7 +248,7 @@ mod tests {
 
     #[test]
     pub fn test_test(){
-        println!("ZZZZZZZZZZZZZZZZZZB");
+        debug!("ZZZZZZZZZZZZZZZZZZB");
 
         let t1 = Tensor::from_slice(&[4., 6.]);
         let t2 = Tensor::from_slice(&[15., 5.]);
@@ -300,15 +258,15 @@ mod tests {
         let t_vstack = Tensor::vstack(&[t1.copy(), t2.copy()]);
 
 
-        println!("t1={:?}, t2={:?}, t_stack={:?} t_column_stack={:?} t_vstack={:?}", t1, t2, t_stack, t_column_stack, t_vstack);
+        debug!("t1={:?}, t2={:?}, t_stack={:?} t_column_stack={:?} t_vstack={:?}", t1, t2, t_stack, t_column_stack, t_vstack);
         t_stack.print();
-        println!("t_stack mean={:?}", t_stack.mean_dim(1, false, kind::Kind::Float));
+        debug!("t_stack mean={:?}", t_stack.mean_dim(1, false, kind::Kind::Float));
 
         t_column_stack.print();
-        println!("t_column_stack mean={:?}", t_column_stack.mean_dim(1, false, kind::Kind::Float));
+        debug!("t_column_stack mean={:?}", t_column_stack.mean_dim(1, false, kind::Kind::Float));
 
         t_vstack.print();
-        println!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
+        debug!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
     }
 }
 

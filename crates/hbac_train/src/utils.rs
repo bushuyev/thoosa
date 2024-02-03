@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::mem;
+use log::{debug, info, trace};
 use plotters::prelude::{BLACK, Color, IntoFont, LineSeries, RED, RGBColor, WHITE};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -30,15 +31,15 @@ pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, MyError> {
     Ok(t.iter::<f64>()?.collect::<Vec<f64>>())
 }
 
-pub fn train(device:&Device, eegs:Box<dyn DataBatch>, model:Box<dyn Module>, vs:&VarStore, loss_fn:LossFp) -> Result<(), GenError>{
+pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&VarStore, loss_fn:LossFp) -> Result<(), GenError>{
 
-    println!("device={:?}", device);
+    debug!("device={:?}", device);
     const BATCH_SIZE: usize = 10usize;
 
-    let mut opt = nn::AdamW::default().build(vs, 0.00001).unwrap();
+    let mut opt = nn::AdamW::default().build(vs, 6.25e-5).unwrap();
 
     for idx in 1..100 {
-        print!(".");
+        trace!("idx={}", idx);
         std::io::stdout().flush()?;
 
         let (x_t, y_t) = eegs.train_batch(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
@@ -64,14 +65,14 @@ pub fn train(device:&Device, eegs:Box<dyn DataBatch>, model:Box<dyn Module>, vs:
 
                 let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
                 let valid_loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
-                println!("valid loss={:?}", valid_loss);
+                info!("valid loss={:?}", valid_loss);
                 std::io::stdout().flush().unwrap();
             }
 
         });
 
         if idx % 10 == 0 {
-            println!("loss={:?}", loss);
+            info!("loss={:?}", loss);
             std::io::stdout().flush()?;
         }
 

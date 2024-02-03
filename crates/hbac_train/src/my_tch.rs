@@ -1,7 +1,9 @@
+use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
-use tch::nn::{Module, Sequential};
+use tch::nn::{Init, Linear, LinearConfig, Module, Path, Sequential};
 use tch::Tensor;
 use torch_sys::IntList;
+use crate::data::GenError;
 
 #[derive(Debug)]
 pub struct MySequential {
@@ -112,4 +114,26 @@ impl Module for MyFuncModule {
     fn forward(&self, xs: &Tensor) -> Tensor {
         (self.func)(xs)
     }
+}
+
+
+
+pub fn my_linear<'a, T: Borrow<Path<'a>>>(
+    vs: T,
+    in_dim: i64,
+    out_dim: i64,
+    c: LinearConfig,
+) -> Result<Linear, GenError> {
+    let vs = vs.borrow();
+    let bs = if c.bias {
+        let bs_init = c.bs_init.unwrap_or_else(|| {
+            let bound = 1.0 / (in_dim as f64).sqrt();
+            Init::Uniform { lo: -bound, up: bound }
+        });
+        Some(vs.f_var("bias", &[out_dim], bs_init)?)
+    } else {
+        None
+    };
+
+    Ok(Linear { ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs })
 }

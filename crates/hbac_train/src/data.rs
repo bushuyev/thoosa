@@ -1,11 +1,12 @@
 #![feature(vec_into_raw_parts)]
 
 use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Add;
 use std::time::Instant;
+use log::{debug, SetLoggerError};
 
 use polars::error::PolarsError;
 use polars::export::ahash::{HashMap, HashMapExt};
@@ -36,27 +37,13 @@ impl GenError {
     }
 }
 
-impl From<PolarsError> for GenError {
-    fn from(value: PolarsError) -> Self {
-        print!("value={:?}", value);
+
+impl<D> From<D> for GenError where D: Display {
+    fn from(value: D) -> Self {
+        debug!("value={}", value);
         GenError::new(value.to_string())
     }
 }
-
-impl From<std::io::Error> for GenError {
-    fn from(value: std::io::Error) -> Self {
-        print!("value={:?}", value);
-        GenError::new(value.to_string())
-    }
-}
-
-impl From<WeightedError> for GenError {
-    fn from(value: WeightedError) -> Self {
-        print!("value={:?}", value);
-        GenError::new(value.to_string())
-    }
-}
-
 
 #[derive(Debug)]
 pub struct EEG{
@@ -242,7 +229,7 @@ impl EEGs {
             }
         };
 
-        println!("df={:?}", df.clone().collect()?.head(Some(10)));
+        debug!("df={:?}", df.clone().collect()?.head(Some(10)));
 
 
         let gr_by_eeg_id_df = df
@@ -276,7 +263,7 @@ impl EEGs {
             ])
             .collect()?;
 
-        println!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
+        debug!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
         std::io::stdout().flush()?;
 
         let mut train_eegs = Vec::with_capacity(gr_by_eeg_id_df.shape().0);//TODO capacity
@@ -324,7 +311,7 @@ impl EEGs {
                 .collect::<Vec<u32>>();
 
 
-            // println!("eeg_id ={:?}, fragments_in_mls={:?} seizure_vote={:?}  lpd_vote={:?}, gpd_vote={:?}, lrda_vote={:?}, grda_vote={:?}, other_vote={:?}",
+            // debug!("eeg_id ={:?}, fragments_in_mls={:?} seizure_vote={:?}  lpd_vote={:?}, gpd_vote={:?}, lrda_vote={:?}, grda_vote={:?}, other_vote={:?}",
             //                 eeg_id, fragments_in_mls,     seizure_vote,      lpd_vote,      gpd_vote,       lrda_vote,      grda_vote,      other_vote);
 
             let mut scan_conf = ScanArgsParquet::default();
@@ -385,7 +372,7 @@ impl EEGs {
             std::io::stdout().flush()?;
         }
 
-        println!("tensors.len={}  valid_eegs.len={}", train_eegs.len(), valid_eegs.len());
+        debug!("tensors.len={}  valid_eegs.len={}", train_eegs.len(), valid_eegs.len());
         std::io::stdout().flush()?;
 
         Ok(Box::new(EEGs{
@@ -429,7 +416,7 @@ impl EEGs {
             .choose_multiple(&mut rng, batch_size)
             .fold((vec![], vec![]), |mut a, eeg| {
                 let fragemnt_tensor = eeg.random_fragemnt_tensor(&mut rng);
-                // println!("random_fragemnt_tensor size: {:?}", tensor.size());
+                // debug!("random_fragemnt_tensor size: {:?}", tensor.size());
 
                 a.0.push(fragemnt_tensor);
                 a.1.push(eeg.votes_tensor());
@@ -549,6 +536,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 mod tests {
     use std::io::Write;
     use std::ops::Div;
+    use log::debug;
     use plotters::prelude::{GREEN, RED};
     use plotters::style::BLACK;
     use polars::export::ahash::{HashMap, HashMapExt};
@@ -570,27 +558,29 @@ mod tests {
 
     #[test]
     pub fn test_load_eegs() -> Result<(), GenError> {
-        println!("test_load_eegs");
+        debug!("test_load_eegs");
         std::io::stdout().flush()?;
 
-        let good_eegs = EEGs::good_eegs("../../data")?;
+        // let good_eegs = EEGs::good_eegs("../../data")?;
 
         let eegs = EEGs::load_eegs (
             "../../data",
-            // Some(col("eeg_id").eq(lit(1345588872)))
+            Some(col("eeg_id").eq(lit(1345588872))),
             // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
-            Some(col("eeg_id").is_in(lit(good_eegs))),
+            // Some(col("eeg_id").is_in(lit(good_eegs))),
             // None,
             // Some(col("all_votes").list().max().eq(col("all_votes").list().sum())),
             Some(ByPatientIdSplitter::new(0.7)),
         )?;
 
         // assert_eq!(eegs.len(), 1);
-        println!("train eegs={:?}", eegs.train_set.len());
-        println!("test eegs={:?}", eegs.valid_set.len());
+        debug!("train eegs={:?}", eegs.train_set.len());
+        debug!("test eegs={:?}", eegs.valid_set.len());
 
 
-        // println!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());
+        // debug!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());
+
+
 
 
         crate::utils::plot(
@@ -602,6 +592,7 @@ mod tests {
 
         Ok(())
     }
+
 
     #[test]
     pub fn test_arr_to_expr() -> Result<(), GenError> {
@@ -619,7 +610,7 @@ mod tests {
             .filter(filter_exps)
             .collect()?;
 
-        println!("df={:?}", df);
+        debug!("df={:?}", df);
 
         assert_eq!(
             df!(
@@ -714,12 +705,12 @@ mod tests {
     //         "z" => (0..8).map(|x|x^2).collect::<Vec<i32>>(),
     //     )?;
     //
-    //     println!("1. df={:?}", df);
+    //     debug!("1. df={:?}", df);
     //
     //     // let df = df.lazy().with_columns([sum_horizontal(&[cols(["x", "y"])])]).collect()?;
     //     // let df = df.sum_horizontal(NullStrategy::Ignore)?;
     //
-    //     println!("2. df={:?}", df);
+    //     debug!("2. df={:?}", df);
     //
     //     Ok(())
     // }
@@ -752,7 +743,7 @@ mod tests {
         //
         // let df_set = df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)).collect()?;
         //
-        // println!("{:?}", df_set.head(Some(100)));
+        // debug!("{:?}", df_set.head(Some(100)));
 
         /*let df = df!(
                         // 30   20    40    10    50
@@ -767,7 +758,7 @@ mod tests {
             ], vec![false], true, true)
             .collect()?;
 
-        println!("df_sorted={:?}", df_sorted);*/
+        debug!("df_sorted={:?}", df_sorted);*/
 
 
         // let choices = [1, 2, 4, 8, 16, 32, 3, 7];
@@ -779,8 +770,8 @@ mod tests {
         // let wen = we / (we + wo);
         // let won = wo / (we + wo);
         //
-        // println!("{:?}", choices.choose_multiple_weighted(&mut rng, 4, |x| {
-        //     println!("x={}, x%2={}  wen={}, won={}", x, x%2, wen, won);
+        // debug!("{:?}", choices.choose_multiple_weighted(&mut rng, 4, |x| {
+        //     debug!("x={}, x%2={}  wen={}, won={}", x, x%2, wen, won);
         //     if x % 2 == 0 {wen} else {won}
         // } )?.map(|i|*i).collect::<Vec<i32>>());
 
@@ -794,8 +785,8 @@ mod tests {
 
         let dfs = df.partition_by(["set"], false)?;
 
-        // println!("df={:?}", df.head(Some(10)));
-        println!("dfs={:?}", dfs);*/
+        // debug!("df={:?}", df.head(Some(10)));
+        debug!("dfs={:?}", dfs);*/
 
         // let df_filt = df
         //     .lazy()
@@ -803,7 +794,7 @@ mod tests {
         //     .select([all()])
         //     .collect()?;
         //
-        // println!("df={:?}", df_filt.head(Some(10)));
+        // debug!("df={:?}", df_filt.head(Some(10)));
 
         // let grouped = df
         //     // .sample_frac(&Series::new("frac", &[0.5]), true, true, None)?
@@ -812,11 +803,11 @@ mod tests {
         //         .agg([col("groups").first(), col("values").count().alias("count")])
         //         .collect()?;
 
-        // println!("grouped={:?}", grouped);
+        // debug!("grouped={:?}", grouped);
 
         // let over_gr = df.lazy().with_columns(col("field_1").count().over("field_2")).collect()?;
         // let mprob = |s:&mut [Series]| {
-        //     println!("s1={:?}", s);
+        //     debug!("s1={:?}", s);
         //     Ok(Some(
         //             (0..10).map(|v|Some(v as f32)).collect::<Float32Chunked>().into_series()
         //     ))
@@ -834,11 +825,11 @@ mod tests {
         //     ])
         //     .collect()?;
 
-        // println!("over_gr={:?}", over_gr);
+        // debug!("over_gr={:?}", over_gr);
         // df.with_row_count("id", None).partition_by("id");
 
         // for field in df.clone().lazy().schema()?.iter_fields() {
-        //     println!("{:?}", field.name);
+        //     debug!("{:?}", field.name);
         //     let column_df = df.clone().lazy().select(&[col(field.name.as_str())]).collect()?;
         //     // column_df.column(field.name.as_str())?.f64().iter().collect();
         // }

@@ -1,9 +1,11 @@
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
+use log::debug;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
-use crate::my_tch::{Fp, MyAvgPool1d, MyFuncModule, MyMaxPool1d, MySequential};
+use crate::data::GenError;
+use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyFuncModule, MyMaxPool1d, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
@@ -65,14 +67,14 @@ impl NthParams for NthConst {
 
 impl Node {
 
-    pub fn build_tch_module(&self, vs: &nn::Path) -> Box<dyn Module>  {
-        match self {
+    pub fn build_tch_module(&self, vs: &nn::Path) -> Result<Box<dyn Module>, GenError>  {
+        Ok(match self {
             Node::Seq { elts } => {
 
-                let layers:Vec<Box<dyn Module>> = elts.iter().fold(Vec::new(), |mut kids, node| {
-                    kids.push(node.build_tch_module(vs));
-                    kids
-                });
+                let layers:Vec<Box<dyn Module>> = elts.iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn Module>>, node| {
+                    kids.push(node.build_tch_module(vs)?);
+                    Ok::<Vec<Box<dyn Module>>, GenError>(kids)
+                })?;
 
                 Box::new(MySequential::new(layers))
 
@@ -84,7 +86,8 @@ impl Node {
                 todo!()
             }
             Node::Linear {in_feats, out_feats} => {
-                Box::new(nn::linear(vs/ "layer1", *in_feats, *out_feats, LinearConfig::default()))
+                debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
+                Box::new(my_linear(vs/ "layer1", *in_feats, *out_feats, LinearConfig::default())?)
             }
             Node::MaxPool { kernel_size, stride, padding } => {
                 Box::new(MyMaxPool1d::new(*kernel_size, *stride, *padding))
@@ -95,7 +98,7 @@ impl Node {
             Node::Func { func } => {
                 Box::new(MyFuncModule::new(func.clone()))
             }
-        }
+        })
     }
 }
 
