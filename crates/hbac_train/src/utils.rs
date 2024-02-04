@@ -12,7 +12,7 @@ use crate::data::{EEGs, GenError};
 use crate::my_tch::{Fp, LossFp};
 
 #[derive(Debug)]
-enum MyError {
+pub enum MyError {
     TchError(TchError)
 }
 

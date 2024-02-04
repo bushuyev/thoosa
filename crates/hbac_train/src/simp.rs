@@ -66,7 +66,7 @@ mod tests {
     use tch::nn::ConvConfig;
     use crate::{configure_dense, utils};
     use crate::simp::TestDs;
-    use crate::utils::DataBatch;
+    use crate::utils::{collect_to_vec, DataBatch};
 
     #[test]
     pub fn plot_ds(){
@@ -129,10 +129,17 @@ mod tests {
             vec![
                 // (format!("sin 5"), GREEN, sin_y_5),
                 // (format!("sin 20"), RED, sin_y_20),
-                (format!("sin 5+20"), RED, sin_y_5_20),
+                (format!("sin 5+20"), RED, sin_y_5_20.clone()),
                 (format!("filtered"), BLUE, filtered),
             ], "data", (640, 480)
         ).unwrap();
+
+        let fft = Tensor::from_slice(sin_y_5_20.iter().map(|v|v.1).collect::<Vec<f32>>().as_slice()).fft_fft(None, 0, "backward");
+        let fft_vec = collect_to_vec(&fft.abs());
+
+        // fft.print();
+
+        println!("fft_vec={:?}", fft_vec);
     }
 
     #[test]

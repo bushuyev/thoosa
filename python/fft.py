@@ -61,7 +61,7 @@ x = np.linspace(0.0, N*T, N, endpoint=False)
 # y = np.sin(50.0 * 2.0*np.pi*x) #+ np.sin(80.0 * 2.0*np.pi*x)
 y = eeg_df['F3'].to_numpy()
 
-y = butter_bandpass_filter(y, 0.5, 40, 200, order=6)
+# y = butter_bandpass_filter(y, 0.5, 40, 200, order=6)
 
 
 fig1, ax = plt.subplots(figsize=(100, 10))
