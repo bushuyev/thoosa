@@ -97,12 +97,19 @@ mod tests {
         let n = 1000i64;
         let x = lin_t(n);
         // let gauss_1 = gauss_t(400., 100., n);
-        let pulse_1 = pulse_v(80., 20., n, 20.);
+        let pulse_1 = pulse_v(80., 20., 150, 20.);
+        let pulse_2 = pulse_v(80., 20., 150, 20.);
         let random = random_v(1000, 10., 1.);
         let const_v = (0..n).map(|v|100f64).collect::<Vec<_>>();
 
         let sig = Tensor::from_slice(
-            random.into_iter().zip(std::iter::repeat(0f64).take(100).chain(pulse_1.into_iter())).map(|(v1, v2)| 0.001 * v1+v2).collect::<Vec<f64>>().as_slice()
+            random.into_iter().zip(
+                    std::iter::repeat(0f64).take(0)
+                    .chain(pulse_1.into_iter())
+                    .chain(std::iter::repeat(0f64).take(20))
+                    .chain(pulse_2.into_iter())
+
+            ).map(|(v1, v2)| 0.001 * v1+v2).collect::<Vec<f64>>().as_slice()
         );
 
         // // let t_10 = Tensor::from_slice((0..10).map(|i| i as f64).collect::<Vec<_>>().as_slice());
