@@ -4,6 +4,7 @@ mod builder;
 mod utils;
 mod simp;
 mod version;
+mod motifs;
 
 use std::time::Instant;
 use tch::nn::{ConvConfig, Module, OptimizerConfig};
@@ -18,6 +19,7 @@ use polars::prelude::{col, lit, NamedFrom, Series};
 use simplelog::*;
 use builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
+use crate::motifs::find_motifs;
 use crate::utils::DataBatch;
 use crate::version::VERSION;
 
@@ -95,6 +97,7 @@ fn main() -> Result<(), GenError> {
         Some(data::ByPatientIdSplitter::new(0.7)),
     )?;
 
+    find_motifs();
 
     debug!("eegs={:?}", eegs.len());
 

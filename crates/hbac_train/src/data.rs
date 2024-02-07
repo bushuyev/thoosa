@@ -534,9 +534,10 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::io::Write;
     use std::ops::Div;
-    use log::debug;
+    use log::{debug, LevelFilter};
     use plotters::prelude::{GREEN, RED};
     use plotters::style::BLACK;
     use polars::export::ahash::{HashMap, HashMapExt};
@@ -546,12 +547,22 @@ mod tests {
     use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, Set, split_frame_by_offsets, Splitter};
     use rand::thread_rng;
     use rand::seq::SliceRandom;
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Tensor;
     use crate::utils::DataBatch;
 
 
     #[ctor::ctor]
     fn init() {
+        CombinedLogger::init(
+            vec![
+                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ).unwrap_or_else(|e|{
+            println!("CombinedLogger::init failed: {:?}", e);
+        });
+
+
         std::env::set_var("POLARS_FMT_MAX_COLS", "100");
         std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
     }
@@ -565,8 +576,8 @@ mod tests {
 
         let eegs = EEGs::load_eegs (
             "../../data",
-            Some(col("eeg_id").eq(lit(1345588872))),
-            // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
+            // Some(col("eeg_id").eq(lit(1345588872))),
+            Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
             // Some(col("eeg_id").is_in(lit(good_eegs))),
             // None,
             // Some(col("all_votes").list().max().eq(col("all_votes").list().sum())),
@@ -581,14 +592,61 @@ mod tests {
         // debug!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());
 
 
-
-
         crate::utils::plot(
             vec![
                 (format!("0"), BLACK, eegs.train_set[0].egg_map[0].iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (10_000, 480)
+            ], "EEG", (10_000, 480), "0.png"
         ).unwrap();
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_fetch_similarities() -> Result<(), GenError> {
+
+
+        // let good_eegs = EEGs::good_eegs("../../data")?;
+        let df = LazyCsvReader::new("../../data/train.csv")
+            .finish()?
+            .with_streaming(true)
+            .group_by([col("eeg_id")])
+            .agg([
+                col("seizure_vote").first(),
+                col("lpd_vote").first(),
+                col("gpd_vote").first(),
+                col("lrda_vote").first(),
+                col("grda_vote").first(),
+                col("other_vote").first(),
+            ])
+            .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
+            .filter(
+                col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
+            )
+            .with_column(
+                when(col("seizure_vote").gt(lit(0))).then(lit("seizure_vote"))
+                    .otherwise(
+                        when(col("lpd_vote").gt(lit(0))).then(lit("lpd_vote"))
+                            .otherwise(
+                                when(col("gpd_vote").gt(lit(0))).then(lit("gpd_vote"))
+                                    .otherwise(
+                                        when(col("lrda_vote").gt(lit(0))).then(lit("lrda_vote"))
+                                            .otherwise(
+                                                when(col("grda_vote").gt(lit(0))).then(lit("grda_vote"))
+                                                    .otherwise(
+                                                        lit("other_vote")
+                                                    )
+                                            )
+                                    )
+                            )
+                    )
+                    .alias("win_vote")
+            )
+            .group_by([col("win_vote")])
+            .agg([count().alias("votes_count")])
+            .collect()?;
+
+        println!("df={:?}", df);
 
         Ok(())
     }

@@ -85,7 +85,7 @@ pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&Var
     Ok(())
 }
 
-pub fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32)) -> Result<(), Box<dyn std::error::Error>> {
+pub fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
         if max_min.0 > *x {
@@ -106,7 +106,7 @@ pub fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &st
     });
 
 
-    let root = BitMapBackend::new("0.png", w_h).into_drawing_area();
+    let root = BitMapBackend::new(path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
         .caption(caption, ("sans-serif", 50).into_font())

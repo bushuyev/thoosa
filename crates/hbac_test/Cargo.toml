@@ -1,0 +1,30 @@
+[package]
+name = "hbac_test"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+tch = { version = "0.14.0" }
+torch-sys = "0.14.0"
+sci-rs = "0.3.8"
+plotters = { version = "0.3.5"}
+rand = "0.8.5"
+
+log = "0.4.20"
+simplelog = "0.12.1"
+
+anyhow = "1.0.79"
+ctor = "0.2.6"
+chrono = { version = "0.4.32" }
+
+
+[dev-dependencies]
+rand_chacha = "0.3.1"
+approx = "0.5.1"
+
+[build-dependencies]
+chrono = { version = "0.4.32" }
+
+[profile.test]
+opt-level = 0

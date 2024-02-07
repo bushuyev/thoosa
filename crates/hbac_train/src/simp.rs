@@ -92,7 +92,7 @@ mod tests {
             vec![
                 (format!("{:?}", t_y_0.iter::<f64>().unwrap().collect::<Vec<f64>>()), GREEN, x_0),
                 (format!("{:?}", t_y_1.iter::<f64>().unwrap().collect::<Vec<f64>>()), RED, x_1),
-            ], "data", (640, 480)
+            ], "data", (640, 480), "0.png"
         ).unwrap();
     }
 
@@ -131,7 +131,7 @@ mod tests {
                 // (format!("sin 20"), RED, sin_y_20),
                 (format!("sin 5+20"), RED, sin_y_5_20.clone()),
                 (format!("filtered"), BLUE, filtered),
-            ], "data", (640, 480)
+            ], "data", (640, 480), "0.png"
         ).unwrap();
 
         let fft = Tensor::from_slice(sin_y_5_20.iter().map(|v|v.1).collect::<Vec<f32>>().as_slice()).fft_fft(None, 0, "backward");
