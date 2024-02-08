@@ -54,8 +54,11 @@ fn z_norm(t:&Tensor, dim: i64) -> Tensor {
 mod tests {
     use std::f64::consts::PI;
     use std::iter::Map;
+    use std::mem::size_of_val;
     use std::ops::Range;
     use std::time::Instant;
+    use std::io;
+    use std::io::Write;
 
     use log::{debug, LevelFilter};
     use plotters::prelude::{BLACK, BLUE, MAGENTA};
@@ -93,23 +96,21 @@ mod tests {
     }
 
     #[test]
-    pub fn test_dot() -> Result<(), GenError>{
+    pub fn test_pulses_in_rand() -> Result<(), GenError>{
         let n = 1000i64;
         let x = lin_t(n);
         // let gauss_1 = gauss_t(400., 100., n);
-        let pulse_1 = pulse_v(80., 20., 150, 20.);
-        let pulse_2 = pulse_v(80., 20., 150, 20.);
-        let random = random_v(1000, 10., 1.);
-        let const_v = (0..n).map(|v|100f64).collect::<Vec<_>>();
+
+        let to_pulses_in_random = pulses_in_rand(
+            n,
+            &[
+                (100, pulse_v(80., 20., 200, 20.)),
+                (100, pulse_v(80., 20., 200, 20.))
+            ]
+        );
 
         let sig = Tensor::from_slice(
-            random.into_iter().zip(
-                    std::iter::repeat(0f64).take(0)
-                    .chain(pulse_1.into_iter())
-                    .chain(std::iter::repeat(0f64).take(20))
-                    .chain(pulse_2.into_iter())
-
-            ).map(|(v1, v2)| 0.001 * v1+v2).collect::<Vec<f64>>().as_slice()
+            to_pulses_in_random.as_slice()
         );
 
         // // let t_10 = Tensor::from_slice((0..10).map(|i| i as f64).collect::<Vec<_>>().as_slice());
@@ -121,16 +122,67 @@ mod tests {
         // let dot_1 = norm(&t_1_snippet).dot(&norm(&t_2_1_snippet));
         // //
         // println!("dot_0={:?}", dot_0);
-        // println!("dot_1={:?}", dot_1);
+        println!("sig={:?}", sig.size());
 
         crate::utils::plot(
             vec![
                 (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig)).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (1000, 480), format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "EEG", (1000, 500), format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
 
         Ok(())
+    }
+
+    #[test]
+    fn test_motifs_match(){
+        let t1 = Instant::now();
+
+        let n = 10_000;
+
+        let mut t = Box::new(Tensor::zeros(&[n, n], (Kind::Float, Device::Cpu)));
+
+        for i in (0..n) {
+            if i % 100 == 0{
+                debug!("i={}", i);
+            }
+
+            // std::io::stdout().flush().expect("flush");
+
+
+            for j in (0..n) {
+
+                t.index_put_(
+                    &[
+                        Some(Tensor::from_slice(&[i])),//row
+                        Some(Tensor::from_slice(&[j])) //col
+                    ],
+                    &Tensor::from_slice(&[ (i * j) as f32  ]),
+                    false
+                );
+            }
+        }
+
+
+        // debug!("mem size {}", size_of_val(&t.as_ptr()));
+        debug!("done {} in {}", n, t1.elapsed().as_millis());
+    }
+
+    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)]) -> Vec<f64> {
+        let random = random_v(n, 10., 1.);
+        let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset + pulse.len()).sum();
+
+        random.into_iter().zip(
+            pulses
+                .into_iter()
+                .flat_map(
+                    |(offset, pulse)|
+                        std::iter::repeat(0f64)
+                        .take(*offset)
+                        .chain(pulse.into_iter().map(|v|*v))
+                )
+                .chain(std::iter::repeat(0f64).take(n as usize-pulses_len))
+        ).map(|(v1, v2)| 0.001 * v1 + v2).collect::<Vec<f64>>()
     }
 
     #[test]
@@ -198,8 +250,17 @@ mod tests {
     pub fn test_find_motifs() -> Result<(), GenError>{
         let n = 1000i64;
         let x = lin_t(n);
-        let gauss_1 = gauss_t(400., 100., n); //f.flip([0]);
-        let gauss_2 = gauss_t(600., 100., n); //.flip([0]);
+        // let sig_1 = gauss_t(400., 100., n); //f.flip([0]);
+        // let sig_2 = gauss_t(600., 100., n); //.flip([0]);
+
+        let sig_1 = Tensor::from_slice(
+            pulses_in_rand(n, &[]).as_slice()
+        );
+
+        let sig_2 = Tensor::from_slice(
+            pulses_in_rand(n, &[]).as_slice()
+        );
+
 
         let m = 100;
 
@@ -208,12 +269,16 @@ mod tests {
         let t1 = Instant::now();
         let mut corr:Vec<f32> = vec![];
         let mut dots:Vec<f32> = vec![];
+
+        println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_1.size(), sig_2.size());
         // for d_1 in (0..n-m) {
         let d_1 = 200; {
-            let t_1_snippet = gauss_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
+            let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
 
             for d_2 in (0..n-m) {
-                let t_2_snippet = norm(&gauss_2.f_slice(0, Some(d_2 as i64), Some((d_2+m) as i64), 1)?);
+                // println!("d_1={:?}, d_2={:?}", d_1, d_2);
+
+                let t_2_snippet = norm(&sig_2.f_slice(0, Some(d_2 as i64), Some((d_2+m) as i64), 1)?);
 
                 let dp = norm(&t_1_snippet).dot(&t_2_snippet);
 
@@ -222,7 +287,7 @@ mod tests {
         }
         debug!("done in {}", t1.elapsed().as_millis());
         debug!("1. dots.len= {}", dots.len());
-        dots.extend((0..n as usize -dots.len()).map(|_|0.).collect::<Vec<f32>>());
+        // dots.extend((0..n as usize -dots.len()).map(|_|0.).collect::<Vec<f32>>());
         debug!("2. dots.len= {}", dots.len());
 
 
@@ -230,9 +295,9 @@ mod tests {
 
         crate::utils::plot(
             vec![
-                (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&gauss_1)).collect::<Vec<(f32, f32)>>()),
+                (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1)).collect::<Vec<(f32, f32)>>()),
                 // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
-                (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&gauss_2)).collect::<Vec<(f32, f32)>>()),
+                (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_2)).collect::<Vec<(f32, f32)>>()),
                 (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
 
             ], "EEG", (1000, 480), format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
@@ -260,14 +325,14 @@ mod tests {
     }
 
 
-    fn random_v(N: usize, amplitude: f64, max_slope: f64) -> Vec<f64> {
+    fn random_v(n: i64, amplitude: f64, max_slope: f64) -> Vec<f64> {
         let mut rng = rand::thread_rng();
-        let mut signal = Vec::with_capacity(N);
+        let mut signal = Vec::with_capacity(n as usize);
 
         let mut current_value = 0.0;
         let mut prev_value = 0.0;
 
-        for _ in 0..N {
+        for _ in 0..n {
             let slope = rng.gen_range(-max_slope..max_slope);
             let next_value = current_value + slope;
 

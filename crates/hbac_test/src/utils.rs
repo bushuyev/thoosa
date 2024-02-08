@@ -1,10 +1,10 @@
 use std::io::Write;
 use std::mem;
 use log::{debug, info, trace};
-use plotters::prelude::{BLACK, Color, IntoFont, LineSeries, RED, RGBColor, WHITE};
+use plotters::prelude::*;
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
-use plotters::element::PathElement;
+use plotters::element::{PathElement, Polygon};
 use tch::{Device, nn, Reduction, TchError, Tensor};
 use tch::nn::{Module, OptimizerConfig, VarStore};
 use plotters::drawing::IntoDrawingArea;
@@ -69,11 +69,27 @@ pub fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &st
             .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
     }
 
+
     chart
         .configure_series_labels()
         .background_style(&WHITE.mix(0.8))
         .border_style(&BLACK)
         .draw()?;
+
+
+
+    let motif_area = |x: i32, dx: i32| {
+        return EmptyElement::at((x as f32, 10.))
+            + Rectangle::new([(0, 0), ((dx as f32 *0.963) as i32, w_h.1 as i32 - 80)], &BLUE)//TODO 963?
+            + Text::new(
+            format!("({:.2},{:.2})", x, dx),
+            (5, 5),
+            ("sans-serif", 15.0).into_font(),
+        );
+    };
+
+
+    chart.plotting_area().draw(&motif_area(100, 100)).expect("Drawing Failure");
 
     root.present()?;
 
