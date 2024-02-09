@@ -52,6 +52,7 @@ fn z_norm(t:&Tensor, dim: i64) -> Tensor {
 
 
 mod tests {
+    use std::collections::VecDeque;
     use std::f64::consts::PI;
     use std::iter::Map;
     use std::mem::size_of_val;
@@ -79,20 +80,62 @@ mod tests {
     }
 
     #[test]
-    pub fn test_z_norm() {
+    pub fn test_filt(){
+        let sig = [1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1];
+        let m = 4;
+        let n = sig.len();
+        let mut motif_start_op:Option<usize> = None;
+        let min_dot = 1;
+        let mut motifs:Vec<(usize, usize)> = vec![];
+
+        for (i, dot) in sig.into_iter().enumerate(){
+            match motif_start_op {
+                None => {
+                    if dot > min_dot {
+                        motif_start_op = Some(i);
+                    }
+                }
+                Some(motif_start) => {
+                    if dot <= min_dot {
+                        motifs.push((motif_start, i));
+                        motif_start_op = None;
+                    }
+                }
+            }
+        }
+
+        assert_eq!([(1, 3), (5, 8)], motifs.as_slice());
+
+        println!("motifs={:?}", motifs);
+    }
+
+    #[test]
+    pub fn   test_z_norm() {
         assert_eq!(vec![-1.2247449, 0.0, 1.2247449], vec_f32_from(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)));
     }
 
     #[test]
     pub fn test_norm() -> Result<(), GenError>{
         let t = Tensor::from_slice(&[1., 2., 3.]);
-        let norm = norm(&t);
+        let norm = norm(&t, &[-1]);
+        // norm.print();
         assert_eq!(1.0, vec_f32_from(&norm.dot(&norm))[0]);
+
+
+        let t = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 3.]),
+            Tensor::from_slice(&[1., 2., 3.])
+        ]);
+        t.print();
+        let norm = crate::tests::norm(&t, &[1, -1]);
+        norm.print();
+        // assert_eq!(1.0, vec_f32_from(&norm.dot(&norm))[0]);
+
         Ok(())
     }
 
-    fn norm(t: &Tensor) -> Tensor {
-        t.view([-1]) / t.dot(&t).sqrt()
+    fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
+        t.view(dim) / t.dot(&t).sqrt()
     }
 
     #[test]
@@ -124,7 +167,7 @@ mod tests {
         // println!("dot_0={:?}", dot_0);
         println!("sig={:?}", sig.size());
 
-        crate::utils::plot(
+        crate::utils::plot_series(
             vec![
                 (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig)).collect::<Vec<(f32, f32)>>()),
 
@@ -167,6 +210,110 @@ mod tests {
         // debug!("mem size {}", size_of_val(&t.as_ptr()));
         debug!("done {} in {}", n, t1.elapsed().as_millis());
     }
+
+
+
+    fn self_dot(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, GenError> {
+        let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?;
+        let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?;
+
+        // slice_t.print();
+
+        Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
+    }
+
+    fn self_dot_norm(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, GenError> {
+        let slice_1 = norm(&t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?, &[1, -1]);
+        let slice_2 = norm(&t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?, &[1, -1]);
+
+        // slice_t.print();
+
+        Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
+    }
+
+
+    #[test]
+    fn test_self_dot() -> Result<(), GenError>{
+        let t1 = Tensor::from_slice2(&[
+            &[1.,  2.,  3.,  4.,  5.,  6.,  7.,  8.,  9.],
+            &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
+            &[100., 200., 300., 400., 500., 600., 700., 800., 900.]
+        ]);
+
+        //(1,2,3) x
+        //(1,2,3)
+        let d_0 = self_dot(&t1, 0, 0, 1, 1, 3)?;
+        assert_eq!(Tensor::from_slice(&[14., 1400., 140000.]), d_0);
+
+        //(1,2,3) x
+        //(2,3,4)
+        let d_1 = self_dot(&t1, 0, 1, 1, 1, 3)?;
+        assert_eq!(Tensor::from_slice(&[20., 2000., 200000.]), d_1);
+
+        //(1,2,3) x
+        //(3,4,5)
+        let d_2 = self_dot(&t1, 0, 2, 1, 1, 3)?;
+        assert_eq!(Tensor::from_slice(&[26., 2600., 260000.]), d_2);
+
+        //(1,2,3) x
+        //(4,5,6) = 26-(1*3+2*3+3*3)+(1*4+2*4+3*4)
+        let d_3 = self_dot(&t1, 0, 3, 1, 1, 3)?;
+        assert_eq!(Tensor::from_slice(&[32., 3200., 320000.]), d_3);
+
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_motifs_match_vec(){
+        let t1 = Instant::now();
+
+        let n = 1_0;
+
+        // let mut rows_vec:Box<Vec<Vec<f32>>> = Box::new(Vec::with_capacity(n));
+        let mut t = Box::new(Tensor::zeros(&[n, n], (Kind::Uint8, Device::Cpu)));
+
+        for i in (0..n) {
+            if i % 1000 == 0 {
+                debug!("i={}", i);
+            }
+
+            // std::io::stdout().flush().expect("flush");
+            let mut row_vec:Vec<u8> = Vec::with_capacity(n as usize);
+
+            for j in (0..n) {
+                row_vec.push((i * j) as u8)
+
+            }
+            // rows_vec.push(row_vec);
+            t.index_put_(
+                &[
+                    Some(Tensor::from_slice(&[i])),//row
+                ],
+                &Tensor::from_slice(row_vec.as_slice()),
+                false
+            );
+        }
+
+        t.print();
+
+        // debug!("mem size {}", size_of_val(&t.as_ptr()));
+        debug!("done {} in {}", n, t1.elapsed().as_millis());
+
+        // let t1_vec = from::<Vec<Vec<f32>>>(&t);
+        // debug!("t1_vec={:?}", t1_vec.len());
+        for i in (0..n){
+            for j in (0..n) {
+                print!("{:?} ", t.int64_value(&[i, j]));
+            }
+            println!();
+        }
+
+
+        // let mut t = Box::new(Tensor::from_slice(rows_vec.as_slice()));
+        // debug!("done t {:?} in {}", t.size(), t1.elapsed().as_millis());
+    }
+
 
     fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)]) -> Vec<f64> {
         let random = random_v(n, 10., 1.);
@@ -229,7 +376,7 @@ mod tests {
 
         // let gauss_1_0 = gauss_1.f_slice(0, Some(300), Some(500), 1)?;
 
-        crate::utils::plot(
+        crate::utils::plot_series(
             vec![
                 (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&gauss_1)).collect::<Vec<(f32, f32)>>()),
                 // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
@@ -260,27 +407,33 @@ mod tests {
         let sig_2 = Tensor::from_slice(
             pulses_in_rand(n, &[]).as_slice()
         );
+        println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_1.size(), sig_2.size());
+        let sig_1_c = sig_1.copy();
+        let sig_2_c = sig_2.copy();
+        let t = Tensor::vstack(&[sig_1, sig_2]);
+        println!("t.size={:?}", t.size());
 
 
-        let m = 100;
+
+        let m = 10;
 
         let zeros = Tensor::zeros([m], (Kind::Float, Device::Cpu));
 
         let t1 = Instant::now();
-        let mut corr:Vec<f32> = vec![];
         let mut dots:Vec<f32> = vec![];
 
-        println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_1.size(), sig_2.size());
-        // for d_1 in (0..n-m) {
-        let d_1 = 200; {
-            let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
 
-            for d_2 in (0..n-m) {
+        for i_0 in (0..n-m) {
+        // let d_1 = 200; {
+            // let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
+
+            for i_i in (i_0..n-m) {
                 // println!("d_1={:?}, d_2={:?}", d_1, d_2);
 
-                let t_2_snippet = norm(&sig_2.f_slice(0, Some(d_2 as i64), Some((d_2+m) as i64), 1)?);
+                // let t_2_snippet = norm(&sig_2.f_slice(0, Some(d_2 as i64), Some((d_2+m) as i64), 1)?);
 
-                let dp = norm(&t_1_snippet).dot(&t_2_snippet);
+                // let dp = norm(&t_1_snippet).dot(&t_2_snippet);
+                let dp = self_dot_norm(&t, i_0, i_i, 1, 1, m)?;
 
                 dots.push(vec_f32_from(&dp)[0]);
             }
@@ -288,17 +441,17 @@ mod tests {
         debug!("done in {}", t1.elapsed().as_millis());
         debug!("1. dots.len= {}", dots.len());
         // dots.extend((0..n as usize -dots.len()).map(|_|0.).collect::<Vec<f32>>());
-        debug!("2. dots.len= {}", dots.len());
+        // debug!("2. dots.len= {}", dots.len());
 
 
         // let gauss_1_0 = gauss_1.f_slice(0, Some(300), Some(500), 1)?;
 
-        crate::utils::plot(
+        crate::utils::plot_series(
             vec![
-                (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1)).collect::<Vec<(f32, f32)>>()),
+                (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c)).collect::<Vec<(f32, f32)>>()),
                 // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
-                (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_2)).collect::<Vec<(f32, f32)>>()),
-                (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
+                (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_2_c)).collect::<Vec<(f32, f32)>>()),
+                // (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
 
             ], "EEG", (1000, 480), format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();

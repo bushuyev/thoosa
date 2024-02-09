@@ -25,8 +25,49 @@ pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, MyError> {
     Ok(t.iter::<f64>()?.collect::<Vec<f64>>())
 }
 
+pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
+    let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
 
-pub fn plot(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    root.fill(&WHITE)?;
+
+    let mut chart = ChartBuilder::on(&root)
+        .margin(20)
+        .x_label_area_size(10)
+        .y_label_area_size(10)
+        .build_cartesian_2d(-2.1f64..0.6f64, -1.2f64..1.2f64)?;
+
+    chart
+        .configure_mesh()
+        .disable_x_mesh()
+        .disable_y_mesh()
+        .draw()?;
+
+    let plotting_area = chart.plotting_area();
+
+    let range = plotting_area.get_pixel_range();
+
+    let (pw, ph) = (range.0.end - range.0.start, range.1.end - range.1.start);
+    let (xr, yr) = (chart.x_range(), chart.y_range());
+
+
+
+    // for (x, y, c) in mandelbrot_set(xr, yr, (pw as usize, ph as usize), 100) {
+    //     if c != 100 {
+    //         plotting_area.draw_pixel((x, y), &MandelbrotHSL::get_color(c as f64 / 100.0))?;
+    //     } else {
+    //         plotting_area.draw_pixel((x, y), &BLACK)?;
+    //     }
+    // }
+
+    // To avoid the IO failure being ignored silently, we manually call the present function
+    root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
+    println!("Result has been saved to {}", path);
+
+
+    Ok(())
+}
+
+pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
         if max_min.0 > *x {
