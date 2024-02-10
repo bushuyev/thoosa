@@ -4,7 +4,7 @@ use std::slice::SliceIndex;
 use tch::{TchError, Tensor};
 use crate::GenError;
 
-struct TensorsSource<'a> {//TODO SliceIndex?
+struct TensorsSource {//TODO SliceIndex?
     tensors:Vec<Tensor>,
     tensor_index_0:usize,
     tensor_index_1:usize,
@@ -12,37 +12,79 @@ struct TensorsSource<'a> {//TODO SliceIndex?
     slice_index_0:i64,
     slice_index_1:i64,
 
-    tensor_0:Option<Tensor>,
-
-    dim:i64,
+    dim:usize,
+    step:i64,
     m:i64,
-    pd:PhantomData<&'a ()>
 }
 
-impl <'a> TensorsSource<'a> {
-    pub fn new(inner: Vec<Tensor>, dim:i64, m:i64) -> Self {
+impl TensorsSource {
+    pub fn new(tensors: Vec<Tensor>, dim:usize, m:i64, step:i64) -> Self {
+
+        assert!(step <= m);
+
         Self {
-            tensors: inner,
+            tensors,
             tensor_index_0: 0,
             tensor_index_1: 0,
 
             slice_index_0:0,
             slice_index_1:0,
-            tensor_0: None,
 
             dim,
-            m,
-            pd: PhantomData
+            step,
+            m
         }
     }
 
-    fn next(&'a mut self) -> Option<Result<(&'a Tensor, &'a Tensor), GenError>> {
+}
+
+impl Iterator for TensorsSource {
+    type Item = Result<(Tensor, Tensor), GenError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        println!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
+
+
         if self.tensor_index_0 < self.tensors.len() {
-            // return Some(Ok((
-            //     // &self.tensors[self.tensor_index_0].f_slice(self.dim, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap(),
-            //     // &self.tensors[self.tensor_index_1].f_slice(self.dim, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()
-            // )))
-            return Some(Ok((self.tensor_0.as_ref().unwrap(), self.tensor_0.as_ref().unwrap())))
+
+            let v = Some(Ok((
+                self.tensors[self.tensor_index_0].f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap(),
+                self.tensors[self.tensor_index_1].f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()
+            )));
+
+
+            //TODO m < tensor
+            if self.slice_index_1 + self.m < self.tensors[self.tensor_index_1].size()[self.dim] {
+                self.slice_index_1 += self.step;
+
+                println!("1");
+
+            } else {
+
+                if self.tensor_index_1 < self.tensors.len() -1 {
+                    self.tensor_index_1 += 1;
+                    self.slice_index_1 = self.slice_index_0;
+
+                    println!("2.1");
+
+                } else {
+
+                    if self.slice_index_0 + self.m < self.tensors[self.tensor_index_0].size()[self.dim] {
+                        self.slice_index_0 += self.step;
+
+                        println!("2.2.1");
+                    } else {
+                        println!("2.2.2");
+
+                        self.slice_index_0 = 0;
+                        self.tensor_index_0 += 1;
+                    }
+
+                    self.tensor_index_1 = self.tensor_index_0;
+                    self.slice_index_1 = self.slice_index_0;
+                }
+            }
+            return v;
 
         }
 
@@ -50,33 +92,35 @@ impl <'a> TensorsSource<'a> {
     }
 }
 
-// impl <'a> Iterator for TensorsSource<'a> {
-//     type Item = Result<(&'a Tensor, &'a Tensor), GenError>;
-//
-//     fn next(&'a mut self) -> Option<Self::Item> {
-//         if self.tensor_index_0 < self.tensors.len() {
-//             // return Some(Ok((
-//             //     // &self.tensors[self.tensor_index_0].f_slice(self.dim, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap(),
-//             //     // &self.tensors[self.tensor_index_1].f_slice(self.dim, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()
-//             // )))
-//             return Some(Ok((self.tensor_0.as_ref().unwrap(), self.tensor_0.as_ref().unwrap())))
-//
-//         }
-//
-//         None
-//     }
-// }
-
 
 #[cfg(test)]
 mod tests {
     use tch::{Device, Kind, Tensor};
+    use crate::GenError;
     use crate::iter_test_2::TensorsSource;
 
     #[test]
     fn test_one_inner(){
 
-        // let t_0 = Tensor::randn(&[2, 100], (Kind::Float, Device::Cpu));
+        let t_0= Tensor::vstack(&[
+            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
+            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice())
+        ]);
+
+
+        let ts = TensorsSource::new(vec![t_0], 1, 2, 2);
+        let r = ts.collect::<Vec<Result<(Tensor, Tensor), GenError>>>();
+        // x x x x x
+        //   x x x x
+        //     x x x
+        //       x x
+        //         x
+        assert_eq!(r.len(), 15);
+    }
+
+    #[test]
+    fn test_two_inner(){
+
         let t_0= Tensor::vstack(&[
             Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
             Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice())
@@ -88,6 +132,21 @@ mod tests {
         ]);
 
 
-        let ts = TensorsSource::new(vec![t_0, t_1], 1, 10);
+        let ts = TensorsSource::new(vec![t_0, t_1], 1, 2, 2);
+        let r = ts.collect::<Vec<Result<(Tensor, Tensor), GenError>>>();
+        // x x x x x x x x x x
+        //   x x x x x x x x x
+        //     x x x x x x x x
+        //       x x x x x x x
+        //         x x x x x x
+        //           x x x x x
+        //             x x x x
+        //               x x x
+        //                 x x
+        //                   x
+        //
+
+        println!("r.len()={:?}", r.len());
+        // assert_eq!(r.len(), 15);
     }
 }
