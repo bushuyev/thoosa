@@ -7,6 +7,8 @@ use tch::{Device, Kind, kind, Tensor};
 use rand::Rng;
 
 mod utils;
+mod iter_test;
+mod iter_test_2;
 
 #[derive(Debug)]
 pub struct GenError {
@@ -305,13 +307,8 @@ mod tests {
         Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
     }
 
-    fn self_dot_norm(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, GenError> {
-        let slice_1 = norm_2(&t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?);
-        let slice_2 = norm_2(&t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?);
-
-        // slice_t.print();
-
-        Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
+    fn self_dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, GenError> {
+        Ok(norm_2(slice_01).tensordot(&norm_2(slice_02), [dim], [dim]).diag(0))
     }
 
 
@@ -475,32 +472,43 @@ mod tests {
         Ok(())
     }
 
+    struct TensorsSource {
+        tensors:Vec<Tensor>
+    }
+
+    impl TensorsSource {
+        pub fn new(tensors: Vec<Tensor>) -> Self {
+            Self { tensors }
+        }
+
+        fn get_slices(&self,  i_0: i64, i_1: i64, m: i64, dim: i64) -> Result<(Tensor, Tensor), GenError> {
+            Ok((
+                self.tensors[0].f_slice(dim, Some(i_0), Some(i_0 + m), 1)?,
+                self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?
+            ))
+        }
+
+    }
 
     #[test]
     pub fn test_find_motifs() -> Result<(), GenError>{
-        let n = 100i64;
+        let n = 20_000i64;
         let x = lin_t(n);
         let sig_num = 2;
         // let sig_1 = gauss_t(400., 100., n); //f.flip([0]);
         // let sig_2 = gauss_t(600., 100., n); //.flip([0]);
 
-        let sig_1 = Tensor::from_slice(
-            pulses_in_rand(n, &[
-                (10, pulse_v(8., 3., 20, 2.)),
-                (30, pulse_v(8., 3., 20, 2.))
-            ]).as_slice()
-        );
+        let (sig_0_1, sig_0_2) = two_sigs(10_000);
+        println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_0_1.size(), sig_0_2.size());
+        let sig_1_c = sig_0_1.copy();
+        let sig_2_c = sig_0_2.copy();
+        let t_0 = Tensor::vstack(&[sig_0_1, sig_0_2]);
+        println!("t.size={:?}", t_0.size());
 
-        let sig_2 = Tensor::from_slice(
-            pulses_in_rand(n, &[]).as_slice()
-        );
-        println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_1.size(), sig_2.size());
-        let sig_1_c = sig_1.copy();
-        let sig_2_c = sig_2.copy();
-        let t = Tensor::vstack(&[sig_1, sig_2]);
-        println!("t.size={:?}", t.size());
+        let (sig_1_1, sig_1_2) = two_sigs(10_000);
+        let t_1 = Tensor::vstack(&[sig_1_1, sig_1_2]);
 
-
+        let ts = crate::tests::TensorsSource::new(vec![t_0, t_1]);
 
         let m = 20;
 
@@ -510,21 +518,28 @@ mod tests {
         let mut dots:Vec<Vec<f64>> = vec![];
 
         let mut mt = crate::tests::MotifTracker::new(0.7);
+
+        let dim = 1;
+
         for i_0 in (0..n-m).step_by(10) {
         // let d_1 = 200; {
             // let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
 
             for i_1 in (i_0..n-m).step_by(10).skip(1) {
-                // println!("d_1={:?}, d_2={:?}", d_1, d_2);
+                println!("i_0={:?}, i_1={:?} m={}", i_0, i_1, m);
 
                 // let t_2_snippet = norm(&sig_2.f_slice(0, Some(d_2 as i64), Some((d_2+m) as i64), 1)?);
 
                 // let dp = norm(&t_1_snippet).dot(&t_2_snippet);
-                let dp = self_dot_norm(&t, i_0, i_1, 1, 1, m)?;
+
+
+                let (slice_01, slice_02) = ts.get_slices(i_0, i_1, m, dim)?;
+
+                let dp = self_dot_norm(dim, &slice_01, &slice_02)?;
 
                 // dp.print();
 
-                println!("i_0={:?}, i_1={:?}, dp={:?} ", i_0, i_1, dp.double_value(&[0]));
+                // println!("i_0={:?}, i_1={:?}, dp={:?} ", i_0, i_1, dp.double_value(&[0]));
                 // row_dots.push(dp.double_value(&[0]));
                 mt.track(i_0, i_1, dp.double_value(&[0]) as f32);
 
@@ -554,6 +569,23 @@ mod tests {
         println!("ok");
 
         Ok(())
+    }
+
+
+    pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
+        let sig_1 = Tensor::from_slice(
+            pulses_in_rand(n, &[
+                // (10, pulse_v(8., 3., 20, 2.)),
+                // (30, pulse_v(8., 3., 20, 2.))
+                (100, pulse_v(80., 30., 200, 20.)),
+                (300, pulse_v(80., 30., 200, 20.))
+            ]).as_slice()
+        );
+
+        let sig_2 = Tensor::from_slice(
+            pulses_in_rand(n, &[]).as_slice()
+        );
+        (sig_1, sig_2)
     }
 
     fn gauss_t(μ: f64, σ: f64, n: i64) -> Tensor {
