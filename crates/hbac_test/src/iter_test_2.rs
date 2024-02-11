@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Index;
 use std::slice::SliceIndex;
@@ -5,8 +6,103 @@ use log::debug;
 use tch::{TchError, Tensor};
 use crate::GenError;
 
-struct TensorsSource {//TODO SliceIndex?
-    tensors:Vec<Tensor>,
+trait TensorsStore {
+    fn get_tensor(&mut self, index: usize) -> Result<&Tensor, GenError>;
+
+    fn tensors_len(&self) -> usize;
+}
+struct VecTensorsStore {
+    tensors:Vec<Tensor>
+}
+
+impl VecTensorsStore {
+    pub fn new(tensors: Vec<Tensor>) -> Box<Self> {
+        Box::new(Self { tensors })
+    }
+}
+impl TensorsStore for VecTensorsStore {
+    fn get_tensor(&mut self, index: usize) -> Result<&Tensor, GenError>{
+        Ok(&self.tensors[index])
+    }
+
+    fn tensors_len(&self) -> usize {
+        self.tensors.len()
+    }
+}
+
+struct LazyTensorsStore {
+    tensor_refs:Vec<String>,
+    loaded:HashMap<String, Tensor>,
+    tensor_loader: Box<dyn TensorLoader>
+}
+
+trait TensorLoader {
+    fn load(&self, tensor_ref:&String)->Tensor;
+}
+
+struct HashTensorLoader {
+    tensors:HashMap<String, Tensor>
+}
+
+impl HashTensorLoader {
+    pub fn new(tensors: HashMap<String, Tensor>) -> Box<Self> {
+        Box::new(Self { tensors })
+    }
+}
+
+impl TensorLoader for HashTensorLoader {
+    fn load(&self, tensor_ref: &String) -> Tensor {
+        debug!("tensor_ref={:?} self.tensors={:?}", tensor_ref, self.tensors);
+        self.tensors.get(tensor_ref).unwrap().copy()
+    }
+}
+
+impl LazyTensorsStore {
+
+    pub fn new(tensor_refs: Vec<String>, tensor_loader: Box<dyn TensorLoader>) -> Box<Self> {
+        let mut loaded = HashMap::new();
+
+        preload(&mut loaded, &tensor_loader, &tensor_refs[0]);
+
+        Box::new(Self {
+            tensor_refs,
+            loaded: loaded,
+            tensor_loader
+        })
+    }
+}
+
+impl TensorsStore for LazyTensorsStore {
+    fn get_tensor(&mut self, index: usize) -> Result<&Tensor, GenError> {
+
+        if index < self.tensor_refs.len() -1 {
+            preload(&mut self.loaded, &self.tensor_loader, &self.tensor_refs[index + 1]);
+        }
+
+        let loaded_tensor = self.loaded.get(&self.tensor_refs[index]);
+
+        match loaded_tensor {
+            None => {
+                Err(GenError::new("not yet loaded".into()))
+            }
+            Some(tensor) => {
+                Ok(tensor)
+            }
+        }
+    }
+
+    fn tensors_len(&self) -> usize {
+        self.tensor_refs.len()
+    }
+}
+
+fn preload(loaded:&mut HashMap<String, Tensor>, tensor_loader: &Box<dyn TensorLoader>, tensor_ref: &String) {
+    loaded.insert(tensor_ref.clone(), tensor_loader.load(tensor_ref));
+}
+
+
+struct TensorsIter {//TODO SliceIndex?
+    tensors_store: Box<dyn TensorsStore>,
     tensor_index_0:usize,
     tensor_index_1:usize,
 
@@ -18,13 +114,15 @@ struct TensorsSource {//TODO SliceIndex?
     m:i64,
 }
 
-impl TensorsSource {
-    pub fn new(tensors: Vec<Tensor>, dim:usize, m:i64, step:i64) -> Self {
+impl TensorsIter {
+    pub fn new(tensors_store: Box<impl TensorsStore + 'static>, dim:usize, m:i64, step:i64) -> Self {
 
         assert!(step <= m);
 
+        debug!("tensors_store.tensors_len()={}", tensors_store.tensors_len());
+
         Self {
-            tensors,
+            tensors_store,
             tensor_index_0: 0,
             tensor_index_1: 0,
 
@@ -36,41 +134,38 @@ impl TensorsSource {
             m,
         }
     }
-
 }
 
-impl Iterator for TensorsSource {
+impl Iterator for TensorsIter {
     type Item = Result<(Tensor, Tensor), GenError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         debug!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
 
 
-        if self.tensor_index_0 < self.tensors.len() {
-
+        if self.tensor_index_0 < self.tensors_store.tensors_len() {
             let v = Some(Ok((
-                self.tensors[self.tensor_index_0].f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap(),
-                self.tensors[self.tensor_index_1].f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()
+                self.tensors_store.get_tensor(self.tensor_index_0).unwrap().f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap(),//TODO unwrap
+                self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()
             )));
 
 
             //TODO m < tensor
-            if self.slice_index_1 + self.step + self.m <= self.tensors[self.tensor_index_1].size()[self.dim] {
+            if self.slice_index_1 + self.step + self.m <= self.tensors_store.get_tensor(self.tensor_index_1).unwrap().size()[self.dim] {
                 self.slice_index_1 += self.step;
 
                 debug!("1");
 
             } else {
 
-                if self.tensor_index_1 < self.tensors.len() -1 {
+                if self.tensor_index_1 < self.tensors_store.tensors_len() -1 {
                     self.tensor_index_1 += 1;
                     self.slice_index_1 = 0;
 
                     debug!("2.1");
 
                 } else {
-
-                    if self.slice_index_0 + self.step + self.m <= self.tensors[self.tensor_index_0].size()[self.dim] {
+                    if self.slice_index_0 + self.step + self.m <= self.tensors_store.get_tensor(self.tensor_index_0).unwrap().size()[self.dim] {
                         self.slice_index_0 += self.step;
 
                         debug!("2.2.1");
@@ -84,7 +179,7 @@ impl Iterator for TensorsSource {
                     self.slice_index_1 = self.slice_index_0 + self.step;
                     self.tensor_index_1 = self.tensor_index_0;
 
-                    if self.slice_index_1 + self.m > self.tensors[self.tensor_index_1].size()[self.dim] {//to avoid "i=10 0: [8.0, 9.0] 1: []" in test_one_inner
+                    if self.slice_index_1 + self.m > self.tensors_store.get_tensor(self.tensor_index_1).unwrap().size()[self.dim] {//to avoid "i=10 0: [8.0, 9.0] 1: []" in test_one_inner
                         self.slice_index_0 = 0;
                         self.tensor_index_0 += 1;
 
@@ -105,15 +200,27 @@ impl Iterator for TensorsSource {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::Write;
     use std::time::Instant;
-    use log::{debug, LevelFilter};
+    use log::{debug, LevelFilter, SetLoggerError};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
     use crate::GenError;
-    use crate::iter_test_2::TensorsSource;
+    use crate::iter_test_2::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore};
     use crate::tests::from;
 
+    #[ctor::ctor]
+    fn init() {
+        match CombinedLogger::init(
+            vec![
+                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ){
+            Ok(_) => {}
+            Err(_) => {}
+        };
+    }
 
 
     #[test]
@@ -125,7 +232,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsSource::new(vec![t_0], 1, 2, 2);
+        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
         let r = ts_to_vec(ts);
         // x x x x x
         //   x x x x
@@ -161,7 +268,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsSource::new(vec![t_0], 1, 3, 2);
+        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
         let r = ts_to_vec(ts);
         //
         // for r in r.clone() {
@@ -189,7 +296,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsSource::new(vec![t_0], 1, 3, 2);
+        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
         let r = ts_to_vec(ts);
 
         // for r in r.clone() {
@@ -211,7 +318,7 @@ mod tests {
 
     }
 
-    fn ts_to_vec(ts: TensorsSource) -> Vec<String> {
+    fn ts_to_vec(ts: TensorsIter) -> Vec<String> {
         let r = ts.enumerate().map(|(i, v)| {
             match v {
                 Ok(ref x) => {
@@ -236,7 +343,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsSource::new(vec![t_0], 1, 2, 2);
+        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
         let r = ts_to_vec(ts);
         // for r in r.clone() {
         //     println!("r={:?}", r);
@@ -271,7 +378,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsSource::new(vec![t_0, t_1], 1, 2, 2);
+        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0, t_1]), 1, 2, 2);
         let r = ts_to_vec(ts);
         // for r in r.clone() {
         //     println!("r={:?}", r);
@@ -322,11 +429,34 @@ mod tests {
         // assert_eq!(r.len(), 15);
     }
 
+    #[test]
+    fn test_two_inner_lazy() {
+        let t_0 = Tensor::vstack(&[
+            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
+            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice())
+        ]);
+
+        let t_1 = Tensor::vstack(&[
+            Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice()),
+            Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice())
+        ]);
+
+        let mut tensors_map = HashMap::new();
+        tensors_map.insert("t_0".into(), t_0);
+        tensors_map.insert("t_1".into(), t_1);
+
+
+        let ts = TensorsIter::new(
+            LazyTensorsStore::new(vec!["t_0".into(), "t_1".into()], HashTensorLoader::new(tensors_map)),
+            1, 2, 2
+        );
+        let r = ts_to_vec(ts);
+    }
     // #[test]
     fn test_time(){
 
         let all_t = (0..4_000).map(|_|Tensor::rand(&[20, 100_000], (Kind::Float, Device::Cpu))).collect::<Vec<Tensor>>();
-        let ts = TensorsSource::new(all_t, 1, 1_000, 100);
+        let ts = TensorsIter::new(VecTensorsStore::new(all_t), 1, 1_000, 100);
 
         let t1 = Instant::now();
         let mut s = 0;

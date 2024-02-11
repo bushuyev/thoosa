@@ -64,7 +64,7 @@ mod tests {
     use std::io;
     use std::io::Write;
 
-    use log::{debug, LevelFilter};
+    use log::{debug, LevelFilter, SetLoggerError};
     use plotters::prelude::{BLACK, BLUE, MAGENTA};
     use plotters::style::{GREEN, RED};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
@@ -76,11 +76,14 @@ mod tests {
 
     #[ctor::ctor]
     fn init() {
-        CombinedLogger::init(
+        match CombinedLogger::init(
             vec![
                 TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
             ]
-        ).unwrap();
+        ){
+            Ok(_) => {}
+            Err(_) => {}
+        };
     }
 
     struct MotifTracker {
