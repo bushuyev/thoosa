@@ -19,6 +19,11 @@ ctor = "0.2.6"
 chrono = { version = "0.4.32" }
 rayon = "1.8.1"
 
+crossbeam-utils = "0.8.19"
+crossbeam = "0.8.4"
+crossbeam-channel = "0.5.11"
+futures = "0.3.30"
+
 
 [dev-dependencies]
 rand_chacha = "0.3.1"

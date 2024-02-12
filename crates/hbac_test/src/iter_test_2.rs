@@ -5,6 +5,7 @@ use std::slice::SliceIndex;
 use log::debug;
 use tch::{TchError, Tensor};
 use crate::GenError;
+use rayon::prelude::*;
 
 trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Tensor, GenError>;
@@ -33,7 +34,7 @@ impl TensorsStore for VecTensorsStore {
 struct LazyTensorsStore {
     tensor_refs:Vec<String>,
     loaded:HashMap<String, Tensor>,
-    tensor_loader: Box<dyn TensorLoader>
+    tensor_loader: Box<dyn TensorLoader + Send>
 }
 
 trait TensorLoader {
@@ -59,7 +60,7 @@ impl TensorLoader for HashTensorLoader {
 
 impl LazyTensorsStore {
 
-    pub fn new(tensor_refs: Vec<String>, tensor_loader: Box<dyn TensorLoader>) -> Box<Self> {
+    pub fn new(tensor_refs: Vec<String>, tensor_loader: Box<dyn TensorLoader + Send>) -> Box<Self> {
         let mut loaded = HashMap::new();
 
         preload(&mut loaded, &tensor_loader, &tensor_refs[0]);
@@ -83,7 +84,7 @@ impl TensorsStore for LazyTensorsStore {
 
         match loaded_tensor {
             None => {
-                Err(GenError::new("not yet loaded".into()))
+                Err(GenError::new("not tensor".into()))
             }
             Some(tensor) => {
                 Ok(tensor)
@@ -96,13 +97,13 @@ impl TensorsStore for LazyTensorsStore {
     }
 }
 
-fn preload(loaded:&mut HashMap<String, Tensor>, tensor_loader: &Box<dyn TensorLoader>, tensor_ref: &String) {
+fn preload(loaded:&mut HashMap<String, Tensor>, tensor_loader: &Box<dyn TensorLoader + Send>, tensor_ref: &String) {
     loaded.insert(tensor_ref.clone(), tensor_loader.load(tensor_ref));
 }
 
 
 struct TensorsIter {//TODO SliceIndex?
-    tensors_store: Box<dyn TensorsStore>,
+    tensors_store: Box<dyn TensorsStore + Send>,
     tensor_index_0:usize,
     tensor_index_1:usize,
 
@@ -115,7 +116,7 @@ struct TensorsIter {//TODO SliceIndex?
 }
 
 impl TensorsIter {
-    pub fn new(tensors_store: Box<impl TensorsStore + 'static>, dim:usize, m:i64, step:i64) -> Self {
+    pub fn new(tensors_store: Box<impl TensorsStore + Send +'static>, dim:usize, m:i64, step:i64) -> Self {
 
         assert!(step <= m);
 
@@ -204,11 +205,13 @@ mod tests {
     use std::io::Write;
     use std::time::Instant;
     use log::{debug, LevelFilter, SetLoggerError};
+    use rayon::prelude::ParallelBridge;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
     use crate::GenError;
     use crate::iter_test_2::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore};
     use crate::tests::from;
+    use rayon::iter::ParallelIterator;
 
     #[ctor::ctor]
     fn init() {
@@ -450,7 +453,11 @@ mod tests {
             LazyTensorsStore::new(vec!["t_0".into(), "t_1".into()], HashTensorLoader::new(tensors_map)),
             1, 2, 2
         );
-        let r = ts_to_vec(ts);
+
+        // let r = ts_to_vec(ts);
+        ts.par_bridge().for_each(|v|{
+            println!("v={:?}", v);
+        });
     }
     // #[test]
     fn test_time(){
