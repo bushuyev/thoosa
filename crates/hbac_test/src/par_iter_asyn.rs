@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -63,15 +65,15 @@ impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'sta
     }
 }
 
-struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static, V:Send+'static{
+struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
     data_loaded:HashMap<K, V>,
-    data_being_loaded:Arc<Mutex<HashMap<K, Arc<Mutex<Vec<Waker>>>>>>,
+    data_being_loaded:Arc<Mutex<HashMap<K, Arc<Mutex<()>>>>>,
     loader:fn(&K)->V,
     read_mx:Arc<Mutex<()>>,
     load_mx:Arc<Mutex<()>>
 }
 
-impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'static, V:Send +'static{
+impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'static + Debug, V:Send +'static{
     pub fn new(loader: fn(&K) -> V) -> Self {
         Self {
             data_loaded: HashMap::new(),
@@ -82,7 +84,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         }
     }
 
-    pub fn load_blocking(&mut self, key:K) -> &V{
+    pub fn load_blocking(&mut self, key:K) {
         // self.data_loaded.entry(key.clone()).or_insert_with(||(self.loader)(&key))
 
         // let guard = self.read_mx.lock().expect("data_loaded.lock");
@@ -91,29 +93,48 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         //     return v;
         // }
 
-        let guard = self.load_mx.lock().expect("data_loaded.lock");
-        if let Some(v) = self.data_loaded.get(&key) {
-            drop(guard);
-            return v;
+        // let guard = self.load_mx.lock().expect("data_loaded.lock");
+        // if let Some(v) = self.data_loaded.get(&key) {
+        //     drop(guard);
+        //     return v;
+        // }
+
+
+
+        if self.data_loaded.contains_key(&key) {
+            println!("{:?} is already loaded", key);
+            return;
         }
-
-        let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
-        let wakers_mx = data_being_loaded_guard.entry(key.clone()).or_insert_with(|| Arc::new(Mutex::new(vec![])));
-
-        let wakers_lock = wakers_mx.lock().expect("wakers_mx");
-        let is_wakers_empty = wakers_lock.is_empty();
-
+        println!("loading {:?}", key);
 
         self.data_loaded.insert(
             key.clone(),
             block_on(LoaderFuture::new(self.loader.clone(), key.clone()))
         );
 
-        drop(wakers_lock);
-        drop(guard);
 
-        self.read_mx.lock().expect("data_loaded.lock");
-        self.data_loaded.get(&key).expect("no data")
+        // drop(guard);
+
+        // self.read_mx.lock().expect("data_loaded.lock");
+        // self.data_loaded.get(&key).expect("no data")
+    }
+
+    pub fn get_loaded(&self, key:&K) -> Option<&V> {
+        self.data_loaded.get(key)
+    }
+
+    pub fn load_and_get(&mut self, k:K) -> Option<&V> {
+        let data_being_loaded_lock = Arc::clone(&self.data_being_loaded);
+        let mut data_being_loaded_guard = data_being_loaded_lock.lock().expect("data_being_loaded");
+        let entry_mutex = data_being_loaded_guard.entry(k.clone()).or_insert_with(|| Arc::new(Mutex::new(())));
+        let entry_lock_clone = Arc::clone(entry_mutex);
+
+        entry_lock_clone.lock().expect("wakers_mx");
+
+        drop(data_being_loaded_guard);
+
+        self.load_blocking(k.clone());
+        self.get_loaded(&k)
     }
 
 
@@ -176,6 +197,8 @@ async fn load_it(i:i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+    use std::time::Duration;
     use futures::executor::block_on;
     use rayon::prelude::*;
     use crate::par_iter_asyn::{CacheOnThreads, load_it};
@@ -186,8 +209,9 @@ mod tests {
         key:String
     }
 
-    fn load_test_entity(key:&String)->TestEntity{
-        TestEntity {key:key.clone()}
+    fn load_test_entity(key:&String)->Box<TestEntity>{
+        thread::sleep(Duration::new(10, 0));
+        Box::new(TestEntity {key:key.clone()})
     }
 
 
@@ -217,10 +241,22 @@ mod tests {
     #[test]
     fn test_cache_on_threads(){
         let mut cache = CacheOnThreads::new(load_test_entity);
+        cache.load_and_get("Key1".into());
+        cache.load_and_get("Key1".into());
+        cache.load_and_get("Key1".into());
+        cache.load_and_get("Key1".into());
+        cache.load_and_get("Key1".into());
+        // let e_2 = cache.load_and_get("Key1".into()).map(|e| e as *const _ as *const u32).unwrap();
+        let e_1 = cache.load_and_get("Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
 
-        let e_1 = cache.load_blocking("Key1".into());
+        // let xx = e_1.and_then(|e_1| e_2.map(|e_2|(e_1 as *const _, e_2 as *const _))).unwrap();
 
+        // let p_1 = e_1.unwrap() as *const _;
+        // let p_2 = e_2.unwrap() as *const _;
+        // println!("ee={:?}", e_2 == e_1);
         println!("e_1={:?}", e_1);
+        // let i:&TestEntity = unsafe { &*(e_1 as *const _ as *const &TestEntity)};
+        // println!("e_1={:?}", i);
 
     }
 }
