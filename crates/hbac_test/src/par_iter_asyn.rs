@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -10,22 +11,55 @@ use std::time::Duration;
 use futures::executor::block_on;
 
 // struct LoaderFuture <K, V> where K:Hash + Eq{
-struct LoaderFuture {
-    wakers: Arc<Mutex<Vec<Waker>>>
+struct LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
+    waker: Arc<Mutex<Option<Waker>>>,
+    data: Arc<Mutex<Option<V>>>,
+    pd:PhantomData<K>
 }
 
-impl LoaderFuture {
-    pub fn new(wakers: Arc<Mutex<Vec<Waker>>>) -> Self {
-        Self {wakers}
+impl<K, V> LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
+    pub fn new(loader: fn(&K) -> V, key:K) -> Self {
+        let waker = Arc::new(Mutex::new(None::<Waker>));
+        let waker_in_thread  = Arc::clone(&waker);
+
+        let data = Arc::new(Mutex::new(None));
+        let data_in_thread = Arc::clone(&data);
+
+        thread::spawn(move || {
+
+            data_in_thread.lock().expect("data_in_thread").replace(
+                (loader)(&key)
+            );
+
+            if let Some(waker) = waker_in_thread.lock().expect("waker_in_thread").take() {
+                waker.wake()
+            }
+        });
+
+
+        Self {
+            waker,
+            data,
+            pd: PhantomData
+        }
     }
 }
 
 // impl <K, V> Future for LoaderFuture <K, V> where K:Hash + Eq{
-impl Future for LoaderFuture {
-    type Output = ();
+impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
+    type Output = V;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        todo!()
+         match self.data.lock().expect("self.data").take() {
+             None => {
+                 self.waker.lock().expect("self.waker").replace(cx.waker().clone());
+
+                 Poll::Pending
+             }
+             Some(data) => {
+                 Poll::Ready(data)
+             }
+         }
     }
 }
 
@@ -51,11 +85,11 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
     pub fn load_blocking(&mut self, key:K) -> &V{
         // self.data_loaded.entry(key.clone()).or_insert_with(||(self.loader)(&key))
 
-        let guard = self.read_mx.lock().expect("data_loaded.lock");
-        if let Some(v) = self.data_loaded.get(&key) {
-            drop(guard);
-            return v;
-        }
+        // let guard = self.read_mx.lock().expect("data_loaded.lock");
+        // if let Some(v) = self.data_loaded.get(&key) {
+        //     drop(guard);
+        //     return v;
+        // }
 
         let guard = self.load_mx.lock().expect("data_loaded.lock");
         if let Some(v) = self.data_loaded.get(&key) {
@@ -69,37 +103,20 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         let wakers_lock = wakers_mx.lock().expect("wakers_mx");
         let is_wakers_empty = wakers_lock.is_empty();
 
-        let feature = LoaderFuture::new(Arc::clone(wakers_mx));
 
-        if is_wakers_empty {
-            let thread_data_being_loaded = Arc::clone(&self.data_being_loaded);
-            let loader = self.loader.clone();
+        self.data_loaded.insert(
+            key.clone(),
+            block_on(LoaderFuture::new(self.loader.clone(), key.clone()))
+        );
 
-            thread::spawn(move || {
-
-                let v = (loader)(&key);
-
-                // let guard = self.load_mx.lock().expect("data_loaded.lock");
-                // if let Some(v) = self.data_loaded.get(&key) {
-                //
-                // }
-
-                if let Some(mut wakers) = thread_data_being_loaded.lock().expect("thread_data_being_loaded thread").remove(&key) {
-                    for waker in &*wakers.lock().expect("wakers in future") {
-                        waker.wake_by_ref();
-                    };
-                }
-            });
-        }
         drop(wakers_lock);
         drop(guard);
 
-        block_on(feature);
-
-
-
-        todo!()
+        self.read_mx.lock().expect("data_loaded.lock");
+        self.data_loaded.get(&key).expect("no data")
     }
+
+
 
     fn _load_in_future(&mut self, key: &K) -> V {
 
