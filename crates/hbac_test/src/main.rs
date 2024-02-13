@@ -7,9 +7,7 @@ use tch::{Device, Kind, kind, Tensor};
 use rand::Rng;
 
 mod utils;
-mod iter_test;
 mod tensor_iter;
-mod crossbeam_channel;
 mod cache_on_threads;
 
 #[derive(Debug)]
@@ -73,6 +71,7 @@ mod tests {
     use tch::{Device, Kind, kind, Tensor};
     use chrono::Utc;
     use rand::Rng;
+    use rayon::prelude::ParallelBridge;
     use crate::{GenError, z_norm};
 
 
@@ -497,7 +496,7 @@ mod tests {
 
     #[test]
     pub fn test_find_motifs() -> Result<(), GenError>{
-        let n = 20_000i64;
+        let n = 1_000i64;
         let x = lin_t(n);
         let sig_num = 2;
         // let sig_1 = gauss_t(400., 100., n); //f.flip([0]);
@@ -513,25 +512,27 @@ mod tests {
         let (sig_1_1, sig_1_2) = two_sigs(10_000);
         let t_1 = Tensor::vstack(&[sig_1_1, sig_1_2]);
 
-        let ts = crate::tests::TensorsSource::new(vec![t_0, t_1]);
 
-        let m = 20;
+
+        let m = 100;
+        let step = 50;
 
 
         let t1 = Instant::now();
 
-        let mut dots:Vec<Vec<f64>> = vec![];
 
-        let mut mt = crate::tests::MotifTracker::new(0.7);
+        let mut mt = crate::tests::MotifTracker::new(0.9);
 
         let dim = 1;
 
-        for i_0 in (0..n-m).step_by(10) {
+
+        let ts = crate::tests::TensorsSource::new(vec![t_0, t_1]);
+        for i_0 in (0..n-m).step_by(step) {
         // let d_1 = 200; {
             // let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
 
             for i_1 in (i_0..n-m).step_by(10).skip(1) {
-                println!("i_0={:?}, i_1={:?} m={}", i_0, i_1, m);
+                debug!("i_0={:?}, i_1={:?} m={}", i_0, i_1, m);
 
                 // let t_2_snippet = norm(&sig_2.f_slice(0, Some(d_2 as i64), Some((d_2+m) as i64), 1)?);
 
@@ -554,7 +555,6 @@ mod tests {
         }
         mt.dump();
         debug!("done in {}", t1.elapsed().as_millis());
-        debug!("1. dots.len= {}", dots.len());
         // dots.extend((0..n as usize -dots.len()).map(|_|0.).collect::<Vec<f32>>());
         // debug!("2. dots.len= {}", dots.len());
 
@@ -574,6 +574,34 @@ mod tests {
         println!("ok");
 
         Ok(())
+    }
+
+    #[test]
+    pub fn test_motiffs_iter(){
+        fn load_sig_tensor(key:&String) ->Box<Tensor>{
+            let (sig_1_1, sig_1_2) = two_sigs(10_000);
+            Box::new(Tensor::vstack(&[sig_1_1, sig_1_2]))
+        }
+
+        let ts_iter = crate::tensor_iter::TensorsIter::new(
+            Box::new(crate::tensor_iter::CacheOnThreadsStore::new(load_sig_tensor, vec!["sig_0".into()])),
+            1, 2, 2
+        );
+
+        let mut mt = crate::tests::MotifTracker::new(0.9);
+
+        let dots = ts_iter.par_bridge().map(|r|{
+            match r {
+                Ok(v) => {
+                    // v.0.tensordot(&v.1, 1, 1)
+                    let dp = self_dot_norm(1, &v.0, &v.1)?;
+                    mt.track(i_0, i_1, dp.double_value(&[0]) as f32);
+                }
+                Err(e) => {
+                    panic!("v={:?}", e);
+                }
+            }
+        }).collect::<Vec<Tensor>>();
     }
 
 

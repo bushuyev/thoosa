@@ -106,7 +106,7 @@ fn preload(loaded:&mut HashMap<String, Box<Tensor>>, tensor_loader: &Box<dyn Ten
 }
 
 
-struct TensorsIter {//TODO SliceIndex?
+pub(crate) struct TensorsIter {//TODO SliceIndex?
     tensors_store: Box<dyn TensorsStore + Send>,
     tensor_index_0:usize,
     tensor_index_1:usize,
@@ -204,7 +204,7 @@ impl Iterator for TensorsIter {
 
 
 
-struct CacheOnThreadsStore {
+pub(crate) struct CacheOnThreadsStore {
     cache:CacheOnThreads<String, Box<Tensor>>,
     keys:Vec<String>
 }
@@ -528,8 +528,7 @@ mod tests {
         let vec_100 = (0..20).map(|i|format!("key_{}", i)).collect::<Vec<String>>();
 
         let ts = TensorsIter::new(
-            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100)
-            ),
+            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100)),
             1, 2, 2
         );
 
