@@ -12,7 +12,6 @@ use simplelog::*;
 use tch::{Device, kind, Kind, nn, no_grad, Reduction, Tensor};
 use tch::nn::{Init, Linear, LinearConfig, Module, Path, Sequential};
 use tch::nn::{ConvConfig, OptimizerConfig};
-use torch_sys::IntList;
 
 use crate::{data, utils};
 use crate::builder::{NthConst, SeqBuilder};

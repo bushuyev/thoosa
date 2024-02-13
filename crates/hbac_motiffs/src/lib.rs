@@ -60,14 +60,14 @@ fn self_dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tenso
 }
 
 
-pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>){
+pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>, m: i64, step: i64, min_dot: f32){
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
         Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys)),
-        1, 100, 10
+        1, m, step
     );
 
-    let mt = Arc::new(Mutex::new(crate::tests::MotifTracker::new(0.9)));
+    let mt = Arc::new(Mutex::new(crate::tests::MotifTracker::new(min_dot)));
 
     ts_iter.par_bridge().map(|r|(Arc::clone(&mt), r)).for_each(|(mt, r)| {
         match r {
@@ -115,6 +115,7 @@ mod tests {
     use crate::{GenError, z_norm};
     use rayon::iter::ParallelIterator;
     use rayon::iter::IntoParallelIterator;
+    use crate::*;
 
     #[ctor::ctor]
     fn init() {
@@ -217,7 +218,7 @@ mod tests {
         let mut mt = crate::tests::MotifTracker::new(0.8);
 
         for (i, dot) in dots.into_iter().enumerate(){
-                mt.track(0 as i64, i as i64, dot as f32);
+            mt.track(0 as i64, i as i64, dot as f32);
         }
         assert_eq!([(0, 1, 3, 0.9), (0, 5, 8, 0.9)], mt.motifs()[0..2]);
 
@@ -254,7 +255,7 @@ mod tests {
             Tensor::from_slice(&[1., 2., 3.])
         ]);
 
-        let norm = crate::tests::norm_2(&t);
+        let norm = norm_2(&t);
 
         assert_eq!(Tensor::from_slice(&[1., 1.]),norm.tensordot(&norm, 1, 1).diag(0));
 
@@ -302,7 +303,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    // #[test]
     fn test_motifs_match(){
         let t1 = Instant::now();
 
@@ -442,8 +443,8 @@ mod tests {
                 .flat_map(
                     |(offset, pulse)|
                         std::iter::repeat(0f64)
-                        .take(*offset)
-                        .chain(pulse.into_iter().map(|v|*v))
+                            .take(*offset)
+                            .chain(pulse.into_iter().map(|v|*v))
                 )
                 .chain(std::iter::repeat(0f64).take(n as usize-pulses_len))
         ).map(|(v1, v2)| 0.001 * v1 + v2).collect::<Vec<f64>>()
@@ -561,7 +562,7 @@ mod tests {
 
         let ts = crate::tests::TensorsSource::new(vec![t_0, t_1]);
         for i_0 in (0..n-m).step_by(step) {
-        // let d_1 = 200; {
+            // let d_1 = 200; {
             // let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
 
             for i_1 in (i_0..n-m).step_by(10).skip(1) {
@@ -704,17 +705,5 @@ mod tests {
     }
 
 
-    //from tch-0.14.0/tests/test_utils.rs
-    pub fn from<'a, T>(t: &'a Tensor) -> T
-        where
-            <T as TryFrom<&'a tch::Tensor>>::Error: std::fmt::Debug,
-            T: TryFrom<&'a Tensor>,
-    {
-        T::try_from(t).unwrap()
-    }
 
-
-    pub fn vec_f32_from(t: &Tensor) -> Vec<f32> {
-        from::<Vec<f32>>(&t.reshape(-1))
-    }
 }

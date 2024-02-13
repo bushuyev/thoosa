@@ -6,8 +6,8 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Add;
 use std::time::Instant;
-use log::{debug, SetLoggerError};
 
+use log::{debug, SetLoggerError};
 use polars::error::PolarsError;
 use polars::export::ahash::{HashMap, HashMapExt};
 use polars::export::arrow::compute::filter::filter;
@@ -18,10 +18,11 @@ use polars::prelude::{
     col, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom,
     ScanArgsParquet, Series,
 };
+use rand::{Rng, thread_rng};
 use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
-use rand::{Rng, thread_rng};
 use tch::{Kind, Tensor};
+
 use crate::utils::DataBatch;
 
 #[derive(Debug)]
@@ -531,25 +532,40 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
     df.partition_by(&["frag_id"], false)
 }
 
+pub fn eeg_to_tensor(base_path: &str, eeg_id: &str) -> Result<Tensor, GenError> {
+    let scan_conf = ScanArgsParquet::default();
+
+    let eeg_df = LazyFrame::scan_parquet(
+        format!("{}/train_eegs/{}.parquet", base_path, eeg_id),
+        scan_conf,
+    )?;
+
+    let df = eeg_df.collect()?;
+
+    Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()))
+}
+
 
 #[cfg(test)]
 mod tests {
     use std::fs::File;
     use std::io::Write;
     use std::ops::Div;
+    use std::time::Instant;
+
     use log::{debug, LevelFilter};
     use plotters::prelude::{GREEN, RED};
     use plotters::style::BLACK;
     use polars::export::ahash::{HashMap, HashMapExt};
     use polars::prelude::*;
-
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, EEGs, GenError, Set, split_frame_by_offsets, Splitter};
-    use rand::thread_rng;
     use rand::seq::SliceRandom;
+    use rand::thread_rng;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Tensor;
-    use crate::utils::DataBatch;
 
+    use crate::*;
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, EEGs, GenError, series_to_tensor, Set, split_frame_by_offsets, Splitter};
+    use crate::utils::DataBatch;
 
     #[ctor::ctor]
     fn init() {
@@ -596,6 +612,27 @@ mod tests {
                 (format!("0"), BLACK, eegs.train_set[0].egg_map[0].iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
 
             ], "EEG", (10_000, 480), "0.png"
+        ).unwrap();
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_plot_eeg_tensor() -> Result<(), GenError> {
+        // println!("tensor={:?}", tensor.size());
+
+        let t_0 = data::eeg_to_tensor("../../data", "1628180742")?.f_slice(0, Some(0), Some(1), 1)?;
+        let t_1 = data::eeg_to_tensor("../../data", "1019408895")?.f_slice(0, Some(0), Some(1), 1)?;
+
+        // println!("tensor={:?}", tensor.size());
+
+        //"1628180742".into(), "1019408895"
+        crate::utils::plot(
+            vec![
+                (format!("1628180742"), BLACK, crate::utils::from::<Vec<f32>>(&t_0.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
+                (format!("1019408895"), RED, crate::utils::from::<Vec<f32>>(&t_1.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
+
+            ], "EEG", (10_000, 480), "/tmp/plots/1628180742_1019408895.png"
         ).unwrap();
 
         Ok(())
@@ -752,6 +789,28 @@ mod tests {
 
     }
 
+    #[test]
+    pub fn test_eeg_to_tensor() -> Result<(), GenError> {
+        // series_to_tensor()
+
+        let base_path = "../../data";
+        let eeg_id = "4454049";
+
+        let t1 = Instant::now();
+        let t = data::eeg_to_tensor(base_path, eeg_id)?;
+
+
+        debug!("done in {}", t1.elapsed().as_millis());
+
+        println!("t={:?}", t.size());
+
+        assert_eq!([20, 17600], t.size().as_slice());
+
+        Ok(())
+
+    }
+
+
 
     // #[test]
     // pub fn test_load_by_std() -> Result<(), GenError> {
@@ -772,7 +831,7 @@ mod tests {
     //     Ok(())
     // }
     #[test]
-    pub fn test_test() -> Result<(), GenError> {
+    pub fn test_test()-> Result<(), GenError> {
 
 
 
