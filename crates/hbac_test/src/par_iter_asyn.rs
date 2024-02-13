@@ -64,9 +64,18 @@ impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'sta
          }
     }
 }
+#[derive(Debug)]
+pub struct Inner<'a, K, V>(MutexGuard<'a, HashMap<K, V>>, K) where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static;
+
+impl<'a, K, V> Deref for Inner<'a, K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static {
+    type Target = V;
+    fn deref(&self) -> &Self::Target {
+        self.0.get(&self.1).unwrap()
+    }
+}
 
 struct CacheOnThreads< K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
-    data_loaded:HashMap<K, V>,
+    data_loaded:Arc<Mutex<HashMap<K, V>>>,
 
     data_being_loaded:Arc<Mutex<HashMap<K, Arc<Mutex<()>>>>>,
 
@@ -79,7 +88,7 @@ struct CacheOnThreads< K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V
 impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'static + Debug, V:Send +'static{
     pub fn new(loader: fn(&K) -> V) -> Self {
         Self {
-            data_loaded: HashMap::new(),
+            data_loaded: Arc::new(Mutex::new(HashMap::new())),
             data_being_loaded: Arc::new(Mutex::new(HashMap::new())),
             loader,
             read_mx:Arc::new(Mutex::new(())),
@@ -90,7 +99,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
     fn load_blocking(&mut self, key:K) ->bool {
 
-        self.data_loaded.insert(
+        self.data_loaded.lock().expect("data_loaded").insert(
             key.clone(),
             block_on(LoaderFuture::new(self.loader.clone(), key.clone()))
         );
@@ -99,15 +108,20 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         return true;
     }
 
-    pub fn get_loaded(&self, key:&K) -> Option<&V> {
-        self.data_loaded.get(key)
+    pub fn get_loaded<'a>(&'a self, key:K) -> Inner<'a, K, V> {
+        let lock = self.data_loaded.lock().expect("data_loaded");
+        Inner(lock, key)
     }
 
-    pub fn load_blocking_and_get(&mut self, k:K) -> Option<&V> {
+    pub fn load_blocking_and_get(&mut self, k:K) -> Inner<'_, K, V> {
 
         let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
         println!("loading {:?} self.keys_fifo.len()={}", k, self.keys_fifo.len());
-        if !self.data_loaded.contains_key(&k) {
+
+        let mut data_loaded_clone = Arc::clone(&self.data_loaded);
+        let mut data_loaded_guard = data_loaded_clone.lock().expect("data_loaded");
+
+        if !data_loaded_guard.contains_key(&k) {
 
             if self.keys_fifo.len() > 3 {
                 if let Some(key_to_remove) = self.keys_fifo.pop_front() {
@@ -115,7 +129,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
                     let entry_mutex = data_being_loaded_guard.entry(key_to_remove.clone()).or_insert_with(|| Arc::new(Mutex::new(())));
                     entry_mutex.lock().expect("entry_mutex for key_to_remove");
 
-                    self.data_loaded.remove(&key_to_remove);
+                    data_loaded_guard.remove(&key_to_remove);
                     data_being_loaded_guard.remove(&key_to_remove);
                 }
             }
@@ -123,7 +137,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
             let entry_mutex = data_being_loaded_guard.entry(k.clone()).or_insert_with(|| Arc::new(Mutex::new(())));
             let entry_lock_clone = Arc::clone(entry_mutex);
-
+            drop(data_loaded_guard);
             drop(data_being_loaded_guard);
             entry_lock_clone.lock().expect("wakers_mx");
 
@@ -131,9 +145,10 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
 
         } else {
+            drop(data_loaded_guard);
             println!("{:?} is already loaded", k);
         }
-        self.get_loaded(&k)
+        self.get_loaded(k.clone())
     }
 
     pub fn load_no_blocking(&mut self, keys:&[K]) {
@@ -238,6 +253,7 @@ async fn load_it(i:i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Deref;
     use std::thread;
     use std::time::Duration;
     use futures::executor::block_on;
@@ -285,13 +301,22 @@ mod tests {
         cache.load_blocking_and_get("Key1".into());
         cache.load_blocking_and_get("Key1".into());
         cache.load_blocking_and_get("Key2".into());
+
+
         cache.load_blocking_and_get("Key3".into());
         cache.load_blocking_and_get("Key4".into());
         cache.load_blocking_and_get("Key5".into());
         cache.load_blocking_and_get("Key1".into());
-        cache.get_loaded(&"Key1".into());
+        cache.load_blocking_and_get("Key2".into());
+
+        let key_2 = cache.get_loaded("Key2".into());
+        let e_2 = key_2.deref();
+
         // let e_2 = cache.load_and_get("Key1".into()).map(|e| e as *const _ as *const u32).unwrap();
-        let e_1 = cache.load_blocking_and_get("Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
+        let key_1 = cache.get_loaded("Key2".into());
+        let e_1 = key_1.deref(); //.map(|e| e as *const _ as *const u32).unwrap();
+
+
 
         // let xx = e_1.and_then(|e_1| e_2.map(|e_2|(e_1 as *const _, e_2 as *const _))).unwrap();
 
