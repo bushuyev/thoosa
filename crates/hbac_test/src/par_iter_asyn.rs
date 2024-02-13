@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
@@ -65,12 +65,15 @@ impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'sta
     }
 }
 
-struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
+struct CacheOnThreads< K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
     data_loaded:HashMap<K, V>,
+
     data_being_loaded:Arc<Mutex<HashMap<K, Arc<Mutex<()>>>>>,
+
     loader:fn(&K)->V,
     read_mx:Arc<Mutex<()>>,
-    load_mx:Arc<Mutex<()>>
+    load_mx:Arc<Mutex<()>>,
+    keys_fifo: VecDeque<K>
 }
 
 impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'static + Debug, V:Send +'static{
@@ -80,61 +83,99 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             data_being_loaded: Arc::new(Mutex::new(HashMap::new())),
             loader,
             read_mx:Arc::new(Mutex::new(())),
-            load_mx:Arc::new(Mutex::new(()))
+            load_mx:Arc::new(Mutex::new(())),
+            keys_fifo: VecDeque::new()
         }
     }
 
-    pub fn load_blocking(&mut self, key:K) {
-        // self.data_loaded.entry(key.clone()).or_insert_with(||(self.loader)(&key))
-
-        // let guard = self.read_mx.lock().expect("data_loaded.lock");
-        // if let Some(v) = self.data_loaded.get(&key) {
-        //     drop(guard);
-        //     return v;
-        // }
-
-        // let guard = self.load_mx.lock().expect("data_loaded.lock");
-        // if let Some(v) = self.data_loaded.get(&key) {
-        //     drop(guard);
-        //     return v;
-        // }
-
-
-
-        if self.data_loaded.contains_key(&key) {
-            println!("{:?} is already loaded", key);
-            return;
-        }
-        println!("loading {:?}", key);
+    fn load_blocking(&mut self, key:K) ->bool {
 
         self.data_loaded.insert(
             key.clone(),
             block_on(LoaderFuture::new(self.loader.clone(), key.clone()))
         );
+        println!("{:?} was loaded", key);
 
-
-        // drop(guard);
-
-        // self.read_mx.lock().expect("data_loaded.lock");
-        // self.data_loaded.get(&key).expect("no data")
+        return true;
     }
 
     pub fn get_loaded(&self, key:&K) -> Option<&V> {
         self.data_loaded.get(key)
     }
 
-    pub fn load_and_get(&mut self, k:K) -> Option<&V> {
-        let data_being_loaded_lock = Arc::clone(&self.data_being_loaded);
-        let mut data_being_loaded_guard = data_being_loaded_lock.lock().expect("data_being_loaded");
-        let entry_mutex = data_being_loaded_guard.entry(k.clone()).or_insert_with(|| Arc::new(Mutex::new(())));
-        let entry_lock_clone = Arc::clone(entry_mutex);
+    pub fn load_blocking_and_get(&mut self, k:K) -> Option<&V> {
 
-        entry_lock_clone.lock().expect("wakers_mx");
+        let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
+        println!("loading {:?} self.keys_fifo.len()={}", k, self.keys_fifo.len());
+        if !self.data_loaded.contains_key(&k) {
 
-        drop(data_being_loaded_guard);
+            if self.keys_fifo.len() > 3 {
+                if let Some(key_to_remove) = self.keys_fifo.pop_front() {
+                    println!("removing {:?} ", key_to_remove);
+                    let entry_mutex = data_being_loaded_guard.entry(key_to_remove.clone()).or_insert_with(|| Arc::new(Mutex::new(())));
+                    entry_mutex.lock().expect("entry_mutex for key_to_remove");
 
-        self.load_blocking(k.clone());
+                    self.data_loaded.remove(&key_to_remove);
+                    data_being_loaded_guard.remove(&key_to_remove);
+                }
+            }
+            self.keys_fifo.push_back(k.clone());
+
+            let entry_mutex = data_being_loaded_guard.entry(k.clone()).or_insert_with(|| Arc::new(Mutex::new(())));
+            let entry_lock_clone = Arc::clone(entry_mutex);
+
+            drop(data_being_loaded_guard);
+            entry_lock_clone.lock().expect("wakers_mx");
+
+            self.load_blocking(k.clone());
+
+
+        } else {
+            println!("{:?} is already loaded", k);
+        }
         self.get_loaded(&k)
+    }
+
+    pub fn load_no_blocking(&mut self, keys:&[K]) {
+
+
+        for key in keys {
+
+            let data_being_loaded_in_thread = Arc::clone(&self.data_being_loaded);
+            let key_in_thread = key.clone();
+            let loader_in_thread = self.loader.clone();
+            thread::spawn(move || {
+                let mut data_being_loaded_guard = data_being_loaded_in_thread.lock().expect("data_being_loaded");
+
+                let entry_mutex = data_being_loaded_guard.entry(key_in_thread.clone()).or_insert_with(|| Arc::new(Mutex::new(())));
+
+                let entry_lock_clone = Arc::clone(entry_mutex);
+
+                drop(data_being_loaded_guard);
+                entry_lock_clone.lock().expect("wakers_mx");
+
+                let data =  (loader_in_thread)(&key_in_thread);
+
+                // self.data_loaded.insert(
+                //     key.clone(),
+                //     (self.loader)(&key_in_thread)
+                // );
+
+                // (loader_in_thread)(&key_in_thread)
+
+                // drop(data_being_loaded_guard);
+                //
+                // data_in_thread.lock().expect("data_in_thread").replace(
+                //     (loader)(&key)
+                // );
+                //
+                // if let Some(waker) = waker_in_thread.lock().expect("waker_in_thread").take() {
+                //     waker.wake()
+                // }
+            });
+        }
+
+
     }
 
 
@@ -210,7 +251,7 @@ mod tests {
     }
 
     fn load_test_entity(key:&String)->Box<TestEntity>{
-        thread::sleep(Duration::new(10, 0));
+        thread::sleep(Duration::new(3, 0));
         Box::new(TestEntity {key:key.clone()})
     }
 
@@ -241,13 +282,16 @@ mod tests {
     #[test]
     fn test_cache_on_threads(){
         let mut cache = CacheOnThreads::new(load_test_entity);
-        cache.load_and_get("Key1".into());
-        cache.load_and_get("Key1".into());
-        cache.load_and_get("Key1".into());
-        cache.load_and_get("Key1".into());
-        cache.load_and_get("Key1".into());
+        cache.load_blocking_and_get("Key1".into());
+        cache.load_blocking_and_get("Key1".into());
+        cache.load_blocking_and_get("Key2".into());
+        cache.load_blocking_and_get("Key3".into());
+        cache.load_blocking_and_get("Key4".into());
+        cache.load_blocking_and_get("Key5".into());
+        cache.load_blocking_and_get("Key1".into());
+        cache.get_loaded(&"Key1".into());
         // let e_2 = cache.load_and_get("Key1".into()).map(|e| e as *const _ as *const u32).unwrap();
-        let e_1 = cache.load_and_get("Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
+        let e_1 = cache.load_blocking_and_get("Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
 
         // let xx = e_1.and_then(|e_1| e_2.map(|e_2|(e_1 as *const _, e_2 as *const _))).unwrap();
 
@@ -258,5 +302,11 @@ mod tests {
         // let i:&TestEntity = unsafe { &*(e_1 as *const _ as *const &TestEntity)};
         // println!("e_1={:?}", i);
 
+    }
+
+    #[test]
+    fn test_load_no_blocking(){
+        let mut cache = CacheOnThreads::new(load_test_entity);
+        cache.load_no_blocking(&["Key1".into(), "Key2".into()])
     }
 }
