@@ -8,9 +8,9 @@ use rand::Rng;
 
 mod utils;
 mod iter_test;
-mod iter_test_2;
+mod tensor_iter;
 mod crossbeam_channel;
-mod par_iter_asyn;
+mod cache_on_threads;
 
 #[derive(Debug)]
 pub struct GenError {

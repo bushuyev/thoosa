@@ -2,27 +2,30 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Index;
 use std::slice::SliceIndex;
+use std::thread;
+use std::time::Duration;
 use log::debug;
-use tch::{TchError, Tensor};
+use tch::{Device, Kind, TchError, Tensor};
 use crate::GenError;
 use rayon::prelude::*;
+use crate::cache_on_threads::CacheOnThreads;
 
 trait TensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Tensor, GenError>;
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError>;
 
     fn tensors_len(&self) -> usize;
 }
 struct VecTensorsStore {
-    tensors:Vec<Tensor>
+    tensors:Vec<Box<Tensor>>
 }
 
 impl VecTensorsStore {
     pub fn new(tensors: Vec<Tensor>) -> Box<Self> {
-        Box::new(Self { tensors })
+        Box::new(Self { tensors:tensors.into_iter().map(|t|Box::new(t)).collect() })
     }
 }
 impl TensorsStore for VecTensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Tensor, GenError>{
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError> {
         Ok(&self.tensors[index])
     }
 
@@ -31,9 +34,10 @@ impl TensorsStore for VecTensorsStore {
     }
 }
 
+//TODO remove
 struct LazyTensorsStore {
     tensor_refs:Vec<String>,
-    loaded:HashMap<String, Tensor>,
+    loaded:HashMap<String, Box<Tensor>>,
     tensor_loader: Box<dyn TensorLoader + Send>
 }
 
@@ -74,7 +78,7 @@ impl LazyTensorsStore {
 }
 
 impl TensorsStore for LazyTensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Tensor, GenError> {
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError> {
 
         if index < self.tensor_refs.len() -1 {
             preload(&mut self.loaded, &self.tensor_loader, &self.tensor_refs[index + 1]);
@@ -97,8 +101,8 @@ impl TensorsStore for LazyTensorsStore {
     }
 }
 
-fn preload(loaded:&mut HashMap<String, Tensor>, tensor_loader: &Box<dyn TensorLoader + Send>, tensor_ref: &String) {
-    loaded.insert(tensor_ref.clone(), tensor_loader.load(tensor_ref));
+fn preload(loaded:&mut HashMap<String, Box<Tensor>>, tensor_loader: &Box<dyn TensorLoader + Send>, tensor_ref: &String) {
+    loaded.insert(tensor_ref.clone(), Box::new(tensor_loader.load(tensor_ref)));
 }
 
 
@@ -199,6 +203,50 @@ impl Iterator for TensorsIter {
 }
 
 
+
+struct CacheOnThreadsStore {
+    cache:CacheOnThreads<String, Box<Tensor>>,
+    keys:Vec<String>
+}
+
+impl CacheOnThreadsStore {
+    pub fn new(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>) -> Self {
+        Self {
+            cache: CacheOnThreads::new(loader),
+            keys
+        }
+    }
+
+    fn index_to_key(&self, i:usize)->&String {
+        &self.keys[i]
+    }
+}
+
+impl TensorsStore for CacheOnThreadsStore {
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError> {
+
+        if index+2 < self.keys.len() && index % 2 == 0 {
+            debug!("1. get_tensor: index={}", index);
+
+            self.cache.load_blocking_preload_and_get(
+                &self.index_to_key(index).clone(),
+                (index..index + 2).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
+            ).ok_or(GenError::new("no tensor".into()))
+
+        } else {
+            debug!("2. get_tensor: index={}", index);
+
+            self.cache.load_blocking_and_get(
+                &self.index_to_key(index).clone()
+            ).ok_or(GenError::new("no tensor".into()))
+        }
+    }
+
+    fn tensors_len(&self) -> usize {
+        self.keys.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -209,7 +257,7 @@ mod tests {
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
     use crate::GenError;
-    use crate::iter_test_2::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore};
+    use crate::tensor_iter::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore, CacheOnThreadsStore};
     use crate::tests::from;
     use rayon::iter::ParallelIterator;
 
@@ -459,6 +507,47 @@ mod tests {
             println!("v={:?}", v);
         });
     }
+
+    fn load_rand_tensor(key:&String) ->Box<Tensor>{
+        Box::new(Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu)))
+    }
+
+    #[test]
+    fn test_cache_on_threads() {
+        let vec_8:Vec<String> = vec![
+            "key1".into(),
+            "key2".into(),
+            "key3".into(),
+            "key4".into(),
+            "key5".into(),
+            "key6".into(),
+            "key7".into(),
+            "key8".into()
+        ];
+
+        let vec_100 = (0..20).map(|i|format!("key_{}", i)).collect::<Vec<String>>();
+
+        let ts = TensorsIter::new(
+            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100)
+            ),
+            1, 2, 2
+        );
+
+        // let r = ts_to_vec(ts);
+        let dots = ts.par_bridge().map(|r|{
+            match r {
+                Ok(v) => {
+                    v.0.tensordot(&v.1, 1, 1)
+                }
+                Err(e) => {
+                    panic!("v={:?}", e);
+                }
+            }
+        }).collect::<Vec<Tensor>>();
+
+        println!("dots {}", dots.len());
+    }
+
     // #[test]
     fn test_time(){
 
