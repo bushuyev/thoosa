@@ -106,7 +106,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
     pub fn load_blocking_and_get(&mut self, k:K) -> Option<&V> {
 
         let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
-        println!("loading {:?} self.keys_fifo.len()={}", k, self.keys_fifo.len());
+        println!("loading {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
         if !self.data_loaded.contains_key(&k) {
 
             if self.keys_fifo.len() > 3 {
@@ -131,6 +131,10 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
 
         } else {
+            if let Some((i, e)) = self.keys_fifo.iter().enumerate().find(|(i, e)| e == &&k) {
+                self.keys_fifo.remove(i);
+            }
+            self.keys_fifo.push_back(k.clone());
             println!("{:?} is already loaded", k);
         }
         self.get_loaded(&k)
@@ -288,10 +292,11 @@ mod tests {
         cache.load_blocking_and_get("Key3".into());
         cache.load_blocking_and_get("Key4".into());
         cache.load_blocking_and_get("Key5".into());
+        cache.load_blocking_and_get("Key2".into());
         cache.load_blocking_and_get("Key1".into());
-        cache.get_loaded(&"Key1".into());
-        // let e_2 = cache.load_and_get("Key1".into()).map(|e| e as *const _ as *const u32).unwrap();
-        let e_1 = cache.load_blocking_and_get("Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
+
+        let e_1 = cache.get_loaded(&"Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
+        let e_2 = cache.get_loaded(&"Key2".into()); //.map(|e| e as *const _ as *const u32).unwrap();
 
         // let xx = e_1.and_then(|e_1| e_2.map(|e_2|(e_1 as *const _, e_2 as *const _))).unwrap();
 
@@ -299,6 +304,10 @@ mod tests {
         // let p_2 = e_2.unwrap() as *const _;
         // println!("ee={:?}", e_2 == e_1);
         println!("e_1={:?}", e_1);
+
+        assert_eq!(e_1.unwrap().key, "Key1");
+        assert_eq!(e_2.unwrap().key, "Key2");
+
         // let i:&TestEntity = unsafe { &*(e_1 as *const _ as *const &TestEntity)};
         // println!("e_1={:?}", i);
 
