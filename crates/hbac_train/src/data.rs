@@ -543,8 +543,7 @@ mod tests {
     use polars::export::ahash::{HashMap, HashMapExt};
     use polars::prelude::*;
 
-    use crate::{EEGs, GenError};
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, Set, split_frame_by_offsets, Splitter};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, EEGs, GenError, Set, split_frame_by_offsets, Splitter};
     use rand::thread_rng;
     use rand::seq::SliceRandom;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};

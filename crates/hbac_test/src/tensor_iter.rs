@@ -140,9 +140,10 @@ impl TensorsIter {
         }
     }
 }
+pub type TensorSlice = (usize, i64, Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorsIter {
-    type Item = Result<(Tensor, Tensor), GenError>;
+    type Item = Result<(TensorSlice, TensorSlice), GenError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         debug!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
@@ -150,8 +151,8 @@ impl Iterator for TensorsIter {
 
         if self.tensor_index_0 < self.tensors_store.tensors_len() {
             let v = Some(Ok((
-                self.tensors_store.get_tensor(self.tensor_index_0).unwrap().f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap(),//TODO unwrap
-                self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()
+                (self.tensor_index_0, self.slice_index_0, self.tensors_store.get_tensor(self.tensor_index_0).unwrap().f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()),//TODO unwrap
+                (self.tensor_index_1, self.slice_index_1, self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap())
             )));
 
 
@@ -181,14 +182,14 @@ impl Iterator for TensorsIter {
                         self.tensor_index_0 += 1;
                     }
 
-                    self.slice_index_1 = self.slice_index_0 + self.step;
+                    self.slice_index_1 = self.slice_index_0 + self.m;
                     self.tensor_index_1 = self.tensor_index_0;
 
                     if self.slice_index_1 + self.m > self.tensors_store.get_tensor(self.tensor_index_1).unwrap().size()[self.dim] {//to avoid "i=10 0: [8.0, 9.0] 1: []" in test_one_inner
                         self.slice_index_0 = 0;
                         self.tensor_index_0 += 1;
 
-                        self.slice_index_1 = self.slice_index_0 + self.step;
+                        self.slice_index_1 = self.slice_index_0 + self.m;
                         self.tensor_index_1 = self.tensor_index_0;
                     }
 
@@ -373,7 +374,7 @@ mod tests {
         let r = ts.enumerate().map(|(i, v)| {
             match v {
                 Ok(ref x) => {
-                    format!("i={} 0: {:?} 1: {:?}", i, from::<Vec<Vec<f32>>>(&x.0)[0], from::<Vec<Vec<f32>>>(&x.1)[0])
+                    format!("i={} 0: {:?} 1: {:?}", i, from::<Vec<Vec<f32>>>(&x.0.2)[0], from::<Vec<Vec<f32>>>(&x.1.2)[0])
                     // x.0.print();
                     // x.1.print();
                 }
@@ -536,7 +537,7 @@ mod tests {
         let dots = ts.par_bridge().map(|r|{
             match r {
                 Ok(v) => {
-                    v.0.tensordot(&v.1, 1, 1)
+                    v.0.2.tensordot(&v.1.2, 1, 1)
                 }
                 Err(e) => {
                     panic!("v={:?}", e);

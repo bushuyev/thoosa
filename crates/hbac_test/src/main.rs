@@ -1,10 +1,13 @@
 extern crate core;
 
 use std::fmt::Display;
+use std::sync::{Arc, Mutex};
 
 use log::debug;
 use tch::{Device, Kind, kind, Tensor};
 use rand::Rng;
+use rayon::iter::{ParallelBridge, ParallelIterator};
+use crate::tests::two_sigs;
 
 mod utils;
 mod tensor_iter;
@@ -52,7 +55,43 @@ fn z_norm(t:&Tensor, dim: i64) -> Tensor {
     z_t
 }
 
+fn self_dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, GenError> {
+    Ok(norm_2(slice_01).tensordot(&norm_2(slice_02), [dim], [dim]).diag(0))
+}
 
+
+pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>){
+
+    let ts_iter = crate::tensor_iter::TensorsIter::new(
+        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys)),
+        1, 100, 10
+    );
+
+    let mt = Arc::new(Mutex::new(crate::tests::MotifTracker::new(0.9)));
+
+    ts_iter.par_bridge().map(|r|(Arc::clone(&mt), r)).for_each(|(mt, r)| {
+        match r {
+            Ok(((t_0_i, s_0_i, t_0), (t_1_i, s_1_i, t_1))) => {
+                // v.0.tensordot(&v.1, 1, 1)
+                let dp = self_dot_norm(1, &t_0, &t_1).unwrap();
+                mt.lock().expect("mt").track(s_0_i, s_1_i, dp.double_value(&[0]) as f32);
+            }
+            Err(e) => {
+                panic!("v={:?}", e);
+            }
+        };
+    });
+
+    println!("mt={:?}", mt);
+}
+
+fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
+    t.view(dim) / t.dot(&t).sqrt()
+}
+
+fn norm_2(t: &Tensor) -> Tensor {
+    t/ t.tensordot(&t, 1, 1).diag(0).sqrt().view([1, -1]).transpose(0, 1)
+}
 mod tests {
     use std::collections::VecDeque;
     use std::f64::consts::PI;
@@ -63,6 +102,7 @@ mod tests {
     use std::time::Instant;
     use std::io;
     use std::io::Write;
+    use std::sync::{Arc, Mutex};
 
     use log::{debug, LevelFilter, SetLoggerError};
     use plotters::prelude::{BLACK, BLUE, MAGENTA};
@@ -73,7 +113,8 @@ mod tests {
     use rand::Rng;
     use rayon::prelude::ParallelBridge;
     use crate::{GenError, z_norm};
-
+    use rayon::iter::ParallelIterator;
+    use rayon::iter::IntoParallelIterator;
 
     #[ctor::ctor]
     fn init() {
@@ -87,7 +128,8 @@ mod tests {
         };
     }
 
-    struct MotifTracker {
+    #[derive(Debug)]
+    pub(crate) struct MotifTracker {
         motifs:Vec<(i64, i64, i64, f32)>,//i_0, match_0, match_1, dot
         motif_start_op:Option<i64>,
         min_dot: f32,
@@ -219,13 +261,7 @@ mod tests {
         Ok(())
     }
 
-    fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
-        t.view(dim) / t.dot(&t).sqrt()
-    }
 
-    fn norm_2(t: &Tensor) -> Tensor {
-        t/ t.tensordot(&t, 1, 1).diag(0).sqrt().view([1, -1]).transpose(0, 1)
-    }
 
     #[test]
     pub fn test_pulses_in_rand() -> Result<(), GenError>{
@@ -311,9 +347,6 @@ mod tests {
         Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
     }
 
-    fn self_dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, GenError> {
-        Ok(norm_2(slice_01).tensordot(&norm_2(slice_02), [dim], [dim]).diag(0))
-    }
 
 
     #[test]
@@ -502,20 +535,20 @@ mod tests {
         // let sig_1 = gauss_t(400., 100., n); //f.flip([0]);
         // let sig_2 = gauss_t(600., 100., n); //.flip([0]);
 
-        let (sig_0_1, sig_0_2) = two_sigs(10_000);
+        let (sig_0_1, sig_0_2) = two_sigs(1_000);
         println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_0_1.size(), sig_0_2.size());
         let sig_1_c = sig_0_1.copy();
         let sig_2_c = sig_0_2.copy();
         let t_0 = Tensor::vstack(&[sig_0_1, sig_0_2]);
         println!("t.size={:?}", t_0.size());
 
-        let (sig_1_1, sig_1_2) = two_sigs(10_000);
+        let (sig_1_1, sig_1_2) = two_sigs(1_000);
         let t_1 = Tensor::vstack(&[sig_1_1, sig_1_2]);
 
 
 
         let m = 100;
-        let step = 50;
+        let step = 10;
 
 
         let t1 = Instant::now();
@@ -579,29 +612,31 @@ mod tests {
     #[test]
     pub fn test_motiffs_iter(){
         fn load_sig_tensor(key:&String) ->Box<Tensor>{
-            let (sig_1_1, sig_1_2) = two_sigs(10_000);
+            let (sig_1_1, sig_1_2) = two_sigs(1000);
             Box::new(Tensor::vstack(&[sig_1_1, sig_1_2]))
         }
 
         let ts_iter = crate::tensor_iter::TensorsIter::new(
             Box::new(crate::tensor_iter::CacheOnThreadsStore::new(load_sig_tensor, vec!["sig_0".into()])),
-            1, 2, 2
+            1, 100, 10
         );
 
-        let mut mt = crate::tests::MotifTracker::new(0.9);
+        let mt = Arc::new(Mutex::new(MotifTracker::new(0.9)));
 
-        let dots = ts_iter.par_bridge().map(|r|{
+        ts_iter.par_bridge().map(|r|(Arc::clone(&mt), r)).for_each(|(mt, r)| {
             match r {
-                Ok(v) => {
+                Ok(((t_0_i, s_0_i, t_0), (t_1_i, s_1_i, t_1))) => {
                     // v.0.tensordot(&v.1, 1, 1)
-                    let dp = self_dot_norm(1, &v.0, &v.1)?;
-                    mt.track(i_0, i_1, dp.double_value(&[0]) as f32);
+                    let dp = self_dot_norm(1, &t_0, &t_1).unwrap();
+                    mt.lock().expect("mt").track(s_0_i, s_1_i, dp.double_value(&[0]) as f32);
                 }
                 Err(e) => {
                     panic!("v={:?}", e);
                 }
-            }
-        }).collect::<Vec<Tensor>>();
+            };
+        });
+
+        println!("mt={:?}", mt);
     }
 
 
