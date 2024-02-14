@@ -259,7 +259,7 @@ mod tests {
     use tch::{Device, Kind, Tensor};
     use crate::GenError;
     use crate::tensor_iter::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore, CacheOnThreadsStore};
-    use crate::tests::from;
+    use crate::utils::*;
     use rayon::iter::ParallelIterator;
 
     #[ctor::ctor]

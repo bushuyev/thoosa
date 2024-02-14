@@ -7,9 +7,9 @@ use log::debug;
 use tch::{Device, Kind, kind, Tensor};
 use rand::Rng;
 use rayon::iter::{ParallelBridge, ParallelIterator};
-use crate::tests::two_sigs;
 
-mod utils;
+
+pub mod utils;
 mod tensor_iter;
 mod cache_on_threads;
 
@@ -116,6 +116,7 @@ mod tests {
     use rayon::iter::ParallelIterator;
     use rayon::iter::IntoParallelIterator;
     use crate::*;
+    use crate::utils::*;
 
     #[ctor::ctor]
     fn init() {

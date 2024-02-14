@@ -136,3 +136,19 @@ pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, capti
 
     Ok(())
 }
+
+//from tch-0.14.0/tests/test_utils.rs
+pub fn from<'a, T>(t: &'a Tensor) -> T
+    where
+        <T as TryFrom<&'a tch::Tensor>>::Error: std::fmt::Debug,
+        T: TryFrom<&'a Tensor>,
+{
+    T::try_from(t).unwrap()
+}
+
+
+pub fn vec_f32_from(t: &Tensor) -> Vec<f32> {
+    from::<Vec<f32>>(&t.reshape(-1))
+}
+
+
