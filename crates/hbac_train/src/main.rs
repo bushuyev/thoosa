@@ -1,6 +1,7 @@
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::str::FromStr;
 use log::{debug, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, Kind, Tensor};
@@ -46,24 +47,28 @@ struct Cli {
 
     #[arg(long, default_value = None )]
     limit_eeg: Option<usize>,
+
+    #[arg(long, default_value = "INFO")]
+    term_logger_level: String,
+
+    #[arg(long, default_value = "INFO")]
+    write_logger_level: String,
+
+    #[arg(long, default_value = "hbac.log")]
+    logfile: String,
 }
 
 
-
-fn main() -> Result<(), GenError>{
+fn main() -> Result<(), GenError> {
 
     let cli = Cli::parse();
 
     CombinedLogger::init(
         vec![
-            TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
-            WriteLogger::new(LevelFilter::Debug, Config::default(), File::create("hbac.log")?),
+            TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+            WriteLogger::new(LevelFilter::from_str(cli.write_logger_level.as_str())?, Config::default(), File::create(cli.logfile)?),
         ]
     )?;
-
-
-    info!("VERSION: {}", VERSION);
-    std::io::stdout().flush()?;
 
 
     let device = if tch::utils::has_cuda() {
@@ -72,8 +77,8 @@ fn main() -> Result<(), GenError>{
         Device::Cpu
     };
 
-    debug!("device={:?}, base_path={:?}", device, cli.base_path);
-
+    info!("VERSION: {} device={:?}, base_path={:?} cpus={}", VERSION, device, cli.base_path, std::thread::available_parallelism()?);
+    std::io::stdout().flush()?;
 
     let eeg_id_series = data::EEGs::good_eegs_of(cli.base_path.as_str(), cli.kind.as_str())?;
 
@@ -87,7 +92,7 @@ fn main() -> Result<(), GenError>{
         }
     };
 
-    let records_num = clc_records(&eeg_id_series)? as i64;
+    let records_num = clc_records(&eeg_id_series, cli.base_path.as_str())? as i64;
 
     let slots_to_compare = (records_num - cli.window) / cli.step;
     let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare;
@@ -104,7 +109,7 @@ fn main() -> Result<(), GenError>{
         .create(true)
         .write(true)
         .append(false)
-        .open(format!("{}/eegs.txt", motiffs_dir))
+        .open(format!("{}/{}_eegs.txt", motiffs_dir, cli.kind))
         .unwrap();
 
     write!(file, "{:?}", eeg_ids_str);
@@ -112,7 +117,7 @@ fn main() -> Result<(), GenError>{
     find_motiffs_iter(
         move |key:&String|{
             // Box::new(Tensor::rand(&[2, 1000], (Kind::Float, Device::Cpu)))
-            Box::new(data::eeg_to_tensor(cli.base_path.as_str(), key.as_ref()).unwrap())
+            Box::new(data::eeg_to_tensor(cli.base_path.as_str(), key.as_ref(), device).unwrap())
         },
         // vec!["1628180742".into(), "1019408895".into(), "3523834378".into()],
         eeg_ids_str,

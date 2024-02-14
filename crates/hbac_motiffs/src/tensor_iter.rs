@@ -221,7 +221,7 @@ impl CacheOnThreadsStore {
         Self {
             cache: CacheOnThreads::new(loader),
             keys,
-            preload_d:2
+            preload_d
 
         }
     }

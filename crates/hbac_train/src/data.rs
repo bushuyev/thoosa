@@ -21,7 +21,7 @@ use polars::prelude::{
 use rand::{Rng, thread_rng};
 use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
-use tch::{Kind, Tensor};
+use tch::{Device, Kind, Tensor};
 
 use crate::utils::DataBatch;
 
@@ -207,7 +207,8 @@ impl EEGs {
             good_eegs_filter
             .filter(col(kind).gt(lit(0)))
                 // .sort(kind, SortOptions{ descending: true, ..Default::default()})
-                .sort("eeg_id", Default::default())
+                // .sort("eeg_id", Default::default())
+                .sort_by_exprs(vec![col(kind), col("eeg_id")], vec![true, false], true, true)
             .collect()?
             .column("eeg_id")?.clone()
         )
@@ -552,7 +553,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
     df.partition_by(&["frag_id"], false)
 }
 
-pub fn eeg_to_tensor(base_path: &str, eeg_id: &str) -> Result<Tensor, GenError> {
+pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, GenError> {
     let scan_conf = ScanArgsParquet::default();
 
     let eeg_df = LazyFrame::scan_parquet(
@@ -562,10 +563,10 @@ pub fn eeg_to_tensor(base_path: &str, eeg_id: &str) -> Result<Tensor, GenError> 
 
     let df = eeg_df.collect()?;
 
-    Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()))
+    Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()).to_device(device))
 }
 
-pub fn clc_records(eeg_id_series: &Series) -> Result<usize, GenError> {
+pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, GenError> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
 
@@ -573,7 +574,7 @@ pub fn clc_records(eeg_id_series: &Series) -> Result<usize, GenError> {
         // println!("eeg_id={:?}", eeg_id.unwrap_or_default());
         let eeg_id = eeg_id.unwrap();
         let eeg_df = LazyFrame::scan_parquet(
-            format!("{}/train_eegs/{}.parquet", "../../data", eeg_id),
+            format!("{}/train_eegs/{}.parquet", base_dir, eeg_id),
             scan_conf.clone(),
         ).unwrap().collect().unwrap();
 
@@ -660,8 +661,8 @@ mod tests {
     pub fn test_plot_eeg_tensor() -> Result<(), GenError> {
         // println!("tensor={:?}", tensor.size());
 
-        let t_0 = data::eeg_to_tensor("../../data", "1628180742")?.f_slice(0, Some(0), Some(1), 1)?;
-        let t_1 = data::eeg_to_tensor("../../data", "1019408895")?.f_slice(0, Some(0), Some(1), 1)?;
+        let t_0 = data::eeg_to_tensor("../../data", "1628180742", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
+        let t_1 = data::eeg_to_tensor("../../data", "1019408895", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
 
         // println!("tensor={:?}", tensor.size());
 
@@ -836,7 +837,7 @@ mod tests {
         let eeg_id = "4454049";
 
         let t1 = Instant::now();
-        let t = data::eeg_to_tensor(base_path, eeg_id)?;
+        let t = data::eeg_to_tensor(base_path, eeg_id, Device::Cpu)?;
 
 
         debug!("done in {}", t1.elapsed().as_millis());
@@ -892,14 +893,25 @@ mod tests {
         //     )
         //     .collect()?;
 
-        let eeg_id_series = EEGs::good_eegs_of("../../data", "seizure_vote")?;
+        // let eeg_id_series = EEGs::good_eegs_of("../../data", "seizure_vote")?;
+        //
+        // let eeg_id_series = eeg_id_series.limit(100);
 
-        let eeg_id_series = eeg_id_series.limit(10);
+        // let good_eegs_filter = EEGs::good_eegs_filter("../../data")?;
 
 
-        let records_num:usize = clc_records(&eeg_id_series)?;
+        let eeg_id = EEGs::good_eegs_filter("../../data")?
+                .filter(col("seizure_vote").gt(lit(0)))
+                // .sort(kind, SortOptions{ descending: true, ..Default::default()})
+                // .sort("eeg_id", Default::default())
+                .sort_by_exprs(vec![col("seizure_vote"), col("eeg_id")], vec![true, false], true, true)
+                .collect()?;
 
-        println!("eeg_id_series={} records_num={:?}", eeg_id_series.len(), records_num);
+        println!("eeg_id_series={:?}", eeg_id);
+
+        // let records_num:usize = clc_records(&eeg_id_series, "../../data")?;
+
+        // println!("eeg_id_series={} records_num={:?}", eeg_id_series.len(), records_num);
 
         // let df = LazyCsvReader::new("../../data/train.csv")
         //     .finish()?

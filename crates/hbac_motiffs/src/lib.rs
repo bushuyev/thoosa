@@ -90,7 +90,7 @@ pub fn find_motiffs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[i as i64]) as f32);
                 }
 
-                if slots_processed > 0 && slots_processed % 1000 == 0 {
+                if slots_processed > 0 && slots_processed % 10_000 == 0 {
                     let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
                     info!("pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min", slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, ((slots_to_process-slots_processed as usize)/(slots_per_sec+1))/60)
                 }
