@@ -19,6 +19,7 @@ simplelog = "0.12.1"
 anyhow = "1.0.79"
 ctor = "0.2.6"
 hbac_motiffs = {path = "../hbac_motiffs"}
+clap = { version = "4.5.0", features = ["derive"] }
 
 
 [dev-dependencies]

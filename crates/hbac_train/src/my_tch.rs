@@ -198,27 +198,8 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 }
 
 
-fn train() -> Result<(), GenError> {
-    CombinedLogger::init(
-        vec![
-            TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
-            WriteLogger::new(LevelFilter::Debug, Config::default(), File::create("hbac.log")?),
-        ]
-    )?;
+fn train(base_path:&str, device:Device) -> Result<(), GenError> {
 
-    info!("VERSION: {}", VERSION);
-    std::io::stdout().flush()?;
-
-    let args: Vec<String> = env::args().collect();
-    let base_path = args.get(1).map(|s|s.as_str()).unwrap_or("../../data");
-
-    let device = if tch::utils::has_cuda() {
-        Device::Cuda(0)
-    } else {
-        Device::Cpu
-    };
-
-    debug!("device={:?}, base_path={:?}", device, base_path);
 
     let good_eegs = EEGs::good_eegs(base_path)?;
 

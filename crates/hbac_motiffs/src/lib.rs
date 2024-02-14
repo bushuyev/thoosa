@@ -1,17 +1,21 @@
 extern crate core;
 
 use std::fmt::Display;
+use std::fs::{File, OpenOptions};
 use std::sync::{Arc, Mutex};
 
 use log::debug;
 use tch::{Device, Kind, kind, Tensor};
 use rand::Rng;
 use rayon::iter::{ParallelBridge, ParallelIterator};
-
+use crate::utils::cdt;
 
 pub mod utils;
 mod tensor_iter;
 mod cache_on_threads;
+use std::io::Write;
+
+use tensor_iter::*;
 
 #[derive(Debug)]
 pub struct GenError {
@@ -60,21 +64,35 @@ fn self_dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tenso
 }
 
 
-pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>, m: i64, step: i64, min_dot: f32){
+pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, motiffs_dir:&str){
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
         Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys)),
         1, m, step
     );
+    let dir = format!("{}/{}", motiffs_dir, cdt());
+    match std::fs::create_dir_all(dir.clone()){
+        Ok(_) => {}
+        Err(_) => {}
+    }
 
-    let mt = Arc::new(Mutex::new(crate::tests::MotifTracker::new(min_dot)));
+    let all_mt = min_dot
+        .into_iter()
+        .enumerate()
+        .map(|(i, min_dot)|Mutex::new(MotifTracker::new(min_dot, format!("{}/motifs_{}.csv", dir.clone(), i).as_str())))
+        .collect::<Vec<Mutex<MotifTracker>>>();
 
-    ts_iter.par_bridge().map(|r|(Arc::clone(&mt), r)).for_each(|(mt, r)| {
+    // ts_iter.par_bridge().map(|r|(Arc::clone(&all_mt), r)).for_each(|(mt, r)| {
+    ts_iter.par_bridge().for_each(|r| {
         match r {
-            Ok(((t_0_i, s_0_i, t_0), (t_1_i, s_1_i, t_1))) => {
+            Ok((t_s_0, t_s_1)) => {
                 // v.0.tensordot(&v.1, 1, 1)
-                let dp = self_dot_norm(1, &t_0, &t_1).unwrap();
-                mt.lock().expect("mt").track(s_0_i, s_1_i, dp.double_value(&[0]) as f32);
+                let dp = self_dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
+
+                for (i, mt) in all_mt.iter().enumerate() {
+                    mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[i as i64]) as f32);
+                }
+
             }
             Err(e) => {
                 panic!("v={:?}", e);
@@ -82,7 +100,7 @@ pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>, 
         };
     });
 
-    println!("mt={:?}", mt);
+    println!("saved to {:?}", dir);
 }
 
 fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
@@ -92,6 +110,103 @@ fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
 fn norm_2(t: &Tensor) -> Tensor {
     t/ t.tensordot(&t, 1, 1).diag(0).sqrt().view([1, -1]).transpose(0, 1)
 }
+
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct TensorSliceIdx(usize, i64);
+
+impl From<(usize, i64)> for TensorSliceIdx {
+    fn from(value: (usize, i64)) -> Self {
+        TensorSliceIdx(value.0, value.1)
+    }
+}
+
+impl Display for TensorSliceIdx {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{},{}", self.0, self.1)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct MotifTracker {
+    motifs:Vec<(TensorSliceIdx, TensorSliceIdx, TensorSliceIdx, f32)>,//i_0, match_0, match_1, dot
+    motif_start_op:Option<TensorSliceIdx>,//tensor, slice
+    min_dot: f32,
+    i_0: TensorSliceIdx,
+    file:File,
+    written_len: usize,
+    last_dot: f32
+}
+
+impl MotifTracker {
+    pub fn new(min_dot:f32, path: &str) -> Self {
+        match std::fs::remove_file(path){
+            Ok(_) => {}
+            Err(_) => {}
+        }
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+
+        Self {
+            motif_start_op: None,
+            min_dot,
+            motifs: vec![],
+            i_0: TensorSliceIdx(0, 0),
+            file,
+            written_len: 0,
+            last_dot: 0.
+        }
+    }
+
+    pub fn track(&mut self, i_0: TensorSliceIdx, i: TensorSliceIdx, dot:f32) {
+        match self.motif_start_op {
+            None => {
+                if dot > self.min_dot {
+                    self.motif_start_op = Some(i);
+                    self.last_dot = dot;
+                }
+            }
+            Some(motif_start) => {
+                if dot <= self.min_dot {
+                    self.motifs.push((i_0, motif_start, i, self.last_dot));
+                    self.motif_start_op = None;
+                    self.last_dot = 0.0;
+                }
+            }
+        }
+
+        if self.i_0 != i_0 {
+            self.i_0 = i_0;
+            self.dump();
+
+        }
+
+    }
+
+    pub fn next(&mut self) {
+        self.last_dot = 0.0;
+        self.motif_start_op = None;
+    }
+
+    fn dump(&mut self) {
+        for motif in self.motifs.iter().skip(self.written_len) {
+            writeln!(self.file, "{}, {}, {},  {:.3}", motif.0, motif.1, motif.2, motif.3);
+        }
+        self.file.flush();
+
+        self.written_len = self.motifs.len();
+    }
+
+    pub fn motifs(&self) -> &Vec<(TensorSliceIdx, TensorSliceIdx, TensorSliceIdx, f32)> {
+        &self.motifs
+    }
+}
+
 mod tests {
     use std::collections::VecDeque;
     use std::f64::consts::PI;
@@ -130,85 +245,6 @@ mod tests {
         };
     }
 
-    #[derive(Debug)]
-    pub(crate) struct MotifTracker {
-        motifs:Vec<(i64, i64, i64, f32)>,//i_0, match_0, match_1, dot
-        motif_start_op:Option<i64>,
-        min_dot: f32,
-        i_0:i64,
-        file:File,
-        written_len: usize,
-        last_dot: f32
-    }
-
-    impl MotifTracker {
-        pub fn new(min_dot:f32) -> Self {
-            match std::fs::remove_file("test_motifs.csv"){
-                Ok(_) => {}
-                Err(_) => {}
-            }
-
-            let mut file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .append(true)
-                .open("test_motifs.csv")
-                .unwrap();
-
-            Self {
-                motif_start_op: None,
-                min_dot,
-                motifs: vec![],
-                i_0: 0,
-                file,
-                written_len: 0,
-                last_dot: 0.
-            }
-        }
-
-        pub fn track(&mut self, i_0:i64, i:i64, dot:f32) {
-            match self.motif_start_op {
-                None => {
-                    if dot > self.min_dot {
-                        self.motif_start_op = Some(i);
-                        self.last_dot = dot;
-                    }
-                }
-                Some(motif_start) => {
-                    if dot <= self.min_dot {
-                        self.motifs.push((i_0, motif_start, i, self.last_dot));
-                        self.motif_start_op = None;
-                        self.last_dot = 0.0;
-                    }
-                }
-            }
-
-            if self.i_0 != i_0 {
-                self.i_0 = i_0;
-                self.dump();
-
-            }
-
-        }
-
-        pub fn next(&mut self) {
-            self.last_dot = 0.0;
-            self.motif_start_op = None;
-        }
-
-        fn dump(&mut self) {
-            for motif in self.motifs.iter().skip(self.written_len) {
-                writeln!(self.file, "{},{},{},{:.3}", motif.0, motif.1, motif.2, motif.3);
-            }
-            self.file.flush();
-
-            self.written_len = self.motifs.len();
-        }
-
-        pub fn motifs(&self) -> &Vec<(i64, i64, i64, f32)> {
-            &self.motifs
-        }
-    }
 
     #[test]
     pub fn test_filt(){
@@ -216,12 +252,12 @@ mod tests {
         // let dots = [1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1];
         let dots = [0.5, 0.9, 0.9, 0.5, 0.5, 0.9, 0.9, 0.9, 0.5, 0.5, 0.5, 0.5];
 
-        let mut mt = crate::tests::MotifTracker::new(0.8);
+        let mut mt = crate::tests::MotifTracker::new(0.8, "/tmp/test_motifs.csv");
 
         for (i, dot) in dots.into_iter().enumerate(){
-            mt.track(0 as i64, i as i64, dot as f32);
+            mt.track(TensorSliceIdx(0, 0), TensorSliceIdx(0, i as i64), dot as f32);
         }
-        assert_eq!([(0, 1, 3, 0.9), (0, 5, 8, 0.9)], mt.motifs()[0..2]);
+        assert_eq!([(TensorSliceIdx(0, 0), TensorSliceIdx(0, 1), TensorSliceIdx(0, 3), 0.9f32), (TensorSliceIdx(0, 0), TensorSliceIdx(0, 5), TensorSliceIdx(0, 8), 0.9f32)], mt.motifs()[0..2]);
 
         // let t1 = Instant::now();
         //
@@ -556,7 +592,7 @@ mod tests {
         let t1 = Instant::now();
 
 
-        let mut mt = crate::tests::MotifTracker::new(0.9);
+        let mut mt = crate::tests::MotifTracker::new(0.9, "/tmp/test_motifs.csv");
 
         let dim = 1;
 
@@ -582,7 +618,7 @@ mod tests {
 
                 // println!("i_0={:?}, i_1={:?}, dp={:?} ", i_0, i_1, dp.double_value(&[0]));
                 // row_dots.push(dp.double_value(&[0]));
-                mt.track(i_0, i_1, dp.double_value(&[0]) as f32);
+                mt.track(TensorSliceIdx(0, i_0), TensorSliceIdx(0, i_1), dp.double_value(&[0]) as f32);
 
             }
             mt.next();
@@ -623,14 +659,15 @@ mod tests {
             1, 100, 10
         );
 
-        let mt = Arc::new(Mutex::new(MotifTracker::new(0.9)));
+
+        let mt = Arc::new(Mutex::new(MotifTracker::new(0.9, "/tmp/test_motifs.csv")));
 
         ts_iter.par_bridge().map(|r|(Arc::clone(&mt), r)).for_each(|(mt, r)| {
             match r {
-                Ok(((t_0_i, s_0_i, t_0), (t_1_i, s_1_i, t_1))) => {
+                Ok((t_s_0, t_s_1)) => {
                     // v.0.tensordot(&v.1, 1, 1)
-                    let dp = self_dot_norm(1, &t_0, &t_1).unwrap();
-                    mt.lock().expect("mt").track(s_0_i, s_1_i, dp.double_value(&[0]) as f32);
+                    let dp = self_dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
+                    mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[0]) as f32);
                 }
                 Err(e) => {
                     panic!("v={:?}", e);

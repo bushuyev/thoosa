@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::mem;
+use chrono::NaiveDateTime;
+use chrono::SecondsFormat;
 use log::{debug, info, trace};
 use plotters::prelude::*;
 use plotters::backend::BitMapBackend;
@@ -152,3 +154,16 @@ pub fn vec_f32_from(t: &Tensor) -> Vec<f32> {
 }
 
 
+pub fn cdt() -> String {
+    chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::utils::cdt;
+
+    #[test]
+    fn test_cdt(){
+        println!("{}", cdt().replace(':', "_").replace('+', "_"));
+    }
+}

@@ -9,6 +9,7 @@ use tch::{Device, Kind, TchError, Tensor};
 use crate::GenError;
 use rayon::prelude::*;
 use crate::cache_on_threads::CacheOnThreads;
+use crate::TensorSliceIdx;
 
 trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError>;
@@ -140,7 +141,7 @@ impl TensorsIter {
         }
     }
 }
-pub type TensorSlice = (usize, i64, Tensor); //tensor idx, slice, tensor
+pub type TensorSlice = ((TensorSliceIdx), Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorsIter {
     type Item = Result<(TensorSlice, TensorSlice), GenError>;
@@ -151,8 +152,8 @@ impl Iterator for TensorsIter {
 
         if self.tensor_index_0 < self.tensors_store.tensors_len() {
             let v = Some(Ok((
-                (self.tensor_index_0, self.slice_index_0, self.tensors_store.get_tensor(self.tensor_index_0).unwrap().f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()),//TODO unwrap
-                (self.tensor_index_1, self.slice_index_1, self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap())
+                (TensorSliceIdx(self.tensor_index_0, self.slice_index_0), self.tensors_store.get_tensor(self.tensor_index_0).unwrap().f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()),//TODO unwrap
+                (TensorSliceIdx(self.tensor_index_1, self.slice_index_1), self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap())
             )));
 
 
@@ -330,9 +331,9 @@ mod tests {
             "i=0 0: [0.0, 1.0, 2.0] 1: [2.0, 3.0, 4.0]",
             "i=1 0: [0.0, 1.0, 2.0] 1: [4.0, 5.0, 6.0]",
             "i=2 0: [0.0, 1.0, 2.0] 1: [6.0, 7.0, 8.0]",
-            "i=3 0: [2.0, 3.0, 4.0] 1: [4.0, 5.0, 6.0]",
-            "i=4 0: [2.0, 3.0, 4.0] 1: [6.0, 7.0, 8.0]",
-            "i=5 0: [4.0, 5.0, 6.0] 1: [6.0, 7.0, 8.0]",
+            "i=3 0: [2.0, 3.0, 4.0] 1: [5.0, 6.0, 7.0]", //+m instead of +step
+            "i=4 0: [2.0, 3.0, 4.0] 1: [7.0, 8.0, 9.0]",
+            "i=5 0: [4.0, 5.0, 6.0] 1: [7.0, 8.0, 9.0]",
             // "i=10 0: [8.0, 9.0] 1: []"
         ], r
         );
@@ -359,12 +360,9 @@ mod tests {
             "i=1 0: [0.0, 1.0, 2.0] 1: [4.0, 5.0, 6.0]",
             "i=2 0: [0.0, 1.0, 2.0] 1: [6.0, 7.0, 8.0]",
             "i=3 0: [0.0, 1.0, 2.0] 1: [8.0, 9.0, 10.0]",
-            "i=4 0: [2.0, 3.0, 4.0] 1: [4.0, 5.0, 6.0]",
-            "i=5 0: [2.0, 3.0, 4.0] 1: [6.0, 7.0, 8.0]",
-            "i=6 0: [2.0, 3.0, 4.0] 1: [8.0, 9.0, 10.0]",
-            "i=7 0: [4.0, 5.0, 6.0] 1: [6.0, 7.0, 8.0]",
-            "i=8 0: [4.0, 5.0, 6.0] 1: [8.0, 9.0, 10.0]",
-            "i=9 0: [6.0, 7.0, 8.0] 1: [8.0, 9.0, 10.0]",
+            "i=4 0: [2.0, 3.0, 4.0] 1: [5.0, 6.0, 7.0]",
+            "i=5 0: [2.0, 3.0, 4.0] 1: [7.0, 8.0, 9.0]",
+            "i=6 0: [4.0, 5.0, 6.0] 1: [7.0, 8.0, 9.0]"
         ], r
         );
 
@@ -374,7 +372,7 @@ mod tests {
         let r = ts.enumerate().map(|(i, v)| {
             match v {
                 Ok(ref x) => {
-                    format!("i={} 0: {:?} 1: {:?}", i, from::<Vec<Vec<f32>>>(&x.0.2)[0], from::<Vec<Vec<f32>>>(&x.1.2)[0])
+                    format!("i={} 0: {:?} 1: {:?}", i, from::<Vec<Vec<f32>>>(&x.0.1)[0], from::<Vec<Vec<f32>>>(&x.1.1)[0])
                     // x.0.print();
                     // x.1.print();
                 }
@@ -537,7 +535,7 @@ mod tests {
         let dots = ts.par_bridge().map(|r|{
             match r {
                 Ok(v) => {
-                    v.0.2.tensordot(&v.1.2, 1, 1)
+                    v.0.1.tensordot(&v.1.1, 1, 1)
                 }
                 Err(e) => {
                     panic!("v={:?}", e);

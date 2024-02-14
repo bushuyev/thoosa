@@ -192,6 +192,27 @@ impl Splitter for ByPatientIdSplitter {
 impl EEGs {
 
     pub fn good_eegs(base_path: &str)  -> Result<Series, GenError>{
+        let good_eegs_filter = Self::good_eegs_filter(base_path)?;
+
+        Ok(good_eegs_filter
+            .collect()?
+            .column("eeg_id")?.clone())
+
+    }
+
+    pub fn good_eegs_of(base_path: &str, kind:&str)  -> Result<Series, GenError>{
+        let good_eegs_filter = Self::good_eegs_filter(base_path)?;
+
+        Ok(
+            good_eegs_filter
+            .filter(col(kind).gt(lit(0)))
+            .collect()?
+            .column("eeg_id")?.clone()
+        )
+
+    }
+
+    fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, GenError> {
         Ok(LazyCsvReader::new(format!("{}/train.csv", base_path))
             .finish()?
             .with_streaming(true)
@@ -207,10 +228,7 @@ impl EEGs {
             .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
             .filter(
                 col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
-            )
-            .collect()?
-            .column("eeg_id")?.clone())
-
+            ))
     }
 
     pub fn load_all_eegs(base_path: &str) -> Result<Box<EEGs>, GenError> {
@@ -545,6 +563,24 @@ pub fn eeg_to_tensor(base_path: &str, eeg_id: &str) -> Result<Tensor, GenError> 
     Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()))
 }
 
+pub fn clc_records(eeg_id_series: &Series) -> Result<usize, GenError> {
+    let mut scan_conf = ScanArgsParquet::default();
+    scan_conf.cache = false;
+
+    Ok(eeg_id_series.i64()?.into_iter().map(|eeg_id| {
+        // println!("eeg_id={:?}", eeg_id.unwrap_or_default());
+        let eeg_id = eeg_id.unwrap();
+        let eeg_df = LazyFrame::scan_parquet(
+            format!("{}/train_eegs/{}.parquet", "../../data", eeg_id),
+            scan_conf.clone(),
+        ).unwrap().collect().unwrap();
+
+        // println!("eeg_id={:?} eeg_df.shape()={:?}", eeg_id, eeg_df.shape());
+
+        eeg_df.shape().0
+    }).sum())
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -562,9 +598,10 @@ mod tests {
     use rand::thread_rng;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Tensor;
+    use hbac_motiffs::utils::*;
 
     use crate::*;
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, EEGs, GenError, series_to_tensor, Set, split_frame_by_offsets, Splitter};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, GenError, series_to_tensor, Set, split_frame_by_offsets, Splitter};
     use crate::utils::DataBatch;
 
     #[ctor::ctor]
@@ -607,7 +644,7 @@ mod tests {
         // debug!("batch_x={:?}", eegs.TRAIN[0].egg_map[0].len());
 
 
-        crate::utils::plot(
+        plot_series(
             vec![
                 (format!("0"), BLACK, eegs.train_set[0].egg_map[0].iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
 
@@ -627,10 +664,10 @@ mod tests {
         // println!("tensor={:?}", tensor.size());
 
         //"1628180742".into(), "1019408895"
-        crate::utils::plot(
+        plot_series(
             vec![
-                (format!("1628180742"), BLACK, crate::utils::from::<Vec<f32>>(&t_0.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
-                (format!("1019408895"), RED, crate::utils::from::<Vec<f32>>(&t_1.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
+                (format!("1628180742"), BLACK, from::<Vec<f32>>(&t_0.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
+                (format!("1019408895"), RED, from::<Vec<f32>>(&t_1.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
 
             ], "EEG", (10_000, 480), "/tmp/plots/1628180742_1019408895.png"
         ).unwrap();
@@ -832,8 +869,35 @@ mod tests {
     // }
     #[test]
     pub fn test_test()-> Result<(), GenError> {
+        // let good_eegs = crate::data::EEGs::good_eegs("../../data")?;
+
+        // let df = LazyCsvReader::new(format!("{}/train.csv", "../../data"))
+        //     .finish()?
+        //     .with_streaming(true)
+        //     .group_by([col("eeg_id")])
+        //     .agg([
+        //         col("seizure_vote").first(),
+        //         col("lpd_vote").first(),
+        //         col("gpd_vote").first(),
+        //         col("lrda_vote").first(),
+        //         col("grda_vote").first(),
+        //         col("other_vote").first(),
+        //     ])
+        //     .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
+        //     .filter(
+        //         col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
+        //             .and(col("seizure_vote").gt(lit(0)))
+        //     )
+        //     .collect()?;
+
+        let eeg_id_series = EEGs::good_eegs_of("../../data", "seizure_vote")?;
+
+        let eeg_id_series = eeg_id_series.limit(10);
 
 
+        let records_num:usize = clc_records(&eeg_id_series)?;
+
+        println!("eeg_id_series={} records_num={:?}", eeg_id_series.len(), records_num);
 
         // let df = LazyCsvReader::new("../../data/train.csv")
         //     .finish()?
@@ -960,6 +1024,5 @@ mod tests {
 
         Ok(())
     }
-
 
 }
