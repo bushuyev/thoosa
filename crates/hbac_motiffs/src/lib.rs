@@ -14,7 +14,8 @@ pub mod utils;
 mod tensor_iter;
 mod cache_on_threads;
 use std::io::Write;
-
+use std::time::Instant;
+use log::info;
 use tensor_iter::*;
 
 #[derive(Debug)]
@@ -64,35 +65,35 @@ fn self_dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tenso
 }
 
 
-pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, motiffs_dir:&str){
-
-    let ts_iter = crate::tensor_iter::TensorsIter::new(
-        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys)),
-        1, m, step
-    );
-    let dir = format!("{}/{}", motiffs_dir, cdt());
-    match std::fs::create_dir_all(dir.clone()){
-        Ok(_) => {}
-        Err(_) => {}
-    }
+pub fn find_motiffs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motiffs_dir:&str, preload_d:usize) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let all_mt = min_dot
         .into_iter()
         .enumerate()
-        .map(|(i, min_dot)|Mutex::new(MotifTracker::new(min_dot, format!("{}/motifs_{}.csv", dir.clone(), i).as_str())))
+        .map(|(i, min_dot)|Mutex::new(MotifTracker::new(min_dot, format!("{}/motifs_{}.csv", motiffs_dir.clone(), i).as_str())))
         .collect::<Vec<Mutex<MotifTracker>>>();
 
-    // ts_iter.par_bridge().map(|r|(Arc::clone(&all_mt), r)).for_each(|(mt, r)| {
+    let ts_iter = crate::tensor_iter::TensorsIter::new(
+        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys, preload_d)),
+        1, m, step
+    );
+
+    let t1 = Instant::now();
+
     ts_iter.par_bridge().for_each(|r| {
         match r {
-            Ok((t_s_0, t_s_1)) => {
-                // v.0.tensordot(&v.1, 1, 1)
+            Ok((t_s_0, t_s_1, slots_processed)) => {
+
                 let dp = self_dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
 
                 for (i, mt) in all_mt.iter().enumerate() {
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[i as i64]) as f32);
                 }
 
+                if slots_processed > 0 && slots_processed % 1000 == 0 {
+                    let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
+                    info!("pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min", slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, ((slots_to_process-slots_processed as usize)/(slots_per_sec+1))/60)
+                }
             }
             Err(e) => {
                 panic!("v={:?}", e);
@@ -100,7 +101,7 @@ pub fn find_motiffs_iter(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>, 
         };
     });
 
-    println!("saved to {:?}", dir);
+    debug!("saved to {:?}", motiffs_dir);
 }
 
 fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
@@ -134,7 +135,6 @@ pub(crate) struct MotifTracker {
     min_dot: f32,
     i_0: TensorSliceIdx,
     file:File,
-    written_len: usize,
     last_dot: f32
 }
 
@@ -158,7 +158,6 @@ impl MotifTracker {
             motifs: vec![],
             i_0: TensorSliceIdx(0, 0),
             file,
-            written_len: 0,
             last_dot: 0.
         }
     }
@@ -194,12 +193,12 @@ impl MotifTracker {
     }
 
     fn dump(&mut self) {
-        for motif in self.motifs.iter().skip(self.written_len) {
+        for motif in self.motifs.iter() {
             writeln!(self.file, "{}, {}, {},  {:.3}", motif.0, motif.1, motif.2, motif.3);
         }
         self.file.flush();
+        self.motifs.clear();
 
-        self.written_len = self.motifs.len();
     }
 
     pub fn motifs(&self) -> &Vec<(TensorSliceIdx, TensorSliceIdx, TensorSliceIdx, f32)> {
@@ -207,6 +206,7 @@ impl MotifTracker {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
     use std::f64::consts::PI;
@@ -655,7 +655,7 @@ mod tests {
         }
 
         let ts_iter = crate::tensor_iter::TensorsIter::new(
-            Box::new(crate::tensor_iter::CacheOnThreadsStore::new(load_sig_tensor, vec!["sig_0".into()])),
+            Box::new(crate::tensor_iter::CacheOnThreadsStore::new(load_sig_tensor, vec!["sig_0".into()], 2)),
             1, 100, 10
         );
 
@@ -664,7 +664,7 @@ mod tests {
 
         ts_iter.par_bridge().map(|r|(Arc::clone(&mt), r)).for_each(|(mt, r)| {
             match r {
-                Ok((t_s_0, t_s_1)) => {
+                Ok((t_s_0, t_s_1, p)) => {
                     // v.0.tensordot(&v.1, 1, 1)
                     let dp = self_dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[0]) as f32);

@@ -12,6 +12,8 @@ use std::thread;
 use std::time::Duration;
 use futures::executor::block_on;
 use log::debug;
+use tch::Tensor;
+use std::rc::Rc;
 
 // struct LoaderFuture <K, V> where K:Hash + Eq{
 struct LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
@@ -21,7 +23,9 @@ struct LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 
 }
 
 impl<K, V> LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
-    pub fn new(loader: fn(&K) -> V, key:K) -> Self {
+
+    pub fn new<F>(loader: Arc<F>, key:K) -> Self where F: Fn(&K)->V + Send + Sync + 'static{
+
         let waker = Arc::new(Mutex::new(None::<Waker>));
         let waker_in_thread  = Arc::clone(&waker);
 
@@ -66,23 +70,24 @@ impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'sta
     }
 }
 
-pub struct CacheOnThreads< K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
+pub struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
     data_loaded:HashMap<K, V>,
 
     data_being_loaded:Arc<Mutex<HashMap<K, Arc<Mutex<Option<V>>>>>>,
 
-    loader:fn(&K)->V,
+    loader:Arc<Box<dyn Fn(&K)->V + Sync + Send>>,
     read_mx:Arc<Mutex<()>>,
     load_mx:Arc<Mutex<()>>,
     keys_fifo: VecDeque<K>
 }
 
 impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'static + Debug, V:Send +'static{
-    pub fn new(loader: fn(&K) -> V) -> Self {
+
+    pub fn new<F>(loader: F) -> Self where F:Fn(&K) -> V + Sync + Send + 'static{
         Self {
             data_loaded: HashMap::new(),
             data_being_loaded: Arc::new(Mutex::new(HashMap::new())),
-            loader,
+            loader:Arc::new(Box::new(loader)),
             read_mx:Arc::new(Mutex::new(())),
             load_mx:Arc::new(Mutex::new(())),
             keys_fifo: VecDeque::new()
@@ -93,7 +98,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
         self.data_loaded.insert(
             key.clone(),
-            block_on(LoaderFuture::new(self.loader.clone(), key.clone()))
+            block_on(LoaderFuture::new(Arc::clone(&self.loader), key.clone()))
         );
         debug!("{:?} was loaded", key);
 

@@ -206,6 +206,8 @@ impl EEGs {
         Ok(
             good_eegs_filter
             .filter(col(kind).gt(lit(0)))
+                // .sort(kind, SortOptions{ descending: true, ..Default::default()})
+                .sort("eeg_id", Default::default())
             .collect()?
             .column("eeg_id")?.clone()
         )

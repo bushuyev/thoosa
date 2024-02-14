@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Index;
 use std::slice::SliceIndex;
+use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 use std::thread;
 use std::time::Duration;
 use log::debug;
@@ -118,6 +119,7 @@ pub(crate) struct TensorsIter {//TODO SliceIndex?
     dim:usize,
     step:i64,
     m:i64,
+    iteration_n:AtomicI64,
 }
 
 impl TensorsIter {
@@ -138,13 +140,14 @@ impl TensorsIter {
             dim,
             step,
             m,
+            iteration_n:  AtomicI64::new(0)
         }
     }
 }
 pub type TensorSlice = ((TensorSliceIdx), Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorsIter {
-    type Item = Result<(TensorSlice, TensorSlice), GenError>;
+    type Item = Result<(TensorSlice, TensorSlice, i64), GenError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         debug!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
@@ -153,7 +156,8 @@ impl Iterator for TensorsIter {
         if self.tensor_index_0 < self.tensors_store.tensors_len() {
             let v = Some(Ok((
                 (TensorSliceIdx(self.tensor_index_0, self.slice_index_0), self.tensors_store.get_tensor(self.tensor_index_0).unwrap().f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()),//TODO unwrap
-                (TensorSliceIdx(self.tensor_index_1, self.slice_index_1), self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap())
+                (TensorSliceIdx(self.tensor_index_1, self.slice_index_1), self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()),
+                self.iteration_n.fetch_add(1, Ordering::Relaxed)
             )));
 
 
@@ -208,14 +212,17 @@ impl Iterator for TensorsIter {
 
 pub(crate) struct CacheOnThreadsStore {
     cache:CacheOnThreads<String, Box<Tensor>>,
-    keys:Vec<String>
+    keys:Vec<String>,
+    preload_d:usize
 }
 
 impl CacheOnThreadsStore {
-    pub fn new(loader: fn(&String) -> Box<Tensor>, keys: Vec<String>) -> Self {
+    pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize) -> Self where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static{
         Self {
             cache: CacheOnThreads::new(loader),
-            keys
+            keys,
+            preload_d:2
+
         }
     }
 
@@ -227,12 +234,12 @@ impl CacheOnThreadsStore {
 impl TensorsStore for CacheOnThreadsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError> {
 
-        if index+2 < self.keys.len() && index % 2 == 0 {
+        if index+self.preload_d < self.keys.len() && index % self.preload_d == 0 {
             debug!("1. get_tensor: index={}", index);
 
             self.cache.load_blocking_preload_and_get(
                 &self.index_to_key(index).clone(),
-                (index..index + 2).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
+                (index..index + self.preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
             ).ok_or(GenError::new("no tensor".into()))
 
         } else {
@@ -527,7 +534,7 @@ mod tests {
         let vec_100 = (0..20).map(|i|format!("key_{}", i)).collect::<Vec<String>>();
 
         let ts = TensorsIter::new(
-            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100)),
+            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100, 2)),
             1, 2, 2
         );
 

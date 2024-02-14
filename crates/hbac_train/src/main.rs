@@ -1,5 +1,5 @@
 use std::env;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use log::{debug, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
@@ -8,6 +8,8 @@ use hbac_motiffs::find_motiffs_iter;
 use crate::data::{clc_records, GenError};
 use crate::version::VERSION;
 use clap::{Parser, Subcommand};
+use polars::export::rayon;
+use hbac_motiffs::utils::cdt;
 
 mod my_tch;
 mod data;
@@ -21,15 +23,29 @@ mod version;
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    #[arg(short, long, default_value=Some("../../data".into()))]
-    base_path: Option<String>,
+    #[arg(long, default_value="../../data")]
+    base_path: String,
 
-    #[arg(short, long, default_value_t = 1000)]
-    step: u32,
+    #[arg(long, default_value_t = 1000)]
+    step: i64,
 
+    #[arg(long, default_value_t = 1000)]
+    window: i64,
 
-    #[arg(short, long, default_value_t = 1000)]
-    window: u32,
+    #[arg(long, default_value_t = 0.9)]
+    min_dot: f32,
+
+    #[arg(long, default_value = "seizure_vote")]
+    kind: String,
+
+    #[arg(long, default_value = "../../data_local/motiffs")]
+    motiffs_dir: String,
+
+    #[arg(long, default_value_t = 10)]
+    preload_d: usize,
+
+    #[arg(long, default_value = None )]
+    limit_eeg: Option<usize>,
 }
 
 
@@ -38,26 +54,17 @@ fn main() -> Result<(), GenError>{
 
     let cli = Cli::parse();
 
-
-    println!("{:?}", cli.base_path);
-
-    fn load_sig_tensor(key:&String) ->Box<Tensor>{
-        // Box::new(Tensor::rand(&[2, 1000], (Kind::Float, Device::Cpu)))
-        Box::new(data::eeg_to_tensor("../../data", key.as_ref()).unwrap())
-    }
-
     CombinedLogger::init(
         vec![
-            TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+            TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
             WriteLogger::new(LevelFilter::Debug, Config::default(), File::create("hbac.log")?),
         ]
     )?;
 
+
     info!("VERSION: {}", VERSION);
     std::io::stdout().flush()?;
 
-    let args: Vec<String> = env::args().collect();
-    let base_path = args.get(1).map(|s|s.as_str()).unwrap_or("../../data");
 
     let device = if tch::utils::has_cuda() {
         Device::Cuda(0)
@@ -65,25 +72,56 @@ fn main() -> Result<(), GenError>{
         Device::Cpu
     };
 
-    debug!("device={:?}, base_path={:?}", device, base_path);
+    debug!("device={:?}, base_path={:?}", device, cli.base_path);
 
 
-    let eeg_id_series = data::EEGs::good_eegs_of("../../data", "seizure_vote")?;
+    let eeg_id_series = data::EEGs::good_eegs_of(cli.base_path.as_str(), cli.kind.as_str())?;
 
-    let eeg_id_series = eeg_id_series.limit(3);
+    // let eeg_id_series = cli.limit_eeg.map_or(eeg_id_series, |v|eeg_id_series.limit(v));
+    let eeg_id_series = match cli.limit_eeg {
+        None => {
+            eeg_id_series
+        }
+        Some(v) => {
+            eeg_id_series.limit(v)
+        }
+    };
+
+    let records_num = clc_records(&eeg_id_series)? as i64;
+
+    let slots_to_compare = (records_num - cli.window) / cli.step;
+    let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare;
+
+    let motiffs_dir = format!("{}/{}", cli.motiffs_dir, cdt());
+
+    if let Err(e) = std::fs::create_dir_all(motiffs_dir.clone()){
+        panic!("can't create {}: {:?}", motiffs_dir, e);
+    }
 
 
-    let records_num:usize = clc_records(&eeg_id_series)?;
+    let eeg_ids_str = eeg_id_series.i64()?.into_iter().map(|v| v.unwrap().to_string()).collect::<Vec<String>>();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(false)
+        .open(format!("{}/eegs.txt", motiffs_dir))
+        .unwrap();
 
+    write!(file, "{:?}", eeg_ids_str);
 
     find_motiffs_iter(
-        load_sig_tensor,
+        move |key:&String|{
+            // Box::new(Tensor::rand(&[2, 1000], (Kind::Float, Device::Cpu)))
+            Box::new(data::eeg_to_tensor(cli.base_path.as_str(), key.as_ref()).unwrap())
+        },
         // vec!["1628180742".into(), "1019408895".into(), "3523834378".into()],
-        eeg_id_series.str()?.into_iter().map(|v|v.unwrap().into()).collect::<Vec<String>>(),
-        1000,
-        1000,
-        (0..20).map(|_|0.9).collect(),
-        "../../data_local/motiffs"
+        eeg_ids_str,
+        cli.window,
+        cli.step,
+        (0..20).map(|_|cli.min_dot).collect(),
+        slots_to_compare as usize,
+        motiffs_dir.as_str(),
+        cli.preload_d
     );
 
     Ok(())
