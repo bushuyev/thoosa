@@ -5,7 +5,75 @@ use std::time::Instant;
 use log::{debug, info};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use std::io::Write;
+use hbac_common::HbacError;
 use crate::{TensorSliceIdx, utils};
+use crate::utils::cdt;
+use clap::clap_derive::{Args, Parser, Subcommand};
+
+
+#[derive(Debug, Args)]
+pub struct FindMotifsParams {
+    #[arg(long, default_value_t = 1000)]
+    step: i64,
+
+    #[arg(long, default_value_t = 1000)]
+    window: i64,
+
+    #[arg(long, default_value_t = 0.9)]
+    min_dot: f32,
+
+    #[arg(long, default_value = "seizure_vote")]
+    kind: String,
+
+    #[arg(long, default_value = "../../data_local/motifs")]
+    motifs_dir: String,
+
+    #[arg(long, default_value_t = 10)]
+    preload_d: usize,
+
+}
+
+impl FindMotifsParams {
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+}
+
+pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>) -> Result<(), HbacError> where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+
+
+    let slots_to_compare = (records_num - cli.window) / cli.step;
+    let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare;
+
+    let motifs_dir = format!("{}/{}", cli.motifs_dir, cdt());
+
+    if let Err(e) = std::fs::create_dir_all(motifs_dir.clone()) {
+        panic!("can't create {}: {:?}", motifs_dir, e);
+    }
+
+
+    let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(false)
+        .open(format!("{}/{}_eegs.txt", motifs_dir, cli.kind))
+        .unwrap();
+
+    write!(file, "{:?}", eeg_ids_str);
+
+    find_motifs_iter(
+        loader,
+        eeg_ids_str,
+        cli.window,
+        cli.step,
+        (0..20).map(|_| cli.min_dot).collect(),
+        slots_to_compare as usize,
+        motifs_dir.as_str(),
+        cli.preload_d
+    );
+    Ok(())
+}
 
 pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
