@@ -1,15 +1,13 @@
 use std::io::Write;
-use std::mem;
-use chrono::NaiveDateTime;
 use chrono::SecondsFormat;
-use log::{debug, info, trace};
 use plotters::prelude::*;
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
-use plotters::element::{PathElement, Polygon};
-use tch::{Device, nn, Reduction, TchError, Tensor};
-use tch::nn::{Module, OptimizerConfig, VarStore};
+use plotters::element::PathElement;
+use tch::{Kind, TchError, Tensor};
+use tch::nn::{Module, OptimizerConfig};
 use plotters::drawing::IntoDrawingArea;
+use hbac_common::HbacError;
 
 #[derive(Debug)]
 pub enum MyError {
@@ -166,4 +164,36 @@ mod tests {
     fn test_cdt(){
         println!("{}", cdt().replace(':', "_").replace('+', "_"));
     }
+}
+
+
+pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
+
+    let mean_t = t.mean_dim(dim, false, Kind::Float);
+    let std_t = t.std(false);
+    // println!("mean={:?}", vec_f32_from(&mean_t));
+    // println!("std_t={:?}", vec_f32_from(&std_t));
+    let z_t = (t - mean_t) / std_t;
+    // println!("z_t={:?}", vec_f32_from(&z_t));
+    z_t
+}
+
+pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, HbacError> {
+    Ok(norm_2(slice_01).tensordot(&norm_2(slice_02), [dim], [dim]).diag(0))
+}
+
+
+pub fn self_dot(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, HbacError> {
+    let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?;
+    let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?;
+
+    Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
+}
+
+pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
+    t.view(dim) / t.dot(&t).sqrt()
+}
+
+pub fn norm_2(t: &Tensor) -> Tensor {
+    t/ t.tensordot(&t, 1, 1).diag(0).sqrt().view([1, -1]).transpose(0, 1)
 }

@@ -22,29 +22,10 @@ use rand::{Rng, thread_rng};
 use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use tch::{Device, Kind, Tensor};
+use hbac_common::HbacError;
 
 use crate::utils::DataBatch;
 
-#[derive(Debug)]
-pub struct GenError {
-    msg:String
-}
-
-impl GenError {
-    pub fn new(msg:String) -> Self {
-        Self {
-            msg
-        }
-    }
-}
-
-
-impl<D> From<D> for GenError where D: Display {
-    fn from(value: D) -> Self {
-        debug!("value={}", value);
-        GenError::new(value.to_string())
-    }
-}
 
 #[derive(Debug)]
 pub struct EEG{
@@ -116,7 +97,7 @@ pub trait Splitter {
 
     fn split_to(&self, v:&Self::Type) ->Set;
 
-    fn init(&self, df:LazyFrame) -> Result<LazyFrame, GenError> {
+    fn init(&self, df:LazyFrame) -> Result<LazyFrame, HbacError> {
         Ok(df.clone())
     }
 }
@@ -161,7 +142,7 @@ impl Splitter for ByPatientIdSplitter {
 
     }
 
-    fn init(&self, df: LazyFrame) -> Result<LazyFrame, GenError>{
+    fn init(&self, df: LazyFrame) -> Result<LazyFrame, HbacError>{
         let mut df_sorted = df.clone().group_by(["patient_id"]).agg([
             col("seizure_vote").sum(),
             col("lpd_vote").sum(),
@@ -191,7 +172,7 @@ impl Splitter for ByPatientIdSplitter {
 
 impl EEGs {
 
-    pub fn good_eegs(base_path: &str)  -> Result<Series, GenError>{
+    pub fn good_eegs(base_path: &str)  -> Result<Series, HbacError>{
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
         Ok(good_eegs_filter
@@ -200,7 +181,7 @@ impl EEGs {
 
     }
 
-    pub fn good_eegs_of(base_path: &str, kind:&str)  -> Result<Series, GenError>{
+    pub fn good_eegs_of(base_path: &str, kind:&str)  -> Result<Series, HbacError>{
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
         Ok(
@@ -215,7 +196,7 @@ impl EEGs {
 
     }
 
-    fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, GenError> {
+    fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, HbacError> {
         Ok(LazyCsvReader::new(format!("{}/train.csv", base_path))
             .finish()?
             .with_streaming(true)
@@ -234,10 +215,10 @@ impl EEGs {
             ))
     }
 
-    pub fn load_all_eegs(base_path: &str) -> Result<Box<EEGs>, GenError> {
+    pub fn load_all_eegs(base_path: &str) -> Result<Box<EEGs>, HbacError> {
         EEGs::load_eegs::<_>(base_path, None, None::<AllTrainSplitter<EEG>>)
     }
-    pub fn load_eegs<S>(base_path: &str, filter:Option<Expr>, splitter:Option<S>) -> Result<Box<EEGs>, GenError> where S:Splitter<Type=EEG>{
+    pub fn load_eegs<S>(base_path: &str, filter:Option<Expr>, splitter:Option<S>) -> Result<Box<EEGs>, HbacError> where S:Splitter<Type=EEG>{
         let df = LazyCsvReader::new(format!("{}/train.csv", base_path))
             .finish()?
             .with_streaming(true);
@@ -477,7 +458,7 @@ impl DataBatch for EEGs {
     }
 }
 
-fn series_to_tensor(s: &Series) ->  Result<Tensor, GenError> {
+fn series_to_tensor(s: &Series) ->  Result<Tensor, HbacError> {
 
     Ok(match s.dtype(){
         // DataType::UInt8 => {}
@@ -553,7 +534,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
     df.partition_by(&["frag_id"], false)
 }
 
-pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, GenError> {
+pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
     let scan_conf = ScanArgsParquet::default();
 
     let eeg_df = LazyFrame::scan_parquet(
@@ -566,7 +547,7 @@ pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Te
     Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()).to_device(device))
 }
 
-pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, GenError> {
+pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, HbacError> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
 
@@ -601,10 +582,10 @@ mod tests {
     use rand::thread_rng;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Tensor;
-    use hbac_motiffs::utils::*;
+    use hbac_motifs::utils::*;
 
     use crate::*;
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, GenError, series_to_tensor, Set, split_frame_by_offsets, Splitter};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, series_to_tensor, Set, split_frame_by_offsets, Splitter};
     use crate::utils::DataBatch;
 
     #[ctor::ctor]
@@ -623,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_load_eegs() -> Result<(), GenError> {
+    pub fn test_load_eegs() -> Result<(), HbacError> {
         debug!("test_load_eegs");
         std::io::stdout().flush()?;
 
@@ -658,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_plot_eeg_tensor() -> Result<(), GenError> {
+    pub fn test_plot_eeg_tensor() -> Result<(), HbacError> {
         // println!("tensor={:?}", tensor.size());
 
         let t_0 = data::eeg_to_tensor("../../data", "1628180742", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
@@ -679,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_fetch_similarities() -> Result<(), GenError> {
+    pub fn test_fetch_similarities() -> Result<(), HbacError> {
 
 
         // let good_eegs = EEGs::good_eegs("../../data")?;
@@ -729,7 +710,7 @@ mod tests {
 
 
     #[test]
-    pub fn test_arr_to_expr() -> Result<(), GenError> {
+    pub fn test_arr_to_expr() -> Result<(), HbacError> {
         let df: DataFrame = df!(
             "val"       => [1, 2, 3, 4, 5, 6, 7, 8, 9],
         )?;
@@ -758,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_split_frame_by_offsets() -> Result<(), GenError> {
+    pub fn test_split_frame_by_offsets() -> Result<(), HbacError> {
 
         let df = df!(
             "col1"  => (0..10).map(|i| i as f64).collect::<Vec<f64>>(),
@@ -830,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_eeg_to_tensor() -> Result<(), GenError> {
+    pub fn test_eeg_to_tensor() -> Result<(), HbacError> {
         // series_to_tensor()
 
         let base_path = "../../data";
@@ -871,7 +852,7 @@ mod tests {
     //     Ok(())
     // }
     #[test]
-    pub fn test_test()-> Result<(), GenError> {
+    pub fn test_test()-> Result<(), HbacError> {
         // let good_eegs = crate::data::EEGs::good_eegs("../../data")?;
 
         // let df = LazyCsvReader::new(format!("{}/train.csv", "../../data"))

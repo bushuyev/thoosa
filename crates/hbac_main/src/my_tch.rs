@@ -17,7 +17,7 @@ use crate::{data, utils};
 use crate::builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
 use crate::data::EEGs;
-use crate::data::GenError;
+use hbac_common::HbacError;
 use crate::utils::DataBatch;
 use crate::version::VERSION;
 
@@ -139,7 +139,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
-) -> Result<Linear, GenError> {
+) -> Result<Linear, HbacError> {
     let vs = vs.borrow();
     let bs = if c.bias {
         let bs_init = c.bs_init.unwrap_or_else(|| {
@@ -198,7 +198,7 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 }
 
 
-fn train(base_path:&str, device:Device) -> Result<(), GenError> {
+fn train(base_path:&str, device:Device) -> Result<(), HbacError> {
 
 
     let good_eegs = EEGs::good_eegs(base_path)?;

@@ -1013,7 +1013,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "hbac_motiffs"
+name = "hbac_common"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "simplelog",
+]
+
+[[package]]
+name = "hbac_main"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "chrono",
+ "clap",
+ "ctor",
+ "hbac_common",
+ "hbac_motifs",
+ "log",
+ "plotters",
+ "polars",
+ "rand",
+ "rand_chacha",
+ "simplelog",
+ "tch",
+]
+
+[[package]]
+name = "hbac_motifs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1023,6 +1051,7 @@ dependencies = [
  "crossbeam-utils",
  "ctor",
  "futures",
+ "hbac_common",
  "log",
  "plotters",
  "rand",
@@ -1031,25 +1060,6 @@ dependencies = [
  "simplelog",
  "tch",
  "torch-sys",
-]
-
-[[package]]
-name = "hbac_train"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "chrono",
- "clap",
- "ctor",
- "hbac_motiffs",
- "log",
- "plotters",
- "polars",
- "rand",
- "rand_chacha",
- "simplelog",
- "tch",
 ]
 
 [[package]]

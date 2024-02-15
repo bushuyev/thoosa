@@ -1,10 +1,13 @@
 [package]
-name = "hbac_train"
+name = "hbac_main"
 version = "0.1.0"
 edition = "2021"
 
 
 [dependencies]
+hbac_common = {path = "../hbac_common"}
+hbac_motifs = {path = "../hbac_motifs"}
+
 polars = { version = "0.36.2", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
 tch = { version = "0.14.0" }
 #torch-sys = "0.14.0"
@@ -18,7 +21,7 @@ simplelog = "0.12.1"
 #serde = "1"
 anyhow = "1.0.79"
 ctor = "0.2.6"
-hbac_motiffs = {path = "../hbac_motiffs"}
+
 clap = { version = "4.5.0", features = ["derive"] }
 
 

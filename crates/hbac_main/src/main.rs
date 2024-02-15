@@ -5,12 +5,13 @@ use std::str::FromStr;
 use log::{debug, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, Kind, Tensor};
-use hbac_motiffs::find_motiffs_iter;
-use crate::data::{clc_records, GenError};
+use hbac_motifs::find::find_motifs_iter;
+use crate::data::{clc_records};
 use crate::version::VERSION;
 use clap::{Parser, Subcommand};
 use polars::export::rayon;
-use hbac_motiffs::utils::cdt;
+use hbac_motifs::utils::cdt;
+use hbac_common::HbacError;
 
 mod my_tch;
 mod data;
@@ -39,8 +40,8 @@ struct Cli {
     #[arg(long, default_value = "seizure_vote")]
     kind: String,
 
-    #[arg(long, default_value = "../../data_local/motiffs")]
-    motiffs_dir: String,
+    #[arg(long, default_value = "../../data_local/motifs")]
+    motifs_dir: String,
 
     #[arg(long, default_value_t = 10)]
     preload_d: usize,
@@ -59,7 +60,7 @@ struct Cli {
 }
 
 
-fn main() -> Result<(), GenError> {
+fn main() -> Result<(), HbacError> {
 
     let cli = Cli::parse();
 
@@ -97,10 +98,10 @@ fn main() -> Result<(), GenError> {
     let slots_to_compare = (records_num - cli.window) / cli.step;
     let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare;
 
-    let motiffs_dir = format!("{}/{}", cli.motiffs_dir, cdt());
+    let motifs_dir = format!("{}/{}", cli.motifs_dir, cdt());
 
-    if let Err(e) = std::fs::create_dir_all(motiffs_dir.clone()){
-        panic!("can't create {}: {:?}", motiffs_dir, e);
+    if let Err(e) = std::fs::create_dir_all(motifs_dir.clone()){
+        panic!("can't create {}: {:?}", motifs_dir, e);
     }
 
 
@@ -109,23 +110,21 @@ fn main() -> Result<(), GenError> {
         .create(true)
         .write(true)
         .append(false)
-        .open(format!("{}/{}_eegs.txt", motiffs_dir, cli.kind))
+        .open(format!("{}/{}_eegs.txt", motifs_dir, cli.kind))
         .unwrap();
 
     write!(file, "{:?}", eeg_ids_str);
 
-    find_motiffs_iter(
+    find_motifs_iter(
         move |key:&String|{
-            // Box::new(Tensor::rand(&[2, 1000], (Kind::Float, Device::Cpu)))
             Box::new(data::eeg_to_tensor(cli.base_path.as_str(), key.as_ref(), device).unwrap())
         },
-        // vec!["1628180742".into(), "1019408895".into(), "3523834378".into()],
         eeg_ids_str,
         cli.window,
         cli.step,
         (0..20).map(|_|cli.min_dot).collect(),
         slots_to_compare as usize,
-        motiffs_dir.as_str(),
+        motifs_dir.as_str(),
         cli.preload_d
     );
 

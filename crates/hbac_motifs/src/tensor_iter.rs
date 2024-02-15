@@ -7,13 +7,13 @@ use std::thread;
 use std::time::Duration;
 use log::debug;
 use tch::{Device, Kind, TchError, Tensor};
-use crate::GenError;
+use crate::HbacError;
 use rayon::prelude::*;
 use crate::cache_on_threads::CacheOnThreads;
 use crate::TensorSliceIdx;
 
 trait TensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError>;
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError>;
 
     fn tensors_len(&self) -> usize;
 }
@@ -27,7 +27,7 @@ impl VecTensorsStore {
     }
 }
 impl TensorsStore for VecTensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError> {
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
         Ok(&self.tensors[index])
     }
 
@@ -80,7 +80,7 @@ impl LazyTensorsStore {
 }
 
 impl TensorsStore for LazyTensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError> {
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
 
         if index < self.tensor_refs.len() -1 {
             preload(&mut self.loaded, &self.tensor_loader, &self.tensor_refs[index + 1]);
@@ -90,7 +90,7 @@ impl TensorsStore for LazyTensorsStore {
 
         match loaded_tensor {
             None => {
-                Err(GenError::new("not tensor".into()))
+                Err(HbacError::new("not tensor".into()))
             }
             Some(tensor) => {
                 Ok(tensor)
@@ -147,7 +147,7 @@ impl TensorsIter {
 pub type TensorSlice = ((TensorSliceIdx), Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorsIter {
-    type Item = Result<(TensorSlice, TensorSlice, i64), GenError>;
+    type Item = Result<(TensorSlice, TensorSlice, i64), HbacError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         debug!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
@@ -232,7 +232,7 @@ impl CacheOnThreadsStore {
 }
 
 impl TensorsStore for CacheOnThreadsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, GenError> {
+    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
 
         if index+self.preload_d < self.keys.len() && index % self.preload_d == 0 {
             debug!("1. get_tensor: index={}", index);
@@ -240,14 +240,14 @@ impl TensorsStore for CacheOnThreadsStore {
             self.cache.load_blocking_preload_and_get(
                 &self.index_to_key(index).clone(),
                 (index..index + self.preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
-            ).ok_or(GenError::new("no tensor".into()))
+            ).ok_or(HbacError::new("no tensor".into()))
 
         } else {
             debug!("2. get_tensor: index={}", index);
 
             self.cache.load_blocking_and_get(
                 &self.index_to_key(index).clone()
-            ).ok_or(GenError::new("no tensor".into()))
+            ).ok_or(HbacError::new("no tensor".into()))
         }
     }
 
@@ -265,7 +265,7 @@ mod tests {
     use rayon::prelude::ParallelBridge;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
-    use crate::GenError;
+    use crate::HbacError;
     use crate::tensor_iter::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore, CacheOnThreadsStore};
     use crate::utils::*;
     use rayon::iter::ParallelIterator;

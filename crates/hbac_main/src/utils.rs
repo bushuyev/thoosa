@@ -8,8 +8,9 @@ use plotters::element::PathElement;
 use tch::{Device, nn, Reduction, TchError, Tensor};
 use tch::nn::{Module, OptimizerConfig, VarStore};
 use plotters::drawing::IntoDrawingArea;
-use crate::data::{EEGs, GenError};
+use crate::data::{EEGs};
 use crate::my_tch::{Fp, LossFp};
+use hbac_common::HbacError;
 
 #[derive(Debug)]
 pub enum MyError {
@@ -31,7 +32,7 @@ pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, MyError> {
     Ok(t.iter::<f64>()?.collect::<Vec<f64>>())
 }
 
-pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&VarStore, loss_fn:LossFp) -> Result<(), GenError>{
+pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&VarStore, loss_fn:LossFp) -> Result<(), HbacError>{
 
     debug!("device={:?}", device);
     const BATCH_SIZE: usize = 10usize;

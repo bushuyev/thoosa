@@ -4,7 +4,7 @@ use std::pin::Pin;
 use log::debug;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
-use crate::data::GenError;
+use hbac_common::HbacError;
 use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyFuncModule, MyMaxPool1d, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
@@ -67,13 +67,13 @@ impl NthParams for NthConst {
 
 impl Node {
 
-    pub fn build_tch_module(&self, vs: &nn::Path) -> Result<Box<dyn Module>, GenError>  {
+    pub fn build_tch_module(&self, vs: &nn::Path) -> Result<Box<dyn Module>, HbacError>  {
         Ok(match self {
             Node::Seq { elts } => {
 
                 let layers:Vec<Box<dyn Module>> = elts.iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn Module>>, node| {
                     kids.push(node.build_tch_module(vs)?);
-                    Ok::<Vec<Box<dyn Module>>, GenError>(kids)
+                    Ok::<Vec<Box<dyn Module>>, HbacError>(kids)
                 })?;
 
                 Box::new(MySequential::new(layers))

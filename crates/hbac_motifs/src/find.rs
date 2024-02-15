@@ -1,86 +1,18 @@
-extern crate core;
-
-use std::fmt::Display;
 use std::fs::{File, OpenOptions};
-use std::sync::{Arc, Mutex};
-
-use log::debug;
-use tch::{Device, Kind, kind, Tensor};
-use rand::Rng;
-use rayon::iter::{ParallelBridge, ParallelIterator};
-use crate::utils::cdt;
-
-pub mod utils;
-mod tensor_iter;
-mod cache_on_threads;
-mod group;
-
-use std::io::Write;
+use tch::Tensor;
+use std::sync::Mutex;
 use std::time::Instant;
-use log::info;
-use tensor_iter::*;
+use log::{debug, info};
+use rayon::iter::{ParallelBridge, ParallelIterator};
+use std::io::Write;
+use crate::{TensorSliceIdx, utils};
 
-#[derive(Debug)]
-pub struct GenError {
-    msg:String
-}
-
-impl GenError {
-    pub fn new(msg:String) -> Self {
-        Self {
-            msg
-        }
-    }
-}
-
-
-impl<D> From<D> for GenError where D: Display {
-    fn from(value: D) -> Self {
-        debug!("value={}", value);
-        GenError::new(value.to_string())
-    }
-}
-
-fn main() {
-
-    let t = Tensor::from_slice(&[1., 2., 3.]);
-    let t_0 = Tensor::zeros([3], (Kind::Float, Device::Cpu));
-    // let t = Tensor::pad_sequence()
-
-    println!("xxx h={:?}", Tensor::hstack(&[t.view([-1]), t_0.view([-1])]));
-    println!("xxx t={:?} t_0={:?}", t.flip([0]), t_0);
-}
-
-fn z_norm(t:&Tensor, dim: i64) -> Tensor {
-
-    let mean_t = t.mean_dim(dim, false, Kind::Float);
-    let std_t = t.std(false);
-    // println!("mean={:?}", vec_f32_from(&mean_t));
-    // println!("std_t={:?}", vec_f32_from(&std_t));
-    let z_t = (t - mean_t) / std_t;
-    // println!("z_t={:?}", vec_f32_from(&z_t));
-    z_t
-}
-
-fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, GenError> {
-    Ok(norm_2(slice_01).tensordot(&norm_2(slice_02), [dim], [dim]).diag(0))
-}
-
-
-fn self_dot(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, GenError> {
-    let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?;
-    let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?;
-
-    Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
-}
-
-
-pub fn find_motiffs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motiffs_dir:&str, preload_d:usize) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let all_mt = min_dot
         .into_iter()
         .enumerate()
-        .map(|(i, min_dot)|Mutex::new(MotifTracker::new(min_dot, format!("{}/motifs_{}.csv", motiffs_dir.clone(), i).as_str())))
+        .map(|(i, min_dot)|Mutex::new(MotifTracker::new(min_dot, format!("{}/motifs_{}.csv", motifs_dir.clone(), i).as_str())))
         .collect::<Vec<Mutex<MotifTracker>>>();
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
@@ -94,7 +26,7 @@ pub fn find_motiffs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min
         match r {
             Ok((t_s_0, t_s_1, slots_processed)) => {
 
-                let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
+                let dp = utils::dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
 
                 for (i, mt) in all_mt.iter().enumerate() {
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[i as i64]) as f32);
@@ -111,31 +43,7 @@ pub fn find_motiffs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min
         };
     });
 
-    debug!("saved to {:?}", motiffs_dir);
-}
-
-fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
-    t.view(dim) / t.dot(&t).sqrt()
-}
-
-fn norm_2(t: &Tensor) -> Tensor {
-    t/ t.tensordot(&t, 1, 1).diag(0).sqrt().view([1, -1]).transpose(0, 1)
-}
-
-
-#[derive(Debug, PartialEq, Hash, Eq, Copy, Clone)]
-pub struct TensorSliceIdx(usize, i64);
-
-impl From<(usize, i64)> for TensorSliceIdx {
-    fn from(value: (usize, i64)) -> Self {
-        TensorSliceIdx(value.0, value.1)
-    }
-}
-
-impl Display for TensorSliceIdx {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{},{}", self.0, self.1)
-    }
+    debug!("saved to {:?}", motifs_dir);
 }
 
 #[derive(Debug)]
@@ -217,7 +125,7 @@ impl MotifTracker {
 }
 
 #[cfg(test)]
-mod tests {
+mod motif_find_tests {
     use std::collections::VecDeque;
     use std::f64::consts::PI;
     use std::fs::{File, OpenOptions};
@@ -237,11 +145,12 @@ mod tests {
     use chrono::Utc;
     use rand::Rng;
     use rayon::prelude::ParallelBridge;
-    use crate::{GenError, z_norm};
     use rayon::iter::ParallelIterator;
     use rayon::iter::IntoParallelIterator;
     use crate::*;
+    use crate::find::MotifTracker;
     use crate::utils::*;
+    use crate::utils::z_norm;
 
     #[ctor::ctor]
     fn init() {
@@ -262,7 +171,7 @@ mod tests {
         // let dots = [1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1];
         let dots = [0.5, 0.9, 0.9, 0.5, 0.5, 0.9, 0.9, 0.9, 0.5, 0.5, 0.5, 0.5];
 
-        let mut mt = crate::tests::MotifTracker::new(0.8, "/tmp/test_motifs.csv");
+        let mut mt = super::MotifTracker::new(0.8, "/tmp/test_motifs.csv");
 
         for (i, dot) in dots.into_iter().enumerate(){
             mt.track(TensorSliceIdx(0, 0), TensorSliceIdx(0, i as i64), dot as f32);
@@ -290,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_norm() -> Result<(), GenError>{
+    pub fn test_norm() -> Result<(), HbacError>{
         let t = Tensor::from_slice(&[1., 2., 3.]);
         let norm = norm(&t, &[-1]);
 
@@ -312,7 +221,7 @@ mod tests {
 
 
     #[test]
-    pub fn test_pulses_in_rand() -> Result<(), GenError>{
+    pub fn test_pulses_in_rand() -> Result<(), HbacError>{
         let n = 1000i64;
         let x = lin_t(n);
         // let gauss_1 = gauss_t(400., 100., n);
@@ -385,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn test_self_dot() -> Result<(), GenError>{
+    fn test_self_dot() -> Result<(), HbacError>{
         let t1 = Tensor::from_slice2(&[
             &[1.,  2.,  3.,  4.,  5.,  6.,  7.,  8.,  9.],
             &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
@@ -417,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn test_self_dot_norm() -> Result<(), GenError> {
+    fn test_self_dot_norm() -> Result<(), HbacError> {
         let t1 = Tensor::from_slice2(&[
             &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
             &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
@@ -507,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_find_motifs_fft() -> Result<(), GenError>{
+    pub fn test_find_motifs_fft() -> Result<(), HbacError>{
         let n = 1000i64;
         let x = lin_t(n);
         let gauss_1 = gauss_t(400., 100., n); //f.flip([0]);
@@ -566,7 +475,8 @@ mod tests {
         Ok(())
     }
 
-    struct TensorsSource {
+
+    pub struct TensorsSource {
         tensors:Vec<Tensor>
     }
 
@@ -575,7 +485,7 @@ mod tests {
             Self { tensors }
         }
 
-        fn get_slices(&self,  i_0: i64, i_1: i64, m: i64, dim: i64) -> Result<(Tensor, Tensor), GenError> {
+        fn get_slices(&self,  i_0: i64, i_1: i64, m: i64, dim: i64) -> Result<(Tensor, Tensor), HbacError> {
             Ok((
                 self.tensors[0].f_slice(dim, Some(i_0), Some(i_0 + m), 1)?,
                 self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?
@@ -585,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_find_motifs() -> Result<(), GenError>{
+    pub fn test_find_motifs() -> Result<(), HbacError>{
         let n = 1_000i64;
         let x = lin_t(n);
         let sig_num = 2;
@@ -611,12 +521,12 @@ mod tests {
         let t1 = Instant::now();
 
 
-        let mut mt = crate::tests::MotifTracker::new(0.9, "/tmp/test_motifs.csv");
+        let mut mt = super::MotifTracker::new(0.9, "/tmp/test_motifs.csv");
 
         let dim = 1;
 
 
-        let ts = crate::tests::TensorsSource::new(vec![t_0, t_1]);
+        let ts = TensorsSource::new(vec![t_0, t_1]);
         for i_0 in (0..n-m).step_by(step) {
             // let d_1 = 200; {
             // let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
@@ -667,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_motiffs_iter(){
+    pub fn test_motifs_iter(){
         fn load_sig_tensor(key:&String) ->Box<Tensor>{
             let (sig_1_1, sig_1_2) = two_sigs(1000);
             Box::new(Tensor::vstack(&[sig_1_1, sig_1_2]))
