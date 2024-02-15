@@ -13,6 +13,8 @@ use crate::utils::cdt;
 pub mod utils;
 mod tensor_iter;
 mod cache_on_threads;
+mod group;
+
 use std::io::Write;
 use std::time::Instant;
 use log::info;
@@ -60,8 +62,16 @@ fn z_norm(t:&Tensor, dim: i64) -> Tensor {
     z_t
 }
 
-fn self_dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, GenError> {
+fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, GenError> {
     Ok(norm_2(slice_01).tensordot(&norm_2(slice_02), [dim], [dim]).diag(0))
+}
+
+
+fn self_dot(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, GenError> {
+    let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?;
+    let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?;
+
+    Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
 }
 
 
@@ -84,7 +94,7 @@ pub fn find_motiffs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min
         match r {
             Ok((t_s_0, t_s_1, slots_processed)) => {
 
-                let dp = self_dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
+                let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
 
                 for (i, mt) in all_mt.iter().enumerate() {
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[i as i64]) as f32);
@@ -113,7 +123,7 @@ fn norm_2(t: &Tensor) -> Tensor {
 }
 
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Hash, Eq, Copy, Clone)]
 pub struct TensorSliceIdx(usize, i64);
 
 impl From<(usize, i64)> for TensorSliceIdx {
@@ -374,19 +384,6 @@ mod tests {
         debug!("done {} in {}", n, t1.elapsed().as_millis());
     }
 
-
-
-    fn self_dot(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, GenError> {
-        let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?;
-        let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?;
-
-        // slice_t.print();
-
-        Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
-    }
-
-
-
     #[test]
     fn test_self_dot() -> Result<(), GenError>{
         let t1 = Tensor::from_slice2(&[
@@ -420,6 +417,28 @@ mod tests {
     }
 
     #[test]
+    fn test_self_dot_norm() -> Result<(), GenError> {
+        let t1 = Tensor::from_slice2(&[
+            &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
+            &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
+            &[100., 200., 300., 400., 500., 600., 700., 800., 900.]
+        ]);
+
+        //(1,2,3) x
+        //(1,2,3)
+        let slice_1 = t1.f_slice(1, Some(0), Some(3), 1)?; //1, 2, 3 - normilzed -  (0.267261, 0.534522, 0.801784)
+        let slice_2 = t1.f_slice(1, Some(3), Some(6), 1)?; //4, 5, 6 - (0.455842, 0.569803, 0.683763)
+
+        let d_0 = dot_norm(1, &slice_1, &slice_2)?;
+
+        assert_eq!(format!("{:.4}", d_0.double_value(&[0])), "0.9746");
+        assert_eq!(format!("{:.4}", d_0.double_value(&[1])), "0.9746");
+        assert_eq!(format!("{:.4}", d_0.double_value(&[2])), "0.9746");
+
+        Ok(())
+    }
+
+        #[test]
     fn test_motifs_match_vec(){
         let t1 = Instant::now();
 
@@ -612,7 +631,7 @@ mod tests {
 
                 let (slice_01, slice_02) = ts.get_slices(i_0, i_1, m, dim)?;
 
-                let dp = self_dot_norm(dim, &slice_01, &slice_02)?;
+                let dp = dot_norm(dim, &slice_01, &slice_02)?;
 
                 // dp.print();
 
@@ -666,7 +685,7 @@ mod tests {
             match r {
                 Ok((t_s_0, t_s_1, p)) => {
                     // v.0.tensordot(&v.1, 1, 1)
-                    let dp = self_dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
+                    let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[0]) as f32);
                 }
                 Err(e) => {

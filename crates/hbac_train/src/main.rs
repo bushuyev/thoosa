@@ -129,5 +129,6 @@ fn main() -> Result<(), GenError> {
         cli.preload_d
     );
 
+    info!("All done");
     Ok(())
 }
