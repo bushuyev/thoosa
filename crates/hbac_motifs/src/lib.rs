@@ -11,8 +11,8 @@ use rayon::iter::{ParallelBridge, ParallelIterator};
 pub mod utils;
 mod tensor_iter;
 mod cache_on_threads;
-mod group;
-mod find;
+pub mod group;
+pub mod find;
 
 use std::io::Write;
 use std::time::Instant;
