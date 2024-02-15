@@ -7,7 +7,7 @@ use crate::TensorSliceIdx;
 
 
 
-fn group_pairs<T>(pairs: Vec<(T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq {
+fn group_pairs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq {
     let mut pairs_groups: HashMap<T, u16> = HashMap::new();
     let mut last_group = 0u16;
     for pair in pairs {
@@ -77,7 +77,7 @@ mod tests {
         ];
 
 
-        let mut groups = group_pairs(pairs);
+        let mut groups = group_pairs(pairs.into_iter());
 
         println!("groups 0 = ={:?}", groups);
         let group_0 = groups.get_mut(&0).unwrap();
@@ -104,7 +104,7 @@ mod tests {
             }
         }
 
-        let mut groups = group_pairs(pairs);
+        let mut groups = group_pairs(pairs.into_iter());
 
         println!("len: groups.len={}", groups.len());
     }
