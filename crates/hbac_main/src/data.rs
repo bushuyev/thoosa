@@ -23,6 +23,7 @@ use polars::prelude::{
 use rand::{Rng, thread_rng};
 use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
+use regex::Regex;
 use tch::{Device, Kind, Tensor};
 use hbac_common::HbacError;
 use hbac_motifs::TensorSliceIdx;
@@ -590,11 +591,25 @@ pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx, Tensor
 
 }
 
-pub fn read_eeg_index(motif_dir:&str)->Vec<String> {
-    vec![]
+pub fn read_eeg_index(motif_dir:&str)->Result<Vec<String>, HbacError> {
+    // motif_dir
+    let files:Vec<DirEntry> = fs::read_dir(motif_dir)?.into_iter().map(|p|p.unwrap()).filter(|p|p.file_name().to_str().unwrap().ends_with("txt")).collect();
+    assert_eq!(files.len(), 1);
+
+
+    println!("files={:?}", files);
+    let cnt = fs::read_to_string(files[0].path())?;
+    println!("{:?}", cnt);
+
+    let re: Regex = Regex::new(r#""(?<id>\w+)""#)?;
+
+    Ok(
+        re.captures_iter(cnt.as_str()).map(|caps| caps["id"].into()).collect::<Vec<String>>()
+    )
+
 }
 
-pub fn copy_fragment(eeg:&str, fragment:&TensorSliceIdx, output_di:&str) {
+pub fn write_motifs_slices(dir:&str, fragments_map: std::collections::HashMap<usize, Vec<(u16, i64, u16)>>, eegs:Vec<String>) {
 
 }
 
@@ -604,12 +619,11 @@ mod tests {
     use std::fs::{DirEntry, File};
     use std::io::Write;
     use std::ops::Div;
-    use std::time::Instant;
+    use std::time::{Instant, UNIX_EPOCH};
 
     use log::{debug, LevelFilter};
     use plotters::prelude::{GREEN, RED};
     use plotters::style::BLACK;
-    use polars::export::ahash::{HashMap, HashMapExt};
     use polars::prelude::*;
     use rand::seq::SliceRandom;
     use rand::thread_rng;
@@ -618,7 +632,7 @@ mod tests {
     use hbac_motifs::utils::*;
 
     use crate::*;
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter, write_motifs_slices};
     use crate::utils::DataBatch;
 
     #[ctor::ctor]
@@ -876,6 +890,39 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_write_motifs_slices() {
+        let mut map = HashMap::new();
+
+        map.insert(0, vec![(0, 100, 0)]);
+
+        write_motifs_slices(
+            "/tmp/motif_framents",
+            map,
+            vec!["0123".into()]
+        );
+    }
+
+    #[test]
+    fn test_read_eeg_index() -> Result<(), HbacError>  {
+        let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
+        std::fs::create_dir_all(dir.clone())?;
+
+        let filename = format!("{}/test_eegs.txt", dir);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(false)
+            .open(filename.clone())
+            .unwrap();
+
+        let vec_1:Vec<String> = vec!["1123".into(), "34534".into(), "99877".into()];
+        write!(file, "{:?}", vec_1);
+
+        assert_eq!(vec_1, read_eeg_index(dir.as_str())?);
+        Ok(())
+
+    }
 
     // #[test]
     // pub fn test_load_by_std() -> Result<(), GenError> {

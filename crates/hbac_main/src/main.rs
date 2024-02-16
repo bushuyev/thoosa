@@ -6,7 +6,7 @@ use log::{debug, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, Kind, Tensor};
 use hbac_motifs::find::{find_motifs_iter, FindMotifsParams};
-use crate::data::{clc_records, read_motif_to_iter};
+use crate::data::{clc_records, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
@@ -109,10 +109,14 @@ fn main() -> Result<(), HbacError> {
         }
 
         Some(Commands::MotifsToFragments(fragment_motifs_params)) => {
-            fragments::motifs_to_eeg_slices(
-                list_motifs(fragment_motifs_params.motifs_dir())?,
-                read_motif_to_iter
-            )?;
+            data::write_motifs_slices(
+                fragment_motifs_params.fragments_dir(),
+                fragments::motifs_to_eeg_slices(
+                    list_motifs(fragment_motifs_params.motifs_dir())?,
+                    read_motif_to_iter
+                )?,
+                read_eeg_index(fragment_motifs_params.motifs_dir())?
+            );
         }
         None => {}
     }

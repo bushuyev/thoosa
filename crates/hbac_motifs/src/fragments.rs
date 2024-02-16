@@ -23,6 +23,10 @@ impl FragmentMotifsParams {
     pub fn motifs_dir(&self) -> &str {
         &self.motifs_dir
     }
+
+    pub fn fragments_dir(&self) -> &str {
+        &self.fragments_dir
+    }
 }
 
 pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq {
@@ -62,7 +66,7 @@ pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
 
 
 pub fn list_motifs(motifs_dir:&str) -> Result<Vec<(u16, String)>, HbacError>{
-    let re = Regex::new(r".+_(?<id>[0-9]+).csv$").unwrap();
+    let re = Regex::new(r".+_(?<id>[0-9]+).csv$").unwrap();//TODO lazy_static
 
     let mut motiffs:Vec<(u16, String)> = vec![];
     for p in fs::read_dir(motifs_dir)?.into_iter() {
