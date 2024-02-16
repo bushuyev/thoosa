@@ -117,7 +117,7 @@ fn main() -> Result<(), HbacError> {
                     read_motif_to_iter
                 )?,
                 read_eeg_index(fragment_motifs_params.motifs_dir())?,
-                    data::read_eeg_to_df
+                    data::eeg_to_tensor
             )?;
         }
         None => {}
