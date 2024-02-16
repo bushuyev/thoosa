@@ -2,6 +2,8 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
+use std::fs;
+use std::fs::DirEntry;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Add;
@@ -23,6 +25,7 @@ use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use tch::{Device, Kind, Tensor};
 use hbac_common::HbacError;
+use hbac_motifs::TensorSliceIdx;
 
 use crate::utils::DataBatch;
 
@@ -559,16 +562,46 @@ pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, Hbac
             scan_conf.clone(),
         ).unwrap().collect().unwrap();
 
-        // println!("eeg_id={:?} eeg_df.shape()={:?}", eeg_id, eeg_df.shape());
+        debug!("eeg_id={:?} eeg_df.shape()={:?}", eeg_id, eeg_df.shape());
 
         eeg_df.shape().0
     }).sum())
 }
 
+// pub fn read_motif_to_iter(motif_file:&str) -> Result<impl Iterator<Item = (TensorSliceIdx, TensorSliceIdx)>, HbacError>{ TODO LazyCsvReader ?
+pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError>{
+
+    let motif_df = CsvReader::from_path(motif_file)?.has_header(false).finish()?;
+    let columns = motif_df.get_columns();
+
+    Ok(columns[0].i64()?.into_iter().zip(
+        columns[1].i64()?.into_iter().zip(
+            columns[2].i64()?.into_iter().zip(
+                columns[3].i64()?.into_iter()
+            )
+        )
+
+    ).map(|v|{
+        let (Some(id_0), (Some(sl_0), (Some(id_1), (Some(sl_1))))) = v else {
+            panic!("unexpected entry in motif");
+        };
+        (TensorSliceIdx(id_0 as usize, sl_0), TensorSliceIdx(id_1 as usize, sl_1))
+    }).collect::<Vec<(TensorSliceIdx, TensorSliceIdx)>>())
+
+}
+
+pub fn read_eeg_index(motif_dir:&str)->Vec<String> {
+    vec![]
+}
+
+pub fn copy_fragment(eeg:&str, fragment:&TensorSliceIdx, output_di:&str) {
+
+}
+
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
+    use std::fs::{DirEntry, File};
     use std::io::Write;
     use std::ops::Div;
     use std::time::Instant;
@@ -585,7 +618,7 @@ mod tests {
     use hbac_motifs::utils::*;
 
     use crate::*;
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, series_to_tensor, Set, split_frame_by_offsets, Splitter};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter};
     use crate::utils::DataBatch;
 
     #[ctor::ctor]
@@ -832,6 +865,17 @@ mod tests {
     }
 
 
+    #[test]
+    fn test_read_motif_to_iter() -> Result<(), HbacError>{
+        let motifs_iter = read_motif_to_iter("../../data_local/test_motifs/motifs_0.csv")?;
+
+        assert_eq!(motifs_iter.len(), 4);
+        assert_eq!((TensorSliceIdx(0, 1000), TensorSliceIdx(1, 3000)), motifs_iter[0]);
+        assert_eq!((TensorSliceIdx(1, 3000), TensorSliceIdx(2, 25000)), motifs_iter[1]);
+
+        Ok(())
+    }
+
 
     // #[test]
     // pub fn test_load_by_std() -> Result<(), GenError> {
@@ -881,14 +925,16 @@ mod tests {
         // let good_eegs_filter = EEGs::good_eegs_filter("../../data")?;
 
 
-        let eeg_id = EEGs::good_eegs_filter("../../data")?
-                .filter(col("seizure_vote").gt(lit(0)))
-                // .sort(kind, SortOptions{ descending: true, ..Default::default()})
-                // .sort("eeg_id", Default::default())
-                .sort_by_exprs(vec![col("seizure_vote"), col("eeg_id")], vec![true, false], true, true)
-                .collect()?;
+        // let eeg_id = EEGs::good_eegs_filter("../../data")?
+        //         .filter(col("seizure_vote").gt(lit(0)))
+        //         // .sort(kind, SortOptions{ descending: true, ..Default::default()})
+        //         // .sort("eeg_id", Default::default())
+        //         .sort_by_exprs(vec![col("seizure_vote"), col("eeg_id")], vec![true, false], true, true)
+        //         .collect()?;
+        //
+        // println!("eeg_id_series={:?}", eeg_id);
 
-        println!("eeg_id_series={:?}", eeg_id);
+        // let eeg_id_series = data::EEGs::good_eegs_of("../../data", "lpd_vote")?;
 
         // let records_num:usize = clc_records(&eeg_id_series, "../../data")?;
 
