@@ -1,17 +1,18 @@
 #![feature(vec_into_raw_parts)]
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
 use std::fs::DirEntry;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Add;
+use std::path::Path;
 use std::time::Instant;
 
 use log::{debug, SetLoggerError};
 use polars::error::PolarsError;
-use polars::export::ahash::{HashMap, HashMapExt};
 use polars::export::arrow::compute::filter::filter;
 use polars::export::arrow::io::iterator::StreamingIterator;
 use polars::io::SerReader;
@@ -26,6 +27,7 @@ use rand::prelude::SliceRandom;
 use regex::Regex;
 use tch::{Device, Kind, Tensor};
 use hbac_common::HbacError;
+use hbac_motifs::fragments::MotifSlice;
 use hbac_motifs::TensorSliceIdx;
 
 use crate::utils::DataBatch;
@@ -539,16 +541,21 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
+    let df = read_eeg_to_df(base_path, eeg_id)?;
+
+    Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()).to_device(device))
+}
+
+pub fn read_eeg_to_df(base_path: &str, eeg_id: &str) -> Result<DataFrame, HbacError> {
     let scan_conf = ScanArgsParquet::default();
 
-    let eeg_df = LazyFrame::scan_parquet(
-        format!("{}/train_eegs/{}.parquet", base_path, eeg_id),
-        scan_conf,
+    let eeg_df = LazyFrame::scan_parquet(//TODO read_parallel?
+         format!("{}/train_eegs/{}.parquet", base_path, eeg_id),
+         scan_conf,
     )?;
 
     let df = eeg_df.collect()?;
-
-    Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()).to_device(device))
+    Ok(df)
 }
 
 pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, HbacError> {
@@ -609,10 +616,6 @@ pub fn read_eeg_index(motif_dir:&str)->Result<Vec<String>, HbacError> {
 
 }
 
-pub fn write_motifs_slices(dir:&str, fragments_map: std::collections::HashMap<usize, Vec<(u16, i64, u16)>>, eegs:Vec<String>) {
-
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -629,6 +632,7 @@ mod tests {
     use rand::thread_rng;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Tensor;
+    use hbac_motifs::fragments::MotifSlice;
     use hbac_motifs::utils::*;
 
     use crate::*;
@@ -890,18 +894,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_write_motifs_slices() {
-        let mut map = HashMap::new();
-
-        map.insert(0, vec![(0, 100, 0)]);
-
-        write_motifs_slices(
-            "/tmp/motif_framents",
-            map,
-            vec!["0123".into()]
-        );
-    }
 
     #[test]
     fn test_read_eeg_index() -> Result<(), HbacError>  {

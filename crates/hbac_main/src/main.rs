@@ -14,7 +14,7 @@ use polars::prelude::Series;
 use hbac_motifs::utils::cdt;
 use hbac_common::HbacError;
 use hbac_motifs::{find, fragments, TensorSliceIdx};
-use hbac_motifs::fragments::{FragmentMotifsParams, group_motifs, list_motifs};
+use hbac_motifs::fragments::{FragmentMotifsParams, group_motifs, list_motifs, write_motifs_slices};
 use std::collections::HashMap;
 
 mod my_tch;
@@ -109,14 +109,16 @@ fn main() -> Result<(), HbacError> {
         }
 
         Some(Commands::MotifsToFragments(fragment_motifs_params)) => {
-            data::write_motifs_slices(
+            write_motifs_slices(
+                cli.base_path.as_str(),
                 fragment_motifs_params.fragments_dir(),
                 fragments::motifs_to_eeg_slices(
                     list_motifs(fragment_motifs_params.motifs_dir())?,
                     read_motif_to_iter
                 )?,
-                read_eeg_index(fragment_motifs_params.motifs_dir())?
-            );
+                read_eeg_index(fragment_motifs_params.motifs_dir())?,
+                    data::read_eeg_to_df
+            )?;
         }
         None => {}
     }
