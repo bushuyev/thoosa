@@ -3,14 +3,17 @@ use std::fs;
 use std::fs::DirEntry;
 use std::hash::Hash;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use clap::Args;
-use log::debug;
+use log::{debug, info};
 use hbac_common::HbacError;
 use crate::tensor_iter::TensorSlice;
 use crate::TensorSliceIdx;
 use regex::Regex;
 use tch::Tensor;
 use tch::Device;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 
 #[derive(Debug, Args)]
 pub struct FragmentMotifsParams {
@@ -50,10 +53,9 @@ pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
         let g_1 = pairs_groups.get(&pair.1);
         if let Some(g_0_val) = g_0 {
             if g_1.is_some() {
-                debug!("should never happen");
+                debug!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}", g_0, g_1, ln, pair);
                 if g_0.ne(&g_1) {
                     separated_groups.push((*g_0_val, *g_1.unwrap()));
-                    // panic!("g_0={:?} g_1={:?} ln={} pair={:?}", g_0, g_1, ln, pair);
                 }
             } else {
                 pairs_groups.insert(pair.1, *g_0_val);
@@ -70,7 +72,7 @@ pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
         }
     }
 
-    println!("separated_groups={:?}", separated_groups);
+    debug!("separated_groups={:?}", separated_groups);
     let separated_groups_map = if !separated_groups.is_empty() {
         let map = group_motifs(separated_groups.into_iter()).values().fold(HashMap::new(), |mut h, v| {
             for i in v.iter().skip(1) {
@@ -78,7 +80,7 @@ pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
             }
             h
         });
-        println!("separated_groups group_motifs={:?}", map);
+        debug!("separated_groups group_motifs={:?}", map);
         Some(map)
     } else {
         None
@@ -90,6 +92,8 @@ pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
         let mut gr_vec = groups.entry(*group).or_insert_with(|| vec![]);
         gr_vec.push(val);
     }
+
+    debug!("group_motifs groups={:?}", groups);
     groups
 }
 
@@ -149,37 +153,49 @@ impl MotifSlice {
 pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loader:fn(&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError>) -> Result<HashMap<usize, Vec<MotifSlice>>, HbacError>{
 
     //motif files (per channel) -> motif groups -> eeg slices
-    let mut eeg_motifs_sets: HashMap<usize, HashSet<MotifSlice>> = HashMap::new();
+    let mut tensorid_motifs_sets: HashMap<usize, HashSet<MotifSlice>> = HashMap::new();
 
     for channel_motifs in all_channels_motifs {
-        debug!("channel: {:?}", channel_motifs.0);
+        debug!("motifs_to_eeg_slices: channel={:?}", channel_motifs.0);
         for group in group_motifs(motif_loader(channel_motifs.1.as_str())?.into_iter()) {
-            debug!("group: {:?}", group.0);
+            debug!("motifs_to_eeg_slices: group={:?}", group.0);
             for tensor_slice in group.1 {
-                let mut eegs_fragments = eeg_motifs_sets.entry(tensor_slice.0).or_insert_with(|| HashSet::new());
+                let mut eegs_fragments = tensorid_motifs_sets.entry(tensor_slice.0).or_insert_with(|| HashSet::new());
 
                 eegs_fragments.insert(MotifSlice::new(group.0, tensor_slice.1, channel_motifs.0)); //motifs group, slice, channel_idx (column in eeg file)
             }
         }
     }
 
+    debug!("motifs_to_eeg_slices: eeg_motifs_sets={:?}", tensorid_motifs_sets);
 
-    let mut eeg_motifs:HashMap<usize, Vec<MotifSlice>> = HashMap::new();
-    for (key, slices_set) in eeg_motifs_sets.into_iter(){
+    let mut tensor_motifs:HashMap<usize, Vec<MotifSlice>> = HashMap::new();
+    for (tensor_id, slices_set) in tensorid_motifs_sets.into_iter(){
         let mut slices_vec:Vec<MotifSlice> = slices_set.into_iter().collect();
         slices_vec.sort_by(|a, b|a.slise_idx().cmp(&b.slise_idx()));
-        eeg_motifs.insert(key, slices_vec);
+        tensor_motifs.insert(tensor_id, slices_vec);
     }
-    Ok(eeg_motifs)
+
+    debug!("motifs_to_eeg_slices: eeg_motifs={:?}", tensor_motifs);
+
+    Ok(tensor_motifs)
 }
 
 pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id__fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64) -> Result<(), HbacError>
-    where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError>{
+    where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
+
+    debug!("write_motifs_slices");
     let output_dir = Path::new(output_dir);
     fs::create_dir_all(output_dir)?;
 
+    let total:usize = eeg_id__fragments_map.values().map(|fragments|fragments.len()).sum();
+    debug!("write_motifs_slices: total={}", total);
+
+    let mut progress = AtomicU64::new(0);
 
     for (eeg_idx, channels_fragments) in eeg_id__fragments_map {
+    // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{
+
         let eeg_id = eegs[eeg_idx].clone();
         let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), Device::Cpu)?;
 
@@ -188,7 +204,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id__fragments
             let motif_path = channel_path.join(fragment.motif_group.to_string());
             fs::create_dir_all(motif_path.clone())?;
 
-            // println!("eeg_t:");
+
             // eeg_t.print();
 
             let channel_t = eeg_t.get(fragment.channel_idx as i64);
@@ -203,9 +219,14 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id__fragments
             // println!("fragment_t:");
             // fragment_t.print();
 
-            fragment_t.save(motif_path.join(format!("{}.pt", fragment.slise_idx)));
+            fragment_t.save(motif_path.join(format!("{}_{}.pt", eeg_id, fragment.slise_idx)));
+
+            progress.fetch_add(1, Ordering::Relaxed);
+            info!("progress: {} out of {} total", progress.load(Ordering::Relaxed), total);
 
         }
+
+        // Ok::<(), HbacError>(())
     }
 
     Ok(())
@@ -223,6 +244,8 @@ mod tests {
     use crate::TensorSliceIdx;
     use crate::fragments::group_motifs;
     use crate::fragments::MotifSlice;
+    use rayon::iter::IntoParallelRefIterator;
+    use rayon::iter::ParallelIterator;
     /*
         a - b
         a - c
@@ -282,11 +305,16 @@ mod tests {
         println!("groups 0 = ={:?}", groups);
         assert_eq!(groups.len(), 2);
 
-        let group_0 = groups.get_mut(&1).unwrap();
+        let mut values:Vec<Vec<String>> = groups.values().into_iter().map(|v|v.clone()).collect();
+        values.sort_by(|a, b|b.len().cmp(&a.len()));
+
+        println!("values={:?}", values);
+
+        let group_0 = values.get_mut(0).unwrap();
         group_0.sort();
         assert_eq!(&vec!["a".to_string(), "b".to_string(), "v".to_string(), "w".to_string(), "x".to_string(), "y".to_string()], group_0);
 
-        let group_1 = groups.get_mut(&0).unwrap();
+        let group_1 = values.get_mut(1).unwrap();
         group_1.sort();
         assert_eq!(&vec!["l".to_string(), "m".to_string()], group_1);
 
@@ -414,10 +442,24 @@ mod tests {
 
         let map = super::motifs_to_eeg_slices(vec![(0, "aaa".into())], test_motif_loader)?;
 
+
+        let mut values:Vec<&Vec<MotifSlice>> = map.values().into_iter().collect();
+        values.sort_by(|a, b|b.len().cmp(&a.len()));
+
         println!("map={:?}", map);
+        assert_eq!(map.len(), 2);
         //tensor id (eeg) - group, slice, channel
-        assert_eq!(map.get(&0).unwrap(), &[MotifSlice::new(0, 1000, 0), MotifSlice::new(0, 3000, 0), MotifSlice::new(1, 5000, 0), MotifSlice::new(1, 9000, 0)]);
-        assert_eq!(map.get(&1).unwrap(), &[MotifSlice::new(0, 2000, 0), MotifSlice::new(1, 7000, 0)]);
+        assert_eq!(values.get(0).unwrap().as_slice(), &[
+            MotifSlice::new(0, 1000, 0),
+            MotifSlice::new(0, 3000, 0),
+            MotifSlice::new(0, 5000, 0),
+            MotifSlice::new(0, 9000, 0),
+        ]);
+
+        assert_eq!(values.get(1).unwrap().as_slice(), &[
+            MotifSlice::new(0, 2000, 0),
+            MotifSlice::new(0, 7000, 0)
+        ]);
 
 
         Ok(())
@@ -472,6 +514,29 @@ mod tests {
         // loaded_slice.print();
 
         assert!(Tensor::from_slice(&[10.1, 20.1]).view([1, -1]).equal(&loaded_slice));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_test() -> Result<(), HbacError>{
+
+        let map = (0..100).fold(HashMap::new(), |mut h, v|{
+            h.insert(v, (0..100).collect::<Vec<usize>>());
+            h
+        });
+
+        map.par_iter().try_for_each(|v|{
+
+            if *v.0 == 50 {
+                Err::<(), HbacError>(HbacError::new("XXX".to_string()))
+            } else {
+                Ok::<(), HbacError>(())
+            }
+
+
+
+        })?;
 
         Ok(())
     }

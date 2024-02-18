@@ -554,8 +554,7 @@ pub fn read_eeg_to_df(base_path: &str, eeg_id: &str) -> Result<DataFrame, HbacEr
          scan_conf,
     )?;
 
-    let df = eeg_df.collect()?;
-    Ok(df)
+    Ok(eeg_df.collect()?)
 }
 
 pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, HbacError> {
@@ -604,9 +603,9 @@ pub fn read_eeg_index(motif_dir:&str)->Result<Vec<String>, HbacError> {
     assert_eq!(files.len(), 1);
 
 
-    println!("files={:?}", files);
+    debug!("files={:?}", files);
     let cnt = fs::read_to_string(files[0].path())?;
-    println!("{:?}", cnt);
+    debug!("{:?}", cnt);
 
     let re: Regex = Regex::new(r#""(?<id>\w+)""#)?;
 

@@ -457,7 +457,6 @@ mod motif_find_tests {
             for j in (0..n) {
                 print!("{:?} ", t.int64_value(&[i, j]));
             }
-            println!();
         }
 
 
