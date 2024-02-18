@@ -8,7 +8,6 @@ use tch::{Device, Kind, Tensor};
 use rand::Rng;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
-pub mod utils;
 mod tensor_iter;
 mod cache_on_threads;
 pub mod fragments;

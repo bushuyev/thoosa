@@ -4,26 +4,12 @@ use plotters::prelude::*;
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::element::PathElement;
-use tch::{Kind, TchError, Tensor};
+use tch::{Kind, Tensor};
 use tch::nn::{Module, OptimizerConfig};
 use plotters::drawing::IntoDrawingArea;
-use hbac_common::HbacError;
-
-#[derive(Debug)]
-pub enum MyError {
-    TchError(TchError)
-}
-
-impl From<TchError> for MyError {
-    fn from(value: TchError) -> Self {
-        MyError::TchError(value)
-    }
-}
+use crate::HbacError;
 
 
-pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, MyError> {
-    Ok(t.iter::<f64>()?.collect::<Vec<f64>>())
-}
 
 pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -67,7 +53,7 @@ pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), HbacError> {
 
     let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
         if max_min.0 > *x {
@@ -196,4 +182,8 @@ pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
 
 pub fn norm_2(t: &Tensor) -> Tensor {
     t/ t.tensordot(&t, 1, 1).diag(0).sqrt().view([1, -1]).transpose(0, 1)
+}
+
+pub fn lin_t(n: i64) -> Tensor {
+    Tensor::from((0..n).map(|x| x as f32).collect::<Vec<f32>>().as_slice())
 }

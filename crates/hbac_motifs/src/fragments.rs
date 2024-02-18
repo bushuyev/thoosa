@@ -1,11 +1,15 @@
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::DirEntry;
 use std::hash::Hash;
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use chrono::Utc;
 use clap::Args;
-use log::{debug, info};
+use log::{debug, error, info};
+use plotters::prelude::{BLACK, RGBColor};
 use hbac_common::HbacError;
 use crate::tensor_iter::TensorSlice;
 use crate::TensorSliceIdx;
@@ -14,6 +18,7 @@ use tch::Tensor;
 use tch::Device;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
+use hbac_common::utils::*;
 
 #[derive(Debug, Args)]
 pub struct FragmentMotifsParams {
@@ -232,20 +237,101 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id__fragments
     Ok(())
 }
 
+#[derive(Debug, Args)]
+pub struct PlotFragmentsParams {
+
+
+    #[arg(long, default_value = "../../data_local/fragments")]
+    fragments_dir: String,
+
+    #[arg(long, default_value = "/tmp/fragments_plots")]
+    output_dir: String,
+
+}
+
+pub fn plot_fragments(params:&PlotFragmentsParams)->Result<(), HbacError> {
+
+    do_plot_fragments(
+        &params.fragments_dir,
+        &params.output_dir
+    );
+
+    Ok(())
+}
+pub fn check_fragments(from: &impl AsRef<std::path::Path>,)->Result<(), HbacError> {
+    let tensors:Vec<Tensor> = fs::read_dir(from)?
+        .into_iter()
+        .filter(|e|e.as_ref().is_ok_and(|e|e.file_type().is_ok_and(|f|f.is_file())))
+        .map(|e|Tensor::load(e.unwrap().path()).unwrap()).collect();
+
+    println!("tensors={:?}", tensors.len());
+
+    tensors.iter().enumerate().for_each(|(i_0, t_0)|{
+        tensors.iter().enumerate().skip(i_0).for_each(|(i_1, t_1)|{
+
+
+            let dp = dot_norm(1, &t_0, &t_1).unwrap();
+
+            println!("i_0={:?} i_1={:?} dp={:?}", i_0, i_1, dp.double_value(&[0]));
+
+        });
+    });
+
+    Ok(())
+}
+
+
+fn do_plot_fragments(from: &impl AsRef<std::path::Path>, to: &impl AsRef<std::path::Path>) ->Result<(), HbacError>{
+    debug!("do_plot_fragments: from={:?} to={:?}", from.as_ref(), to.as_ref());
+    fs::create_dir_all(to)?;
+
+    let mut series:Vec<(String, RGBColor, Vec<(f32, f32)>)> = vec![];
+    let x = lin_t(1000);//TODO
+
+    let to_path = to.as_ref();
+    let from_path = from.as_ref();
+    for f in fs::read_dir(from)? {
+        let entry = f?;
+
+        if entry.file_type()?.is_dir() {
+            do_plot_fragments(
+                &from_path.join(entry.file_name()),
+                &to_path.join(entry.file_name())
+            )?
+        } else {
+
+            if let Ok(pt) = Tensor::load(entry.path()) {
+                series.push(
+                    (format!("{}", entry.file_name().to_str().unwrap()), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&pt).into_iter()).collect::<Vec<(f32, f32)>>()),
+                );
+            } else {
+                error!("can't load {:?}", entry.path());
+            }
+
+
+        }
+    }
+    plot_series(series, format!("{}", to_path.file_name().unwrap().to_str().unwrap()).as_str(), (1000, 480), &to_path.join(format!("{}.png", to_path.file_name().unwrap().to_str().unwrap())))
+}
+
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
+mod motifs_tests {
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
     use std::path::Path;
     use std::time::UNIX_EPOCH;
+    use log::error;
+    use plotters::prelude::BLACK;
     use tch::Kind::Double;
     use tch::{Device, Tensor};
     use hbac_common::HbacError;
     use crate::TensorSliceIdx;
-    use crate::fragments::group_motifs;
+    use crate::fragments::{do_plot_fragments, group_motifs};
     use crate::fragments::MotifSlice;
     use rayon::iter::IntoParallelRefIterator;
     use rayon::iter::ParallelIterator;
+    use hbac_common::utils::vec_f32_from;
     /*
         a - b
         a - c
@@ -443,22 +529,30 @@ mod tests {
         let map = super::motifs_to_eeg_slices(vec![(0, "aaa".into())], test_motif_loader)?;
 
 
+        assert_eq!(map.len(), 2);
+
         let mut values:Vec<&Vec<MotifSlice>> = map.values().into_iter().collect();
         values.sort_by(|a, b|b.len().cmp(&a.len()));
 
-        println!("map={:?}", map);
-        assert_eq!(map.len(), 2);
+        let groups  = values.iter().flat_map(|v|v.iter()).fold(HashSet::new(), |mut a, motif_slice|{
+            a.insert(motif_slice.motif_group);
+            a
+        });
+
+        assert_eq!(groups.len(), 1);
+        let group = groups.into_iter().next().unwrap();
+
         //tensor id (eeg) - group, slice, channel
         assert_eq!(values.get(0).unwrap().as_slice(), &[
-            MotifSlice::new(0, 1000, 0),
-            MotifSlice::new(0, 3000, 0),
-            MotifSlice::new(0, 5000, 0),
-            MotifSlice::new(0, 9000, 0),
+            MotifSlice::new(group, 1000, 0),
+            MotifSlice::new(group, 3000, 0),
+            MotifSlice::new(group, 5000, 0),
+            MotifSlice::new(group, 9000, 0),
         ]);
 
         assert_eq!(values.get(1).unwrap().as_slice(), &[
-            MotifSlice::new(0, 2000, 0),
-            MotifSlice::new(0, 7000, 0)
+            MotifSlice::new(group, 2000, 0),
+            MotifSlice::new(group, 7000, 0)
         ]);
 
 
@@ -519,6 +613,46 @@ mod tests {
     }
 
     #[test]
+    fn test_plot_fragments()-> Result<(), HbacError>{
+        super::plot_fragments(
+            &super::PlotFragmentsParams {
+                fragments_dir: "/tmp/fff/0/".to_string(),
+                output_dir: "/tmp/fragments_plots_zzz/0/".to_string(),
+            }
+        )
+    }
+
+    #[test]
+    fn test_check_fragments()-> Result<(), HbacError>{
+
+        super::check_fragments(
+            &"/tmp/fff/0/0/".to_string()
+        )
+        // for f in fs::read_dir(from)? {
+        //     let entry = f?;
+        //
+        //     if entry.file_type()?.is_dir() {
+        //         do_plot_fragments(
+        //             &from_path.join(entry.file_name()),
+        //             &to_path.join(entry.file_name())
+        //         )?
+        //     } else {
+        //
+        //         if let Ok(pt) = Tensor::load(entry.path()) {
+        //             series.push(
+        //                 (format!("{}", entry.file_name().to_str().unwrap()), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&pt).into_iter()).collect::<Vec<(f32, f32)>>()),
+        //             );
+        //         } else {
+        //             error!("can't load {:?}", entry.path());
+        //         }
+        //
+        //
+        //     }
+        // }
+
+    }
+
+    // #[test]
     fn test_test() -> Result<(), HbacError>{
 
         let map = (0..100).fold(HashMap::new(), |mut h, v|{
@@ -540,5 +674,7 @@ mod tests {
 
         Ok(())
     }
+
+
 }
 

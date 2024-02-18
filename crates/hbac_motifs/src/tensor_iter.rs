@@ -267,7 +267,7 @@ mod tests {
     use tch::{Device, Kind, Tensor};
     use crate::HbacError;
     use crate::tensor_iter::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore, CacheOnThreadsStore};
-    use crate::utils::*;
+    use hbac_common::utils::*;
     use rayon::iter::ParallelIterator;
 
     #[ctor::ctor]

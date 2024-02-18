@@ -1,15 +1,17 @@
 use std::fs::{File, OpenOptions};
-use tch::Tensor;
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::Instant;
+
+use clap::clap_derive::{Args, Parser, Subcommand};
 use log::{debug, info};
 use rayon::iter::{ParallelBridge, ParallelIterator};
-use std::io::Write;
-use hbac_common::HbacError;
-use crate::{TensorSliceIdx, utils};
-use crate::utils::cdt;
-use clap::clap_derive::{Args, Parser, Subcommand};
+use tch::Tensor;
 
+use hbac_common::HbacError;
+use hbac_common::utils::*;
+
+use crate::TensorSliceIdx;
 
 #[derive(Debug, Args)]
 pub struct FindMotifsParams {
@@ -94,7 +96,7 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
         match r {
             Ok((t_s_0, t_s_1, slots_processed)) => {
 
-                let dp = utils::dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
+                let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
 
                 for (i, mt) in all_mt.iter().enumerate() {
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[i as i64]) as f32);
@@ -197,28 +199,28 @@ mod motif_find_tests {
     use std::collections::VecDeque;
     use std::f64::consts::PI;
     use std::fs::{File, OpenOptions};
+    use std::io;
+    use std::io::Write;
     use std::iter::Map;
     use std::mem::size_of_val;
     use std::ops::Range;
-    use std::time::Instant;
-    use std::io;
-    use std::io::Write;
     use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+    use plotters::prelude::*;
 
+    use chrono::Utc;
     use log::{debug, LevelFilter, SetLoggerError};
-    use plotters::prelude::{BLACK, BLUE, MAGENTA};
-    use plotters::style::{GREEN, RED};
+    use rand::Rng;
+    use rayon::iter::IntoParallelIterator;
+    use rayon::iter::ParallelIterator;
+    use rayon::prelude::ParallelBridge;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, kind, Tensor};
-    use chrono::Utc;
-    use rand::Rng;
-    use rayon::prelude::ParallelBridge;
-    use rayon::iter::ParallelIterator;
-    use rayon::iter::IntoParallelIterator;
+
+
     use crate::*;
     use crate::find::MotifTracker;
-    use crate::utils::*;
-    use crate::utils::z_norm;
+    use hbac_common::utils::*;
 
     #[ctor::ctor]
     fn init() {
@@ -317,11 +319,11 @@ mod motif_find_tests {
         // println!("dot_0={:?}", dot_0);
         println!("sig={:?}", sig.size());
 
-        crate::utils::plot_series(
+        plot_series(
             vec![
                 (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig)).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (1000, 500), format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
 
         Ok(())
@@ -526,7 +528,7 @@ mod motif_find_tests {
 
         // let gauss_1_0 = gauss_1.f_slice(0, Some(300), Some(500), 1)?;
 
-        crate::utils::plot_series(
+        plot_series(
             vec![
                 (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&gauss_1)).collect::<Vec<(f32, f32)>>()),
                 // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
@@ -534,7 +536,7 @@ mod motif_find_tests {
                 (format!("dots"), GREEN, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>()),
                 (format!("dots_ff"), RED, dots_ff.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
 
-            ], "EEG", (1000, 480), format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
         // find_motifs();
         println!("ok");
@@ -628,15 +630,15 @@ mod motif_find_tests {
 
         // let gauss_1_0 = gauss_1.f_slice(0, Some(300), Some(500), 1)?;
 
-        crate::utils::plot_series(
+        plot_series(
             vec![
                 (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c)).collect::<Vec<(f32, f32)>>()),
                 // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
                 // (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_2_c)).collect::<Vec<(f32, f32)>>()),
                 // (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
 
-            ], "EEG", (1000, 480), format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        ).unwrap();
+            ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        )?;
         // find_motifs();
         println!("ok");
 
@@ -733,11 +735,4 @@ mod motif_find_tests {
 
         signal
     }
-
-    fn lin_t(n: i64) -> Tensor {
-        Tensor::from((0..n).map(|x| x as f32).collect::<Vec<f32>>().as_slice())
-    }
-
-
-
 }

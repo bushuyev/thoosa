@@ -1,34 +1,20 @@
 use std::io::Write;
 use std::mem;
 use log::{debug, info, trace};
-use plotters::prelude::{BLACK, Color, IntoFont, LineSeries, RED, RGBColor, WHITE};
-use plotters::backend::BitMapBackend;
-use plotters::chart::ChartBuilder;
-use plotters::element::PathElement;
+
 use tch::{Device, nn, Reduction, TchError, Tensor};
 use tch::nn::{Module, OptimizerConfig, VarStore};
-use plotters::drawing::IntoDrawingArea;
 use crate::data::{EEGs};
 use crate::my_tch::{Fp, LossFp};
 use hbac_common::HbacError;
 
-#[derive(Debug)]
-pub enum MyError {
-    TchError(TchError)
-}
-
-impl From<TchError> for MyError {
-    fn from(value: TchError) -> Self {
-        MyError::TchError(value)
-    }
-}
 
 pub trait DataBatch {
     fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor);
     fn valid(&self, batch_size:Option<usize>) -> (Tensor, Tensor);
 }
 
-pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, MyError> {
+pub fn collect_to_vec(t:&Tensor)-> Result<Vec<f64>, HbacError> {
     Ok(t.iter::<f64>()?.collect::<Vec<f64>>())
 }
 
