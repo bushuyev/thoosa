@@ -80,7 +80,7 @@ pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, capti
         .caption(caption, ("sans-serif", 50).into_font())
         .margin(5)
         .x_label_area_size(30)
-        .y_label_area_size(30)
+        .y_label_area_size(100)
         .build_cartesian_2d(min_x..max_x, min_y..max_y)?;
 
     chart.configure_mesh().draw()?;
@@ -137,6 +137,9 @@ pub fn vec_f32_from(t: &Tensor) -> Vec<f32> {
     from::<Vec<f32>>(&t.reshape(-1))
 }
 
+pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
+    from::<Vec<f64>>(&t.reshape(-1))
+}
 
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Secs, true)

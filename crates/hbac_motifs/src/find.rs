@@ -33,6 +33,9 @@ pub struct FindMotifsParams {
     #[arg(long, default_value_t = 10)]
     preload_d: usize,
 
+    #[arg(long, default_value_t = 10)]
+    max_keys_fifo: usize,
+
 }
 
 impl FindMotifsParams {
@@ -72,21 +75,22 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
         (0..20).map(|_| cli.min_dot).collect(),
         slots_to_compare as usize,
         motifs_dir.as_str(),
-        cli.preload_d
+        cli.preload_d,
+        cli.max_keys_fifo,
     );
     Ok(())
 }
 
-pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize, max_keys_fifo: usize) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let all_mt = min_dot
         .into_iter()
         .enumerate()
-        .map(|(i, min_dot)|Mutex::new(MotifTracker::new(min_dot, format!("{}/motifs_{}.csv", motifs_dir.clone(), i).as_str())))
-        .collect::<Vec<Mutex<MotifTracker>>>();
+        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::new(min_dot, format!("{}/motifs_{}.csv", motifs_dir.clone(), i).as_str())))
+        .collect::<Vec<Mutex<SimpMotifTracker>>>();
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
-        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys, preload_d)),
+        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys, preload_d, max_keys_fifo)),
         1, m, step
     );
 
@@ -103,9 +107,14 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
                 }
 
                 if slots_processed > 0 && slots_processed % 10_000 == 0 {
+                    for (i, mt) in all_mt.iter().enumerate() {
+                        mt.lock().expect("mt").dump();
+                    }
+
                     let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
                     info!("pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min", slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, ((slots_to_process-slots_processed as usize)/(slots_per_sec+1))/60)
                 }
+
             }
             Err(e) => {
                 panic!("v={:?}", e);
@@ -113,7 +122,63 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
         };
     });
 
+    for (i, mt) in all_mt.iter().enumerate() {
+        mt.lock().expect("mt").dump();
+    }
+
     debug!("saved to {:?}", motifs_dir);
+}
+
+
+#[derive(Debug)]
+pub(crate) struct SimpMotifTracker {
+    motifs:Vec<(TensorSliceIdx, TensorSliceIdx, f32)>,//i_0, match_0, match_1, dot
+    min_dot: f32,
+    i_0: TensorSliceIdx,
+    file:File,
+}
+
+impl SimpMotifTracker {
+    pub fn new(min_dot:f32, path: &str) -> Self {
+        match std::fs::remove_file(path) {
+            Ok(_) => {}
+            Err(_) => {}
+        }
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+
+        Self {
+            min_dot,
+            motifs: vec![],
+            i_0: TensorSliceIdx(0, 0),
+            file,
+        }
+    }
+
+    pub fn track(&mut self, i_0: TensorSliceIdx, i_1: TensorSliceIdx, dot:f32) {
+        if dot > self.min_dot {
+            self.motifs.push((i_0, i_1, dot));
+        }
+    }
+
+    fn dump(&mut self) {
+        for motif in self.motifs.iter() {
+            writeln!(self.file, "{}, {},  {:.3}", motif.0, motif.1, motif.2);
+        }
+        self.file.flush();
+        self.motifs.clear();
+
+    }
+
+
+    pub fn motifs(&self) -> &Vec<(TensorSliceIdx, TensorSliceIdx, f32)> {
+        &self.motifs
+    }
 }
 
 #[derive(Debug)]
@@ -199,10 +264,11 @@ mod motif_find_tests {
     use std::collections::VecDeque;
     use std::f64::consts::PI;
     use std::fs::{File, OpenOptions};
-    use std::io;
+    use std::{fs, io};
     use std::io::Write;
     use std::iter::Map;
     use std::mem::size_of_val;
+    use std::ops::Mul;
     use std::ops::Range;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -417,61 +483,10 @@ mod motif_find_tests {
         Ok(())
     }
 
-        #[test]
-    fn test_motifs_match_vec(){
-        let t1 = Instant::now();
-
-        let n = 1_0;
-
-        // let mut rows_vec:Box<Vec<Vec<f32>>> = Box::new(Vec::with_capacity(n));
-        let mut t = Box::new(Tensor::zeros(&[n, n], (Kind::Uint8, Device::Cpu)));
-
-        for i in (0..n) {
-            if i % 1000 == 0 {
-                debug!("i={}", i);
-            }
-
-            // std::io::stdout().flush().expect("flush");
-            let mut row_vec:Vec<u8> = Vec::with_capacity(n as usize);
-
-            for j in (0..n) {
-                row_vec.push((i * j) as u8)
-
-            }
-            // rows_vec.push(row_vec);
-            t.index_put_(
-                &[
-                    Some(Tensor::from_slice(&[i])),//row
-                ],
-                &Tensor::from_slice(row_vec.as_slice()),
-                false
-            );
-        }
-
-        t.print();
-
-        // debug!("mem size {}", size_of_val(&t.as_ptr()));
-        debug!("done {} in {}", n, t1.elapsed().as_millis());
-
-        // let t1_vec = from::<Vec<Vec<f32>>>(&t);
-        // debug!("t1_vec={:?}", t1_vec.len());
-        for i in (0..n){
-            for j in (0..n) {
-                print!("{:?} ", t.int64_value(&[i, j]));
-            }
-        }
-
-
-        // let mut t = Box::new(Tensor::from_slice(rows_vec.as_slice()));
-        // debug!("done t {:?} in {}", t.size(), t1.elapsed().as_millis());
-    }
-
-
-    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)]) -> Vec<f64> {
-        let random = random_v(n, 10., 1.);
+    fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f64>)]) -> Vec<f64> {
         let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset + pulse.len()).sum();
 
-        random.into_iter().zip(
+        std::iter::repeat(0.).take(n as usize).zip(
             pulses
                 .into_iter()
                 .flat_map(
@@ -482,6 +497,28 @@ mod motif_find_tests {
                 )
                 .chain(std::iter::repeat(0f64).take(n as usize-pulses_len))
         ).map(|(v1, v2)| 0.001 * v1 + v2).collect::<Vec<f64>>()
+    }
+
+
+    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)]) -> Vec<f64> {
+        let random = random_v(n, 10., 1.);
+        let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
+
+        join_with_offset::<f64>(n, 0., 0.001, pulses, random)
+    }
+
+    fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T>{
+        main.into_iter().zip(
+            pulses
+                .into_iter()
+                .flat_map(
+                    |(offset, pulse)|
+                        std::iter::repeat(def)
+                            .take(*offset)
+                            .chain(pulse.into_iter().map(|v| *v))
+                )
+                .chain(std::iter::repeat(def).take(n as usize - pulses.len()))
+        ).map(|(v1, v2)| (scale * v1) + v2).collect::<Vec<T>>()
     }
 
     #[test]
@@ -564,6 +601,112 @@ mod motif_find_tests {
     }
 
     #[test]
+    pub fn test_eeg_check_with_conv()-> Result<(), HbacError> {
+        //data_local/tensor_eegs/2088807520.pt
+
+        let pulse_id = "3945687482_2000";
+        // let pulse_id = "613306557_7000";
+        let eeg_id = "3945687482";
+
+        for f in fs::read_dir("/tmp/eegs_for_seizure_fragments_3_1/")? {
+        // for f in fs::read_dir("/tmp/eegs_for_gpd_fragments_3_1/")? {
+            let e = f?;
+            let pool_t = pool_eeg_vs_fragment(
+                e.path().to_str().unwrap().to_string(),
+                format!("/tmp/seizure_fragments/3/1/{}.pt", pulse_id)
+            )?;
+
+            println!("{:?} {:?}", e.path().to_str().unwrap().to_string(), pool_t);
+        }
+
+
+
+        // pool_t.print();
+
+        // let conv_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n -conv_t.size()[1])/2) as usize, vec_f32_from(&conv_t))], (0..n).map(|x|0.).collect::<Vec<f32>>());
+        // let pool_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n -pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..n).map(|x|0.).collect::<Vec<f32>>());
+
+        // plot_series(
+        //     vec![
+        //         //(format!("Sig"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_0)).collect::<Vec<(f32, f32)>>()),
+        //         // (format!("CONV"), RED,  vec_f32_from(&x).into_iter().zip(conv_v).collect::<Vec<(f32, f32)>>()),
+        //         // (format!("POOL"), GREEN,  vec_f32_from(&x).into_iter().zip(pool_v).collect::<Vec<(f32, f32)>>()),
+        //         (format!("POOL {}/{}", pulse_id, eeg_id), GREEN,  (0..conv_t.size()[1]).map(|x| x as f32).zip(vec_f32_from(&conv_t)).collect::<Vec<(f32, f32)>>()),
+        //
+        //     ], "EEG", ((conv_t.size()[1] * 100) as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        // )?;
+
+        Ok(())
+    }
+
+    fn pool_eeg_vs_fragment(eeg: String, pulse: String) -> Result<Vec<f32>, HbacError> {
+        let t = Tensor::load(eeg)?;
+        let pulse = Tensor::load(pulse)?;
+        // println!("t={:?}", t.size());
+        // println!("pulse={:?}", pulse.size());
+
+        let t_0 = t.get(3).view([1, -1]);
+
+        // println!("t_0={:?}", t_0.size());
+
+        let conv_t = t_0.view([1, -1]).conv1d(&pulse.view([1, 1, -1]), None::<Tensor>, 1000, 0, 1, 1);
+
+        // println!("conv_t.size = {:?}", conv_t.size());
+
+        let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
+
+        // println!("pool.size = {:?}", pool_t.size());
+
+        let n = t_0.size()[1];
+        let x = lin_t(n);
+        Ok(vec_f32_from(&pool_t))
+    }
+
+    #[test]
+    pub fn test_check_with_conv() -> Result<(), HbacError> {
+        let n = 1_000i64;
+
+        let pulse = Tensor::from_slice(pulse_v(80., 30., 200, 20.).as_slice());
+
+        let sig_0_1  = Tensor::from_slice(
+            pulses_in_rand(n, &[
+                // (10, pulse_v(8., 3., 20, 2.)),
+                // (30, pulse_v(8., 3., 20, 2.))
+                (100, pulse_v(80., 30., 200, 20.)),
+                (300, pulse_v(40., 30., 200, 20.))
+            ]).as_slice()
+        );
+
+        println!("sig_0_1.size = {:?}", sig_0_1.size());
+        println!("pulse.size = {:?}", pulse.size());
+
+        let sig_1_c = sig_0_1.copy();
+
+        let conv_t = sig_1_c.view([1, -1]).conv1d(&pulse.view([1, 1, -1]), None::<Tensor>, 1, 0, 1, 1);
+
+        println!("conv_t.size = {:?}", conv_t.size());
+
+        let pool_t = conv_t.max_pool1d(10, 10, 0, 1, false);
+
+        println!("pool.size = {:?}", pool_t.size());
+
+        let x = lin_t(n);
+
+        let conv_v = join_with_offset::<f32>(1000, 0.0, 1., &[(100, vec_f32_from(&conv_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
+        let pool_v = join_with_offset::<f32>(1000, 0.0, 1., &[(((1000-pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
+        plot_series(
+            vec![
+                (format!("Sig"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c)).collect::<Vec<(f32, f32)>>()),
+                (format!("CONV"), RED,  vec_f32_from(&x).into_iter().zip(conv_v).collect::<Vec<(f32, f32)>>()),
+                (format!("POOL"), GREEN,  vec_f32_from(&x).into_iter().zip(pool_v).collect::<Vec<(f32, f32)>>()),
+
+            ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     pub fn test_find_motifs() -> Result<(), HbacError>{
         let n = 1_000i64;
         let x = lin_t(n);
@@ -581,54 +724,47 @@ mod motif_find_tests {
         let (sig_1_1, sig_1_2) = two_sigs(1_000);
         let t_1 = Tensor::vstack(&[sig_1_1, sig_1_2]);
 
-
-
         let m = 100;
-        let step = 10;
+        let step = 100;
 
 
         let t1 = Instant::now();
 
 
-        let mut mt = super::MotifTracker::new(0.9, "/tmp/test_motifs.csv");
+        let mut mt = super::SimpMotifTracker::new(0.9, "/tmp/test_motifs.csv");
 
         let dim = 1;
 
 
         let ts = TensorsSource::new(vec![t_0, t_1]);
         for i_0 in (0..n-m).step_by(step) {
-            // let d_1 = 200; {
-            // let t_1_snippet = sig_1.f_slice(0, Some(d_1), Some((d_1+m) as i64), 1)?;
 
-            for i_1 in (i_0..n-m).step_by(10).skip(1) {
+            for i_1 in (i_0..n-m).step_by(step).skip(1) {
                 debug!("i_0={:?}, i_1={:?} m={}", i_0, i_1, m);
-
-                // let t_2_snippet = norm(&sig_2.f_slice(0, Some(d_2 as i64), Some((d_2+m) as i64), 1)?);
-
-                // let dp = norm(&t_1_snippet).dot(&t_2_snippet);
-
 
                 let (slice_01, slice_02) = ts.get_slices(i_0, i_1, m, dim)?;
 
                 let dp = dot_norm(dim, &slice_01, &slice_02)?;
 
-                // dp.print();
-
-                // println!("i_0={:?}, i_1={:?}, dp={:?} ", i_0, i_1, dp.double_value(&[0]));
-                // row_dots.push(dp.double_value(&[0]));
                 mt.track(TensorSliceIdx(0, i_0), TensorSliceIdx(0, i_1), dp.double_value(&[0]) as f32);
 
             }
-            mt.next();
+            // mt.next();
             // dots.push(row_dots);
         }
-        mt.dump();
+
         debug!("done in {}", t1.elapsed().as_millis());
         // dots.extend((0..n as usize -dots.len()).map(|_|0.).collect::<Vec<f32>>());
         // debug!("2. dots.len= {}", dots.len());
 
 
         // let gauss_1_0 = gauss_1.f_slice(0, Some(300), Some(500), 1)?;
+
+        let motifs = mt.motifs();
+        assert_eq!((TensorSliceIdx(0, 100), TensorSliceIdx(0, 600)), (motifs[0].0, motifs[0].1));
+        assert_eq!((TensorSliceIdx(0, 200), TensorSliceIdx(0, 700)), (motifs[1].0, motifs[1].1));
+
+        // mt.dump();
 
         plot_series(
             vec![
@@ -645,41 +781,9 @@ mod motif_find_tests {
         Ok(())
     }
 
-    #[test]
-    pub fn test_motifs_iter(){
-        fn load_sig_tensor(key:&String) ->Box<Tensor>{
-            let (sig_1_1, sig_1_2) = two_sigs(1000);
-            Box::new(Tensor::vstack(&[sig_1_1, sig_1_2]))
-        }
-
-        let ts_iter = crate::tensor_iter::TensorsIter::new(
-            Box::new(crate::tensor_iter::CacheOnThreadsStore::new(load_sig_tensor, vec!["sig_0".into()], 2)),
-            1, 100, 10
-        );
-
-
-        let mt = Arc::new(Mutex::new(MotifTracker::new(0.9, "/tmp/test_motifs.csv")));
-
-        ts_iter.par_bridge().map(|r|(Arc::clone(&mt), r)).for_each(|(mt, r)| {
-            match r {
-                Ok((t_s_0, t_s_1, p)) => {
-                    // v.0.tensordot(&v.1, 1, 1)
-                    let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
-                    mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[0]) as f32);
-                }
-                Err(e) => {
-                    panic!("v={:?}", e);
-                }
-            };
-        });
-
-        println!("mt={:?}", mt);
-    }
-
-
     pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
         let sig_1 = Tensor::from_slice(
-            pulses_in_rand(n, &[
+            pulses_in_const(n, &[
                 // (10, pulse_v(8., 3., 20, 2.)),
                 // (30, pulse_v(8., 3., 20, 2.))
                 (100, pulse_v(80., 30., 200, 20.)),
@@ -692,6 +796,8 @@ mod motif_find_tests {
         );
         (sig_1, sig_2)
     }
+
+
 
     fn gauss_t(μ: f64, σ: f64, n: i64) -> Tensor {
         Tensor::from(gauss_i(μ, σ, n).collect::<Vec<_>>().as_slice())

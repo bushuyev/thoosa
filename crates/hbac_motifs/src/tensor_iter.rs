@@ -217,9 +217,9 @@ pub(crate) struct CacheOnThreadsStore {
 }
 
 impl CacheOnThreadsStore {
-    pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize) -> Self where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static{
+    pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize, max_keys_fifo: usize) -> Self where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static{
         Self {
-            cache: CacheOnThreads::new(loader),
+            cache: CacheOnThreads::new(loader, max_keys_fifo),
             keys,
             preload_d
 
@@ -234,7 +234,7 @@ impl CacheOnThreadsStore {
 impl TensorsStore for CacheOnThreadsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
 
-        if index+self.preload_d < self.keys.len() && index % self.preload_d == 0 {
+        if index + self.preload_d < self.keys.len() && index % self.preload_d == 0 {
             debug!("1. get_tensor: index={}", index);
 
             self.cache.load_blocking_preload_and_get(
@@ -509,6 +509,7 @@ mod tests {
         );
 
         // let r = ts_to_vec(ts);
+        //TODO
         ts.par_bridge().for_each(|v|{
             println!("v={:?}", v);
         });
@@ -534,7 +535,7 @@ mod tests {
         let vec_100 = (0..20).map(|i|format!("key_{}", i)).collect::<Vec<String>>();
 
         let ts = TensorsIter::new(
-            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100, 2)),
+            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100, 2, 3)),
             1, 2, 2
         );
 
@@ -549,8 +550,8 @@ mod tests {
                 }
             }
         }).collect::<Vec<Tensor>>();
-
-        println!("dots {}", dots.len());
+        // println!("dots {}", dots.len());
+        assert_eq!(4000, dots.len())
     }
 
     // #[test]

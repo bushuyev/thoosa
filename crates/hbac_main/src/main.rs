@@ -11,7 +11,7 @@ use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::Series;
-use hbac_motifs::utils::cdt;
+use hbac_common::utils::cdt;
 use hbac_common::HbacError;
 use hbac_motifs::{find, fragments, TensorSliceIdx};
 use hbac_motifs::fragments::{FragmentMotifsParams, group_motifs, list_motifs, plot_fragments, PlotFragmentsParams, write_motifs_slices};
@@ -54,6 +54,7 @@ enum Commands {
     FindMotifs (FindMotifsParams),
     MotifsToFragments(FragmentMotifsParams),
     PlotFragments(PlotFragmentsParams),
+    ChooseFragments(PlotFragmentsParams),
 }
 
 
@@ -126,7 +127,10 @@ fn main() -> Result<(), HbacError> {
         Some(Commands::PlotFragments(plot_fragments_params)) => {
             plot_fragments(
                 plot_fragments_params
-            )
+            )?;
+        }
+        Some(Commands::ChooseFragments(choose_fragments_params)) => {
+
         }
         None => {}
     }

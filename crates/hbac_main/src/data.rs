@@ -543,7 +543,9 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
     let df = read_eeg_to_df(base_path, eeg_id)?;
 
-    Ok(Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>()).to_device(device))
+    let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>());
+    tensor.set_requires_grad(false);
+    Ok(tensor.to_device(device))
 }
 
 pub fn read_eeg_to_df(base_path: &str, eeg_id: &str) -> Result<DataFrame, HbacError> {
@@ -618,6 +620,7 @@ pub fn read_eeg_index(motif_dir:&str)->Result<Vec<String>, HbacError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::fs::{DirEntry, File};
     use std::io::Write;
     use std::ops::Div;
@@ -632,10 +635,10 @@ mod tests {
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Tensor;
     use hbac_motifs::fragments::MotifSlice;
-    use hbac_motifs::utils::*;
+    use hbac_common::utils::*;
 
     use crate::*;
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter, write_motifs_slices};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter};
     use crate::utils::DataBatch;
 
     #[ctor::ctor]
@@ -682,7 +685,7 @@ mod tests {
             vec![
                 (format!("0"), BLACK, eegs.train_set[0].egg_map[0].iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (10_000, 480), "0.png"
+            ], "EEG", (10_000, 480), &"0.png"
         ).unwrap();
 
         Ok(())
@@ -703,7 +706,7 @@ mod tests {
                 (format!("1628180742"), BLACK, from::<Vec<f32>>(&t_0.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
                 (format!("1019408895"), RED, from::<Vec<f32>>(&t_1.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (10_000, 480), "/tmp/plots/1628180742_1019408895.png"
+            ], "EEG", (10_000, 480), &"/tmp/plots/1628180742_1019408895.png"
         ).unwrap();
 
         Ok(())
@@ -870,6 +873,8 @@ mod tests {
         let t1 = Instant::now();
         let t = data::eeg_to_tensor(base_path, eeg_id, Device::Cpu)?;
 
+        // t.save(format!("../../data_local/tensor_eegs/{}.pt", eeg_id));
+
 
         debug!("done in {}", t1.elapsed().as_millis());
 
@@ -879,6 +884,27 @@ mod tests {
 
         Ok(())
 
+    }
+
+    #[test]
+    pub fn eegs_to_tensors() -> Result<(), HbacError> {
+        for f in fs::read_dir("/media/bu/KINGSTON/gpd_fragments/3/1")? {
+            let entry = f?;
+
+            let filename:String = entry.file_name().to_str().unwrap().to_string();
+
+            let filname = filename.replace(".pt", "");
+            let eeg_split = filname.split("_").collect::<Vec<&str>>();
+            println!("{:?}", eeg_split);
+
+            let t = data::eeg_to_tensor("../../data", eeg_split[0], Device::Cpu)?;
+
+            fs::create_dir_all("/tmp/eegs_for_gpd_fragments_3_1");
+            t.save(format!("/tmp/eegs_for_gpd_fragments_3_1/{}.pt", eeg_split[0]));
+
+        }
+
+        Ok(())
     }
 
 
@@ -913,6 +939,20 @@ mod tests {
         assert_eq!(vec_1, read_eeg_index(dir.as_str())?);
         Ok(())
 
+    }
+
+    #[test]
+    fn index_eegs_to_pt() -> Result<(), HbacError> {
+
+        for eeg_file in read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?{
+            println!("{:?}", eeg_file);
+
+            let t = data::eeg_to_tensor("../../data/", eeg_file.as_str(), Device::Cpu)?;
+
+            t.save(format!("../../data_local/seizure_vote_eegs_pts/{}.pt", eeg_file));
+        }
+
+        Ok(())
     }
 
     // #[test]
