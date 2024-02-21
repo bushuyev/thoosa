@@ -21,7 +21,7 @@ use rayon::iter::ParallelIterator;
 use hbac_common::utils::*;
 
 #[derive(Debug, Args)]
-pub struct FragmentMotifsParams {
+pub struct MotifsToFragmentsParams {
     #[arg(long, default_value = "../../data_local/motifs")]
     motifs_dir: String,
 
@@ -32,7 +32,7 @@ pub struct FragmentMotifsParams {
     window: i64,
 }
 
-impl FragmentMotifsParams {
+impl MotifsToFragmentsParams {
     pub fn motifs_dir(&self) -> &str {
         &self.motifs_dir
     }
@@ -189,11 +189,8 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
     Ok(tensor_motifs)
 }
 
-pub fn motifs_to_tensor<F>(base_path:&str, output_dir:&str, eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<Tensor, HbacError>
+pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<Tensor, HbacError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
-
-    let output_dir = Path::new(output_dir);
-
 
     let mut channels_groups_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
 
@@ -226,11 +223,11 @@ pub fn motifs_to_tensor<F>(base_path:&str, output_dir:&str, eeg_id_fragments_map
 
     let groups_num = channels_groups_slices.values().map(|groups_slices|groups_slices.len()).max().expect("groups_num") as i64;
 
-    println!("channels_groups_slices={:?} groups_num={:?}", channels_groups_slices, groups_num);
+    // println!("channels_motif_tensorsgroups_slices={:?} groups_num={:?}", channels_groups_slices, groups_num);
 
     let tensor = Tensor::vstack((0..channels).map(|channel| channels_groups_slices.remove(&(channel as u16)).expect(format!("no {}", channel).as_str()))
         .map(|mut groups_slices| groups_slices.values_mut().map(|slices| choose_sice(slices)).collect::<Vec<Tensor>>()).map(|mut group| {
-        println!("group={:?}", group.len());
+        // println!("group={:?}", group.len());
         if (group.len() as i64) < groups_num {
             group.extend((0..groups_num-group.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, Device::Cpu))))
         }
@@ -354,15 +351,32 @@ fn do_plot_fragments(from: &impl AsRef<std::path::Path>, to: &impl AsRef<std::pa
 
 
 #[derive(Debug, Args)]
-struct ChooseFragmentsParams {
+pub struct MotifsToTensorParams {
 
-    #[arg(long, default_value = "../../data_local/fragments")]
-    fragments_dir: String,
+    #[arg(long, default_value = "../../data_local/motifs")]
+    motifs_dir: String,
 
-    #[arg(long, default_value = "../../data_local/choosen_fragments")]
-    output_dir: String,
+    #[arg(long)]
+    output_dir: Option<String>,
+
+    #[arg(long, default_value_t = 1000)]
+    window: i64,
 }
-pub fn choose_fragments(params:&ChooseFragmentsParams)->Result<(), HbacError> {
+
+impl MotifsToTensorParams {
+
+    pub fn output_dir(&self) -> Option<&str> {
+        self.output_dir.as_ref().map(|x|x.as_str())
+    }
+    pub fn motifs_dir(&self) -> &str {
+        &self.motifs_dir
+    }
+
+    pub fn window(&self) -> i64 {
+        self.window
+    }
+}
+pub fn choose_fragments(params:&MotifsToTensorParams) ->Result<(), HbacError> {
 
     Ok(())
 }
@@ -644,10 +658,8 @@ mod motifs_tests {
         assert_eq!(motifs.len(), 20);
         assert_eq!((0..20).collect::<Vec<u16>>(), motifs.into_iter().map(|v|v.0).collect::<Vec<u16>>());
 
-
         Ok(())
     }
-
 
     #[test]
     fn test_motifs_to_tensor() -> Result<(), HbacError>{
@@ -690,7 +702,6 @@ mod motifs_tests {
 
         let t = super::motifs_to_tensor(
             "zzz",
-            dir.as_str(),
             eeg_id_fragments_map,
             vec!["111".into(), "222".into()],
             test_eeg_to_t,

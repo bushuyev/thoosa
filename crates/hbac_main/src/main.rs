@@ -14,8 +14,9 @@ use polars::prelude::Series;
 use hbac_common::utils::cdt;
 use hbac_common::HbacError;
 use hbac_motifs::{find, fragments, TensorSliceIdx};
-use hbac_motifs::fragments::{FragmentMotifsParams, group_motifs, list_motifs, plot_fragments, PlotFragmentsParams, write_motifs_slices};
+use hbac_motifs::fragments::{MotifsToTensorParams, group_motifs, list_motifs, motifs_to_tensor, plot_fragments, PlotFragmentsParams, write_motifs_slices, MotifsToFragmentsParams};
 use std::collections::HashMap;
+use std::path::Path;
 
 mod my_tch;
 mod data;
@@ -52,9 +53,9 @@ struct Cli {
 enum Commands {
     #[command()]
     FindMotifs (FindMotifsParams),
-    MotifsToFragments(FragmentMotifsParams),
+    MotifsToFragments(MotifsToFragmentsParams),
     PlotFragments(PlotFragmentsParams),
-    ChooseFragments(PlotFragmentsParams),
+    MotifsToTensor(MotifsToTensorParams),
 }
 
 
@@ -118,7 +119,7 @@ fn main() -> Result<(), HbacError> {
                     list_motifs(fragment_motifs_params.motifs_dir())?,
                     read_motif_to_iter
                 )?,
-                read_eeg_index(fragment_motifs_params.motifs_dir())?,
+                read_eeg_index(fragment_motifs_params.motifs_dir())?.1,
                 data::eeg_to_tensor,
                 fragment_motifs_params.window()
             )?;
@@ -129,7 +130,26 @@ fn main() -> Result<(), HbacError> {
                 plot_fragments_params
             )?;
         }
-        Some(Commands::ChooseFragments(choose_fragments_params)) => {
+
+        Some(Commands::MotifsToTensor(choose_fragments_params)) => {
+            let motifs_eeg_index = read_eeg_index(choose_fragments_params.motifs_dir())?;
+            let t = motifs_to_tensor(
+                cli.base_path.as_str(),
+                fragments::motifs_to_eeg_slices(
+                    list_motifs(choose_fragments_params.motifs_dir())?,
+                    read_motif_to_iter
+                )?,
+                motifs_eeg_index.1,
+                data::eeg_to_tensor,
+                choose_fragments_params.window(),
+                20
+            )?;
+
+            if let Some(out) =  choose_fragments_params.output_dir() {
+                let save_to = motifs_eeg_index.0.map(|v|v.replace(".txt", ".pt")).unwrap_or("unknown.pt".into());
+
+                t.save(Path::new(out).join(save_to));
+            }
 
         }
         None => {}

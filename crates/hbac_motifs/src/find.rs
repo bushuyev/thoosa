@@ -273,6 +273,7 @@ mod motif_find_tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
     use plotters::prelude::*;
+    use tch::IndexOp;
 
     use chrono::Utc;
     use log::{debug, LevelFilter, SetLoggerError};
@@ -604,19 +605,27 @@ mod motif_find_tests {
     pub fn test_eeg_check_with_conv()-> Result<(), HbacError> {
         //data_local/tensor_eegs/2088807520.pt
 
-        let pulse_id = "3945687482_2000";
+        // let pulse_id = "3945687482_2000";
         // let pulse_id = "613306557_7000";
-        let eeg_id = "3945687482";
+        // let eeg_id = "3945687482";
+        let motifs = Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?;
+        println!("motifs={:?}", motifs.size());
+        let motifs = motifs.i((.., 0, ..)).view((20, 1, 1000)); //.transpose(0, 1);
+        println!("motifs={:?}", motifs.size());
 
-        for f in fs::read_dir("/tmp/eegs_for_seizure_fragments_3_1/")? {
-        // for f in fs::read_dir("/tmp/eegs_for_gpd_fragments_3_1/")? {
-            let e = f?;
-            let pool_t = pool_eeg_vs_fragment(
-                e.path().to_str().unwrap().to_string(),
-                format!("/tmp/seizure_fragments/3/1/{}.pt", pulse_id)
-            )?;
+        // for f in fs::read_dir("/tmp/eegs_for_seizure_fragments_3_1/")? {
+        for f in fs::read_dir("/tmp/eegs_for_gpd_fragments_3_1/")? {
+            // let e = f?;
+            let eeg = Tensor::load(f?.path())?;
 
-            println!("{:?} {:?}", e.path().to_str().unwrap().to_string(), pool_t);
+            let x = eeg.conv1d(&motifs, None::<Tensor>, 1000, 0, 1, 20);
+            // x.print();
+            // let pool_t = pool_eeg_vs_fragment(
+            //     e.path().to_str().unwrap().to_string(),
+            //     format!("/tmp/seizure_fragments/3/1/{}.pt", pulse_id)
+            // )?;
+
+            println!("eeg.size()={:?} x.size()={:?}", eeg.size(), x.max().f_int64_value(&[]));
         }
 
 
@@ -779,6 +788,37 @@ mod motif_find_tests {
         println!("ok");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_conv(){
+
+        let t_0 =Tensor::vstack(&[
+            Tensor::from_slice(&[1.,  1.,  1.,  0.,  0.,  0. ]),
+            Tensor::from_slice(&[2.,  2.,  2.,  0.,  0.,  0. ])
+        ]); //view((2, 1, 6))
+        let t_1 = Tensor::vstack(&[
+            Tensor::from_slice(&[1.,  1.,  1.]),
+            Tensor::from_slice(&[2.,  2.,  2.])
+        ]).view((2, 1, 3)); //view((2, 1, 3))
+
+
+
+        let c = t_0.conv1d(&t_1, None::<Tensor>, 1, 3, 1, 2);
+
+        println!("t_0={:?} t_1={:?} c={:?}", t_0.size(), t_1.size(), c.size());
+        c.print();
+
+        assert_eq!(
+            c,
+            Tensor::vstack(&[
+                Tensor::from_slice(&[ 0.,   1.,   2.,   3.,   2.,   1.,   0.,   0.,   0.,   0.,]),
+                Tensor::from_slice(&[ 0.,   4.,   8.,  12.,   8.,   4.,   0.,   0.,   0.,   0.,])
+            ])
+        )
+
+        //1 1 1 0 0 0 * 1 1 1 = 1  2  3  2  1 0 0 0
+        //2 2 2 0 0 0 * 2 2 2 = 4  8  12 8  4 0 0 0
     }
 
     pub fn two_sigs(n: i64) -> (Tensor, Tensor) {

@@ -599,7 +599,7 @@ pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx, Tensor
 
 }
 
-pub fn read_eeg_index(motif_dir:&str)->Result<Vec<String>, HbacError> {
+pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), HbacError> {
     // motif_dir
     let files:Vec<DirEntry> = fs::read_dir(motif_dir)?.into_iter().map(|p|p.unwrap()).filter(|p|p.file_name().to_str().unwrap().ends_with("txt")).collect();
     assert_eq!(files.len(), 1);
@@ -612,7 +612,10 @@ pub fn read_eeg_index(motif_dir:&str)->Result<Vec<String>, HbacError> {
     let re: Regex = Regex::new(r#""(?<id>\w+)""#)?;
 
     Ok(
-        re.captures_iter(cnt.as_str()).map(|caps| caps["id"].into()).collect::<Vec<String>>()
+        (
+            files[0].path().file_name().and_then(|f|f.to_str()).map(|f|f.to_string()),
+            re.captures_iter(cnt.as_str()).map(|caps| caps["id"].into()).collect::<Vec<String>>()
+        )
     )
 
 }
@@ -936,7 +939,7 @@ mod tests {
         let vec_1:Vec<String> = vec!["1123".into(), "34534".into(), "99877".into()];
         write!(file, "{:?}", vec_1);
 
-        assert_eq!(vec_1, read_eeg_index(dir.as_str())?);
+        assert_eq!(vec_1, read_eeg_index(dir.as_str())?.1);
         Ok(())
 
     }
@@ -944,7 +947,7 @@ mod tests {
     #[test]
     fn index_eegs_to_pt() -> Result<(), HbacError> {
 
-        for eeg_file in read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?{
+        for eeg_file in read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?.1{
             println!("{:?}", eeg_file);
 
             let t = data::eeg_to_tensor("../../data/", eeg_file.as_str(), Device::Cpu)?;
