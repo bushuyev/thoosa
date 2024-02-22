@@ -261,7 +261,7 @@ impl MotifTracker {
 
 #[cfg(test)]
 mod motif_find_tests {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::f64::consts::PI;
     use std::fs::{File, OpenOptions};
     use std::{fs, io};
@@ -283,6 +283,7 @@ mod motif_find_tests {
     use rayon::prelude::ParallelBridge;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, kind, Tensor};
+    use tch::Kind::{Float, Int};
 
 
     use crate::*;
@@ -348,7 +349,7 @@ mod motif_find_tests {
             Tensor::from_slice(&[1., 2., 3.])
         ]);
 
-        let norm = norm_2(&t);
+        let norm = norm_2(&t, 1);
 
         assert_eq!(Tensor::from_slice(&[1., 1.]),norm.tensordot(&norm, 1, 1).diag(0));
 
@@ -368,7 +369,7 @@ mod motif_find_tests {
             &[
                 (100, pulse_v(80., 20., 200, 20.)),
                 (100, pulse_v(80., 20., 200, 20.))
-            ]
+            ], 10.
         );
 
         let sig = Tensor::from_slice(
@@ -501,8 +502,8 @@ mod motif_find_tests {
     }
 
 
-    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)]) -> Vec<f64> {
-        let random = random_v(n, 10., 1.);
+    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)], amplitude: f64) -> Vec<f64> {
+        let random = random_v(n, amplitude, 1.);
         let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
 
         join_with_offset::<f64>(n, 0., 0.001, pulses, random)
@@ -603,49 +604,131 @@ mod motif_find_tests {
 
     #[test]
     pub fn test_eeg_check_with_conv()-> Result<(), HbacError> {
-        //data_local/tensor_eegs/2088807520.pt
 
-        // let pulse_id = "3945687482_2000";
-        // let pulse_id = "613306557_7000";
-        // let eeg_id = "3945687482";
-        let motifs = Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?;
-        println!("motifs={:?}", motifs.size());
-        let motifs = motifs.i((.., 0, ..)).view((20, 1, 1000)); //.transpose(0, 1);
-        println!("motifs={:?}", motifs.size());
+
+
+
+        let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
 
         // for f in fs::read_dir("/tmp/eegs_for_seizure_fragments_3_1/")? {
-        for f in fs::read_dir("/tmp/eegs_for_gpd_fragments_3_1/")? {
-            // let e = f?;
-            let eeg = Tensor::load(f?.path())?;
 
-            let x = eeg.conv1d(&motifs, None::<Tensor>, 1000, 0, 1, 20);
-            // x.print();
-            // let pool_t = pool_eeg_vs_fragment(
-            //     e.path().to_str().unwrap().to_string(),
-            //     format!("/tmp/seizure_fragments/3/1/{}.pt", pulse_id)
-            // )?;
-
-            println!("eeg.size()={:?} x.size()={:?}", eeg.size(), x.max().f_int64_value(&[]));
+        let mut channels_motifs_classes:Vec<Vec<(Vec<f64>, Vec<f64>)>> = Vec::with_capacity(20); // (Vec<f64>, Vec<f64>) - conv. value, class label
+        for i in 0..20 {
+            let mut motifs_classes = Vec::with_capacity(120);
+            for i in 0..120 {
+                motifs_classes.push((Vec::with_capacity(400*6), Vec::with_capacity(400*6)));//num of eegs of all classes
+            }
+            channels_motifs_classes.push(motifs_classes);
         }
 
+        let motifs = Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?;
+        println!("motifs={:?}", motifs.size());
+        let motifs_flat = motifs.view((20*120, 1, 1000)); //.transpose(0, 1);
+        println!("motifs={:?}", motifs_flat.size());
 
+        clc_motifs(&motifs, &motifs_flat, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/", 1.)?;
+        clc_motifs(&motifs, &motifs_flat, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/", 0.)?;
 
-        // pool_t.print();
+        // println!("clc_motifs: {:?}", channels_motifs_classes);
 
-        // let conv_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n -conv_t.size()[1])/2) as usize, vec_f32_from(&conv_t))], (0..n).map(|x|0.).collect::<Vec<f32>>());
-        // let pool_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n -pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..n).map(|x|0.).collect::<Vec<f32>>());
+        for motif_i in 0..120 {
+            for channel_i in 0..20 {
+                let vals_labels_t = Tensor::vstack(&[
+                    Tensor::from_slice(channels_motifs_classes[channel_i][motif_i].0.as_slice()),
+                    Tensor::from_slice(channels_motifs_classes[channel_i][motif_i].1.as_slice())
+                ]);
 
-        // plot_series(
-        //     vec![
-        //         //(format!("Sig"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_0)).collect::<Vec<(f32, f32)>>()),
-        //         // (format!("CONV"), RED,  vec_f32_from(&x).into_iter().zip(conv_v).collect::<Vec<(f32, f32)>>()),
-        //         // (format!("POOL"), GREEN,  vec_f32_from(&x).into_iter().zip(pool_v).collect::<Vec<(f32, f32)>>()),
-        //         (format!("POOL {}/{}", pulse_id, eeg_id), GREEN,  (0..conv_t.size()[1]).map(|x| x as f32).zip(vec_f32_from(&conv_t)).collect::<Vec<(f32, f32)>>()),
-        //
-        //     ], "EEG", ((conv_t.size()[1] * 100) as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        // )?;
+                println!("channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, vals_labels_t.corrcoef().double_value(&[0, 1]));
+            }
+        }
 
         Ok(())
+    }
+
+    fn clc_motifs(motifs: &Tensor, motifs_flat: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64) -> Result<(), HbacError> {
+        let mut count = 0;
+        for f in fs::read_dir(eeg_path)? {
+            let e = f?;
+            let eeg = Tensor::load(e.path())?;
+
+            let conv_t = eeg.conv1d(&motifs_flat, None::<Tensor>, 10, 0, 1, 20);
+            let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
+
+            let val_t = pool_t.view((20, 120, -1));
+
+            for motif_i in 0..120 {
+                for channel_i in 0..20 {
+                    let motif_t = motifs.i((channel_i as i64, motif_i as i64));
+
+                    let v_label = if motif_t.equal(&all_zero) {
+                        (0., class_label)
+                    } else {
+                        let eeg_x_motif = val_t.i((channel_i as i64, motif_i as i64, ..));
+                        let conv_val = eeg_x_motif.max().double_value(&[]);
+
+                        (conv_val, class_label)
+                    };
+
+                    channels_motifs_classes[channel_i][motif_i].0.push(v_label.0);
+                    channels_motifs_classes[channel_i][motif_i].1.push(v_label.1);
+                }
+            }
+
+            if count > 100 {
+                break
+            }
+            count +=1;
+
+        }
+        Ok(())
+    }
+
+    /**
+    * series - [channel x data]
+    * motifs = [channel x motif x data slice]
+    */
+    fn clc_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
+
+        let channels_num = series.size()[0];
+        let series_len = series.size()[1];
+        let motifs_num = motifs.size()[1];
+        let motif_len = motifs.size()[2];
+
+        //channels, motif, motif x series dots
+        let mut matches:Vec<Vec<Vec<f32>>> = (0..channels_num).fold(Vec::new(), |mut a, v|{
+            a.push((0..motifs_num).fold(Vec::new(), |mut a, _| {
+                a.push(Vec::new());
+                a
+            }));
+            a
+        });
+
+        for i in (0..=series_len-motif_len).step_by(step) {
+            for m in 0..motifs_num {
+
+                let dp = dot_norm(
+                    1,
+                    &series.i((.., i..i + motif_len)),
+                    &motifs.i((.., m, ..))
+                )?;
+                for (channel, dot) in from::<Vec<f32>>(&dp).into_iter().enumerate() {
+                    matches[channel][m as usize].push(dot);
+                }
+
+            }
+        }
+
+        let matches = Tensor::vstack(matches.into_iter().map(|channel_motifs| {
+
+            Tensor::from_slice(channel_motifs.into_iter().map(|motifs_dots| {
+
+                motifs_dots.into_iter().map(|v| if v> threshold { 1 } else {0}).sum()
+
+            }).collect::<Vec<i32>>().as_slice())
+
+        }).collect::<Vec<Tensor>>().as_slice());
+
+        Ok(matches)
     }
 
     fn pool_eeg_vs_fragment(eeg: String, pulse: String) -> Result<Vec<f32>, HbacError> {
@@ -683,7 +766,7 @@ mod motif_find_tests {
                 // (30, pulse_v(8., 3., 20, 2.))
                 (100, pulse_v(80., 30., 200, 20.)),
                 (300, pulse_v(40., 30., 200, 20.))
-            ]).as_slice()
+            ], 50.).as_slice()
         );
 
         println!("sig_0_1.size = {:?}", sig_0_1.size());
@@ -695,25 +778,105 @@ mod motif_find_tests {
 
         println!("conv_t.size = {:?}", conv_t.size());
 
-        let pool_t = conv_t.max_pool1d(10, 10, 0, 1, false);
+        let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
 
         println!("pool.size = {:?}", pool_t.size());
 
         let x = lin_t(n);
 
-        let conv_v = join_with_offset::<f32>(1000, 0.0, 1., &[(100, vec_f32_from(&conv_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
-        let pool_v = join_with_offset::<f32>(1000, 0.0, 1., &[(((1000-pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
+        let conv_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n-conv_t.size()[1])/2) as usize, vec_f32_from(&conv_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
+        let pool_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n-pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
         plot_series(
             vec![
-                (format!("Sig"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c)).collect::<Vec<(f32, f32)>>()),
+                (format!("Sig"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c.g_mul_scalar(10.))).collect::<Vec<(f32, f32)>>()),
                 (format!("CONV"), RED,  vec_f32_from(&x).into_iter().zip(conv_v).collect::<Vec<(f32, f32)>>()),
                 (format!("POOL"), GREEN,  vec_f32_from(&x).into_iter().zip(pool_v).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "EEG", (n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         )?;
 
         Ok(())
     }
+
+    #[test]
+    pub fn test_check_with_conv_eeg() -> Result<(), HbacError> {
+        let channel = 0;
+        let t_0 = Tensor::load("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/2088807520.pt")?.i((channel)).view((1, -1));
+        let t_1 = Tensor::load("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/2088807520.pt")?.i((channel)).view((1, -1));
+        // let t_1 = Tensor::load("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/155224651.pt")?.i((channel)).view((1, -1));
+
+
+        let gauss = gauss_t(0., 10., 100).totype(Float);
+        println!("t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size());
+
+
+        let range = 1000..2000;
+        let pulse = t_0.i((0, range.clone()));
+        let pulse_x = t_0.i((0, range));
+
+        let pulse_x_m = pulse_x.median().view([1]).f_double_value(&[0])?;
+        let t_0_m = t_0.median().view([1]).f_double_value(&[0])?;
+
+        println!("pulse_x_m={:?} t_0_m={}", pulse_x_m, t_0_m);
+
+        // let pulse_x = z_norm(&pulse_x, 0); //Tensor::from_slice((0..1000).map(|_|t_0_m).collect::<Vec<f64>>().as_slice()).totype(Float).view([1, 1000]);
+        let pulse_x = pulse_x.view([1, -1]).conv1d(&gauss.view([1, 1, -1]), None::<Tensor>, 1, 50, 1, 1); //Tensor::from_slice((0..1000).map(|_|t_0_m).collect::<Vec<f64>>().as_slice()).totype(Float).view([1, 1000]);
+        let pulse_x = pulse_x./*g_mul_scalar(0.05).*/i((..,0..1000));
+
+        let sig  = t_1;
+
+        println!("pulse.size = {:?} pulse_x.size()={:?}", pulse.size(), pulse_x.size());
+
+
+        println!("sig.size = {:?}", sig.size());
+
+        let sig_n = z_norm(&sig.copy(), 1);
+
+        // let n = pulse.size()[0] as i64;
+        let n = sig.size()[1] as i64;
+
+        let conv_t = z_norm(&sig, 1).view([1, -1]).conv1d(&pulse.view([1, 1, -1]), None::<Tensor>, 1, 0, 1, 1);
+        let conv_x_t = z_norm(&sig, 1).view([1, -1]).conv1d(&pulse_x.view([1, 1, -1]), None::<Tensor>, 1, 0, 1, 1);
+        let d_conv = (n - conv_t.size()[1]) / 2 ;
+
+        // let conv_t_p = Tensor::hstack(&[
+        //     Tensor::zeros([1, d_conv], (Kind::Float, Device::Cpu)),
+        //     conv_t.view(conv_t.size().as_slice()),
+        //     Tensor::zeros([1, d_conv + 1], (Kind::Float, Device::Cpu))
+        // ]);
+        // let deconv_t = conv_t.conv_transpose1d(&)
+        // println!("conv_t.size = {:?} conv_t_p.size={:?}", conv_t.size(), conv_t_p.size());
+
+        let conv_diff_t = conv_t - conv_x_t;
+
+
+
+        // let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
+
+        // println!("pool.size = {:?}", pool_t.size());
+
+        let x = lin_t(n);
+
+
+        // let conv_v = join_with_offset::<f32>(n, 0.0, 1., &[(d_conv as usize, vec_f32_from(&conv_t))], (0..n).map(|x|0.).collect::<Vec<f32>>());
+        // let pool_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n-pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..n).map(|x|0.).collect::<Vec<f32>>());
+        plot_series(
+            vec![
+                // (format!("Pulse"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&pulse)).collect::<Vec<(f32, f32)>>()),
+                // (format!("Pulse X"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&pulse_x)).collect::<Vec<(f32, f32)>>()),
+                // (format!("Sig"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig.g_mul_scalar(10.))).collect::<Vec<(f32, f32)>>()),
+                // (format!("Sig Norm"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_n.g_mul_scalar(10.))).collect::<Vec<(f32, f32)>>()),
+                // (format!("CONV"), RED,  vec_f32_from(&x).into_iter().zip(conv_v).collect::<Vec<(f32, f32)>>()),
+                // (format!("POOL"), GREEN,  vec_f32_from(&x).into_iter().zip(pool_v).collect::<Vec<(f32, f32)>>()),
+                (format!("POOL"), GREEN,  vec_f32_from(&x).into_iter().zip(vec_f32_from(&conv_diff_t)).collect::<Vec<(f32, f32)>>()),
+
+            ], "EEG", (n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        )?;
+
+        Ok(())
+    }
+
+
 
     #[test]
     pub fn test_find_motifs() -> Result<(), HbacError>{
@@ -817,9 +980,100 @@ mod motif_find_tests {
             ])
         )
 
+        //https://www.rapidtables.com/calc/math/convolution-calculator.html
         //1 1 1 0 0 0 * 1 1 1 = 1  2  3  2  1 0 0 0
         //2 2 2 0 0 0 * 2 2 2 = 4  8  12 8  4 0 0 0
     }
+
+    #[test]
+    fn test_conv_2(){
+
+        let t_0 =Tensor::vstack(&[
+            Tensor::from_slice(&[1.,  1.,  1.,  0.,  0.,  0. ]),// first channel
+            Tensor::from_slice(&[2.,  2.,  2.,  0.,  0.,  0. ]) // second channel
+        ]); //view((2, 1, 6))
+
+        let t_1 = Tensor::vstack(&[
+            Tensor::vstack(&[
+                Tensor::from_slice(&[1.,  1.,  1.]),// 1 first channel kernel
+                Tensor::from_slice(&[3.,  3.,  3.]) // 2 first channel kenrel
+            ]),
+            Tensor::vstack(&[
+                Tensor::from_slice(&[2.,  2.,  2.]),// 1 second channel kernel
+                Tensor::from_slice(&[4.,  4.,  4.]) // 2 second channel kernel
+            ])
+        ]).view((4, 1, 3));
+
+        println!("t_0={:?} t_1={:?}", t_0.size(), t_1.size());
+
+        let c = t_0.conv1d(&t_1, None::<Tensor>, 1, 3, 1, 2);
+
+        println!("c={:?}", c.size());
+        c.print();
+
+        assert_eq!(
+            c,
+            Tensor::vstack(&[
+                Tensor::from_slice(&[ 0.,   1.,   2.,   3.,   2.,   1.,   0.,   0.,   0.,   0.,]), // first channel * 1 kernel
+                Tensor::from_slice(&[ 0.,   3.,   6.,   9.,   6.,   3.,   0.,   0.,   0.,   0.,]), // first channel * 2 kernel
+                Tensor::from_slice(&[ 0.,   4.,   8.,  12.,   8.,   4.,   0.,   0.,   0.,   0.,]), // second channel * 1 kernel
+                Tensor::from_slice(&[ 0.,   8.,  16.,  24.,  16.,   8.,   0.,   0.,   0.,   0.,])  // second channel * 2 kernel
+            ])
+        );
+
+        let c_by_channel = c.view((2, -1, 10));
+
+        println!("c={:?}", c_by_channel.size());
+        c_by_channel.print();
+
+        //https://www.rapidtables.com/calc/math/convolution-calculator.html
+        //1 1 1 0 0 0 * 1 1 1 = 1  2  3  2  1 0 0 0
+        //2 2 2 0 0 0 * 2 2 2 = 4  8  12 8  4 0 0 0
+    }
+
+    #[test]
+    fn test_clc_matches() -> Result<(), HbacError>{
+        let t_0 = Tensor::vstack(&[
+            Tensor::from_slice(&[1.,  1.,  1.,  2.,  2.,  2.,  3.,  3.,  1.]),//channel 0
+            Tensor::from_slice(&[10., 10., 10., 20., 20., 20., 30., 30., 10.])//channel 1
+        ]);
+
+        let motifs_t = Tensor::vstack(&[
+            Tensor::vstack(&[ //channel 0
+                Tensor::from_slice(&[1.,  1.,  1.]),//motif 0
+                Tensor::from_slice(&[1.,  2.,  2.]),//motif 1
+                Tensor::from_slice(&[3.,  3.,  1.]),//motif 2
+                Tensor::from_slice(&[1.,  7.,  1.]),//motif 3
+            ]),
+            Tensor::vstack(&[//channel 1
+                Tensor::from_slice(&[10.,  10.,  10.]),//motif 0
+                Tensor::from_slice(&[10.,  20.,  20.]),//motif 1
+                Tensor::from_slice(&[30.,  30.,  10.]),//motif 2
+                Tensor::from_slice(&[10.,  70.,  10.]),//motif 3
+            ])
+        ]).view((2, 4, -1));
+
+        let matches_t = Tensor::vstack(&[
+            Tensor::from_slice(&[ //channel 0
+                2,//motif 0
+                2,//motif 1
+                1,//motif 2
+                0,//motif 3
+            ]),
+            Tensor::from_slice(&[//channel 1
+                2,//motif 0
+                2,//motif 1
+                1,//motif 2
+                0,//motif 3
+            ])
+        ]).totype(Int);
+
+        assert_eq!(matches_t, clc_matches(&t_0, &motifs_t, 1, 0.99)?);
+
+        println!("Ok");
+        Ok(())
+    }
+
 
     pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
         let sig_1 = Tensor::from_slice(
@@ -832,7 +1086,7 @@ mod motif_find_tests {
         );
 
         let sig_2 = Tensor::from_slice(
-            pulses_in_rand(n, &[]).as_slice()
+            pulses_in_rand(n, &[], 10.).as_slice()
         );
         (sig_1, sig_2)
     }

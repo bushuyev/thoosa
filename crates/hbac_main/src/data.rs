@@ -891,21 +891,34 @@ mod tests {
 
     #[test]
     pub fn eegs_to_tensors() -> Result<(), HbacError> {
-        for f in fs::read_dir("/media/bu/KINGSTON/gpd_fragments/3/1")? {
-            let entry = f?;
+        // for f in fs::read_dir("/media/bu/KINGSTON/gpd_fragments/3/1")? {
+        //     let entry = f?;
+        //
+        //     let filename:String = entry.file_name().to_str().unwrap().to_string();
+        //
+        //     let filname = filename.replace(".pt", "");
+        //     let eeg_split = filname.split("_").collect::<Vec<&str>>();
+        //     println!("{:?}", eeg_split);
+        //
+        //     let t = data::eeg_to_tensor("../../data", eeg_split[0], Device::Cpu)?;
+        //
+        //     fs::create_dir_all("/tmp/eegs_for_gpd_fragments_3_1");
+        //     t.save(format!("/tmp/eegs_for_gpd_fragments_3_1/{}.pt", eeg_split[0]));
+        //
+        // }
+        let (Some(name), eegs) = read_eeg_index("../../data_down/14_02_results/2024-02-19T07:12:01Z")? else {
+            panic!("no eeg index")
+        };
 
-            let filename:String = entry.file_name().to_str().unwrap().to_string();
+        let save_to = format!("/media/bu/KINGSTON/{}", name);
+        fs::create_dir_all(save_to.clone());
+        for eeg in eegs {
+            let t = data::eeg_to_tensor("../../data", eeg.as_str(), Device::Cpu)?;
 
-            let filname = filename.replace(".pt", "");
-            let eeg_split = filname.split("_").collect::<Vec<&str>>();
-            println!("{:?}", eeg_split);
-
-            let t = data::eeg_to_tensor("../../data", eeg_split[0], Device::Cpu)?;
-
-            fs::create_dir_all("/tmp/eegs_for_gpd_fragments_3_1");
-            t.save(format!("/tmp/eegs_for_gpd_fragments_3_1/{}.pt", eeg_split[0]));
-
+            t.save(format!("{}/{}.pt", save_to, eeg));
         }
+
+        println!("saved to {}", name);
 
         Ok(())
     }

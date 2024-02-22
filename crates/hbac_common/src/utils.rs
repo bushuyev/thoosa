@@ -168,7 +168,7 @@ pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
 }
 
 pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, HbacError> {
-    Ok(norm_2(slice_01).tensordot(&norm_2(slice_02), [dim], [dim]).diag(0))
+    Ok(norm_2(slice_01, 1).tensordot(&norm_2(slice_02, dim), [dim], [dim]).diag(0))
 }
 
 
@@ -183,8 +183,8 @@ pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
     t.view(dim) / t.dot(&t).sqrt()
 }
 
-pub fn norm_2(t: &Tensor) -> Tensor {
-    t/ t.tensordot(&t, 1, 1).diag(0).sqrt().view([1, -1]).transpose(0, 1)
+pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
+    t/ t.tensordot(&t, dim, dim).diag(0).sqrt().view([1, -1]).transpose(0, 1)
 }
 
 pub fn lin_t(n: i64) -> Tensor {
