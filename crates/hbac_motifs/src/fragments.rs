@@ -220,8 +220,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<usize, 
 
     fn choose_sice(slices:&mut Vec<Tensor>)->Tensor {
 
-         slices.pop().unwrap()
-
+         slices.pop().unwrap()//TODO
     }
 
     let groups_num = channels_groups_slices.values().map(|groups_slices|groups_slices.len()).max().expect("groups_num") as i64;

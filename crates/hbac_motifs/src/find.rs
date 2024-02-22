@@ -603,9 +603,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_eeg_check_with_conv()-> Result<(), HbacError> {
-
-
+    pub fn test_eeg_select_by_corrcoef() -> Result<(), HbacError> {
 
 
         let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
@@ -623,13 +621,22 @@ mod motif_find_tests {
 
         let motifs = Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?;
         println!("motifs={:?}", motifs.size());
-        let motifs_flat = motifs.view((20*120, 1, 1000)); //.transpose(0, 1);
-        println!("motifs={:?}", motifs_flat.size());
 
-        clc_motifs(&motifs, &motifs_flat, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/", 1.)?;
-        clc_motifs(&motifs, &motifs_flat, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/", 0.)?;
+
+        // conv_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/", 1.)?;
+        // conv_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/", 0.)?;
+
+
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/", 1.)?;
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/", 0.)?;
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/", 0.)?;
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/", 0.)?;
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/", 0.)?;
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, "/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/", 0.)?;
 
         // println!("clc_motifs: {:?}", channels_motifs_classes);
+
+        let mut channels_good_motifs = (0..20).map(|_|vec![]).collect::<Vec<Vec<i32>>>();
 
         for motif_i in 0..120 {
             for channel_i in 0..20 {
@@ -638,14 +645,71 @@ mod motif_find_tests {
                     Tensor::from_slice(channels_motifs_classes[channel_i][motif_i].1.as_slice())
                 ]);
 
-                println!("channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, vals_labels_t.corrcoef().double_value(&[0, 1]));
+                // println!("vals_labels_t={:?}", channels_motifs_classes[channel_i][motif_i]);
+                let corr = vals_labels_t.corrcoef().double_value(&[0, 1]);
+
+                if corr > 0. {
+                    println!("+channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
+
+                    channels_good_motifs[channel_i].push(motif_i as i32);
+
+                } else if corr < 0. {
+                    println!("-channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
+                }
             }
         }
+
+        let good_motifs = Tensor::vstack(channels_good_motifs.into_iter().map(|good_motifs_idxs|{
+            Tensor::from_slice(good_motifs_idxs.as_slice())
+        }).collect::<Vec<Tensor>>().as_slice());
+
+
+        good_motifs.print();
 
         Ok(())
     }
 
-    fn clc_motifs(motifs: &Tensor, motifs_flat: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64) -> Result<(), HbacError> {
+    fn dot_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64) -> Result<(), HbacError> {
+        let mut count = 0;
+        for f in fs::read_dir(eeg_path)? {
+            let e = f?;
+            let eeg = Tensor::load(e.path())?;
+
+            let matches = clc_dot_matches(&eeg, &motifs, 1000, 0.99)?;
+
+            for motif_i in 0..120 {//TODO
+                for channel_i in 0..20 {
+                    let motif_t = motifs.i((channel_i as i64, motif_i as i64));
+
+                    let v_label = if motif_t.equal(&all_zero) {
+                        (0., class_label)
+                    } else {
+                        let v = matches.i((channel_i as i64, motif_i as i64));
+                        let conv_val = v.double_value(&[]);
+                        // println!("channel_i={:?}, motif_i={:?}, v={:?}", channel_i,motif_i, conv_val);
+
+                        (conv_val, class_label)
+                    };
+
+                    channels_motifs_classes[channel_i][motif_i].0.push(v_label.0);
+                    channels_motifs_classes[channel_i][motif_i].1.push(v_label.1);
+                }
+            }
+
+            if count > 100 {
+                break
+            }
+            count +=1;
+
+        }
+        Ok(())
+    }
+
+
+    fn conv_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64) -> Result<(), HbacError> {
+        let motifs_flat = motifs.view((20*120, 1, 1000)); //.transpose(0, 1);
+        println!("motifs={:?}", motifs_flat.size());
+
         let mut count = 0;
         for f in fs::read_dir(eeg_path)? {
             let e = f?;
@@ -656,7 +720,7 @@ mod motif_find_tests {
 
             let val_t = pool_t.view((20, 120, -1));
 
-            for motif_i in 0..120 {
+            for motif_i in 0..120 {//TODO
                 for channel_i in 0..20 {
                     let motif_t = motifs.i((channel_i as i64, motif_i as i64));
 
@@ -687,7 +751,7 @@ mod motif_find_tests {
     * series - [channel x data]
     * motifs = [channel x motif x data slice]
     */
-    fn clc_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
+    fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
 
         let channels_num = series.size()[0];
         let series_len = series.size()[1];
@@ -1032,7 +1096,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_clc_matches() -> Result<(), HbacError>{
+    fn test_clc_dot_matches() -> Result<(), HbacError>{
         let t_0 = Tensor::vstack(&[
             Tensor::from_slice(&[1.,  1.,  1.,  2.,  2.,  2.,  3.,  3.,  1.]),//channel 0
             Tensor::from_slice(&[10., 10., 10., 20., 20., 20., 30., 30., 10.])//channel 1
@@ -1068,7 +1132,7 @@ mod motif_find_tests {
             ])
         ]).totype(Int);
 
-        assert_eq!(matches_t, clc_matches(&t_0, &motifs_t, 1, 0.99)?);
+        assert_eq!(matches_t, clc_dot_matches(&t_0, &motifs_t, 1, 0.99)?);
 
         println!("Ok");
         Ok(())
