@@ -167,6 +167,13 @@ pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
     z_t
 }
 
+pub fn z_norm_2(t_0:&Tensor, dim:i64) -> Result<Tensor, HbacError>{
+    let std = t_0.std_dim(1, true, true);
+    //TODO std - 0
+    Ok(((t_0 -t_0.mean_dim(1, true, Kind::Float))/ std))
+}
+
+
 pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, HbacError> {
     Ok(norm_2(slice_01, 1).tensordot(&norm_2(slice_02, dim), [dim], [dim]).diag(0))
 }
