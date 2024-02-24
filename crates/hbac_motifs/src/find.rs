@@ -315,6 +315,8 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &m
     let channels_num = motifs.size()[0] as usize;
     let motifs_num = motifs.size()[1] as usize;
 
+    debug!("dot_motifs");
+
     for eeg in eegs_iter_f {
         // let e = f?;
         // let eeg = Tensor::load(e.path())?;
@@ -348,8 +350,7 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &m
     Ok(())
 }
 
-
-fn find_good_motifs<I>(motifs: &Tensor, labels_loaders:HashMap<i64, Result<I, HbacError>>, limit: i32) -> Result<Tensor, HbacError>
+fn find_good_motifs<I>(motifs: &Tensor, labels_loaders:Vec<(i64, I)>, limit: i32) -> Result<Tensor, HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> {
     let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
 
@@ -369,7 +370,7 @@ fn find_good_motifs<I>(motifs: &Tensor, labels_loaders:HashMap<i64, Result<I, Hb
     }
 
     for (label, tensors_iter_f) in labels_loaders {
-        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, tensors_iter_f?, label, limit)?;
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, tensors_iter_f, label, limit)?;
     }
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
@@ -758,14 +759,14 @@ mod motif_find_tests {
         let t = find_good_motifs(
          &Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
 
-         HashMap::from([
-             (1, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")),
-         ]),
+         vec![
+             (1, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")?),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")?),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")?),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")?),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")?),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")?),
+         ],
          10
         )?;
 
