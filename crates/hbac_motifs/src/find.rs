@@ -320,7 +320,7 @@ fn dot_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut 
 
         let matches = clc_dot_matches(&eeg, &motifs, 1000, 0.97)?;
 
-        for motif_i in 0..motifs_num {//TODO
+        for motif_i in 0..motifs_num {
             for channel_i in 0..channels_num {
                 let motif_t = motifs.i((channel_i as i64, motif_i as i64));
 
@@ -329,7 +329,6 @@ fn dot_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut 
                 } else {
                     let v = matches.i((channel_i as i64, motif_i as i64));
                     let conv_val = v.double_value(&[]);
-                    // println!("channel_i={:?}, motif_i={:?}, v={:?}", channel_i,motif_i, conv_val);
 
                     (conv_val, class_label)
                 };
@@ -349,10 +348,10 @@ fn dot_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut 
 }
 
 
-fn find_good_motifs(motifs_path: &str, tensor_paths_labels:HashMap<&str, f64>, limit: i32) -> Result<Tensor, HbacError> {
+fn find_good_motifs<F, I>(motifs: &Tensor, tensor_paths_labels:HashMap<&str, f64>, labels_loaders:HashMap<usize, F>, limit: i32) -> Result<Tensor, HbacError>
+    where I:Iterator<Item=Result<Tensor, HbacError>>, F:Fn()->Result<I, HbacError>  {
     let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
 
-    let motifs = Tensor::load(motifs_path)?;
     debug!("motifs={:?}", motifs.size());
 
     let channels_num = motifs.size()[0];
@@ -368,11 +367,9 @@ fn find_good_motifs(motifs_path: &str, tensor_paths_labels:HashMap<&str, f64>, l
         channels_motifs_classes.push(motifs_classes);
     }
 
-
     for (path, label) in tensor_paths_labels {
         dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, path, label, limit)?;
     }
-
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
 
@@ -434,7 +431,7 @@ mod motif_find_tests {
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, kind, Tensor};
     use tch::Kind::{Float, Int};
-
+    use tch::TchError;
 
     use crate::*;
     use crate::find::MotifTracker;
@@ -755,9 +752,9 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_eeg_select_by_corrcoef() -> Result<(), HbacError> {
-        find_good_motifs(
-            "../../data_local/motif_tensors/seizure_vote_eegs.pt",
+    pub fn test_find_good_motifs() -> Result<(), HbacError> {
+        let t = find_good_motifs(
+         &Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
             HashMap::from([
                 ("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/", 1.),
                 ("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/", 0.),
@@ -765,8 +762,22 @@ mod motif_find_tests {
                 ("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/", 0.),
                 ("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/", 0.),
                 ("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/", 0.)
-            ]), 10
+            ]),
+
+         HashMap::from([
+             (1, ||{
+                 fs::read_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/").map(|r|
+                     r.map(|e_r| e_r.and_then(|e|
+                         Tensor::load(e.path()).map_err(|e|std::io::Error::other(e.to_string()))
+                     ).map_err(|e|HbacError::new(e.to_string())))
+                 ).map_err(|e|HbacError::new(e.to_string()))
+
+             })
+         ]),
+         10
         )?;
+
+        println!("t={:}", t);
 
         Ok(())
     }
