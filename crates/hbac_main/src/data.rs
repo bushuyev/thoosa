@@ -241,36 +241,7 @@ impl EEGs {
         debug!("df={:?}", df.clone().collect()?.head(Some(10)));
 
 
-        let gr_by_eeg_id_df = df
-            .clone()
-            // .collect()?
-            // .sample_n(&Series::new("n", [3]), false, true, None)?
-            // .lazy()
-            // .with_column(concat_list([
-            //     col("seizure_vote"),
-            //     col("lpd_vote"),
-            //     col("gpd_vote"),
-            //     col("lrda_vote"),
-            //     col("grda_vote"),
-            //     col("other_vote")
-            // ])?.alias("all_votes"))
-            .filter(filter.unwrap_or(true.into()))
-            // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
-            // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
-            // .filter(col("eeg_id").eq(lit(1345588872)))
-            // .top_k(100, [col("eeg_id")], [false], false, false)
-            .group_by([col("eeg_id")])
-            .agg([
-                col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds"),
-                col("set").first(),
-                col("seizure_vote").first(),
-                col("lpd_vote").first(),
-                col("gpd_vote").first(),
-                col("lrda_vote").first(),
-                col("grda_vote").first(),
-                col("other_vote").first(),
-            ])
-            .collect()?;
+        let gr_by_eeg_id_df = Self::group_by_eeg_id(filter, df)?;
 
         debug!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
         std::io::stdout().flush()?;
@@ -388,6 +359,39 @@ impl EEGs {
             train_set: train_eegs,
             valid_set: valid_eegs
         }))
+    }
+
+    fn group_by_eeg_id(filter: Option<Expr>, df: LazyFrame) -> Result<DataFrame, HbacError> {
+        Ok(df
+            .clone()
+            // .collect()?
+            // .sample_n(&Series::new("n", [3]), false, true, None)?
+            // .lazy()
+            // .with_column(concat_list([
+            //     col("seizure_vote"),
+            //     col("lpd_vote"),
+            //     col("gpd_vote"),
+            //     col("lrda_vote"),
+            //     col("grda_vote"),
+            //     col("other_vote")
+            // ])?.alias("all_votes"))
+            .filter(filter.unwrap_or(true.into()))
+            // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
+            // .filter(col("eeg_id").is_in(list([lit(1345588872)])))
+            // .filter(col("eeg_id").eq(lit(1345588872)))
+            // .top_k(100, [col("eeg_id")], [false], false, false)
+            .group_by([col("eeg_id")])
+            .agg([
+                col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds"),
+                // col("set").first(),
+                col("seizure_vote").first(),
+                col("lpd_vote").first(),
+                col("gpd_vote").first(),
+                col("lrda_vote").first(),
+                col("grda_vote").first(),
+                col("other_vote").first(),
+            ])
+            .collect()?)
     }
 
     pub fn len(&self) -> usize {
@@ -541,18 +545,24 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
-    let df = read_eeg_to_df(base_path, eeg_id)?;
+    let path = format!("{}/train_eegs/{}.parquet", base_path, eeg_id);
+
+    eeg_to_tensor_by_path(path, device)
+}
+
+fn eeg_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
+    let df = read_eeg_to_df(path)?;
 
     let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>());
     tensor.set_requires_grad(false);
     Ok(tensor.to_device(device))
 }
 
-pub fn read_eeg_to_df(base_path: &str, eeg_id: &str) -> Result<DataFrame, HbacError> {
+pub fn read_eeg_to_df(path: impl AsRef<Path>) -> Result<DataFrame, HbacError> {
     let scan_conf = ScanArgsParquet::default();
 
     let eeg_df = LazyFrame::scan_parquet(//TODO read_parallel?
-         format!("{}/train_eegs/{}.parquet", base_path, eeg_id),
+         path,
          scan_conf,
     )?;
 
@@ -906,19 +916,115 @@ mod tests {
         //     t.save(format!("/tmp/eegs_for_gpd_fragments_3_1/{}.pt", eeg_split[0]));
         //
         // }
-        let (Some(name), eegs) = read_eeg_index("../../data_down/14_02_results/2024-02-19T07:12:01Z")? else {
-            panic!("no eeg index")
-        };
+        // let (Some(name), eegs) = read_eeg_index("../../data_down/14_02_results/2024-02-19T07:12:01Z")? else {
+        //     panic!("no eeg index")
+        // };
 
-        let save_to = format!("/media/bu/KINGSTON/{}", name);
+
+
+        /*let save_to = format!("/media/bu/KINGSTON/all_eegs.pt");
         fs::create_dir_all(save_to.clone());
-        for eeg in eegs {
-            let t = data::eeg_to_tensor("../../data", eeg.as_str(), Device::Cpu)?;
+        // for eeg in eegs {
+        for (i, f) in fs::read_dir("../../data/train_eegs")?.enumerate() {
+            if i % 1000 == 0 {
+                println!("{} done", i);
+                std::io::stdout().flush()?;
+            }
+            let entry = f?;
 
-            t.save(format!("{}/{}.pt", save_to, eeg));
+            let t = data::eeg_to_tensor_by_path(entry.path(), Device::Cpu)?;
+
+            t.save(format!("{}/{}.pt", save_to, entry.file_name().to_str().map(|v|v.replace(".parquet", ".pt")).unwrap_or(i.to_string())));
+        }*/
+
+        // println!("saved to {}", name);
+
+
+        let df = LazyCsvReader::new("../../data/train.csv")
+            .finish()?
+            .with_streaming(true);
+
+
+        debug!("df={:?}", df.clone().collect()?.head(Some(10)));
+
+
+        let gr_by_eeg_id_df = EEGs::group_by_eeg_id(None, df)?;
+
+        debug!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
+        std::io::stdout().flush()?;
+
+        let mut count = 0;
+
+        fs::create_dir_all("/media/bu/KINGSTON/all_eegs.pt");
+
+        for (eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
+            .column("eeg_id")?.i64()?.into_iter()
+            // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
+            // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
+            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+            .map(|
+                (((((((eeg_id),
+                    // eeg_label_offset_seconds),
+                    seizure_vote),
+                    lpd_vote),
+                    gpd_vote),
+                    lrda_vote),
+                    grda_vote),
+                    other_vote)
+            | {
+                (
+                    eeg_id.unwrap_or_default(),
+                    // eeg_label_offset_seconds.unwrap_or_default(),
+                    seizure_vote.unwrap_or_default(),
+                    lpd_vote.unwrap_or_default(),
+                    gpd_vote.unwrap_or_default(),
+                    lrda_vote.unwrap_or_default(),
+                    grda_vote.unwrap_or_default(),
+                    other_vote.unwrap_or_default(),
+                )
+            })
+        {
+
+            if count % 1000 == 0 {
+                debug!("{} done", count);
+                std::io::stdout().flush()?;
+            }
+
+            // println!("eeg_id={} {} {} {} {} {} {}",
+            //        eeg_id,
+            //        TryInto::<i64>::try_into(seizure_vote).expect("seizure_vote"),
+            //        TryInto::<i64>::try_into(lpd_vote).expect("lpd_vote"),
+            //        TryInto::<i64>::try_into(gpd_vote).expect("gpd_vote"),
+            //        TryInto::<i64>::try_into(lrda_vote).expect("lrda_vote"),
+            //        TryInto::<i64>::try_into(grda_vote).expect("grda_vote"),
+            //        TryInto::<i64>::try_into(other_vote).expect("other_vote")
+            // );
+            // std::io::stdout().flush()?;
+
+            let t = data::eeg_to_tensor("../../data", eeg_id.to_string().as_str(), Device::Cpu)?;
+
+            let path = format!("{}/{}_{}_{}_{}_{}_{}_{}.pt", "/media/bu/KINGSTON/all_eegs.pt",
+                     eeg_id,
+                     TryInto::<i64>::try_into(seizure_vote).expect("seizure_vote"),
+                     TryInto::<i64>::try_into(lpd_vote).expect("lpd_vote"),
+                     TryInto::<i64>::try_into(gpd_vote).expect("gpd_vote"),
+                     TryInto::<i64>::try_into(lrda_vote).expect("lrda_vote"),
+                     TryInto::<i64>::try_into(grda_vote).expect("grda_vote"),
+                     TryInto::<i64>::try_into(other_vote).expect("other_vote")
+            );
+            debug!("{}", path);
+            t.save(path);
+
+            count+=1;
         }
 
-        println!("saved to {}", name);
+        debug!("count={}", count);
+
 
         Ok(())
     }

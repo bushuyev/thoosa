@@ -155,7 +155,7 @@ impl MotifSlice {
 }
 
 /**
-* returns map tensor_id - (group, tensor slice idx, channel)
+* returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
 */
 pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loader:fn(&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError>) -> Result<HashMap<usize, Vec<MotifSlice>>, HbacError>{
 
@@ -163,8 +163,10 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
     let mut tensorid_motifs_sets: HashMap<usize, HashSet<MotifSlice>> = HashMap::new();
 
     for channel_motifs in all_channels_motifs {
+
         debug!("motifs_to_eeg_slices: channel={:?}", channel_motifs.0);
         for group_slices in group_motifs(motif_loader(channel_motifs.1.as_str())?.into_iter()) {
+
             debug!("motifs_to_eeg_slices: group={:?}", group_slices.0);
             //group by tensor(eeg) id to read from eeg files
             for tensor_slice in group_slices.1 {
@@ -197,48 +199,46 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<usize, 
 
     let mut channels_groups_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
 
-    for (eeg_idx, channels_fragments) in eeg_id_fragments_map {
+    for (eeg_idx, channels_motifslices) in eeg_id_fragments_map {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
         let eeg_id = eegs[eeg_idx].clone();
         let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), Device::Cpu)?;
 
-        for fragment in channels_fragments {
+        for fragment in channels_motifslices {
 
             let channel_t = eeg_t.get(fragment.channel_idx as i64);
             let channel_t = channel_t.view([1, -1]);
 
-
-            let fragment_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx + window), 1)?;
+            let motifslice_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx + window), 1)?;
 
             let  mut channels_groups = channels_groups_slices.entry(fragment.channel_idx).or_insert_with(||HashMap::new());
             let  mut groups_slices = channels_groups.entry(fragment.motif_group).or_insert_with(||Vec::new());
 
-            groups_slices.push(fragment_t);
+            groups_slices.push(motifslice_t);
         }
     }
 
-    fn choose_sice(slices:&mut Vec<Tensor>)->Tensor {
+    fn choose_slice(slices:&mut Vec<Tensor>) ->Tensor {
 
          slices.pop().unwrap()//TODO
     }
 
     let groups_num = channels_groups_slices.values().map(|groups_slices|groups_slices.len()).max().expect("groups_num") as i64;
 
-    // println!("channels_motif_tensorsgroups_slices={:?} groups_num={:?}", channels_groups_slices, groups_num);
+    let tensor = Tensor::vstack(
+         (0..channels).map(|channel| channels_groups_slices.remove(&(channel as u16)).expect(format!("no {}", channel).as_str()))
+            .map(|mut groups_slices| groups_slices.values_mut().map(|slices| choose_slice(slices)).collect::<Vec<Tensor>>()).map(|mut group| {
 
-    let tensor = Tensor::vstack((0..channels).map(|channel| channels_groups_slices.remove(&(channel as u16)).expect(format!("no {}", channel).as_str()))
-        .map(|mut groups_slices| groups_slices.values_mut().map(|slices| choose_sice(slices)).collect::<Vec<Tensor>>()).map(|mut group| {
-        // println!("group={:?}", group.len());
-        if (group.len() as i64) < groups_num {
-            group.extend((0..groups_num-group.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, Device::Cpu))))
-        }
+            if (group.len() as i64) < groups_num {
+                group.extend((0..groups_num-group.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, Device::Cpu))))
+            }
 
-        let t = Tensor::vstack(group.as_slice());
+            let t = Tensor::vstack(group.as_slice());
 
-        t.view((groups_num, window))
-    })
-        .collect::<Vec<Tensor>>().as_slice());
+            t.view((groups_num, window))
+        }).collect::<Vec<Tensor>>().as_slice()
+    );
 
     let tensor = tensor.view((channels, groups_num, -1));
     Ok(tensor)
@@ -441,7 +441,7 @@ mod motifs_tests {
      */
 
     #[test]
-    fn test_main(){
+    fn test_group_motifs(){
         let pairs:Vec<(String, String)> = vec![
             ("a".into(), "b".into()),
             ("a".into(), "c".into()),
@@ -454,7 +454,6 @@ mod motifs_tests {
 
         let mut groups = group_motifs(pairs.into_iter());
 
-        println!("groups 0 = ={:?}", groups);
         let group_0 = groups.get_mut(&0).unwrap();
         group_0.sort();
         assert_eq!(&vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()], group_0);
@@ -469,7 +468,7 @@ mod motifs_tests {
     }
 
     #[test]
-    fn test_main_separated(){
+    fn test_group_motifs_separated(){
         let pairs:Vec<(String, String)> = vec![
             ("l".into(), "m".into()),
             ("a".into(), "x".into()),
@@ -482,13 +481,11 @@ mod motifs_tests {
 
         let mut groups = group_motifs(pairs.into_iter());
 
-        println!("groups 0 = ={:?}", groups);
         assert_eq!(groups.len(), 2);
 
         let mut values:Vec<Vec<String>> = groups.values().into_iter().map(|v|v.clone()).collect();
         values.sort_by(|a, b|b.len().cmp(&a.len()));
 
-        println!("values={:?}", values);
 
         let group_0 = values.get_mut(0).unwrap();
         group_0.sort();
@@ -500,21 +497,6 @@ mod motifs_tests {
 
     }
 
-
-    // #[test]
-    fn test_it(){
-        let mut pairs :Vec<(TensorSliceIdx, TensorSliceIdx)> = vec![];
-
-        for j in (0..100) {
-            for i in (0..10_000) {
-                pairs.push((TensorSliceIdx((i + j) as usize, i as i64), TensorSliceIdx(i as usize, i as i64)));
-            }
-        }
-
-        let mut groups = group_motifs(pairs.into_iter());
-
-        println!("len: groups.len={}", groups.len());
-    }
 
     #[test]
     fn test_motifs_to_eeg_slices_1() -> Result<(), HbacError>{

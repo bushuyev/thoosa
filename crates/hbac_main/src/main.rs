@@ -149,6 +149,7 @@ fn main() -> Result<(), HbacError> {
                 let save_to = motifs_eeg_index.0.map(|v|v.replace(".txt", ".pt")).unwrap_or("unknown.pt".into());
 
                 t.save(Path::new(out).join(save_to));
+                //TODO find_good_motifs()
             }
 
         }

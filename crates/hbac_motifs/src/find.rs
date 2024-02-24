@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::Mutex;
@@ -6,7 +8,7 @@ use std::time::Instant;
 use clap::clap_derive::{Args, Parser, Subcommand};
 use log::{debug, info};
 use rayon::iter::{ParallelBridge, ParallelIterator};
-use tch::Tensor;
+use tch::{Device, IndexOp, Tensor};
 
 use hbac_common::HbacError;
 use hbac_common::utils::*;
@@ -258,6 +260,155 @@ impl MotifTracker {
     }
 }
 
+/**
+ * series - [channel x data]
+ * motifs = [channel x motif x data slice]
+ */
+fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
+
+    let channels_num = series.size()[0];
+    let series_len = series.size()[1];
+    let motifs_num = motifs.size()[1];
+    let motif_len = motifs.size()[2];
+
+    //channels, motif, motif x series dots
+    let mut matches:Vec<Vec<Vec<f32>>> = (0..channels_num).fold(Vec::new(), |mut a, v|{
+        a.push((0..motifs_num).fold(Vec::new(), |mut a, _| {
+            a.push(Vec::new());
+            a
+        }));
+        a
+    });
+
+    for i in (0..=series_len-motif_len).step_by(step) {
+        for m in 0..motifs_num {
+
+            let dp = dot_norm(
+                1,
+                &series.i((.., i..i + motif_len)),
+                &motifs.i((.., m, ..))
+            )?;
+            for (channel, dot) in from::<Vec<f32>>(&dp).into_iter().enumerate() {
+                matches[channel][m as usize].push(dot);
+            }
+
+        }
+    }
+
+    let matches = Tensor::vstack(matches.into_iter().map(|channel_motifs| {
+
+        Tensor::from_slice(channel_motifs.into_iter().map(|motifs_dots| {
+
+            motifs_dots.into_iter().map(|v| if v> threshold { 1 } else {0}).sum()
+
+        }).collect::<Vec<i32>>().as_slice())
+
+    }).collect::<Vec<Tensor>>().as_slice());
+
+    Ok(matches)
+}
+
+
+fn dot_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64, limit: i32) -> Result<(), HbacError> {
+    let mut count = 0;
+    let channels_num = motifs.size()[0] as usize;
+    let motifs_num = motifs.size()[1] as usize;
+
+    for f in fs::read_dir(eeg_path)? {
+        let e = f?;
+        let eeg = Tensor::load(e.path())?;
+
+        let matches = clc_dot_matches(&eeg, &motifs, 1000, 0.97)?;
+
+        for motif_i in 0..motifs_num {//TODO
+            for channel_i in 0..channels_num {
+                let motif_t = motifs.i((channel_i as i64, motif_i as i64));
+
+                let v_label = if motif_t.equal(&all_zero) {
+                    (0., class_label)
+                } else {
+                    let v = matches.i((channel_i as i64, motif_i as i64));
+                    let conv_val = v.double_value(&[]);
+                    // println!("channel_i={:?}, motif_i={:?}, v={:?}", channel_i,motif_i, conv_val);
+
+                    (conv_val, class_label)
+                };
+
+                channels_motifs_classes[channel_i][motif_i].0.push(v_label.0);
+                channels_motifs_classes[channel_i][motif_i].1.push(v_label.1);
+            }
+        }
+
+        if count > limit {
+            break
+        }
+        count +=1;
+
+    }
+    Ok(())
+}
+
+
+fn find_good_motifs(motifs_path: &str, tensor_paths_labels:HashMap<&str, f64>, limit: i32) -> Result<Tensor, HbacError> {
+    let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
+
+    let motifs = Tensor::load(motifs_path)?;
+    debug!("motifs={:?}", motifs.size());
+
+    let channels_num = motifs.size()[0];
+    let motifs_num = motifs.size()[1];
+
+    let mut channels_motifs_classes: Vec<Vec<(Vec<f64>, Vec<f64>)>> = Vec::with_capacity(channels_num as usize); // (Vec<f64>, Vec<f64>) - conv. value, class label
+    for i in 0..channels_num {
+
+        let mut motifs_classes = Vec::with_capacity(motifs_num as usize);
+        for i in 0..motifs_num {
+            motifs_classes.push((Vec::with_capacity(400 * tensor_paths_labels.len()), Vec::with_capacity(400 * tensor_paths_labels.len())));//num of eegs of all classes
+        }
+        channels_motifs_classes.push(motifs_classes);
+    }
+
+
+    for (path, label) in tensor_paths_labels {
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, path, label, limit)?;
+    }
+
+
+    let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
+
+    for motif_i in 0..motifs_num {
+        for channel_i in 0..channels_num {
+            let vals_labels_t = Tensor::vstack(&[
+                Tensor::from_slice(channels_motifs_classes[channel_i as usize][motif_i as usize].0.as_slice()),
+                Tensor::from_slice(channels_motifs_classes[channel_i as usize][motif_i as usize].1.as_slice())
+            ]);
+
+            // println!("vals_labels_t={:?}", channels_motifs_classes[channel_i][motif_i]);
+            let corr = vals_labels_t.corrcoef().double_value(&[0, 1]);
+
+            if corr > 0. {
+                debug!("+channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
+
+                channels_good_motifs[channel_i as usize].push(motif_i as i32);
+            } else if corr < 0. {
+                debug!("-channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
+            }
+        }
+    }
+
+    let Some(max_motifs) = channels_good_motifs.iter().map(|c| c.len()).max() else {
+        return Err("No good motifs".into());
+    };
+
+    Ok(Tensor::vstack(channels_good_motifs.into_iter().map(|mut good_motifs_idxs| {
+        for _ in good_motifs_idxs.len()..max_motifs {
+            good_motifs_idxs.push(-1);
+        }
+        Tensor::from_slice(good_motifs_idxs.as_slice())
+    }).collect::<Vec<Tensor>>().as_slice()))
+}
+
+
 #[cfg(test)]
 mod motif_find_tests {
     use std::collections::{HashMap, VecDeque};
@@ -288,6 +439,7 @@ mod motif_find_tests {
     use crate::*;
     use crate::find::MotifTracker;
     use hbac_common::utils::*;
+    use crate::find::find_good_motifs;
     use crate::fragments::{list_motifs, write_motifs_slices};
 
     #[ctor::ctor]
@@ -604,124 +756,20 @@ mod motif_find_tests {
 
     #[test]
     pub fn test_eeg_select_by_corrcoef() -> Result<(), HbacError> {
-        save_good_motifs(
+        find_good_motifs(
             "../../data_local/motif_tensors/seizure_vote_eegs.pt",
             HashMap::from([
                 ("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/", 1.),
-                ("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/", 0.),
-                ("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/", 0.),
                 ("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/", 0.),
+                ("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/", 0.),
                 ("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/", 0.),
+                ("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/", 0.),
                 ("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/", 0.)
-            ]), 10,
-            "../../data_local/motif_tensors/seizure_vote_eegs_good_idx.pt"
-        )
-    }
-
-    fn save_good_motifs(motifs_path: &str, tensor_paths_labels:HashMap<&str, f32>, i1: i32, save_to: &str) -> Result<(), HbacError> {
-        let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
-
-        // for f in fs::read_dir("/tmp/eegs_for_seizure_fragments_3_1/")? {
-        let motifs = Tensor::load(motifs_path)?;
-        println!("motifs={:?}", motifs.size());
-
-        let channels_num = motifs.size()[0];
-        let motifs_num = motifs.size()[1];
-
-        let mut channels_motifs_classes: Vec<Vec<(Vec<f64>, Vec<f64>)>> = Vec::with_capacity(channels_num); // (Vec<f64>, Vec<f64>) - conv. value, class label
-        for i in 0..channels_num {
-
-            let mut motifs_classes = Vec::with_capacity(motifs_num);
-            for i in 0..motifs_num {
-                motifs_classes.push((Vec::with_capacity(400 * tensor_paths_labels.len()), Vec::with_capacity(400 * tensor_paths_labels.len())));//num of eegs of all classes
-            }
-            channels_motifs_classes.push(motifs_classes);
-        }
-
-
-        for (path, label) in tensor_paths_labels {
-            dot_motifs(&motifs_num, &all_zero, &mut channels_motifs_classes, path, label, limit)?;
-        }
-
-        // println!("clc_motifs: {:?}", channels_motifs_classes);
-
-        let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
-
-        for motif_i in 0..motifs_num {
-            for channel_i in 0..channels_num {
-                let vals_labels_t = Tensor::vstack(&[
-                    Tensor::from_slice(channels_motifs_classes[channel_i][motif_i].0.as_slice()),
-                    Tensor::from_slice(channels_motifs_classes[channel_i][motif_i].1.as_slice())
-                ]);
-
-                // println!("vals_labels_t={:?}", channels_motifs_classes[channel_i][motif_i]);
-                let corr = vals_labels_t.corrcoef().double_value(&[0, 1]);
-
-                if corr > 0. {
-                    println!("+channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
-
-                    channels_good_motifs[channel_i].push(motif_i as i32);
-                } else if corr < 0. {
-                    println!("-channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
-                }
-            }
-        }
-
-        let Some(max_motifs) = channels_good_motifs.iter().map(|c| c.len()).max() else {
-            return Err("No good motifs".into());
-        };
-
-        let good_motifs = Tensor::vstack(channels_good_motifs.into_iter().map(|mut good_motifs_idxs| {
-            for _ in good_motifs_idxs.len()..max_motifs {
-                good_motifs_idxs.push(-1);
-            }
-            Tensor::from_slice(good_motifs_idxs.as_slice())
-        }).collect::<Vec<Tensor>>().as_slice());
-        // good_motifs.print();
-
-        good_motifs.save(save_to);
-
-        //
+            ]), 10
+        )?;
 
         Ok(())
     }
-
-    fn dot_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64, limit: i32) -> Result<(), HbacError> {
-        let mut count = 0;
-        for f in fs::read_dir(eeg_path)? {
-            let e = f?;
-            let eeg = Tensor::load(e.path())?;
-
-            let matches = clc_dot_matches(&eeg, &motifs, 1000, 0.97)?;
-
-            for motif_i in 0..120 {//TODO
-                for channel_i in 0..20 {
-                    let motif_t = motifs.i((channel_i as i64, motif_i as i64));
-
-                    let v_label = if motif_t.equal(&all_zero) {
-                        (0., class_label)
-                    } else {
-                        let v = matches.i((channel_i as i64, motif_i as i64));
-                        let conv_val = v.double_value(&[]);
-                        // println!("channel_i={:?}, motif_i={:?}, v={:?}", channel_i,motif_i, conv_val);
-
-                        (conv_val, class_label)
-                    };
-
-                    channels_motifs_classes[channel_i][motif_i].0.push(v_label.0);
-                    channels_motifs_classes[channel_i][motif_i].1.push(v_label.1);
-                }
-            }
-
-            if count > limit {
-                break
-            }
-            count +=1;
-
-        }
-        Ok(())
-    }
-
 
     fn conv_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64) -> Result<(), HbacError> {
         let motifs_flat = motifs.view((20*120, 1, 1000)); //.transpose(0, 1);
@@ -764,53 +812,6 @@ mod motif_find_tests {
         Ok(())
     }
 
-    /**
-    * series - [channel x data]
-    * motifs = [channel x motif x data slice]
-    */
-    fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
-
-        let channels_num = series.size()[0];
-        let series_len = series.size()[1];
-        let motifs_num = motifs.size()[1];
-        let motif_len = motifs.size()[2];
-
-        //channels, motif, motif x series dots
-        let mut matches:Vec<Vec<Vec<f32>>> = (0..channels_num).fold(Vec::new(), |mut a, v|{
-            a.push((0..motifs_num).fold(Vec::new(), |mut a, _| {
-                a.push(Vec::new());
-                a
-            }));
-            a
-        });
-
-        for i in (0..=series_len-motif_len).step_by(step) {
-            for m in 0..motifs_num {
-
-                let dp = dot_norm(
-                    1,
-                    &series.i((.., i..i + motif_len)),
-                    &motifs.i((.., m, ..))
-                )?;
-                for (channel, dot) in from::<Vec<f32>>(&dp).into_iter().enumerate() {
-                    matches[channel][m as usize].push(dot);
-                }
-
-            }
-        }
-
-        let matches = Tensor::vstack(matches.into_iter().map(|channel_motifs| {
-
-            Tensor::from_slice(channel_motifs.into_iter().map(|motifs_dots| {
-
-                motifs_dots.into_iter().map(|v| if v> threshold { 1 } else {0}).sum()
-
-            }).collect::<Vec<i32>>().as_slice())
-
-        }).collect::<Vec<Tensor>>().as_slice());
-
-        Ok(matches)
-    }
 
     fn pool_eeg_vs_fragment(eeg: String, pulse: String) -> Result<Vec<f32>, HbacError> {
         let t = Tensor::load(eeg)?;
@@ -1149,7 +1150,7 @@ mod motif_find_tests {
             ])
         ]).totype(Int);
 
-        assert_eq!(matches_t, clc_dot_matches(&t_0, &motifs_t, 1, 0.99)?);
+        assert_eq!(matches_t, super::clc_dot_matches(&t_0, &motifs_t, 1, 0.99)?);
 
         println!("Ok");
         Ok(())
