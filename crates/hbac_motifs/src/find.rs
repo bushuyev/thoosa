@@ -309,13 +309,13 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
 }
 
 
-fn dot_motifs<F, I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<i64>)>>, eegs_iter_f: F, class_label: i64, limit: i32) -> Result<(), HbacError>
-    where I:Iterator<Item=Result<Tensor, HbacError>>, F:Fn()->Result<I, HbacError> {
+fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<i64>)>>, eegs_iter_f: I, class_label: i64, limit: i32) -> Result<(), HbacError>
+    where I:Iterator<Item=Result<Tensor, HbacError>> {
     let mut count = 0;
     let channels_num = motifs.size()[0] as usize;
     let motifs_num = motifs.size()[1] as usize;
 
-    for eeg in (eegs_iter_f)()? {
+    for eeg in eegs_iter_f {
         // let e = f?;
         // let eeg = Tensor::load(e.path())?;
 
@@ -349,11 +349,11 @@ fn dot_motifs<F, I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes:
 }
 
 
-fn find_good_motifs<F, I>(motifs: &Tensor, labels_loaders:HashMap<i64, F>, limit: i32) -> Result<Tensor, HbacError>
-    where I:Iterator<Item=Result<Tensor, HbacError>>, F:Fn()->Result<I, HbacError>  {
+fn find_good_motifs<I>(motifs: &Tensor, labels_loaders:HashMap<i64, Result<I, HbacError>>, limit: i32) -> Result<Tensor, HbacError>
+    where I:Iterator<Item=Result<Tensor, HbacError>> {
     let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
 
-    debug!("motifs={:?}", motifs.size());
+    debug!("find_good_motifs: motifs={:?}", motifs.size());
 
     let channels_num = motifs.size()[0];
     let motifs_num = motifs.size()[1];
@@ -369,7 +369,7 @@ fn find_good_motifs<F, I>(motifs: &Tensor, labels_loaders:HashMap<i64, F>, limit
     }
 
     for (label, tensors_iter_f) in labels_loaders {
-        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, tensors_iter_f, label, limit)?;
+        dot_motifs(&motifs, &all_zero, &mut channels_motifs_classes, tensors_iter_f?, label, limit)?;
     }
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
@@ -759,12 +759,12 @@ mod motif_find_tests {
          &Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
 
          HashMap::from([
-             (1, || load_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")),
-             (0, || load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")),
-             (0, || load_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")),
-             (0, || load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")),
-             (0, || load_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")),
-             (0, || load_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")),
+             (1, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")),
+             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")),
          ]),
          10
         )?;
@@ -777,8 +777,10 @@ mod motif_find_tests {
     fn load_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> Result<impl Iterator<Item=Result<Tensor, HbacError>>, HbacError> {
 
         fs::read_dir(path).map(|r|
-            r.map(|e_r| e_r.and_then(|e|
+            r.map(|e_r| e_r.and_then(|e| {
+                debug!("load_all_in_dir");
                 Tensor::load(e.path()).map_err(|e| std::io::Error::other(e.to_string()))
+            }
             ).map_err(|e| HbacError::new(e.to_string())))
         ).map_err(|e| HbacError::new(e.to_string()))
     }
