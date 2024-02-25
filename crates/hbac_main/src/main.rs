@@ -79,6 +79,8 @@ fn _main() -> Result<(), HbacError> {
 
     let cli = Cli::parse();
 
+    rayon::ThreadPoolBuilder::new().num_threads(4).build_global()?;
+
     CombinedLogger::init(
         vec![
             TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
@@ -163,9 +165,8 @@ fn _main() -> Result<(), HbacError> {
 
             if let Some(out) =  choose_fragments_params.output_dir() {
                 let save_to = motifs_eeg_index.0.map(|v|v.replace(".txt", ".pt")).unwrap_or("unknown.pt".into());
-
                 t.save(Path::new(out).join(save_to));
-                //TODO find_good_motifs()
+
             }
 
         }
@@ -173,8 +174,6 @@ fn _main() -> Result<(), HbacError> {
         Some(Commands::SelectMotifs(find_good_motifs_params)) => {
 
             debug!("select_motifs: label_tensors()={:?}", find_good_motifs_params.label_tensors());
-
-
 
             let t = select_motifs(
 
@@ -186,8 +185,6 @@ fn _main() -> Result<(), HbacError> {
 
                 cli.limit
             )?;
-
-
 
             t.save(find_good_motifs_params.output_motifs_tensor_path())?;
         }

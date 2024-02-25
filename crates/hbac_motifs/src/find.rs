@@ -12,12 +12,14 @@ use clap::parser::*;
 use clap::clap_derive::{Args, Parser, Subcommand};
 use log::{debug, info};
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use rayon::iter::IntoParallelIterator;
 use tch::{Device, IndexOp, Tensor};
 use hbac_common::utils::*;
 
 use hbac_common::HbacError;
 use hbac_common::utils::*;
 use rayon::iter::IntoParallelRefIterator;
+use torch_sys::C_tensor;
 use crate::TensorSliceIdx;
 
 #[derive(Debug, Args)]
@@ -314,59 +316,59 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
 }
 
 
-fn dot_motifs<I>(motifs: Arc<Mutex<Tensor>>, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<i64>)>>>>, eegs_iter_f: I, class_label: i64, limit: Option<usize>) -> Result<(), HbacError>
+fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<i64>)>>>>, eegs_iter_f: I, class_label: i64, limit: Option<usize>) -> Result<(), HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
     let mut count = AtomicU64::new(0);
 
 
+    let channels_num = motifs.size()[0] as usize;
+    let motifs_num = motifs.size()[1] as usize;
+
     debug!("dot_motifs");
 
 
-    eegs_iter_f.par_bridge().try_for_each(|eeg|{
+    // eegs_iter_f.par_bridge().try_for_each(|eeg|{
+    for eeg in eegs_iter_f {
         // let e = f?;
         // let eeg = Tensor::load(e.path())?;
 
-        if let Ok(motifs_guard) = motifs.lock(){
-            // let matches = clc_dot_matches(&eeg?, &Tensor::from_slice(&[1.,3.]), 1000, 0.97)?;
-            let matches = clc_dot_matches(&eeg?, &motifs_guard, 1000, 0.97)?;
 
-            let channels_num = motifs_guard.size()[0] as usize;
-            let motifs_num = motifs_guard.size()[1] as usize;
+        // let matches = clc_dot_matches(&eeg?, &Tensor::from_slice(&[1.,3.]), 1000, 0.97)?;
+        let matches = clc_dot_matches(&eeg?, &motifs, 1000, 0.97)?;
 
-            for motif_i in 0..motifs_num {
-                for channel_i in 0..channels_num {
-                    // let motif_t = motifs_guard.i((channel_i as i64, motif_i as i64));
+        for motif_i in 0..motifs_num {
+            for channel_i in 0..channels_num {
+                let motif_t = motifs.i((channel_i as i64, motif_i as i64));
 
-                    // let v_label = if motif_t.equal(&all_zero) {
-                        // (0., class_label)
-                    // } else {
-                        let v = matches.i((channel_i as i64, motif_i as i64));
-                        let conv_val = v.double_value(&[]);
-                        //
-                    let v_label = (conv_val, class_label);
-                    // };
-                    //
-                    if let Ok(mut channels_motifs_classes_guard) =  channels_motifs_classes.lock(){
-                        channels_motifs_classes_guard[channel_i][motif_i].0.push(v_label.0);
-                        channels_motifs_classes_guard[channel_i][motif_i].1.push(v_label.1);
-                    }
+                let v_label = if motif_t.equal(&all_zero) {
+                    (0., class_label)
+                } else {
+                    let v = matches.i((channel_i as i64, motif_i as i64));
+                    let conv_val = v.double_value(&[]);
+
+                     (conv_val, class_label)
+                };
+                //
+                if let Ok(mut channels_motifs_classes_guard) =  channels_motifs_classes.lock(){
+                    channels_motifs_classes_guard[channel_i][motif_i].0.push(v_label.0);
+                    channels_motifs_classes_guard[channel_i][motif_i].1.push(v_label.1);
                 }
             }
-
-
-
-            if limit.map(|limit| count.load(Ordering::Relaxed) > limit as u64).unwrap_or(false) {
-                return Ok(())
-            }
-
-            debug!("count={}", count.fetch_add(1, Ordering::Relaxed));
-
         }
 
 
-        Ok::<(), HbacError>(())
 
-    });
+        if limit.map(|limit| count.load(Ordering::Relaxed) > limit as u64).unwrap_or(false) {
+            return Ok(())
+        }
+
+        debug!("count={}", count.fetch_add(1, Ordering::Relaxed));
+
+
+
+
+
+    }
     Ok(())
 }
 
@@ -399,8 +401,8 @@ impl SelectMotifsParams {
 }
 
 pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>) -> Result<Tensor, HbacError>
-    where I:Iterator<Item=Result<Tensor, HbacError>> + Send {
-    let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
+    where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+    // let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
 
     debug!("find_good_motifs: motifs={:?}", motifs.size());
 
@@ -417,12 +419,16 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
         channels_motifs_classes.push(motifs_classes);
     }
 
-    let motifs_lock = Arc::new(Mutex::new(motifs));
+    // let motifs_lock = Arc::new(Mutex::new(motifs));
+    let motifs_ptr = motifs.as_ptr() as usize;
     let channels_motifs_classes_lock = Arc::new(Mutex::new(channels_motifs_classes));
 
-    for (label, tensors_iter_f) in labels_loaders {
-        dot_motifs(Arc::clone(&motifs_lock), &all_zero, Arc::clone(&channels_motifs_classes_lock), tensors_iter_f, label, limit)?;
-    }
+
+    labels_loaders.into_iter().par_bridge().try_for_each(|(label, loader)|{
+        dot_motifs(&unsafe {Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor)}, &Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu)), Arc::clone(&channels_motifs_classes_lock), loader, label, limit)?;
+        Ok::<(), HbacError>(())
+    });
+
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
 
