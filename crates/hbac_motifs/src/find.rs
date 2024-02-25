@@ -5,10 +5,13 @@ use std::io::Write;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use clap::value_parser;
+use clap::parser::*;
 use clap::clap_derive::{Args, Parser, Subcommand};
 use log::{debug, info};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use tch::{Device, IndexOp, Tensor};
+use hbac_common::utils::*;
 
 use hbac_common::HbacError;
 use hbac_common::utils::*;
@@ -309,7 +312,7 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
 }
 
 
-fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<i64>)>>, eegs_iter_f: I, class_label: i64, limit: i32) -> Result<(), HbacError>
+fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<i64>)>>, eegs_iter_f: I, class_label: i64, limit: Option<usize>) -> Result<(), HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> {
     let mut count = 0;
     let channels_num = motifs.size()[0] as usize;
@@ -341,7 +344,7 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &m
             }
         }
 
-        if count > limit {
+        if limit.map(|limit| count > limit).unwrap_or(false) {
             break
         }
         count +=1;
@@ -350,7 +353,35 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &m
     Ok(())
 }
 
-fn find_good_motifs<I>(motifs: &Tensor, labels_loaders:Vec<(i64, I)>, limit: i32) -> Result<Tensor, HbacError>
+#[derive(Debug, Args)]
+pub struct SelectMotifsParams {
+
+    #[arg(long)]
+    motifs_tensor_path: String,
+
+    #[arg(long)]
+    output_motifs_tensor_path: String,
+
+    #[arg(long, value_parser=parse_key_val::<i64, String>)]
+    label_tensors: Vec<(i64, String)>,
+
+}
+
+impl SelectMotifsParams {
+    pub fn motifs_tensor_path(&self) -> &str {
+        &self.motifs_tensor_path
+    }
+    pub fn output_motifs_tensor_path(&self) -> &str {
+        &self.output_motifs_tensor_path
+    }
+
+
+    pub fn label_tensors(&self) -> &Vec<(i64, String)> {
+        &self.label_tensors
+    }
+}
+
+pub fn select_motifs<I>(motifs: &Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>) -> Result<Tensor, HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> {
     let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
 
@@ -407,6 +438,18 @@ fn find_good_motifs<I>(motifs: &Tensor, labels_loaders:Vec<(i64, I)>, limit: i32
     }).collect::<Vec<Tensor>>().as_slice()))
 }
 
+pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> Result<impl Iterator<Item=Result<Tensor, HbacError>>, HbacError> {
+
+    fs::read_dir(path.as_ref()).map(|r|
+        r.map(|e_r| e_r.and_then(|e| {
+                debug!("load_all_in_dir");
+                Tensor::load(e.path()).map_err(|e| std::io::Error::other(e.to_string()))
+            }).map_err(|e| HbacError::new(e.to_string()))
+        )
+    ).map_err(|e| HbacError::new(format!("got {} while reading {:?} ", e, path.as_ref())))
+}
+
+
 
 #[cfg(test)]
 mod motif_find_tests {
@@ -438,8 +481,9 @@ mod motif_find_tests {
     use crate::*;
     use crate::find::MotifTracker;
     use hbac_common::utils::*;
-    use crate::find::find_good_motifs;
+    use crate::find::select_motifs;
     use crate::fragments::{list_motifs, write_motifs_slices};
+    use crate::find::iter_all_in_dir;
 
     #[ctor::ctor]
     fn init() {
@@ -754,20 +798,20 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_find_good_motifs() -> Result<(), HbacError> {
+    pub fn test_select_motifs() -> Result<(), HbacError> {//TODO dummy tensors
 
-        let t = find_good_motifs(
+        let t = select_motifs(
          &Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
 
          vec![
-             (1, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")?),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")?),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")?),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")?),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")?),
-             (0, load_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")?),
+             (1, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")?),
+             (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")?),
+             (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")?),
+             (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")?),
+             (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")?),
+             (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")?),
          ],
-         10
+         Some(3)
         )?;
 
         println!("t={:}", t);
@@ -775,16 +819,6 @@ mod motif_find_tests {
         Ok(())
     }
 
-    fn load_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> Result<impl Iterator<Item=Result<Tensor, HbacError>>, HbacError> {
-
-        fs::read_dir(path).map(|r|
-            r.map(|e_r| e_r.and_then(|e| {
-                debug!("load_all_in_dir");
-                Tensor::load(e.path()).map_err(|e| std::io::Error::other(e.to_string()))
-            }
-            ).map_err(|e| HbacError::new(e.to_string())))
-        ).map_err(|e| HbacError::new(e.to_string()))
-    }
 
     fn conv_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64) -> Result<(), HbacError> {
         let motifs_flat = motifs.view((20*120, 1, 1000)); //.transpose(0, 1);

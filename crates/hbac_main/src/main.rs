@@ -1,11 +1,12 @@
+use std::backtrace::Backtrace;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::str::FromStr;
-use log::{debug, info, LevelFilter};
+use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, Kind, Tensor};
-use hbac_motifs::find::{find_motifs_iter, FindMotifsParams};
+use hbac_motifs::find::{select_motifs, find_motifs_iter, SelectMotifsParams, FindMotifsParams, iter_all_in_dir};
 use crate::data::{clc_records, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
@@ -17,6 +18,7 @@ use hbac_motifs::{find, fragments, TensorSliceIdx};
 use hbac_motifs::fragments::{MotifsToTensorParams, group_motifs, list_motifs, motifs_to_tensor, plot_fragments, PlotFragmentsParams, write_motifs_slices, MotifsToFragmentsParams};
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 mod my_tch;
 mod data;
@@ -43,7 +45,7 @@ struct Cli {
     logfile: String,
 
     #[arg(long, default_value = None )]
-    limit_eeg: Option<usize>,
+    limit: Option<usize>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -56,10 +58,24 @@ enum Commands {
     MotifsToFragments(MotifsToFragmentsParams),
     PlotFragments(PlotFragmentsParams),
     MotifsToTensor(MotifsToTensorParams),
+    SelectMotifs(SelectMotifsParams),
 }
 
 
-fn main() -> Result<(), HbacError> {
+fn main()  {
+    let t1 = Instant::now();
+    match _main() {
+
+        Ok(_) => {
+            info!("All done in {} mls", t1.elapsed().as_millis());
+        }
+
+        Err(e) => {
+            error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
+        }
+    }
+}
+fn _main() -> Result<(), HbacError> {
 
     let cli = Cli::parse();
 
@@ -77,7 +93,7 @@ fn main() -> Result<(), HbacError> {
     };
 
     info!("VERSION: {} device={:?}, base_path={:?} cpus={}", VERSION, device, cli.base_path, std::thread::available_parallelism()?);
-    info!("limit_eeg: {:?}", cli.limit_eeg);
+    info!("limit_eeg: {:?}", cli.limit);
     std::io::stdout().flush()?;
 
     let base_path = cli.base_path.clone();
@@ -89,7 +105,7 @@ fn main() -> Result<(), HbacError> {
 
             let eeg_id_series = data::EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind())?;
 
-            let eeg_id_series = match cli.limit_eeg {
+            let eeg_id_series = match cli.limit {
                 None => {
                     eeg_id_series
                 }
@@ -153,10 +169,32 @@ fn main() -> Result<(), HbacError> {
             }
 
         }
+
+        Some(Commands::SelectMotifs(find_good_motifs_params)) => {
+
+            debug!("select_motifs: label_tensors()={:?}", find_good_motifs_params.label_tensors());
+
+
+
+            let t = select_motifs(
+
+                &Tensor::load(find_good_motifs_params.motifs_tensor_path())?,
+
+                find_good_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
+                    Ok((label_tensors_path.0, iter_all_in_dir(label_tensors_path.1.as_str())?)) //(label, path)
+                }).collect::<Result<Vec<_>, HbacError>>()?,
+
+                cli.limit
+            )?;
+
+
+
+            t.save(find_good_motifs_params.output_motifs_tensor_path())?;
+        }
+
         None => {}
     }
 
-    info!("All done");
     Ok(())
 }
 
@@ -166,6 +204,6 @@ mod main_tests {
 
     #[test]
     fn test_it(){
-        main();
+        // main();
     }
 }

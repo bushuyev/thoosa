@@ -9,6 +9,7 @@ use crate::my_tch::{Fp, LossFp};
 use hbac_common::HbacError;
 
 
+
 pub trait DataBatch {
     fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor);
     fn valid(&self, batch_size:Option<usize>) -> (Tensor, Tensor);
