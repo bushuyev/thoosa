@@ -178,7 +178,7 @@ fn _main() -> Result<(), HbacError> {
 
             let t = select_motifs(
 
-                &Tensor::load(find_good_motifs_params.motifs_tensor_path())?,
+                Tensor::load(find_good_motifs_params.motifs_tensor_path())?,
 
                 find_good_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
                     Ok((label_tensors_path.0, iter_all_in_dir(label_tensors_path.1.as_str())?)) //(label, path)
