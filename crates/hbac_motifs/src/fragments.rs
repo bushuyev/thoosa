@@ -192,7 +192,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 }
 
 /**
-* returns tensor cahnnels x max groups in channels x fist slice in group. Fills with Tensor::zeros when groups in channel < max
+* returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when groups in channel < max
 */
 pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<Tensor, HbacError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {

@@ -166,9 +166,7 @@ fn _main() -> Result<(), HbacError> {
             if let Some(out) =  choose_fragments_params.output_dir() {
                 let save_to = motifs_eeg_index.0.map(|v|v.replace(".txt", ".pt")).unwrap_or("unknown.pt".into());
                 t.save(Path::new(out).join(save_to));
-
             }
-
         }
 
         Some(Commands::SelectMotifs(find_good_motifs_params)) => {
@@ -183,7 +181,8 @@ fn _main() -> Result<(), HbacError> {
                     Ok((label_tensors_path.0, iter_all_in_dir(label_tensors_path.1.as_str())?)) //(label, path)
                 }).collect::<Result<Vec<_>, HbacError>>()?,
 
-                cli.limit
+                cli.limit,
+                1000
             )?;
 
             t.save(find_good_motifs_params.output_motifs_tensor_path())?;

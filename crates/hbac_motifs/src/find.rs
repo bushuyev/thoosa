@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 use clap::value_parser;
 use clap::parser::*;
@@ -295,10 +296,10 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
                 &series.i((.., i..i + motif_len)),
                 &motifs.i((.., m, ..))
             )?;
+
             for (channel, dot) in from::<Vec<f32>>(&dp).into_iter().enumerate() {
                 matches[channel][m as usize].push(dot);
             }
-
         }
     }
 
@@ -316,31 +317,26 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
 }
 
 
-fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<i64>)>>>>, eegs_iter_f: I, class_label: i64, limit: Option<usize>) -> Result<(), HbacError>
+fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<i64>)>>>>, eegs_iter_f: I, class_label: i64, limit: Option<usize>, step: usize, threshold: f32) -> Result<(), HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
-    let mut count = AtomicU64::new(0);
 
+    let mut count = AtomicU64::new(0);
 
     let channels_num = motifs.size()[0] as usize;
     let motifs_num = motifs.size()[1] as usize;
 
-    debug!("dot_motifs");
+    debug!("dot_motifs: channels_num={} motifs_num={}", channels_num, motifs_num);
 
-
-    // eegs_iter_f.par_bridge().try_for_each(|eeg|{
     for eeg in eegs_iter_f {
-        // let e = f?;
-        // let eeg = Tensor::load(e.path())?;
 
-
-        // let matches = clc_dot_matches(&eeg?, &Tensor::from_slice(&[1.,3.]), 1000, 0.97)?;
-        let matches = clc_dot_matches(&eeg?, &motifs, 1000, 0.97)?;
+        let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
 
         for motif_i in 0..motifs_num {
+
             for channel_i in 0..channels_num {
                 let motif_t = motifs.i((channel_i as i64, motif_i as i64));
 
-                let v_label = if motif_t.equal(&all_zero) {
+                let num_matches__label = if motif_t.equal(&all_zero) {
                     (0., class_label)
                 } else {
                     let v = matches.i((channel_i as i64, motif_i as i64));
@@ -348,26 +344,19 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Ar
 
                      (conv_val, class_label)
                 };
-                //
+
                 if let Ok(mut channels_motifs_classes_guard) =  channels_motifs_classes.lock(){
-                    channels_motifs_classes_guard[channel_i][motif_i].0.push(v_label.0);
-                    channels_motifs_classes_guard[channel_i][motif_i].1.push(v_label.1);
+                    channels_motifs_classes_guard[channel_i][motif_i].0.push(num_matches__label.0);
+                    channels_motifs_classes_guard[channel_i][motif_i].1.push(num_matches__label.1);
                 }
             }
         }
-
-
 
         if limit.map(|limit| count.load(Ordering::Relaxed) > limit as u64).unwrap_or(false) {
             return Ok(())
         }
 
         debug!("count={}", count.fetch_add(1, Ordering::Relaxed));
-
-
-
-
-
     }
     Ok(())
 }
@@ -400,14 +389,15 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>) -> Result<Tensor, HbacError>
+pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize) -> Result<Tensor, HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
-    // let all_zero = Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu));
+    let motifs_size = motifs.size();
 
-    debug!("find_good_motifs: motifs={:?}", motifs.size());
+    debug!("select_motifs: find_good_motifs: motifs={:?}", motifs_size);
 
-    let channels_num = motifs.size()[0];
-    let motifs_num = motifs.size()[1];
+    let channels_num = motifs_size[0];
+    let motifs_num = motifs_size[1];
+    let slice_len = motifs_size[2];
 
     let mut channels_motifs_classes: Vec<Vec<(Vec<f64>, Vec<i64>)>> = Vec::with_capacity(channels_num as usize); // (Vec<f64>, Vec<f64>) - conv. value, class label
     for i in 0..channels_num {
@@ -419,22 +409,28 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
         channels_motifs_classes.push(motifs_classes);
     }
 
-    // let motifs_lock = Arc::new(Mutex::new(motifs));
+
     let motifs_ptr = motifs.as_ptr() as usize;
     let channels_motifs_classes_lock = Arc::new(Mutex::new(channels_motifs_classes));
 
 
     labels_loaders.into_iter().par_bridge().try_for_each(|(label, loader)|{
-        dot_motifs(&unsafe {Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor)}, &Tensor::zeros(1000, (tch::Kind::Float, Device::Cpu)), Arc::clone(&channels_motifs_classes_lock), loader, label, limit)?;
-        Ok::<(), HbacError>(())
+        dot_motifs(
+            &unsafe {Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor)},
+            &Tensor::zeros(slice_len, (tch::Kind::Float, Device::Cpu)), //TODO
+            Arc::clone(&channels_motifs_classes_lock),
+            loader, label, limit, step, 0.97 //TODO step - k * slice_len
+        )
     });
-
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
 
     let Ok(channels_motifs_classes_guard) = channels_motifs_classes_lock.lock() else {
-        panic!("can't lock channels_motifs_classes_lock");
+        panic!("select_motifs: can't lock channels_motifs_classes_lock");
     };
+
+    debug!("select_motifs: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard);
+
     for motif_i in 0..motifs_num {
         for channel_i in 0..channels_num {
             let vals_labels_t = Tensor::vstack(&[
@@ -442,15 +438,14 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
                 Tensor::from_slice(channels_motifs_classes_guard[channel_i as usize][motif_i as usize].1.as_slice())
             ]);
 
-            // println!("vals_labels_t={:?}", channels_motifs_classes[channel_i][motif_i]);
             let corr = vals_labels_t.corrcoef().double_value(&[0, 1]);
 
             if corr > 0. {
-                debug!("+channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
+                debug!("select_motifs: +channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
 
                 channels_good_motifs[channel_i as usize].push(motif_i as i32);
-            } else if corr < 0. {
-                debug!("-channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
+            } else {
+                debug!("select_motifs: -channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
             }
         }
     }
@@ -471,7 +466,7 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> Result<impl Iterato
 
     fs::read_dir(path.as_ref()).map(|r|
         r.map(|e_r| e_r.and_then(|e| {
-                debug!("load_all_in_dir");
+                debug!("select_motifs: load_all_in_dir");
                 Tensor::load(e.path()).map_err(|e| std::io::Error::other(e.to_string()))
             }).map_err(|e| HbacError::new(e.to_string()))
         )
@@ -495,6 +490,7 @@ mod motif_find_tests {
     use std::time::Instant;
     use plotters::prelude::*;
     use tch::IndexOp;
+    use std::path::Path;
 
     use chrono::Utc;
     use log::{debug, LevelFilter, SetLoggerError};
@@ -515,6 +511,7 @@ mod motif_find_tests {
     use crate::find::select_motifs;
     use crate::fragments::{list_motifs, write_motifs_slices};
     use crate::find::iter_all_in_dir;
+    use hbac_common::utils::cdt_for_dir;
 
     #[ctor::ctor]
     fn init() {
@@ -831,12 +828,64 @@ mod motif_find_tests {
     #[test]
     pub fn test_select_motifs() -> Result<(), HbacError> {//TODO dummy tensors
 
-        let t = select_motifs(
-         Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
 
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+
+        fs::create_dir_all(test_dir.clone());
+        fs::create_dir_all(test_dir.clone().join("0"));
+        fs::create_dir_all(test_dir.clone().join("1"));
+
+        //as build in motifs_to_tensor - channels x  motif  x slice
+        let motifs_tensor = //Tensor::vstack(&[
+            Tensor::vstack(&[//channel 0
+                Tensor::vstack( &[ //
+                    Tensor::from_slice(&[1., 0., 1.]),//motif 0 first slice - good motif, matches tensors in "0" and does not matches tensors in 1
+                    Tensor::from_slice(&[1., 2., 3.]) //motif 1 first slice - bad motif, matches tensors in "1" and does not matches tensors in 0
+                ]).view((2, 3)),
+                Tensor::vstack( &[//channel 1
+                    Tensor::from_slice(&[4., 5., 6.]),//motif 0 first slice - bad motif,
+                    Tensor::from_slice(&[2., 2., 0.]) //motif 1 first slice - good motif,
+                ]).view((2, 3)),
+            ]).view((2, 2, 3));
+
+
+        // tensors with matches
+        let t_0_0 = Tensor::vstack( &[
+            Tensor::from_slice(&[0., 0., 1., 0., 1., 0.]),//channel 0
+            Tensor::from_slice(&[1., 1., 0., 1., 0., 0.]) //channel 1
+        ]).view((2, 6));
+
+        t_0_0.save(test_dir.join("0").join("t_0_0.pt"));
+
+        let t_0_1 = Tensor::vstack( &[
+            Tensor::from_slice(&[0., 0., 1., 0., 1., 0.]),//channel 0
+            Tensor::from_slice(&[0., 2., 2., 0., 0., 0.]) //channel 1
+        ]).view((2, 6));
+
+        t_0_1.save(test_dir.join("0").join("t_0_1.pt"));
+
+        // tensors without matches
+        let t_1_0 = Tensor::vstack( &[
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]),//channel 0
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]) //channel 1
+        ]).view((2, 6));
+
+        t_1_0.save(test_dir.join("1").join("t_1_0.pt"));
+
+        let t_1_1 = Tensor::vstack( &[
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]),//channel 0
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]) //channel 1
+        ]).view((2, 6));
+
+        t_1_1.save(test_dir.join("1").join("t_1_1.pt"));
+
+
+        let t = select_motifs(
+         // Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
+            motifs_tensor,
          vec![
-             (1, iter_all_in_dir("/media/bu/KINGSTON/test_eegs_0/")?),
-             (0, iter_all_in_dir("/media/bu/KINGSTON/test_eegs_1/")?),
+             (1, iter_all_in_dir(test_dir.join("0"))?),
+             (0, iter_all_in_dir(test_dir.join("1"))?),
 
              // (1, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")?),
              // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")?),
@@ -845,10 +894,13 @@ mod motif_find_tests {
              // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")?),
              // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")?),
          ],
-         Some(3)
+         Some(3),
+            1
         )?;
 
-        println!("t={:}", t);
+
+        assert_eq!(0, t.f_int64_value(&[0,0])?); //motif 0 is good for channel 0
+        assert_eq!(1, t.f_int64_value(&[1,0])?); //motif 1 is good for channel 1
 
         Ok(())
     }
@@ -1205,10 +1257,10 @@ mod motif_find_tests {
 
         let motifs_t = Tensor::vstack(&[
             Tensor::vstack(&[ //channel 0
-                Tensor::from_slice(&[1.,  1.,  1.]),//motif 0
-                Tensor::from_slice(&[1.,  2.,  2.]),//motif 1
-                Tensor::from_slice(&[3.,  3.,  1.]),//motif 2
-                Tensor::from_slice(&[1.,  7.,  1.]),//motif 3
+                Tensor::from_slice(&[1.,  1.,  1.]),//motif 0  - matches 1.,  1.,  1. and  2.,  2.,  2.,
+                Tensor::from_slice(&[1.,  2.,  2.]),//motif 1  - matches  1.,  2.,  2. and  2.,  3.,  3.,
+                Tensor::from_slice(&[3.,  3.,  1.]),//motif 2  - matches 3.,  3.,  1.
+                Tensor::from_slice(&[1.,  7.,  1.]),//motif 3  - no matches
             ]),
             Tensor::vstack(&[//channel 1
                 Tensor::from_slice(&[10.,  10.,  10.]),//motif 0
@@ -1235,7 +1287,6 @@ mod motif_find_tests {
 
         assert_eq!(matches_t, super::clc_dot_matches(&t_0, &motifs_t, 1, 0.99)?);
 
-        println!("Ok");
         Ok(())
     }
 

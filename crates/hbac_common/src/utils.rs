@@ -144,14 +144,19 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
+pub fn cdt_for_dir() ->String {
+    cdt().replace(':', "_").replace('+', "_")
+}
+
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::utils::cdt;
 
     #[test]
-    fn test_cdt(){
-        println!("{}", cdt().replace(':', "_").replace('+', "_"));
+    fn test_cdt_for_dir(){
+        println!("{}", super::cdt_for_dir() );
+        assert_eq!(false, super::cdt_for_dir().contains(":"))
     }
 }
 
