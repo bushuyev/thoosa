@@ -77,6 +77,7 @@ fn main()  {
 }
 fn _main() -> Result<(), HbacError> {
 
+
     let cli = Cli::parse();
 
     rayon::ThreadPoolBuilder::new().num_threads(4).build_global()?;
@@ -151,6 +152,7 @@ fn _main() -> Result<(), HbacError> {
 
         Some(Commands::MotifsToTensor(choose_fragments_params)) => {
             let motifs_eeg_index = read_eeg_index(choose_fragments_params.motifs_dir())?;
+
             let t = motifs_to_tensor(
                 cli.base_path.as_str(),
                 fragments::motifs_to_eeg_slices(

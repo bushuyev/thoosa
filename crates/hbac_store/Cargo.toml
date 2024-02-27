@@ -1,0 +1,13 @@
+[package]
+name = "hbac_store"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+log = "0.4.20"
+simplelog = "0.12.1"
+
+rusqlite = { version = "0.31.0", features = ["bundled"] }

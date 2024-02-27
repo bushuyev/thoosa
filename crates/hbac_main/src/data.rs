@@ -1097,7 +1097,14 @@ mod tests {
     // }
     #[test]
     pub fn test_test()-> Result<(), HbacError> {
-        // let good_eegs = crate::data::EEGs::good_eegs("../../data")?;
+        // let good_eegs = EEGs::good_eegs("../../data")?;
+        let good_eegs = EEGs::good_eegs_filter("../../data")?;
+
+        let good_df = good_eegs.collect()?;
+
+        println!("good_df={:?}", good_df.head(Some(100)));
+
+        // good_eegs
 
         // let df = LazyCsvReader::new(format!("{}/train.csv", "../../data"))
         //     .finish()?

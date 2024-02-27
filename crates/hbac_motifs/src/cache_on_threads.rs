@@ -111,19 +111,24 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         self.data_loaded.get(key)
     }
 
-    fn update_loaded(&mut self) {
-        let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
-
-        if self.keys_fifo.len() > 3 { //TODO 3
-            if let Some(key_to_remove) = self.keys_fifo.pop_front() {
+    fn purge_fifo(keys_fifo:&mut VecDeque<K>, max_keys_fifo:usize, data_being_loaded_guard:&mut HashMap<K, Arc<Mutex<Option<V>>>>, data_loaded:&mut HashMap<K, V>){
+        if keys_fifo.len() > max_keys_fifo {
+            if let Some(key_to_remove) = keys_fifo.pop_front() {
                 debug!("removing {:?} ", key_to_remove);
                 let entry_mutex = data_being_loaded_guard.entry(key_to_remove.clone()).or_insert_with(|| Arc::new(Mutex::new(None)));
                 entry_mutex.lock().expect("entry_mutex for key_to_remove");
 
-                self.data_loaded.remove(&key_to_remove);
+                data_loaded.remove(&key_to_remove);
                 data_being_loaded_guard.remove(&key_to_remove);
             }
         }
+    }
+
+    fn update_loaded(&mut self) {
+        let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
+
+        Self::purge_fifo(&mut self.keys_fifo, self.max_keys_fifo, &mut data_being_loaded_guard, &mut self.data_loaded);
+        
 
         for (key, entry_mutex) in data_being_loaded_guard.iter() {
             let mut entry_mutex_guard = entry_mutex.lock().expect("");
@@ -142,16 +147,8 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         debug!("loading {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
         if !self.data_loaded.contains_key(k) {
 
-            if self.keys_fifo.len() > 3 { //TODO 3
-                if let Some(key_to_remove) = self.keys_fifo.pop_front() {
-                    debug!("removing {:?} ", key_to_remove);
-                    let entry_mutex = data_being_loaded_guard.entry(key_to_remove.clone()).or_insert_with(|| Arc::new(Mutex::new(None)));
-                    entry_mutex.lock().expect("entry_mutex for key_to_remove");
-
-                    self.data_loaded.remove(&key_to_remove);
-                    data_being_loaded_guard.remove(&key_to_remove);
-                }
-            }
+            Self::purge_fifo(&mut self.keys_fifo, self.max_keys_fifo, &mut data_being_loaded_guard, &mut self.data_loaded);
+           
             self.keys_fifo.push_back(k.clone());
 
             let entry_mutex = data_being_loaded_guard.entry(k.clone()).or_insert_with(|| Arc::new(Mutex::new(None)));

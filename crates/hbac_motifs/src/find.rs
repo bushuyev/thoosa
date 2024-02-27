@@ -54,7 +54,8 @@ impl FindMotifsParams {
     }
 }
 
-pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>) -> Result<(), HbacError> where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>) -> Result<(), HbacError>
+    where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let slots_to_compare = (records_num - cli.window) / cli.step;
     let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare;

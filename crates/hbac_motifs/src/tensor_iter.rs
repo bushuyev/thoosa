@@ -232,6 +232,7 @@ impl CacheOnThreadsStore {
 }
 
 impl TensorsStore for CacheOnThreadsStore {
+
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
 
         if index + self.preload_d < self.keys.len() && index % self.preload_d == 0 {

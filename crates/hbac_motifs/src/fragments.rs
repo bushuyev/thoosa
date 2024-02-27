@@ -165,7 +165,9 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
     for channel_motifs in all_channels_motifs {
 
         debug!("motifs_to_eeg_slices: channel={:?}", channel_motifs.0);
-        for group_slices in group_motifs(motif_loader(channel_motifs.1.as_str())?.into_iter()) {
+        let motifs = group_motifs(motif_loader(channel_motifs.1.as_str())?.into_iter());
+
+        for group_slices in motifs {
 
             debug!("motifs_to_eeg_slices: group={:?}", group_slices.0);
             //group by tensor(eeg) id to read from eeg files
