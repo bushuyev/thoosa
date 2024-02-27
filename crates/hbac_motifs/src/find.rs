@@ -71,15 +71,8 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
     }
 
 
-    let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(false)
-        .open(format!("{}/{}_eegs.txt", motifs_dir, cli.kind))
-        .unwrap();
+    let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
 
-    write!(file, "{:?}", eeg_ids_str);
 
     find_motifs_iter(
         loader,
@@ -100,7 +93,7 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
 pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize, max_keys_fifo: usize, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
-    let run_id = {store.lock()?.save_run("some")}?;
+    let run_id = {store.lock()?.save_run("some", &keys)}?;
 
     let all_mt = min_dot
         .into_iter()

@@ -33,7 +33,7 @@ impl StoreDumper {
 
 
 pub trait Store:Sync + Send{
-    fn save_run(&mut self, name:&str) -> Result<usize, crate::StoreError>;
+    fn save_run(&mut self, name:&str, keys:&Vec<String>) -> Result<usize, crate::StoreError>;
     fn save_slices(&mut self, run_id:usize, name:&str, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), crate::StoreError>;
 }
 
@@ -50,11 +50,26 @@ pub struct SqlStore {
 
 impl Store for SqlStore {
 
-    fn save_run(&mut self, name:&str) -> Result<usize, crate::StoreError> {
+    fn save_run(&mut self, name:&str, keys:&Vec<String>) -> Result<usize, crate::StoreError> {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
         let run_id = t.execute("INSERT INTO matches_run (name) VALUES (?)", params![name])?;
+
+
+        let (mut q, params) = keys.into_iter().fold(
+            (vec!["INSERT INTO run_resources (run_id, key) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+                a.0.push("(?, ?)");
+                a.0.push(", ");
+                a.1.push(Value::Integer(run_id as i64));
+                a.1.push(Value::Text(v.clone()));
+                a
+            });
+
+        q.pop();
+
+        t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+
 
         t.commit();
 
@@ -142,6 +157,13 @@ impl SqlStore {
             )", ())?;
 
             t.execute(
+                "CREATE TABLE IF NOT EXISTS run_resources (
+                id         INTEGER PRIMARY KEY,
+                run_id     REFERENCES matches_run(id) ON DELETE CASCADE,
+                key        VARCHAR(256)
+            )", ())?;
+
+            t.execute(
             "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
                 run_id          REFERENCES matches_run(id) ON DELETE CASCADE,
@@ -217,6 +239,7 @@ mod store_tests{
     use std::error::Error;
     use std::fs;
     use rusqlite::Connection;
+    use rusqlite::types::Value;
     use crate::{SqlStore, Store, StoreError};
 
 
@@ -265,8 +288,7 @@ mod store_tests{
             ((1usize, 100i64), (1usize, 200i64), 0.92),
         ];
 
-        println!("map: {:?}",  map);
-        let run_id= store.save_run("test")?;
+        let run_id= store.save_run("test", &vec!["aaa".to_string(), "bbb".to_string()])?;
         store.save_slices(run_id, "seizure_400", 0, map)?;
 
         {
@@ -274,10 +296,20 @@ mod store_tests{
             let t2 = guard.transaction()?;
             let mut stmt = t2.prepare("SELECT * FROM slice_matches")?;
 
-            let mut rows = stmt.query([])?;
-            while let Some(row) = rows.next()? {
-                println!("row={:?}", row);
-            }
+            let mut rows = stmt.query_map([], |row| {
+                Ok((row.get(0)?,  row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?.map(|v|v.unwrap()).collect::<Vec<(i64, i64, i64, i64, i64)>>();
+
+            assert_eq!(vec![(1, 1, 0, 0, 100), (2, 1, 0, 1, 100)], rows);
+
+            let mut stmt = t2.prepare("SELECT * FROM run_resources")?;
+
+            let mut rows = stmt.query_map([], |row| {
+                Ok((row.get(1)?,  row.get(2)?))
+            })?.map(|v|v.unwrap()).collect::<Vec<(usize, String)>>();
+
+
+            assert_eq!(vec![(1usize, "aaa".to_string()), (1usize, "bbb".to_string())], rows)
 
         }
 
