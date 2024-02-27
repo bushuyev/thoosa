@@ -18,6 +18,7 @@ use hbac_motifs::{find, fragments, TensorSliceIdx};
 use hbac_motifs::fragments::{MotifsToTensorParams, group_motifs, list_motifs, motifs_to_tensor, plot_fragments, PlotFragmentsParams, write_motifs_slices, MotifsToFragmentsParams};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use hbac_store::SqlStore;
 
@@ -78,7 +79,7 @@ fn main()  {
 }
 fn _main() -> Result<(), HbacError> {
 
-    let mut store = SqlStore::new("hbac.db3")?;
+    let store = Arc::new(Mutex::new(SqlStore::new("hbac.db3")?));
 
     let cli = Cli::parse();
 
@@ -129,7 +130,7 @@ fn _main() -> Result<(), HbacError> {
                 find_motifs_params,
                 records_num,
                 eeg_id_series.i64()?.into_iter(),
-                &mut store
+                Arc::clone(&store)
             )?;
         }
 

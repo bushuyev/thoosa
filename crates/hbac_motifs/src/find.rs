@@ -25,7 +25,7 @@ use torch_sys::C_tensor;
 use crate::TensorSliceIdx;
 use hbac_store::Store;
 use hbac_store::StoreDumper;
-
+use std::cell::RefCell;
 
 #[derive(Debug, Args)]
 pub struct FindMotifsParams {
@@ -58,7 +58,7 @@ impl FindMotifsParams {
     }
 }
 
-pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>, store:&mut impl Store) -> Result<(), HbacError>
+pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let slots_to_compare = (records_num - cli.window) / cli.step;
@@ -97,14 +97,16 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
 }
 
 //TODO min_dot len should be == channels
-pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize, max_keys_fifo: usize, store:&mut impl Store) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize, max_keys_fifo: usize, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
+    where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
+    let run_id = {store.lock()?.save_run("some")}?;
 
     let all_mt = min_dot
         .into_iter()
         .enumerate()
         // .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<FileDumper>::new(min_dot, FileDumper::new(format!("{}/motifs_{}.csv", motifs_dir.clone(), i).as_str()))))
-        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(store, "seizure_400".into(), i))))//TODO name
+        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, "seizure_400".into(), i))))//TODO name
         .collect::<Vec<Mutex<SimpMotifTracker<_>>>>();
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
@@ -145,11 +147,13 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
     }
 
     debug!("saved to {:?}", motifs_dir);
+
+    Ok(())
 }
 
 
 pub trait MotifDumper {
-    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>);
+    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) -> Result<(), HbacError>;
 }
 
 #[derive(Debug)]
@@ -179,21 +183,25 @@ impl FileDumper {
 }
 
 impl MotifDumper for FileDumper {
-    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) {
+    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) -> Result<(), HbacError> {
         for motif in motifs.iter() {
             writeln!(self.file, "{}, {},  {:.3}", motif.0, motif.1, motif.2);
         }
         self.file.flush();
 
+        Ok(())
+
     }
 }
 
 
-impl MotifDumper for StoreDumper<'_> {
+impl MotifDumper for StoreDumper {
 
-    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) {
+    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) -> Result<(), HbacError>{
 
-        self.store.save_slices(self.name.as_str(), self.channel as i64,  motifs.into_iter().map(|v|((v.0.0, v.0.1), (v.1.0, v.1.1), v.2)).collect::<Vec<_>>());//TODO move TensorSliceIdx to shared
+        self.store.lock()?.save_slices(self.run_id, self.name.as_str(), self.channel as i64,  motifs.into_iter().map(|v|((v.0.0, v.0.1), (v.1.0, v.1.1), v.2)).collect::<Vec<_>>());//TODO move TensorSliceIdx to shared
+
+        Ok(())
 
     }
 }
@@ -225,6 +233,7 @@ impl <D:MotifDumper+Debug> SimpMotifTracker<D> {
     }
 
     fn dump(&mut self) {
+        debug!("SimpMotifTracker::dump: self.motifs={}", self.motifs.len());
        self.dumper.dump(&mut self.motifs);
        self.motifs.clear();
     }
