@@ -639,7 +639,7 @@ mod motifs_tests {
 
     #[test]
     fn test_motif_to_iter() -> Result<(), HbacError>{
-        let motifs = &super::list_motifs("../../data_local/motifs/2024-02-15T18:04:50+01:00")?;
+        let motifs = &super::list_motifs("../../data_local/motifs/2024-02-18T21:08:49+01:00")?;
 
         assert_eq!(motifs.len(), 20);
         assert_eq!((0..20).collect::<Vec<u16>>(), motifs.into_iter().map(|v|v.0).collect::<Vec<u16>>());

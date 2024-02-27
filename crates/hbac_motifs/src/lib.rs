@@ -4,7 +4,6 @@ use std::fmt::Display;
 use std::sync::{Arc, Mutex};
 
 use log::debug;
-use tch::{Device, Kind, Tensor};
 use rand::Rng;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 

@@ -1073,6 +1073,7 @@ dependencies = [
  "ctor",
  "futures",
  "hbac_common",
+ "hbac_store",
  "log",
  "plotters",
  "rand",

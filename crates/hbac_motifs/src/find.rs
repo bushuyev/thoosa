@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -22,6 +23,9 @@ use hbac_common::utils::*;
 use rayon::iter::IntoParallelRefIterator;
 use torch_sys::C_tensor;
 use crate::TensorSliceIdx;
+use hbac_store::Store;
+use hbac_store::StoreDumper;
+
 
 #[derive(Debug, Args)]
 pub struct FindMotifsParams {
@@ -54,7 +58,7 @@ impl FindMotifsParams {
     }
 }
 
-pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>) -> Result<(), HbacError>
+pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>, store:&mut impl Store) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let slots_to_compare = (records_num - cli.window) / cli.step;
@@ -87,17 +91,21 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
         motifs_dir.as_str(),
         cli.preload_d,
         cli.max_keys_fifo,
+        store
     );
     Ok(())
 }
 
-pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize, max_keys_fifo: usize) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+//TODO min_dot len should be == channels
+pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize, max_keys_fifo: usize, store:&mut impl Store) where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+
 
     let all_mt = min_dot
         .into_iter()
         .enumerate()
-        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::new(min_dot, format!("{}/motifs_{}.csv", motifs_dir.clone(), i).as_str())))
-        .collect::<Vec<Mutex<SimpMotifTracker>>>();
+        // .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<FileDumper>::new(min_dot, FileDumper::new(format!("{}/motifs_{}.csv", motifs_dir.clone(), i).as_str()))))
+        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(store, "seizure_400".into(), i))))//TODO name
+        .collect::<Vec<Mutex<SimpMotifTracker<_>>>>();
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
         Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys, preload_d, max_keys_fifo)),
@@ -140,20 +148,21 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
 }
 
 
+pub trait MotifDumper {
+    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>);
+}
+
 #[derive(Debug)]
-pub(crate) struct SimpMotifTracker {
-    motifs:Vec<(TensorSliceIdx, TensorSliceIdx, f32)>,//i_0, match_0, match_1, dot
-    min_dot: f32,
-    i_0: TensorSliceIdx,
+pub struct FileDumper {
     file:File,
 }
 
-impl SimpMotifTracker {
-    pub fn new(min_dot:f32, path: &str) -> Self {
-        match std::fs::remove_file(path) {
+impl FileDumper {
+    pub fn new(path: &str) -> Self {
+        /*match std::fs::remove_file(path) {
             Ok(_) => {}
             Err(_) => {}
-        }
+        }*/
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -162,11 +171,50 @@ impl SimpMotifTracker {
             .open(path)
             .unwrap();
 
+
+        Self {
+            file
+        }
+    }
+}
+
+impl MotifDumper for FileDumper {
+    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) {
+        for motif in motifs.iter() {
+            writeln!(self.file, "{}, {},  {:.3}", motif.0, motif.1, motif.2);
+        }
+        self.file.flush();
+
+    }
+}
+
+
+impl MotifDumper for StoreDumper<'_> {
+
+    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) {
+
+        self.store.save_slices(self.name.as_str(), self.channel as i64,  motifs.into_iter().map(|v|((v.0.0, v.0.1), (v.1.0, v.1.1), v.2)).collect::<Vec<_>>());//TODO move TensorSliceIdx to shared
+
+    }
+}
+
+
+#[derive(Debug)]
+pub(crate) struct SimpMotifTracker<D:MotifDumper+Debug> {
+    motifs:Vec<(TensorSliceIdx, TensorSliceIdx, f32)>,//i_0, match_0, match_1, dot
+    min_dot: f32,
+    i_0: TensorSliceIdx,
+    dumper:D
+}
+
+impl <D:MotifDumper+Debug> SimpMotifTracker<D> {
+
+    pub fn new(min_dot:f32, dumper:D) -> SimpMotifTracker<D> {
         Self {
             min_dot,
             motifs: vec![],
             i_0: TensorSliceIdx(0, 0),
-            file,
+            dumper
         }
     }
 
@@ -177,12 +225,8 @@ impl SimpMotifTracker {
     }
 
     fn dump(&mut self) {
-        for motif in self.motifs.iter() {
-            writeln!(self.file, "{}, {},  {:.3}", motif.0, motif.1, motif.2);
-        }
-        self.file.flush();
-        self.motifs.clear();
-
+       self.dumper.dump(&mut self.motifs);
+       self.motifs.clear();
     }
 
 
@@ -507,7 +551,7 @@ mod motif_find_tests {
     use torch_sys::C_tensor;
 
     use crate::*;
-    use crate::find::MotifTracker;
+    use crate::find::{FileDumper, MotifTracker};
     use hbac_common::utils::*;
     use crate::find::select_motifs;
     use crate::fragments::{list_motifs, write_motifs_slices};
@@ -1121,7 +1165,7 @@ mod motif_find_tests {
         let t1 = Instant::now();
 
 
-        let mut mt = super::SimpMotifTracker::new(0.9, "/tmp/test_motifs.csv");
+        let mut mt = super::SimpMotifTracker::new(0.9, FileDumper::new("/tmp/test_motifs.csv"));
 
         let dim = 1;
 
@@ -1156,17 +1200,16 @@ mod motif_find_tests {
 
         // mt.dump();
 
-        plot_series(
-            vec![
-                (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c)).collect::<Vec<(f32, f32)>>()),
-                // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
-                // (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_2_c)).collect::<Vec<(f32, f32)>>()),
-                // (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
-
-            ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        )?;
+        // plot_series(
+        //     vec![
+        //         (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c)).collect::<Vec<(f32, f32)>>()),
+        //         // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
+        //         // (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_2_c)).collect::<Vec<(f32, f32)>>()),
+        //         // (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
+        //
+        //     ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        // )?;
         // find_motifs();
-        println!("ok");
 
         Ok(())
     }

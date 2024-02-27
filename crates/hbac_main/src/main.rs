@@ -19,6 +19,8 @@ use hbac_motifs::fragments::{MotifsToTensorParams, group_motifs, list_motifs, mo
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
+use hbac_store::SqlStore;
+
 
 mod my_tch;
 mod data;
@@ -26,7 +28,6 @@ mod builder;
 mod utils;
 mod simp;
 mod version;
-
 
 
 #[derive(Parser)]
@@ -77,6 +78,7 @@ fn main()  {
 }
 fn _main() -> Result<(), HbacError> {
 
+    let mut store = SqlStore::new("hbac.db3")?;
 
     let cli = Cli::parse();
 
@@ -126,7 +128,8 @@ fn _main() -> Result<(), HbacError> {
                 },
                 find_motifs_params,
                 records_num,
-                eeg_id_series.i64()?.into_iter()
+                eeg_id_series.i64()?.into_iter(),
+                &mut store
             )?;
         }
 

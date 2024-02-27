@@ -8,6 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 hbac_common = {path = "../hbac_common"}
+hbac_store = {path = "../hbac_store"}
 tch = { version = "0.14.0" }
 torch-sys = "0.14.0"
 sci-rs = "0.3.8"
