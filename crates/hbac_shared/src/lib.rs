@@ -4,7 +4,8 @@ use log::debug;
 use std::fmt::Display;
 use std::backtrace::Backtrace;
 
-pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
+//group of similar slices - motif
+pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
     let mut pairs_groups: HashMap<T, u16> = HashMap::new();
     let mut last_group = 0u16;
 
@@ -36,7 +37,7 @@ pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
 
     debug!("separated_groups={:?}", separated_groups);
     let separated_groups_map = if !separated_groups.is_empty() {
-        let map = group_motifs(separated_groups.into_iter()).values().fold(HashMap::new(), |mut h, v| {
+        let map = group_slices(separated_groups.into_iter()).values().fold(HashMap::new(), |mut h, v| {
             for i in v.iter().skip(1) {
                 h.insert(v[0], *i);
             }
@@ -78,7 +79,7 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use crate::group_motifs;
+    use crate::group_slices;
 
     #[test]
     fn test_group_motifs(){
@@ -92,7 +93,7 @@ mod shared_tests {
         ];
 
 
-        let mut groups = group_motifs(pairs.into_iter());
+        let mut groups = group_slices(pairs.into_iter());
 
         let group_0 = groups.get_mut(&0).unwrap();
         group_0.sort();
@@ -119,7 +120,7 @@ mod shared_tests {
         ];
 
 
-        let mut groups = group_motifs(pairs.into_iter());
+        let mut groups = group_slices(pairs.into_iter());
 
         assert_eq!(groups.len(), 2);
 

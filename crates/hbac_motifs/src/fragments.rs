@@ -166,7 +166,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
     for channel_motifs in all_channels_motifs {
 
         debug!("motifs_to_eeg_slices: channel={:?}", channel_motifs.0);
-        let motifs = group_motifs(motif_loader(channel_motifs.1.as_str())?.into_iter());
+        let motifs = group_slices(motif_loader(channel_motifs.1.as_str())?.into_iter());
 
         for group_slices in motifs {
 
@@ -423,7 +423,7 @@ mod motifs_tests {
     use tch::{Device, Tensor};
     use hbac_shared::HbacError;
     use hbac_shared::TensorSliceIdx;
-    use crate::fragments::{do_plot_fragments, group_motifs};
+    use crate::fragments::{do_plot_fragments, group_slices};
     use crate::fragments::MotifSlice;
     use rayon::iter::IntoParallelRefIterator;
     use rayon::iter::ParallelIterator;
