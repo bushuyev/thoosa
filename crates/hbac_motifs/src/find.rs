@@ -91,7 +91,6 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
     let all_mt = min_dot
         .into_iter()
         .enumerate()
-        // .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<FileDumper>::new(min_dot, FileDumper::new(format!("{}/motifs_{}.csv", motifs_dir.clone(), i).as_str()))))
         .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, "seizure_400".into(), i))))//TODO name
         .collect::<Vec<Mutex<SimpMotifTracker<_>>>>();
 
@@ -132,6 +131,9 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
         mt.lock().expect("mt").dump();
     }
 
+    for i in 0..20{ //TODO channels len
+        {store.lock()?.set_motifs(run_id, i as i64)}?;
+    }
 
     Ok(())
 }

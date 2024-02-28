@@ -27,7 +27,7 @@ use rand::prelude::SliceRandom;
 use regex::Regex;
 use tch::{Device, Kind, Tensor};
 use hbac_shared::HbacError;
-use hbac_motifs::fragments::MotifSlice;
+use hbac_shared::MotifSlice;
 use hbac_shared::TensorSliceIdx;
 
 use crate::utils::DataBatch;
@@ -609,6 +609,31 @@ pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx, Tensor
 
 }
 
+// pub fn read_motif_to_iter(motif_file:&str) -> Result<impl Iterator<Item = (TensorSliceIdx, TensorSliceIdx)>, HbacError>{ TODO LazyCsvReader ?
+pub fn read_motif_to_iter_imp(motif_file:&str) -> Result<Vec<((usize, i64), (usize, i64), f32)>, HbacError>{
+
+    let motif_df = CsvReader::from_path(motif_file)?.has_header(false).finish()?;
+    let columns = motif_df.get_columns();
+
+    Ok(columns[0].i64()?.into_iter().zip(
+        columns[1].i64()?.into_iter().zip(
+            columns[2].i64()?.into_iter().zip(
+                columns[3].i64()?.into_iter().zip(
+                    if columns.len() == 7 {columns[6].f64()?.into_iter()} else {columns[4].f64()?.into_iter()}
+                )
+            )
+        )
+
+    ).map(|v|{
+        let (Some(id_0), (Some(sl_0), (Some(id_1), (Some(sl_1), (Some(dot)))))) = v else {
+            panic!("unexpected entry in motif");
+        };
+        ((id_0 as usize, sl_0), (id_1 as usize, sl_1), dot as f32)
+    }).collect::<Vec<((usize, i64), (usize, i64), f32)>>())
+
+}
+
+
 pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), HbacError> {
     // motif_dir
     let files:Vec<DirEntry> = fs::read_dir(motif_dir)?.into_iter().map(|p|p.unwrap()).filter(|p|p.file_name().to_str().unwrap().ends_with("txt")).collect();
@@ -647,7 +672,7 @@ mod tests {
     use rand::thread_rng;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Tensor;
-    use hbac_motifs::fragments::MotifSlice;
+    use hbac_shared::MotifSlice;
     use hbac_common::utils::*;
     use hbac_shared::HbacError;
 

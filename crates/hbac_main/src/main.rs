@@ -7,7 +7,7 @@ use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, Kind, Tensor};
 use hbac_motifs::find::{find_motifs_iter, FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
-use crate::data::{clc_records, read_eeg_index, read_motif_to_iter};
+use crate::data::{clc_records, EEGs, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use hbac_store::SqlStore;
+use hbac_store::{SqlStore, Store};
 use hbac_shared::*;
 use hbac_shared::TensorSliceIdx;
 
@@ -53,6 +53,12 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+
+#[derive(Debug, Args)]
+pub struct FillClasseResources {
+
 }
 
 #[derive(Debug, Subcommand)]
@@ -157,33 +163,44 @@ fn _main() -> Result<(), HbacError> {
         }
 
         Some(Commands::MotifsToTensor(choose_fragments_params)) => {
-            let motifs_eeg_index = read_eeg_index(choose_fragments_params.motifs_dir())?;
-
-            let t = motifs_to_tensor(
-                cli.base_path.as_str(),
-                fragments::motifs_to_eeg_slices(
-                    list_motifs(choose_fragments_params.motifs_dir())?,
-                    read_motif_to_iter
-                )?,
-                motifs_eeg_index.1,
-                data::eeg_to_tensor,
-                choose_fragments_params.window(),
-                20
-            )?;
-
-            if let Some(out) =  choose_fragments_params.output_dir() {
-                let save_to = motifs_eeg_index.0.map(|v|v.replace(".txt", ".pt")).unwrap_or("unknown.pt".into());
-                t.save(Path::new(out).join(save_to));
-            }
+            // let motifs_eeg_index = read_eeg_index(choose_fragments_params.motifs_dir())?;
+            //
+            // let t = motifs_to_tensor(
+            //     cli.base_path.as_str(),
+            //     fragments::motifs_to_eeg_slices(
+            //         list_motifs(choose_fragments_params.motifs_dir())?,
+            //         read_motif_to_iter
+            //     )?,
+            //     motifs_eeg_index.1,
+            //     data::eeg_to_tensor,
+            //     choose_fragments_params.window(),
+            //     20
+            // )?;
+            //
+            // if let Some(out) =  choose_fragments_params.output_dir() {
+            //     let save_to = motifs_eeg_index.0.map(|v|v.replace(".txt", ".pt")).unwrap_or("unknown.pt".into());
+            //     t.save(Path::new(out).join(save_to));
+            // }
         }
 
         Some(Commands::SelectMotifs(find_good_motifs_params)) => {
 
             debug!("select_motifs: label_tensors()={:?}", find_good_motifs_params.label_tensors());
 
+            let mut store_guard = store.lock()?;
+            let motifs = motifs_to_tensor(
+                cli.base_path.as_str(),
+                store_guard.motifs_to_eeg_slices(1)?,
+                vec![],
+                data::eeg_to_tensor,
+                1000,
+                20
+            )?;
+
             let t = select_motifs(
 
-                Tensor::load(find_good_motifs_params.motifs_tensor_path())?,
+                // Tensor::load(find_good_motifs_params.motifs_tensor_path())?,
+                motifs,
 
                 find_good_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
                     Ok((label_tensors_path.0, iter_all_in_dir(label_tensors_path.1.as_str())?)) //(label, path)
@@ -204,8 +221,45 @@ fn _main() -> Result<(), HbacError> {
 
 #[cfg(test)]
 mod main_tests {
+    use hbac_shared::HbacError;
+    use hbac_store::{SqlStore, Store};
+    use crate::data::{read_eeg_index, read_motif_to_iter, read_motif_to_iter_imp};
+
     #[test]
     fn test_it(){
         // main();
+    }
+
+    #[test]
+    fn motifs_to_store() -> Result<(), HbacError>{
+        let runs = vec![
+            ("2024-02-14T17:36:36Z", "seizure"),
+            ("2024-02-15T17:14:09Z", "lpd"),
+            ("2024-02-16T06:34:04Z", "gpd"),
+            ("2024-02-16T11:31:30Z", "lrda"),
+            ("2024-02-16T16:29:11Z", "grda"),
+            ("2024-02-19T07:12:01Z", "other"),
+        ];
+
+        let mut store = SqlStore::new("hbac_imp.db3")?;
+
+        for (dir, desc) in runs {
+            let (_, eeg_ids) = read_eeg_index(format!("../../data_down/14_02_results/{}", dir).as_str())?;
+
+            let run_id = store.save_run(format!("{}/csv motifs import", desc).as_str(), &eeg_ids)?;
+
+            for channel in 0..20 {
+                let r = read_motif_to_iter_imp(format!("../../data_down/14_02_results/{}/motifs_{}.csv", dir, channel).as_str())?;
+
+                for chunk in r.chunks(500) {
+                    store.save_slices(run_id, channel, chunk.to_vec());
+                }
+
+                store.set_motifs(run_id, channel);
+
+                println!("desc={}, channel={}, run_id={}, r.len()={}", desc, channel, run_id, r.len());
+            }
+        }
+        Ok(())
     }
 }

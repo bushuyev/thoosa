@@ -126,35 +126,6 @@ pub fn list_motifs(motifs_dir:&str) -> Result<Vec<(u16, String)>, HbacError>{
     Ok(motiffs)
 }
 
-#[derive(Debug, Eq, Hash, PartialEq)]
-pub struct MotifSlice {
-    motif_group: u16,
-    slise_idx: i64,
-    channel_idx: u16,
-}
-
-impl MotifSlice {
-
-    pub fn new(motif_group: u16, slise_idx: i64, channel_idx: u16) -> Self {
-        Self { motif_group, slise_idx, channel_idx }
-    }
-
-    #[inline]
-    pub fn motif_group(&self) -> u16 {
-        self.motif_group
-    }
-
-    #[inline]
-    pub fn slise_idx(&self) -> i64 {
-        self.slise_idx
-    }
-
-    #[inline]
-    pub fn channel_idx(&self) -> u16 {
-        self.channel_idx
-    }
-}
-
 /**
 * returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
 */
@@ -197,7 +168,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when groups in channel < max
 */
-pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<Tensor, HbacError>
+pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<Tensor, HbacError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
 
     let mut channels_groups_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
@@ -205,7 +176,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<usize, 
     for (eeg_idx, channels_motifslices) in eeg_id_fragments_map {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
-        let eeg_id = eegs[eeg_idx].clone();
+        let eeg_id = eegs[eeg_idx as usize].clone();
         let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), Device::Cpu)?;
 
         for fragment in channels_motifslices {
@@ -216,7 +187,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<usize, 
             let motifslice_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx + window), 1)?;
 
             let  mut channels_groups = channels_groups_slices.entry(fragment.channel_idx).or_insert_with(||HashMap::new());
-            let  mut groups_slices = channels_groups.entry(fragment.motif_group).or_insert_with(||Vec::new());
+            let  mut groups_slices = channels_groups.entry(fragment.motif).or_insert_with(||Vec::new());
 
             groups_slices.push(motifslice_t);
         }
@@ -268,7 +239,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 
         for fragment in channels_fragments {
             let channel_path = output_dir.join(fragment.channel_idx.to_string());
-            let motif_path = channel_path.join(fragment.motif_group.to_string());
+            let motif_path = channel_path.join(fragment.motif.to_string());
             fs::create_dir_all(motif_path.clone())?;
 
 
@@ -414,20 +385,14 @@ pub fn check_fragments(from: &impl AsRef<std::path::Path>,)->Result<(), HbacErro
 #[cfg(test)]
 mod motifs_tests {
     use std::collections::{HashMap, HashSet};
-    use std::fs;
     use std::path::Path;
     use std::time::UNIX_EPOCH;
-    use log::error;
-    use plotters::prelude::BLACK;
-    use tch::Kind::Double;
     use tch::{Device, Tensor};
     use hbac_shared::HbacError;
     use hbac_shared::TensorSliceIdx;
-    use crate::fragments::{do_plot_fragments, group_slices};
-    use crate::fragments::MotifSlice;
+    use hbac_shared::MotifSlice;
     use rayon::iter::IntoParallelRefIterator;
     use rayon::iter::ParallelIterator;
-    use hbac_common::utils::vec_f32_from;
     use hbac_common::utils::*;
 
 
@@ -545,7 +510,7 @@ mod motifs_tests {
         values.sort_by(|a, b|b.len().cmp(&a.len()));
 
         let groups  = values.iter().flat_map(|v|v.iter()).fold(HashSet::new(), |mut a, motif_slice|{
-            a.insert(motif_slice.motif_group);
+            a.insert(motif_slice.motif);
             a
         });
 
