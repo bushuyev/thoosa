@@ -12,6 +12,7 @@ use rusqlite::types::ValueRef::Real;
 use std::fmt;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, PoisonError};
+use hbac_shared::group_motifs;
 
 pub struct StoreDumper {
     pub store:Arc<Mutex<dyn Store>>, //TODO pub
@@ -34,7 +35,8 @@ impl StoreDumper {
 
 pub trait Store:Sync + Send{
     fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, crate::StoreError>;
-    fn save_slices(&mut self, run_id:usize, descr:&str, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), crate::StoreError>;
+    fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), crate::StoreError>;
+    fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), crate::StoreError>;
 }
 
 impl Debug for StoreDumper {
@@ -77,7 +79,7 @@ impl Store for SqlStore {
     }
 
 
-    fn save_slices(&mut self, run_id:usize, name:&str, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), StoreError>{
+    fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), StoreError>{
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
@@ -104,6 +106,12 @@ impl Store for SqlStore {
         Ok(())
     }
 
+    fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), crate::StoreError> {
+
+        // let motifs = group_motifs(motif_loader(channel_motifs.1.as_str())?.into_iter());
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -172,7 +180,8 @@ impl SqlStore {
                 slice_idx_0     INTEGER NOT NULL,
                 tensor_id_1     INTEGER NOT NULL,
                 slice_idx_1     INTEGER NOT NULL,
-                dot             FLOAT NOT NULL
+                dot             FLOAT NOT NULL,
+                motif           INTEGER DEFAULT NULL
             )", ())?;
 
             t.execute(
@@ -182,15 +191,15 @@ impl SqlStore {
                 run_on    DATETIME DEFAULT CURRENT_TIMESTAMP,
                 channel_id  INTEGER NOT NULL
             )", ())?;
-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS motif_slices (
-                id          INTEGER PRIMARY KEY,
-                motif_id    REFERENCES motifs(id) ON DELETE CASCADE,
-                tensor_id   INTEGER NOT NULL,
-                slice_idx   INTEGER NOT NULL
-            )", ())?;
-
+            //
+            // t.execute(
+            //     "CREATE TABLE IF NOT EXISTS motif_slices (
+            //     id          INTEGER PRIMARY KEY,
+            //     motif_id    REFERENCES motifs(id) ON DELETE CASCADE,
+            //     tensor_id   INTEGER NOT NULL,
+            //     slice_idx   INTEGER NOT NULL
+            // )", ())?;
+            //
             t.execute("commit", ())?;
         }
 
@@ -201,34 +210,34 @@ impl SqlStore {
 
 
 
-    pub fn save_motifs(&mut self, descr:&str, channel:i64, motifs_slices:HashMap<u16, Vec<(usize, i64)>>) -> Result<(), StoreError>{
-        let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
-
-        let motif_id = t.execute("INSERT INTO motifs (descr, channel_id) VALUES (?, ?)", (descr, channel))?;
-
-        debug!("save_motifs: name={} channel={} motif_id={} motifs_slices.len()={}", descr, channel, motif_id, motifs_slices.len());
-
-        for slices in motifs_slices.into_values() {
-
-            let (mut q, params) = slices.into_iter().fold((vec!["INSERT INTO motif_slices (motif_id, tensor_id, slice_idx) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<usize>), v| {
-                a.0.push("(?, ?, ?)");
-                a.0.push(", ");
-                a.1.push(motif_id);
-                a.1.push(v.0);
-                a.1.push(v.1 as usize);
-                a
-            });
-
-            q.pop();
-
-            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-        }
-
-        t.commit();
-
-        Ok(())
-    }
+    // pub fn save_motifs(&mut self, descr:&str, channel:i64, motifs_slices:HashMap<u16, Vec<(usize, i64)>>) -> Result<(), StoreError>{
+    //     let mut conn_guard = self.conn.lock()?;
+    //     let mut t = conn_guard.transaction()?;
+    //
+    //     let motif_id = t.execute("INSERT INTO motifs (descr, channel_id) VALUES (?, ?)", (descr, channel))?;
+    //
+    //     debug!("save_motifs: name={} channel={} motif_id={} motifs_slices.len()={}", descr, channel, motif_id, motifs_slices.len());
+    //
+    //     for slices in motifs_slices.into_values() {
+    //
+    //         let (mut q, params) = slices.into_iter().fold((vec!["INSERT INTO motif_slices (motif_id, tensor_id, slice_idx) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<usize>), v| {
+    //             a.0.push("(?, ?, ?)");
+    //             a.0.push(", ");
+    //             a.1.push(motif_id);
+    //             a.1.push(v.0);
+    //             a.1.push(v.1 as usize);
+    //             a
+    //         });
+    //
+    //         q.pop();
+    //
+    //         t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+    //     }
+    //
+    //     t.commit();
+    //
+    //     Ok(())
+    // }
 
 }
 
@@ -247,59 +256,77 @@ mod store_tests{
     pub struct TensorSliceIdx(pub usize, pub i64);
 
 
-    #[test]
-    fn test_save_motifs() -> Result<(), StoreError> {
-        fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        let mut store = SqlStore::new("/tmp/test_db.db3")?;
-        println!("Ok");
-
-        let map :HashMap<u16, Vec<(usize, i64)>> = HashMap::from([
-            (0u16, vec![(0, 100), (0, 200)]),
-            (1u16, vec![(1, 100), (1, 200)]),
-        ]);
-
-        println!("map: {:?}",  map);
-        store.save_motifs("seizure_400", 0, map)?;
-
-        {
-            let mut conn_guard = store.conn.lock()?;
-            let t2 = conn_guard.transaction()?;
-            let mut stmt = t2.prepare("SELECT * FROM motif_slices")?;
-
-            let mut rows = stmt.query([])?;
-            while let Some(row) = rows.next()? {
-                println!("row={:?}", row);
-            }
-        }
-
-        Ok(())
-    }
+    // #[test]
+    // fn test_save_motifs() -> Result<(), StoreError> {
+    //     fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+    //     let mut store = SqlStore::new("/tmp/test_db.db3")?;
+    //     println!("Ok");
+    //
+    //     let map :HashMap<u16, Vec<(usize, i64)>> = HashMap::from([
+    //         (0u16, vec![(0, 100), (0, 200)]),
+    //         (1u16, vec![(1, 100), (1, 200)]),
+    //     ]);
+    //
+    //     println!("map: {:?}",  map);
+    //     store.save_motifs("seizure_400", 0, map)?;
+    //
+    //     {
+    //         let mut conn_guard = store.conn.lock()?;
+    //         let t2 = conn_guard.transaction()?;
+    //         let mut stmt = t2.prepare("SELECT * FROM motif_slices")?;
+    //
+    //         let mut rows = stmt.query([])?;
+    //         while let Some(row) = rows.next()? {
+    //             println!("row={:?}", row);
+    //         }
+    //     }
+    //
+    //     Ok(())
+    // }
 
 
     #[test]
     fn test_save_slices() -> Result<(), StoreError> {
         fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
-        println!("Ok");
+
 
         let map :Vec<((usize, i64),(usize, i64),f32)> = vec![
             ((0usize, 100i64), (0usize, 200i64), 0.91),
             ((1usize, 100i64), (1usize, 200i64), 0.92),
+            ((3usize, 100i64), (3usize, 200i64), 0.93),
+            ((3usize, 200i64), (5usize, 200i64), 0.94),
         ];
 
         let run_id= store.save_run("test", &vec!["aaa".to_string(), "bbb".to_string()])?;
-        store.save_slices(run_id, "seizure_400", 0, map)?;
+        store.save_slices(run_id,  7, map)?;
+
+        store.set_motifs(run_id, 7)?;
 
         {
             let mut guard = store.conn.lock()?;
             let t2 = guard.transaction()?;
-            let mut stmt = t2.prepare("SELECT * FROM slice_matches")?;
+            let mut stmt = t2.prepare("SELECT run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, motif FROM slice_matches")?;
 
             let mut rows = stmt.query_map([], |row| {
-                Ok((row.get(0)?,  row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-            })?.map(|v|v.unwrap()).collect::<Vec<(i64, i64, i64, i64, i64)>>();
+                Ok((
+                    row.get(0)?,//run_id
+                    row.get(1)?,//channel_id
+                    row.get(2)?,//tensor_id_0
+                    row.get(3)?,//slice_idx_0
+                    row.get(4)?,//tensor_id_1
+                    row.get(5)?,//slice_idx_1
+                    row.get(6)?//motif_id
+                ))
+            })?.map(|v|v.unwrap()).collect::<Vec<(i64, i64, i64, i64, i64, i64, i64)>>();
 
-            assert_eq!(vec![(1, 1, 0, 0, 100), (2, 1, 0, 1, 100)], rows);
+            assert_eq!(vec![
+                (1, 7, 0, 100, 0, 200, 0),
+                (1, 7, 1, 100, 1, 200, 0),
+                (1, 7, 3, 100, 3, 200, 0),
+                (1, 7, 3, 200, 5, 200, 0)
+            ],
+           rows);
 
             let mut stmt = t2.prepare("SELECT * FROM run_resources")?;
 

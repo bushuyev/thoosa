@@ -7,6 +7,7 @@ edition = "2021"
 path = "src/lib.rs"
 
 [dependencies]
+hbac_shared = {path = "../hbac_shared"}
 log = "0.4.20"
 simplelog = "0.12.1"
 

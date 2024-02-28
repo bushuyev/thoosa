@@ -6,7 +6,7 @@ use std::str::FromStr;
 use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, Kind, Tensor};
-use hbac_motifs::find::{select_motifs, find_motifs_iter, SelectMotifsParams, FindMotifsParams, iter_all_in_dir};
+use hbac_motifs::find::{find_motifs_iter, FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
 use crate::data::{clc_records, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
@@ -14,13 +14,15 @@ use polars::export::rayon;
 use polars::prelude::Series;
 use hbac_common::utils::cdt;
 use hbac_common::HbacError;
-use hbac_motifs::{find, fragments, TensorSliceIdx};
-use hbac_motifs::fragments::{MotifsToTensorParams, group_motifs, list_motifs, motifs_to_tensor, plot_fragments, PlotFragmentsParams, write_motifs_slices, MotifsToFragmentsParams};
+use hbac_motifs::{find, fragments};
+use hbac_motifs::fragments::{list_motifs, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, plot_fragments, PlotFragmentsParams, write_motifs_slices};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use hbac_store::SqlStore;
+use hbac_shared::*;
+use hbac_shared::TensorSliceIdx;
 
 
 mod my_tch;
@@ -202,8 +204,6 @@ fn _main() -> Result<(), HbacError> {
 
 #[cfg(test)]
 mod main_tests {
-    use crate::main;
-
     #[test]
     fn test_it(){
         // main();

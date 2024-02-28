@@ -8,6 +8,7 @@ edition = "2021"
 hbac_common = {path = "../hbac_common"}
 hbac_motifs = {path = "../hbac_motifs"}
 hbac_store = {path = "../hbac_store"}
+hbac_shared = {path = "../hbac_shared"}
 
 polars = { version = "0.36.2", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
 tch = { version = "0.14.0" }

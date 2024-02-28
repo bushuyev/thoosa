@@ -28,7 +28,7 @@ use regex::Regex;
 use tch::{Device, Kind, Tensor};
 use hbac_common::HbacError;
 use hbac_motifs::fragments::MotifSlice;
-use hbac_motifs::TensorSliceIdx;
+use hbac_shared::TensorSliceIdx;
 
 use crate::utils::DataBatch;
 

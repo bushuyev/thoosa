@@ -22,7 +22,7 @@ use hbac_common::HbacError;
 use hbac_common::utils::*;
 use rayon::iter::IntoParallelRefIterator;
 use torch_sys::C_tensor;
-use crate::TensorSliceIdx;
+use hbac_shared::TensorSliceIdx;
 use hbac_store::Store;
 use hbac_store::StoreDumper;
 use std::cell::RefCell;
@@ -184,7 +184,7 @@ impl MotifDumper for StoreDumper {
 
     fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx, TensorSliceIdx, f32)>) -> Result<(), HbacError>{
 
-        self.store.lock()?.save_slices(self.run_id, self.name.as_str(), self.channel as i64,  motifs.into_iter().map(|v|((v.0.0, v.0.1), (v.1.0, v.1.1), v.2)).collect::<Vec<_>>());//TODO move TensorSliceIdx to shared
+        self.store.lock()?.save_slices(self.run_id, self.channel as i64,  motifs.into_iter().map(|v|((v.0.0, v.0.1), (v.1.0, v.1.1), v.2)).collect::<Vec<_>>());//TODO move TensorSliceIdx to shared
 
         Ok(())
 
@@ -551,6 +551,7 @@ mod motif_find_tests {
     use crate::fragments::{list_motifs, write_motifs_slices};
     use crate::find::iter_all_in_dir;
     use hbac_common::utils::cdt_for_dir;
+    use hbac_shared::TensorSliceIdx;
 
     #[ctor::ctor]
     fn init() {

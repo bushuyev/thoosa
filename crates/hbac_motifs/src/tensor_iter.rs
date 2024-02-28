@@ -7,10 +7,10 @@ use std::thread;
 use std::time::Duration;
 use log::debug;
 use tch::{Device, Kind, TchError, Tensor};
-use crate::HbacError;
+use hbac_common::HbacError;
 use rayon::prelude::*;
 use crate::cache_on_threads::CacheOnThreads;
-use crate::TensorSliceIdx;
+use hbac_shared::TensorSliceIdx;
 
 trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError>;

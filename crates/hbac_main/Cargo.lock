@@ -1049,6 +1049,7 @@ dependencies = [
  "ctor",
  "hbac_common",
  "hbac_motifs",
+ "hbac_shared",
  "hbac_store",
  "log",
  "plotters",
@@ -1073,6 +1074,7 @@ dependencies = [
  "ctor",
  "futures",
  "hbac_common",
+ "hbac_shared",
  "hbac_store",
  "log",
  "plotters",
@@ -1086,9 +1088,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hbac_shared"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "simplelog",
+]
+
+[[package]]
 name = "hbac_store"
 version = "0.1.0"
 dependencies = [
+ "hbac_shared",
  "log",
  "rusqlite",
  "simplelog",
