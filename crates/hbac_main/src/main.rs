@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::Series;
 use hbac_common::utils::cdt;
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
 use hbac_motifs::fragments::{list_motifs, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, plot_fragments, PlotFragmentsParams, write_motifs_slices};
 use std::collections::HashMap;

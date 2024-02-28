@@ -6,7 +6,7 @@ use tch::{Device, nn, Reduction, TchError, Tensor};
 use tch::nn::{Module, OptimizerConfig, VarStore};
 use crate::data::{EEGs};
 use crate::my_tch::{Fp, LossFp};
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 
 
 

@@ -10,7 +10,7 @@ use chrono::Utc;
 use clap::Args;
 use log::{debug, error, info};
 use plotters::prelude::{BLACK, RGBColor};
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use crate::tensor_iter::TensorSlice;
 use hbac_shared::TensorSliceIdx;
 use regex::Regex;
@@ -421,7 +421,7 @@ mod motifs_tests {
     use plotters::prelude::BLACK;
     use tch::Kind::Double;
     use tch::{Device, Tensor};
-    use hbac_common::HbacError;
+    use hbac_shared::HbacError;
     use hbac_shared::TensorSliceIdx;
     use crate::fragments::{do_plot_fragments, group_motifs};
     use crate::fragments::MotifSlice;

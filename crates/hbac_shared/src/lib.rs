@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use log::debug;
 use std::fmt::Display;
+use std::backtrace::Backtrace;
 
 pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
     let mut pairs_groups: HashMap<T, u16> = HashMap::new();
@@ -150,5 +151,31 @@ impl From<(usize, i64)> for TensorSliceIdx {
 impl Display for TensorSliceIdx {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{},{}", self.0, self.1)
+    }
+}
+
+#[derive(Debug)]
+pub struct HbacError {
+    msg:String,
+    backtrace:Backtrace
+}
+
+impl HbacError {
+
+    pub fn new(msg:String) -> Self {
+        debug!("HbacError::new: msg={}", msg);
+        Self {
+            msg,
+            backtrace:Backtrace::capture()
+        }
+    }
+}
+
+
+impl<D> From<D> for HbacError where D: Display {
+
+    fn from(value: D) -> Self {
+        debug!("HbacError::from: value={}", value);
+        HbacError::new(value.to_string())
     }
 }

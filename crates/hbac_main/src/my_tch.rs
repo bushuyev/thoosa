@@ -17,7 +17,7 @@ use crate::{data, utils};
 use crate::builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
 use crate::data::EEGs;
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use crate::utils::DataBatch;
 use crate::version::VERSION;
 

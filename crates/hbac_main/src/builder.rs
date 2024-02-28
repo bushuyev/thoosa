@@ -4,7 +4,7 @@ use std::pin::Pin;
 use log::debug;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyFuncModule, MyMaxPool1d, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html

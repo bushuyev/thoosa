@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 use log::debug;
 use tch::{Device, Kind, TchError, Tensor};
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use rayon::prelude::*;
 use crate::cache_on_threads::CacheOnThreads;
 use hbac_shared::TensorSliceIdx;

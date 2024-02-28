@@ -26,7 +26,7 @@ use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use regex::Regex;
 use tch::{Device, Kind, Tensor};
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use hbac_motifs::fragments::MotifSlice;
 use hbac_shared::TensorSliceIdx;
 
@@ -649,9 +649,10 @@ mod tests {
     use tch::Tensor;
     use hbac_motifs::fragments::MotifSlice;
     use hbac_common::utils::*;
+    use hbac_shared::HbacError;
 
     use crate::*;
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, HbacError, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter};
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter};
     use crate::utils::DataBatch;
 
     #[ctor::ctor]

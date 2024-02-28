@@ -7,7 +7,7 @@ use plotters::element::PathElement;
 use tch::{Kind, Tensor};
 use tch::nn::{Module, OptimizerConfig};
 use plotters::drawing::IntoDrawingArea;
-use crate::HbacError;
+use hbac_shared::HbacError;
 use std::error::Error;
 
 

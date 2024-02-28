@@ -18,7 +18,7 @@ use rayon::iter::IntoParallelIterator;
 use tch::{Device, IndexOp, Tensor};
 use hbac_common::utils::*;
 
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use hbac_common::utils::*;
 use rayon::iter::IntoParallelRefIterator;
 use torch_sys::C_tensor;

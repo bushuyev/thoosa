@@ -1,7 +1,7 @@
 
 use tch::Tensor;
 use tch::Kind;
-use hbac_common::HbacError;
+use hbac_shared::HbacError;
 use hbac_common::utils::z_norm_2;
 
 pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tensor, HbacError>{
@@ -21,7 +21,7 @@ pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tenso
 #[cfg(test)]
 mod distance_tests {
     use tch::Tensor;
-    use hbac_common::HbacError;
+    use hbac_shared::HbacError;
     use crate::distance::z_normalized_euclidean;
 
     #[test]
