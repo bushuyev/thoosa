@@ -42,7 +42,7 @@ pub struct FindMotifsParams {
     kind: String,
 
     #[arg(long, default_value = "../../data_local/motifs")]
-    motifs_dir: String,
+    descr: String,
 
     #[arg(long, default_value_t = 10)]
     preload_d: usize,
@@ -64,12 +64,6 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
     let slots_to_compare = (records_num - cli.window) / cli.step;
     let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare;
 
-    let motifs_dir = format!("{}/{}", cli.motifs_dir, cdt());
-
-    if let Err(e) = std::fs::create_dir_all(motifs_dir.clone()) {
-        panic!("can't create {}: {:?}", motifs_dir, e);
-    }
-
 
     let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
 
@@ -81,7 +75,6 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
         cli.step,
         (0..20).map(|_| cli.min_dot).collect(),
         slots_to_compare as usize,
-        motifs_dir.as_str(),
         cli.preload_d,
         cli.max_keys_fifo,
         store
@@ -90,7 +83,7 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
 }
 
 //TODO min_dot len should be == channels
-pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, motifs_dir:&str, preload_d:usize, max_keys_fifo: usize, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
+pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, preload_d:usize, max_keys_fifo: usize, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let run_id = {store.lock()?.save_run("some", &keys)}?;
@@ -139,7 +132,6 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
         mt.lock().expect("mt").dump();
     }
 
-    debug!("saved to {:?}", motifs_dir);
 
     Ok(())
 }

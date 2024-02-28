@@ -33,8 +33,8 @@ impl StoreDumper {
 
 
 pub trait Store:Sync + Send{
-    fn save_run(&mut self, name:&str, keys:&Vec<String>) -> Result<usize, crate::StoreError>;
-    fn save_slices(&mut self, run_id:usize, name:&str, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), crate::StoreError>;
+    fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, crate::StoreError>;
+    fn save_slices(&mut self, run_id:usize, descr:&str, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), crate::StoreError>;
 }
 
 impl Debug for StoreDumper {
@@ -50,11 +50,11 @@ pub struct SqlStore {
 
 impl Store for SqlStore {
 
-    fn save_run(&mut self, name:&str, keys:&Vec<String>) -> Result<usize, crate::StoreError> {
+    fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, crate::StoreError> {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
-        let run_id = t.execute("INSERT INTO matches_run (name) VALUES (?)", params![name])?;
+        let run_id = t.execute("INSERT INTO matches_run (descr) VALUES (?)", params![descr])?;
 
 
         let (mut q, params) = keys.into_iter().fold(
@@ -152,7 +152,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS matches_run (
                 id          INTEGER PRIMARY KEY,
-                name        VARCHAR(256),
+                descr       VARCHAR(256),
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
@@ -178,7 +178,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS motifs (
                 id    INTEGER PRIMARY KEY,
-                name    VARCHAR(256),
+                descr    VARCHAR(256),
                 run_on    DATETIME DEFAULT CURRENT_TIMESTAMP,
                 channel_id  INTEGER NOT NULL
             )", ())?;
@@ -186,7 +186,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS motif_slices (
                 id          INTEGER PRIMARY KEY,
-                motif_id    REFERENCES motif(id) ON DELETE CASCADE,
+                motif_id    REFERENCES motifs(id) ON DELETE CASCADE,
                 tensor_id   INTEGER NOT NULL,
                 slice_idx   INTEGER NOT NULL
             )", ())?;
@@ -201,13 +201,13 @@ impl SqlStore {
 
 
 
-    pub fn save_motifs(&mut self, name:&str, channel:i64, motifs_slices:HashMap<u16, Vec<(usize, i64)>>) -> Result<(), StoreError>{
+    pub fn save_motifs(&mut self, descr:&str, channel:i64, motifs_slices:HashMap<u16, Vec<(usize, i64)>>) -> Result<(), StoreError>{
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
-        let motif_id = t.execute("INSERT INTO motifs (name, channel_id) VALUES (?, ?)", (name, channel))?;
+        let motif_id = t.execute("INSERT INTO motifs (descr, channel_id) VALUES (?, ?)", (descr, channel))?;
 
-        debug!("save_motifs: name={} channel={} motif_id={} motifs_slices.len()={}", name, channel, motif_id, motifs_slices.len());
+        debug!("save_motifs: name={} channel={} motif_id={} motifs_slices.len()={}", descr, channel, motif_id, motifs_slices.len());
 
         for slices in motifs_slices.into_values() {
 
@@ -261,17 +261,16 @@ mod store_tests{
         println!("map: {:?}",  map);
         store.save_motifs("seizure_400", 0, map)?;
 
-         {
-             let mut conn_guard = store.conn.lock()?;
-             let t2 = conn_guard.transaction()?;
-           let mut stmt = t2.prepare("SELECT * FROM motif_slices")?;
+        {
+            let mut conn_guard = store.conn.lock()?;
+            let t2 = conn_guard.transaction()?;
+            let mut stmt = t2.prepare("SELECT * FROM motif_slices")?;
 
-           let mut rows = stmt.query([])?;
-           while let Some(row) = rows.next()? {
-               println!("row={:?}", row);
-           }
-
-       }
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                println!("row={:?}", row);
+            }
+        }
 
         Ok(())
     }
