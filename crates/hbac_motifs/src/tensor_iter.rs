@@ -266,7 +266,7 @@ mod tests {
     use rayon::prelude::ParallelBridge;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
-    use crate::HbacError;
+    use hbac_shared::*;
     use crate::tensor_iter::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore, CacheOnThreadsStore};
     use hbac_common::utils::*;
     use rayon::iter::ParallelIterator;

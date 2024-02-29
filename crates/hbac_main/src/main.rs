@@ -1,5 +1,5 @@
 use std::backtrace::Backtrace;
-use std::env;
+use std::{env, fs};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::str::FromStr;
@@ -117,16 +117,8 @@ fn _main() -> Result<(), HbacError> {
         Some(Commands::FindMotifs(find_motifs_params)) => {
             info!("find_motifs_params={:?}", find_motifs_params);
 
-            let eeg_id_series = data::EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind())?;
+            let eeg_id_series = EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind(), cli.limit)?;
 
-            let eeg_id_series = match cli.limit {
-                None => {
-                    eeg_id_series
-                }
-                Some(v) => {
-                    eeg_id_series.limit(v)
-                }
-            };
 
             let records_num = clc_records(&eeg_id_series, base_path.as_str())? as i64;
             debug!("records_num={}", records_num);
@@ -187,30 +179,45 @@ fn _main() -> Result<(), HbacError> {
 
             debug!("select_motifs: label_tensors()={:?}", find_good_motifs_params.label_tensors());
 
+            let run_id = 1;
+
             let mut store_guard = store.lock()?;
-            let motifs = motifs_to_tensor(
+            let (motifs, channel_motif_ids) = motifs_to_tensor(
                 cli.base_path.as_str(),
-                store_guard.motifs_to_eeg_slices(1)?,
-                vec![],
+                store_guard.motifs_to_eeg_slices(run_id)?,
+                store_guard.list_run_resources(run_id)?,
                 data::eeg_to_tensor,
                 1000,
                 20
             )?;
 
-            let t = select_motifs(
-
-                // Tensor::load(find_good_motifs_params.motifs_tensor_path())?,
+            let channels_good_motif_idxs = select_motifs(
                 motifs,
-
                 find_good_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
-                    Ok((label_tensors_path.0, iter_all_in_dir(label_tensors_path.1.as_str())?)) //(label, path)
-                }).collect::<Result<Vec<_>, HbacError>>()?,
+                    let eeg_ids = EEGs::good_eegs_of(cli.base_path.as_str(), label_tensors_path.1.as_str(), cli.limit)?.i64()?.into_iter()
+                        .enumerate()
+                        .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
+                        .collect::<Vec<String>>();
 
+                    Ok((label_tensors_path.0, eeg_ids.into_iter().map(|eeg_id| {
+                        data::eeg_to_tensor(cli.base_path.as_str(), eeg_id.as_str(), Device::Cpu)
+                    }))) //(label, path)
+                }).collect::<Result<Vec<_>, HbacError>>()?,
                 cli.limit,
-                1000
+                1000,
             )?;
 
-            t.save(find_good_motifs_params.output_motifs_tensor_path())?;
+            let motifs_corrs = channel_motif_ids.into_iter().zip(channels_good_motif_idxs.into_iter()).map(|(motif_ids, motif_idxs_corss)|{
+                motif_idxs_corss.into_iter().map(|(motif_id, motif_idx_corr)|{
+                    (motif_ids[motif_id as usize], motif_idx_corr)
+                }).collect::<Vec<(usize, f64)>>()
+            }).collect::<Vec<Vec<(usize, f64)>>>();
+
+            debug!("motifs_corrs={:?}", motifs_corrs);
+
+            store_guard.save_motifs_corrs(format!("{:?}", find_good_motifs_params.label_tensors()).as_str(), motifs_corrs)?;//TODO label_tensors
+
+            // t.save(find_good_motifs_params.output_motifs_tensor_path())?;
         }
 
         None => {}
@@ -219,15 +226,29 @@ fn _main() -> Result<(), HbacError> {
     Ok(())
 }
 
+
 #[cfg(test)]
 mod main_tests {
+    use tch::Device;
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
-    use crate::data::{read_eeg_index, read_motif_to_iter, read_motif_to_iter_imp};
+    use crate::data;
+    use crate::data::{EEGs, read_eeg_index, read_motif_to_iter, read_motif_to_iter_imp};
 
     #[test]
-    fn test_it(){
+    fn test_it() -> Result<(), HbacError>{
         // main();
+        EEGs::good_eegs_of("../../data/", "seizure_vote", Some(10))?.i64()?.into_iter().enumerate().map(|(i, v):(usize, Option<i64>)|{
+            // String::from(v.expect(format!("no value in {}", i))).as_str();
+
+            data::eeg_to_tensor("../../data/", v.expect(format!("no value in {}", i).as_str()).to_string().as_str(), Device::Cpu)
+        }).try_for_each(|t|{
+            println!("t={:?}", t?.size());
+
+            Ok::<(), HbacError>(())
+        })?;
+
+        Ok(())
     }
 
     #[test]

@@ -168,10 +168,10 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when groups in channel < max
 */
-pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<Tensor, HbacError>
+pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
 
-    let mut channels_groups_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
+    let mut channels_motifs_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
 
     for (eeg_idx, channels_motifslices) in eeg_id_fragments_map {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
@@ -186,8 +186,8 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Ve
 
             let motifslice_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx + window), 1)?;
 
-            let  mut channels_groups = channels_groups_slices.entry(fragment.channel_idx).or_insert_with(||HashMap::new());
-            let  mut groups_slices = channels_groups.entry(fragment.motif).or_insert_with(||Vec::new());
+            let  mut channels_motifs = channels_motifs_slices.entry(fragment.channel_idx).or_insert_with(||HashMap::new());
+            let  mut groups_slices = channels_motifs.entry(fragment.motif).or_insert_with(||Vec::new());
 
             groups_slices.push(motifslice_t);
         }
@@ -195,14 +195,19 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Ve
 
     fn choose_slice(slices:&mut Vec<Tensor>) ->Tensor {
 
-         slices.pop().unwrap()//TODO
+         slices.pop().unwrap()//TODO choose best or blend slices
     }
 
-    let groups_num = channels_groups_slices.values().map(|groups_slices|groups_slices.len()).max().expect("groups_num") as i64;
+    let groups_num = channels_motifs_slices.values().map(|groups_slices|groups_slices.len()).max().expect("groups_num") as i64;
+
+    let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::new()).collect();
 
     let tensor = Tensor::vstack(
-         (0..channels).map(|channel| channels_groups_slices.remove(&(channel as u16)).expect(format!("no {}", channel).as_str()))
-            .map(|mut groups_slices| groups_slices.values_mut().map(|slices| choose_slice(slices)).collect::<Vec<Tensor>>()).map(|mut group| {
+         (0..channels).map(|channel| (channel, channels_motifs_slices.remove(&(channel as u16)).expect(format!("no {}", channel).as_str())))
+            .map(|(channel, mut motif_slices)| motif_slices.into_iter().map(|(motif_id, mut slices)| {
+                channel_motif_ids[channel as usize].push(motif_id as usize);
+                choose_slice(&mut slices)
+            }).collect::<Vec<Tensor>>()).map(|mut group| {
 
             if (group.len() as i64) < groups_num {
                 group.extend((0..groups_num-group.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, Device::Cpu))))
@@ -215,7 +220,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Ve
     );
 
     let tensor = tensor.view((channels, groups_num, -1));
-    Ok(tensor)
+    Ok((tensor, channel_motif_ids))
 
 }
 
@@ -549,20 +554,20 @@ mod motifs_tests {
         let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
         println!("dir={}", dir);
 
-        let mut eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>> = HashMap::new();
+        let mut eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>> = HashMap::new();
 
-        eeg_id_fragments_map.insert(0usize, vec![
-            MotifSlice::new(0, 100, 0),
-            MotifSlice::new(0, 301, 1),
-            MotifSlice::new(1, 500, 0),
-            MotifSlice::new(1, 701, 1)
+        eeg_id_fragments_map.insert(0i64, vec![
+            MotifSlice::new(7, 100, 0),
+            MotifSlice::new(7, 301, 1),
+            MotifSlice::new(9, 500, 0),
+            MotifSlice::new(9, 701, 1)
         ]);
 
-        eeg_id_fragments_map.insert(1usize, vec![
-            MotifSlice::new(0, 200, 0),
-            MotifSlice::new(0, 401, 1),
-            MotifSlice::new(1, 600, 0),
-            MotifSlice::new(1, 801, 1)
+        eeg_id_fragments_map.insert(1i64, vec![
+            MotifSlice::new(7, 200, 0),
+            MotifSlice::new(7, 401, 1),
+            MotifSlice::new(9, 600, 0),
+            MotifSlice::new(9, 801, 1)
         ]);
 
         fn test_eeg_to_t(base_dir:&str, eeg_id:&str, _:Device) -> Result<Tensor, HbacError> {
@@ -583,7 +588,7 @@ mod motifs_tests {
             })
         }
 
-        let t = super::motifs_to_tensor(
+        let (t, motif_ids) = super::motifs_to_tensor(
             "zzz",
             eeg_id_fragments_map,
             vec!["111".into(), "222".into()],
@@ -591,6 +596,10 @@ mod motifs_tests {
             10, 2
         )?;
 
+        println!("motif_ids={:?}", motif_ids);
+
+        //16 = 7+9
+        assert_eq!(vec![16, 16], motif_ids.into_iter().map(|v|v.into_iter().sum::<usize>()).collect::<Vec<usize>>());
 
         assert_eq!(from::<Vec<f32>>(&t.get(0).get(0))[0] as i64 % 100, 0);//ch0, group/slice random
         assert_eq!(from::<Vec<f32>>(&t.get(1).get(0))[0] as i64 % 100, 1);//ch1, group/slice random

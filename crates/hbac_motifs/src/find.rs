@@ -397,16 +397,13 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Ar
             return Ok(())
         }
 
-        debug!("count={}", count.fetch_add(1, Ordering::Relaxed));
+        debug!("dot_motifs: count={}", count.fetch_add(1, Ordering::Relaxed));
     }
     Ok(())
 }
 
 #[derive(Debug, Args)]
 pub struct SelectMotifsParams {
-
-    #[arg(long)]
-    motifs_tensor_path: String,
 
     #[arg(long)]
     output_motifs_tensor_path: String,
@@ -417,9 +414,6 @@ pub struct SelectMotifsParams {
 }
 
 impl SelectMotifsParams {
-    pub fn motifs_tensor_path(&self) -> &str {
-        &self.motifs_tensor_path
-    }
     pub fn output_motifs_tensor_path(&self) -> &str {
         &self.output_motifs_tensor_path
     }
@@ -430,7 +424,7 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize) -> Result<Tensor, HbacError>
+pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
     let motifs_size = motifs.size();
 
@@ -464,13 +458,13 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
         )
     });
 
-    let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<i32>>>();
+    let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>();
 
     let Ok(channels_motifs_classes_guard) = channels_motifs_classes_lock.lock() else {
         panic!("select_motifs: can't lock channels_motifs_classes_lock");
     };
 
-    debug!("select_motifs: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard);
+    debug!("select_motifs: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard.len());
 
     for motif_i in 0..motifs_num {
         for channel_i in 0..channels_num {
@@ -484,7 +478,7 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
             if corr > 0. {
                 debug!("select_motifs: +channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
 
-                channels_good_motifs[channel_i as usize].push(motif_i as i32);
+                channels_good_motifs[channel_i as usize].push((motif_i, corr));
             } else {
                 debug!("select_motifs: -channel_i={}, motif_i={}, v={:.5}", channel_i, motif_i, corr);
             }
@@ -495,12 +489,13 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
         return Err("No good motifs".into());
     };
 
-    Ok(Tensor::vstack(channels_good_motifs.into_iter().map(|mut good_motifs_idxs| {
-        for _ in good_motifs_idxs.len()..max_motifs {
-            good_motifs_idxs.push(-1);
-        }
-        Tensor::from_slice(good_motifs_idxs.as_slice())
-    }).collect::<Vec<Tensor>>().as_slice()))
+    Ok(channels_good_motifs)
+    // Ok(Tensor::vstack(channels_good_motifs.into_iter().map(|mut good_motifs_idxs| {
+    //     for _ in good_motifs_idxs.len()..max_motifs {
+    //         good_motifs_idxs.push(-1);
+    //     }
+    //     Tensor::from_slice(good_motifs_idxs.as_slice())
+    // }).collect::<Vec<Tensor>>().as_slice()))
 }
 
 pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> Result<impl Iterator<Item=Result<Tensor, HbacError>>, HbacError> {
@@ -513,6 +508,8 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> Result<impl Iterato
         )
     ).map_err(|e| HbacError::new(format!("got {} while reading {:?} ", e, path.as_ref())))
 }
+
+
 
 
 
@@ -553,7 +550,7 @@ mod motif_find_tests {
     use crate::fragments::{list_motifs, write_motifs_slices};
     use crate::find::iter_all_in_dir;
     use hbac_common::utils::cdt_for_dir;
-    use hbac_shared::TensorSliceIdx;
+    use hbac_shared::*;
 
     #[ctor::ctor]
     fn init() {
@@ -864,12 +861,10 @@ mod motif_find_tests {
                 self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?
             ))
         }
-
     }
 
     #[test]
     pub fn test_select_motifs() -> Result<(), HbacError> {//TODO dummy tensors
-
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
@@ -922,7 +917,7 @@ mod motif_find_tests {
         t_1_1.save(test_dir.join("1").join("t_1_1.pt"));
 
 
-        let t = select_motifs(
+        let channels_good_motifs = select_motifs(
          // Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
             motifs_tensor,
          vec![
@@ -940,9 +935,10 @@ mod motif_find_tests {
             1
         )?;
 
+        println!("t={:?}", channels_good_motifs);
 
-        assert_eq!(0, t.f_int64_value(&[0,0])?); //motif 0 is good for channel 0
-        assert_eq!(1, t.f_int64_value(&[1,0])?); //motif 1 is good for channel 1
+        assert_eq!(0, channels_good_motifs[0][0].0); //motif 0 is good for channel 0
+        assert_eq!(1, channels_good_motifs[1][0].0); //motif 1 is good for channel 1
 
         Ok(())
     }

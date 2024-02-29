@@ -187,19 +187,27 @@ impl EEGs {
 
     }
 
-    pub fn good_eegs_of(base_path: &str, kind:&str)  -> Result<Series, HbacError>{
+    pub fn good_eegs_of(base_path: &str, kind:&str, limit:Option<usize>)  -> Result<Series, HbacError>{
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
-        Ok(
+        let eeg_id_series =
             good_eegs_filter
             .filter(col(kind).gt(lit(0)))
                 // .sort(kind, SortOptions{ descending: true, ..Default::default()})
                 // .sort("eeg_id", Default::default())
                 .sort_by_exprs(vec![col(kind), col("eeg_id")], vec![true, false], true, true)
             .collect()?
-            .column("eeg_id")?.clone()
-        )
+            .column("eeg_id")?.clone();
 
+
+        match limit {
+            None => {
+                Ok(eeg_id_series)
+            }
+            Some(v) => {
+                Ok(eeg_id_series.limit(v))
+            }
+        }
     }
 
     fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, HbacError> {
