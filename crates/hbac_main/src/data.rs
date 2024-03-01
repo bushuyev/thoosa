@@ -456,6 +456,11 @@ impl EEGs {
             )
         )
     }
+
+    pub fn load_slices(channel:usize, slices:Vec<TensorSliceIdx>) -> Vec<Tensor>{
+
+        vec![]
+    }
 }
 
 impl DataBatch for EEGs {

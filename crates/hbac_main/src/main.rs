@@ -13,14 +13,15 @@ use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::Series;
-use hbac_common::utils::cdt;
+use hbac_common::utils::{cdt, dot_norm, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
-use hbac_motifs::fragments::{list_motifs, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, plot_fragments, PlotFragmentsParams, write_motifs_slices};
+use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use plotters::prelude::BLACK;
 use hbac_store::{SqlStore, Store};
 use hbac_shared::*;
 use hbac_shared::TensorSliceIdx;
@@ -70,7 +71,7 @@ enum Commands {
     #[command()]
     FindMotifs (FindMotifsParams),
     MotifsToFragments(MotifsToFragmentsParams),
-    PlotFragments(PlotFragmentsParams),
+    PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
     TrainOnMotif(SelectMotifsParams),
@@ -146,23 +147,38 @@ fn _main() -> Result<(), HbacError> {
         }
 
         Some(Commands::MotifsToFragments(fragment_motifs_params)) => {
-            write_motifs_slices(
-                cli.base_path.as_str(),
-                fragment_motifs_params.fragments_dir(),
-                fragments::motifs_to_eeg_slices(
-                    list_motifs(fragment_motifs_params.motifs_dir())?,
-                    read_motif_to_iter
-                )?,
-                read_eeg_index(fragment_motifs_params.motifs_dir())?.1,
-                data::eeg_to_tensor,
-                fragment_motifs_params.window()
-            )?;
+            // write_motifs_slices(
+            //     cli.base_path.as_str(),
+            //     fragment_motifs_params.fragments_dir(),
+            //     fragments::motifs_to_eeg_slices(
+            //         list_motifs(fragment_motifs_params.motifs_dir())?,
+            //         read_motif_to_iter
+            //     )?,
+            //     read_eeg_index(fragment_motifs_params.motifs_dir())?.1,
+            //     data::eeg_to_tensor,
+            //     fragment_motifs_params.window()
+            // )?;
         }
 
-        Some(Commands::PlotFragments(plot_fragments_params)) => {
-            plot_fragments(
-                plot_fragments_params
-            )?;
+        Some(Commands::PlotMotifSlices(plot_fragments_params)) => {
+            let mut store_guard = store.lock()?;
+
+            let (channel, run_id, slices) = store_guard.list_motif_slices(plot_fragments_params.motif_id())?;
+
+            let slices = load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device);
+
+            let all_sices = slices.iter().flat_map(|(eeg_id, slices)| slices.iter()).collect::<Vec<&Tensor>>();
+
+            check_slices(&all_sices, 0.9);
+
+            plot_series(
+                all_sices.into_iter().map(|t|{
+                    (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)|(i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+                }).collect(),
+                format!("Motif {}", plot_fragments_params.motif_id()).as_str(),
+                (10000, 10000),
+                &Path::new(plot_fragments_params.output_dir()).join(format!("motif_{}.png", plot_fragments_params.motif_id()))
+            ).unwrap();
         }
 
         Some(Commands::MotifsToTensor(choose_fragments_params)) => {
@@ -211,7 +227,7 @@ fn _main() -> Result<(), HbacError> {
                         .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
                         .collect::<Vec<String>>();
 
-                    Ok((label_tensors_path.0, eeg_ids.into_iter().map(|eeg_id| {
+                    Ok((label_tensors_path.0, eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
                         data::eeg_to_tensor(cli.base_path.as_str(), eeg_id.as_str(), device)
                     }))) //(label, path)
                 }).collect::<Result<Vec<_>, HbacError>>()?,
@@ -244,6 +260,7 @@ fn _main() -> Result<(), HbacError> {
 }
 
 
+
 #[cfg(test)]
 mod main_tests {
     use tch::Device;
@@ -255,15 +272,15 @@ mod main_tests {
     #[test]
     fn test_it() -> Result<(), HbacError>{
         // main();
-        EEGs::good_eegs_of("../../data/", "seizure_vote", Some(10))?.i64()?.into_iter().enumerate().map(|(i, v):(usize, Option<i64>)|{
-            // String::from(v.expect(format!("no value in {}", i))).as_str();
-
-            data::eeg_to_tensor("../../data/", v.expect(format!("no value in {}", i).as_str()).to_string().as_str(), Device::Cpu)
-        }).try_for_each(|t|{
-            println!("t={:?}", t?.size());
-
-            Ok::<(), HbacError>(())
-        })?;
+        // EEGs::good_eegs_of("../../data/", "seizure_vote", Some(10))?.i64()?.into_iter().enumerate().map(|(i, v):(usize, Option<i64>)|{
+        //     // String::from(v.expect(format!("no value in {}", i))).as_str();
+        //
+        //     data::eeg_to_tensor("../../data/", v.expect(format!("no value in {}", i).as_str()).to_string().as_str(), Device::Cpu)
+        // }).try_for_each(|t|{
+        //     println!("t={:?}", t?.size());
+        //
+        //     Ok::<(), HbacError>(())
+        // })?;
 
         Ok(())
     }

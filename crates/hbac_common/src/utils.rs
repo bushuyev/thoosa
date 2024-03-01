@@ -186,7 +186,7 @@ pub fn z_norm_2(t_0:&Tensor, dim:i64) -> Result<Tensor, HbacError>{
 
 
 pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, HbacError> {
-    Ok(norm_2(slice_01, 1).tensordot(&norm_2(slice_02, dim), [dim], [dim]).diag(0))
+    Ok(norm_2(slice_01, dim).tensordot(&norm_2(slice_02, dim), [dim], [dim]).diag(0))
 }
 
 

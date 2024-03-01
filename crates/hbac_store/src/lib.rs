@@ -63,7 +63,7 @@ pub trait Store:Sync + Send{
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
     fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>) -> Result<usize, HbacError>;
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
-    fn list_motif_slices(&mut self, motif_id:usize) -> Result<Vec<TensorSliceIdx>, HbacError>;
+    fn list_motif_slices(&mut self, motif_id:usize) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError>;
 }
 
 impl Debug for StoreDumper {
@@ -297,38 +297,46 @@ impl Store for SqlStore {
         Ok(channels_corr_motifs)
     }
 
-    fn list_motif_slices(&mut self, motif_id:usize) -> Result<Vec<TensorSliceIdx>, HbacError> {
+    fn list_motif_slices(&mut self, motif_id:usize) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError> {
 
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
-        let slices = {
-            let mut stmt = t.prepare("SELECT  channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches where motif_id=?")?;
+        let channel_slices = {
+            let mut stmt = t.prepare("SELECT channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, run_id FROM slice_matches where motif_id=?")?;
 
-            let (slices, channel_set) = stmt.query_map([motif_id], |row| {
+            let (slices, channel_set, run_id) = stmt.query_map([motif_id], |row| {
                 Ok((
                     row.get::<usize, i64>(0)?,//channel_id
                     row.get::<usize, i64>(1)?,//tensor_id_0
                     row.get::<usize, i64>(2)?,//slice_idx_0
                     row.get::<usize, i64>(3)?,//tensor_id_1
                     row.get::<usize, i64>(4)?,//slice_idx_1
+                    row.get::<usize, usize>(5)?,//run_id
                 ))
-            })?.map(|v| v.unwrap()).fold((HashSet::new(), HashSet::new()), |(mut a, mut channel_set), v| {
+            })?.map(|v| v.unwrap()).fold((HashSet::new(), HashSet::new(), None), |(mut a, mut channel_set, mut run_id), v| {
                 a.insert(TensorSliceIdx(v.1 as usize, v.2 as i64));
                 a.insert(TensorSliceIdx(v.3 as usize, v.4 as i64));
 
-                channel_set.insert(v.0);
-                (a, channel_set)
+                channel_set.insert(v.0);//TODO replace with Option
+
+                if let Some(run_id) = run_id   {
+                   assert!(run_id == v.5);
+                } else {
+                    run_id.replace(v.5);
+                }
+
+                (a, channel_set, run_id)
             });
 
             assert!(channel_set.len() == 1);
 
-            slices.into_iter().collect()
+            (channel_set.into_iter().nth(0).expect("channel"), run_id.expect("no run id"), slices.into_iter().collect())
         };
 
         t.commit();
 
-        Ok(slices)
+        Ok(channel_slices)
     }
 }
 
@@ -500,7 +508,7 @@ mod store_tests{
         assert_eq!(1, motifs[7][0].0);
         assert_eq!(2, motifs[7][1].0);
 
-        let mut slices = store.list_motif_slices(1)?;
+        let (channel, run_id_, mut slices) = store.list_motif_slices(1)?;
         slices.sort_by(|a, b| if a.0 + (a.1 as usize) < b.0 + (b.1 as usize) { Ordering::Less } else {Ordering::Greater});
 
         if m_1_first {
@@ -512,6 +520,9 @@ mod store_tests{
                 TensorSliceIdx(3, 100), TensorSliceIdx(3, 200), TensorSliceIdx(5, 200), TensorSliceIdx(5, 300)
             ], slices);
         }
+
+        assert_eq!(7, channel);
+        assert_eq!(run_id, run_id_);
 
         Ok(())
     }

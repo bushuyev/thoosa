@@ -8,7 +8,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::Utc;
 use clap::Args;
-use log::{debug, error, info};
+use clap::builder::TypedValueParser;
+use log::{debug, error, info, warn};
 use plotters::prelude::{BLACK, RGBColor};
 use hbac_shared::HbacError;
 use crate::tensor_iter::TensorSlice;
@@ -20,6 +21,11 @@ use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use hbac_common::utils::*;
 use hbac_shared::*;
+use rayon::prelude::*;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelBridge;
+use tch::IndexOp;
+
 
 #[derive(Debug, Args)]
 pub struct MotifsToFragmentsParams {
@@ -276,59 +282,63 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 }
 
 #[derive(Debug, Args)]
-pub struct PlotFragmentsParams {
+pub struct PlotMotifSlicesParams {
 
-    #[arg(long, default_value = "../../data_local/fragments")]
-    fragments_dir: String,
+    #[arg(long)]
+    motif_id: usize,
 
-    #[arg(long, default_value = "/tmp/fragments_plots")]
+    #[arg(long, default_value = "/tmp/motif_plots")]
     output_dir: String,
 
 }
 
-pub fn plot_fragments(params:&PlotFragmentsParams)->Result<(), HbacError> {
-
-    do_plot_fragments(
-        &params.fragments_dir,
-        &params.output_dir
-    );
-
-    Ok(())
+impl PlotMotifSlicesParams {
+    pub fn motif_id(&self) -> usize {
+        self.motif_id
+    }
+    pub fn output_dir(&self) -> &str {
+        &self.output_dir
+    }
 }
 
-fn do_plot_fragments(from: &impl AsRef<std::path::Path>, to: &impl AsRef<std::path::Path>) ->Result<(), HbacError>{
-    debug!("do_plot_fragments: from={:?} to={:?}", from.as_ref(), to.as_ref());
-    fs::create_dir_all(to)?;
+pub fn check_slices(slices: &Vec<&Tensor>, min_dot:f32) {
 
-    let mut series:Vec<(String, RGBColor, Vec<(f32, f32)>)> = vec![];
-    let x = lin_t(1000);//TODO
+    slices.iter().enumerate().for_each(|(i, s_0)| {
+        slices.iter().skip(i).for_each(|s_1| {
+            let dp = dot_norm(1, &s_0.view((1, -1)), &s_1.view((1, -1))).unwrap().double_value(&[0]) as f32;
 
-    let to_path = to.as_ref();
-    let from_path = from.as_ref();
-    for f in fs::read_dir(from)? {
-        let entry = f?;
-
-        if entry.file_type()?.is_dir() {
-            do_plot_fragments(
-                &from_path.join(entry.file_name()),
-                &to_path.join(entry.file_name())
-            )?
-        } else {
-
-            if let Ok(pt) = Tensor::load(entry.path()) {
-                series.push(
-                    (format!("{}", entry.file_name().to_str().unwrap()), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&pt).into_iter()).collect::<Vec<(f32, f32)>>()),
-                );
+            if dp < min_dot {
+                warn!("dot: {}", dp);
             } else {
-                error!("can't load {:?}", entry.path());
+                debug!("dot: {}", dp);
             }
 
-
-        }
-    }
-    plot_series(series, format!("{}", to_path.file_name().unwrap().to_str().unwrap()).as_str(), (1000, 480), &to_path.join(format!("{}.png", to_path.file_name().unwrap().to_str().unwrap())))
+        });
+    });
 }
 
+
+pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx>, eegs: Vec<String>, load_tensor: F, device: Device) -> Vec<(String, Vec<Tensor>)>
+    where F: Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
+
+    let tensors_ids_slices = slices.iter().fold(HashMap::new(), |mut a, slice| {
+        a
+            .entry(slice.0)
+            .or_insert_with(|| Vec::with_capacity(10))
+            .push(slice.1);
+        a
+    });
+
+    let slices = tensors_ids_slices.into_par_iter().map(|(tensor_idx, slices)| {
+        let resource = eegs[tensor_idx].clone();
+        let t = load_tensor(base_path, resource.as_str(), device).unwrap();
+
+        (resource, slices.into_iter().map(|slice_idx| t.i((channel, slice_idx..slice_idx + widow))).collect::<Vec<Tensor>>())
+
+    }).collect::<Vec<(String, Vec<Tensor>)>>();
+
+    slices
+}
 
 
 #[derive(Debug, Args)]
@@ -650,44 +660,49 @@ mod motifs_tests {
         Ok(())
     }
 
+
     #[test]
-    fn test_plot_fragments()-> Result<(), HbacError>{
-        super::plot_fragments(
-            &super::PlotFragmentsParams {
-                fragments_dir: "/tmp/fff/0/".to_string(),
-                output_dir: "/tmp/fragments_plots_zzz/0/".to_string(),
-            }
-        )
+    fn test_load_motif_slices()-> Result<(), HbacError>{
+
+        fn test_eeg_to_t(base_dir:&str, eeg_id:&str, _:Device) -> Result<Tensor, HbacError> {
+            let t = Tensor::vstack(&[
+                Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
+                Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
+            ]);
+
+            Ok(t)
+        }
+
+        let motif_slices = super::load_motif_slices(
+            "base",
+            0,
+            2,
+            vec![TensorSliceIdx(0, 2)],
+            vec!["123".into()],
+            test_eeg_to_t,
+            Device::Cpu
+        );
+
+        assert_eq!(vec![("123".to_string(), vec![Tensor::from_slice(&[2.0, 3.0])])], motif_slices);
+
+        println!("motif_slices={:?}", motif_slices);
+
+        Ok(())
     }
 
     #[test]
-    fn test_check_fragments()-> Result<(), HbacError>{
+    fn test_check_slices()-> Result<(), HbacError> {
 
-        super::check_fragments(
-            &"/tmp/seizure_fragments/0/0/".to_string()
-        )
-        // for f in fs::read_dir(from)? {
-        //     let entry = f?;
-        //
-        //     if entry.file_type()?.is_dir() {
-        //         do_plot_fragments(
-        //             &from_path.join(entry.file_name()),
-        //             &to_path.join(entry.file_name())
-        //         )?
-        //     } else {
-        //
-        //         if let Ok(pt) = Tensor::load(entry.path()) {
-        //             series.push(
-        //                 (format!("{}", entry.file_name().to_str().unwrap()), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&pt).into_iter()).collect::<Vec<(f32, f32)>>()),
-        //             );
-        //         } else {
-        //             error!("can't load {:?}", entry.path());
-        //         }
-        //
-        //
-        //     }
-        // }
+        super::check_slices(
+            &vec![
+                &Tensor::from_slice(&[1., 1., 1.]),
+                &Tensor::from_slice(&[1., 1., 1.]),
+                &Tensor::from_slice(&[0., 1., 1.]),
+            ],
+            0.99
+        );
 
+        Ok(())
     }
 
     // #[test]
