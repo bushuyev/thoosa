@@ -7,6 +7,7 @@ import torch
 
 sin_y = torch.tensor(np.array([4. * np.sin(np.pi * x / 20.) for x in range(0, 100)]), dtype=torch.float)
 x2_y = torch.tensor(np.array([2. * (x / 50.) ** 2 - 4. for x in range(0, 100)]), dtype=torch.float)
+x2_y_1000 = torch.tensor(np.array([4. * (x / 50.) ** 2 - 4. for x in range(0, 1000)]), dtype=torch.float)
 
 
 class NPDataset(Dataset):
@@ -24,6 +25,7 @@ class NPDataset(Dataset):
 
 plt.plot(sin_y, 'r', label="sin")
 plt.plot(x2_y, 'g', label="x2")
+# plt.plot(x2_y_1000, 'b', label="x2")
 
 plt.show()
 
@@ -76,6 +78,7 @@ with torch.no_grad():
     for _ in range(0,10):
         print(f"sin={model(sin_y.view(1, -1))}")
         print(f"x2={model(x2_y.view(1, -1))}")
+        print(f"x4={model(x2_y_1000.view(1, -1))}")
         print("--------------------------------------")
 
 

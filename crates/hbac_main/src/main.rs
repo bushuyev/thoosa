@@ -1,5 +1,6 @@
 use std::backtrace::Backtrace;
 use std::{env, fs};
+use std::cmp::max;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::str::FromStr;
@@ -48,8 +49,11 @@ struct Cli {
     #[arg(long, default_value = "hbac.log")]
     logfile: String,
 
-    #[arg(long, default_value = None )]
+    #[arg(long)]
     limit: Option<usize>,
+
+    #[arg(long)]
+    num_threads: Option<usize>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -57,7 +61,7 @@ struct Cli {
 
 
 #[derive(Debug, Args)]
-pub struct FillClasseResources {
+pub struct TrainOnMotifParams {
 
 }
 
@@ -69,6 +73,7 @@ enum Commands {
     PlotFragments(PlotFragmentsParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
+    TrainOnMotif(SelectMotifsParams),
 }
 
 
@@ -91,7 +96,7 @@ fn _main() -> Result<(), HbacError> {
 
     let cli = Cli::parse();
 
-    rayon::ThreadPoolBuilder::new().num_threads(4).build_global()?;
+
 
     CombinedLogger::init(
         vec![
@@ -106,9 +111,15 @@ fn _main() -> Result<(), HbacError> {
         Device::Cpu
     };
 
-    info!("VERSION: {} device={:?}, base_path={:?} cpus={}", VERSION, device, cli.base_path, std::thread::available_parallelism()?);
+    let cpu_num = std::thread::available_parallelism()?;
+    let num_threads = cli.num_threads.unwrap_or_else(||max(2, cpu_num.get()/2));
+
+    info!("VERSION: {} device={:?}, base_path={:?} cpus={} num_threads={}", VERSION, device, cli.base_path, cpu_num, num_threads);
     info!("limit_eeg: {:?}", cli.limit);
     std::io::stdout().flush()?;
+
+
+    rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
 
     let base_path = cli.base_path.clone();
 
@@ -175,36 +186,38 @@ fn _main() -> Result<(), HbacError> {
             // }
         }
 
-        Some(Commands::SelectMotifs(find_good_motifs_params)) => {
+        Some(Commands::SelectMotifs(select_motifs_params)) => {
 
-            debug!("select_motifs: label_tensors()={:?}", find_good_motifs_params.label_tensors());
-
-            let run_id = 1;
+            info!("select_motifs: select_motifs_params={:?}", select_motifs_params);
 
             let mut store_guard = store.lock()?;
             let (motifs, channel_motif_ids) = motifs_to_tensor(
                 cli.base_path.as_str(),
-                store_guard.motifs_to_eeg_slices(run_id)?,
-                store_guard.list_run_resources(run_id)?,
+                store_guard.motifs_to_eeg_slices(select_motifs_params.run_id())?,
+                store_guard.list_run_resources(select_motifs_params.run_id())?,
                 data::eeg_to_tensor,
-                1000,
-                20
+                select_motifs_params.window() as i64,
+                20,
+                device
             )?;
+
+            info!("select_motifs: motifs tensor built, size={:?}", motifs.size());
 
             let channels_good_motif_idxs = select_motifs(
                 motifs,
-                find_good_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
+                select_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
                     let eeg_ids = EEGs::good_eegs_of(cli.base_path.as_str(), label_tensors_path.1.as_str(), cli.limit)?.i64()?.into_iter()
                         .enumerate()
                         .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
                         .collect::<Vec<String>>();
 
                     Ok((label_tensors_path.0, eeg_ids.into_iter().map(|eeg_id| {
-                        data::eeg_to_tensor(cli.base_path.as_str(), eeg_id.as_str(), Device::Cpu)
+                        data::eeg_to_tensor(cli.base_path.as_str(), eeg_id.as_str(), device)
                     }))) //(label, path)
                 }).collect::<Result<Vec<_>, HbacError>>()?,
                 cli.limit,
-                1000,
+                select_motifs_params.step(),
+                device
             )?;
 
             let motifs_corrs = channel_motif_ids.into_iter().zip(channels_good_motif_idxs.into_iter()).map(|(motif_ids, motif_idxs_corss)|{
@@ -213,13 +226,17 @@ fn _main() -> Result<(), HbacError> {
                 }).collect::<Vec<(usize, f64)>>()
             }).collect::<Vec<Vec<(usize, f64)>>>();
 
-            debug!("motifs_corrs={:?}", motifs_corrs);
+            debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
+            info!("select_motifs: motifs_corrs.len()={:?}", motifs_corrs.len());
 
-            store_guard.save_motifs_corrs(format!("{:?}", find_good_motifs_params.label_tensors()).as_str(), motifs_corrs)?;//TODO label_tensors
+            store_guard.save_motifs_corrs(format!("{:?}", select_motifs_params.label_tensors()).as_str(), motifs_corrs)?;//TODO label_tensors
 
             // t.save(find_good_motifs_params.output_motifs_tensor_path())?;
         }
 
+        Some(Commands::TrainOnMotif(_)) => {
+
+        }
         None => {}
     }
 

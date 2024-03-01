@@ -397,7 +397,11 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Ar
             return Ok(())
         }
 
-        debug!("dot_motifs: count={}", count.fetch_add(1, Ordering::Relaxed));
+        let count_ = count.fetch_add(1, Ordering::Relaxed);
+        if count_ % 100 == 0 {
+            info!("dot_motifs: count={}", count_);
+        }
+        debug!("dot_motifs: count={}", count_);
     }
     Ok(())
 }
@@ -406,7 +410,13 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Ar
 pub struct SelectMotifsParams {
 
     #[arg(long)]
-    output_motifs_tensor_path: String,
+    run_id: usize,
+
+    #[arg(long,  default_value_t = 1000)]
+    step: usize,
+
+    #[arg(long,  default_value_t = 1000)]
+    window: usize,
 
     #[arg(long, value_parser=parse_key_val::<i64, String>)]
     label_tensors: Vec<(i64, String)>,
@@ -414,17 +424,23 @@ pub struct SelectMotifsParams {
 }
 
 impl SelectMotifsParams {
-    pub fn output_motifs_tensor_path(&self) -> &str {
-        &self.output_motifs_tensor_path
-    }
-
 
     pub fn label_tensors(&self) -> &Vec<(i64, String)> {
         &self.label_tensors
     }
+
+    pub fn run_id(&self) -> usize {
+        self.run_id
+    }
+    pub fn step(&self) -> usize {
+        self.step
+    }
+    pub fn window(&self) -> usize {
+        self.window
+    }
 }
 
-pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
+pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
     let motifs_size = motifs.size();
 
@@ -452,7 +468,7 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
     labels_loaders.into_iter().par_bridge().try_for_each(|(label, loader)|{
         dot_motifs(
             &unsafe {Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor)},
-            &Tensor::zeros(slice_len, (tch::Kind::Float, Device::Cpu)), //TODO
+            &Tensor::zeros(slice_len, (tch::Kind::Float, device)), //TODO
             Arc::clone(&channels_motifs_classes_lock),
             loader, label, limit, step, 0.97 //TODO step - k * slice_len
         )
@@ -468,6 +484,7 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
 
     for motif_i in 0..motifs_num {
         for channel_i in 0..channels_num {
+
             let vals_labels_t = Tensor::vstack(&[
                 Tensor::from_slice(channels_motifs_classes_guard[channel_i as usize][motif_i as usize].0.as_slice()),
                 Tensor::from_slice(channels_motifs_classes_guard[channel_i as usize][motif_i as usize].1.as_slice())
@@ -621,6 +638,45 @@ mod motif_find_tests {
 
 
     #[test]
+    pub fn test_composite_sin() -> Result<(), HbacError>{
+        let n = 300i64;
+        let x = lin_t(n);
+        // let gauss_1 = gauss_t(400., 100., n);
+
+        let to_pulses_in_random = pulses_in_rand(
+            n,
+            &[
+                (100, comp_sin_v(100)),
+                // (100, pulse_v(80., 20., 200, 20.))
+            ], 2., 1.
+        );
+
+        let sig = Tensor::from_slice(
+            to_pulses_in_random.as_slice()
+        );
+
+        // // let t_10 = Tensor::from_slice((0..10).map(|i| i as f64).collect::<Vec<_>>().as_slice());
+        // let t_1_snippet = gauss_1.f_slice(0, Some(0i64), Some(100i64), 1)?;
+        // let t_2_snippet = gauss_1.f_slice(0, Some(0i64), Some(100i64), 1)?;
+        // let t_2_1_snippet = gauss_1.f_slice(0, Some(10i64), Some(110i64), 1)?;
+        //
+        // let dot_0 = norm(&t_1_snippet).dot(&norm(&t_2_snippet));
+        // let dot_1 = norm(&t_1_snippet).dot(&norm(&t_2_1_snippet));
+        // //
+        // println!("dot_0={:?}", dot_0);
+        println!("sig={:?}", sig.size());
+
+        plot_series(
+            vec![
+                (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig)).collect::<Vec<(f32, f32)>>()),
+
+            ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        ).unwrap();
+
+        Ok(())
+    }
+
+    #[test]
     pub fn test_pulses_in_rand() -> Result<(), HbacError>{
         let n = 1000i64;
         let x = lin_t(n);
@@ -631,7 +687,7 @@ mod motif_find_tests {
             &[
                 (100, pulse_v(80., 20., 200, 20.)),
                 (100, pulse_v(80., 20., 200, 20.))
-            ], 10.
+            ], 10., 0.001
         );
 
         let sig = Tensor::from_slice(
@@ -764,11 +820,11 @@ mod motif_find_tests {
     }
 
 
-    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)], amplitude: f64) -> Vec<f64> {
+    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)], amplitude: f64, scale: f64) -> Vec<f64> {
         let random = random_v(n, amplitude, 1.);
         let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
 
-        join_with_offset::<f64>(n, 0., 0.001, pulses, random)
+        join_with_offset::<f64>(n, 0., scale, pulses, random)
     }
 
     fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T>{
@@ -918,21 +974,22 @@ mod motif_find_tests {
 
 
         let channels_good_motifs = select_motifs(
-         // Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
+            // Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
             motifs_tensor,
-         vec![
-             (1, iter_all_in_dir(test_dir.join("0"))?),
-             (0, iter_all_in_dir(test_dir.join("1"))?),
+            vec![
+                (1, iter_all_in_dir(test_dir.join("0"))?),
+                (0, iter_all_in_dir(test_dir.join("1"))?),
 
-             // (1, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")?),
-             // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")?),
-             // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")?),
-             // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")?),
-             // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")?),
-             // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")?),
-         ],
-         Some(3),
-            1
+                // (1, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")?),
+                // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")?),
+                // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/gpd_vote_eegs.txt/")?),
+                // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lrda_vote_eegs.txt/")?),
+                // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/grda_vote_eegs.txt/")?),
+                // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/")?),
+            ],
+            Some(3),
+            1,
+            Device::Cpu
         )?;
 
         println!("t={:?}", channels_good_motifs);
@@ -1021,7 +1078,7 @@ mod motif_find_tests {
                 // (30, pulse_v(8., 3., 20, 2.))
                 (100, pulse_v(80., 30., 200, 20.)),
                 (300, pulse_v(40., 30., 200, 20.))
-            ], 50.).as_slice()
+            ], 50., 0.001).as_slice()
         );
 
         println!("sig_0_1.size = {:?}", sig_0_1.size());
@@ -1339,7 +1396,7 @@ mod motif_find_tests {
         );
 
         let sig_2 = Tensor::from_slice(
-            pulses_in_rand(n, &[], 10.).as_slice()
+            pulses_in_rand(n, &[], 10., 0.001).as_slice()
         );
         (sig_1, sig_2)
     }
@@ -1352,6 +1409,20 @@ mod motif_find_tests {
 
     fn gauss_i(μ: f64, σ: f64, n: i64) -> impl Iterator<Item=f64> {
         (0..n).map(move |x| (-0.5 * ((x as f64 - μ) / σ).powi(2)).exp())
+    }
+
+    fn comp_sin(n: i64) -> impl Iterator<Item=f64> {
+        (0..n).map(|x|x as f64).map(move |x|
+            30. * (PI / 100. * x).sin() +
+            4. * (PI / 50. * x.powf(1.2)).sin() +
+            8. * (PI / 25. * x.powf(1.2)).sin() +
+            12. * (PI / 12. * x.powf(1.2)).sin() +
+            6. * (PI / 6. * x.powf(1.2)).sin()
+        )
+    }
+
+    fn comp_sin_v(n: i64) -> Vec<f64> {
+        comp_sin(n).collect::<Vec<f64>>()
     }
 
     fn pulse_t(μ: f64, σ: f64, n: i64, f: f64) -> Tensor {

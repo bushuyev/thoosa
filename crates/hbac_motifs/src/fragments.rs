@@ -168,7 +168,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when groups in channel < max
 */
-pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
+pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
 
     let mut channels_motifs_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
@@ -177,7 +177,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Ve
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
         let eeg_id = eegs[eeg_idx as usize].clone();
-        let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), Device::Cpu)?;
+        let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), device)?;//TODO use always CPU? no clc
 
         for fragment in channels_motifslices {
 
@@ -210,7 +210,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Ve
             }).collect::<Vec<Tensor>>()).map(|mut group| {
 
             if (group.len() as i64) < groups_num {
-                group.extend((0..groups_num-group.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, Device::Cpu))))
+                group.extend((0..groups_num-group.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, device))))
             }
 
             let t = Tensor::vstack(group.as_slice());
@@ -593,7 +593,8 @@ mod motifs_tests {
             eeg_id_fragments_map,
             vec!["111".into(), "222".into()],
             test_eeg_to_t,
-            10, 2
+            10, 2,
+            Device::Cpu
         )?;
 
         println!("motif_ids={:?}", motif_ids);

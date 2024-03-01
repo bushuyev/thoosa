@@ -387,7 +387,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS motifs_corrs (
                 motif_id   REFERENCES motifs(id),
-                corr_id    REFERENCES corrs_run(id),
+                corr_id    REFERENCES corrs_run(id) ON DELETE CASCADE,
                 corr       FLOAT NOT NULL
             )", ())?;
 

@@ -9,6 +9,8 @@ use tch::nn::{Module, OptimizerConfig};
 use plotters::drawing::IntoDrawingArea;
 use hbac_shared::HbacError;
 use std::error::Error;
+use std::fs;
+use std::ops::Deref;
 
 
 pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
@@ -54,6 +56,10 @@ pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Err
 }
 
 pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), HbacError> {
+    if let Some(parent) = path.as_ref().parent() {
+        fs::create_dir_all(parent)?;
+    }
+
 
     let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
         if max_min.0 > *x {
