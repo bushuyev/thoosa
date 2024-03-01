@@ -269,11 +269,13 @@ mod tests {
     use log::debug;
     use tch::{Device, kind, Kind, nn, Reduction, Tensor};
     use tch::nn::{ConvConfig, Module, OptimizerConfig};
+    use hbac_shared::HbacError;
 
     use crate::builder::clc_conv1d_out;
     use crate::builder::SeqBuilder;
     use crate::data::EEGs;
     use crate::my_tch::configure_dense;
+    use crate::utils;
     use crate::utils::DataBatch;
 
     #[test]
@@ -362,6 +364,27 @@ mod tests {
                 |t|t.copy()
             ).end_seq();
 
+    }
+
+
+    #[test]
+    pub fn test_simp()-> Result<(), HbacError>{
+        let vs = nn::VarStore::new(Device::Cpu);
+
+        let net = SeqBuilder::new(1000)
+            .conv(5, 1, 1, ConvConfig::default())
+            .linear()
+            .end_seq().build_tch_module(&vs.root())?;
+
+        utils::train(
+            &Device::Cpu,
+            &crate::simp::TestDs::new() as &dyn DataBatch,
+            net,
+            &vs,
+            |pred: &Tensor, target: &Tensor| {
+                pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
+            }
+        )
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 use tch::Tensor;
 use crate::utils::DataBatch;
 
-struct TestDs {
+pub(crate) struct TestDs {
     sin_y:Tensor,
     x2_y:Tensor,
 }
@@ -11,8 +11,8 @@ impl TestDs {
     pub fn new() -> Self {
 
         Self {
-            sin_y: Tensor::from_slice((0..100).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice()),
-            x2_y: Tensor::from_slice((0..100).map(|x| 2. * (x as f32/ 50.).powi(2) - 4.  ).collect::<Vec<f32>>().as_slice())
+            sin_y: Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice()),
+            x2_y: Tensor::from_slice((0..1000).map(|x| 2. * (x as f32/ 50.).powi(2) - 4.  ).collect::<Vec<f32>>().as_slice())
         }
     }
 }
