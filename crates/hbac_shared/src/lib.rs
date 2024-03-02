@@ -209,3 +209,24 @@ impl MotifSlice {
         self.channel_idx
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use log::LevelFilter;
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+
+    #[ctor::ctor]
+    fn init() {
+        CombinedLogger::init(
+            vec![
+                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ).unwrap_or_else(|e|{
+            println!("CombinedLogger::init failed: {:?}", e);
+        });
+
+
+        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
+        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    }
+}

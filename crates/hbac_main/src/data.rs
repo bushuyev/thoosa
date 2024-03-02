@@ -30,7 +30,7 @@ use hbac_shared::HbacError;
 use hbac_shared::MotifSlice;
 use hbac_shared::TensorSliceIdx;
 
-use crate::utils::DataBatch;
+use hbac_common::utils::DataBatch;
 
 
 #[derive(Debug)]
@@ -670,7 +670,7 @@ pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), Hba
 
 
 #[cfg(test)]
-mod tests {
+mod data_tests {
     use std::fs;
     use std::fs::{DirEntry, File};
     use std::io::Write;
@@ -691,22 +691,22 @@ mod tests {
 
     use crate::*;
     use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter};
-    use crate::utils::DataBatch;
+    use hbac_common::utils::DataBatch;
 
-    #[ctor::ctor]
-    fn init() {
-        CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ).unwrap_or_else(|e|{
-            println!("CombinedLogger::init failed: {:?}", e);
-        });
-
-
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    }
+    // #[ctor::ctor]
+    // fn init() {
+    //     CombinedLogger::init(
+    //         vec![
+    //             TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+    //         ]
+    //     ).unwrap_or_else(|e|{
+    //         println!("CombinedLogger::init failed: {:?}", e);
+    //     });
+    //
+    //
+    //     std::env::set_var("POLARS_FMT_MAX_COLS", "100");
+    //     std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    // }
 
     #[test]
     pub fn test_load_eegs() -> Result<(), HbacError> {

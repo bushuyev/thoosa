@@ -4,13 +4,15 @@ use plotters::prelude::*;
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::element::PathElement;
-use tch::{Kind, Tensor};
-use tch::nn::{Module, OptimizerConfig};
+use tch::{Device, Kind, nn, Tensor};
+use tch::nn::{Module, OptimizerConfig, VarStore};
 use plotters::drawing::IntoDrawingArea;
 use hbac_shared::HbacError;
 use std::error::Error;
 use std::fs;
 use std::ops::Deref;
+use log::{debug, info, trace};
+use crate::my_tch::LossFp;
 
 
 pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
@@ -157,8 +159,6 @@ pub fn cdt_for_dir() ->String {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::utils::cdt;
-
     #[test]
     fn test_cdt_for_dir(){
         println!("{}", super::cdt_for_dir() );
@@ -221,4 +221,64 @@ pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Syn
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+
+pub trait DataBatch {
+    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor);
+    fn valid(&self, batch_size:Option<usize>) -> (Tensor, Tensor);
+}
+
+pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&VarStore, loss_fn:LossFp) -> Result<(), HbacError>{
+
+    debug!("device={:?}", device);
+    const BATCH_SIZE: usize = 10usize;
+
+    let mut opt = nn::AdamW::default().build(vs, 6.25e-5).unwrap();
+
+    for idx in 1..100 {
+        trace!("idx={}", idx);
+        std::io::stdout().flush()?;
+
+        let (x_t, y_t) = eegs.train_batch(BATCH_SIZE);// load_batch(device, BATCH_SIZE);
+
+        let x_t = x_t.to_device(*device);
+        let y_t = y_t.to_device(*device);
+
+        let pred_y = model.forward(&x_t);
+
+
+        let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
+
+        let loss = loss_fn(&pred_y_mean, &y_t);
+
+        opt.backward_step(&loss);
+
+        tch::no_grad(||{
+            // if idx % 10 == 0 {
+            //     let (x_t, y_t) = eegs.valid(Some(BATCH_SIZE));
+            //
+            //     let pred_y = model.forward(&x_t.to_device(*device));
+            //
+            //
+            //     let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
+            //     let valid_loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
+            //     info!("valid loss={:?}", valid_loss);
+            //     std::io::stdout().flush().unwrap();
+            // }
+
+        });
+
+        // if idx % 10 == 0 {
+            debug!("loss={:?}", loss);
+            std::io::stdout().flush()?;
+        // }
+
+        drop(x_t);
+        drop(y_t);
+        drop(pred_y_mean);
+        drop(loss);
+    }
+
+    Ok(())
 }

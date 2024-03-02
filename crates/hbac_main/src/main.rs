@@ -6,14 +6,14 @@ use std::io::Write;
 use std::str::FromStr;
 use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
-use tch::{Device, Kind, Tensor};
+use tch::{Device, Kind, nn, Reduction, Tensor};
 use hbac_motifs::find::{find_motifs_iter, FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
 use crate::data::{clc_records, EEGs, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::Series;
-use hbac_common::utils::{cdt, dot_norm, norm_2, plot_series};
+use hbac_common::utils::{cdt, DataBatch, dot_norm, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
 use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
@@ -22,16 +22,18 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use plotters::prelude::BLACK;
+use tch::nn::ConvConfig;
+use hbac_common::builder::SeqBuilder;
+use hbac_common::simp::DummyDs;
 use hbac_store::{SqlStore, Store};
 use hbac_shared::*;
 use hbac_shared::TensorSliceIdx;
 
 
-mod my_tch;
+
 mod data;
-mod builder;
 mod utils;
-mod simp;
+
 mod version;
 
 
@@ -70,7 +72,6 @@ pub struct TrainOnMotifParams {
 enum Commands {
     #[command()]
     FindMotifs (FindMotifsParams),
-    MotifsToFragments(MotifsToFragmentsParams),
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
@@ -146,20 +147,6 @@ fn _main() -> Result<(), HbacError> {
             )?;
         }
 
-        Some(Commands::MotifsToFragments(fragment_motifs_params)) => {
-            // write_motifs_slices(
-            //     cli.base_path.as_str(),
-            //     fragment_motifs_params.fragments_dir(),
-            //     fragments::motifs_to_eeg_slices(
-            //         list_motifs(fragment_motifs_params.motifs_dir())?,
-            //         read_motif_to_iter
-            //     )?,
-            //     read_eeg_index(fragment_motifs_params.motifs_dir())?.1,
-            //     data::eeg_to_tensor,
-            //     fragment_motifs_params.window()
-            // )?;
-        }
-
         Some(Commands::PlotMotifSlices(plot_fragments_params)) => {
             let mut store_guard = store.lock()?;
 
@@ -182,24 +169,22 @@ fn _main() -> Result<(), HbacError> {
         }
 
         Some(Commands::MotifsToTensor(choose_fragments_params)) => {
-            // let motifs_eeg_index = read_eeg_index(choose_fragments_params.motifs_dir())?;
-            //
-            // let t = motifs_to_tensor(
-            //     cli.base_path.as_str(),
-            //     fragments::motifs_to_eeg_slices(
-            //         list_motifs(choose_fragments_params.motifs_dir())?,
-            //         read_motif_to_iter
-            //     )?,
-            //     motifs_eeg_index.1,
-            //     data::eeg_to_tensor,
-            //     choose_fragments_params.window(),
-            //     20
-            // )?;
-            //
-            // if let Some(out) =  choose_fragments_params.output_dir() {
-            //     let save_to = motifs_eeg_index.0.map(|v|v.replace(".txt", ".pt")).unwrap_or("unknown.pt".into());
-            //     t.save(Path::new(out).join(save_to));
-            // }
+
+            let mut store_guard = store.lock()?;
+
+            let t = motifs_to_tensor(
+                cli.base_path.as_str(),
+                store_guard.motifs_to_eeg_slices(choose_fragments_params.run_id())?,
+                store_guard.list_run_resources(choose_fragments_params.run_id())?,
+                data::eeg_to_tensor,
+                choose_fragments_params.window(),
+                20,
+                device
+            )?;
+
+            if let Some(out) =  choose_fragments_params.output_dir() {
+                t.0.save(Path::new(out).join(format!("motifs_in_{}", choose_fragments_params.run_id())));
+            }
         }
 
         Some(Commands::SelectMotifs(select_motifs_params)) => {
@@ -251,7 +236,22 @@ fn _main() -> Result<(), HbacError> {
         }
 
         Some(Commands::TrainOnMotif(_)) => {
+            let vs = nn::VarStore::new(Device::Cpu);
 
+            let net = SeqBuilder::new(1000)
+                .conv(100, 1, 1, ConvConfig::default())
+                .linear()
+                .end_seq().build_tch_module(&vs.root())?;
+
+            hbac_common::utils::train(
+                &Device::Cpu,
+                &DummyDs::new() as &dyn DataBatch,
+                net,
+                &vs,
+                |pred: &Tensor, target: &Tensor| {
+                    pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
+                }
+            )?;
         }
         None => {}
     }
@@ -263,6 +263,7 @@ fn _main() -> Result<(), HbacError> {
 
 #[cfg(test)]
 mod main_tests {
+    use log::debug;
     use tch::Device;
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
@@ -271,6 +272,7 @@ mod main_tests {
 
     #[test]
     fn test_it() -> Result<(), HbacError>{
+        debug!("XXXXXXXXXXXXXXXXX");
         // main();
         // EEGs::good_eegs_of("../../data/", "seizure_vote", Some(10))?.i64()?.into_iter().enumerate().map(|(i, v):(usize, Option<i64>)|{
         //     // String::from(v.expect(format!("no value in {}", i))).as_str();

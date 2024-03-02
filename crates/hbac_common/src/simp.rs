@@ -2,12 +2,12 @@ use std::f32::consts::PI;
 use tch::Tensor;
 use crate::utils::DataBatch;
 
-pub(crate) struct TestDs {
+pub struct DummyDs {
     sin_y:Tensor,
     x2_y:Tensor,
 }
 
-impl TestDs {
+impl DummyDs {
     pub fn new() -> Self {
 
         Self {
@@ -17,7 +17,7 @@ impl TestDs {
     }
 }
 
-impl DataBatch for TestDs {
+impl DataBatch for DummyDs {
     fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor) {
         let (x, y):(Vec<Tensor>, Vec<Tensor>) = (0..batch_size).fold((vec![], vec![]), |mut x_y, i| {
 
@@ -41,11 +41,11 @@ impl DataBatch for TestDs {
             Tensor::stack(
                 x.as_slice(),
                 0,
-            ).view([batch_size as i64, 1i64, 100i64]),
+            ).view([batch_size as i64, 1i64, 1000i64]),
             Tensor::stack(
                 y.as_slice(),
                 0,
-            )
+            ).view([batch_size as i64])
         )
     }
 

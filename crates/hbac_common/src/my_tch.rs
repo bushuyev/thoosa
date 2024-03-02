@@ -7,19 +7,19 @@ use std::time::Instant;
 
 use log::{debug, info};
 use plotters::prelude::*;
-use polars::prelude::{col, lit, NamedFrom, Series};
+// use polars::prelude::{col, lit, NamedFrom, Series};
 use simplelog::*;
 use tch::{Device, kind, Kind, nn, no_grad, Reduction, Tensor};
 use tch::nn::{Init, Linear, LinearConfig, Module, Path, Sequential};
 use tch::nn::{ConvConfig, OptimizerConfig};
 
-use crate::{data, utils};
+// use crate::{data, utils};
 use crate::builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
-use crate::data::EEGs;
+// use crate::data::EEGs;
 use hbac_shared::HbacError;
 use crate::utils::DataBatch;
-use crate::version::VERSION;
+use hbac_shared::*;
 
 #[derive(Debug)]
 pub struct MySequential {
@@ -198,63 +198,63 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 }
 
 
-fn train(base_path:&str, device:Device) -> Result<(), HbacError> {
-
-
-    let good_eegs = EEGs::good_eegs(base_path)?;
-
-    let t1 = Instant::now();
-    let eegs = EEGs::load_eegs (
-        base_path,
-        // None,
-        // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
-        Some(col("eeg_id").is_in(lit(good_eegs))),
-        Some(data::ByPatientIdSplitter::new(0.7)),
-    )?;
-
-
-    debug!("eegs={:?}", eegs.len());
-
-    debug!("done in {}", t1.elapsed().as_millis());
-    let vs = nn::VarStore::new(device.clone());
-
-
-
-    for num_blocks in [16, 32, 64] { //[2, 4, 6, 8, 16]
-
-        for kernel in [3, 5, 10, 20, 50, 100] { //[5, 7, 10, 20, 50, 100]
-        debug!("---------------------------------------num_blocks={:?} kernel={:?}", num_blocks, kernel);
-
-            match configure_dense(50 * 200, num_blocks, 4, kernel, 20).build_tch_module(&vs.root()) {
-                Ok(model) => {
-                    match utils::train(
-                        &device,
-                        eegs.as_ref() as &dyn DataBatch,
-                        model,
-                        &vs,
-                        |pred: &Tensor, target: &Tensor| {
-                            pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
-                        }
-                    ){
-                        Ok(_) => {
-                            debug!("num_blocks={:?} kernel={:?} done", num_blocks, kernel);
-                        }
-                        Err(e) => {
-                            debug!("num_blocks={:?} kernel={:?} train failed: {:?}", num_blocks, kernel, e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug!("num_blocks={:?} kernel={:?} build_tch_module failed: {:?}", num_blocks, kernel, e);
-                }
-            };
-
-        }
-    }
-
-    Ok(())
-
-}
+// fn train(base_path:&str, device:Device) -> Result<(), HbacError> {
+//
+//
+//     let good_eegs = EEGs::good_eegs(base_path)?;
+//
+//     let t1 = Instant::now();
+//     let eegs = EEGs::load_eegs (
+//         base_path,
+//         // None,
+//         // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
+//         Some(col("eeg_id").is_in(lit(good_eegs))),
+//         Some(data::ByPatientIdSplitter::new(0.7)),
+//     )?;
+//
+//
+//     debug!("eegs={:?}", eegs.len());
+//
+//     debug!("done in {}", t1.elapsed().as_millis());
+//     let vs = nn::VarStore::new(device.clone());
+//
+//
+//
+//     for num_blocks in [16, 32, 64] { //[2, 4, 6, 8, 16]
+//
+//         for kernel in [3, 5, 10, 20, 50, 100] { //[5, 7, 10, 20, 50, 100]
+//         debug!("---------------------------------------num_blocks={:?} kernel={:?}", num_blocks, kernel);
+//
+//             match configure_dense(50 * 200, num_blocks, 4, kernel, 20).build_tch_module(&vs.root()) {
+//                 Ok(model) => {
+//                     match utils::train(
+//                         &device,
+//                         eegs.as_ref() as &dyn DataBatch,
+//                         model,
+//                         &vs,
+//                         |pred: &Tensor, target: &Tensor| {
+//                             pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
+//                         }
+//                     ){
+//                         Ok(_) => {
+//                             debug!("num_blocks={:?} kernel={:?} done", num_blocks, kernel);
+//                         }
+//                         Err(e) => {
+//                             debug!("num_blocks={:?} kernel={:?} train failed: {:?}", num_blocks, kernel, e);
+//                         }
+//                     }
+//                 }
+//                 Err(e) => {
+//                     debug!("num_blocks={:?} kernel={:?} build_tch_module failed: {:?}", num_blocks, kernel, e);
+//                 }
+//             };
+//
+//         }
+//     }
+//
+//     Ok(())
+//
+// }
 
 fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
     (
@@ -265,18 +265,35 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 
 
 #[cfg(test)]
-mod tests {
-    use log::debug;
+mod tch_tests {
+    use log::{debug, LevelFilter};
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, kind, Kind, nn, Reduction, Tensor};
     use tch::nn::{ConvConfig, Module, OptimizerConfig};
     use hbac_shared::HbacError;
 
     use crate::builder::clc_conv1d_out;
     use crate::builder::SeqBuilder;
-    use crate::data::EEGs;
     use crate::my_tch::configure_dense;
     use crate::utils;
     use crate::utils::DataBatch;
+
+    use hbac_shared::*;
+
+    #[ctor::ctor]
+    fn init() {
+        CombinedLogger::init(
+            vec![
+                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ).unwrap_or_else(|e|{
+            println!("CombinedLogger::init failed: {:?}", e);
+        });
+
+
+        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
+        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    }
 
     #[test]
     pub fn test_conv1_out(){
@@ -300,51 +317,51 @@ mod tests {
         y_p.print()
     }
 
-    #[test]
-    pub fn test_configure_dense(){
-        let vs = nn::VarStore::new(Device::Cpu);
-
-        let model = configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root()).unwrap();
-
-
-        let eegs = EEGs::load_all_eegs("../../data").unwrap();
-
-        let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
-
-
-        // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
-        let (tensor, y_t) = eegs.train_batch(10);
-        // debug!("size:   {:?}", tensor.size());
-        let pred_y = model.forward(
-            &tensor.totype(Kind::Float) //batch, channels, L in
-        );
-        let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
-        debug!("1. pred size:   pred_y.size()={:?}     y_t.size()={:?}", pred_y_mean.size(), y_t.size());
-        // let loss = y_t.mse_loss(&pred_y_mean, Reduction::Mean); //.sum(kind::Kind::Float);;
-        let loss = y_t.cross_entropy_loss::<Tensor>(&pred_y_mean, None, Reduction::Mean, -100, 0.0);
-        // let loss_1 = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
-        debug!(":::::::::::::::::::::::::::: pred_y.size()={:?} y_t.size()={:?}, pred_y_mean.size()={:?},  loss.size()={:?}", pred_y.size(), y_t.size(), pred_y_mean.size(),  loss.size());
-        loss.print();
-        debug!("::::::::::::::::::::::::::::: loss={:?}", loss);
-        opt.backward_step(&loss);
-        //
-        // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
-        // let (tensor, y_t) = eegs.batch_tensor(10);
-        // debug!("size:   {:?}", tensor.size());
-        // let pred_y = model.forward(
-        //     &tensor //batch, channels, L in
-        // );
-        // debug!("2. pred size:   {:?}", pred_y.size());
-        // let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
-        // // let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
-        // let loss = y_t.mse_loss(&pred_y_mean, Reduction::None);
-        // opt.backward_step(&loss);
-        // pred_y.print();
-
-
-
-
-    }
+    // #[test]
+    // pub fn test_configure_dense(){
+    //     let vs = nn::VarStore::new(Device::Cpu);
+    //
+    //     let model = configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root()).unwrap();
+    //
+    //
+    //     let eegs = EEGs::load_all_eegs("../../data").unwrap();
+    //
+    //     let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
+    //
+    //
+    //     // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
+    //     let (tensor, y_t) = eegs.train_batch(10);
+    //     // debug!("size:   {:?}", tensor.size());
+    //     let pred_y = model.forward(
+    //         &tensor.totype(Kind::Float) //batch, channels, L in
+    //     );
+    //     let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
+    //     debug!("1. pred size:   pred_y.size()={:?}     y_t.size()={:?}", pred_y_mean.size(), y_t.size());
+    //     // let loss = y_t.mse_loss(&pred_y_mean, Reduction::Mean); //.sum(kind::Kind::Float);;
+    //     let loss = y_t.cross_entropy_loss::<Tensor>(&pred_y_mean, None, Reduction::Mean, -100, 0.0);
+    //     // let loss_1 = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
+    //     debug!(":::::::::::::::::::::::::::: pred_y.size()={:?} y_t.size()={:?}, pred_y_mean.size()={:?},  loss.size()={:?}", pred_y.size(), y_t.size(), pred_y_mean.size(),  loss.size());
+    //     loss.print();
+    //     debug!("::::::::::::::::::::::::::::: loss={:?}", loss);
+    //     opt.backward_step(&loss);
+    //     //
+    //     // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
+    //     // let (tensor, y_t) = eegs.batch_tensor(10);
+    //     // debug!("size:   {:?}", tensor.size());
+    //     // let pred_y = model.forward(
+    //     //     &tensor //batch, channels, L in
+    //     // );
+    //     // debug!("2. pred size:   {:?}", pred_y.size());
+    //     // let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
+    //     // // let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
+    //     // let loss = y_t.mse_loss(&pred_y_mean, Reduction::None);
+    //     // opt.backward_step(&loss);
+    //     // pred_y.print();
+    //
+    //
+    //
+    //
+    // }
 
     #[test]
     pub fn test_res_seq(){
@@ -369,20 +386,22 @@ mod tests {
 
     #[test]
     pub fn test_simp()-> Result<(), HbacError>{
+        debug!("ZZZZZZZZZZZZZZZZZ");
+
         let vs = nn::VarStore::new(Device::Cpu);
 
         let net = SeqBuilder::new(1000)
-            .conv(5, 1, 1, ConvConfig::default())
+            .conv(100, 1, 1, ConvConfig::default())
             .linear()
             .end_seq().build_tch_module(&vs.root())?;
 
         utils::train(
             &Device::Cpu,
-            &crate::simp::TestDs::new() as &dyn DataBatch,
+            &crate::simp::DummyDs::new() as &dyn DataBatch,
             net,
             &vs,
             |pred: &Tensor, target: &Tensor| {
-                pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
+                pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
             }
         )
     }

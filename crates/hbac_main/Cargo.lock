@@ -1032,6 +1032,7 @@ name = "hbac_common"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "ctor",
  "hbac_shared",
  "log",
  "plotters",
@@ -1092,6 +1093,7 @@ dependencies = [
 name = "hbac_shared"
 version = "0.1.0"
 dependencies = [
+ "ctor",
  "log",
  "simplelog",
 ]

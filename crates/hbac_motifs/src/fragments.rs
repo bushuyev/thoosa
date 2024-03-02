@@ -344,8 +344,8 @@ pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: V
 #[derive(Debug, Args)]
 pub struct MotifsToTensorParams {
 
-    #[arg(long, default_value = "../../data_local/motifs")]
-    motifs_dir: String,
+    #[arg(long)]
+    run_id: usize,
 
     #[arg(long)]
     output_dir: Option<String>,
@@ -359,12 +359,14 @@ impl MotifsToTensorParams {
     pub fn output_dir(&self) -> Option<&str> {
         self.output_dir.as_ref().map(|x|x.as_str())
     }
-    pub fn motifs_dir(&self) -> &str {
-        &self.motifs_dir
-    }
+
+
 
     pub fn window(&self) -> i64 {
         self.window
+    }
+    pub fn run_id(&self) -> usize {
+        self.run_id
     }
 }
 pub fn choose_fragments(params:&MotifsToTensorParams) ->Result<(), HbacError> {
