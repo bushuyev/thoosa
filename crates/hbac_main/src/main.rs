@@ -150,7 +150,7 @@ fn _main() -> Result<(), HbacError> {
         Some(Commands::PlotMotifSlices(plot_fragments_params)) => {
             let mut store_guard = store.lock()?;
 
-            let (channel, run_id, slices) = store_guard.list_motif_slices(plot_fragments_params.motif_id())?;
+            let (channel, run_id, slices) = store_guard.list_motif_slices(plot_fragments_params.motif_id(), None, false)?;
 
             let slices = load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device);
 
