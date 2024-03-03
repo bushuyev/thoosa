@@ -5,6 +5,7 @@ use crate::utils::DataBatch;
 pub struct DummyDs {
     sin_y:Tensor,
     x2_y:Tensor,
+    batch_size: usize
 }
 
 impl DummyDs {
@@ -12,14 +13,15 @@ impl DummyDs {
 
         Self {
             sin_y: Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice()),
-            x2_y: Tensor::from_slice((0..1000).map(|x| 2. * (x as f32/ 50.).powi(2) - 4.  ).collect::<Vec<f32>>().as_slice())
+            x2_y: Tensor::from_slice((0..1000).map(|x| 2. * (x as f32/ 50.).powi(2) - 4.  ).collect::<Vec<f32>>().as_slice()),
+            batch_size: 10
         }
     }
 }
 
 impl DataBatch for DummyDs {
-    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor) {
-        let (x, y):(Vec<Tensor>, Vec<Tensor>) = (0..batch_size).fold((vec![], vec![]), |mut x_y, i| {
+    fn train_batch(&self) -> (Tensor, Tensor) {
+        let (x, y):(Vec<Tensor>, Vec<Tensor>) = (0..self.batch_size).fold((vec![], vec![]), |mut x_y, i| {
 
             if i % 2 == 0 {
                 x_y.0.push(self.sin_y.copy());
@@ -41,16 +43,16 @@ impl DataBatch for DummyDs {
             Tensor::stack(
                 x.as_slice(),
                 0,
-            ).view([batch_size as i64, 1i64, 1000i64]),
+            ).view([self.batch_size as i64, 1i64, 1000i64]),
             Tensor::stack(
                 y.as_slice(),
                 0,
-            ).view([batch_size as i64])
+            ).view([self.batch_size as i64])
         )
     }
 
-    fn valid(&self, batch_size:Option<usize>) -> (Tensor, Tensor) {
-        todo!()
+    fn valid_batch(&self) -> (Tensor, Tensor) {
+        self.train_batch()
     }
 }
 

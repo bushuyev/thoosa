@@ -89,6 +89,7 @@ impl EEG {
 pub struct EEGs {
     train_set: Vec<EEG>,
     valid_set: Vec<EEG>,
+    batch_size: usize
 }
 
 #[derive(Default)]
@@ -365,7 +366,8 @@ impl EEGs {
 
         Ok(Box::new(EEGs{
             train_set: train_eegs,
-            valid_set: valid_eegs
+            valid_set: valid_eegs,
+            batch_size: 10//TODO param
         }))
     }
 
@@ -391,7 +393,7 @@ impl EEGs {
             .group_by([col("eeg_id")])
             .agg([
                 col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds"),
-                // col("set").first(),
+                col("set").first(),
                 col("seizure_vote").first(),
                 col("lpd_vote").first(),
                 col("gpd_vote").first(),
@@ -456,28 +458,15 @@ impl EEGs {
             )
         )
     }
-
-    pub fn load_slices(channel:usize, slices:Vec<TensorSliceIdx>) -> Vec<Tensor>{
-
-        vec![]
-    }
 }
 
 impl DataBatch for EEGs {
-    fn train_batch(&self, batch_size: usize) -> (Tensor, Tensor) {
-        Self::random_subset(batch_size, &self.train_set)
+    fn train_batch(&self) -> (Tensor, Tensor) {
+        Self::random_subset(self.batch_size, &self.train_set)
     }
 
-    fn valid(&self, batch_size: Option<usize>) -> (Tensor, Tensor) {
-        match batch_size {
-            None => {
-                Self::all_set(&self.valid_set)
-            }
-            Some(batch_size) => {
-                Self::random_subset(batch_size, &self.valid_set)
-            }
-        }
-
+    fn valid_batch(&self) -> (Tensor, Tensor) {
+        Self::random_subset(self.batch_size, &self.valid_set)
     }
 }
 

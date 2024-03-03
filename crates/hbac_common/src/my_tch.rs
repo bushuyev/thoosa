@@ -386,7 +386,6 @@ mod tch_tests {
 
     #[test]
     pub fn test_simp()-> Result<(), HbacError>{
-        debug!("ZZZZZZZZZZZZZZZZZ");
 
         let vs = nn::VarStore::new(Device::Cpu);
 
@@ -402,7 +401,7 @@ mod tch_tests {
             &vs,
             |pred: &Tensor, target: &Tensor| {
                 pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-            }
+            }, 100, nn::AdamW::default().build(&vs, 1.0e-4)?
         )
     }
 

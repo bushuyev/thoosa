@@ -63,7 +63,7 @@ pub trait Store:Sync + Send{
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
     fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>) -> Result<usize, HbacError>;
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
-    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, not: bool) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError>;
+    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError>;
 }
 
 impl Debug for StoreDumper {
@@ -242,6 +242,8 @@ impl Store for SqlStore {
             }).map_err(|e|HbacError::new(e.to_string()))
         }).collect::<Result<Vec<String>, HbacError>>();
 
+        debug!("list_run_resources: result.is_ok={}", result.is_ok());
+
         result
     }
 
@@ -297,7 +299,7 @@ impl Store for SqlStore {
         Ok(channels_corr_motifs)
     }
 
-    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, not: bool) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError> {
+    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError> {
 
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
@@ -306,11 +308,16 @@ impl Store for SqlStore {
 
             let mut stmt = t.prepare(&[
                 "SELECT channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, run_id FROM slice_matches where motif_id",
-                if !not {"=?"} else{"!=?"},
+                if all_but_in_run_id.is_none() {"=? AND ? IS NOT NULL AND ? IS NOT NULL "} else {"!=? AND run_id=? AND channel_id=?"},
                 &limit.map(|limit| format!("LIMIT {}", limit)).unwrap_or("".to_owned())
             ].join(""))?;
 
-            let (slices, channel_set, run_id) = stmt.query_map([motif_id], |row| {
+            let params = match all_but_in_run_id {
+                Some((run_id, channel_id))=>[motif_id, run_id, channel_id],
+                None =>[motif_id, 0, 0],
+            };
+
+            let (slices, channel_set, run_id) = stmt.query_map(params, |row| {
                 Ok((
                     row.get::<usize, i64>(0)?,//channel_id
                     row.get::<usize, i64>(1)?,//tensor_id_0
@@ -325,18 +332,24 @@ impl Store for SqlStore {
 
                 channel_set.insert(v.0);//TODO replace with Option
 
-                if let Some(run_id) = run_id   {
-                   assert!(run_id == v.5);
-                } else {
-                    run_id.replace(v.5);
+                if all_but_in_run_id.is_none() {
+                    if let Some(run_id) = run_id {
+                        assert!(run_id == v.5);
+                    } else {
+                        run_id.replace(v.5);
+                    }
                 }
 
                 (a, channel_set, run_id)
             });
 
-            assert!(channel_set.len() == 1);
-
-            (channel_set.into_iter().nth(0).expect("channel"), run_id.expect("no run id"), slices.into_iter().collect())
+            if all_but_in_run_id.is_none() {
+                assert!(channel_set.len() == 1);
+                (channel_set.into_iter().nth(0).expect("channel"), run_id.expect("no run id"), slices.into_iter().collect())
+            } else {
+                let (run_id, channel_id) = all_but_in_run_id.unwrap();
+                (channel_id as i64, run_id, slices.into_iter().collect()) //TODO
+            }
         };
 
         t.commit();
@@ -513,7 +526,7 @@ mod store_tests{
         assert_eq!(1, motifs[7][0].0);
         assert_eq!(2, motifs[7][1].0);
 
-        let (channel, run_id_, mut slices) = store.list_motif_slices(1, None, false)?;
+        let (channel, run_id_, mut slices) = store.list_motif_slices(1, None, None)?;
         slices.sort_by(|a, b| if a.0 + (a.1 as usize) < b.0 + (b.1 as usize) { Ordering::Less } else {Ordering::Greater});
 
         if m_1_first {
@@ -529,7 +542,9 @@ mod store_tests{
         assert_eq!(7, channel);
         assert_eq!(run_id, run_id_);
 
-        let (channel, run_id_, mut slices) = store.list_motif_slices(1, Some(10), true)?;
+        let (channel, run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id as usize, channel as usize)))?;
+
+        slices.sort_by(|a, b| if a.0 + (a.1 as usize) < b.0 + (b.1 as usize) { Ordering::Less } else {Ordering::Greater});
 
         if !m_1_first {
             assert_eq!(vec![

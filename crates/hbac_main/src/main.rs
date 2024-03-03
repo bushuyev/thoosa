@@ -16,13 +16,13 @@ use polars::prelude::Series;
 use hbac_common::utils::{cdt, DataBatch, dot_norm, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
-use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
+use hbac_motifs::fragments::{check_slices, ClassTensorsDataBatch, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use plotters::prelude::BLACK;
-use tch::nn::ConvConfig;
+use tch::nn::{ConvConfig, OptimizerConfig};
 use hbac_common::builder::SeqBuilder;
 use hbac_common::simp::DummyDs;
 use hbac_store::{SqlStore, Store};
@@ -65,7 +65,33 @@ struct Cli {
 
 #[derive(Debug, Args)]
 pub struct TrainOnMotifParams {
+    #[arg(long)]
+    motif_id: usize,
 
+    #[arg(long, default_value = "/tmp/motif_models")]
+    output_dir: String,
+
+    #[arg(long, default_value_t = 1000)]
+    cycles: usize,
+
+    #[arg(long, default_value_t = 1.0e-5)]
+    lr: f64,
+}
+
+impl TrainOnMotifParams {
+    pub fn motif_id(&self) -> usize {
+        self.motif_id
+    }
+    pub fn output_dir(&self) -> &str {
+        &self.output_dir
+    }
+
+    pub fn cycles(&self) -> usize {
+        self.cycles
+    }
+    pub fn lr(&self) -> f64 {
+        self.lr
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -75,7 +101,7 @@ enum Commands {
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
-    TrainOnMotif(SelectMotifsParams),
+    TrainOnMotif(TrainOnMotifParams),
 }
 
 
@@ -147,14 +173,14 @@ fn _main() -> Result<(), HbacError> {
             )?;
         }
 
-        Some(Commands::PlotMotifSlices(plot_fragments_params)) => {
+        Some(Commands::PlotMotifSlices(plot_motif_slices_params)) => {
             let mut store_guard = store.lock()?;
 
-            let (channel, run_id, slices) = store_guard.list_motif_slices(plot_fragments_params.motif_id(), None, false)?;
+            let (channel, run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
 
             let slices = load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device);
 
-            let all_sices = slices.iter().flat_map(|(eeg_id, slices)| slices.iter()).collect::<Vec<&Tensor>>();
+            let all_sices = slices.iter().flat_map(|(eeg_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
             check_slices(&all_sices, 0.9);
 
@@ -162,9 +188,9 @@ fn _main() -> Result<(), HbacError> {
                 all_sices.into_iter().map(|t|{
                     (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)|(i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
                 }).collect(),
-                format!("Motif {}", plot_fragments_params.motif_id()).as_str(),
+                format!("Motif {}", plot_motif_slices_params.motif_id()).as_str(),
                 (10000, 10000),
-                &Path::new(plot_fragments_params.output_dir()).join(format!("motif_{}.png", plot_fragments_params.motif_id()))
+                &Path::new(plot_motif_slices_params.output_dir()).join(format!("motif_{}.png", plot_motif_slices_params.motif_id()))
             ).unwrap();
         }
 
@@ -235,22 +261,59 @@ fn _main() -> Result<(), HbacError> {
             // t.save(find_good_motifs_params.output_motifs_tensor_path())?;
         }
 
-        Some(Commands::TrainOnMotif(_)) => {
-            let vs = nn::VarStore::new(Device::Cpu);
+        Some(Commands::TrainOnMotif(train_on_motif_params)) => {
+            debug!("train_on_motif: train_on_motif_params={:?}", train_on_motif_params);
+
+            let mut store_guard = store.lock()?;
+
+            let (channel, run_id, slices) = store_guard.list_motif_slices(train_on_motif_params.motif_id(), None, None)?;
+
+            debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
+
+            let all_sices_1 = flat_map(load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+
+
+            let (channel, run_id, slices) = store_guard.list_motif_slices(train_on_motif_params.motif_id(), Some(all_sices_1.len()), Some((run_id, channel as usize)))?;
+
+            debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
+
+            let all_sices_0 = flat_map(load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+
+            debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
+
+
+            let vs = nn::VarStore::new(device);
 
             let net = SeqBuilder::new(1000)
                 .conv(100, 1, 1, ConvConfig::default())
                 .linear()
                 .end_seq().build_tch_module(&vs.root())?;
 
+            info!("train_on_motif: training on {} slices", all_sices_0.len());
+
             hbac_common::utils::train(
                 &Device::Cpu,
-                &DummyDs::new() as &dyn DataBatch,
+                &ClassTensorsDataBatch::new(
+                    HashMap::from([
+                        (
+                            0,
+                            all_sices_0
+                        ),
+                        (
+                            1,
+                            all_sices_1
+                        )
+                    ]),
+                    10,
+                    0.8
+                ) as &dyn DataBatch,
                 net,
                 &vs,
                 |pred: &Tensor, target: &Tensor| {
                     pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-                }
+                },
+                train_on_motif_params.cycles,
+                nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
             )?;
         }
         None => {}
@@ -259,6 +322,9 @@ fn _main() -> Result<(), HbacError> {
     Ok(())
 }
 
+fn flat_map(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
+    slices.into_iter().flat_map(|(eeg_id, slices)| slices.into_iter()).collect::<Vec<Box<Tensor>>>()
+}
 
 
 #[cfg(test)]
