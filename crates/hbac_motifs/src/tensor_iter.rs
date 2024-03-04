@@ -1,10 +1,14 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Index;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::slice::SliceIndex;
-use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
+use futures::lock::Mutex;
 use log::{warn, debug};
 use tch::{Device, Kind, TchError, Tensor};
 use hbac_shared::HbacError;
@@ -119,11 +123,12 @@ pub(crate) struct TensorsIter {//TODO SliceIndex?
     dim:usize,
     step:i64,
     m:i64,
-    iteration_n:AtomicI64,
+    iteration_n:AtomicUsize,
 }
 
 impl TensorsIter {
-    pub fn new(tensors_store: Box<impl TensorsStore + Send +'static>, dim:usize, m:i64, step:i64) -> Self {
+
+    pub fn new(tensors_store: Box<impl TensorsStore + Send +'static>, dim:usize, m:usize, step:usize) -> Self {
 
         assert!(step <= m);
 
@@ -135,19 +140,19 @@ impl TensorsIter {
             tensor_index_1: 0,
 
             slice_index_0:0,
-            slice_index_1:step,
+            slice_index_1:step as i64,
 
             dim,
-            step,
-            m,
-            iteration_n:  AtomicI64::new(0)
+            step: step as i64,
+            m: m as i64,
+            iteration_n:  AtomicUsize::new(0)
         }
     }
 }
 pub type TensorSlice = ((TensorSliceIdx), Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorsIter {
-    type Item = Result<(TensorSlice, TensorSlice, i64), HbacError>;
+    type Item = Result<(TensorSlice, TensorSlice, usize), HbacError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         debug!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
@@ -213,17 +218,23 @@ impl Iterator for TensorsIter {
 pub(crate) struct CacheOnThreadsStore {
     cache:CacheOnThreads<String, Box<Tensor>>,
     keys:Vec<String>,
-    preload_d:usize
+    preload_d:Arc<AtomicUsize>,
 }
 
 impl CacheOnThreadsStore {
 
     pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize, max_keys_fifo: usize) -> Self where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static{
-        Self {
-            cache: CacheOnThreads::new(loader, max_keys_fifo),
-            keys,
-            preload_d
+        let preload_d_rc = Arc::new(AtomicUsize::new(preload_d));
 
+        let preload_d_rc_in_cache = Arc::clone(&preload_d_rc);
+        Self {
+            cache: CacheOnThreads::new(loader, max_keys_fifo, Some(Box::new(move ||{
+                let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
+
+                warn!("on blocking: {:?}", preload_d)
+            }))),
+            keys,
+            preload_d: preload_d_rc,
         }
     }
 
@@ -235,20 +246,21 @@ impl CacheOnThreadsStore {
 impl TensorsStore for CacheOnThreadsStore {
 
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
+        let preload_d = self.preload_d.load(Ordering::Relaxed);
 
-        if index + self.preload_d < self.keys.len() && index % self.preload_d == 0 {
+        if index + preload_d < self.keys.len() && index % preload_d == 0 {
             debug!("1. get_tensor: index={}", index);
 
             self.cache.load_blocking_preload_and_get(
 
                 &self.index_to_key(index).clone(),
-                (index..index + self.preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
+                (index..index + preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
 
             ).ok_or(HbacError::new("no tensor".into()))
 
         } else {
             debug!("2. get_tensor: index={}", index);
-            warn!("blocking waiting");
+
             self.cache.load_blocking_and_get(
 
                 &self.index_to_key(index).clone()

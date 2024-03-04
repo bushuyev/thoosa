@@ -43,6 +43,9 @@ struct Cli {
     #[arg(long, default_value="../../data")]
     base_path: String,
 
+    #[arg(long, default_value="hbac.db3")]
+    store_path: String,
+
     #[arg(long, default_value = "INFO")]
     term_logger_level: String,
 
@@ -119,12 +122,9 @@ fn main()  {
     }
 }
 fn _main() -> Result<(), HbacError> {
-
-    let store = Arc::new(Mutex::new(SqlStore::new("hbac.db3")?));
-
     let cli = Cli::parse();
 
-
+    let store = Arc::new(Mutex::new(SqlStore::new(cli.store_path)?));
 
     CombinedLogger::init(
         vec![
@@ -159,7 +159,7 @@ fn _main() -> Result<(), HbacError> {
             let eeg_id_series = EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind(), cli.limit)?;
 
 
-            let records_num = clc_records(&eeg_id_series, base_path.as_str())? as i64;
+            let records_num = clc_records(&eeg_id_series, base_path.as_str())?;
             debug!("records_num={}", records_num);
 
             find::find_motifs(

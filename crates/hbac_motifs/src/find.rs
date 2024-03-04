@@ -30,10 +30,10 @@ use std::cell::RefCell;
 #[derive(Debug, Args)]
 pub struct FindMotifsParams {
     #[arg(long, default_value_t = 1000)]
-    step: i64,
+    step: usize,
 
     #[arg(long, default_value_t = 1000)]
-    window: i64,
+    window: usize,
 
     #[arg(long, default_value_t = 0.9)]
     min_dot: f32,
@@ -58,35 +58,18 @@ impl FindMotifsParams {
     }
 }
 
-pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
+pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:usize, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
-    let slots_to_compare = (records_num - cli.window) / cli.step;
-    let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare; // n x n - diagonale
+    let slots_to_process = (records_num - cli.window) / cli.step;
+    let slots_to_process = slots_to_process.pow(2) / 2 - slots_to_process; // n x n - diagonale
 
 
     let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
 
 
-    find_motifs_iter(
-        loader,
-        eeg_ids_str,
-        cli.window,
-        cli.step,
-        (0..20).map(|_| cli.min_dot).collect(),
-        slots_to_compare as usize,
-        cli.preload_d,
-        cli.max_keys_fifo,
-        store
-    );
-    Ok(())
-}
-
-//TODO min_dot len should be == channels
-pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, preload_d:usize, max_keys_fifo: usize, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
-    where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
-
-    let run_id = {store.lock()?.save_run(format!("find motifs with min dots: {:?}", min_dot).as_str(), &keys)}?;
+    let min_dot = (0..20).map(|_| cli.min_dot).collect::<Vec<f32>>();
+    let run_id = { store.lock()?.save_run(format!("find motifs in {} with min dots: {:?}", cli.kind, min_dot).as_str(), &eeg_ids_str)}?;
 
     let all_mt = min_dot
         .into_iter()
@@ -95,8 +78,8 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
         .collect::<Vec<Mutex<SimpMotifTracker<_>>>>();
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
-        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, keys, preload_d, max_keys_fifo)),
-        1, m, step
+        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, eeg_ids_str, cli.preload_d, cli.max_keys_fifo)),
+        1, cli.window, cli.step
     );
 
     let t1 = Instant::now();
@@ -117,7 +100,7 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
                     }
 
                     let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
-                    info!("pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min", slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, ((slots_to_process-slots_processed as usize)/(slots_per_sec+1))/60)
+                    info!("pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min", slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, ((slots_to_process-slots_processed)/(slots_per_sec+1))/60)
                 }
 
             }
@@ -132,7 +115,7 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
     }
 
     for i in 0..20{ //TODO channels len
-        {store.lock()?.set_motifs(run_id, i as i64)}?;
+        { store.lock()?.set_motifs(run_id, i as i64)}?;
     }
 
     Ok(())

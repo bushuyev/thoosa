@@ -11,7 +11,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::Duration;
 use futures::executor::block_on;
-use log::debug;
+use log::{debug, warn};
 use tch::Tensor;
 use std::rc::Rc;
 
@@ -70,6 +70,7 @@ impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'sta
     }
 }
 
+
 pub struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
     data_loaded:HashMap<K, V>,
 
@@ -79,12 +80,14 @@ pub struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug
     read_mx:Arc<Mutex<()>>,
     load_mx:Arc<Mutex<()>>,
     keys_fifo: VecDeque<K>,
-    max_keys_fifo: usize
+    max_keys_fifo: usize,
+    on_blocking_listener:Option<Box<dyn FnMut() + Send>>
 }
 
 impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'static + Debug, V:Send +'static{
 
-    pub fn new<F>(loader: F, max_keys_fifo: usize) -> Self where F:Fn(&K) -> V + Sync + Send + 'static{
+    pub fn new<F>(loader: F, max_keys_fifo: usize, on_blocking_listener:Option<Box<dyn FnMut() + Send>>) -> Self
+        where F:Fn(&K) -> V + Sync + Send + 'static {
         Self {
             data_loaded: HashMap::new(),
             data_being_loaded: Arc::new(Mutex::new(HashMap::new())),
@@ -92,11 +95,14 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             read_mx:Arc::new(Mutex::new(())),
             load_mx:Arc::new(Mutex::new(())),
             keys_fifo: VecDeque::new(),
-            max_keys_fifo
+            max_keys_fifo,
+            on_blocking_listener
         }
     }
 
     fn load_blocking(&mut self, key:K) ->bool {
+
+        self.on_blocking_listener.as_mut().map(|mut c|(c)());
 
         self.data_loaded.insert(
             key.clone(),
@@ -310,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_cache_on_threads(){
-        let mut cache = CacheOnThreads::new(load_test_entity, 3);
+        let mut cache = CacheOnThreads::new(load_test_entity, 3, None);
         let e_1_0= cache.load_blocking_and_get(&"Key1".into()).unwrap().key.clone();
         cache.load_blocking_and_get(&"Key1".into());
         cache.load_blocking_and_get(&"Key2".into());
@@ -342,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_load_no_blocking(){
-        let mut cache = CacheOnThreads::new(load_test_entity, 3);
+        let mut cache = CacheOnThreads::new(load_test_entity, 3, None);
         cache.load_no_blocking(&["Key1".into(), "Key2".into()]);
 
         cache.load_blocking_and_get(&"Key1".into());
