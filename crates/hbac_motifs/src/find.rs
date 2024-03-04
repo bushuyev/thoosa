@@ -62,7 +62,7 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let slots_to_compare = (records_num - cli.window) / cli.step;
-    let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare;
+    let slots_to_compare = slots_to_compare.pow(2) / 2 - slots_to_compare; // n x n - diagonale
 
 
     let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
@@ -86,12 +86,12 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:i64, eegs: i
 pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_dot: Vec<f32>, slots_to_process:usize, preload_d:usize, max_keys_fifo: usize, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
-    let run_id = {store.lock()?.save_run("some", &keys)}?;
+    let run_id = {store.lock()?.save_run(format!("find motifs with min dots: {:?}", min_dot).as_str(), &keys)}?;
 
     let all_mt = min_dot
         .into_iter()
         .enumerate()
-        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, "seizure_400".into(), i))))//TODO name
+        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))))//TODO name
         .collect::<Vec<Mutex<SimpMotifTracker<_>>>>();
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
@@ -107,8 +107,8 @@ pub fn find_motifs_iter<F>(loader: F, keys: Vec<String>, m: i64, step: i64, min_
 
                 let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
 
-                for (i, mt) in all_mt.iter().enumerate() {
-                    mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[i as i64]) as f32);
+                for (channel, mt) in all_mt.iter().enumerate() {
+                    mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[channel as i64]) as f32);
                 }
 
                 if slots_processed > 0 && slots_processed % 10_000 == 0 {

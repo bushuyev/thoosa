@@ -7,7 +7,7 @@ use std::str::FromStr;
 use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, Kind, nn, Reduction, Tensor};
-use hbac_motifs::find::{find_motifs_iter, FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
+use hbac_motifs::find::{FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
 use crate::data::{clc_records, EEGs, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
@@ -285,8 +285,13 @@ fn _main() -> Result<(), HbacError> {
             let vs = nn::VarStore::new(device);
 
             let net = SeqBuilder::new(1000)
-                .conv(100, 1, 1, ConvConfig::default())
+                .conv(10, 1, 10, ConvConfig::default())
+                .conv(10, 10, 10, ConvConfig::default())
+                .conv(10, 10, 1, ConvConfig::default())
+                .func(Tensor::elu)
                 .linear()
+                .func(Tensor::elu)
+                .linear_s(2)
                 .end_seq().build_tch_module(&vs.root())?;
 
             info!("train_on_motif: training on {} slices", all_sices_0.len());

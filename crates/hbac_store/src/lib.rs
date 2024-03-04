@@ -20,16 +20,14 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 pub struct StoreDumper {
     pub store:Arc<Mutex<dyn Store>>, //TODO pub
     pub run_id:usize,
-    pub name:String,
     pub channel:usize
 }
 
 impl StoreDumper {
-    pub fn new(store: Arc<Mutex<impl Store + 'static>>, run_id:usize, name:String, channel:usize) -> Self {
+    pub fn new(store: Arc<Mutex<impl Store + 'static>>, run_id:usize, channel:usize) -> Self {
         Self {
             run_id,
             store,
-            name,
             channel
         }
     }

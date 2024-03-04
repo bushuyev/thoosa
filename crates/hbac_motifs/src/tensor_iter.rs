@@ -5,7 +5,7 @@ use std::slice::SliceIndex;
 use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 use std::thread;
 use std::time::Duration;
-use log::debug;
+use log::{warn, debug};
 use tch::{Device, Kind, TchError, Tensor};
 use hbac_shared::HbacError;
 use rayon::prelude::*;
@@ -217,6 +217,7 @@ pub(crate) struct CacheOnThreadsStore {
 }
 
 impl CacheOnThreadsStore {
+
     pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize, max_keys_fifo: usize) -> Self where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static{
         Self {
             cache: CacheOnThreads::new(loader, max_keys_fifo),
@@ -239,15 +240,19 @@ impl TensorsStore for CacheOnThreadsStore {
             debug!("1. get_tensor: index={}", index);
 
             self.cache.load_blocking_preload_and_get(
+
                 &self.index_to_key(index).clone(),
                 (index..index + self.preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
+
             ).ok_or(HbacError::new("no tensor".into()))
 
         } else {
             debug!("2. get_tensor: index={}", index);
-
+            warn!("blocking waiting");
             self.cache.load_blocking_and_get(
+
                 &self.index_to_key(index).clone()
+
             ).ok_or(HbacError::new("no tensor".into()))
         }
     }

@@ -235,8 +235,7 @@ pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&Var
 
 
     for idx in 1..cycles {
-        debug!("idx={}", idx);
-        std::io::stdout().flush()?;
+
 
         let (x_t, y_t) = eegs.train_batch();// load_batch(device, BATCH_SIZE);
 
@@ -261,16 +260,15 @@ pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&Var
 
                 let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
                 let valid_loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
-                info!("valid loss={:?}", valid_loss);
+                info!("train loss={:?}, valid loss={:?}", loss, valid_loss);
                 std::io::stdout().flush().unwrap();
             }
 
         });
 
-        if idx % 10 == 0 {
-            debug!("train: loss={:?}", loss);
-            std::io::stdout().flush()?;
-        }
+        debug!("train: idx={} loss={:?}", idx, loss);
+        std::io::stdout().flush()?;
+
 
         drop(x_t);
         drop(y_t);
