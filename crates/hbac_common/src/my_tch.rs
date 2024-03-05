@@ -20,6 +20,7 @@ use crate::builder::Node;
 use hbac_shared::HbacError;
 use crate::utils::DataBatch;
 use hbac_shared::*;
+// use linfa::prelude::*;
 
 #[derive(Debug)]
 pub struct MySequential {
@@ -67,6 +68,28 @@ impl Module for MyMaxPool1d {
 
     fn forward(&self, xs: &Tensor) -> Tensor {
         xs.max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)
+    }
+}
+
+
+
+#[derive(Debug)]
+pub struct MyBatchNorm1d {
+
+}
+
+impl crate::my_tch::MyBatchNorm1d {
+    pub fn new() -> Self {
+        Self {
+
+        }
+    }
+}
+
+impl Module for crate::my_tch::MyBatchNorm1d {
+
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        xs.batch_norm::<Tensor>(None, None, None, None, true, 0.1, 1.0e-05, false)
     }
 }
 
@@ -277,8 +300,9 @@ mod tch_tests {
     use crate::my_tch::configure_dense;
     use crate::utils;
     use crate::utils::DataBatch;
-
+    use crate::utils::from;
     use hbac_shared::*;
+    use core::f32::consts::PI;
 
     #[ctor::ctor]
     fn init() {
@@ -390,24 +414,43 @@ mod tch_tests {
         let vs = nn::VarStore::new(Device::Cpu);
 
         let net = SeqBuilder::new(1000)
+            .batch_norm()
             .conv(100, 1, 1, ConvConfig::default())
-            .linear()
+            .linear_s(1)
+            .func(Tensor::sigmoid)
             .end_seq().build_tch_module(&vs.root())?;
 
         utils::train(
             &Device::Cpu,
-            &crate::simp::DummyDs::new() as &dyn DataBatch,
-            net,
+            &crate::simp::DummyDs::new(
+                Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice()),
+                Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 22.).sin()).collect::<Vec<f32>>().as_slice()),
+            ) as &dyn DataBatch,
+            &net,
             &vs,
             |pred: &Tensor, target: &Tensor| {
-                pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
+                // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
+                pred.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
             }, 100, nn::AdamW::default().build(&vs, 1.0e-4)?
-        )
+        )?;
+
+
+        let t_0 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice());
+        let t_1 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 22.).sin()).collect::<Vec<f32>>().as_slice());
+
+
+        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000));
+        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000));
+        println!("t_0={:?}, t_1={:?}",
+                 from::<Vec<f32>>(&net.forward(&batch_0).view(-1)),
+                 from::<Vec<f32>>(&net.forward(&batch_1).view(-1))
+        );
+
+        Ok(())
     }
 
     #[test]
     pub fn test_test(){
-        debug!("ZZZZZZZZZZZZZZZZZZB");
 
         let t1 = Tensor::from_slice(&[4., 6.]);
         let t2 = Tensor::from_slice(&[15., 5.]);

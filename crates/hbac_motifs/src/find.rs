@@ -90,6 +90,8 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:usize, eegs:
 
                 let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
 
+                debug!("t_s_0.1.size()={:?}, t_s_0.1.device()={:?}, t_s_1.1.size()={:?}, t_s_1.1.device()={:?} dp.size()={:?}, dp.device()={:?}", t_s_0.1.size(), t_s_0.1.device(), t_s_1.1.size(), t_s_1.1.device(), dp.size(), dp.device());
+
                 for (channel, mt) in all_mt.iter().enumerate() {
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[channel as i64]) as f32);
                 }

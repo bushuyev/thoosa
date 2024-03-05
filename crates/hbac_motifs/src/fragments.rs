@@ -486,7 +486,7 @@ impl ClassTensorsDataBatch {
             x_y_acc
         });
 
-        x_y_vecs.1.shuffle(&mut rng);
+        // x_y_vecs.1.shuffle(&mut rng);
 
         debug!("ClassTensorsDataBatch::to_x_y: x_y_vecs.1.len()={} ", x_y_vecs.0.len());
 
@@ -498,7 +498,7 @@ impl ClassTensorsDataBatch {
         let tensor = Tensor::stack(
             x_y_vecs.0.as_slice(),
             0,
-        ).view((batch_size as i64, 1, 1000));
+        ).view((batch_size as i64, 1, -1));
 
         debug!("ClassTensorsDataBatch::to_x_y: tensor.size()={:?}", tensor.size());
 
@@ -525,6 +525,7 @@ impl DataBatch for ClassTensorsDataBatch {
 
 #[cfg(test)]
 mod motifs_tests {
+    use tch::IndexOp;
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
     use std::time::UNIX_EPOCH;
@@ -864,7 +865,10 @@ mod motifs_tests {
 
         let train_batch = batch.train_batch();
 
-        println!("train_batch: x={:?}, y={:?}", train_batch.0.size(), train_batch.1.size());
+        println!("train_batch: x={:?}", from::<Vec<f32>>(&train_batch.0.i((.., 0, 0))));
+        println!("train_batch: y={:?}", from::<Vec<f32>>(&train_batch.1));
+
+        // println!("train_batch: x={:?}, y={:?}", train_batch.0.size(), train_batch.1.size());
 
         assert_eq!(10, train_batch.0.size()[0]);
         assert_eq!(5, train_batch.1.iter::<i64>()?.filter(|v|*v==1).count());

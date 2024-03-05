@@ -5,7 +5,7 @@ use log::debug;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
 use hbac_shared::HbacError;
-use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyFuncModule, MyMaxPool1d, MySequential};
+use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyFuncModule, MyMaxPool1d, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
@@ -83,7 +83,7 @@ impl Node {
                 Box::new(nn::conv1d(vs/ "cnn", *in_channels, *out_channels, *kernel, *config))
             }
             Node::BatchNorm { .. } => {
-                todo!()
+                Box::new(MyBatchNorm1d::new())
             }
             Node::Linear {in_feats, out_feats} => {
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);

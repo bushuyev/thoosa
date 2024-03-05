@@ -14,6 +14,7 @@ use std::ops::Deref;
 use log::{debug, info, trace};
 use crate::my_tch::LossFp;
 use tch::nn::Optimizer;
+use tch::IndexOp;
 
 pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -229,9 +230,9 @@ pub trait DataBatch {
     fn valid_batch(&self) -> (Tensor, Tensor);
 }
 
-pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&VarStore, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<(), HbacError>{
+pub fn train(device:&Device, eegs:&dyn DataBatch, model:&Box<dyn Module>, vs:&VarStore, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<(), HbacError>{
 
-    debug!("train: device={:?}", device);
+    debug!("train: device={:?} cycles={}", device, cycles);
 
 
     for idx in 1..cycles {
@@ -242,12 +243,15 @@ pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&Var
         // let x_t = x_t.to_device(*device);
         // let y_t = y_t.to_device(*device);
 
-        let pred_y = model.forward(&x_t);
+        let pred_y = model.forward(&x_t).i((.., 0, 0));
 
+        debug!("pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
+        debug!("   y_t ={:?}", from::<Vec<f32>>(&y_t));
+        debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
 
-        let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
+        // let pred_y_mean = pred_y.view((10, 1)); //pred_y.mean_dim(1, false, tch::Kind::Float);
 
-        let loss = loss_fn(&pred_y_mean, &y_t);
+        let loss = loss_fn(&pred_y, &y_t);
 
         opt.backward_step(&loss);
 
@@ -255,11 +259,15 @@ pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&Var
             if idx % 10 == 0 {
                 let (x_t, y_t) = eegs.valid_batch();
 
-                let pred_y = model.forward(&x_t.to_device(*device));
+                let pred_y = model.forward(&x_t.to_device(*device)).i((.., 0, 0));
 
+                debug!("vaid: pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
+                debug!("vaid:    y_t.size()={:?}",  from::<Vec<f32>>(&y_t));
+                debug!("vaid: pred_y.size()={:?} ", from::<Vec<f32>>(&pred_y));
 
-                let pred_y_mean = pred_y.mean_dim(1, false, tch::Kind::Float);
-                let valid_loss = loss_fn(&pred_y_mean, &y_t.to_device(*device));
+                // let pred_y_mean = pred_y.view((10, 1)); // pred_y.mean_dim(1, false, tch::Kind::Float);
+
+                let valid_loss = loss_fn(&pred_y, &y_t);
                 info!("train loss={:?}, valid loss={:?}", loss, valid_loss);
                 std::io::stdout().flush().unwrap();
             }
@@ -272,7 +280,7 @@ pub fn train(device:&Device, eegs:&dyn DataBatch, model:Box<dyn Module>, vs:&Var
 
         drop(x_t);
         drop(y_t);
-        drop(pred_y_mean);
+        drop(pred_y);
         drop(loss);
     }
 

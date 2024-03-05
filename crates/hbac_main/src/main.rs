@@ -285,13 +285,10 @@ fn _main() -> Result<(), HbacError> {
             let vs = nn::VarStore::new(device);
 
             let net = SeqBuilder::new(1000)
+                .batch_norm()
                 .conv(10, 1, 10, ConvConfig::default())
-                .conv(10, 10, 10, ConvConfig::default())
-                .conv(10, 10, 1, ConvConfig::default())
-                .func(Tensor::elu)
-                .linear()
-                .func(Tensor::elu)
-                .linear_s(2)
+                .linear_s(1)
+                .func(Tensor::sigmoid)
                 .end_seq().build_tch_module(&vs.root())?;
 
             info!("train_on_motif: training on {} slices", all_sices_0.len());
@@ -312,10 +309,11 @@ fn _main() -> Result<(), HbacError> {
                     10,
                     0.8
                 ) as &dyn DataBatch,
-                net,
+                &net,
                 &vs,
                 |pred: &Tensor, target: &Tensor| {
-                    pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
+                    // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
+                    pred.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
                 },
                 train_on_motif_params.cycles,
                 nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
@@ -335,7 +333,7 @@ fn flat_map(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
 #[cfg(test)]
 mod main_tests {
     use log::debug;
-    use tch::Device;
+    use tch::{Device, Kind, Reduction, Tensor};
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
     use crate::data;
@@ -343,7 +341,7 @@ mod main_tests {
 
     #[test]
     fn test_it() -> Result<(), HbacError>{
-        debug!("XXXXXXXXXXXXXXXXX");
+        // debug!("XXXXXXXXXXXXXXXXX");
         // main();
         // EEGs::good_eegs_of("../../data/", "seizure_vote", Some(10))?.i64()?.into_iter().enumerate().map(|(i, v):(usize, Option<i64>)|{
         //     // String::from(v.expect(format!("no value in {}", i))).as_str();
@@ -354,6 +352,9 @@ mod main_tests {
         //
         //     Ok::<(), HbacError>(())
         // })?;
+
+        let ce = Tensor::from_slice(&[1., 1., 0., 0.]).binary_cross_entropy::<Tensor>(&Tensor::from_slice(&[1., 1., 0., 0.1]), None, Reduction::Mean);
+        ce.print();
 
         Ok(())
     }
