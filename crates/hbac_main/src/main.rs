@@ -22,8 +22,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use plotters::prelude::BLACK;
-use tch::nn::{ConvConfig, OptimizerConfig};
-use hbac_common::builder::SeqBuilder;
+use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
+use hbac_common::builder::{Node, SeqBuilder};
 use hbac_common::simp::DummyDs;
 use hbac_store::{SqlStore, Store};
 use hbac_shared::*;
@@ -274,8 +274,13 @@ fn _main() -> Result<(), HbacError> {
         Some(Commands::TrainOnMotifs(train_on_motif_params)) => {
             debug!("train_on_motif: train_on_motif_params={:?}", train_on_motif_params);
 
+            let node = motif_node(train_on_motif_params);
+
+            fs::create_dir_all(train_on_motif_params.output_dir());
+
             for motif_id in train_on_motif_params.motif_ids() {
-                train_on_motif(cli.base_path.as_str(), train_on_motif_params, Arc::clone(&store), device, *motif_id)?;
+                train_on_motif(cli.base_path.as_str(), train_on_motif_params, Arc::clone(&store), device, *motif_id, &node)?
+                    .save(Path::new(train_on_motif_params.output_dir()).join(format!("{}.safetensors", motif_id)))?;
             }
         }
         None => {}
@@ -284,7 +289,16 @@ fn _main() -> Result<(), HbacError> {
     Ok(())
 }
 
-fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, store: Arc<Mutex<SqlStore>>, device: Device, motif_id: usize) -> Result<(), HbacError> {
+fn motif_node(train_on_motif_params: &TrainOnMotifsParams) -> Node {
+    SeqBuilder::new(train_on_motif_params.window() as i64)
+        .batch_norm()
+        .conv(10, 1, 10, ConvConfig::default())
+        .linear_s(1)
+        .func(Tensor::sigmoid)
+        .end_seq()
+}
+
+fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, store: Arc<Mutex<SqlStore>>, device: Device, motif_id: usize, node: &Node) -> Result<VarStore, HbacError> {
     let mut store_guard = store.lock()?;
 
     let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, None, None)?;
@@ -306,12 +320,7 @@ fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, 
 
     let vs = nn::VarStore::new(device);
 
-    let net = SeqBuilder::new(window)
-        .batch_norm()
-        .conv(10, 1, 10, ConvConfig::default())
-        .linear_s(1)
-        .func(Tensor::sigmoid)
-        .end_seq().build_tch_module(&vs.root())?;
+    let net = node.build_tch_module(&vs.root())?;
 
     info!("train_on_motif: training on {} slices", all_sices_0.len());
 
@@ -336,7 +345,7 @@ fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, 
         train_on_motif_params.cycles,
         nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
     )?;
-    Ok(())
+    Ok(vs)
 }
 
 fn flat_map(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {

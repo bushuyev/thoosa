@@ -292,7 +292,7 @@ mod tch_tests {
     use log::{debug, trace, LevelFilter};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, IndexOp, kind, Kind, nn, Reduction, Tensor};
-    use tch::nn::{ConvConfig, Module, OptimizerConfig};
+    use tch::nn::{ConvConfig, Module, OptimizerConfig, Sequential, VarStore};
     use hbac_shared::HbacError;
 
     use crate::builder::clc_conv1d_out;
@@ -411,14 +411,9 @@ mod tch_tests {
     #[test]
     pub fn test_simp()-> Result<(), HbacError>{
 
-        let vs = nn::VarStore::new(Device::Cpu);
+        let mut vs_0 = nn::VarStore::new(Device::Cpu);
 
-        let net = SeqBuilder::new(1000)
-            .batch_norm()
-            .conv(100, 1, 1, ConvConfig::default())
-            .linear_s(1)
-            .func(Tensor::sigmoid)
-            .end_seq().build_tch_module(&vs.root())?;
+        let net_0 = test_net(&vs_0)?;
 
         utils::train(
             &Device::Cpu,
@@ -426,8 +421,8 @@ mod tch_tests {
                 Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice()),
                 Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 22.).sin()).collect::<Vec<f32>>().as_slice()),
             ) as &dyn DataBatch,
-            &net,
-            &vs,
+            &net_0,
+            &vs_0,
             |pred: &Tensor, target: &Tensor| {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
 
@@ -436,7 +431,7 @@ mod tch_tests {
                 pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
             },
             100,
-            nn::AdamW::default().build(&vs, 1.0e-4)?
+            nn::AdamW::default().build(&vs_0, 1.0e-4)?
         )?;
 
 
@@ -446,16 +441,58 @@ mod tch_tests {
 
         let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000));
         let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000));
-        println!("t_0={:?}, t_1={:?}",
-                 from::<Vec<f32>>(&net.forward(&batch_0).view(-1)),
-                 from::<Vec<f32>>(&net.forward(&batch_1).view(-1))
+        println!("net t_0={:?}, t_1={:?}",
+                 from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)),
+                 from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1))
         );
+
+        vs_0.freeze();
+        vs_0.save("/tmp/test_vars.safetensors")?;
+
+        let mut vs_1 = nn::VarStore::new(Device::Cpu);
+
+        let net_1 = test_net(&vs_1)?;
+        vs_1.load("/tmp/test_vars.safetensors")?;
+
+        println!("net 1 t_0={:?}, t_1={:?}",
+                 from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1)),
+                 from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1))
+        );
+
+
+        let mut vs_2 = nn::VarStore::new(Device::Cpu);
+
+        let net_2 = test_net(&vs_2)?;
+
+        println!("net 2 t_0={:?}, t_1={:?}",
+                 from::<Vec<f32>>(&net_2.forward(&batch_0).view(-1)),
+                 from::<Vec<f32>>(&net_2.forward(&batch_1).view(-1))
+        );
+
+
+
+
 
         Ok(())
     }
 
+    fn test_net(vs: &VarStore) -> Result<Box<dyn Module>, HbacError> {
+        SeqBuilder::new(1000)
+            .batch_norm()
+            .conv(100, 1, 1, ConvConfig::default())
+            .linear_s(1)
+            .func(Tensor::sigmoid)
+            .end_seq().build_tch_module(&vs.root())
+    }
+
     #[test]
-    pub fn test_test(){
+    pub fn test_test() -> Result<(), HbacError> {
+        let vs = nn::VarStore::new(Device::Cpu);
+
+        let mod_0 = SeqBuilder::new(1000).linear_s(1).end_seq().build_tch_module(&vs.root())?;
+
+
+
 
         // debug!("debug: {:?}", (||{println!(">>>debug"); "debug"})());
         // trace!("trace: {:?}", (||{println!(">>>trace"); "trace"})());
@@ -477,6 +514,8 @@ mod tch_tests {
         //
         // t_vstack.print();
         // debug!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
+
+        Ok(())
     }
 }
 

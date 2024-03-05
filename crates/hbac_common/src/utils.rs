@@ -251,6 +251,7 @@ pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, vs:&Va
         opt.backward_step(&loss);
 
         tch::no_grad(||{
+
             if idx % 10 == 0 {
                 let (x_t, y_t) = data.valid_batch();
 
