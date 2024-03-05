@@ -419,14 +419,14 @@ pub fn check_fragments(from: &impl AsRef<std::path::Path>,)->Result<(), HbacErro
 
 #[derive(Debug)]
 pub struct ClassTensorsDataBatch {
-    train :HashMap<usize, Vec<Box<Tensor>>>,
-    val :HashMap<usize, Vec<Box<Tensor>>>,
+    train :Vec<Vec<Box<Tensor>>>,//index - class
+    val :Vec<Vec<Box<Tensor>>>,
     batch_size: usize
 }
 
 impl ClassTensorsDataBatch {
 
-    pub fn new(classes_tensors: HashMap<usize, Vec<Box<Tensor>>>, batch_size: usize, train_valid_split:f32) -> Self {
+    pub fn new(classes_tensors: Vec<Vec<Box<Tensor>>>, batch_size: usize, train_valid_split:f32) -> Self {
         /*
         TODO impl - shuffle first
         let mut rng = thread_rng();
@@ -441,23 +441,28 @@ impl ClassTensorsDataBatch {
         let valid = &x_y[split_i..];
         */
 
-        assert!(batch_size % classes_tensors.len() == 0);
+        let classes_len = classes_tensors.len();
+        assert!(batch_size % classes_len == 0);
 
-        let (train, val):(HashMap<usize, Vec<Box<Tensor>>>, HashMap<usize, Vec<Box<Tensor>>>) = classes_tensors.into_iter().fold((HashMap::new(), HashMap::new()), |mut a, (label, tensors)|{
+        let (train, val):(Vec<Vec<Box<Tensor>>>, Vec<Vec<Box<Tensor>>>) = classes_tensors
+            .into_iter()
+            .fold((Vec::with_capacity(classes_len), Vec::with_capacity(classes_len)), |mut class_train_val, tensors|{
+
             let tensors_len = tensors.len();
             let split_i = (tensors_len as f32 * train_valid_split) as usize;
 
-            let train_val = tensors.into_iter().enumerate().fold((Vec::with_capacity(split_i), Vec::with_capacity(tensors_len - split_i)), |mut a_v, (i, t)| {
+            let train_val = tensors.into_iter().enumerate().fold((Vec::with_capacity(split_i), Vec::with_capacity(tensors_len - split_i)), |mut train_val, (i, t)| {
                 if i < split_i {
-                    a_v.0.push(t);
+                    train_val.0.push(t);
                 } else {
-                    a_v.1.push(t);
+                    train_val.1.push(t);
                 }
-                a_v
+                train_val
             });
-            a.0.insert(label, train_val.0);
-            a.1.insert(label, train_val.1);
-            a
+
+            class_train_val.0.push(train_val.0);//train
+            class_train_val.1.push(train_val.1); //validation
+            class_train_val
         });
 
         Self {
@@ -467,36 +472,41 @@ impl ClassTensorsDataBatch {
         }
     }
 
-    fn to_x_y(label_tensors: &HashMap<usize, Vec<Box<Tensor>>>, batch_size: usize) -> (Tensor, Tensor) {
+    fn to_x_y(class_tensors: &Vec<Vec<Box<Tensor>>>, batch_size: usize) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
-        let per_class_len = batch_size / label_tensors.len();//TODO make balanced
+        let per_class_len = batch_size / class_tensors.len();//TODO make balanced
 
         debug!("ClassTensorsDataBatch::to_x_y: per_class_len={}", per_class_len);
 
-        let mut x_y_vecs = label_tensors.iter().fold((vec![], vec![]), |mut x_y_acc, (label, tensors)| {
+        let mut x_y_vecs = class_tensors.iter().enumerate().fold(vec![], |mut x_y_acc, (class, tensors)| {
 
             tensors.choose_multiple(&mut rng, per_class_len).for_each(|t| {
 
-                
-                x_y_acc.0.push(t.shallow_clone());
-                x_y_acc.1.push(*label as i64);
+                x_y_acc.push((t.shallow_clone(), class as i64));
             });
 
             x_y_acc
         });
 
-        // x_y_vecs.1.shuffle(&mut rng);
+        x_y_vecs.shuffle(&mut rng);
 
-        debug!("ClassTensorsDataBatch::to_x_y: x_y_vecs.1.len()={} ", x_y_vecs.0.len());
+        debug!("ClassTensorsDataBatch::to_x_y: x_y_vecs.1.len()={} ", x_y_vecs.len());
 
-        (x_y_vecs.1.len()..batch_size).for_each(|i|{
-            x_y_vecs.0.push(x_y_vecs.0[i-x_y_vecs.0.len()].shallow_clone());
-            x_y_vecs.1.push(x_y_vecs.1[i-x_y_vecs.1.len()]);
+        (x_y_vecs.len()..batch_size).for_each(|i|{
+            x_y_vecs.push(
+                (
+                    x_y_vecs[i-x_y_vecs.len()].0.shallow_clone(),
+                    x_y_vecs[i-x_y_vecs.len()].1
+                )
+            );
+
         });
 
+        let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice());
+
         let tensor = Tensor::stack(
-            x_y_vecs.0.as_slice(),
+            x_y_vecs.into_iter().map(|e|e.0).collect::<Vec<_>>().as_slice(),
             0,
         ).view((batch_size as i64, 1, -1));
 
@@ -504,8 +514,7 @@ impl ClassTensorsDataBatch {
 
         (
             tensor,
-
-            Tensor::from_slice(x_y_vecs.1.as_slice())
+            classes
         )
     }
 }
@@ -837,28 +846,22 @@ mod motifs_tests {
     fn test_class_tensors_data_batch()-> Result<(), HbacError>{
 
         let mut batch = super::ClassTensorsDataBatch::new(
-            HashMap::from(
-                [
-                    (
-                        0,
+            vec![
                         vec![
                             Box::new(Tensor::from_slice(&[0., 0., 0.])),Box::new(Tensor::from_slice(&[0., 0., 1.])),Box::new(Tensor::from_slice(&[0., 0., 2.])),
                             Box::new(Tensor::from_slice(&[0., 1., 0.])),Box::new(Tensor::from_slice(&[0., 1., 1.])),Box::new(Tensor::from_slice(&[0., 1., 2.])),
                             Box::new(Tensor::from_slice(&[0., 2., 0.])),Box::new(Tensor::from_slice(&[0., 2., 1.])),Box::new(Tensor::from_slice(&[0., 2., 2.])),
                             Box::new(Tensor::from_slice(&[0., 3., 0.])),Box::new(Tensor::from_slice(&[0., 3., 1.])),Box::new(Tensor::from_slice(&[0., 3., 2.]))
-                        ]
-                    ),
-                    (
-                        1,
+                        ],
+
                         vec![
                             Box::new(Tensor::from_slice(&[1., 0., 0.])),Box::new(Tensor::from_slice(&[1., 0., 1.])),Box::new(Tensor::from_slice(&[1., 0., 2.])),
                             Box::new(Tensor::from_slice(&[1., 1., 0.])),Box::new(Tensor::from_slice(&[1., 1., 1.])),Box::new(Tensor::from_slice(&[1., 1., 2.])),
                             Box::new(Tensor::from_slice(&[1., 2., 0.])),Box::new(Tensor::from_slice(&[1., 2., 1.])),Box::new(Tensor::from_slice(&[1., 2., 2.])),
                             Box::new(Tensor::from_slice(&[1., 3., 0.])),Box::new(Tensor::from_slice(&[1., 3., 1.])),Box::new(Tensor::from_slice(&[1., 3., 2.]))
                         ]
-                    ),
+
                 ],
-            ),
             10,
             0.5
         );
@@ -867,6 +870,8 @@ mod motifs_tests {
 
         println!("train_batch: x={:?}", from::<Vec<f32>>(&train_batch.0.i((.., 0, 0))));
         println!("train_batch: y={:?}", from::<Vec<f32>>(&train_batch.1));
+
+        assert_eq!(from::<Vec<f32>>(&train_batch.0.i((.., 0, 0))), from::<Vec<f32>>(&train_batch.1));
 
         // println!("train_batch: x={:?}, y={:?}", train_batch.0.size(), train_batch.1.size());
 

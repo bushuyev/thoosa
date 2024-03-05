@@ -233,6 +233,7 @@ fn _main() -> Result<(), HbacError> {
             let channels_good_motif_idxs = select_motifs(
                 motifs,
                 select_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
+
                     let eeg_ids = EEGs::good_eegs_of(cli.base_path.as_str(), label_tensors_path.1.as_str(), cli.limit)?.i64()?.into_iter()
                         .enumerate()
                         .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
@@ -241,6 +242,7 @@ fn _main() -> Result<(), HbacError> {
                     Ok((label_tensors_path.0, eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
                         data::eeg_to_tensor(cli.base_path.as_str(), eeg_id.as_str(), device)
                     }))) //(label, path)
+
                 }).collect::<Result<Vec<_>, HbacError>>()?,
                 cli.limit,
                 select_motifs_params.step(),
@@ -296,16 +298,10 @@ fn _main() -> Result<(), HbacError> {
             hbac_common::utils::train(
                 &Device::Cpu,
                 &ClassTensorsDataBatch::new(
-                    HashMap::from([
-                        (
-                            0,
-                            all_sices_0
-                        ),
-                        (
-                            1,
-                            all_sices_1
-                        )
-                    ]),
+                    vec![
+                        all_sices_0,
+                        all_sices_1
+                    ],
                     10,
                     0.8
                 ) as &dyn DataBatch,
