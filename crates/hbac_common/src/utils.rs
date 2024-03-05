@@ -230,24 +230,19 @@ pub trait DataBatch {
     fn valid_batch(&self) -> (Tensor, Tensor);
 }
 
-pub fn train(device:&Device, eegs:&dyn DataBatch, model:&Box<dyn Module>, vs:&VarStore, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<(), HbacError>{
+pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, vs:&VarStore, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<(), HbacError>{
 
     debug!("train: device={:?} cycles={}", device, cycles);
 
 
     for idx in 1..cycles {
 
+        let (x_t, y_t) = data.train_batch();
 
-        let (x_t, y_t) = eegs.train_batch();// load_batch(device, BATCH_SIZE);
-
-        // let x_t = x_t.to_device(*device);
-        // let y_t = y_t.to_device(*device);
-
-        let pred_y = model.forward(&x_t).i((.., 0, 0));
+        let pred_y = model.forward(&x_t);
 
         debug!("pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
         debug!("   y_t ={:?}", from::<Vec<f32>>(&y_t));
-        debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
 
         // let pred_y_mean = pred_y.view((10, 1)); //pred_y.mean_dim(1, false, tch::Kind::Float);
 
@@ -257,13 +252,13 @@ pub fn train(device:&Device, eegs:&dyn DataBatch, model:&Box<dyn Module>, vs:&Va
 
         tch::no_grad(||{
             if idx % 10 == 0 {
-                let (x_t, y_t) = eegs.valid_batch();
+                let (x_t, y_t) = data.valid_batch();
 
-                let pred_y = model.forward(&x_t.to_device(*device)).i((.., 0, 0));
+                let pred_y = model.forward(&x_t.to_device(*device));
 
                 debug!("vaid: pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
                 debug!("vaid:    y_t.size()={:?}",  from::<Vec<f32>>(&y_t));
-                debug!("vaid: pred_y.size()={:?} ", from::<Vec<f32>>(&pred_y));
+                // debug!("vaid: pred_y.size()={:?} ", from::<Vec<f32>>(&pred_y));
 
                 // let pred_y_mean = pred_y.view((10, 1)); // pred_y.mean_dim(1, false, tch::Kind::Float);
 

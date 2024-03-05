@@ -289,9 +289,9 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 
 #[cfg(test)]
 mod tch_tests {
-    use log::{debug, LevelFilter};
+    use log::{debug, trace, LevelFilter};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use tch::{Device, kind, Kind, nn, Reduction, Tensor};
+    use tch::{Device, IndexOp, kind, Kind, nn, Reduction, Tensor};
     use tch::nn::{ConvConfig, Module, OptimizerConfig};
     use hbac_shared::HbacError;
 
@@ -430,8 +430,13 @@ mod tch_tests {
             &vs,
             |pred: &Tensor, target: &Tensor| {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-                pred.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
-            }, 100, nn::AdamW::default().build(&vs, 1.0e-4)?
+
+                let pred_y = pred.i((.., 0, 0));
+                debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
+                pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
+            },
+            100,
+            nn::AdamW::default().build(&vs, 1.0e-4)?
         )?;
 
 
@@ -452,23 +457,26 @@ mod tch_tests {
     #[test]
     pub fn test_test(){
 
-        let t1 = Tensor::from_slice(&[4., 6.]);
-        let t2 = Tensor::from_slice(&[15., 5.]);
+        // debug!("debug: {:?}", (||{println!(">>>debug"); "debug"})());
+        // trace!("trace: {:?}", (||{println!(">>>trace"); "trace"})());
 
-        let t_stack = Tensor::stack(&[t1.copy(), t2.copy()], 0);
-        let t_column_stack = Tensor::column_stack(&[t1.copy(), t2.copy()]);
-        let t_vstack = Tensor::vstack(&[t1.copy(), t2.copy()]);
-
-
-        debug!("t1={:?}, t2={:?}, t_stack={:?} t_column_stack={:?} t_vstack={:?}", t1, t2, t_stack, t_column_stack, t_vstack);
-        t_stack.print();
-        debug!("t_stack mean={:?}", t_stack.mean_dim(1, false, kind::Kind::Float));
-
-        t_column_stack.print();
-        debug!("t_column_stack mean={:?}", t_column_stack.mean_dim(1, false, kind::Kind::Float));
-
-        t_vstack.print();
-        debug!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
+        // let t1 = Tensor::from_slice(&[4., 6.]);
+        // let t2 = Tensor::from_slice(&[15., 5.]);
+        //
+        // let t_stack = Tensor::stack(&[t1.copy(), t2.copy()], 0);
+        // let t_column_stack = Tensor::column_stack(&[t1.copy(), t2.copy()]);
+        // let t_vstack = Tensor::vstack(&[t1.copy(), t2.copy()]);
+        //
+        //
+        // debug!("t1={:?}, t2={:?}, t_stack={:?} t_column_stack={:?} t_vstack={:?}", t1, t2, t_stack, t_column_stack, t_vstack);
+        // t_stack.print();
+        // debug!("t_stack mean={:?}", t_stack.mean_dim(1, false, kind::Kind::Float));
+        //
+        // t_column_stack.print();
+        // debug!("t_column_stack mean={:?}", t_column_stack.mean_dim(1, false, kind::Kind::Float));
+        //
+        // t_vstack.print();
+        // debug!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
     }
 }
 

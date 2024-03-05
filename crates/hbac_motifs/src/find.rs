@@ -1342,10 +1342,10 @@ mod motif_find_tests {
                 Tensor::from_slice(&[1.,  7.,  1.]),//motif 3  - no matches
             ]),
             Tensor::vstack(&[//channel 1
-                Tensor::from_slice(&[10.,  10.,  10.]),//motif 0
-                Tensor::from_slice(&[10.,  20.,  20.]),//motif 1
-                Tensor::from_slice(&[30.,  30.,  10.]),//motif 2
                 Tensor::from_slice(&[10.,  70.,  10.]),//motif 3
+                Tensor::from_slice(&[30.,  30.,  10.]),//motif 2
+                Tensor::from_slice(&[10.,  20.,  20.]),//motif 1
+                Tensor::from_slice(&[10.,  10.,  10.]),//motif 0
             ])
         ]).view((2, 4, -1));
 
@@ -1357,10 +1357,10 @@ mod motif_find_tests {
                 0,//motif 3
             ]),
             Tensor::from_slice(&[//channel 1
-                2,//motif 0
-                2,//motif 1
-                1,//motif 2
                 0,//motif 3
+                1,//motif 2
+                2,//motif 1
+                2,//motif 0
             ])
         ]).totype(Int);
 

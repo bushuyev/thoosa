@@ -6,14 +6,14 @@ use std::io::Write;
 use std::str::FromStr;
 use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
-use tch::{Device, Kind, nn, Reduction, Tensor};
+use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use hbac_motifs::find::{FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
 use crate::data::{clc_records, EEGs, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::Series;
-use hbac_common::utils::{cdt, DataBatch, dot_norm, norm_2, plot_series};
+use hbac_common::utils::{cdt, DataBatch, dot_norm, from, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
 use hbac_motifs::fragments::{check_slices, ClassTensorsDataBatch, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
@@ -67,9 +67,12 @@ struct Cli {
 
 
 #[derive(Debug, Args)]
-pub struct TrainOnMotifParams {
+pub struct TrainOnMotifsParams {
     #[arg(long)]
-    motif_id: usize,
+    motif_ids: Vec<usize>,
+
+    #[arg(long,  default_value_t = 1000)]
+    window: usize,//should be same as one used when finding motifs or TODO center bigger/smaller window
 
     #[arg(long, default_value = "/tmp/motif_models")]
     output_dir: String,
@@ -81,10 +84,8 @@ pub struct TrainOnMotifParams {
     lr: f64,
 }
 
-impl TrainOnMotifParams {
-    pub fn motif_id(&self) -> usize {
-        self.motif_id
-    }
+impl TrainOnMotifsParams {
+
     pub fn output_dir(&self) -> &str {
         &self.output_dir
     }
@@ -95,6 +96,13 @@ impl TrainOnMotifParams {
     pub fn lr(&self) -> f64 {
         self.lr
     }
+
+    pub fn window(&self) -> usize {
+        self.window
+    }
+    pub fn motif_ids(&self) -> &Vec<usize> {
+        &self.motif_ids
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -104,7 +112,7 @@ enum Commands {
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
-    TrainOnMotif(TrainOnMotifParams),
+    TrainOnMotifs(TrainOnMotifsParams),
 }
 
 
@@ -263,61 +271,71 @@ fn _main() -> Result<(), HbacError> {
             // t.save(find_good_motifs_params.output_motifs_tensor_path())?;
         }
 
-        Some(Commands::TrainOnMotif(train_on_motif_params)) => {
+        Some(Commands::TrainOnMotifs(train_on_motif_params)) => {
             debug!("train_on_motif: train_on_motif_params={:?}", train_on_motif_params);
 
-            let mut store_guard = store.lock()?;
-
-            let (channel, run_id, slices) = store_guard.list_motif_slices(train_on_motif_params.motif_id(), None, None)?;
-
-            debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
-
-            let all_sices_1 = flat_map(load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
-
-
-            let (channel, run_id, slices) = store_guard.list_motif_slices(train_on_motif_params.motif_id(), Some(all_sices_1.len()), Some((run_id, channel as usize)))?;
-
-            debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
-
-            let all_sices_0 = flat_map(load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
-
-            debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
-
-
-            let vs = nn::VarStore::new(device);
-
-            let net = SeqBuilder::new(1000)
-                .batch_norm()
-                .conv(10, 1, 10, ConvConfig::default())
-                .linear_s(1)
-                .func(Tensor::sigmoid)
-                .end_seq().build_tch_module(&vs.root())?;
-
-            info!("train_on_motif: training on {} slices", all_sices_0.len());
-
-            hbac_common::utils::train(
-                &Device::Cpu,
-                &ClassTensorsDataBatch::new(
-                    vec![
-                        all_sices_0,
-                        all_sices_1
-                    ],
-                    10,
-                    0.8
-                ) as &dyn DataBatch,
-                &net,
-                &vs,
-                |pred: &Tensor, target: &Tensor| {
-                    // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-                    pred.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
-                },
-                train_on_motif_params.cycles,
-                nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
-            )?;
+            for motif_id in train_on_motif_params.motif_ids() {
+                train_on_motif(cli.base_path.as_str(), train_on_motif_params, Arc::clone(&store), device, *motif_id)?;
+            }
         }
         None => {}
     }
 
+    Ok(())
+}
+
+fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, store: Arc<Mutex<SqlStore>>, device: Device, motif_id: usize) -> Result<(), HbacError> {
+    let mut store_guard = store.lock()?;
+
+    let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, None, None)?;
+
+    debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
+
+    let window = train_on_motif_params.window() as i64;
+
+    let all_sices_1 = flat_map(load_motif_slices(base_path, channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+
+    let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, Some(all_sices_1.len()), Some((run_id, channel as usize)))?;
+
+    debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
+
+    let all_sices_0 = flat_map(load_motif_slices(base_path, channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+
+    debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
+
+
+    let vs = nn::VarStore::new(device);
+
+    let net = SeqBuilder::new(window)
+        .batch_norm()
+        .conv(10, 1, 10, ConvConfig::default())
+        .linear_s(1)
+        .func(Tensor::sigmoid)
+        .end_seq().build_tch_module(&vs.root())?;
+
+    info!("train_on_motif: training on {} slices", all_sices_0.len());
+
+    hbac_common::utils::train(
+        &Device::Cpu,
+        &ClassTensorsDataBatch::new(
+            vec![
+                all_sices_0,
+                all_sices_1
+            ],
+            10,
+            0.8
+        ) as &dyn DataBatch,
+        &net,
+        &vs,
+        |pred: &Tensor, target: &Tensor| {
+            // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
+            let pred_y = pred.i((.., 0, 0));
+            debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
+            pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
+        },
+        train_on_motif_params.cycles,
+        nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
+    )?;
     Ok(())
 }
 
@@ -349,8 +367,10 @@ mod main_tests {
         //     Ok::<(), HbacError>(())
         // })?;
 
-        let ce = Tensor::from_slice(&[1., 1., 0., 0.]).binary_cross_entropy::<Tensor>(&Tensor::from_slice(&[1., 1., 0., 0.1]), None, Reduction::Mean);
-        ce.print();
+        // let ce = Tensor::from_slice(&[1., 1., 0., 0.]).binary_cross_entropy::<Tensor>(&Tensor::from_slice(&[1., 1., 0., 0.1]), None, Reduction::Mean);
+        // ce.print();
+
+
 
         Ok(())
     }
