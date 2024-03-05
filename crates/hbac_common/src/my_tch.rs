@@ -415,11 +415,16 @@ mod tch_tests {
 
         let net_0 = test_net(&vs_0)?;
 
+
+        let t_0 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice());
+        let t_1 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 22.).sin()).collect::<Vec<f32>>().as_slice());
+
+
         utils::train(
             &Device::Cpu,
             &crate::simp::DummyDs::new(
-                Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice()),
-                Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 22.).sin()).collect::<Vec<f32>>().as_slice()),
+                t_0.shallow_clone(),
+                t_1.shallow_clone(),
             ) as &dyn DataBatch,
             &net_0,
             &vs_0,
@@ -434,9 +439,6 @@ mod tch_tests {
             nn::AdamW::default().build(&vs_0, 1.0e-4)?
         )?;
 
-
-        let t_0 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice());
-        let t_1 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 22.).sin()).collect::<Vec<f32>>().as_slice());
 
 
         let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000));
