@@ -204,7 +204,7 @@ fn _main() -> Result<(), HbacError> {
 
             let channels_good_motif_idxs = select_motifs(
                 motifs,
-                eegs_to_labels_tensors(cli.base_path.as_str(), select_motifs_params.label_tensors(), &device, cli.limit.as_ref()).collect::<Vec<_>>(),
+                eegs_to_labels_tensors(cli.base_path.as_str(), select_motifs_params.label_tensors(), &device, cli.limit.as_ref()),
                 cli.limit,
                 select_motifs_params.step(),
                 device
@@ -269,13 +269,25 @@ fn _main() -> Result<(), HbacError> {
                 if loss < 0.2 {
                     info!("train_on_motif: savgin motif_id={} loss={}", motif_id, loss);
 
-                    vs.save(Path::new(train_on_motif_params.output_dir()).join(format!("{}_{:3}.safetensors", motif_id, loss)))?;
+                    let channel_models = Path::new(train_on_motif_params.output_dir()).join(channel.to_string());
+                    fs::create_dir_all(channel_models);
+
+                    vs.save(channel_models.join(format!("{}_{:3}.safetensors", motif_id, loss)))?;
                 }
             }
         }
 
         Some(TrainOnEEG(train_on_eeg_params)) => {
-            // train_on_eeg(train_on_eeg_params)?;
+
+            train_on_eeg(
+                train_on_eeg_params,
+                eegs_to_labels_tensors(
+                    cli.base_path.as_str(),
+                    &vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],//TODO load from corrs_run
+                    &device,
+                    cli.limit.as_ref()
+                ),
+            )?;
         }
 
         None => {}

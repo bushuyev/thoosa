@@ -8,6 +8,8 @@ use crate::builder::{Node, SeqBuilder};
 use crate::utils::DataBatch;
 use crate::utils::from;
 use rand::prelude::SliceRandom;
+use rayon::iter::ParallelBridge;
+use rayon::iter::ParallelIterator;
 
 #[derive(Debug, Args)]
 pub struct TrainOnEEGParams {
@@ -22,8 +24,20 @@ pub struct TrainOnEEGParams {
     lr: f64,
 }
 
-pub fn train_on_eeg<F>(loader:F, params: &TrainOnEEGParams)-> Result<(), HbacError>
-    where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+
+fn run_net<I>(loader: I) where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
+
+}
+
+pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>)-> Result<(), HbacError>
+    where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+
+    labels_loaders.into_iter().par_bridge().try_for_each(|(label, loader)|{
+        run_net(loader);
+
+        Ok::<(), HbacError>(())
+    });
+
 
     Ok(())
 }
@@ -247,6 +261,7 @@ impl From<&str> for MotifsBy {
 
 #[cfg(test)]
 mod train_tests {
+    use std::collections::HashMap;
     use tch::Tensor;
     use hbac_shared::HbacError;
     use crate::train_nets::{ClassTensorsDataBatch, TrainOnEEGParams};
@@ -303,16 +318,46 @@ mod train_tests {
     #[test]
     fn test_train_on_eeg() -> Result<(), HbacError>{
 
+        fn test_load_tensor(id:String)->Result<Tensor, HbacError> {
+            Ok(Tensor::from_slice(&[0., 0., 0., 1.]))
+        }
+
+
         super::train_on_eeg(
 
-            |id| Box::new(Tensor::from_slice(&[1., 0., 2.])),
             &TrainOnEEGParams {
                 motif_models_dir: "/tmp/dummy".into(),
                 cycles: 10,
                 lr: 1.0e-5
-            }
+            },
+
+            vec![
+                (1, "seizure_vote".to_string()),
+                (0, "lpd_vote".to_string()),
+                (0, "gpd_vote".to_string()),
+                (0, "lrda_vote".to_string()),
+                (0, "grda_vote".to_string()),
+                (0, "other_vote".to_string())
+
+            ].into_iter().map(|(label, kind)|{
+
+                (label, vec!["123".to_string(), "234".to_string()].into_iter().map(|id|{
+
+                    test_load_tensor(id)
+                }))
+            }).collect::<Vec<_>>()
+
         )?;
 
+        /*
+
+        vec![
+                ( vec!["id1", "id2"].into_iter().map(|id|
+                    eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
+                        eeg_to_tensor(base_path, eeg_id.as_str(), *device)
+                    }))
+            ]
+         */
         Ok(())
     }
 }
