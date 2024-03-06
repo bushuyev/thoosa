@@ -274,6 +274,9 @@ impl Store for SqlStore {
         Ok(corr_run_id)
     }
 
+    /**
+    * returns vec of channel X (motif id, corr)
+    */
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError> {
         let mut channels_corr_motifs = (0..20).into_iter().map(|_|Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
 

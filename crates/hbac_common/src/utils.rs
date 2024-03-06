@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::Write;
 use chrono::SecondsFormat;
 use plotters::prelude::*;
@@ -7,7 +8,7 @@ use plotters::element::PathElement;
 use tch::{Device, Kind, nn, Tensor};
 use tch::nn::{Module, OptimizerConfig, VarStore};
 use plotters::drawing::IntoDrawingArea;
-use hbac_shared::HbacError;
+use hbac_shared::{gauss_i, HbacError, pulse_v, pulses_in_const, sig_in_rand};
 use std::error::Error;
 use std::fs;
 use std::ops::Deref;
@@ -210,30 +211,17 @@ pub fn lin_t(n: i64) -> Tensor {
     Tensor::from((0..n).map(|x| x as f32).collect::<Vec<f32>>().as_slice())
 }
 
-
-pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
-    where
-        T: std::str::FromStr,
-        T::Err: Error + Send + Sync + 'static,
-        U: std::str::FromStr,
-        U::Err: Error + Send + Sync + 'static,
-{
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
-}
-
-
 pub trait DataBatch {
     fn train_batch(&self) -> (Tensor, Tensor);
     fn valid_batch(&self) -> (Tensor, Tensor);
 }
 
-pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, vs:&VarStore, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<(), HbacError>{
+pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<f32, HbacError>{
 
     debug!("train: device={:?} cycles={}", device, cycles);
 
+
+    let mut last_valid_loss = [0f32;3];
 
     for idx in 1..cycles {
 
@@ -241,7 +229,7 @@ pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, vs:&Va
 
         let pred_y = model.forward(&x_t);
 
-        debug!("pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
+        debug!("x_t.size()={:?} pred_y.size()={:?} y_t.size()={:?}", x_t.size(), pred_y.size(), y_t.size());
         debug!("   y_t ={:?}", from::<Vec<f32>>(&y_t));
 
         // let pred_y_mean = pred_y.view((10, 1)); //pred_y.mean_dim(1, false, tch::Kind::Float);
@@ -264,7 +252,8 @@ pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, vs:&Va
                 // let pred_y_mean = pred_y.view((10, 1)); // pred_y.mean_dim(1, false, tch::Kind::Float);
 
                 let valid_loss = loss_fn(&pred_y, &y_t);
-                info!("train loss={:?}, valid loss={:?}", loss, valid_loss);
+                last_valid_loss[idx % last_valid_loss.len()] = valid_loss.double_value(&[]) as f32;
+                debug!("train loss={:?}, valid loss={:?} avg loss={}", loss, valid_loss, last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
                 std::io::stdout().flush().unwrap();
             }
 
@@ -280,5 +269,32 @@ pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, vs:&Va
         drop(loss);
     }
 
-    Ok(())
+    Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
+}
+
+
+
+pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
+    let sig_1 = Tensor::from_slice(
+        pulses_in_const(n, &[
+            // (10, pulse_v(8., 3., 20, 2.)),
+            // (30, pulse_v(8., 3., 20, 2.))
+            (100, pulse_v(80., 30., 200, 20.)),
+            (300, pulse_v(80., 30., 200, 20.))
+        ]).as_slice()
+    );
+
+    let sig_2 = Tensor::from_slice(
+        sig_in_rand(n, &[], 10., 0.001).as_slice()
+    );
+    (sig_1, sig_2)
+}
+
+
+pub fn gauss_t(μ: f32, σ: f32, n: i64) -> Tensor {
+    Tensor::from(gauss_i(μ, σ, n).collect::<Vec<_>>().as_slice())
+}
+
+pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
+    Tensor::from(pulse_v(μ, σ, n, f).as_slice())
 }

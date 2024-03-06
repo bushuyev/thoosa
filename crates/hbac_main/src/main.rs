@@ -65,11 +65,39 @@ struct Cli {
     command: Option<Commands>,
 }
 
+#[derive(
+    Clone, Debug,
+)]
+enum MotifsBy {
+    CorrRunId(usize),
+
+    MotifsIds(Vec<usize>)
+}
+
+impl From<&str> for MotifsBy {
+    fn from(v: &str) -> MotifsBy {
+        debug!("From<&str> for MotifsBy: v={:?}", v);
+
+        MotifsBy::CorrRunId(0)
+    }
+}
+
+// impl clap::ValueEnum for MotifsBy {
+//     fn value_variants<'a>() -> &'a [MotifsBy] {
+//         &[MotifsBy::CorrRunId(0), MotifsBy::MotifsIds(None)]
+//     }
+//     fn to_possible_value<'a>(&self) -> ::std::option::Option<clap::builder::PossibleValue> {
+//         match self {
+//             Self::CorrRunId(_) => Some(clap::builder::PossibleValue::new("CorrRunId")),
+//             Self::MotifsIds(_) => Some(clap::builder::PossibleValue::new("MotifsIds")),
+//         }
+//     }
+// }
 
 #[derive(Debug, Args)]
 pub struct TrainOnMotifsParams {
     #[arg(long)]
-    motif_ids: Vec<usize>,
+    motif_ids: MotifsBy,
 
     #[arg(long,  default_value_t = 1000)]
     window: usize,//should be same as one used when finding motifs or TODO center bigger/smaller window
@@ -100,7 +128,8 @@ impl TrainOnMotifsParams {
     pub fn window(&self) -> usize {
         self.window
     }
-    pub fn motif_ids(&self) -> &Vec<usize> {
+
+    pub fn motif_ids(&self) -> &MotifsBy {
         &self.motif_ids
     }
 }
@@ -273,14 +302,32 @@ fn _main() -> Result<(), HbacError> {
 
         Some(Commands::TrainOnMotifs(train_on_motif_params)) => {
             debug!("train_on_motif: train_on_motif_params={:?}", train_on_motif_params);
+            let motifs_iter = {
+                let mut store_guard = store.lock()?;
+
+                fs::create_dir_all(train_on_motif_params.output_dir());
+
+                // for motif_id in train_on_motif_params.motif_ids() {
+                store_guard.list_corr_motifs(1)?
+                    .into_iter()
+                    .flat_map(|channel_motifs|channel_motifs.into_iter())
+                    .filter(|(motif_id, corr)| *corr > 0.05)
+                    .map(|(motif_id, corr)|motif_id)
+            };
 
             let node = motif_node(train_on_motif_params);
 
-            fs::create_dir_all(train_on_motif_params.output_dir());
+            for motif_id in motifs_iter {
 
-            for motif_id in train_on_motif_params.motif_ids() {
-                train_on_motif(cli.base_path.as_str(), train_on_motif_params, Arc::clone(&store), device, *motif_id, &node)?
-                    .save(Path::new(train_on_motif_params.output_dir()).join(format!("{}.safetensors", motif_id)))?;
+                let (loss, mut vs) = train_on_motif(cli.base_path.as_str(), train_on_motif_params, Arc::clone(&store), device, motif_id, &node)?;
+
+                debug!("train_on_motif: motif_id={} loss={}", motif_id, loss);
+
+                if loss < 0.2 {
+                    info!("train_on_motif: savgin motif_id={} loss={}", motif_id, loss);
+
+                    vs.save(Path::new(train_on_motif_params.output_dir()).join(format!("{}_{:3}.safetensors", motif_id, loss)))?;
+                }
             }
         }
         None => {}
@@ -298,14 +345,14 @@ fn motif_node(train_on_motif_params: &TrainOnMotifsParams) -> Node {
         .end_seq()
 }
 
-fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, store: Arc<Mutex<SqlStore>>, device: Device, motif_id: usize, node: &Node) -> Result<VarStore, HbacError> {
+fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, store: Arc<Mutex<SqlStore>>, device: Device, motif_id: usize, node: &Node) -> Result<(f32, VarStore), HbacError> {
     let mut store_guard = store.lock()?;
+    let window = train_on_motif_params.window() as i64;
 
     let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, None, None)?;
 
     debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
-    let window = train_on_motif_params.window() as i64;
 
     let all_sices_1 = flat_map(load_motif_slices(base_path, channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
 
@@ -324,7 +371,7 @@ fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, 
 
     info!("train_on_motif: training on {} slices", all_sices_0.len());
 
-    hbac_common::utils::train(
+    let valid_loss = hbac_common::utils::train(
         &Device::Cpu,
         &ClassTensorsDataBatch::new(
             vec![
@@ -335,7 +382,6 @@ fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, 
             0.8
         ) as &dyn DataBatch,
         &net,
-        &vs,
         |pred: &Tensor, target: &Tensor| {
             // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
             let pred_y = pred.i((.., 0, 0));
@@ -345,7 +391,7 @@ fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, 
         train_on_motif_params.cycles,
         nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
     )?;
-    Ok(vs)
+    Ok((valid_loss, vs))
 }
 
 fn flat_map(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {

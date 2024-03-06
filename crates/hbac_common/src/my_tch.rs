@@ -299,10 +299,11 @@ mod tch_tests {
     use crate::builder::SeqBuilder;
     use crate::my_tch::configure_dense;
     use crate::utils;
-    use crate::utils::DataBatch;
-    use crate::utils::from;
+    use crate::utils::*;
     use hbac_shared::*;
     use core::f32::consts::PI;
+    use chrono::Utc;
+    use plotters::prelude::{BLACK, GREEN, RED};
 
     #[ctor::ctor]
     fn init() {
@@ -413,11 +414,14 @@ mod tch_tests {
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
 
-        let net_0 = test_net(&vs_0)?;
+        let n = 1000;
+        let net_0 = test_net(&vs_0, n)?;
 
 
-        let t_0 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 20.).sin()).collect::<Vec<f32>>().as_slice());
-        let t_1 = Tensor::from_slice((0..1000).map(|x| 4. * (PI * (x as f32)/ 22.).sin()).collect::<Vec<f32>>().as_slice());
+
+        // let t_0 = Tensor::from_slice(sin_v(1000, 20.).as_slice());
+        let t_0 = Tensor::from_slice(sig_in_rand(n, &[], 0.05, 1.).as_slice());
+        let t_1 = Tensor::from_slice(sin_v(n, 22.).as_slice());
 
 
         utils::train(
@@ -427,7 +431,104 @@ mod tch_tests {
                 t_1.shallow_clone(),
             ) as &dyn DataBatch,
             &net_0,
-            &vs_0,
+            |pred: &Tensor, target: &Tensor| {
+                // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
+
+                let pred_y = pred.i((.., 0, 0));
+                debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
+                pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
+            },
+            n as usize,
+            nn::AdamW::default().build(&vs_0, 1.0e-4)?
+        )?;
+
+
+
+        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
+        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
+        println!("net t_0={:?}, t_1={:?}",
+             from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)),
+             from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1))
+        );
+
+        vs_0.freeze();
+        vs_0.save("/tmp/test_vars.safetensors")?;
+
+        let mut vs_1 = nn::VarStore::new(Device::Cpu);
+
+        let net_1 = test_net(&vs_1, n)?;
+        vs_1.load("/tmp/test_vars.safetensors")?;
+
+        println!("net 1 t_0={:?}, t_1={:?}",
+             from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1)),
+             from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1))
+        );
+
+        assert_eq!(from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)), from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1)));
+        assert_eq!(from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1)), from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1)));
+
+
+        Ok(())
+    }
+
+    fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn Module>, HbacError> {
+        SeqBuilder::new(num_features)
+            .batch_norm()
+            .conv(num_features/10, 1, 1, ConvConfig::default())
+            .linear_s(1)
+            .func(Tensor::sigmoid)
+            .end_seq().build_tch_module(&vs.root())
+    }
+
+    #[test]
+    pub fn test_full() -> Result<(), HbacError>{
+        let motif_n =  1000;
+        let input_n =  10000;
+
+        // let motif_0_slice = comp_sin_v(motif_n);
+        let motif_0_slice = sin_v(motif_n, 10.);
+        let motif_0_v = sig_in_rand(
+            input_n,
+            &[(((input_n-motif_n)/2) as usize, motif_0_slice.clone()), ], 0.05, 1.
+        );
+
+
+        // let motif_1_slice = comp_sin_k_v(motif_n, vec![30., 20., 10., 5., 3.]);
+        let motif_1_slice = sin_v(motif_n, 20.);
+        let motif_1_v = sig_in_rand(
+            input_n,
+            &[(((input_n-motif_n)/2) as usize, motif_1_slice.clone()), ], 0.05, 1.
+        );
+
+        let rnd_v = sig_in_rand(input_n, &[], 0.05, 1.);
+        let rnd_v_slice = sig_in_rand(motif_n, &[], 0.05, 1.);
+
+        let x = lin_t(input_n);
+        plot_series(
+            vec![
+                (format!("Motif 0"), RED, vec_f32_from(&x).into_iter().zip(motif_0_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
+                (format!("Motif 1"), GREEN, vec_f32_from(&x).into_iter().zip(motif_1_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
+                (format!("Rand"), BLACK,  vec_f32_from(&x).into_iter().zip(rnd_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
+
+            ], "EEG", (input_n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        )?;
+        let motif_0_t = Tensor::from_slice(motif_0_slice.as_slice());
+        let motif_1_t = Tensor::from_slice(motif_1_slice.as_slice());
+        let rnd_t = Tensor::from_slice(rnd_v_slice.as_slice());
+
+
+        debug!("rnd_t.size()={:?}, motif_0_t.size()={:?}, motif_1_t.size()={:?}", rnd_t.size(), motif_0_t.size(), motif_1_t.size());
+
+        let mut vs_0 = nn::VarStore::new(Device::Cpu);
+        let net_0 = test_net(&vs_0, motif_n)?;
+
+        utils::train(
+            &Device::Cpu,
+            &crate::simp::DummyDs::new(
+                rnd_t.shallow_clone(),
+                motif_0_t.shallow_clone(),
+            ) as &dyn DataBatch,
+            &net_0,
             |pred: &Tensor, target: &Tensor| {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
 
@@ -439,61 +540,109 @@ mod tch_tests {
             nn::AdamW::default().build(&vs_0, 1.0e-4)?
         )?;
 
-
-
-        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000));
-        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000));
-        println!("net t_0={:?}, t_1={:?}",
-                 from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)),
-                 from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1))
-        );
-
-        vs_0.freeze();
-        vs_0.save("/tmp/test_vars.safetensors")?;
-
         let mut vs_1 = nn::VarStore::new(Device::Cpu);
+        let net_1 = test_net(&vs_1, motif_n)?;
+        utils::train(
+            &Device::Cpu,
+            &crate::simp::DummyDs::new(
+                rnd_t.shallow_clone(),
+                motif_1_t.shallow_clone(),
+            ) as &dyn DataBatch,
+            &net_1,
+            |pred: &Tensor, target: &Tensor| {
+                // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
 
-        let net_1 = test_net(&vs_1)?;
-        vs_1.load("/tmp/test_vars.safetensors")?;
+                let pred_y = pred.i((.., 0, 0));
+                debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
+                pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
+            },
+            100,
+            nn::AdamW::default().build(&vs_1, 1.0e-4)?
+        )?;
 
-        println!("net 1 t_0={:?}, t_1={:?}",
-                 from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1)),
-                 from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1))
+        let batch_rnd = Tensor::stack((0..10).map(|_| rnd_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));
+        let batch_0 = Tensor::stack((0..10).map(|_| motif_0_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));
+        let batch_1 = Tensor::stack((0..10).map(|_| motif_1_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));
+
+        debug!("net_0 rnd_t={:?}, motif_0={:?}",
+             from::<Vec<f32>>(&net_0.forward(&batch_rnd).view(-1)),
+             from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1))
         );
 
-
-        let mut vs_2 = nn::VarStore::new(Device::Cpu);
-
-        let net_2 = test_net(&vs_2)?;
-
-        println!("net 2 t_0={:?}, t_1={:?}",
-                 from::<Vec<f32>>(&net_2.forward(&batch_0).view(-1)),
-                 from::<Vec<f32>>(&net_2.forward(&batch_1).view(-1))
+        debug!("net_1 rnd_t={:?}, motif_1={:?}",
+             from::<Vec<f32>>(&net_1.forward(&batch_rnd).view(-1)),
+             from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1))
         );
 
+        debug!("net_1x0 0-1={:?}, 1-0={:?}",
+             from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1)),
+             from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1))
+        );
+
+        let motif_0_t = Tensor::from_slice(motif_0_v.as_slice());
+        debug!("motif_0_t={:?}", motif_0_t.size());
+
+        let motif_1_t = Tensor::from_slice(motif_1_v.as_slice());
+        debug!("motif_1_t={:?}", motif_1_t.size());
+
+        // motif_0_t.split(motif_n, 0).into_iter().array_chunks::<10>().for_each(|slice|{
+        let mut chunks = (0..=(input_n - motif_n) as usize).step_by((motif_n/4) as usize ).array_chunks::<10>();
+        let mut net_0_out = vec![];
+        while let Some(slice_0_idx) = chunks.next() {
+            debug!("slice_0_idx={:?}", slice_0_idx);
+            let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| motif_0_t.i(i as i64..i as i64 +motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
+            debug!("batch.size={:?}", batch.size());
+            let batch= batch.view((10, 1, 1000));
+            debug!("batch.size={:?}", batch.size());
+            let res = net_0.forward(&batch);
+            debug!("batch.size={:?}", res);
+            net_0_out.push(from::<Vec<f32>>(&res.i((.., 0, 0))));
+        };
+
+        for n in net_0_out {
+            debug!("net_0_out={:?}", n);
+        }
 
 
+        debug!("net_rnd_out={:?}", from::<Vec<f32>>(&net_0.forward(&Tensor::stack((0..10).map(|_| Tensor::from_slice(sig_in_rand(motif_n, &[], 0.05, 1.).as_slice())).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000))).i((.., 0, 0))));
 
+
+        let zero_t = Tensor::zeros([1000], (Kind::Float, Device::Cpu));
+        if let Some(reminder) = chunks.into_remainder() {
+            debug!("reminder={:?}", reminder);
+            // let mut last_batch =
+        }
 
         Ok(())
     }
 
-    fn test_net(vs: &VarStore) -> Result<Box<dyn Module>, HbacError> {
-        SeqBuilder::new(1000)
-            .batch_norm()
-            .conv(100, 1, 1, ConvConfig::default())
-            .linear_s(1)
-            .func(Tensor::sigmoid)
-            .end_seq().build_tch_module(&vs.root())
-    }
-
     #[test]
     pub fn test_test() -> Result<(), HbacError> {
-        let vs = nn::VarStore::new(Device::Cpu);
 
-        let mod_0 = SeqBuilder::new(1000).linear_s(1).end_seq().build_tch_module(&vs.root())?;
+        let mut fifo = [0.0; 3];
+        for i in 0..100{
+            fifo[i % fifo.len() as usize] = i as f32;
+            println!("fifo={:?} i={}", fifo, i % fifo.len(), )
+        }
 
+        // let input_n = 10_000usize;
+        // let motif_n = 1_000usize;
+        //
+        // let mut chunks = (0..=input_n - motif_n).step_by(motif_n/2 ).array_chunks::<10>();
+        // while let Some(slice) = chunks.next() {
+        //     println!("slices={:?}", slice);
+        // }
+        //
+        // let rem_option = chunks.into_remainder();
+        // println!("is_some={}", rem_option.is_some());
+        // if let Some(mut reminder) = rem_option {
+        //     println!("reminder={:?}", reminder.len());
+        //
+        // }
 
+        // let vs = nn::VarStore::new(Device::Cpu);
+        //
+        // let mod_0 = SeqBuilder::new(1000).linear_s(1).end_seq().build_tch_module(&vs.root())?;
 
 
         // debug!("debug: {:?}", (||{println!(">>>debug"); "debug"})());

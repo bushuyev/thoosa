@@ -12,6 +12,8 @@ use std::path::Path;
 use clap::value_parser;
 use clap::parser::*;
 use clap::clap_derive::{Args, Parser, Subcommand};
+use hbac_shared::parse_key_val;
+
 use log::{debug, info};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use rayon::iter::IntoParallelIterator;
@@ -628,7 +630,7 @@ mod motif_find_tests {
         let x = lin_t(n);
         // let gauss_1 = gauss_t(400., 100., n);
 
-        let to_pulses_in_random = pulses_in_rand(
+        let pulses_in_random = sig_in_rand(
             n,
             &[
                 (100, comp_sin_v(100)),
@@ -637,7 +639,7 @@ mod motif_find_tests {
         );
 
         let sig = Tensor::from_slice(
-            to_pulses_in_random.as_slice()
+            pulses_in_random.as_slice()
         );
 
         // // let t_10 = Tensor::from_slice((0..10).map(|i| i as f64).collect::<Vec<_>>().as_slice());
@@ -667,7 +669,7 @@ mod motif_find_tests {
         let x = lin_t(n);
         // let gauss_1 = gauss_t(400., 100., n);
 
-        let to_pulses_in_random = pulses_in_rand(
+        let to_pulses_in_random = sig_in_rand(
             n,
             &[
                 (100, pulse_v(80., 20., 200, 20.)),
@@ -786,44 +788,6 @@ mod motif_find_tests {
         assert_eq!(format!("{:.4}", d_0.double_value(&[2])), "0.9746");
 
         Ok(())
-    }
-
-    fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f64>)]) -> Vec<f64> {
-        let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset + pulse.len()).sum();
-
-        std::iter::repeat(0.).take(n as usize).zip(
-            pulses
-                .into_iter()
-                .flat_map(
-                    |(offset, pulse)|
-                        std::iter::repeat(0f64)
-                            .take(*offset)
-                            .chain(pulse.into_iter().map(|v|*v))
-                )
-                .chain(std::iter::repeat(0f64).take(n as usize-pulses_len))
-        ).map(|(v1, v2)| 0.001 * v1 + v2).collect::<Vec<f64>>()
-    }
-
-
-    fn pulses_in_rand(n: i64, pulses: &[(usize, Vec<f64>)], amplitude: f64, scale: f64) -> Vec<f64> {
-        let random = random_v(n, amplitude, 1.);
-        let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
-
-        join_with_offset::<f64>(n, 0., scale, pulses, random)
-    }
-
-    fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T>{
-        main.into_iter().zip(
-            pulses
-                .into_iter()
-                .flat_map(
-                    |(offset, pulse)|
-                        std::iter::repeat(def)
-                            .take(*offset)
-                            .chain(pulse.into_iter().map(|v| *v))
-                )
-                .chain(std::iter::repeat(def).take(n as usize - pulses.len()))
-        ).map(|(v1, v2)| (scale * v1) + v2).collect::<Vec<T>>()
     }
 
     #[test]
@@ -1058,7 +1022,7 @@ mod motif_find_tests {
         let pulse = Tensor::from_slice(pulse_v(80., 30., 200, 20.).as_slice());
 
         let sig_0_1  = Tensor::from_slice(
-            pulses_in_rand(n, &[
+            sig_in_rand(n, &[
                 // (10, pulse_v(8., 3., 20, 2.)),
                 // (30, pulse_v(8., 3., 20, 2.))
                 (100, pulse_v(80., 30., 200, 20.)),
@@ -1369,82 +1333,6 @@ mod motif_find_tests {
         Ok(())
     }
 
-
-    pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
-        let sig_1 = Tensor::from_slice(
-            pulses_in_const(n, &[
-                // (10, pulse_v(8., 3., 20, 2.)),
-                // (30, pulse_v(8., 3., 20, 2.))
-                (100, pulse_v(80., 30., 200, 20.)),
-                (300, pulse_v(80., 30., 200, 20.))
-            ]).as_slice()
-        );
-
-        let sig_2 = Tensor::from_slice(
-            pulses_in_rand(n, &[], 10., 0.001).as_slice()
-        );
-        (sig_1, sig_2)
-    }
-
-
-
-    fn gauss_t(μ: f64, σ: f64, n: i64) -> Tensor {
-        Tensor::from(gauss_i(μ, σ, n).collect::<Vec<_>>().as_slice())
-    }
-
-    fn gauss_i(μ: f64, σ: f64, n: i64) -> impl Iterator<Item=f64> {
-        (0..n).map(move |x| (-0.5 * ((x as f64 - μ) / σ).powi(2)).exp())
-    }
-
-    fn comp_sin(n: i64) -> impl Iterator<Item=f64> {
-        (0..n).map(|x|x as f64).map(move |x|
-            30. * (PI / 100. * x).sin() +
-            4. * (PI / 50. * x.powf(1.2)).sin() +
-            8. * (PI / 25. * x.powf(1.2)).sin() +
-            12. * (PI / 12. * x.powf(1.2)).sin() +
-            6. * (PI / 6. * x.powf(1.2)).sin()
-        )
-    }
-
-    fn comp_sin_v(n: i64) -> Vec<f64> {
-        comp_sin(n).collect::<Vec<f64>>()
-    }
-
-    fn pulse_t(μ: f64, σ: f64, n: i64, f: f64) -> Tensor {
-        Tensor::from(pulse_v(μ, σ, n, f).as_slice())
-    }
-
-    fn pulse_v(μ: f64, σ: f64, n: i64, f: f64) -> Vec<f64> {
-        gauss_i(μ, σ, n).enumerate().map(|(i, x)| (f * 2. * PI *  i as f64 / n as f64).sin() * x).collect::<Vec<_>>()
-    }
-
-
-    fn random_v(n: i64, amplitude: f64, max_slope: f64) -> Vec<f64> {
-        let mut rng = rand::thread_rng();
-        let mut signal = Vec::with_capacity(n as usize);
-
-        let mut current_value = 0.0;
-        let mut prev_value = 0.0;
-
-        for _ in 0..n {
-            let slope = rng.gen_range(-max_slope..max_slope);
-            let next_value = current_value + slope;
-
-            // Check if the slope exceeds the maximum allowed slope
-            if (next_value - prev_value).abs() > max_slope {
-                let direction = if next_value > prev_value { -1.0 } else { 1.0 };
-                current_value = prev_value + direction * max_slope;
-            } else {
-                current_value = next_value;
-            }
-
-            signal.push(current_value * amplitude);
-            prev_value = current_value;
-        }
-
-        signal
-    }
-
     #[test]
     fn test_par(){
         let t = Tensor::from_slice(&[1., 2., 3.]);
@@ -1469,4 +1357,8 @@ mod motif_find_tests {
         });
     }
 
+    #[test]
+    fn test_select_motifs_params(){
+        SelectMotifsParams::pase_from([""])
+    }
 }
