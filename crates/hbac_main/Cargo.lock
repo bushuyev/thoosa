@@ -1032,10 +1032,13 @@ name = "hbac_common"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "clap",
  "ctor",
  "hbac_shared",
  "log",
  "plotters",
+ "rand",
+ "rayon",
  "simplelog",
  "tch",
 ]

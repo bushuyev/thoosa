@@ -31,6 +31,7 @@ use hbac_shared::MotifSlice;
 use hbac_shared::TensorSliceIdx;
 
 use hbac_common::utils::DataBatch;
+use crate::data;
 
 
 #[derive(Debug)]
@@ -558,6 +559,23 @@ fn eeg_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tenso
     let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>());
     tensor.set_requires_grad(false);
     Ok(tensor.to_device(device))
+}
+
+pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64, String)>, device: &'a Device, limit:Option<&'a usize>) -> impl Iterator<Item=(i64, impl Iterator<Item=Result<Tensor, HbacError>> + Send + Sync + 'a)> + 'a
+    {
+
+    labels_kinds.into_iter().map(|label_tensors_path| {
+
+        let eeg_ids = EEGs::good_eegs_of(base_path, label_tensors_path.1.as_str(), Some(10)).unwrap().i64().unwrap().into_iter()
+            .enumerate()
+            .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
+            .collect::<Vec<String>>();
+
+        (label_tensors_path.0, eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
+            eeg_to_tensor(base_path, eeg_id.as_str(), *device)
+        })) //(label, path)
+
+    })
 }
 
 pub fn read_eeg_to_df(path: impl AsRef<Path>) -> Result<DataFrame, HbacError> {

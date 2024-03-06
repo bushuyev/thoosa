@@ -406,7 +406,7 @@ pub struct SelectMotifsParams {
     window: usize,
 
     #[arg(long, value_parser=parse_key_val::<i64, String>)]
-    label_tensors: Vec<(i64, String)>,
+    label_tensors: Vec<(i64, String)>,//TODO rename to label_kinds
 
 }
 

@@ -8,7 +8,7 @@ use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use hbac_motifs::find::{FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
-use crate::data::{clc_records, EEGs, read_eeg_index, read_motif_to_iter};
+use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
@@ -16,7 +16,7 @@ use polars::prelude::Series;
 use hbac_common::utils::{cdt, DataBatch, dot_norm, from, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
-use hbac_motifs::fragments::{check_slices, ClassTensorsDataBatch, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
+use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -24,11 +24,13 @@ use std::time::Instant;
 use plotters::prelude::BLACK;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
 use hbac_common::builder::{Node, SeqBuilder};
+use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams};
 use hbac_common::simp::DummyDs;
+use hbac_common::train_nets;
 use hbac_store::{SqlStore, Store};
 use hbac_shared::*;
 use hbac_shared::TensorSliceIdx;
-
+use crate::Commands::TrainOnEEG;
 
 
 mod data;
@@ -65,74 +67,6 @@ struct Cli {
     command: Option<Commands>,
 }
 
-#[derive(
-    Clone, Debug,
-)]
-enum MotifsBy {
-    CorrRunId(usize),
-
-    MotifsIds(Vec<usize>)
-}
-
-impl From<&str> for MotifsBy {
-    fn from(v: &str) -> MotifsBy {
-        debug!("From<&str> for MotifsBy: v={:?}", v);
-
-        MotifsBy::CorrRunId(0)
-    }
-}
-
-// impl clap::ValueEnum for MotifsBy {
-//     fn value_variants<'a>() -> &'a [MotifsBy] {
-//         &[MotifsBy::CorrRunId(0), MotifsBy::MotifsIds(None)]
-//     }
-//     fn to_possible_value<'a>(&self) -> ::std::option::Option<clap::builder::PossibleValue> {
-//         match self {
-//             Self::CorrRunId(_) => Some(clap::builder::PossibleValue::new("CorrRunId")),
-//             Self::MotifsIds(_) => Some(clap::builder::PossibleValue::new("MotifsIds")),
-//         }
-//     }
-// }
-
-#[derive(Debug, Args)]
-pub struct TrainOnMotifsParams {
-    #[arg(long)]
-    motif_ids: MotifsBy,
-
-    #[arg(long,  default_value_t = 1000)]
-    window: usize,//should be same as one used when finding motifs or TODO center bigger/smaller window
-
-    #[arg(long, default_value = "/tmp/motif_models")]
-    output_dir: String,
-
-    #[arg(long, default_value_t = 1000)]
-    cycles: usize,
-
-    #[arg(long, default_value_t = 1.0e-5)]
-    lr: f64,
-}
-
-impl TrainOnMotifsParams {
-
-    pub fn output_dir(&self) -> &str {
-        &self.output_dir
-    }
-
-    pub fn cycles(&self) -> usize {
-        self.cycles
-    }
-    pub fn lr(&self) -> f64 {
-        self.lr
-    }
-
-    pub fn window(&self) -> usize {
-        self.window
-    }
-
-    pub fn motif_ids(&self) -> &MotifsBy {
-        &self.motif_ids
-    }
-}
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -142,6 +76,7 @@ enum Commands {
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
     TrainOnMotifs(TrainOnMotifsParams),
+    TrainOnEEG(TrainOnEEGParams),
 }
 
 
@@ -269,18 +204,7 @@ fn _main() -> Result<(), HbacError> {
 
             let channels_good_motif_idxs = select_motifs(
                 motifs,
-                select_motifs_params.label_tensors().into_iter().map(|label_tensors_path| {
-
-                    let eeg_ids = EEGs::good_eegs_of(cli.base_path.as_str(), label_tensors_path.1.as_str(), cli.limit)?.i64()?.into_iter()
-                        .enumerate()
-                        .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
-                        .collect::<Vec<String>>();
-
-                    Ok((label_tensors_path.0, eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
-                        data::eeg_to_tensor(cli.base_path.as_str(), eeg_id.as_str(), device)
-                    }))) //(label, path)
-
-                }).collect::<Result<Vec<_>, HbacError>>()?,
+                eegs_to_labels_tensors(cli.base_path.as_str(), select_motifs_params.label_tensors(), &device, cli.limit.as_ref()).collect::<Vec<_>>(),
                 cli.limit,
                 select_motifs_params.step(),
                 device
@@ -315,11 +239,30 @@ fn _main() -> Result<(), HbacError> {
                     .map(|(motif_id, corr)|motif_id)
             };
 
-            let node = motif_node(train_on_motif_params);
+            let node = train_nets::motif_node(train_on_motif_params);
 
             for motif_id in motifs_iter {
 
-                let (loss, mut vs) = train_on_motif(cli.base_path.as_str(), train_on_motif_params, Arc::clone(&store), device, motif_id, &node)?;
+                let mut store_guard = store.lock()?;
+                let window = train_on_motif_params.window() as i64;
+
+                let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, None, None)?;
+
+                debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
+
+
+                let all_sices_1 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+
+                let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, Some(all_sices_1.len()), Some((run_id, channel as usize)))?;
+
+                debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
+
+                let all_sices_0 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+
+                debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
+
+
+                let (loss, mut vs) = train_nets::train_on_motif(all_sices_0, all_sices_1, train_on_motif_params, device, &node)?;
 
                 debug!("train_on_motif: motif_id={} loss={}", motif_id, loss);
 
@@ -330,83 +273,23 @@ fn _main() -> Result<(), HbacError> {
                 }
             }
         }
+
+        Some(TrainOnEEG(train_on_eeg_params)) => {
+            // train_on_eeg(train_on_eeg_params)?;
+        }
+
         None => {}
     }
 
     Ok(())
 }
 
-fn motif_node(train_on_motif_params: &TrainOnMotifsParams) -> Node {
-    SeqBuilder::new(train_on_motif_params.window() as i64)
-        .batch_norm()
-        .conv(10, 1, 10, ConvConfig::default())
-        .linear_s(1)
-        .func(Tensor::sigmoid)
-        .end_seq()
-}
-
-fn train_on_motif(base_path: &str, train_on_motif_params: &TrainOnMotifsParams, store: Arc<Mutex<SqlStore>>, device: Device, motif_id: usize, node: &Node) -> Result<(f32, VarStore), HbacError> {
-    let mut store_guard = store.lock()?;
-    let window = train_on_motif_params.window() as i64;
-
-    let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, None, None)?;
-
-    debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
-
-
-    let all_sices_1 = flat_map(load_motif_slices(base_path, channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
-
-    let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, Some(all_sices_1.len()), Some((run_id, channel as usize)))?;
-
-    debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
-
-    let all_sices_0 = flat_map(load_motif_slices(base_path, channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
-
-    debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
-
-
-    let vs = nn::VarStore::new(device);
-
-    let net = node.build_tch_module(&vs.root())?;
-
-    info!("train_on_motif: training on {} slices", all_sices_0.len());
-
-    let valid_loss = hbac_common::utils::train(
-        &Device::Cpu,
-        &ClassTensorsDataBatch::new(
-            vec![
-                all_sices_0,
-                all_sices_1
-            ],
-            10,
-            0.8
-        ) as &dyn DataBatch,
-        &net,
-        |pred: &Tensor, target: &Tensor| {
-            // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-            let pred_y = pred.i((.., 0, 0));
-            debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
-            pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
-        },
-        train_on_motif_params.cycles,
-        nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
-    )?;
-    Ok((valid_loss, vs))
-}
-
-fn flat_map(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
-    slices.into_iter().flat_map(|(eeg_id, slices)| slices.into_iter()).collect::<Vec<Box<Tensor>>>()
-}
-
 
 #[cfg(test)]
 mod main_tests {
-    use log::debug;
-    use tch::{Device, Kind, Reduction, Tensor};
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
-    use crate::data;
-    use crate::data::{EEGs, read_eeg_index, read_motif_to_iter, read_motif_to_iter_imp};
+    use crate::data::{read_eeg_index, read_motif_to_iter_imp};
 
     #[test]
     fn test_it() -> Result<(), HbacError>{

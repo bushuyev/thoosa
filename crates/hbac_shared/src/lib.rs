@@ -218,14 +218,14 @@ pub fn comp_sin_v(n: i64) -> Vec<f32> {
     comp_sin(n).collect::<Vec<f32>>()
 }
 
-pub fn comp_sin_k(n: i64, k_v:Vec<f32>) -> impl Iterator<Item=f32> {
+pub fn comp_sin_k(n: i64, k_v:Vec<f32>, scale:f32) -> impl Iterator<Item=f32> {
     (0..n).map(|x|x as f32).map(move |x|
         k_v.iter().map(|k| k * (PI / k * x.powf(1.2)).sin()).sum()
-    )
+    ).map(move |x:f32|x * scale)
 }
 
-pub fn comp_sin_k_v(n: i64, k_v:Vec<f32>) -> Vec<f32> {
-    comp_sin_k(n, k_v).collect::<Vec<f32>>()
+pub fn comp_sin_k_v(n: i64, k_v:Vec<f32>, scale:f32) -> Vec<f32> {
+    comp_sin_k(n, k_v, scale).collect::<Vec<f32>>()
 }
 
 
