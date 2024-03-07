@@ -1,5 +1,6 @@
+use std::fs;
 use hbac_shared::HbacError;
-use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
+use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use clap::clap_derive::Args;
 use log::{debug, info};
@@ -10,6 +11,8 @@ use crate::utils::from;
 use rand::prelude::SliceRandom;
 use rayon::iter::ParallelBridge;
 use rayon::iter::ParallelIterator;
+use crate::train_nets;
+use std::path::Path;
 
 #[derive(Debug, Args)]
 pub struct TrainOnEEGParams {
@@ -20,26 +23,67 @@ pub struct TrainOnEEGParams {
     #[arg(long, default_value_t = 1000)]
     cycles: usize,
 
+    #[arg(long, default_value_t = 1000)]
+    features: i64,
+
     #[arg(long, default_value_t = 1.0e-5)]
     lr: f64,
 }
 
 
-fn run_net<I>(loader: I) where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
+fn run_motif_nets<I>(loader: I) where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
 
 }
 
 pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>)-> Result<(), HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+    let models = load_models(params, 20)?;//TODO num channels
 
     labels_loaders.into_iter().par_bridge().try_for_each(|(label, loader)|{
-        run_net(loader);
+        run_motif_nets(loader);
 
         Ok::<(), HbacError>(())
     });
 
 
     Ok(())
+}
+
+fn load_models(params: &TrainOnEEGParams, channels:usize) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
+    debug!("load_models: channel_motifs_dir={:?}", params.motif_models_dir);
+
+    let motif_models_path  = Path::new(params.motif_models_dir.as_str());
+
+    let mut channels_motifs_models = vec![];
+
+    for channel in 0..channels {
+
+        let motif_path = motif_models_path.join(channel.to_string());
+        let mut channels_motifs:Vec<Box<dyn Module>> = vec![];
+
+        if motif_path.is_dir() {
+            let mut channel_motifs = fs::read_dir(&motif_path)?
+                .map(|res| res.map(|e| e.file_name()))
+                .collect::<Result<Vec<_>, std::io::Error>>()?;
+
+            channel_motifs.sort();
+
+            for motif in channel_motifs {
+                debug!("load_models: motif={:?}", motif);
+
+                let mut vs = nn::VarStore::new(Device::Cpu);
+                let node = train_nets::motif_node(params.features).build_tch_module(&vs.root())?;//TODO window
+
+                vs.load(&motif_path.join(motif))?;
+
+                channels_motifs.push(node);
+            }
+        }
+
+        channels_motifs_models.push(channels_motifs);
+    }
+    Ok(channels_motifs_models)
+
 }
 
 #[derive(Debug, Args)]
@@ -82,8 +126,8 @@ impl TrainOnMotifsParams {
     }
 }
 
-pub fn motif_node(train_on_motif_params: &TrainOnMotifsParams) -> Node {
-    SeqBuilder::new(train_on_motif_params.window() as i64)
+pub fn motif_node(window: i64) -> Node {
+    SeqBuilder::new(window)
         .batch_norm()
         .conv(10, 1, 10, ConvConfig::default())
         .linear_s(1)
@@ -262,12 +306,15 @@ impl From<&str> for MotifsBy {
 #[cfg(test)]
 mod train_tests {
     use std::collections::HashMap;
-    use tch::Tensor;
+    use std::fs;
+    use std::path::Path;
+    use tch::{Device, nn, Tensor};
     use hbac_shared::HbacError;
     use crate::train_nets::{ClassTensorsDataBatch, TrainOnEEGParams};
-    use crate::utils::from;
+    use crate::utils::{cdt_for_dir, from};
     use crate::utils::DataBatch;
     use tch::IndexOp;
+    use crate::train_nets;
 
     #[test]
     fn test_class_tensors_data_batch()-> Result<(), HbacError>{
@@ -323,11 +370,24 @@ mod train_tests {
         }
 
 
+
+        let models_path = Path::new("/tmp/test_train_on_eeg").join(cdt_for_dir());
+        let channel_0 = models_path.join("0");
+        fs::create_dir_all(channel_0.clone());
+
+        let mut vs_0 = nn::VarStore::new(Device::Cpu);
+        let test_motif_model = train_nets::motif_node(1000).build_tch_module(&vs_0.root())?;
+        vs_0.freeze();
+        vs_0.save(channel_0.join("test_motif.safetensors"))?;
+
+
+
         super::train_on_eeg(
 
             &TrainOnEEGParams {
-                motif_models_dir: "/tmp/dummy".into(),
+                motif_models_dir: models_path.to_str().unwrap().to_string(),
                 cycles: 10,
+                features: 1000,
                 lr: 1.0e-5
             },
 

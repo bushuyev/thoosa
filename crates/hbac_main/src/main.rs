@@ -232,14 +232,14 @@ fn _main() -> Result<(), HbacError> {
                 fs::create_dir_all(train_on_motif_params.output_dir());
 
                 // for motif_id in train_on_motif_params.motif_ids() {
-                store_guard.list_corr_motifs(1)?
+                store_guard.list_corr_motifs(1)?//TODO param
                     .into_iter()
                     .flat_map(|channel_motifs|channel_motifs.into_iter())
                     .filter(|(motif_id, corr)| *corr > 0.05)
                     .map(|(motif_id, corr)|motif_id)
             };
 
-            let node = train_nets::motif_node(train_on_motif_params);
+            let node = train_nets::motif_node(train_on_motif_params.window() as i64);
 
             for motif_id in motifs_iter {
 
