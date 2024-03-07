@@ -3,13 +3,14 @@ use std::env;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::Write;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use log::{debug, info};
 use plotters::prelude::*;
 // use polars::prelude::{col, lit, NamedFrom, Series};
 use simplelog::*;
-use tch::{Device, kind, Kind, nn, no_grad, Reduction, Tensor};
+use tch::{Device, IndexOp, kind, Kind, nn, no_grad, Reduction, Tensor};
 use tch::nn::{Init, Linear, LinearConfig, Module, Path, Sequential};
 use tch::nn::{ConvConfig, OptimizerConfig};
 
@@ -277,6 +278,46 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 }
 
 
+const CHUNKS_LEN: usize = 10;
+
+fn apply_motifs(motif_n: i64, input_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t: Tensor, motif_batch_size: i64) -> Tensor {
+
+    let nets_len = nets.len();
+    let mut net_tensors_vec = (0..nets_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / step)).collect::<Vec<Vec<Tensor>>>();
+    let mut chunks_for_eeg = (0..=(input_n - motif_n) as usize).step_by(step ).array_chunks::<CHUNKS_LEN>();
+
+    debug!("-------------------------------");
+    while let Some(slice_0_idx) = chunks_for_eeg.next() {
+        let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| eeg_t.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
+        debug!("batch.size={:?}", batch.size());
+
+        let batch = batch.view((motif_batch_size, 1, motif_n));
+        // debug!("batch.size={:?}", batch.size());
+
+        // nets.iter().enumerate().map(|net|net.forward(&batch)).collect::<Vec<Tensor>>()
+
+        for ((net_i, net), net_tensors_vec) in nets.iter().enumerate().zip(net_tensors_vec.iter_mut()) {
+            debug!("slice_0_idx={:?}", slice_0_idx);
+
+            let res_net = net.lock().unwrap().forward(&batch);
+            debug!("res_net size={:?}", res_net.size());
+            // net_0_out.push(from::<Vec<f32>>(&res_net_0.i((.., 0, 0))));
+            net_tensors_vec.push(res_net.view((motif_batch_size)));
+        };
+    }
+    debug!("-------------------------------");
+
+    let zero_t = Tensor::zeros([1000], (Kind::Float, Device::Cpu));
+    if let Some(reminder) = chunks_for_eeg.into_remainder() {
+        debug!("reminder={:?}", reminder);
+        // let mut last_batch =
+    }
+
+    //nets x slices in tensor/motif_batch_size x motif_batch_size
+    Tensor::stack(net_tensors_vec.into_iter().map(|slices_vec| Tensor::vstack(slices_vec.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0).view((nets_len as i64, -1))
+}
+
+
 #[cfg(test)]
 mod tch_tests {
     use log::{debug, trace, LevelFilter};
@@ -287,11 +328,13 @@ mod tch_tests {
 
     use crate::builder::clc_conv1d_out;
     use crate::builder::SeqBuilder;
-    use crate::my_tch::configure_dense;
+    use crate::my_tch::{configure_dense, CHUNKS_LEN};
     use crate::utils;
     use crate::utils::*;
     use hbac_shared::*;
     use core::f32::consts::PI;
+    use std::iter::{ArrayChunks, StepBy};
+    use std::ops::RangeInclusive;
     use chrono::Utc;
     use plotters::prelude::{BLACK, GREEN, RED};
     use rayon::prelude::*;
@@ -421,10 +464,10 @@ mod tch_tests {
 
         utils::train(
             &Device::Cpu,
-            &crate::simp::DummyDs::new(
+            &mut crate::simp::DummyDs::new(
                 t_0.shallow_clone(),
                 t_1.shallow_clone(),
-            ) as &dyn DataBatch,
+            ) as &mut dyn DataBatch,
             &net_0,
             |pred: &Tensor, target: &Tensor| {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
@@ -521,10 +564,10 @@ mod tch_tests {
 
         utils::train(
             &Device::Cpu,
-            &crate::simp::DummyDs::new(
+            &mut crate::simp::DummyDs::new(
                 rnd_t.shallow_clone(),
                 motif_0_t.shallow_clone(),
-            ) as &dyn DataBatch,
+            ) as &mut dyn DataBatch,
             &net_0,
             |pred: &Tensor, target: &Tensor| {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
@@ -541,10 +584,10 @@ mod tch_tests {
         let net_1 = test_net(&vs_1, motif_n)?;
         utils::train(
             &Device::Cpu,
-            &crate::simp::DummyDs::new(
+            &mut crate::simp::DummyDs::new(
                 rnd_t.shallow_clone(),
                 motif_1_t.shallow_clone(),
-            ) as &dyn DataBatch,
+            ) as &mut dyn DataBatch,
             &net_1,
             |pred: &Tensor, target: &Tensor| {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
@@ -584,12 +627,7 @@ mod tch_tests {
 
         // motif_0_t.split(motif_n, 0).into_iter().array_chunks::<10>().for_each(|slice|{
         let step = (motif_n / 4) as usize;
-        let chunks = (0..=(input_n - motif_n) as usize).step_by(step ).array_chunks::<10>();
-        // let mut net_0_out = vec![];
-        // let mut net_1_out = vec![];
 
-
-        // let mut net_1_out_tensors = vec![];
 
         let nets = vec![Mutex::new(net_0), Mutex::new(net_1)];
 
@@ -610,41 +648,8 @@ mod tch_tests {
                 guard.get(i).expect(format!("can't get tensor at {}", i).as_str()).shallow_clone()
             };
 
-            let mut net_tensors_vec = (0..nets_len).map(|_|Vec::with_capacity( ((input_n - motif_n) as usize)/step)).collect::<Vec<Vec<Tensor>>>();
 
-            let mut chunks_for_eeg = chunks.clone();
-
-            debug!("-------------------------------");
-            while let Some(slice_0_idx) = chunks_for_eeg.next() {
-
-                let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| eeg_t.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-                debug!("batch.size={:?}", batch.size());
-
-                let batch = batch.view((motif_batch_size, 1, motif_n));
-                // debug!("batch.size={:?}", batch.size());
-
-                // nets.iter().enumerate().map(|net|net.forward(&batch)).collect::<Vec<Tensor>>()
-
-                for ((net_i, net), net_tensors_vec) in nets.iter().enumerate().zip(net_tensors_vec.iter_mut()) {
-                    debug!("slice_0_idx={:?}", slice_0_idx);
-
-                    let res_net = net.lock().unwrap().forward(&batch);
-                    debug!("res_net size={:?}", res_net.size());
-                    // net_0_out.push(from::<Vec<f32>>(&res_net_0.i((.., 0, 0))));
-                    net_tensors_vec.push(res_net.view((motif_batch_size)));
-
-                };
-            }
-            debug!("-------------------------------");
-
-            let zero_t = Tensor::zeros([1000], (Kind::Float, Device::Cpu));
-            if let Some(reminder) = chunks_for_eeg.into_remainder() {
-                debug!("reminder={:?}", reminder);
-                // let mut last_batch =
-            }
-
-            //nets x slices in tensor/motif_batch_size x motif_batch_size
-            Tensor::stack(net_tensors_vec.into_iter().map(|slices_vec|Tensor::vstack(slices_vec.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0).view((nets_len as i64, -1))
+            super::apply_motifs(motif_n, input_n, step, &nets, eeg_t, motif_batch_size)
 
         }).collect::<Vec<Tensor>>();
 
@@ -680,6 +685,7 @@ mod tch_tests {
 
         Ok(())
     }
+
 
     #[test]
     pub fn test_test() -> Result<(), HbacError> {

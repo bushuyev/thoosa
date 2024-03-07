@@ -212,11 +212,11 @@ pub fn lin_t(n: i64) -> Tensor {
 }
 
 pub trait DataBatch {
-    fn train_batch(&self) -> (Tensor, Tensor);
-    fn valid_batch(&self) -> (Tensor, Tensor);
+    fn train_batch(&mut self) -> (Tensor, Tensor);
+    fn valid_batch(&mut self) -> (Tensor, Tensor);
 }
 
-pub fn train(device:&Device, data:&dyn DataBatch, model:&Box<dyn Module>, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<f32, HbacError>{
+pub fn train(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<f32, HbacError>{
 
     debug!("train: device={:?} cycles={}", device, cycles);
 

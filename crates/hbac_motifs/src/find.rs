@@ -1357,8 +1357,4 @@ mod motif_find_tests {
         });
     }
 
-    #[test]
-    fn test_select_motifs_params(){
-        SelectMotifsParams::pase_from([""])
-    }
 }

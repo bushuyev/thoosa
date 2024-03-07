@@ -223,7 +223,9 @@ pub(crate) struct CacheOnThreadsStore {
 
 impl CacheOnThreadsStore {
 
-    pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize, max_keys_fifo: usize) -> Self where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static{
+    pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize, max_keys_fifo: usize) -> Self
+        where F: Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+
         let preload_d_rc = Arc::new(AtomicUsize::new(preload_d));
 
         let preload_d_rc_in_cache = Arc::clone(&preload_d_rc);
@@ -251,7 +253,7 @@ impl TensorsStore for CacheOnThreadsStore {
         if index + preload_d < self.keys.len() && index % preload_d == 0 {
             debug!("1. get_tensor: index={}", index);
 
-            self.cache.load_blocking_preload_and_get(
+            self.cache.preload_and_blocking_get(
 
                 &self.index_to_key(index).clone(),
                 (index..index + preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
@@ -261,7 +263,7 @@ impl TensorsStore for CacheOnThreadsStore {
         } else {
             debug!("2. get_tensor: index={}", index);
 
-            self.cache.load_blocking_and_get(
+            self.cache.blocking_get(
 
                 &self.index_to_key(index).clone()
 

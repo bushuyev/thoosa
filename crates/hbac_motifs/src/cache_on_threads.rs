@@ -77,8 +77,6 @@ pub struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug
     data_being_loaded:Arc<Mutex<HashMap<K, Arc<Mutex<Option<V>>>>>>,
 
     loader:Arc<Box<dyn Fn(&K)->V + Sync + Send>>,
-    read_mx:Arc<Mutex<()>>,
-    load_mx:Arc<Mutex<()>>,
     keys_fifo: VecDeque<K>,
     max_keys_fifo: usize,
     on_blocking_listener:Option<Box<dyn FnMut() + Send>>
@@ -92,8 +90,6 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             data_loaded: HashMap::new(),
             data_being_loaded: Arc::new(Mutex::new(HashMap::new())),
             loader:Arc::new(Box::new(loader)),
-            read_mx:Arc::new(Mutex::new(())),
-            load_mx:Arc::new(Mutex::new(())),
             keys_fifo: VecDeque::new(),
             max_keys_fifo,
             on_blocking_listener
@@ -113,11 +109,13 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         return true;
     }
 
+    #[cfg(test)]
     pub fn get_loaded(&self, key:&K) -> Option<&V> {
         self.data_loaded.get(key)
     }
 
     fn purge_fifo(keys_fifo:&mut VecDeque<K>, max_keys_fifo:usize, data_being_loaded_guard:&mut HashMap<K, Arc<Mutex<Option<V>>>>, data_loaded:&mut HashMap<K, V>){
+
         if keys_fifo.len() > max_keys_fifo {
             if let Some(key_to_remove) = keys_fifo.pop_front() {
                 debug!("removing {:?} ", key_to_remove);
@@ -147,7 +145,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         }
     }
 
-    pub fn load_blocking_and_get(&mut self, k:&K) -> Option<&V> {
+    pub fn blocking_get(&mut self, k:&K) -> Option<&V> {
 
         let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
         debug!("loading {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
@@ -183,16 +181,16 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         self.get_loaded(&k)
     }
 
-    pub fn load_blocking_preload_and_get(&mut self, k:&K, preload:&[K]) -> Option<&V> {
+    pub fn preload_and_blocking_get(&mut self, k:&K, preload:&[K]) -> Option<&V> {
 
         self.update_loaded();
 
-        self.load_no_blocking(preload);
+        self.preload(preload);
 
-        self.load_blocking_and_get(k)
+        self.blocking_get(k)
     }
 
-    pub fn load_no_blocking(&mut self, keys:&[K]) {
+    pub fn preload(&mut self, keys:&[K]) {
         debug!("load_no_blocking: keys={:?}", keys);
 
         for key in keys {
@@ -204,6 +202,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
             let key_in_thread = key.clone();
             let loader_in_thread = self.loader.clone();
+
             thread::spawn(move || {
                 let mut data_being_loaded_guard = data_being_loaded_in_thread.lock().expect("data_being_loaded");
 
@@ -290,41 +289,17 @@ mod tests {
         TestFuture::new(i).await
     }
 
-
-    #[test]
-    fn test_it(){
-
-        rayon::ThreadPoolBuilder::new().num_threads(10).build_global().unwrap();
-
-        let x:i32 = (0..10).into_par_iter().map(| v_0|  {
-
-            debug!("1.  v_0={}", v_0);
-
-            let v = block_on(load_it(v_0));
-
-
-            debug!("2. v={}", v);
-
-            v
-
-        }).sum();
-
-        debug!("x={:?}", x);
-
-        // debug!("x={:?}",block_on(load_it(3)));
-    }
-
     #[test]
     fn test_cache_on_threads(){
         let mut cache = CacheOnThreads::new(load_test_entity, 3, None);
-        let e_1_0= cache.load_blocking_and_get(&"Key1".into()).unwrap().key.clone();
-        cache.load_blocking_and_get(&"Key1".into());
-        cache.load_blocking_and_get(&"Key2".into());
-        cache.load_blocking_and_get(&"Key3".into());
-        cache.load_blocking_and_get(&"Key4".into());
-        cache.load_blocking_and_get(&"Key5".into());
-        cache.load_blocking_and_get(&"Key2".into());
-        cache.load_blocking_and_get(&"Key1".into());
+        let e_1_0= cache.blocking_get(&"Key1".into()).unwrap().key.clone();
+        cache.blocking_get(&"Key1".into());
+        cache.blocking_get(&"Key2".into());
+        cache.blocking_get(&"Key3".into());
+        cache.blocking_get(&"Key4".into());
+        cache.blocking_get(&"Key5".into());
+        cache.blocking_get(&"Key2".into());
+        cache.blocking_get(&"Key1".into());
 
         let e_1 = cache.get_loaded(&"Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
         let e_2 = cache.get_loaded(&"Key2".into()); //.map(|e| e as *const _ as *const u32).unwrap();
@@ -349,10 +324,10 @@ mod tests {
     #[test]
     fn test_load_no_blocking(){
         let mut cache = CacheOnThreads::new(load_test_entity, 3, None);
-        cache.load_no_blocking(&["Key1".into(), "Key2".into()]);
+        cache.preload(&["Key1".into(), "Key2".into()]);
 
-        cache.load_blocking_and_get(&"Key1".into());
-        cache.load_blocking_and_get(&"Key2".into());
+        cache.blocking_get(&"Key1".into());
+        cache.blocking_get(&"Key2".into());
 
         let e_1 = cache.get_loaded(&"Key1".into()); //.map(|e| e as *const _ as *const u32).unwrap();
         let e_2 = cache.get_loaded(&"Key2".into()); //.map(|e| e as *const _ as *const u32).unwrap();
