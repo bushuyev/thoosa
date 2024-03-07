@@ -17,6 +17,7 @@ use crate::train_nets;
 use std::path::Path;
 use tch::Device::Cpu;
 use tch::Kind::{Double, Float};
+use std::sync::Mutex;
 
 #[derive(Debug, Args)]
 pub struct TrainOnEEGParams {
@@ -92,10 +93,6 @@ impl <I> DataBatch for ClassTensorsLoaderDataBatch<I> where I:Iterator<Item=Resu
     }
 }
 
-fn apply_motif_models(eeg:Tensor, motif_models:&Vec<Vec<Box<dyn Module>>>) -> Tensor {
-
-    todo!()
-}
 
 pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>)-> Result<(), HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
@@ -419,9 +416,12 @@ mod train_tests {
     use tch::IndexOp;
     use crate::train_nets;
     use log::debug;
-    use tch::Kind::Double;
-    use tch::nn::{ConvConfig, Module, VarStore};
+    use tch::Kind::{Double, Float};
+    use tch::nn::{ConvConfig, LinearConfig, Module, VarStore};
     use crate::builder::SeqBuilder;
+    use std::sync::Mutex;
+    use crate::my_tch::apply_channel_motifs;
+    use tch::nn::init;
 
     #[test]
     fn test_class_tensors_data_batch()-> Result<(), HbacError>{
@@ -469,14 +469,15 @@ mod train_tests {
         Ok(())
     }
 
-    fn test_net(num_features: i64) -> Result<Box<dyn Module>, HbacError> {
+    fn test_net(num_features: i64, k: f64, ) -> Result<Box<dyn Module>, HbacError> {
         let mut vs = nn::VarStore::new(Device::Cpu);
 
         SeqBuilder::new(num_features)
-            .batch_norm()
-            .conv(num_features/10, 1, 1, ConvConfig::default())
-            .linear_s(1)
-            .func(Tensor::sigmoid)
+            .linear_s_with_conf(1, LinearConfig {
+                ws_init: init::Init::Const(k),
+                bs_init: None,
+                bias: false
+            })
             .end_seq().build_tch_module(&vs.root())
     }
 
@@ -485,24 +486,67 @@ mod train_tests {
     fn test_apply_motif_models() -> Result<(), HbacError>{
         let input_n = 1000;
         let motif_n = 100;
-        let eeg = Tensor::vstack(&[
+        let step = (motif_n / 1) as usize;
+
+        let eeg_t = Tensor::vstack(&[
             Tensor::from_slice((0..input_n).map(|i|i as f32).collect::<Vec<_>>().as_slice()),
             Tensor::from_slice((0..input_n).map(|i|i as f32 * 2.).collect::<Vec<_>>().as_slice()),
             Tensor::from_slice((0..input_n).map(|i|i as f32 * 3.).collect::<Vec<_>>().as_slice())
         ]);
 
-        // let channel_0_models = vec![
-        //     test_net(motif_n)
-        // ];
-        // apply_motif_models(
-        //
-        // )
-        let step = (motif_n / 4) as usize;
-        let chunks = (0..=(input_n - motif_n) as usize).step_by(step ).array_chunks::<10>();
+        let motif_nets = vec![
+            vec![Mutex::new(test_net(motif_n, 1.)?), Mutex::new(test_net(motif_n, 2.)?)],
+            vec![Mutex::new(test_net(motif_n, 10.)?)]
+        ];
 
-        // test_net(motif_n)?.forward(&)
+        let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0);
+
+        let channel_0_t = apply_channel_motifs(motif_n, input_n, step, &motif_nets[0], eeg_t.i((0, ..)), 10, Some(max_motif_nets_in_channel as i64));
+
+
+        let channel_0_motifs = Tensor::stack(&[
+                Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 54950., 64950., 74950., 84950., 94950.]),  //ch 0 net 0 (k=1)
+                Tensor::from_slice(&[9900., 29900., 49900., 69900., 89900., 109900., 129900., 149900., 169900., 189900.]) // ch. 1 net 1 (k=2)
+            ], 0
+        ).totype(Float).view((2, 10));
+        assert_eq!(
+            channel_0_motifs, channel_0_t);
+
+        let channel_1_t = apply_channel_motifs(motif_n, input_n, step, &motif_nets[1], eeg_t.i((1, ..)), 10, Some(max_motif_nets_in_channel as i64));
+
+
+        let channel_1_motifs = Tensor::stack(&[
+                Tensor::from_slice(&[99000., 299000., 499000., 699000., 899000., 1.099e+06, 1.299e+06, 1.499e+06, 1.699e+06, 1.899e+06]),  //ch 1 net 0 (k=1)
+                Tensor::from_slice(&[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]),  //ch 1 net 0 (k=1)
+            ], 0
+        ).totype(Float).view((2, 10));
+        assert_eq!(
+            channel_1_motifs, channel_1_t
+        );
+
+        let channels_motifs = apply_motifs(input_n, motif_n, step, eeg_t, motif_nets);
+
+
+        assert_eq!(
+            Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
+            channels_motifs
+        );
 
         Ok(())
+    }
+
+    fn apply_motifs(input_n: i64, motif_n: i64, step: usize, eeg_t: Tensor, motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>>) -> Tensor {
+        let max_motif_nets_in_channel = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
+
+        let channels_motifs = Tensor::stack(
+            motif_nets
+                .iter()
+                .enumerate()
+                .map(|(i, net)| apply_channel_motifs(motif_n, input_n, step, &net, eeg_t.i((i as i64, ..)), 10, Some(max_motif_nets_in_channel as i64)))
+                .collect::<Vec<_>>().as_slice(),
+            0
+        );
+        channels_motifs
     }
 
     #[test]

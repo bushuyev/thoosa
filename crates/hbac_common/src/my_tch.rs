@@ -280,41 +280,47 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 
 const CHUNKS_LEN: usize = 10;
 
-fn apply_motifs(motif_n: i64, input_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t: Tensor, motif_batch_size: i64) -> Tensor {
+pub fn apply_channel_motifs(motif_n: i64, input_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t: Tensor, motif_batch_size: i64, pad_motifs_to: Option<i64>) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let nets_len = nets.len();
     let mut net_tensors_vec = (0..nets_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / step)).collect::<Vec<Vec<Tensor>>>();
     let mut chunks_for_eeg = (0..=(input_n - motif_n) as usize).step_by(step ).array_chunks::<CHUNKS_LEN>();
 
-    debug!("-------------------------------");
     while let Some(slice_0_idx) = chunks_for_eeg.next() {
         let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| eeg_t.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
         debug!("batch.size={:?}", batch.size());
 
         let batch = batch.view((motif_batch_size, 1, motif_n));
-        // debug!("batch.size={:?}", batch.size());
-
-        // nets.iter().enumerate().map(|net|net.forward(&batch)).collect::<Vec<Tensor>>()
 
         for ((net_i, net), net_tensors_vec) in nets.iter().enumerate().zip(net_tensors_vec.iter_mut()) {
             debug!("slice_0_idx={:?}", slice_0_idx);
 
             let res_net = net.lock().unwrap().forward(&batch);
             debug!("res_net size={:?}", res_net.size());
-            // net_0_out.push(from::<Vec<f32>>(&res_net_0.i((.., 0, 0))));
             net_tensors_vec.push(res_net.view((motif_batch_size)));
         };
     }
-    debug!("-------------------------------");
 
-    let zero_t = Tensor::zeros([1000], (Kind::Float, Device::Cpu));
+
     if let Some(reminder) = chunks_for_eeg.into_remainder() {
         debug!("reminder={:?}", reminder);
-        // let mut last_batch =
+        //TODO process remainder?
     }
 
     //nets x slices in tensor/motif_batch_size x motif_batch_size
-    Tensor::stack(net_tensors_vec.into_iter().map(|slices_vec| Tensor::vstack(slices_vec.as_slice())).collect::<Vec<Tensor>>().as_slice(), 0).view((nets_len as i64, -1))
+    let mut net_tensors = net_tensors_vec.into_iter().map(|slices_vec| Tensor::vstack(slices_vec.as_slice())).collect::<Vec<Tensor>>();
+    let zero_t = Tensor::zeros([CHUNKS_LEN as i64], (Kind::Float, Device::Cpu)).view((1, CHUNKS_LEN as i64));
+
+    if let Some(pad_to) = pad_motifs_to {
+        (net_tensors.len()..pad_to as usize).for_each(|_|{
+            net_tensors.push(zero_t.shallow_clone());
+        })
+    }
+
+    Tensor::stack(
+        net_tensors.as_slice(),
+        0
+    ).view((pad_motifs_to.unwrap_or(nets_len as i64), -1))
 }
 
 
@@ -649,7 +655,7 @@ mod tch_tests {
             };
 
 
-            super::apply_motifs(motif_n, input_n, step, &nets, eeg_t, motif_batch_size)
+            super::apply_channel_motifs(motif_n, input_n, step, &nets, eeg_t, motif_batch_size, None)
 
         }).collect::<Vec<Tensor>>();
 
@@ -660,13 +666,13 @@ mod tch_tests {
 
         debug!("full_net_batch={:?}", full_batch_vec);
 
-        let vs = nn::VarStore::new(Cpu);
-
-        let net = node.build_tch_module(&vs.root())?;
-
         let full_batch = Tensor::stack(full_batch_vec.as_slice(), 0);
 
         debug!("full_batch.size()={:?}", full_batch.size());
+
+        let vs = nn::VarStore::new(Cpu);
+
+        let net = node.build_tch_module(&vs.root())?;
 
         net.forward(&full_batch.transpose(1, 2));
 

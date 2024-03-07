@@ -27,7 +27,7 @@ pub enum Node {
     Seq {elts: Vec<Node>},
     Conv {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     BatchNorm {num_features: i64},
-    Linear { in_feats: i64, out_feats: i64},
+    Linear { in_feats: i64, out_feats: i64, config:Option<LinearConfig>},
     Func { func:Fp},
     MaxPool { kernel_size:i64, stride:i64, padding:i64},
     AvgPool { kernel_size:i64, stride:i64, padding:i64}
@@ -85,9 +85,9 @@ impl Node {
             Node::BatchNorm { .. } => {
                 Box::new(MyBatchNorm1d::new())
             }
-            Node::Linear {in_feats, out_feats} => {
+            Node::Linear {in_feats, out_feats, config} => {
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
-                Box::new(my_linear(vs/ "layer1", *in_feats, *out_feats, LinearConfig::default())?)
+                Box::new(my_linear(vs/ "layer1", *in_feats, *out_feats, config.unwrap_or(LinearConfig::default()))?)
             }
             Node::MaxPool { kernel_size, stride, padding } => {
                 Box::new(MyMaxPool1d::new(*kernel_size, *stride, *padding))
@@ -188,14 +188,24 @@ impl SeqBuilder {
 
     pub fn linear(&mut self) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats:self.num_features}
+            Node::Linear { in_feats:self.num_features, out_feats:self.num_features, config:None}
         );
         self
     }
 
+
     pub fn linear_s(&mut self, out_feats:i64) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats}
+            Node::Linear { in_feats:self.num_features, out_feats, config:None}
+        );
+        self.num_features = out_feats;
+
+        self
+    }
+
+    pub fn linear_s_with_conf(&mut self, out_feats:i64, config:LinearConfig) -> &mut Self {
+        self.elts.push(
+            Node::Linear { in_feats:self.num_features, out_feats, config:Some(config)}
         );
         self.num_features = out_feats;
 
@@ -205,7 +215,7 @@ impl SeqBuilder {
     pub fn linear_p(&mut self, n:usize, p:&impl NthParams<Params=i64>) -> &mut Self {
         let out_feats = p.on_nth_layer(n);
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats}
+            Node::Linear { in_feats:self.num_features, out_feats, config:None}
         );
         self.num_features = out_feats;
 
