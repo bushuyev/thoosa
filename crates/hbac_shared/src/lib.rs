@@ -142,7 +142,7 @@ pub mod tests {
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
 
     #[ctor::ctor]
-    pub fn init() {
+    fn init() {
         CombinedLogger::init(
             vec![
                 TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
@@ -276,6 +276,22 @@ pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Syn
 }
 
 
+pub fn slice_windows(input_n: usize, motif_n: usize, step: usize, slice_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
+    debug!("slice_windows: input_n={}, motif_n={}, step={}", input_n, motif_n, step);
+
+    (0..=input_n - motif_n).step_by(step).fold((vec![], vec![]), |mut a, v| {
+        a.1.push(v);
+        if a.1.len() == slice_size {
+            a.0.push(a.1);
+            a.1 = vec![];
+        }
+        a
+    })
+}
+
+
+
+
 #[cfg(test)]
 mod shared_tests {
     /*
@@ -292,7 +308,7 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use crate::group_slices;
+    use crate::{group_slices, slice_windows};
 
     #[test]
     fn test_group_motifs(){
@@ -349,5 +365,33 @@ mod shared_tests {
         group_1.sort();
         assert_eq!(&vec!["l".to_string(), "m".to_string()], group_1);
 
+    }
+
+    #[test]
+    fn test_slice_windows_1000(){
+        let input_n = 1000;
+        let motif_n = 100;
+        let step = 100;
+
+        let folds = slice_windows(input_n, motif_n, step);
+
+        println!("folds: {:?}", folds);
+
+    }
+
+    #[test]
+    fn test_slice_windows_3500(){
+        let input_n = 3500;
+        let motif_n = 100;
+        let step = 100;
+
+        let folds = slice_windows(input_n, motif_n, step);
+
+        println!("folds: {:?}", folds);
+
+        assert_eq!(vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900], folds.0[0]);
+        assert_eq!(vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900], folds.0[1]);
+        assert_eq!(vec![2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900], folds.0[2]);
+        assert_eq!(vec![3000, 3100, 3200, 3300, 3400], folds.1)
     }
 }

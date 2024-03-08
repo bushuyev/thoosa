@@ -229,8 +229,8 @@ pub fn train(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, lo
 
         let pred_y = model.forward(&x_t);
 
-        debug!("x_t.size()={:?} pred_y.size()={:?} y_t.size()={:?}", x_t.size(), pred_y.size(), y_t.size());
-        debug!("   y_t ={:?}", from::<Vec<f32>>(&y_t));
+        debug!("train: x_t.size()={:?} pred_y.size()={:?} y_t.size()={:?}", x_t.size(), pred_y.size(), y_t.size());
+        debug!("train:   y_t ={:?}", from::<Vec<f32>>(&y_t));
 
         // let pred_y_mean = pred_y.view((10, 1)); //pred_y.mean_dim(1, false, tch::Kind::Float);
 
@@ -245,15 +245,15 @@ pub fn train(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, lo
 
                 let pred_y = model.forward(&x_t.to_device(*device));
 
-                debug!("vaid: pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
-                debug!("vaid:    y_t.size()={:?}",  from::<Vec<f32>>(&y_t));
+                debug!("train: vaid pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
+                debug!("train: vaid    y_t.size()={:?}",  from::<Vec<f32>>(&y_t));
                 // debug!("vaid: pred_y.size()={:?} ", from::<Vec<f32>>(&pred_y));
 
                 // let pred_y_mean = pred_y.view((10, 1)); // pred_y.mean_dim(1, false, tch::Kind::Float);
 
                 let valid_loss = loss_fn(&pred_y, &y_t);
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss.double_value(&[]) as f32;
-                debug!("train loss={:?}, valid loss={:?} avg loss={}", loss, valid_loss, last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+                debug!("train: vaid loss={:?}, valid loss={:?} avg loss={}", loss, valid_loss, last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
                 std::io::stdout().flush().unwrap();
             }
 
