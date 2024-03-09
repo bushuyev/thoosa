@@ -270,7 +270,7 @@ fn _main() -> Result<(), HbacError> {
                     info!("train_on_motif: savgin motif_id={} loss={}", motif_id, loss);
 
                     let channel_models = Path::new(train_on_motif_params.output_dir()).join(channel.to_string());
-                    fs::create_dir_all(channel_models);
+                    fs::create_dir_all(&channel_models);
 
                     vs.save(channel_models.join(format!("{}_{:3}.safetensors", motif_id, loss)))?;
                 }
@@ -287,6 +287,11 @@ fn _main() -> Result<(), HbacError> {
                     &device,
                     cli.limit.as_ref()
                 ),
+                10,
+                1000,
+                100,
+                100,
+                20
             )?;
         }
 

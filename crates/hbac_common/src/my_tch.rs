@@ -11,6 +11,8 @@ use plotters::prelude::*;
 // use polars::prelude::{col, lit, NamedFrom, Series};
 use simplelog::*;
 use tch::{Device, IndexOp, kind, Kind, nn, no_grad, Reduction, Tensor};
+use tch::Device::Cpu;
+use tch::Kind::Float;
 use tch::nn::{Init, Linear, LinearConfig, Module, Path, Sequential};
 use tch::nn::{ConvConfig, OptimizerConfig};
 
@@ -279,18 +281,26 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 
 
 
-pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, pad_motifs_to: Option<i64>) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
-
-    debug!("apply_channel_motifs: eeg_t_channel.size()={:?}", eeg_t_channel.size());
+pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, pad_motifs_to: Option<i64>, channels: i64) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let input_t_size = eeg_t_channel.size();
+    debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", eeg_t_channel.size(), input_t_size, nets.len());
+
     assert!(input_t_size.len() == 1);
 
+
     let input_n = input_t_size[0];
+    let folds = slice_windows(input_n as usize, motif_n as usize, step, motif_batch_size as usize);
+
+    let folds_len = folds.0.len();
+    if nets.len() == 0 {
+        //if no 'main' folds build motifs on remainder
+        return Tensor::zeros([pad_motifs_to.unwrap_or(channels), if folds_len != 0 {motif_batch_size* folds_len as i64} else {folds.1.len() as i64}], (Float, Cpu));
+    }
+
     let nets_len = nets.len();
     let mut net_tensors_vec = (0..nets_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / step)).collect::<Vec<Vec<Tensor>>>();
 
-    let folds = slice_windows(input_n as usize, motif_n as usize, step, motif_batch_size as usize);
 
     for slice_0_idx in folds.0 {
         debug!("apply_channel_motifs: slice_0_idx={:?}", slice_0_idx);
@@ -309,14 +319,26 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     }
 
 
-    if folds.1.len() > 0 {
+    if folds_len == 0 && folds.1.len() > 0 {
         debug!("apply_channel_motifs: reminder={:?}", folds.1);
-        //TODO process remainder?
+
+        let batch = Tensor::stack(folds.1.into_iter().map(|i| eeg_t_channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
+        debug!("apply_channel_motifs: reminder batch.size={:?} motif_batch_size={:?}", batch.size(), motif_batch_size);
+
+        let batch = batch.view((-1, 1, motif_n));
+
+        for ((net_i, net), net_tensors_vec) in nets.iter().enumerate().zip(net_tensors_vec.iter_mut()) {
+
+            let net_rs = net.lock().unwrap().forward(&batch);
+            debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?}", batch.size(), net_rs.size());
+            net_tensors_vec.push(net_rs.view((net_rs.size()[0])));
+        };
     }
 
     //nets x slices in tensor/motif_batch_size x motif_batch_size
     let mut net_tensors = net_tensors_vec.into_iter().map(|slices_vec| Tensor::vstack(slices_vec.as_slice())).collect::<Vec<Tensor>>();
-    let zero_t = Tensor::zeros([motif_batch_size as i64], (Kind::Float, Device::Cpu)).view((1, motif_batch_size as i64));
+    debug!("apply_channel_motifs: net_tensors[0].size()={:?}", net_tensors[0].size());
+    let zero_t = Tensor::zeros(net_tensors[0].size(), (Kind::Float, Device::Cpu));
 
     if let Some(pad_to) = pad_motifs_to {
         (net_tensors.len()..pad_to as usize).for_each(|_|{
@@ -662,7 +684,7 @@ mod tch_tests {
             };
 
 
-            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, None)
+            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, None, 2)
 
         }).collect::<Vec<Tensor>>();
 
@@ -703,6 +725,10 @@ mod tch_tests {
     #[test]
     pub fn test_test() -> Result<(), HbacError> {
 
+        let t = Tensor::from_slice(&[1., 2., 3., 4.]);
+
+        t.i(2..3).print();
+        t.i(0..10).print();
 
         // println!("chunks_for_eeg={:?}", chunks_for_eeg);
 

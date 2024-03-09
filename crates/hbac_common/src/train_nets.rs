@@ -102,7 +102,53 @@ impl<I> ClassTensorsLoaderDataBatch<I> where I: Iterator<Item=Result<Tensor, Hba
     }
 }
 
-pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64) -> Result<(), HbacError>
+
+struct ClassTensorsLoaderData<I> {
+    classes_tensor_loaders: Vec<Vec<I>>,
+    current:usize
+}
+
+impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+
+    pub fn new(classes_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
+        Self {
+            classes_tensor_loaders,
+            current: 0
+        }
+    }
+
+}
+
+
+impl <I> DataBatch for ClassTensorsLoaderData<I> where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+
+    fn train_batch(&mut self) -> (Tensor, Tensor){
+        self.batch()
+    }
+
+    fn valid_batch(&mut self) -> (Tensor, Tensor){
+        self.batch() //no replacement, just pull next
+    }
+}
+
+impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+
+    fn batch(&mut self) -> (Tensor, Tensor) {
+        let t = self.classes_tensor_loaders[self.current][0].next().unwrap().unwrap();
+
+        let class = Tensor::from_slice(&[self.current as i64]);
+        self.current+=1;
+        if self.current == self.classes_tensor_loaders.len() {
+            self.current = 0;
+        }
+        (
+            t,
+            class
+        )
+    }
+}
+
+pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64) -> Result<(), HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
@@ -115,8 +161,8 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     keys.sort();
 
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, labels_loaders.keys());
-    let models = load_models(&params, 3)?;//TODO num channels
-    debug!("models={:?}", models);
+    let models = load_models(&params, channels as usize, motif_n)?;//TODO num channels
+    debug!("models.size={:?} models={:?}", models.len(), models);
 
     let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
@@ -129,7 +175,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
                 .into_iter()
                 .map(|l|{
                     l.map(|t|{
-                        Ok(apply_motifs(motif_n, step, t.unwrap(), &motif_nets, motif_batch_size))
+                        Ok(apply_motifs(motif_n, step, t.unwrap(), &motif_nets, motif_batch_size, channels))
                     })
                 })
                 .collect::<Vec<_>>())
@@ -142,6 +188,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     train(
         &Cpu, //TODO
         &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
+        // &mut ClassTensorsLoaderData::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         &full_node(motif_batch_size).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
 
@@ -154,10 +201,12 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
         nn::AdamW::default().build(&vs_0, 1.0e-4)?
     )?;
 
+    vs_0.save("../../data_local/full_model.safetensors")?;
+
     Ok(())
 }
 
-fn load_models(params: &TrainOnEEGParams, channels:usize) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
+fn load_models(params: &TrainOnEEGParams, channels:usize, motif_n: i64) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
     debug!("load_models: channel_motifs_dir={:?}", params.motif_models_dir);
 
     let motif_models_path  = Path::new(params.motif_models_dir.as_str());
@@ -180,7 +229,7 @@ fn load_models(params: &TrainOnEEGParams, channels:usize) -> Result<Vec<Vec<Box<
                 debug!("load_models: motif={:?}", motif);
 
                 let mut vs = nn::VarStore::new(Device::Cpu);
-                let node = train_nets::motif_node(100).build_tch_module(&vs.root())?;//TODO window
+                let node = train_nets::motif_node(motif_n).build_tch_module(&vs.root())?;//TODO window
                 vs.load(&motif_path.join(motif))?;
 
                 debug!("load_models: len={:?}", vs.variables().len());
@@ -420,14 +469,16 @@ impl From<&str> for MotifsBy {
     }
 }
 
-fn apply_motifs(motif_n: i64, step: usize, eeg_t: Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64) -> Tensor {
+fn apply_motifs(motif_n: i64, step: usize, eeg_t: Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, channels: i64) -> Tensor {
     let max_motif_nets_in_channel = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
+
+    debug!("apply_motifs max_motif_nets_in_channel={:?}", max_motif_nets_in_channel);
 
     let channels_motifs = Tensor::stack(
         motif_nets
             .iter()
             .enumerate()
-            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, Some(max_motif_nets_in_channel as i64)))
+            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, Some(max_motif_nets_in_channel as i64), channels))
             .collect::<Vec<_>>().as_slice(),
         0
     );
@@ -530,7 +581,7 @@ mod train_tests {
 
         let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0);
 
-        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], eeg_t.i((0, ..)), 10, Some(max_motif_nets_in_channel as i64));
+        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], eeg_t.i((0, ..)), 10, Some(max_motif_nets_in_channel as i64), 2);
 
 
         let channel_0_motifs = Tensor::stack(&[
@@ -541,7 +592,7 @@ mod train_tests {
         assert_eq!(
             channel_0_motifs, channel_0_t);
 
-        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), 10, Some(max_motif_nets_in_channel as i64));
+        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), 10, Some(max_motif_nets_in_channel as i64), 2);
 
 
         let channel_1_motifs = Tensor::stack(&[
@@ -553,7 +604,7 @@ mod train_tests {
             channel_1_motifs, channel_1_t
         );
 
-        let channels_motifs = super::apply_motifs(motif_n, step, eeg_t, &motif_nets, 10);
+        let channels_motifs = super::apply_motifs(motif_n, step, eeg_t, &motif_nets, 10, 2);
 
 
         assert_eq!(
@@ -568,7 +619,8 @@ mod train_tests {
         Tensor::vstack(&[
             Tensor::from_slice((0..input_n).map(|i| i as f32).collect::<Vec<_>>().as_slice()),
             Tensor::from_slice((0..input_n).map(|i| i as f32 * 2.).collect::<Vec<_>>().as_slice()),
-            Tensor::from_slice((0..input_n).map(|i| i as f32 * 3.).collect::<Vec<_>>().as_slice())
+            Tensor::from_slice((0..input_n).map(|i| i as f32 * 3.).collect::<Vec<_>>().as_slice()),
+            Tensor::from_slice((0..input_n).map(|i| i as f32 * 4.).collect::<Vec<_>>().as_slice())
         ])
     }
 
@@ -616,7 +668,7 @@ mod train_tests {
                 }))
 
             }).collect::<Vec<_>>(),
-            13, 100, 100, 7
+            13, 100, 100, 7, 4
         )?;
 
         Ok(())

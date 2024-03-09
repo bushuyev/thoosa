@@ -177,8 +177,8 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             self.keys_fifo.push_back(k.clone());
             debug!("{:?} is already loaded", k);
         }
-        
-        self.get_loaded(&k)
+
+        self.data_loaded.get(k)
     }
 
     pub fn preload_and_blocking_get(&mut self, k:&K, preload:&[K]) -> Option<&V> {
