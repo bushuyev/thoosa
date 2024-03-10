@@ -162,25 +162,30 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
     if input.size().len() != to_size.len() {
         HbacError::new(format!("dimensions don't match: {:?} {:?}", input.size(), to_size));
     }
+    let mut to_size = to_size.to_vec();
 
+
+    let mut input_size = input.size();
+    input_size.reverse();
+    to_size.reverse();
+    let pad_idx = input_size.into_iter().zip(
+        to_size.into_iter()
+    )
+        .enumerate()
+        .flat_map(|(i, (from, to))| {
+            if from > to {
+                panic!("from {} > to {} at {}", from, to, i);
+                [0, 0]
+            } else {
+                [0, to - from]
+            }
+        })
+        .collect::<Vec<i64>>();
 
     Ok(
         input.pad(
-            input.size().into_iter().zip(
-                to_size.into_iter()
-            )
-            .enumerate()
-            .flat_map(|(i, (from, to))| {
-                if from > *to {
-                    panic!("from {} > to {} at {}", from, to, i);
-                    [0,0]
-                } else {
-                    [0,to-from]
-                }
-
-            })
-            .collect::<Vec<i64>>().as_slice(),
-        "constant",
+            pad_idx.as_slice(),
+            "constant",
             0.
         )
     )
@@ -189,6 +194,8 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
 
 #[cfg(test)]
 pub mod tests {
+    use tch::Device::Cpu;
+    use tch::Kind::Float;
     use tch::Tensor;
     use hbac_shared::HbacError;
 
@@ -239,6 +246,27 @@ pub mod tests {
                 &[2,2]
             )?
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pad_to_one_dim() -> Result<(), HbacError>{
+        let t = Tensor::ones([1, 3], (Float, Cpu));
+
+
+        t.pad([0, 0, 0, 1], "constant", 0.).print();
+        assert_eq!(
+            Tensor::vstack(&[
+                Tensor::from_slice(&[1., 1., 1.]),
+                Tensor::from_slice(&[0., 0., 0.]),
+            ]),
+
+        super::pad_to(
+            &t,
+            &[2,3]
+        )?);
+
 
         Ok(())
     }

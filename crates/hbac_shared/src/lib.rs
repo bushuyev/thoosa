@@ -276,12 +276,12 @@ pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Syn
 }
 
 
-pub fn slice_windows(input_n: usize, motif_n: usize, step: usize, slice_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
+pub fn batch_windows(input_n: usize, motif_n: usize, step: usize, batch_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
     debug!("slice_windows: input_n={}, motif_n={}, step={}", input_n, motif_n, step);
 
     (0..=input_n - motif_n).step_by(step).fold((vec![], vec![]), |mut a, v| {
         a.1.push(v);
-        if a.1.len() == slice_size {
+        if a.1.len() == batch_size {
             a.0.push(a.1);
             a.1 = vec![];
         }
@@ -308,7 +308,7 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use crate::{group_slices, slice_windows};
+    use crate::{group_slices, batch_windows};
 
     #[test]
     fn test_group_motifs(){
@@ -373,7 +373,7 @@ mod shared_tests {
         let motif_n = 100;
         let step = 100;
 
-        let folds = slice_windows(input_n, motif_n, step);
+        let folds = batch_windows(input_n, motif_n, step, 10);
 
         println!("folds: {:?}", folds);
 
@@ -385,7 +385,7 @@ mod shared_tests {
         let motif_n = 100;
         let step = 100;
 
-        let folds = slice_windows(input_n, motif_n, step);
+        let folds = batch_windows(input_n, motif_n, step, 10);
 
         println!("folds: {:?}", folds);
 

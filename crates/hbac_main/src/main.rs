@@ -288,7 +288,7 @@ fn _main() -> Result<(), HbacError> {
                     cli.limit.as_ref()
                     //684400 - TODO cut at max_input
                 ),
-                10,
+                5,
                 1000,
                 100,
                 100,
