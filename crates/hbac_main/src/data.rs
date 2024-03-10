@@ -687,6 +687,7 @@ mod data_tests {
     use std::fs::{DirEntry, File};
     use std::io::Write;
     use std::ops::Div;
+    use std::path::PathBuf;
     use std::time::{Instant, UNIX_EPOCH};
 
     use log::{debug, LevelFilter};
@@ -1149,11 +1150,31 @@ mod data_tests {
     #[test]
     pub fn test_test()-> Result<(), HbacError> {
         // let good_eegs = EEGs::good_eegs("../../data")?;
-        let good_eegs = EEGs::good_eegs_filter("../../data")?;
+        // let good_eegs = EEGs::good_eegs_filter("../../data")?;
+        //
+        // let good_df = good_eegs.collect()?;
+        //
+        // println!("good_df={:?}", good_df.head(Some(100)));
 
-        let good_df = good_eegs.collect()?;
+        let mut max_0 = 0usize;
+        let mut max_1 = 0usize;
+        for dir in fs::read_dir("../../data/train_eegs")?.into_iter() {
+            let path = dir?.path();
+            let eeg_df = LazyFrame::scan_parquet(path.clone(), ScanArgsParquet::default()).unwrap().collect().unwrap();
 
-        println!("good_df={:?}", good_df.head(Some(100)));
+            let shape = eeg_df.shape();
+            if shape.0 > max_0 {
+                max_0 = shape.0;
+            }
+
+            if shape.1 > max_1 {
+                max_1 = shape.1;
+            }
+            // debug!("dir?.path()={:?} eeg_df.shape()={:?}", path, shape);
+            // std::io::stdout().flush()?;
+        }
+        //max_0 - 684400
+        println!("max_0={}, max_1={}", max_0, max_1);
 
         // good_eegs
 

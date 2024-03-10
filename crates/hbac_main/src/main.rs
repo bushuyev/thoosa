@@ -286,12 +286,14 @@ fn _main() -> Result<(), HbacError> {
                     &vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],//TODO load from corrs_run
                     &device,
                     cli.limit.as_ref()
+                    //684400 - TODO cut at max_input
                 ),
                 10,
                 1000,
                 100,
                 100,
-                20
+                20,
+                684400
             )?;
         }
 

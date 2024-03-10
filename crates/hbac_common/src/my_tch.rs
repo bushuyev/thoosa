@@ -21,7 +21,7 @@ use crate::builder::{NthConst, SeqBuilder};
 use crate::builder::Node;
 // use crate::data::EEGs;
 use hbac_shared::HbacError;
-use crate::utils::DataBatch;
+use crate::utils::*;
 use hbac_shared::*;
 // use linfa::prelude::*;
 
@@ -281,7 +281,7 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 
 
 
-pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, pad_motifs_to: Option<i64>, channels: i64) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
+pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, pad_motifs_to: Option<i64>, channels: i64, max_in_fold: usize) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let input_t_size = eeg_t_channel.size();
     debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", eeg_t_channel.size(), input_t_size, nets.len());
@@ -295,7 +295,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     let folds_len = folds.0.len();
     if nets.len() == 0 {
         //if no 'main' folds build motifs on remainder
-        return Tensor::zeros([pad_motifs_to.unwrap_or(channels), if folds_len != 0 {motif_batch_size* folds_len as i64} else {folds.1.len() as i64}], (Float, Cpu));
+        return Tensor::zeros([pad_motifs_to.unwrap_or(channels), max_in_fold as i64], (Float, Cpu));
     }
 
     let nets_len = nets.len();
@@ -319,19 +319,21 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     }
 
 
-    if folds_len == 0 && folds.1.len() > 0 {
+    if folds.1.len() > 0 {
         debug!("apply_channel_motifs: reminder={:?}", folds.1);
 
         let batch = Tensor::stack(folds.1.into_iter().map(|i| eeg_t_channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-        debug!("apply_channel_motifs: reminder batch.size={:?} motif_batch_size={:?}", batch.size(), motif_batch_size);
+        debug!("apply_channel_motifs: reminder, batch.size={:?} motif_batch_size={:?}", batch.size(), motif_batch_size);
 
         let batch = batch.view((-1, 1, motif_n));
 
         for ((net_i, net), net_tensors_vec) in nets.iter().enumerate().zip(net_tensors_vec.iter_mut()) {
 
             let net_rs = net.lock().unwrap().forward(&batch);
-            debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?}", batch.size(), net_rs.size());
-            net_tensors_vec.push(net_rs.view((net_rs.size()[0])));
+            debug!("apply_channel_motifs: reminder, batch.size()={:?} net_rs size={:?}", batch.size(), net_rs.size());
+            net_tensors_vec.push(
+                pad_to(&net_rs.view((net_rs.size()[0])), &[motif_batch_size as i64]).unwrap()
+            );
         };
     }
 
@@ -676,6 +678,11 @@ mod tch_tests {
 
         let motif_batch_size = 10;
 
+        let max_folds = slice_windows(input_n as usize, motif_n as usize, step, motif_batch_size as usize);
+        let max_folds = max_folds.0.get(0).map(|v|v.len()).unwrap_or(max_folds.1.len());
+
+
+
         let full_batch_vec = (0..eeg_tensors_len).into_par_iter().map(|i|{
 
             let eeg_t = {
@@ -684,7 +691,7 @@ mod tch_tests {
             };
 
 
-            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, None, 2)
+            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, None, 2, max_folds)
 
         }).collect::<Vec<Tensor>>();
 
@@ -725,10 +732,15 @@ mod tch_tests {
     #[test]
     pub fn test_test() -> Result<(), HbacError> {
 
-        let t = Tensor::from_slice(&[1., 2., 3., 4.]);
+        let folds = slice_windows(684400, 1000, 100, 1000);
 
-        t.i(2..3).print();
-        t.i(0..10).print();
+        println!("folds.0.len={:?} folds.1.len={:?}", folds.0.len(), folds.1.len());
+        println!("folds={:?}", folds);
+
+        // let t = Tensor::from_slice(&[1., 2., 3., 4.]);
+        //
+        // t.i(2..3).print();
+        // t.i(0..10).print();
 
         // println!("chunks_for_eeg={:?}", chunks_for_eeg);
 

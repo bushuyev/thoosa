@@ -12,7 +12,7 @@ use hbac_shared::{gauss_i, HbacError, pulse_v, pulses_in_const, sig_in_rand};
 use std::error::Error;
 use std::fs;
 use std::ops::Deref;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use crate::my_tch::LossFp;
 use tch::nn::Optimizer;
 use tch::IndexOp;
@@ -158,13 +158,89 @@ pub fn cdt_for_dir() ->String {
     cdt().replace(':', "_").replace('+', "_")
 }
 
+pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
+    if input.size().len() != to_size.len() {
+        HbacError::new(format!("dimensions don't match: {:?} {:?}", input.size(), to_size));
+    }
+
+
+    Ok(
+        input.pad(
+            input.size().into_iter().zip(
+                to_size.into_iter()
+            )
+            .enumerate()
+            .flat_map(|(i, (from, to))| {
+                if from > *to {
+                    panic!("from {} > to {} at {}", from, to, i);
+                    [0,0]
+                } else {
+                    [0,to-from]
+                }
+
+            })
+            .collect::<Vec<i64>>().as_slice(),
+        "constant",
+            0.
+        )
+    )
+
+}
 
 #[cfg(test)]
 pub mod tests {
+    use tch::Tensor;
+    use hbac_shared::HbacError;
+
     #[test]
     fn test_cdt_for_dir(){
         println!("{}", super::cdt_for_dir() );
         assert_eq!(false, super::cdt_for_dir().contains(":"))
+    }
+
+    #[test]
+    fn test_pad_to() -> Result<(), HbacError>{
+        let t = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2.]),
+            Tensor::from_slice(&[3., 4.]),
+        ]);
+
+
+        assert_eq!(
+            Tensor::vstack(&[
+                Tensor::from_slice(&[1., 2., 0.]),
+                Tensor::from_slice(&[3., 4., 0.]),
+                Tensor::from_slice(&[0., 0., 0.]),
+            ]),
+            super::pad_to(
+                &t,
+                &[3,3]
+            )?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pad_to_same() -> Result<(), HbacError>{
+        let t = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2.]),
+            Tensor::from_slice(&[3., 4.]),
+        ]);
+
+
+        assert_eq!(
+            Tensor::vstack(&[
+                Tensor::from_slice(&[1., 2.]),
+                Tensor::from_slice(&[3., 4.]),
+            ]),
+            super::pad_to(
+                &t,
+                &[2,2]
+            )?
+        );
+
+        Ok(())
     }
 }
 

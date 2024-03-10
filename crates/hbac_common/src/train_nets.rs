@@ -1,14 +1,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::marker::PhantomData;
-use hbac_shared::HbacError;
+use hbac_shared::{HbacError, slice_windows};
 use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use clap::clap_derive::Args;
 use log::{debug, info};
 use rand::{Rng, thread_rng};
 use crate::builder::{Node, SeqBuilder};
-use crate::utils::{DataBatch, train};
+use crate::utils::{DataBatch, pad_to, train};
 use crate::utils::from;
 use rand::prelude::SliceRandom;
 use rayon::iter::ParallelBridge;
@@ -148,7 +148,7 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<Tensor, HbacErro
     }
 }
 
-pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64) -> Result<(), HbacError>
+pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize ) -> Result<(), HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
@@ -168,6 +168,11 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
 
     assert!(motif_nets.len() > 0);
 
+    let max_folds = slice_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
+    let max_input = max_folds.0.get(0).map(|v|v.len() * 2 /* cause + reminder which should be of same size as main fold*/).unwrap_or(max_folds.1.len() /* if no main fold*/);
+    let max_folds = max_folds.0.len() +  if max_folds.1.len() > 0 {1} else {0};
+    debug!("apply_motifs: max_folds={:?}", max_folds);
+
     let loaders_vec = keys.into_iter()
         .map(
             |label| labels_loaders
@@ -175,7 +180,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
                 .into_iter()
                 .map(|l|{
                     l.map(|t|{
-                        Ok(apply_motifs(motif_n, step, t.unwrap(), &motif_nets, motif_batch_size, channels))
+                        Ok(apply_motifs(motif_n, step, t.unwrap(), &motif_nets, motif_batch_size, channels, max_folds, max_input))
                     })
                 })
                 .collect::<Vec<_>>())
@@ -469,19 +474,21 @@ impl From<&str> for MotifsBy {
     }
 }
 
-fn apply_motifs(motif_n: i64, step: usize, eeg_t: Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, channels: i64) -> Tensor {
+fn apply_motifs(motif_n: i64, step: usize, eeg_t: Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, channels: i64, max_folds: usize, max_in_fold:usize) -> Tensor {
     let max_motif_nets_in_channel = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
 
-    debug!("apply_motifs max_motif_nets_in_channel={:?}", max_motif_nets_in_channel);
+    debug!("apply_motifs: max_motif_nets_in_channel={:?} max_folds={:?}, max_in_fold={:?}", max_motif_nets_in_channel,max_folds, max_in_fold);
 
     let channels_motifs = Tensor::stack(
         motif_nets
             .iter()
             .enumerate()
-            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, Some(max_motif_nets_in_channel as i64), channels))
+            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, Some(max_motif_nets_in_channel as i64), channels, max_in_fold))
+            .map(|t|pad_to(&t, &[max_folds as i64, max_in_fold as i64]).unwrap())
             .collect::<Vec<_>>().as_slice(),
         0
     );
+    // pad_to(&channels_motifs, &[max_motif_nets_in_channel as i64, max_folds as i64, max_in_fold as i64]).unwrap()
     channels_motifs
 }
 
@@ -493,7 +500,7 @@ mod train_tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use tch::{Device, nn, Tensor};
-    use hbac_shared::HbacError;
+    use hbac_shared::{HbacError, slice_windows};
     use crate::train_nets::{ClassTensorsDataBatch, load_models, motif_node, TrainOnEEGParams};
     use crate::utils::{cdt_for_dir, from};
     use crate::utils::DataBatch;
@@ -580,8 +587,10 @@ mod train_tests {
         ];
 
         let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0);
+        let max_folds = slice_windows(input_n as usize, motif_n as usize, step, 10);
+        let max_folds = max_folds.0.get(0).map(|v|v.len()).unwrap_or(max_folds.1.len());
 
-        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], eeg_t.i((0, ..)), 10, Some(max_motif_nets_in_channel as i64), 2);
+        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], eeg_t.i((0, ..)), 10, Some(max_motif_nets_in_channel as i64), 2, max_folds);
 
 
         let channel_0_motifs = Tensor::stack(&[
@@ -592,7 +601,7 @@ mod train_tests {
         assert_eq!(
             channel_0_motifs, channel_0_t);
 
-        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), 10, Some(max_motif_nets_in_channel as i64), 2);
+        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), 10, Some(max_motif_nets_in_channel as i64), 2, max_folds);
 
 
         let channel_1_motifs = Tensor::stack(&[
@@ -604,7 +613,7 @@ mod train_tests {
             channel_1_motifs, channel_1_t
         );
 
-        let channels_motifs = super::apply_motifs(motif_n, step, eeg_t, &motif_nets, 10, 2);
+        let channels_motifs = super::apply_motifs(motif_n, step, eeg_t, &motif_nets, 10, 2, 1, input_n as usize);
 
 
         assert_eq!(
@@ -612,6 +621,41 @@ mod train_tests {
             channels_motifs
         );
 
+        Ok(())
+    }
+
+
+    #[test]
+    fn test_apply_motif_models_diff_len() -> Result<(), HbacError>{
+        let input_n_0 = 1000;
+        let motif_n= 100;
+        let eeg_t_0 = test_eeg(input_n_0);
+        let eeg_t_1 = test_eeg(831);
+
+        let motif_batch_size = 100;
+
+        let motif_nets = vec![
+            vec![Mutex::new(test_net(motif_n, 1.)?), Mutex::new(test_net(motif_n, 1.)?)], //channel 0 nets
+            vec![Mutex::new(test_net(motif_n, 10.)?)] //channel 1 nets
+        ];
+
+
+        let step = 10;
+        let max_folds = slice_windows(input_n_0 as usize, motif_n as usize, step, motif_batch_size as usize);
+        let max_in_fold = max_folds.0.get(0).map(|v|v.len()).unwrap_or(max_folds.1.len());
+
+        println!("max_input={}", max_in_fold);
+
+        let channels_motifs_0 = super::apply_motifs(motif_n, step, eeg_t_0, &motif_nets, motif_batch_size, 2, 2, max_in_fold as usize);
+
+        println!("channels_motifs_0.size={:?}", channels_motifs_0.size());
+
+        let channels_motifs_1 = super::apply_motifs(motif_n, step, eeg_t_1, &motif_nets, motif_batch_size, 2, 2, max_in_fold as usize);
+
+        println!("channels_motifs_1.size={:?}", channels_motifs_1.size());
+
+        assert_eq!(vec![2, 2, 91], channels_motifs_0.size());
+        assert_eq!(vec![2, 2, 91], channels_motifs_1.size());
         Ok(())
     }
 
@@ -668,7 +712,8 @@ mod train_tests {
                 }))
 
             }).collect::<Vec<_>>(),
-            13, 100, 100, 7, 4
+            13, 100, 100, 7, 4,
+            684400
         )?;
 
         Ok(())
