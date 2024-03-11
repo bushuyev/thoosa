@@ -13,7 +13,7 @@ use std::error::Error;
 use std::fs;
 use std::ops::Deref;
 use log::{debug, info, trace, warn};
-use crate::my_tch::LossFp;
+use crate::my_tch::{Fp, LossFp};
 use tch::nn::Optimizer;
 use tch::IndexOp;
 
@@ -320,7 +320,8 @@ pub trait DataBatch {
     fn valid_batch(&mut self) -> (Tensor, Tensor);
 }
 
-pub fn train(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, loss_fn:LossFp, cycles: usize, mut opt: Optimizer) -> Result<f32, HbacError>{
+pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, loss_fn:LossFp, cycles: usize, mut opt: Optimizer, x_f:F) -> Result<f32, HbacError>
+    where F:Fn(Tensor)->Tensor {
 
     debug!("train: device={:?} cycles={}", device, cycles);
 
@@ -329,11 +330,17 @@ pub fn train(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, lo
 
     for idx in 1..cycles {
 
-        let (x_t, y_t) = data.train_batch();
+        let (x_t_0, y_t) = data.train_batch();
+        debug!("x_t_0.size()={:?} ", x_t_0.size());
+
+        let x_t = x_f(x_t_0);
+
+        debug!("x_t.size()={:?} y_t.size()={:?}", x_t.size(), y_t.size());
+
 
         let pred_y = model.forward(&x_t);
 
-        debug!("train: x_t.size()={:?} pred_y.size()={:?} y_t.size()={:?}", x_t.size(), pred_y.size(), y_t.size());
+        debug!("train: pred_y.size()={:?}", pred_y.size());
         debug!("train:   y_t ={:?}", from::<Vec<f32>>(&y_t));
 
         // let pred_y_mean = pred_y.view((10, 1)); //pred_y.mean_dim(1, false, tch::Kind::Float);
@@ -345,7 +352,9 @@ pub fn train(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, lo
         tch::no_grad(||{
 
             if idx % 10 == 0 {
-                let (x_t, y_t) = data.valid_batch();
+                let (x_t_0, y_t) = data.valid_batch();
+
+                let x_t = x_f(x_t_0);
 
                 let pred_y = model.forward(&x_t.to_device(*device));
 

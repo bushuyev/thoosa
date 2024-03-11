@@ -534,7 +534,8 @@ mod tch_tests {
                 pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
             },
             n as usize,
-            nn::AdamW::default().build(&vs_0, 1.0e-4)?
+            nn::AdamW::default().build(&vs_0, 1.0e-4)?,
+            |t|t
         )?;
 
 
@@ -634,7 +635,8 @@ mod tch_tests {
                 pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
             },
             100,
-            nn::AdamW::default().build(&vs_0, 1.0e-4)?
+            nn::AdamW::default().build(&vs_0, 1.0e-4)?,
+            |t|t
         )?;
 
         let mut vs_1 = nn::VarStore::new(Device::Cpu);
@@ -654,7 +656,8 @@ mod tch_tests {
                 pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
             },
             100,
-            nn::AdamW::default().build(&vs_1, 1.0e-4)?
+            nn::AdamW::default().build(&vs_1, 1.0e-4)?,
+            |t|t
         )?;
 
         let batch_rnd = Tensor::stack((0..10).map(|_| rnd_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));

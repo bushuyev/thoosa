@@ -166,6 +166,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
 
     let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
+    let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
     assert!(motif_nets.len() > 0);
 
     let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
@@ -192,16 +193,21 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
         &Cpu, //TODO
         &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         // &mut ClassTensorsLoaderData::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
-        &full_node(20 * max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
+        &full_node(channels * max_nets *  max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
 
-            let pred_y = pred.i((.., 0, 0));
+            let pred_y = pred; //pred.i((.., 0, 0));
             // debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
             debug!("pred_y ={:?} target={:?}", pred_y.size(), target.size());
             pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
         },
         params.cycles,
-        nn::AdamW::default().build(&vs_0, 1.0e-4)?
+        nn::AdamW::default().build(&vs_0, 1.0e-4)?,
+        |t:Tensor|{
+            let t_out = t.view((t.size()[0], -1));
+            debug!("t.size()={:?} t_out.size()={:?}", t.size(), t_out.size());
+            t_out
+        }
     )?;
 
     vs_0.save("../../data_local/full_model.safetensors")?;
@@ -333,7 +339,8 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
             pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
         },
         train_on_motif_params.cycles,
-        nn::AdamW::default().build(&vs, train_on_motif_params.lr)?
+        nn::AdamW::default().build(&vs, train_on_motif_params.lr)?,
+        |t|t
     )?;
     Ok((valid_loss, vs))
 }
