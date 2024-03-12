@@ -356,7 +356,9 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = model.forward(&x_t.to_device(*device));
+                debug!("train: vaid    x_t.size()={:?}",  x_t.size());
+
+                let pred_y = model.forward(&x_t);
 
                 debug!("train: vaid pred_y.size()={:?} y_t.size()={:?}", pred_y.size(), y_t.size());
                 debug!("train: vaid    y_t.size()={:?}",  from::<Vec<f32>>(&y_t));
