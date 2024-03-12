@@ -24,7 +24,7 @@ use std::time::Instant;
 use plotters::prelude::BLACK;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
 use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams};
+use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final};
 use hbac_common::simp::DummyDs;
 use hbac_common::train_nets;
 use hbac_store::{SqlStore, Store};
@@ -77,6 +77,7 @@ enum Commands {
     SelectMotifs(SelectMotifsParams),
     TrainOnMotifs(TrainOnMotifsParams),
     TrainOnEEG(TrainOnEEGParams),
+    TrainFinal(TrainFinalParams),
 }
 
 
@@ -290,7 +291,7 @@ fn _main() -> Result<(), HbacError> {
                 train_on_eeg_params,
                 eegs_to_labels_tensors(
                     cli.base_path.as_str(),
-                    &labels_kinds,//TODO load from corrs_run
+                    &labels_kinds,
                     &device,
                     cli.limit.as_ref()
                     //684400 - TODO cut at max_input
@@ -304,7 +305,43 @@ fn _main() -> Result<(), HbacError> {
                 &device
             )?;
 
-            vs.save(format!("{}/full_model_{}.safetensors", train_on_eeg_params.eeg_models_dir(), train_on_eeg_params.corr_run()))?;
+            vs.save(format!("{}/corr_model_{}.safetensors", train_on_eeg_params.eeg_models_dir(), train_on_eeg_params.corr_run()))?;
+        }
+
+        Some(Commands::TrainFinal(frain_final_params)) => {
+
+            let mut store_guard = store.lock()?;
+
+            let labels_kinds = vec![
+                (0, "seizure_vote".to_string()),
+                (1, "lpd_vote".to_string()),
+                (2, "gpd_vote".to_string()),
+                (3, "lrda_vote".to_string()),
+                (4, "grda_vote".to_string()),
+                (5, "other_vote".to_string())
+            ];
+
+
+            let vs = train_final(
+                frain_final_params,
+                eegs_to_labels_tensors(
+                    cli.base_path.as_str(),
+                    &labels_kinds,//TODO load from corrs_run
+                    &device,
+                    cli.limit.as_ref()
+                    //684400 - TODO cut at max_input
+                ),
+                5,
+                1000,
+                100,
+                100,
+                20,
+                684400,
+
+                &device
+            )?;
+
+            vs.save(format!("{}/final.safetensors", frain_final_params.eeg_models_dir()))?;
         }
 
         None => {}

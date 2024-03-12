@@ -571,7 +571,6 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64,
             .enumerate()
             .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
             .collect::<Vec<String>>();
-
         (
             label_tensors_path.0,
             eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
@@ -1155,46 +1154,32 @@ mod data_tests {
         //
         // println!("good_df={:?}", good_df.head(Some(100)));
 
-        let mut max_0 = 0usize;
-        let mut max_1 = 0usize;
-        for dir in fs::read_dir("../../data/train_eegs")?.into_iter() {
-            let path = dir?.path();
-            let eeg_df = LazyFrame::scan_parquet(path.clone(), ScanArgsParquet::default()).unwrap().collect().unwrap();
+        // find_max_size()?;
 
-            let shape = eeg_df.shape();
-            if shape.0 > max_0 {
-                max_0 = shape.0;
-            }
 
-            if shape.1 > max_1 {
-                max_1 = shape.1;
-            }
-            // debug!("dir?.path()={:?} eeg_df.shape()={:?}", path, shape);
-            // std::io::stdout().flush()?;
-        }
-        //max_0 - 684400
-        println!("max_0={}, max_1={}", max_0, max_1);
 
         // good_eegs
 
-        // let df = LazyCsvReader::new(format!("{}/train.csv", "../../data"))
-        //     .finish()?
-        //     .with_streaming(true)
-        //     .group_by([col("eeg_id")])
-        //     .agg([
-        //         col("seizure_vote").first(),
-        //         col("lpd_vote").first(),
-        //         col("gpd_vote").first(),
-        //         col("lrda_vote").first(),
-        //         col("grda_vote").first(),
-        //         col("other_vote").first(),
-        //     ])
-        //     .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
-        //     .filter(
-        //         col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
-        //             .and(col("seizure_vote").gt(lit(0)))
-        //     )
-        //     .collect()?;
+        let df = LazyCsvReader::new(format!("{}/train.csv", "../../data"))
+            .finish()?
+            .with_streaming(true)
+            .group_by([col("eeg_id")])
+            .agg([
+                col("seizure_vote").first(),
+                col("lpd_vote").first(),
+                col("gpd_vote").first(),
+                col("lrda_vote").first(),
+                col("grda_vote").first(),
+                col("other_vote").first(),
+            ])
+            .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
+            .filter(
+                col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
+                    // .and(col("seizure_vote").gt(lit(0)))
+            )
+            .collect()?;
+
+        println!("{:?}", df.head(Some(100)));
 
         // let eeg_id_series = EEGs::good_eegs_of("../../data", "seizure_vote")?;
         //
@@ -1344,4 +1329,26 @@ mod data_tests {
         Ok(())
     }
 
+    fn find_max_size() -> Result<(), HbacError> {
+        let mut max_0 = 0usize;
+        let mut max_1 = 0usize;
+        for dir in fs::read_dir("../../data/train_eegs")?.into_iter() {
+            let path = dir?.path();
+            let eeg_df = LazyFrame::scan_parquet(path.clone(), ScanArgsParquet::default()).unwrap().collect().unwrap();
+
+            let shape = eeg_df.shape();
+            if shape.0 > max_0 {
+                max_0 = shape.0;
+            }
+
+            if shape.1 > max_1 {
+                max_1 = shape.1;
+            }
+            // debug!("dir?.path()={:?} eeg_df.shape()={:?}", path, shape);
+            // std::io::stdout().flush()?;
+        }
+        //max_0 - 684400
+        println!("max_0={}, max_1={}", max_0, max_1);
+        Ok(())
+    }
 }
