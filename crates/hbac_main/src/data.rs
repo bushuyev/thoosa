@@ -394,7 +394,7 @@ impl EEGs {
             .group_by([col("eeg_id")])
             .agg([
                 col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds"),
-                col("set").first(),
+                // col("set").first(),
                 col("seizure_vote").first(),
                 col("lpd_vote").first(),
                 col("gpd_vote").first(),
@@ -575,6 +575,26 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64,
             label_tensors_path.0,
             eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
                 eeg_to_tensor(base_path, eeg_id.as_str(), *device)
+            })
+        )//(label, path)
+
+    }).collect::<Vec<_>>()
+}
+
+pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64, String)>, device: &'a Device, limit:Option<&'a usize>) -> Vec<(i64, impl Iterator<Item=Result<(Tensor,Tensor), HbacError>> + Send + Sync + 'a)> {
+
+    labels_kinds.into_iter().map(|label_tensors_path| {
+
+        let eeg_ids = EEGs::good_eegs_of(base_path, label_tensors_path.1.as_str(), limit.map(|v|*v)).expect("good_eegs_of")
+            .i64().expect("good_eegs_of/i64")
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
+            .collect::<Vec<String>>();
+        (
+            label_tensors_path.0,
+            eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
+                eeg_to_tensor(base_path, eeg_id.as_str(), *device).map(|v|(v, Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
             })
         )//(label, path)
 
@@ -995,17 +1015,19 @@ mod data_tests {
             .with_streaming(true);
 
 
-        debug!("df={:?}", df.clone().collect()?.head(Some(10)));
+        println!("df={:?}", df.clone().collect()?.head(Some(10)));
 
 
         let gr_by_eeg_id_df = EEGs::group_by_eeg_id(None, df)?;
 
-        debug!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
+        println!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
         std::io::stdout().flush()?;
 
         let mut count = 0;
 
         fs::create_dir_all("/media/bu/KINGSTON/all_eegs.pt");
+
+        println!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
 
         for (eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
             .column("eeg_id")?.i64()?.into_iter()
@@ -1041,7 +1063,7 @@ mod data_tests {
         {
 
             if count % 1000 == 0 {
-                debug!("{} done", count);
+                println!("{} done", count);
                 std::io::stdout().flush()?;
             }
 

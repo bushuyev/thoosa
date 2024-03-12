@@ -8,7 +8,7 @@ use log::{debug, error, info, LevelFilter};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use hbac_motifs::find::{FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
-use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, read_eeg_index, read_motif_to_iter};
+use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, eegs_to_logits_tensors, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
@@ -308,7 +308,7 @@ fn _main() -> Result<(), HbacError> {
             vs.save(format!("{}/corr_model_{}.safetensors", train_on_eeg_params.eeg_models_dir(), train_on_eeg_params.corr_run()))?;
         }
 
-        Some(Commands::TrainFinal(frain_final_params)) => {
+        Some(Commands::TrainFinal(train_final_params)) => {
 
             let mut store_guard = store.lock()?;
 
@@ -323,8 +323,8 @@ fn _main() -> Result<(), HbacError> {
 
 
             let vs = train_final(
-                frain_final_params,
-                eegs_to_labels_tensors(
+                train_final_params,
+                eegs_to_logits_tensors(
                     cli.base_path.as_str(),
                     &labels_kinds,//TODO load from corrs_run
                     &device,
@@ -341,7 +341,7 @@ fn _main() -> Result<(), HbacError> {
                 &device
             )?;
 
-            vs.save(format!("{}/final.safetensors", frain_final_params.eeg_models_dir()))?;
+            vs.save(format!("{}/final.safetensors", train_final_params.models_dir()))?;
         }
 
         None => {}

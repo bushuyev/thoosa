@@ -74,18 +74,6 @@ struct ClassTensorsLoaderDataBatch<I> {
     batch_size: usize
 }
 
-impl <I> ClassTensorsLoaderDataBatch<I> where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
-
-    pub fn new(classes_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
-        Self {
-            classes_tensor_loaders,
-            // cache: VecDeque::with_capacity(batch_size),
-            batch_size: items_per_label
-        }
-    }
-
-}
-
 impl <I> DataBatch for ClassTensorsLoaderDataBatch<I> where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
@@ -98,6 +86,13 @@ impl <I> DataBatch for ClassTensorsLoaderDataBatch<I> where I:Iterator<Item=Resu
 }
 
 impl<I> ClassTensorsLoaderDataBatch<I> where I: Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+    pub fn new(classes_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
+        Self {
+            classes_tensor_loaders,
+            // cache: VecDeque::with_capacity(batch_size),
+            batch_size: items_per_label
+        }
+    }
 
     fn batch(&mut self) -> (Tensor, Tensor) {
         let label_tensors = self.classes_tensor_loaders.iter_mut().enumerate().map(|(label, loaders)| {
@@ -133,7 +128,7 @@ struct ClassTensorsLoaderData<I> {
     current:usize
 }
 
-impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
     pub fn new(classes_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
         Self {
@@ -145,7 +140,7 @@ impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<Tensor, HbacErro
 }
 
 
-impl <I> DataBatch for ClassTensorsLoaderData<I> where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+impl <I> DataBatch for ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
         self.batch()
@@ -156,19 +151,18 @@ impl <I> DataBatch for ClassTensorsLoaderData<I> where I:Iterator<Item=Result<Te
     }
 }
 
-impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
     fn batch(&mut self) -> (Tensor, Tensor) {
         let t = self.classes_tensor_loaders[self.current][0].next().unwrap().unwrap();
 
-        let class = Tensor::from_slice(&[self.current as i64]);
         self.current+=1;
         if self.current == self.classes_tensor_loaders.len() {
             self.current = 0;
         }
         (
-            t,
-            class
+            t.0,
+            t.1
         )
     }
 }
@@ -216,7 +210,6 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     train(
         device,
         &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
-        // &mut ClassTensorsLoaderData::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         &corr_full_node(channels * max_nets *  max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
 
@@ -237,7 +230,8 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
 }
 
 pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<VarStore, HbacError>
-    where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+    where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
+
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
     let mut labels_loaders = labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
@@ -253,6 +247,8 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
 
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, labels_loaders.keys());
 
+    debug!("train_on_eeg: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
+
     let models = load_corr_and_motif_models(params.models_dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?;//TODO num channels
 
     debug!("models.size={:?} models={:?}", models.len(), models);
@@ -267,18 +263,15 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
                     let models = &models;
                     loader_iter.map( move |t|{
                         let t = &t?;
-                        Ok(Tensor::stack(models.iter().map(|model|{
-                            let t = apply_motifs(motif_n, step, t, &model.motif_models, motif_batch_size, channels, max_motif_batches);
+                        Ok((Tensor::stack(models.iter().map(|model|{
+                            let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches);
                             let t_x = t.view((1, -1));
                             debug!("motif models i={} model.corr_run={} t.size()={:?} t_x.size()={:?}", i, model.corr_run, t.size(), t_x.size());
 
                             let t = model.corr_model.lock().unwrap().forward(&t_x);
                             debug!("corr_model {} out .size()={:?}", i, t.size());
                             t
-                        }).collect::<Vec<Tensor>>().as_slice(), 0))
-
-
-
+                        }).collect::<Vec<Tensor>>().as_slice(), 0), t.1.shallow_clone()))
                     })
                 })
                 .collect::<Vec<_>>())
@@ -288,8 +281,8 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
 
     train(
         device,
-        &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
-        // &mut ClassTensorsLoaderData::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
+        // &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
+        &mut ClassTensorsLoaderData::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         &final_node(6, 6).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
 
@@ -301,7 +294,7 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
         params.cycles,
         nn::AdamW::default().build(&vs_0, 1.0e-4)?,
         |t:Tensor|{
-            let t_out = t.view((t.size()[0], -1));
+            let t_out = t.view((t.size()[0]));
             debug!("t.size()={:?} t_out.size()={:?}", t.size(), t_out.size());
             t_out
         }
@@ -401,10 +394,10 @@ fn load_motif_models(motif_models_path: impl AsRef<Path>, corr_run:usize, channe
                 let node = train_nets::motif_node(motif_n).build_tch_module(&vs.root())?;//TODO window
                 vs.load(&motif_path.join(motif))?;
 
-                debug!("load_models: len={:?}", vs.variables().len());
-                for key in  vs.variables().keys() {
-                    debug!("load_models: key={:?}", key);
-                }
+                // debug!("load_models: len={:?}", vs.variables().len());
+                // for key in  vs.variables().keys() {
+                //     debug!("load_models: key={:?}", key);
+                // }
 
                 channels_motifs.push(node);
             }
@@ -496,7 +489,7 @@ pub fn corr_full_node(features: i64) -> Node {
 pub fn final_node(features: i64, classes_num: i64) -> Node {
     SeqBuilder::new(features)
         .linear_s(classes_num)
-        .func(Tensor::sigmoid)
+        // .func(|t|t.softmax(0, Float))
         .end_seq()
 }
 
@@ -696,6 +689,18 @@ pub struct TrainFinalParams {
 
     #[arg(long, default_value = "../../data_local/corr_motif_models")]
     models_dir: String,
+}
+
+impl TrainFinalParams{
+    pub fn cycles(&self) -> usize {
+        self.cycles
+    }
+    pub fn lr(&self) -> f64 {
+        self.lr
+    }
+    pub fn models_dir(&self) -> &str {
+        &self.models_dir
+    }
 }
 
 
@@ -899,6 +904,7 @@ mod train_tests {
         Ok(make_test_eeg(1000))
     }
 
+
     #[test]
     fn test_train_on_eeg() -> Result<(), HbacError> {
         let models_path = Path::new("/tmp/test_train_on_eeg").join(cdt_for_dir());
@@ -1027,7 +1033,8 @@ mod train_tests {
             ].into_iter().map(|(label, kind)|{
 
                 (label, (0..13).map( move |id|{
-                    load_test_tensor(format!("{}-{}-{}", label, kind, id))
+                    debug!("{}-{}-{}", label, kind, id);
+                    Ok((make_test_eeg(1000), Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
                 }))
 
             }).collect::<Vec<_>>(),
