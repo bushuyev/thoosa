@@ -23,8 +23,14 @@ use crate::my_tch::apply_channel_motifs;
 #[derive(Debug, Args)]
 pub struct TrainOnEEGParams {
 
-    #[arg(long, default_value = "/tmp/motif_models")]
+    #[arg(long)]
+    corr_run: usize,
+
+    #[arg(long, default_value = "../../data_local/corr_motif_models")]
     motif_models_dir: String,
+
+    #[arg(long, default_value = "../../data_local/corr_motif_models")]
+    eeg_models_dir: String,
 
     #[arg(long, default_value_t = 1000)]
     cycles: usize,
@@ -33,6 +39,24 @@ pub struct TrainOnEEGParams {
     lr: f64,
 }
 
+impl TrainOnEEGParams {
+    pub fn corr_run(&self) -> usize {
+        self.corr_run
+    }
+    pub fn motif_models_dir(&self) -> &str {
+        &self.motif_models_dir
+    }
+
+    pub fn cycles(&self) -> usize {
+        self.cycles
+    }
+    pub fn lr(&self) -> f64 {
+        self.lr
+    }
+    pub fn eeg_models_dir(&self) -> &str {
+        &self.eeg_models_dir
+    }
+}
 
 fn run_motif_nets<I>(loader: I) where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
     for eeg in loader {
@@ -148,7 +172,7 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<Tensor, HbacErro
     }
 }
 
-pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize ) -> Result<(), HbacError>
+pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<VarStore, HbacError>
     where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
@@ -190,7 +214,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     let mut vs_0 = nn::VarStore::new(Device::Cpu);
 
     train(
-        &Cpu, //TODO
+        device, //TODO
         &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         // &mut ClassTensorsLoaderData::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         &full_node(channels * max_nets *  max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
@@ -210,9 +234,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
         }
     )?;
 
-    vs_0.save("../../data_local/full_model.safetensors")?;
-
-    Ok(())
+    Ok(vs_0)
 }
 
 fn load_models(params: &TrainOnEEGParams, channels:usize, motif_n: i64) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
@@ -261,10 +283,13 @@ pub struct TrainOnMotifsParams {
     #[arg(long)]
     motif_ids: MotifsBy,
 
+    #[arg(long)]
+    corr_run: usize,
+
     #[arg(long,  default_value_t = 1000)]
     window: usize,//should be same as one used when finding motifs or TODO center bigger/smaller window
 
-    #[arg(long, default_value = "/tmp/motif_models")]
+    #[arg(long, default_value = "../data_local/corr_motif_models")]
     output_dir: String,
 
     #[arg(long, default_value_t = 1000)]
@@ -272,6 +297,12 @@ pub struct TrainOnMotifsParams {
 
     #[arg(long, default_value_t = 1.0e-5)]
     lr: f64,
+
+    #[arg(long, default_value_t = 0.2)]
+    max_loss: f32,
+
+    #[arg(long, default_value_t = 0.05)]
+    min_corr: f64,
 }
 
 impl TrainOnMotifsParams {
@@ -293,6 +324,18 @@ impl TrainOnMotifsParams {
 
     pub fn motif_ids(&self) -> &MotifsBy {
         &self.motif_ids
+    }
+
+    pub fn corr_run(&self) -> usize {//TODO should be in MotifsBy
+        self.corr_run
+    }
+
+    pub fn max_loss(&self) -> f32 {
+        self.max_loss
+    }
+
+    pub fn min_corr(&self) -> f64 {
+        self.min_corr
     }
 }
 
@@ -719,9 +762,7 @@ mod train_tests {
         test_model_for_channel(&models_path, "2", 100, "20")?;
 
         super::train_on_eeg(
-
             &params,
-
             vec![
                 (1, "seizure_vote".to_string()),
                 (0, "lpd_vote".to_string()),
@@ -738,7 +779,8 @@ mod train_tests {
 
             }).collect::<Vec<_>>(),
             13, 100, 100, 7, 4,
-            684400
+            684400,
+            &Cpu
         )?;
 
         Ok(())

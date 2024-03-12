@@ -62,6 +62,7 @@ pub trait Store:Sync + Send{
     fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>) -> Result<usize, HbacError>;
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError>;
+    fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError>;
 }
 
 impl Debug for StoreDumper {
@@ -357,6 +358,18 @@ impl Store for SqlStore {
 
         Ok(channel_slices)
     }
+
+    fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError> {
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        let descr:String = t.query_row("SELECT descr FROM corrs_run WHERE id=?", [corr_run_id], |row| row.get(0))?;
+
+        println!("descr={:?}", descr);
+
+        parse_corr_labels(descr.as_str())
+
+    }
 }
 
 
@@ -518,7 +531,7 @@ mod store_tests{
 
         assert_eq!(vec!["aaa".to_owned(), "bbb".to_owned()], store.list_run_resources(run_id)?);
 
-        let corr_id = store.save_motifs_corrs("test", vec![vec![(1, 0.1), (2, 0.2)]])?;
+        let corr_id = store.save_motifs_corrs("[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]", vec![vec![(1, 0.1), (2, 0.2)]])?;
 
         let motifs = store.list_corr_motifs(corr_id)?;
 
@@ -556,6 +569,13 @@ mod store_tests{
                 TensorSliceIdx(3, 100), TensorSliceIdx(3, 200), TensorSliceIdx(5, 200), TensorSliceIdx(5, 300)
             ], slices);
         }
+
+        // println!("corrs_descr={:?}", store.corrs_descr(corr_id)?);
+
+        assert_eq!(
+            vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
+            store.corrs_descr(corr_id)?
+        );
 
         Ok(())
     }

@@ -7,6 +7,7 @@ use std::error::Error;
 use std::f32::consts::PI;
 use std::ops::Mul;
 use rand::Rng;
+use regex::Regex;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
@@ -289,6 +290,10 @@ pub fn batch_windows(input_n: usize, motif_n: usize, step: usize, batch_size: us
     })
 }
 
+pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, HbacError> {
+    let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)?;//TODO const
+    Ok(re.captures_iter(descr).map(|caps| (caps["id"].parse::<i64>().expect(&caps["id"]), caps["kind"].into())).collect::<Vec<(i64, String)>>())
+}
 
 
 
@@ -308,7 +313,7 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use crate::{group_slices, batch_windows};
+    use crate::{group_slices, batch_windows, HbacError};
 
     #[test]
     fn test_group_motifs(){
@@ -393,5 +398,15 @@ mod shared_tests {
         assert_eq!(vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900], folds.0[1]);
         assert_eq!(vec![2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900], folds.0[2]);
         assert_eq!(vec![3000, 3100, 3200, 3300, 3400], folds.1)
+    }
+
+    #[test]
+    fn test_parse_corr_labels()  -> Result<(), HbacError>{
+        assert_eq!(
+            vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
+            super::parse_corr_labels("[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]")?
+        );
+
+        Ok(())
     }
 }

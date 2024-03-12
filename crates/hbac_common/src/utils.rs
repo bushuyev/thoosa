@@ -366,7 +366,7 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
 
                 let valid_loss = loss_fn(&pred_y, &y_t);
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss.double_value(&[]) as f32;
-                debug!("train: vaid loss={:?}, valid loss={:?} avg loss={}", loss, valid_loss, last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+                info!("train: vaid loss={:?}, valid loss={:?} avg loss={}", loss, valid_loss, last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
                 std::io::stdout().flush().unwrap();
             }
 

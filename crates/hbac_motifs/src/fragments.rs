@@ -417,6 +417,7 @@ pub fn check_fragments(from: &impl AsRef<std::path::Path>,)->Result<(), HbacErro
 }
 
 
+
 #[cfg(test)]
 mod motifs_tests {
     use tch::IndexOp;
@@ -429,6 +430,7 @@ mod motifs_tests {
     use hbac_shared::MotifSlice;
     use rayon::iter::ParallelIterator;
     use rayon::iter::ParallelBridge;
+    use regex::Regex;
     use hbac_common::train_nets::ClassTensorsDataBatch;
     use hbac_common::utils::*;
 
@@ -726,7 +728,6 @@ mod motifs_tests {
 
         Ok(())
     }
-
 
     #[test]
     fn test_test() -> Result<(), HbacError>{

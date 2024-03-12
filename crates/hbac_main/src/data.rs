@@ -561,8 +561,7 @@ fn eeg_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tenso
     Ok(tensor.to_device(device))
 }
 
-pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64, String)>, device: &'a Device, limit:Option<&'a usize>) -> Vec<(i64, impl Iterator<Item=Result<Tensor, HbacError>> + Send + Sync + 'a)>
-    {
+pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64, String)>, device: &'a Device, limit:Option<&'a usize>) -> Vec<(i64, impl Iterator<Item=Result<Tensor, HbacError>> + Send + Sync + 'a)> {
 
     labels_kinds.into_iter().map(|label_tensors_path| {
 

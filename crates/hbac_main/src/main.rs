@@ -229,17 +229,19 @@ fn _main() -> Result<(), HbacError> {
             let motifs_iter = {
                 let mut store_guard = store.lock()?;
 
-                fs::create_dir_all(train_on_motif_params.output_dir());
-
                 // for motif_id in train_on_motif_params.motif_ids() {
-                store_guard.list_corr_motifs(1)?//TODO param
+                store_guard.list_corr_motifs(train_on_motif_params.corr_run())?//TODO param
                     .into_iter()
                     .flat_map(|channel_motifs|channel_motifs.into_iter())
-                    .filter(|(motif_id, corr)| *corr > 0.05)
+                    .filter(|(motif_id, corr)| *corr > train_on_motif_params.min_corr())
                     .map(|(motif_id, corr)|motif_id)
             };
 
             let node = train_nets::motif_node(train_on_motif_params.window() as i64);
+
+            let output_dir = Path::new(train_on_motif_params.output_dir()).join(format!("corr_run_{}", train_on_motif_params.corr_run()));
+
+            fs::create_dir_all(&output_dir);
 
             for motif_id in motifs_iter {
 
@@ -250,8 +252,9 @@ fn _main() -> Result<(), HbacError> {
 
                 debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
-
                 let all_sices_1 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+
+
 
                 let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, Some(all_sices_1.len()), Some((run_id, channel as usize)))?;
 
@@ -259,17 +262,17 @@ fn _main() -> Result<(), HbacError> {
 
                 let all_sices_0 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
 
-                debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
 
+                debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
 
                 let (loss, mut vs) = train_nets::train_on_motif(all_sices_0, all_sices_1, train_on_motif_params, device, &node)?;
 
                 debug!("train_on_motif: motif_id={} loss={}", motif_id, loss);
 
-                if loss < 0.2 {
+                if loss < train_on_motif_params.max_loss() {
                     info!("train_on_motif: savgin motif_id={} loss={}", motif_id, loss);
 
-                    let channel_models = Path::new(train_on_motif_params.output_dir()).join(channel.to_string());
+                    let channel_models = output_dir.join(channel.to_string());
                     fs::create_dir_all(&channel_models);
 
                     vs.save(channel_models.join(format!("{}_{:3}.safetensors", motif_id, loss)))?;
@@ -279,11 +282,15 @@ fn _main() -> Result<(), HbacError> {
 
         Some(TrainOnEEG(train_on_eeg_params)) => {
 
-            train_on_eeg(
+            let mut store_guard = store.lock()?;
+
+            let labels_kinds = store_guard.corrs_descr(train_on_eeg_params.corr_run())?;
+
+            let vs = train_on_eeg(
                 train_on_eeg_params,
                 eegs_to_labels_tensors(
                     cli.base_path.as_str(),
-                    &vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],//TODO load from corrs_run
+                    &labels_kinds,//TODO load from corrs_run
                     &device,
                     cli.limit.as_ref()
                     //684400 - TODO cut at max_input
@@ -293,8 +300,11 @@ fn _main() -> Result<(), HbacError> {
                 100,
                 100,
                 20,
-                684400
+                684400,
+                &device
             )?;
+
+            vs.save(format!("{}/full_model_{}.safetensors", train_on_eeg_params.eeg_models_dir(), train_on_eeg_params.corr_run()))?;
         }
 
         None => {}
@@ -308,10 +318,12 @@ fn _main() -> Result<(), HbacError> {
 mod main_tests {
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
-    use crate::data::{read_eeg_index, read_motif_to_iter_imp};
+    use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
 
     #[test]
     fn test_it() -> Result<(), HbacError>{
+
+        // clc_records()
         // debug!("XXXXXXXXXXXXXXXXX");
         // main();
         // EEGs::good_eegs_of("../../data/", "seizure_vote", Some(10))?.i64()?.into_iter().enumerate().map(|(i, v):(usize, Option<i64>)|{
