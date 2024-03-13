@@ -25,12 +25,12 @@ use rand::{Rng, thread_rng};
 use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use regex::Regex;
-use tch::{Device, Kind, Tensor};
+use tch::{Device, IndexOp, Kind, Tensor};
 use hbac_shared::HbacError;
 use hbac_shared::MotifSlice;
 use hbac_shared::TensorSliceIdx;
 
-use hbac_common::utils::DataBatch;
+use hbac_common::utils::{DataBatch, from};
 use crate::data;
 
 
@@ -698,6 +698,25 @@ pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), Hba
 
 }
 
+pub fn save_tensor(columns:&[&str], ids:Vec<i64>, t:&Tensor, path: &str) {
+    assert_eq!(t.size().len(), 2);
+    assert_eq!(t.size()[1] as usize, columns.len() - 1);
+
+    let mut df = DataFrame::new(
+        [
+            vec![Series::new(columns[0], ids)],
+
+            columns.into_iter().skip(1).enumerate().map(move |(i, c)| {
+                Series::new(c, from::<Vec<f32>>(&t.i((.., i as i64))).as_slice())
+            }).collect()
+        ].concat()
+    ).unwrap();
+
+
+    let mut file = std::fs::File::create(path).unwrap();
+    CsvWriter::new(&mut file).finish(&mut df).unwrap();
+
+}
 
 #[cfg(test)]
 mod data_tests {
@@ -715,6 +734,8 @@ mod data_tests {
     use rand::seq::SliceRandom;
     use rand::thread_rng;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
+    use tch::Device::Cpu;
+    use tch::Kind::Float;
     use tch::Tensor;
     use hbac_shared::MotifSlice;
     use hbac_common::utils::*;
@@ -1167,6 +1188,49 @@ mod data_tests {
     //
     //     Ok(())
     // }
+
+
+    #[test]
+    fn test_save_tensor() -> Result<(), HbacError>{
+        let t = Tensor::randn([3, 6], (Float, Cpu));
+        // let t = Tensor::stack(&[
+        //     Tensor::from_slice((0..7).map(|v|v as f64).collect::<Vec<f64>>().as_slice()),
+        //     Tensor::from_slice((0..7).map(|v|v as f64*10.).collect::<Vec<f64>>().as_slice()),
+        //     Tensor::from_slice((0..7).map(|v|v as f64*100.).collect::<Vec<f64>>().as_slice())
+        // ], 0);
+        let path = "/tmp/sub.csv";
+        let ids = vec![111, 222, 333];
+        super::save_tensor(
+            &["eeg_id","seizure_vote","lpd_vote","gpd_vote","lrda_vote","grda_vote","other_vote"],
+            ids.clone(),
+            &t,
+            path
+        );
+
+        let lf = LazyCsvReader::new(path).finish().unwrap().collect()?;
+        let mut checked = 0;
+        for (column_i, column) in lf.get_columns().iter().enumerate() {
+            if column_i == 0 {
+             for (row_i, v) in column.i64()?.into_iter().enumerate() {
+                 assert_eq!(ids[row_i], v.unwrap());
+                 checked += 1;
+             }
+
+            } else {
+                for (row_i, v) in column.f64()?.into_iter().enumerate() {
+                    assert_eq!(
+                        format!("{:.3}", t.i((row_i as i64, column_i as i64-1)).double_value(&[])),
+                        format!("{:.3}", v.unwrap())
+                    );
+                    checked += 1;
+                }
+            }
+
+        }
+        assert_eq!(checked, 21);
+
+        Ok(())
+    }
     #[test]
     pub fn test_test()-> Result<(), HbacError> {
         // let good_eegs = EEGs::good_eegs("../../data")?;
@@ -1182,26 +1246,26 @@ mod data_tests {
 
         // good_eegs
 
-        let df = LazyCsvReader::new(format!("{}/train.csv", "../../data"))
-            .finish()?
-            .with_streaming(true)
-            .group_by([col("eeg_id")])
-            .agg([
-                col("seizure_vote").first(),
-                col("lpd_vote").first(),
-                col("gpd_vote").first(),
-                col("lrda_vote").first(),
-                col("grda_vote").first(),
-                col("other_vote").first(),
-            ])
-            .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
-            .filter(
-                col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
-                    // .and(col("seizure_vote").gt(lit(0)))
-            )
-            .collect()?;
-
-        println!("{:?}", df.head(Some(100)));
+        // let df = LazyCsvReader::new(format!("{}/train.csv", "../../data"))
+        //     .finish()?
+        //     .with_streaming(true)
+        //     .group_by([col("eeg_id")])
+        //     .agg([
+        //         col("seizure_vote").first(),
+        //         col("lpd_vote").first(),
+        //         col("gpd_vote").first(),
+        //         col("lrda_vote").first(),
+        //         col("grda_vote").first(),
+        //         col("other_vote").first(),
+        //     ])
+        //     .with_column(concat_list(["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])?.alias("all_votes").alias("all_votes"))
+        //     .filter(
+        //         col("all_votes").list().max().alias("max").eq(col("all_votes").list().sum().alias("sum"))
+        //             // .and(col("seizure_vote").gt(lit(0)))
+        //     )
+        //     .collect()?;
+        //
+        // println!("{:?}", df.head(Some(100)));
 
         // let eeg_id_series = EEGs::good_eegs_of("../../data", "seizure_vote")?;
         //

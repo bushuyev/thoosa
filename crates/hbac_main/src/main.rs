@@ -4,7 +4,7 @@ use std::cmp::max;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::str::FromStr;
-use log::{debug, error, info, LevelFilter};
+use log::{debug, error, info, LevelFilter, warn};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use hbac_motifs::find::{FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
@@ -24,7 +24,7 @@ use std::time::Instant;
 use plotters::prelude::BLACK;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
 use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final};
+use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams};
 use hbac_common::simp::DummyDs;
 use hbac_common::train_nets;
 use hbac_store::{SqlStore, Store};
@@ -78,6 +78,7 @@ enum Commands {
     TrainOnMotifs(TrainOnMotifsParams),
     TrainOnEEG(TrainOnEEGParams),
     TrainFinal(TrainFinalParams),
+    Infer(InferParams),
 }
 
 
@@ -310,8 +311,6 @@ fn _main() -> Result<(), HbacError> {
 
         Some(Commands::TrainFinal(train_final_params)) => {
 
-            let mut store_guard = store.lock()?;
-
             let labels_kinds = vec![
                 (0, "seizure_vote".to_string()),
                 (1, "lpd_vote".to_string()),
@@ -320,7 +319,6 @@ fn _main() -> Result<(), HbacError> {
                 (4, "grda_vote".to_string()),
                 (5, "other_vote".to_string())
             ];
-
 
             let vs = train_final(
                 train_final_params,
@@ -344,7 +342,12 @@ fn _main() -> Result<(), HbacError> {
             vs.save(format!("{}/final.safetensors", train_final_params.models_dir()))?;
         }
 
-        None => {}
+        Some(Commands::Infer(infer_params)) => {
+            // data::eeg_to_tensor,
+        }
+        None => {
+            warn!("No command");
+        }
     }
 
     Ok(())
