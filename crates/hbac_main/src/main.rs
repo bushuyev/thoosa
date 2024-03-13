@@ -1,3 +1,5 @@
+extern crate core;
+
 use std::backtrace::Backtrace;
 use std::{env, fs};
 use std::cmp::max;
@@ -22,9 +24,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use plotters::prelude::BLACK;
+use tch::Device::Cpu;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
 use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams};
+use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams, infer};
 use hbac_common::simp::DummyDs;
 use hbac_common::train_nets;
 use hbac_store::{SqlStore, Store};
@@ -343,7 +346,26 @@ fn _main() -> Result<(), HbacError> {
         }
 
         Some(Commands::Infer(infer_params)) => {
-            // data::eeg_to_tensor,
+            let t = infer(
+                &infer_params,
+                |path:&Path|{
+                    data::eeg_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), device)
+                },
+                1000,
+                100,
+                100,
+                20,
+                684400,
+                &device,
+            )?;
+
+            data::save_tensor(
+                &["eeg_id","seizure_vote","lpd_vote","gpd_vote","lrda_vote","grda_vote","other_vote"],
+                t.0,
+                &t.1,
+                infer_params.output()
+            )
+
         }
         None => {
             warn!("No command");

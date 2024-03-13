@@ -198,7 +198,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
                 .into_iter()
                 .map(|l|{
                     l.map(|t|{
-                        Ok(apply_motifs(motif_n, step, &t.unwrap(), &motif_nets, motif_batch_size, channels, max_motif_batches))
+                        Ok(apply_motifs(motif_n, step, &t.unwrap(), &motif_nets, motif_batch_size, channels, max_motif_batches, device))
                     })
                 })
                 .collect::<Vec<_>>())
@@ -262,7 +262,7 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
                     loader_iter.map( move |t|{
                         let t = &t?;
                         Ok((Tensor::stack(models.iter().map(|model|{
-                            let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches);
+                            let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
                             let t_x = t.view((1, -1));
                             debug!("motif models i={} model.corr_run={} t.size()={:?} t_x.size()={:?}", i, model.corr_run, t.size(), t_x.size());
 
@@ -301,8 +301,8 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
     Ok(vs_0)
 }
 
-pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<Tensor, HbacError>
-    where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync{
+pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<(Vec<String>, Tensor), HbacError>
+    where F:Fn(&Path) -> Result<Tensor, HbacError> + Sync{
 
     let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
@@ -318,16 +318,14 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
 
     debug!("infer: params.input_data={:?} corr_models.len()={}", params.input_data, corr_models.len());
 
-
-
-    Ok(Tensor::vstack(fs::read_dir(&params.input_data)?.par_bridge().map(|eeg| {
+    let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|eeg| {
         let eeg = eeg.expect("file: ");
 
-        let t = eeg_to_tensor(params.input_data.as_str(), eeg.file_name().to_str().unwrap(), *device).expect("eeg");
+        let t = eeg_to_tensor(eeg.path().as_path()).expect("eeg");
         debug!("infer: t.size={:?}", t.size());
 
         let t = Tensor::stack(corr_models.iter().enumerate().map(|(model_i, model)| {
-            let t = apply_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, channels, max_motif_batches);
+            let t = apply_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
             let t_x = t.view((1, -1));
             debug!("infer: motif models model_i={} model.corr_run={} t.size()={:?} t_x.size()={:?}", model_i, model.corr_run, t.size(), t_x.size());
 
@@ -338,14 +336,23 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
 
         debug!("infer: t.size()={:?}", t.size());
 
-        let pred = final_model.lock().expect("lock").forward(&t.transpose(0,1)); //for single eeg
+        let pred = final_model.lock().expect("lock").forward(&t.transpose(0, 1)); //for single eeg
 
+        let pred= pred.softmax(1, Float);
         debug!("infer: pred={:?}", pred.size());
         // debug!("infer: pred={:?}", from::<Vec<f32>>(&pred));
+        (
+            eeg.path().file_stem().unwrap().to_str().unwrap().to_string(),
+            pred
+        )
+    }).collect::<Vec<(String, Tensor)>>();
 
-        pred
-
-    }).collect::<Vec<Tensor>>().as_slice()))
+    let (ids, tensors) = tensors_ids.into_iter().fold((vec![], vec![]), |mut a, v|{
+        a.0.push(v.0);
+        a.1.push(v.1);
+        a
+    });
+    Ok((ids, Tensor::vstack(tensors.as_slice())))
 
 }
 
@@ -710,7 +717,7 @@ impl From<&str> for MotifsBy {
     }
 }
 
-fn apply_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, channels: i64, max_motif_batches: usize) -> Tensor {
+fn apply_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, channels: i64, max_motif_batches: usize, device: &Device) -> Tensor {
     let max_nets = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
 
     debug!("apply_motifs: max_motif_nets_in_channel={:?} motif_batch_size={:?} max_motif_batches={:?}, ", max_nets, motif_batch_size, max_motif_batches);
@@ -719,7 +726,7 @@ fn apply_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<
         motif_nets
             .iter()
             .enumerate()
-            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches))
+            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches, device))
             // .map(|t|pad_to(&t, &[max_motif_batches as i64, max_in_fold as i64]).unwrap())
             .collect::<Vec<_>>().as_slice(),
         0
@@ -770,6 +777,21 @@ pub struct InferParams {
 
     #[arg(long, default_value = "submission.csv")]
     output: String,
+}
+
+impl InferParams {
+    pub fn models_dir(&self) -> &str {
+        &self.models_dir
+    }
+    pub fn final_model(&self) -> &Option<String> {
+        &self.final_model
+    }
+    pub fn input_data(&self) -> &str {
+        &self.input_data
+    }
+    pub fn output(&self) -> &str {
+        &self.output
+    }
 }
 
 
@@ -872,7 +894,7 @@ mod train_tests {
         let motif_batches = batch_windows(input_n as usize, motif_n as usize, step, batch_size);
         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
-        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], eeg_t.i((0, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches);
+        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], eeg_t.i((0, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
 
         let channel_0_motifs = Tensor::stack(&[
@@ -883,7 +905,7 @@ mod train_tests {
         assert_eq!(
             channel_0_motifs, channel_0_t);
 
-        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches);
+        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
         println!("max_motif_batches={:?}", max_motif_batches);
 
@@ -898,7 +920,7 @@ mod train_tests {
 
         println!("channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
-        let channels_motifs = super::apply_motifs(motif_n, step, &eeg_t, &motif_nets, batch_size as i64, 2, max_motif_batches);
+        let channels_motifs = super::apply_motifs(motif_n, step, &eeg_t, &motif_nets, batch_size as i64, 2, max_motif_batches, &Cpu);
 
         assert_eq!(
             Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
@@ -939,7 +961,7 @@ mod train_tests {
              (motif_batches.0.iter().map(|v|v.len()).sum::<usize>() + motif_batches.1.len()) as i64 // (input_n - motif_n)/ step
          ], (Float, Cpu));
 
-        let channels_motifs_0 = super::apply_motifs(motif_n, step, &eeg_t_0, &motif_nets, motif_batch_size, 2, max_motif_batches);
+        let channels_motifs_0 = super::apply_motifs(motif_n, step, &eeg_t_0, &motif_nets, motif_batch_size, 2, max_motif_batches, &Cpu);
 
         println!("channels_motifs_0.size={:?}", channels_motifs_0.size());
 
@@ -949,7 +971,7 @@ mod train_tests {
                                          (motif_batches.0.iter().map(|v|v.len()).sum::<usize>() + motif_batches.1.len()) as i64 // (input_n - motif_n)/ step
                                      ], (Float, Cpu));
 
-        let channels_motifs_1 = super::apply_motifs(motif_n, step, &eeg_t_1, &motif_nets, motif_batch_size, 2, max_motif_batches);
+        let channels_motifs_1 = super::apply_motifs(motif_n, step, &eeg_t_1, &motif_nets, motif_batch_size, 2, max_motif_batches, &Cpu);
 
         println!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
@@ -1149,8 +1171,8 @@ mod train_tests {
         }
 
 
-        fn test_eeg_to_t(base_dir:&str, eeg_id:&str, _:Device) -> Result<Tensor, HbacError> {
-            debug!("test_eeg_to_t: base_dir={:?}, eeg_id={:?}", base_dir, eeg_id);
+        fn test_eeg_to_t(path:&Path) -> Result<Tensor, HbacError> {
+            debug!("test_eeg_to_t: path={:?}", path);
 
             let t = Tensor::vstack(&[
                 Tensor::rand((600), (Float, Cpu)),
@@ -1181,9 +1203,9 @@ mod train_tests {
             &Cpu,
         )?;
 
-        debug!("t={:?}", t.size());
+        debug!("t={:?}", t.1.size());
 
-        assert_eq!((10,6), t.size());
+        assert_eq!(vec![10,6], t.1.size());
 
         Ok(())
     }

@@ -281,7 +281,7 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
 
 
 
-pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
+pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let input_t_size = eeg_t_channel.size();
     debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", eeg_t_channel.size(), input_t_size, nets.len());
@@ -297,7 +297,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     let folds_len = folds.0.len();
     if nets.len() == 0 {
         //if no 'main' folds build motifs on remainder
-        return Tensor::zeros([max_nets as i64, max_motif_batches as i64, motif_batch_size as i64], (Float, Cpu));
+        return Tensor::zeros([max_nets as i64, max_motif_batches as i64, motif_batch_size as i64], (Float, *device));
     }
 
     let nets_len = nets.len();
@@ -349,11 +349,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     });
     let mut net_tensors = net_tensors_vec.into_iter().map(|net_batches| Tensor::stack(net_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
     debug!("apply_channel_motifs: net_tensors.len()={:?} sizes={:?}", net_tensors.len(), net_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
-    // let zero_t = Tensor::zeros([max_motif_batches as i64, motif_batch_size as i64], (Kind::Float, Device::Cpu));
 
-    // (net_tensors.len()..max_nets as usize).for_each(|_|{
-    //     net_tensors.push(Tensor::zeros([max_motif_batches as i64, motif_batch_size as i64], (Float, Cpu)));
-    // });
 
     let nets_t = Tensor::stack(
         net_tensors.as_slice(),
@@ -714,7 +710,7 @@ mod tch_tests {
             };
 
 
-            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, 0, max_folds)
+            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, 0, max_folds, &Cpu)
 
         }).collect::<Vec<Tensor>>();
 

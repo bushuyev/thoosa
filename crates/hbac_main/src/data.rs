@@ -553,7 +553,7 @@ pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Te
     eeg_to_tensor_by_path(path, device)
 }
 
-fn eeg_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
+pub fn eeg_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
     let df = read_eeg_to_df(path)?;
 
     let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>());
@@ -698,7 +698,7 @@ pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), Hba
 
 }
 
-pub fn save_tensor(columns:&[&str], ids:Vec<i64>, t:&Tensor, path: &str) {
+pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
     assert_eq!(t.size().len(), 2);
     assert_eq!(t.size()[1] as usize, columns.len() - 1);
 
@@ -1199,7 +1199,7 @@ mod data_tests {
         //     Tensor::from_slice((0..7).map(|v|v as f64*100.).collect::<Vec<f64>>().as_slice())
         // ], 0);
         let path = "/tmp/sub.csv";
-        let ids = vec![111, 222, 333];
+        let ids = vec!["a111".to_string(), "b222".to_string(), "c333".to_string()];
         super::save_tensor(
             &["eeg_id","seizure_vote","lpd_vote","gpd_vote","lrda_vote","grda_vote","other_vote"],
             ids.clone(),
@@ -1211,7 +1211,7 @@ mod data_tests {
         let mut checked = 0;
         for (column_i, column) in lf.get_columns().iter().enumerate() {
             if column_i == 0 {
-             for (row_i, v) in column.i64()?.into_iter().enumerate() {
+             for (row_i, v) in column.str()?.into_iter().enumerate() {
                  assert_eq!(ids[row_i], v.unwrap());
                  checked += 1;
              }
