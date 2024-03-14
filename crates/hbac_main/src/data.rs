@@ -547,13 +547,13 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
     df.partition_by(&["frag_id"], false)
 }
 
-pub fn eeg_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
+pub fn parquet_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
     let path = format!("{}/train_eegs/{}.parquet", base_path, eeg_id);
 
-    eeg_to_tensor_by_path(path, device)
+    parquet_to_tensor_by_path(path, device)
 }
 
-pub fn eeg_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
+pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
     let df = read_eeg_to_df(path)?;
 
     let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>());
@@ -574,7 +574,7 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64,
         (
             label_tensors_path.0,
             eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
-                eeg_to_tensor(base_path, eeg_id.as_str(), *device)
+                parquet_to_tensor(base_path, eeg_id.as_str(), *device)
             })
         )//(label, path)
 
@@ -594,7 +594,7 @@ pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64,
         (
             label_tensors_path.0,
             eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
-                eeg_to_tensor(base_path, eeg_id.as_str(), *device).map(|v|(v, Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
+                parquet_to_tensor(base_path, eeg_id.as_str(), *device).map(|v|(v, Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
             })
         )//(label, path)
 
@@ -799,8 +799,8 @@ mod data_tests {
     pub fn test_plot_eeg_tensor() -> Result<(), HbacError> {
         // println!("tensor={:?}", tensor.size());
 
-        let t_0 = data::eeg_to_tensor("../../data", "1628180742", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
-        let t_1 = data::eeg_to_tensor("../../data", "1019408895", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
+        let t_0 = data::parquet_to_tensor("../../data", "1628180742", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
+        let t_1 = data::parquet_to_tensor("../../data", "1019408895", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
 
         // println!("tensor={:?}", tensor.size());
 
@@ -975,7 +975,7 @@ mod data_tests {
         let eeg_id = "4454049";
 
         let t1 = Instant::now();
-        let t = data::eeg_to_tensor(base_path, eeg_id, Device::Cpu)?;
+        let t = data::parquet_to_tensor(base_path, eeg_id, Device::Cpu)?;
 
         // t.save(format!("../../data_local/tensor_eegs/{}.pt", eeg_id));
 
@@ -1099,7 +1099,7 @@ mod data_tests {
             // );
             // std::io::stdout().flush()?;
 
-            let t = data::eeg_to_tensor("../../data", eeg_id.to_string().as_str(), Device::Cpu)?;
+            let t = data::parquet_to_tensor("../../data", eeg_id.to_string().as_str(), Device::Cpu)?;
 
             let path = format!("{}/{}_{}_{}_{}_{}_{}_{}.pt", "/media/bu/KINGSTON/all_eegs.pt",
                      eeg_id,
@@ -1162,7 +1162,7 @@ mod data_tests {
         for eeg_file in read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?.1{
             println!("{:?}", eeg_file);
 
-            let t = data::eeg_to_tensor("../../data/", eeg_file.as_str(), Device::Cpu)?;
+            let t = data::parquet_to_tensor("../../data/", eeg_file.as_str(), Device::Cpu)?;
 
             t.save(format!("../../data_local/seizure_vote_eegs_pts/{}.pt", eeg_file));
         }

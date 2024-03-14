@@ -141,7 +141,7 @@ fn _main() -> Result<(), HbacError> {
 
             find::find_motifs(
                 move |key: &String| {
-                    Box::new(data::eeg_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
+                    Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
                 },
                 find_motifs_params,
                 records_num,
@@ -155,7 +155,7 @@ fn _main() -> Result<(), HbacError> {
 
             let (channel, run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
 
-            let slices = load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device);
+            let slices = load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::parquet_to_tensor, device);
 
             let all_sices = slices.iter().flat_map(|(eeg_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
@@ -179,7 +179,7 @@ fn _main() -> Result<(), HbacError> {
                 cli.base_path.as_str(),
                 store_guard.motifs_to_eeg_slices(choose_fragments_params.run_id())?,
                 store_guard.list_run_resources(choose_fragments_params.run_id())?,
-                data::eeg_to_tensor,
+                data::parquet_to_tensor,
                 choose_fragments_params.window(),
                 20,
                 device
@@ -199,7 +199,7 @@ fn _main() -> Result<(), HbacError> {
                 cli.base_path.as_str(),
                 store_guard.motifs_to_eeg_slices(select_motifs_params.run_id())?,
                 store_guard.list_run_resources(select_motifs_params.run_id())?,
-                data::eeg_to_tensor,
+                data::parquet_to_tensor,
                 select_motifs_params.window() as i64,
                 20,
                 device
@@ -257,7 +257,7 @@ fn _main() -> Result<(), HbacError> {
 
                 debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
-                let all_sices_1 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+                let all_sices_1 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::parquet_to_tensor, device));
 
 
 
@@ -265,7 +265,7 @@ fn _main() -> Result<(), HbacError> {
 
                 debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
-                let all_sices_0 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::eeg_to_tensor, device));
+                let all_sices_0 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::parquet_to_tensor, device));
 
 
                 debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
@@ -349,7 +349,7 @@ fn _main() -> Result<(), HbacError> {
             let t = infer(
                 &infer_params,
                 |path:&Path|{
-                    data::eeg_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), device)
+                    data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), device)
                 },
                 1000,
                 100,

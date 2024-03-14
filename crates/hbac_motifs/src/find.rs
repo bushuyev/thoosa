@@ -73,7 +73,7 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:usize, eegs:
     let min_dot = (0..20).map(|_| cli.min_dot).collect::<Vec<f32>>();
     let run_id = { store.lock()?.save_run(format!("find motifs in {} with min dots: {:?}", cli.kind, min_dot).as_str(), &eeg_ids_str)}?;
 
-    let all_mt = min_dot
+    let all_motif_trackers = min_dot
         .into_iter()
         .enumerate()
         .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))))//TODO name
@@ -94,12 +94,12 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:usize, eegs:
 
                 debug!("t_s_0.1.size()={:?}, t_s_0.1.device()={:?}, t_s_1.1.size()={:?}, t_s_1.1.device()={:?} dp.size()={:?}, dp.device()={:?}", t_s_0.1.size(), t_s_0.1.device(), t_s_1.1.size(), t_s_1.1.device(), dp.size(), dp.device());
 
-                for (channel, mt) in all_mt.iter().enumerate() {
+                for (channel, mt) in all_motif_trackers.iter().enumerate() {
                     mt.lock().expect("mt").track(t_s_0.0, t_s_1.0, dp.double_value(&[channel as i64]) as f32);
                 }
 
                 if slots_processed > 0 && slots_processed % 10_000 == 0 {
-                    for (i, mt) in all_mt.iter().enumerate() {
+                    for (i, mt) in all_motif_trackers.iter().enumerate() {
                         mt.lock().expect("mt").dump();
                     }
 
@@ -114,7 +114,7 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:usize, eegs:
         };
     });
 
-    for (i, mt) in all_mt.iter().enumerate() {
+    for (i, mt) in all_motif_trackers.iter().enumerate() {
         mt.lock().expect("mt").dump();
     }
 
