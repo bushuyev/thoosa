@@ -15,7 +15,7 @@ use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::Series;
-use hbac_common::utils::{cdt, DataBatch, dot_norm, from, norm_2, plot_series};
+use hbac_common::utils::{cdt, DataBatch, dot_norm, from, load_tensor, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
 use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
@@ -47,6 +47,9 @@ mod version;
 struct Cli {
     #[arg(long, default_value="../../data")]
     base_path: String,
+
+    #[arg(long)]
+    tensors_path: Option<String>,
 
     #[arg(long, default_value="hbac.db3")]
     store_path: String,
@@ -141,12 +144,17 @@ fn _main() -> Result<(), HbacError> {
 
             find::find_motifs(
                 move |key: &String| {
-                    Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
+                    if let Some(tensors_path) = cli.tensors_path.as_ref() {
+                        Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
+                    } else {
+                        Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
+                    }
+
                 },
                 find_motifs_params,
                 records_num,
                 eeg_id_series.i64()?.into_iter(),
-                Arc::clone(&store)
+                Arc::clone(&store), 20
             )?;
         }
 

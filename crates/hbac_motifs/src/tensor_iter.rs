@@ -250,24 +250,25 @@ impl TensorsStore for CacheOnThreadsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
         let preload_d = self.preload_d.load(Ordering::Relaxed);
 
-        if index + preload_d < self.keys.len() && index % preload_d == 0 {
+        if self.cache.is_empty() || (index + preload_d < self.keys.len() && index % preload_d == 0){
             debug!("1. get_tensor: index={}", index);
 
+            let key = self.index_to_key(index).clone();
             self.cache.preload_and_blocking_get(
 
-                &self.index_to_key(index).clone(),
+                &key,
                 (index..index + preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
 
-            ).ok_or(HbacError::new("no tensor".into()))
+            ).ok_or_else(||HbacError::new(format!("no tensor at {:?}/{:?} on preload_and_blocking_get", index, key)))
 
         } else {
             debug!("2. get_tensor: index={}", index);
 
+            let key = self.index_to_key(index).clone();
             self.cache.blocking_get(
+                &key
 
-                &self.index_to_key(index).clone()
-
-            ).ok_or(HbacError::new("no tensor".into()))
+            ).ok_or_else(||HbacError::new(format!("no tensor at {:?}/{:?} on blocking_get", index, key)))
         }
     }
 

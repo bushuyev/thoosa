@@ -16,6 +16,8 @@ use log::{debug, info, trace, warn};
 use crate::my_tch::{Fp, LossFp};
 use tch::nn::Optimizer;
 use tch::IndexOp;
+use tch::Kind::Float;
+
 
 pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -154,7 +156,8 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
-pub fn cdt_for_dir() ->String {
+
+pub fn cdt_for_dir() ->String {//TODO move to shared
     cdt().replace(':', "_").replace('+', "_")
 }
 
@@ -192,11 +195,17 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
 
 }
 
+pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
+    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id))).map_err(|e|HbacError::new(e.to_string()))
+}
+
+
 #[cfg(test)]
 pub mod tests {
+    use std::fs;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::Tensor;
+    use tch::{Device, Tensor};
     use hbac_shared::HbacError;
 
     #[test]
@@ -270,8 +279,27 @@ pub mod tests {
 
         Ok(())
     }
-}
 
+
+    #[test]
+    fn test_save_and_load()  -> Result<(), HbacError>{
+
+        let base_path = format!("/tmp/test_test_save_and_load/{}", super::cdt_for_dir());
+        fs::create_dir_all(&base_path)?;
+
+        let id = "1000913311";
+
+        let sample = Tensor::rand(&[3, 3], (Float, Cpu));
+
+        sample.save(format!("{}/{}.pt", base_path.as_str(), id));
+
+        let loaded = super::load_tensor(base_path.as_str(), id, Cpu)?;
+
+        assert_eq!(sample, loaded);
+
+        Ok(())
+    }
+}
 
 pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
 
@@ -314,6 +342,8 @@ pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
 pub fn lin_t(n: i64) -> Tensor {
     Tensor::from((0..n).map(|x| x as f32).collect::<Vec<f32>>().as_slice())
 }
+
+
 
 pub trait DataBatch {
     fn train_batch(&mut self) -> (Tensor, Tensor);
@@ -400,7 +430,7 @@ pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
     );
 
     let sig_2 = Tensor::from_slice(
-        sig_in_rand(n, &[], 10., 0.001).as_slice()
+        sig_in_rand(n, &[], 10., 0.001, 0.1).as_slice()
     );
     (sig_1, sig_2)
 }

@@ -97,6 +97,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
     }
 
     fn load_blocking(&mut self, key:K) ->bool {
+        debug!("load_blocking: blocking on {:?}", key);
 
         self.on_blocking_listener.as_mut().map(|mut c|(c)());
 
@@ -104,7 +105,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             key.clone(),
             block_on(LoaderFuture::new(Arc::clone(&self.loader), key.clone()))
         );
-        debug!("{:?} was loaded", key);
+        debug!("load_blocking: {:?} was loaded", key);
 
         return true;
     }
@@ -148,8 +149,9 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
     pub fn blocking_get(&mut self, k:&K) -> Option<&V> {
 
         let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
-        debug!("loading {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
+
         if !self.data_loaded.contains_key(k) {
+            debug!("blocking_get: loading {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
 
             Self::purge_fifo(&mut self.keys_fifo, self.max_keys_fifo, &mut data_being_loaded_guard, &mut self.data_loaded);
            
@@ -160,7 +162,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             let mut entry_mutex_guard = entry_mutex_clone.lock().expect("");
 
             if let Some(data) = entry_mutex_guard.take(){
-                debug!("{:?} was taken from preloaded", k);
+                debug!("blocking_get: {:?} was taken from preloaded", k);
                 self.data_loaded.insert(k.clone(), data);
 
             } else {
@@ -171,13 +173,15 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
 
         } else {
+            debug!("blocking_get: taking from loaded {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
             if let Some((i, e)) = self.keys_fifo.iter().enumerate().find(|(i, e)| e == &k) {
                 self.keys_fifo.remove(i);
             }
             self.keys_fifo.push_back(k.clone());
-            debug!("{:?} is already loaded", k);
+
         }
 
+        debug!("blocking_get: self.data_loaded={:?}", self.data_loaded.keys());
         self.data_loaded.get(k)
     }
 
@@ -220,6 +224,10 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             });
         }
 
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data_loaded.is_empty()
     }
 
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use log::debug;
+use log::{debug, error};
 use std::fmt::Display;
 use std::backtrace::Backtrace;
 use std::error::Error;
@@ -91,7 +91,7 @@ pub struct HbacError {
 impl HbacError {
 
     pub fn new(msg:String) -> Self {
-        debug!("HbacError::new: msg={}", msg);
+        error!("HbacError::new: msg={}", msg);
         Self {
             msg,
             backtrace:Backtrace::capture()
@@ -103,7 +103,7 @@ impl HbacError {
 impl<D> From<D> for HbacError where D: Display {
 
     fn from(value: D) -> Self {
-        debug!("HbacError::from: value={}", value);
+        error!("HbacError::from: value={}", value);
         HbacError::new(value.to_string())
     }
 }
@@ -175,14 +175,15 @@ pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
 }
 
 
-pub fn sig_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], amplitude: f32, scale: f32) -> Vec<f32> {
-    let random = random_v(n, amplitude, 0.1);
+pub fn sig_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], amplitude: f32, scale: f32, max_slope: f32) -> Vec<f32> {
+    let random = random_v(n, amplitude, max_slope);
     let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
 
     join_with_offset::<f32>(n, 0., scale, pulses, random)
 }
 
-pub fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T>{
+pub fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T> + PartialEq + Default{
+    let mut x:T = T::default();
     main.into_iter().zip(
         pulses
             .into_iter()
@@ -193,7 +194,12 @@ pub fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], m
                         .chain(pulse.into_iter().map(|v| *v))
             )
             .chain(std::iter::repeat(def).take(n as usize - pulses.len()))
-    ).map(|(v1, v2)| (scale * v1) + v2).collect::<Vec<T>>()
+    ).map(|(v1, v2)| if v2!=def {
+        x + v2
+    } else {
+        x = scale * v1;
+        x
+    }).collect::<Vec<T>>()
 }
 
 
@@ -235,29 +241,29 @@ pub fn pulse_v(μ: f32, σ: f32, n: i64, f: f32) -> Vec<f32> {
     gauss_i(μ, σ, n).enumerate().map(|(i, x)| (f * 2. * PI *  i as f32 / n as f32).sin() * x).collect::<Vec<_>>()
 }
 
-
 pub fn random_v(n: i64, amplitude: f32, max_slope: f32) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
     let mut signal = Vec::with_capacity(n as usize);
 
     let mut current_value = 0.0;
     let mut prev_value = 0.0;
 
-    for _ in 0..n {
-        let slope = rng.gen_range(-max_slope..max_slope);
-        let next_value = current_value + slope;
+    let rnd_vals_0 = (0..n).flat_map(move |i| std::iter::repeat(      rand::thread_rng().gen_range(-max_slope..max_slope)).take(1)).collect::<Vec<f32>>();
+    let rnd_vals_1 = (0..n / 10).flat_map(move |i|std::iter::repeat(   rand::thread_rng().gen_range(-max_slope..max_slope)).take(10)).collect::<Vec<f32>>();
+    let rnd_vals_2 = (0..n / 60).flat_map(move |i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(100)).collect::<Vec<f32>>();
+    let rnd_vals_3 = (0..n / 120).flat_map(move |i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(300)).collect::<Vec<f32>>();
+    rnd_vals_0.into_iter().zip(
+        rnd_vals_1.into_iter().zip(
+            rnd_vals_2.into_iter().zip(
+                rnd_vals_3.into_iter()
+            )
+        )
+    ).for_each(|(r_0, ((r_1, (r_2, r_3))))| {
+        debug!("random_v: r_0={:?}, r_1={:?}, r_2={:?}, r_3={:?}", r_0, r_1, r_2, r_3);
 
-        // Check if the slope exceeds the maximum allowed slope
-        if (next_value - prev_value).abs() > max_slope {
-            let direction = if next_value > prev_value { -1.0 } else { 1.0 };
-            current_value = prev_value + direction * max_slope;
-        } else {
-            current_value = next_value;
-        }
-
+        current_value = prev_value + 10.* r_0 + r_1 +  r_2 + r_3;
         signal.push(current_value * amplitude);
         prev_value = current_value;
-    }
+    });
 
     signal
 }
@@ -409,4 +415,5 @@ mod shared_tests {
 
         Ok(())
     }
+
 }
