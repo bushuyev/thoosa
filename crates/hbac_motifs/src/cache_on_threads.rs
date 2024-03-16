@@ -110,7 +110,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         return true;
     }
 
-    #[cfg(test)]
+    // #[cfg(test)]
     pub fn get_loaded(&self, key:&K) -> Option<&V> {
         self.data_loaded.get(key)
     }
@@ -144,6 +144,22 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
             }
         }
+    }
+
+    pub fn blocking_get_1<'a>(&mut self, keys:&[K]) -> Vec<&V> {
+        // let mut out = Vec::with_capacity(keys.len());
+
+        // self.preload(keys);
+
+        for k in keys.into_iter() {
+            self.blocking_get(k).expect(format!("no {:?}", k).as_str());
+        }
+
+        keys.into_iter().map(|k|{
+            self.get_loaded(k).expect(format!("no {:?}", k).as_str())
+        }).collect()
+
+        // out
     }
 
     pub fn blocking_get(&mut self, k:&K) -> Option<&V> {

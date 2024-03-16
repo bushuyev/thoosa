@@ -18,15 +18,16 @@ pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tenso
     )
 }
 
-pub fn dist_d2(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, HbacError> {
+pub fn dist_d2(dim: i64, slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, HbacError> {
     //https://github.com/pytorch/pytorch/blob/96487d0d1f638ae9c665dcd3d4b79e7e2a976f59/aten/src/ATen/native/cuda/DistanceKernel.cu#L188
     //0 -use_mm_for_euclid_dist_if_necessary
     //1 -use_mm_for_euclid_dist
     //2 -donot_use_mm_for_euclid_dist
-    Ok(Tensor::cdist(slice_01, slice_02, 3.0, 0))
+    assert_eq!(slice_0.size()[1], slice_1.size()[1]);
+    Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
 }
 
-pub fn split_t(t_0: &Tensor, step: i32, window: i64) -> Tensor {
+pub fn slice_t(t_0: &Tensor, step: i32, window: i64) -> Tensor {
     Tensor::stack(&(0..=t_0.size()[1] - window).step_by(step as usize).map(|i|
         t_0.i((.., i..i + window))
     ).collect::<Vec<Tensor>>(), 0)
@@ -93,12 +94,12 @@ mod distance_tests {
         let step = 1;
         let window = 2;
         println!("t_0.size()={:?}", t_0.size());
-        let t_0_sliced = super::split_t(&t_0, step, window);
+        let t_0_sliced = super::slice_t(&t_0, step, window);
 
         println!("t_0_sliced={:?}", t_0_sliced.size());
         // t_0_sliced.print();
 
-        let spliced_t = [t_1, t_2, t_3].into_iter().map(|t| super::split_t(&t, step, window)).collect::<Vec<Tensor>>();
+        let spliced_t = [t_1, t_2, t_3].into_iter().map(|t| super::slice_t(&t, step, window)).collect::<Vec<Tensor>>();
         let sizes = spliced_t.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
 
         let tensor_ids = vec!["111", "222", "333"];

@@ -175,11 +175,11 @@ pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
 }
 
 
-pub fn sig_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], amplitude: f32, scale: f32, max_slope: f32) -> Vec<f32> {
-    let random = random_v(n, amplitude, max_slope);
+pub fn sig_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], random_amplitude: f32, pulse_scale: f32, max_slope: f32) -> Vec<f32> {
+    let random = random_v(n, random_amplitude, max_slope);
     let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
 
-    join_with_offset::<f32>(n, 0., scale, pulses, random)
+    join_with_offset::<f32>(n, 0., pulse_scale, pulses, random)
 }
 
 pub fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T> + PartialEq + Default{
@@ -195,9 +195,9 @@ pub fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], m
             )
             .chain(std::iter::repeat(def).take(n as usize - pulses.len()))
     ).map(|(v1, v2)| if v2!=def {
-        x + v2
+        x + scale * v2
     } else {
-        x = scale * v1;
+        x =  v1;
         x
     }).collect::<Vec<T>>()
 }
