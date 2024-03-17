@@ -511,7 +511,7 @@ mod tch_tests {
 
 
         // let t_0 = Tensor::from_slice(sin_v(1000, 20.).as_slice());
-        let t_0 = Tensor::from_slice(sig_in_rand(n, &[], 0.05, 1., 0.1).as_slice());
+        let t_0 = Tensor::from_slice(pulse_in_rand(n, &[], 0.05, 1., 0.1).as_slice());
         let t_1 = Tensor::from_slice(sin_v(n, 22.).as_slice());
 
 
@@ -579,20 +579,20 @@ mod tch_tests {
 
         // let motif_0_slice = comp_sin_v(motif_n);
         let motif_0_slice = sin_v(motif_n, 10.);
-        let motif_0_v = sig_in_rand(
+        let motif_0_v = pulse_in_rand(
             input_n,
             &[(((input_n-motif_n)/2) as usize, motif_0_slice.clone()), ], 0.05, 1., 0.1
         );
 
         // let motif_1_slice = comp_sin_k_v(motif_n, vec![30., 20., 10., 5., 3.]);
         let motif_1_slice = sin_v(motif_n, 20.);
-        let motif_1_v = sig_in_rand(
+        let motif_1_v = pulse_in_rand(
             input_n,
             &[(((input_n-motif_n)/2) as usize, motif_1_slice.clone()), ], 0.05, 1., 0.1
         );
 
         let rnd_v_slice = comp_sin_k_v(motif_n, vec![6., 3., 2.], 0.5);
-        let rnd_v = sig_in_rand(
+        let rnd_v = pulse_in_rand(
             input_n,
             &[(((input_n-motif_n)/2) as usize, rnd_v_slice.clone()), ], 0.05, 1., 0.1
         );

@@ -175,7 +175,7 @@ pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
 }
 
 
-pub fn sig_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], random_amplitude: f32, pulse_scale: f32, max_slope: f32) -> Vec<f32> {
+pub fn pulse_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], random_amplitude: f32, pulse_scale: f32, max_slope: f32) -> Vec<f32> {
     let random = random_v(n, random_amplitude, max_slope);
     let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
 

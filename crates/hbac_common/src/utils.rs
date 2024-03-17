@@ -8,7 +8,7 @@ use plotters::element::PathElement;
 use tch::{Device, Kind, nn, Tensor};
 use tch::nn::{Module, OptimizerConfig, VarStore};
 use plotters::drawing::IntoDrawingArea;
-use hbac_shared::{gauss_i, HbacError, pulse_v, pulses_in_const, sig_in_rand};
+use hbac_shared::{gauss_i, HbacError, pulse_v, pulses_in_const, pulse_in_rand};
 use std::error::Error;
 use std::fs;
 use std::ops::Deref;
@@ -430,7 +430,7 @@ pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
     );
 
     let sig_2 = Tensor::from_slice(
-        sig_in_rand(n, &[], 10., 0.001, 0.1).as_slice()
+        pulse_in_rand(n, &[], 10., 0.001, 0.1).as_slice()
     );
     (sig_1, sig_2)
 }
