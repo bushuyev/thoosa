@@ -19,6 +19,16 @@ use hbac_shared::TensorSliceIdx;
 trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError>;
 
+    fn get_tensors(&mut self, indexes: &[usize]) -> Result<Vec<Tensor>, HbacError> {
+        // let mut tensors = vec![];
+        indexes.into_iter().map(|i|*i).map( |i| self.get_tensor(i).map(|t|t.shallow_clone())).collect()
+        // for i in indexes {
+        //     tensors.push(self.get_tensor(*i)?)
+        // }
+        //
+        // Ok(tensors)
+    }
+
     fn tensors_len(&self) -> usize;
 }
 struct VecTensorsStore {
@@ -149,39 +159,47 @@ impl TensorsIter {
         }
     }
 }
-pub type TensorSlice = ((TensorSliceIdx), Tensor); //tensor idx, slice, tensor
+pub type TensorSlice = ((TensorSliceIdx<String>), Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorsIter {
     type Item = Result<(TensorSlice, TensorSlice, usize), HbacError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         debug!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
-
+        let tensors_len = self.tensors_store.tensors_len();
 
         if self.tensor_index_0 < self.tensors_store.tensors_len() {
+            // let t_0 = self.tensors_store.get_tensor(self.tensor_index_0).unwrap();
+            // let t_1 = self.tensors_store.get_tensor(self.tensor_index_1).unwrap();
+
+            let mut tensors = self.tensors_store.get_tensors(&[self.tensor_index_0, self.tensor_index_1]).unwrap();
+            let t_1 = tensors.pop().unwrap();
+            let t_0 = tensors.pop().unwrap();
+
             let v = Some(Ok((
-                (TensorSliceIdx(self.tensor_index_0, self.slice_index_0), self.tensors_store.get_tensor(self.tensor_index_0).unwrap().f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()),//TODO unwrap
-                (TensorSliceIdx(self.tensor_index_1, self.slice_index_1), self.tensors_store.get_tensor(self.tensor_index_1).unwrap().f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()),
+                //TODO self.tensor_index_0.to_string() -> store.index_to_key
+                (TensorSliceIdx(self.tensor_index_0.to_string(), self.slice_index_0), t_0.f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()),//TODO unwrap
+                (TensorSliceIdx(self.tensor_index_1.to_string(), self.slice_index_1), t_1.f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()),
                 self.iteration_n.fetch_add(1, Ordering::Relaxed)
             )));
 
 
             //TODO m < tensor
-            if self.slice_index_1 + self.step + self.m <= self.tensors_store.get_tensor(self.tensor_index_1).unwrap().size()[self.dim] {
+            if self.slice_index_1 + self.step + self.m <= t_1.size()[self.dim] {
                 self.slice_index_1 += self.step;
 
                 debug!("1");
 
             } else {
 
-                if self.tensor_index_1 < self.tensors_store.tensors_len() -1 {
+                if self.tensor_index_1 < tensors_len -1 {
                     self.tensor_index_1 += 1;
                     self.slice_index_1 = 0;
 
                     debug!("2.1");
 
                 } else {
-                    if self.slice_index_0 + self.step + self.m <= self.tensors_store.get_tensor(self.tensor_index_0).unwrap().size()[self.dim] {
+                    if self.slice_index_0 + self.step + self.m <= t_0.size()[self.dim] {
                         self.slice_index_0 += self.step;
 
                         debug!("2.2.1");

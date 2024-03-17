@@ -136,10 +136,10 @@ pub fn list_motifs(motifs_dir:&str) -> Result<Vec<(u16, String)>, HbacError>{
 /**
 * returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
 */
-pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loader:fn(&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError>) -> Result<HashMap<usize, Vec<MotifSlice>>, HbacError>{
+pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loader:fn(&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError>) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>{
 
     //motif files (per channel) -> motif groups -> eeg slices
-    let mut tensorid_motifs_sets: HashMap<usize, HashSet<MotifSlice>> = HashMap::new();
+    let mut tensorid_motifs_sets: HashMap<String, HashSet<MotifSlice>> = HashMap::new();
 
     for channel_motifs in all_channels_motifs {
 
@@ -160,7 +160,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 
     debug!("motifs_to_eeg_slices: eeg_motifs_sets={:?}", tensorid_motifs_sets);
 
-    let mut tensor_motifs:HashMap<usize, Vec<MotifSlice>> = HashMap::new();
+    let mut tensor_motifs:HashMap<String, Vec<MotifSlice>> = HashMap::new();
     for (tensor_id, slices_set) in tensorid_motifs_sets.into_iter(){
         let mut slices_vec:Vec<MotifSlice> = slices_set.into_iter().collect();
         slices_vec.sort_by(|a, b|a.slise_idx().cmp(&b.slise_idx()));
@@ -319,14 +319,14 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx>, eegs: Vec<String>, load_tensor: F, device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
+pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, eegs: Vec<String>, load_tensor: F, device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
     where F: Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
     let tensors_ids_slices = slices.iter().fold(HashMap::new(), |mut a, slice| {
         a
-            .entry(slice.0)
+            .entry(slice.0.clone())//TODO clone
             .or_insert_with(|| Vec::with_capacity(10))
             .push(slice.1);
         a
@@ -337,17 +337,17 @@ pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: V
     tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).for_each(|tensor_idxs|{
 
         let slices = tensor_idxs.par_iter().map(|tensor_idx|{
-            let tensor_idx:usize = **tensor_idx;
-            let slices = tensors_ids_slices.get(&tensor_idx).expect(format!("no {}", tensor_idx).as_str());
+            // let tensor_idx:String = tensor_idx.clone();
+            let slices = tensors_ids_slices.get(*tensor_idx).expect(format!("no {}", tensor_idx).as_str());
 
-            let resource = eegs[tensor_idx].clone();
-            let t = load_tensor(base_path, resource.as_str(), device).unwrap();
+            // let resource = eegs[tensor_idx].clone();
+            let t = load_tensor(base_path, tensor_idx.as_str(), device).unwrap();
 
             let take = t.size()[1]/widow;
             debug!("load_motif_slices: tensor_idx={} slices.len={} t.size={:?} take={}", tensor_idx, slices.len(), t.size(),  take  );
 
             //take - to skip last slice which might be not full
-            (resource, slices.into_iter().take(take as usize).map(|slice_idx| Box::new(t.i((channel, *slice_idx..*slice_idx + widow)))).collect::<Vec<Box<Tensor>>>())
+            (tensor_idx.to_string(), slices.into_iter().take(take as usize).map(|slice_idx| Box::new(t.i((channel, *slice_idx..*slice_idx + widow)))).collect::<Vec<Box<Tensor>>>())
         }).collect::<Vec<(String, Vec<Box<Tensor>>)>>();
 
 
@@ -438,11 +438,11 @@ mod motifs_tests {
 
     #[test]
     fn test_motifs_to_eeg_slices_1() -> Result<(), HbacError>{
-        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError> {
+        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError> {
             assert_eq!(file_name, "aaa");
 
             Ok(vec![
-                (TensorSliceIdx(0, 1000), TensorSliceIdx(1, 2000))
+                (TensorSliceIdx("0".to_string(), 1000), TensorSliceIdx("1".to_string(), 2000))
             ])
         }
 
@@ -450,8 +450,8 @@ mod motifs_tests {
 
         println!("map={:?}", map);
         //tensor id (eeg) - group, slice, channel
-        assert_eq!(map.get(&0).unwrap(), &[MotifSlice::new(0, 1000, 0)]);
-        assert_eq!(map.get(&1).unwrap(), &[MotifSlice::new(0, 2000, 0)]);
+        assert_eq!(map.get(&"0".to_string()).unwrap(), &[MotifSlice::new(0, 1000, 0)]);
+        assert_eq!(map.get(&"1".to_string()).unwrap(), &[MotifSlice::new(0, 2000, 0)]);
 
         Ok(())
     }
@@ -459,12 +459,12 @@ mod motifs_tests {
 
     #[test]
     fn test_motifs_to_eeg_slices_1_same() -> Result<(), HbacError>{
-        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError> {
+        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError> {
             assert_eq!(file_name, "aaa");
 
             Ok(vec![
-                (TensorSliceIdx(0, 1000), TensorSliceIdx(1, 2000)),
-                (TensorSliceIdx(0, 1000), TensorSliceIdx(1, 4000))
+                (TensorSliceIdx(0.to_string(), 1000), TensorSliceIdx(1.to_string(), 2000)),
+                (TensorSliceIdx(0.to_string(), 1000), TensorSliceIdx(1.to_string(), 4000))
             ])
         }
 
@@ -472,8 +472,8 @@ mod motifs_tests {
 
         println!("map={:?}", map);
         //tensor id (eeg) - group, slice, channel1
-        assert_eq!(map.get(&0).unwrap(), &[MotifSlice::new(0, 1000, 0)]);//once
-        assert_eq!(map.get(&1).unwrap(), &[MotifSlice::new(0, 2000, 0), MotifSlice::new(0, 4000, 0)]);
+        assert_eq!(map.get(&0.to_string()).unwrap(), &[MotifSlice::new(0, 1000, 0)]);//once
+        assert_eq!(map.get(&1.to_string()).unwrap(), &[MotifSlice::new(0, 2000, 0), MotifSlice::new(0, 4000, 0)]);
 
         Ok(())
     }
@@ -481,12 +481,12 @@ mod motifs_tests {
 
     #[test]
     fn test_motifs_to_eeg_slices_2() -> Result<(), HbacError>{
-        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError> {
+        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError> {
             assert_eq!(file_name, "aaa");
 
             Ok(vec![
-                (TensorSliceIdx(0, 1000), TensorSliceIdx(1, 2000)),
-                (TensorSliceIdx(0, 3000), TensorSliceIdx(1, 2000))
+                (TensorSliceIdx(0.to_string(), 1000), TensorSliceIdx(1.to_string(), 2000)),
+                (TensorSliceIdx(0.to_string(), 3000), TensorSliceIdx(1.to_string(), 2000))
             ])
         }
 
@@ -494,8 +494,8 @@ mod motifs_tests {
 
         println!("map={:?}", map);
         //tensor id (eeg) - group, slice, channel
-        assert_eq!(map.get(&0).unwrap(), &[MotifSlice::new(0, 1000, 0), MotifSlice::new(0, 3000, 0)]);
-        assert_eq!(map.get(&1).unwrap(), &[MotifSlice::new(0, 2000, 0)]);
+        assert_eq!(map.get(&0.to_string()).unwrap(), &[MotifSlice::new(0, 1000, 0), MotifSlice::new(0, 3000, 0)]);
+        assert_eq!(map.get(&1.to_string()).unwrap(), &[MotifSlice::new(0, 2000, 0)]);
 
         Ok(())
     }
@@ -503,14 +503,14 @@ mod motifs_tests {
 
     #[test]
     fn test_motifs_to_eeg_slices_two_groups() -> Result<(), HbacError>{
-        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError> {
+        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError> {
             assert_eq!(file_name, "aaa");
 
             Ok(vec![
-                (TensorSliceIdx(0, 1000), TensorSliceIdx(1, 2000)),
-                (TensorSliceIdx(0, 3000), TensorSliceIdx(1, 2000)),
-                (TensorSliceIdx(0, 5000), TensorSliceIdx(1, 7000)),
-                (TensorSliceIdx(0, 9000), TensorSliceIdx(1, 7000))
+                (TensorSliceIdx(0.to_string(), 1000), TensorSliceIdx(1.to_string(), 2000)),
+                (TensorSliceIdx(0.to_string(), 3000), TensorSliceIdx(1.to_string(), 2000)),
+                (TensorSliceIdx(0.to_string(), 5000), TensorSliceIdx(1.to_string(), 7000)),
+                (TensorSliceIdx(0.to_string(), 9000), TensorSliceIdx(1.to_string(), 7000))
             ])
         }
 
@@ -518,8 +518,8 @@ mod motifs_tests {
 
         println!("map={:?}", map);
         //tensor id (eeg) - group, slice, channel
-        assert_eq!(map.get(&0).unwrap(), &[MotifSlice::new(0, 1000, 0), MotifSlice::new(0, 3000, 0), MotifSlice::new(1, 5000, 0), MotifSlice::new(1, 9000, 0)]);
-        assert_eq!(map.get(&1).unwrap(), &[MotifSlice::new(0, 2000, 0), MotifSlice::new(1, 7000, 0)]);
+        assert_eq!(map.get(&0.to_string()).unwrap(), &[MotifSlice::new(0, 1000, 0), MotifSlice::new(0, 3000, 0), MotifSlice::new(1, 5000, 0), MotifSlice::new(1, 9000, 0)]);
+        assert_eq!(map.get(&1.to_string()).unwrap(), &[MotifSlice::new(0, 2000, 0), MotifSlice::new(1, 7000, 0)]);
 
 
         Ok(())
@@ -528,15 +528,15 @@ mod motifs_tests {
 
     #[test]
     fn test_motifs_to_eeg_slices_one_groups_sep() -> Result<(), HbacError>{
-        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError> {
+        fn test_motif_loader(file_name:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError> {
             assert_eq!(file_name, "aaa");
 
             Ok(vec![
-                (TensorSliceIdx(0, 1000), TensorSliceIdx(1, 2000)),
-                (TensorSliceIdx(0, 3000), TensorSliceIdx(1, 2000)),
-                (TensorSliceIdx(0, 5000), TensorSliceIdx(1, 7000)),
-                (TensorSliceIdx(0, 9000), TensorSliceIdx(1, 7000)),
-                (TensorSliceIdx(1, 2000), TensorSliceIdx(1, 7000)),
+                (TensorSliceIdx(0.to_string(), 1000), TensorSliceIdx(1.to_string(), 2000)),
+                (TensorSliceIdx(0.to_string(), 3000), TensorSliceIdx(1.to_string(), 2000)),
+                (TensorSliceIdx(0.to_string(), 5000), TensorSliceIdx(1.to_string(), 7000)),
+                (TensorSliceIdx(0.to_string(), 9000), TensorSliceIdx(1.to_string(), 7000)),
+                (TensorSliceIdx(1.to_string(), 2000), TensorSliceIdx(1.to_string(), 7000)),
             ])
         }
 
@@ -701,7 +701,7 @@ mod motifs_tests {
             "base",
             0,
             2,
-            vec![TensorSliceIdx(0, 2)],
+            vec![TensorSliceIdx(0.to_string(), 2)],
             vec!["123".into()],
             test_eeg_to_t,
             Device::Cpu

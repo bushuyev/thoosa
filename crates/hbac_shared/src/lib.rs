@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use log::{debug, error};
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::backtrace::Backtrace;
 use std::error::Error;
 use std::f32::consts::PI;
@@ -68,15 +68,15 @@ pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
 
 
 #[derive(Debug, PartialEq, Hash, Eq, Copy, Clone)]
-pub struct TensorSliceIdx(pub usize, pub i64);
+pub struct TensorSliceIdx<T>(pub T, pub i64) where T:Eq+Display+Debug;
 
-impl From<(usize, i64)> for TensorSliceIdx {
-    fn from(value: (usize, i64)) -> Self {
+impl From<(String, i64)> for TensorSliceIdx<String> {
+    fn from(value: (String, i64)) -> Self {
         TensorSliceIdx(value.0, value.1)
     }
 }
 
-impl Display for TensorSliceIdx {
+impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{},{}", self.0, self.1)
     }

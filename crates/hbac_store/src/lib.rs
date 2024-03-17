@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::path::Path;
 use rusqlite::{Connection, params, ToSql};
-use log::debug;
+use log::{debug, error};
 use rusqlite::types::{ToSqlOutput, Value};
 use rusqlite::types::ValueRef::Real;
 use std::fmt;
@@ -34,7 +34,7 @@ impl StoreDumper {
 }
 
 #[derive(Debug)]
-struct IdSlice(i64, i64, i64); //id, tensor id, slice idx
+struct IdSlice(i64, String, i64); //id, tensor id, slice idx
 
 impl PartialEq<Self> for IdSlice {
     fn eq(&self, other: &Self) -> bool {
@@ -55,13 +55,13 @@ impl Hash for IdSlice {
 
 pub trait Store:Sync + Send{
     fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
-    fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), HbacError>;
+    fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), HbacError>;
-    fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<i64, Vec<MotifSlice>>, HbacError>;
+    fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
     fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>) -> Result<usize, HbacError>;
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
-    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError>;
+    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), HbacError>;
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError>;
 }
 
@@ -103,25 +103,28 @@ impl Store for SqlStore {
             t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
         }
 
-        t.commit();
+        t.commit()?;
 
         Ok(run_id)
     }
 
 
-    fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((usize, i64), (usize, i64), f32)>) -> Result<(), HbacError>{
+    fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>{
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
+
+        assert!(slices.len() > 0);
 
         let (mut q, params) = slices.into_iter().fold(
             (vec!["INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
             a.0.push("(?, ?, ?, ?, ?, ?, ?)");
             a.0.push(", ");
+
             a.1.push(Value::Integer(run_id as i64));
             a.1.push(Value::Integer(channel as i64));
-            a.1.push(Value::Integer(v.0.0 as i64));
+            a.1.push(Value::Text(v.0.0));
             a.1.push(Value::Integer(v.0.1));
-            a.1.push(Value::Integer(v.1.0 as i64));
+            a.1.push(Value::Text(v.1.0));
             a.1.push(Value::Integer(v.1.1));
             a.1.push(Value::Real(v.2 as f64));
             a
@@ -131,7 +134,7 @@ impl Store for SqlStore {
 
         t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
 
-        t.commit();
+        t.commit()?;
 
         Ok(())
     }
@@ -144,7 +147,12 @@ impl Store for SqlStore {
             let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=? AND channel_id=?")?;
 
             let mut groups = group_slices(stmt.query_map([run_id, channel as usize], |row| {
-                Ok((IdSlice(row.get(0)?, row.get(1)?, row.get(2)?), IdSlice(row.get(0)?, row.get(3)?, row.get(4)?)))
+                Ok(
+                    (
+                        IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
+                        IdSlice(row.get(0)?, row.get(3)?, row.get(4)?)
+                    )
+                )
             })?.map(|v| v.unwrap()));
 
             //TODO sort?
@@ -172,7 +180,7 @@ impl Store for SqlStore {
 
         }
 
-        t.commit();
+        t.commit()?;
 
         Ok(())
     }
@@ -180,14 +188,14 @@ impl Store for SqlStore {
     /**
     * returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
     */
-    fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<i64, Vec<MotifSlice>>, HbacError>{
+    fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>{
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
 
         let mut stmt = t.prepare("SELECT id, motif_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=?")?;
 
-        let tensor_motifs:HashMap<i64, Vec<MotifSlice>> = stmt.query_map([run_id], |row| {
+        let tensor_motifs:HashMap<String, Vec<MotifSlice>> = stmt.query_map([run_id], |row| {
             Ok((
                 row.get(0)?, // id,
                 row.get(1).unwrap_or(-1), // motif,
@@ -198,7 +206,7 @@ impl Store for SqlStore {
                 row.get(6)?, // slice_idx_1
             ))
 
-        })?.fold(Ok(HashMap::new()), |a:Result<HashMap<i64, Vec<hbac_shared::MotifSlice>>, rusqlite::Error>, v:Result<(i64, i64, i64, i64, i64, i64, i64), rusqlite::Error>|{
+        })?.fold(Ok(HashMap::new()), |a:Result<HashMap<String, Vec<hbac_shared::MotifSlice>>, rusqlite::Error>, v:Result<(i64, i64, i64, String, i64, String, i64), rusqlite::Error>|{
             let v = v?;
             if v.1 >=0 {
                 let mut a = a?;
@@ -270,7 +278,7 @@ impl Store for SqlStore {
         q.pop();
 
         t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-        t.commit();
+        t.commit()?;
 
         Ok(corr_run_id)
     }
@@ -296,12 +304,12 @@ impl Store for SqlStore {
             });
 
         }
-        t.commit();
+        t.commit()?;
 
         Ok(channels_corr_motifs)
     }
 
-    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx>), HbacError> {
+    fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), HbacError> {
 
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
@@ -329,8 +337,8 @@ impl Store for SqlStore {
                     row.get::<usize, usize>(5)?,//run_id
                 ))
             })?.map(|v| v.unwrap()).fold((HashSet::new(), HashSet::new(), None), |(mut a, mut channel_set, mut run_id), v| {
-                a.insert(TensorSliceIdx(v.1 as usize, v.2 as i64));
-                a.insert(TensorSliceIdx(v.3 as usize, v.4 as i64));
+                a.insert(TensorSliceIdx(v.1.to_string(), v.2 as i64));
+                a.insert(TensorSliceIdx(v.3.to_string(), v.4 as i64));
 
                 channel_set.insert(v.0);//TODO replace with Option
 
@@ -354,7 +362,7 @@ impl Store for SqlStore {
             }
         };
 
-        t.commit();
+        t.commit()?;
 
         Ok(channel_slices)
     }
@@ -409,9 +417,9 @@ impl SqlStore {
                 id              INTEGER PRIMARY KEY,
                 run_id          REFERENCES matches_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
-                tensor_id_0     INTEGER NOT NULL,
+                tensor_id_0     VARCHAR(256) NOT NULL,
                 slice_idx_0     INTEGER NOT NULL,
-                tensor_id_1     INTEGER NOT NULL,
+                tensor_id_1     VARCHAR(256) NOT NULL,
                 slice_idx_1     INTEGER NOT NULL,
                 dot             FLOAT NOT NULL,
                 motif_id        REFERENCES motifs(id) ON DELETE CASCADE DEFAULT NULL
