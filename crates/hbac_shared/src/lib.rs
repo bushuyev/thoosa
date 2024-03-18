@@ -1,3 +1,5 @@
+pub mod repeat_iter;
+
 use std::collections::HashMap;
 use std::hash::Hash;
 use log::{debug, error};

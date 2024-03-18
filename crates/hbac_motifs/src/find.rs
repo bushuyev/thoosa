@@ -31,6 +31,7 @@ use std::cell::RefCell;
 use crate::cache_on_threads::CacheOnThreads;
 use crate::distance::slice_t;
 use crate::distance::dist_d2;
+use core::slice::Windows;
 
 #[derive(Debug, Args)]
 pub struct FindMotifsParams {
@@ -55,6 +56,11 @@ pub struct FindMotifsParams {
     #[arg(long, default_value_t = 100)]
     max_keys_fifo: usize,
 
+    #[arg(long, default_value_t = 100)]
+    chunk_size: usize,
+
+    #[arg(long, default_value_t = 0.01)]
+    max_dist_k: f32
 }
 
 impl FindMotifsParams {
@@ -90,78 +96,87 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let mut cache = CacheOnThreads::new(loader, find_motifs_params.max_keys_fifo, Some(Box::new(move ||{
         // let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
 
-        // warn!("on blocking: {:?}", preload_d)
+        warn!("blocking")
     })));
 
 
-    let v_w_0 = eeg_ids_str.chunks(20);
-    let v_w_1 = eeg_ids_str.chunks(20);
+    let mut v_w_0 = eeg_ids_str.chunks(find_motifs_params.chunk_size).collect::<Vec<&[String]>>();
+    v_w_0.push(&[]);//to get last window processed
+    let mut v_w_1 = eeg_ids_str.chunks(find_motifs_params.chunk_size).collect::<Vec<&[String]>>();
+    v_w_1.push(&[]);
     let mut c = 0;
 
     let t1 = Instant::now();
     let mut slots_processed = 0;
 
-    v_w_0.enumerate().for_each(|(chunk_i_0, vw_0)|{
+    v_w_0.windows(2).enumerate().for_each(|(chunk_i_0, vw_0_01)|{
+        let vw_0 = vw_0_01[0];
+
         let t_0_tensors = cache.blocking_get_1(vw_0).into_iter().map(|t|{
-            debug!("t_0 size={:?}", t.size());
+            debug!("find_motifs_euc: t_0 size={:?}", t.size());
             let sliced = slice_t(&t, find_motifs_params.step as i32, find_motifs_params.window as i64);
 
-            debug!("t_0 sliced size={:?}", sliced.size());
+            debug!("find_motifs_euc: t_0 sliced size={:?}", sliced.size());
 
             sliced
         }).collect::<Vec<Tensor>>();
+
+        if vw_0_01[1].len() > 0 {
+            debug!("find_motifs_euc: preload={:?}", vw_0_01[1]);
+
+            cache.preload(vw_0_01[1]);
+        }
+
         let sizes_0 = t_0_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
-        // let tensor_ids_0 = sizes_0.iter().zip(vw_0.into_iter()).flat_map(|(size, id)| std::iter::repeat(id).take(*size as usize)).collect::<Vec<&String>>();
 
         // let t_0_sliced = z_norm(&Tensor::vstack(&t_0_tensors), 2);
         let t_0_sliced = Tensor::vstack(&t_0_tensors);
 
-        debug!("t_0_sliced i_0={} merged={:?} sizes_0={:?}", chunk_i_0, t_0_sliced.size(), sizes_0);
+        debug!("find_motifs_euc: t_0_sliced i_0={} merged={:?} sizes_0={:?}", chunk_i_0, t_0_sliced.size(), sizes_0);
 
-        <std::slice::Chunks<'_, String> as Clone>::clone(&v_w_1).skip(chunk_i_0).enumerate().for_each(|(chunk_i_1, vw_1)| {
+        v_w_1.windows(2).into_iter().skip(chunk_i_0).enumerate().for_each(|(chunk_i_1, vw_1_01)| {
+            let vw_1 = vw_1_01[0];
+
             let t_1_tensors = cache.blocking_get_1(vw_1).into_iter().map(|t|{
-                debug!("t_0 size={:?}", t.size());
+                debug!("find_motifs_euc: t_0 size={:?}", t.size());
 
                 let sliced = slice_t(&t, find_motifs_params.step as i32, find_motifs_params.window as i64);
 
-                debug!("t_0 sliced size={:?}", sliced.size());
+                debug!("find_motifs_euc: t_0 sliced size={:?}", sliced.size());
 
                 sliced
             }).collect::<Vec<Tensor>>();
+
+            if vw_1_01[1].len() > 0 {
+                debug!("find_motifs_euc: preload={:?}", vw_1_01[1]);
+
+                cache.preload(vw_1_01[1]);
+            }
+
             let sizes_1 = t_1_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
-            // let tensor_ids_1 = sizes_1.iter().zip(vw_1.into_iter()).flat_map(|(size, id)| std::iter::repeat(id).take(*size as usize)).collect::<Vec<&String>>();
 
             // let t_1_sliced = z_norm(&Tensor::vstack(&t_1_tensors), 2);
             let t_1_sliced = Tensor::vstack(&t_1_tensors);
-            debug!("t_1_sliced merged={:?} sizes_1={:?}", t_1_sliced.size(), sizes_1);
+            debug!("find_motifs_euc: t_1_sliced merged={:?} sizes_1={:?}", t_1_sliced.size(), sizes_1);
 
             for (c, mt) in all_motif_trackers.iter_mut().enumerate() {
                 let tensor_0 = t_0_sliced.i((.., c as i64, ..)).squeeze();
                 let tensor_1 = t_1_sliced.i((.., c as i64, ..)).squeeze();
                 debug!("tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
                 let t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}, chunk_0={} chunk_1={}", c, chunk_i_0, chunk_i_1).as_str());
-                // t.print();
 
-                let mean = 0.05; // * t.mean(None).double_value(&[]) as f32;//TODO k
-                // t.quantile()
-                debug!("dist_d2: t={:?} mean={:?}", t.size(), mean);
-                // for i_0 in 0..t.size()[0] {
-                //     for i_1 in 0..t.size()[1] {
-                //         debug!("t_0={:?} s_0={} t_1={:?} s_1:{} v={}", tensor_ids_0[i_0 as usize], i_0 * find_motifs_params.step as i64,  tensor_ids_1[i_1 as usize], i_1 * find_motifs_params.step as i64, t.double_value(&[i_0, i_1]));
-                //     }
-                // }
+                let mean = find_motifs_params.max_dist_k * t.mean(None).double_value(&[]) as f32;
+                debug!("find_motifs_euc: t={:?} mean={:?}", t.size(), mean);
+
                 let mut i_0 = 0;
                 let mut i_1 = 0;
 
-                // debug!("tensor_ids_0={:?}", tensor_ids_0);
-                // debug!("tensor_ids_1={:?}", tensor_ids_1);
 
                 for (t_idx_0, t_size_0) in sizes_0.iter().enumerate() {
-                    //TODO clc i_1 to skip - sum tensor sizes
                     let skip_idx_1 = if chunk_i_0 == chunk_i_1 {
                         //if first chunk both in outer and inner cycles
                         let skip_ = (0..t_idx_0).map(|i|sizes_0[i]).sum();
-                        debug!("skipping t_idx_0={} skip_={}", t_idx_0, skip_);
+                        debug!("find_motifs_euc: skipping t_idx_0={} skip_={}", t_idx_0, skip_);
                         skip_
                     } else {
                         0
@@ -175,7 +190,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                             for s_1 in  0..*t_size_1 {
                                 let dist = t.double_value(&[i_0, i_1]);
 
-                                debug!("dist val: t_idx_0={} chunk_i_0={}, chunk_i_1={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}", t_idx_0,chunk_i_0, chunk_i_1,  vw_0[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist);
+                                debug!("find_motifs_euc:  t_idx_0={} chunk_i_0={}, chunk_i_1={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}", t_idx_0,chunk_i_0, chunk_i_1,  vw_0[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist);
 
                                 i_1+= 1;
                                 if  (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < mean {
@@ -680,7 +695,7 @@ mod motif_find_tests {
     use std::fs::{File, OpenOptions, ReadDir};
     use std::{fs, io};
     use std::io::Write;
-    use std::iter::Map;
+    use std::iter::{Map};
     use std::mem::size_of_val;
     use std::ops::Mul;
     use std::ops::Range;
@@ -713,6 +728,8 @@ mod motif_find_tests {
     use hbac_common::utils::cdt_for_dir;
     use hbac_shared::*;
     use hbac_store::{SqlStore, Store};
+    use core::slice::Windows;
+    use hbac_shared::repeat_iter::{FirstLastRepeat, Repeat};
 
     #[ctor::ctor]
     fn init() {
@@ -1391,6 +1408,8 @@ mod motif_find_tests {
                 descr: "test".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
+                chunk_size: 0,
+                max_dist_k: 0.0,
             },
             3 * N as usize,
             eeg_id_series.into_iter(),
@@ -1408,7 +1427,7 @@ mod motif_find_tests {
 
 
     #[test]
-    pub fn test_find_motifs_euc() -> Result<(), HbacError>{
+    pub fn test_find_motifs_euc() -> Result<(), HbacError> {
         let eeg_id_series =  [Some(1111i64), Some(2222), Some(3333)];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
@@ -1457,11 +1476,14 @@ mod motif_find_tests {
                 descr: "test".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
+                chunk_size: 2,
+                max_dist_k: 0.0001,
             },
             3 * N as usize,
             eeg_id_series.into_iter(),
             Arc::clone(&store),
-            1
+            1,
+
         );
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
@@ -1707,30 +1729,56 @@ mod motif_find_tests {
 
     #[test]
     fn test_test(){
-        let v = vec!["a1a2a3a4", "b1b2b3b4", "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4", "d1d2d3d4"];
-        let v_w_1 = v.chunks(2);
-        let v_w_2 = v.chunks(2);
+        let v = vec!["a1a2a3a4", "b1b2b3b4", "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4", "g1g2g3g4"];
+
+        let v_w_0 = v.chunks(2).collect::<Vec<&[&str]>>();
+        let v_w_1 = v.chunks(2).collect::<Vec<&[&str]>>();
         let mut c = 0;
-        v_w_1.enumerate().for_each(|(i_0, vw1)|{
 
-            <std::slice::Chunks<'_, &str> as Clone>::clone(&v_w_2).skip(i_0).for_each(|vw2| {
-                println!("vw1={:?} vw2={:?}", vw1, vw2);
+        for (c_i, chunk) in v_w_0.iter().enumerate(){
+            println!("c_i={} chunk={:?}", c_i, chunk);
+        }
 
-                vw1.chunks(2).flat_map(|v|v.into_iter()).for_each(|w1|{
-                    w1.chars().collect::<Vec<char>>().chunks(2).for_each(|c1|{
 
-                        vw2.chunks(2).flat_map(|v|v.into_iter()).for_each(|w2|{
+        // let mut vw_0_windows = v_w_0.windows(2); //.collect::<Vec<Windows<'_, &[&[&str]]>>>();
+        // // vw_1_windows.  //push(vw_1_windows.last().unwrap().clone());
+        // for (w_i, window) in vw_0_windows.clone().enumerate(){
+        //     println!("w_i={} window={:?}", w_i, window);
+        // }
+        //
+        //
+        // let vw_1_windows = v_w_1.windows(2); //.collect::<Vec<Windows<'_, &[&[&str]]>>>();
+        // vw_2_windows.push(vw_2_windows.last().unwrap().clone());
+        let mut v_w_0_i = v_w_0.iter();
+        let mut next = v_w_0_i.next();
 
-                            w2.chars().collect::<Vec<char>>().chunks(2).for_each(|c2| {
-                                println!("c1={:?} c2={:?}", c1.into_iter().collect::<String>(), c2.into_iter().collect::<String>());
-                                c+=1;
-                            });
-                        })
-                    })
+        v_w_0_i.enumerate().for_each(|(i_0, vw0_01)|{
+            // let vw0 = vw0_01[0];
+            println!("chunk={:?}", next.replace(vw0_01));
 
-                });
-            });
+
+
+            // FirstLastRepeat::new(vw_1_windows.clone(), Repeat::Last).enumerate().skip(i_0).for_each(|(i_1, vw1_01)| {
+            //     let vw1 = vw1_01[0];
+            //     println!("vw1={:?} vw2={:?}", vw0, vw1);
+            //
+            //     vw0.chunks(2).flat_map(|v|v.into_iter()).for_each(|w1|{
+            //         w1.chars().collect::<Vec<char>>().chunks(2).for_each(|c1|{
+            //
+            //             vw1.chunks(2).flat_map(|v|v.into_iter()).for_each(|w2|{
+            //
+            //                 w2.chars().collect::<Vec<char>>().chunks(2).for_each(|c2| {
+            //                     println!("c1={:?} c2={:?}", c1.into_iter().collect::<String>(), c2.into_iter().collect::<String>());
+            //                     c+=1;
+            //                 });
+            //             })
+            //         })
+            //
+            //     });
+            // });
         });
+
+        println!("chunk={:?}", next.take());
 
         println!("c={}", c);
     }

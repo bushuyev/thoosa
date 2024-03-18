@@ -138,7 +138,6 @@ fn _main() -> Result<(), HbacError> {
 
             let eeg_id_series = EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind(), cli.limit)?;
 
-
             let records_num = clc_records(&eeg_id_series, base_path.as_str())?;
             debug!("records_num={}", records_num);
 
@@ -153,7 +152,7 @@ fn _main() -> Result<(), HbacError> {
                 find_motifs_params,
                 records_num,
                 eeg_id_series.i64()?.into_iter(),
-                Arc::clone(&store), 20
+                Arc::clone(&store), 20,
             )?;
         }
 
