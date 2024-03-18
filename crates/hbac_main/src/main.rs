@@ -142,14 +142,13 @@ fn _main() -> Result<(), HbacError> {
             let records_num = clc_records(&eeg_id_series, base_path.as_str())?;
             debug!("records_num={}", records_num);
 
-            find::find_motifs(
+            find::find_motifs_euc(
                 move |key: &String| {
                     if let Some(tensors_path) = cli.tensors_path.as_ref() {
                         Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
                     } else {
                         Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
                     }
-
                 },
                 find_motifs_params,
                 records_num,

@@ -146,17 +146,20 @@ impl Store for SqlStore {
         {
             let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=? AND channel_id=?")?;
 
-            let mut groups = group_slices(stmt.query_map([run_id, channel as usize], |row| {
-                Ok(
-                    (
-                        IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
-                        IdSlice(row.get(0)?, row.get(3)?, row.get(4)?)
+            let mut groups = group_slices(
+                stmt.query_map([run_id, channel as usize], |row| {//TODO move group_slices out, not for store
+                    Ok(
+                        (
+                            IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
+                            IdSlice(row.get(0)?, row.get(3)?, row.get(4)?)
+                        )
                     )
-                )
-            })?.map(|v| v.unwrap()));
+                })?.map(|v| v.unwrap())
+            );
 
             //TODO sort?
             for (group, slices) in groups {
+                debug!("set_motifs: group={:?}, slices={:?}", group, slices);
 
                 t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])?;//TODO group not needed?
 

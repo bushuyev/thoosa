@@ -631,7 +631,7 @@ pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, Hbac
 }
 
 // pub fn read_motif_to_iter(motif_file:&str) -> Result<impl Iterator<Item = (TensorSliceIdx, TensorSliceIdx)>, HbacError>{ TODO LazyCsvReader ?
-pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx, TensorSliceIdx)>, HbacError>{
+pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError>{
 
     let motif_df = CsvReader::from_path(motif_file)?.has_header(false).finish()?;
     let columns = motif_df.get_columns();
@@ -647,8 +647,8 @@ pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx, Tensor
         let (Some(id_0), (Some(sl_0), (Some(id_1), (Some(sl_1))))) = v else {
             panic!("unexpected entry in motif");
         };
-        (TensorSliceIdx(id_0 as usize, sl_0), TensorSliceIdx(id_1 as usize, sl_1))
-    }).collect::<Vec<(TensorSliceIdx, TensorSliceIdx)>>())
+        (TensorSliceIdx(id_0.to_string(), sl_0), TensorSliceIdx(id_1.to_string(), sl_1))
+    }).collect::<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>>())
 
 }
 

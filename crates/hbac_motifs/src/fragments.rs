@@ -175,7 +175,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
+pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
 
     let mut channels_motifs_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
@@ -183,7 +183,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<i64, Ve
     for (eeg_idx, channels_motifslices) in eeg_id_fragments_map {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
-        let eeg_id = eegs[eeg_idx as usize].clone();
+        let eeg_id = eeg_idx; //eegs[eeg_idx].clone();
         let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), device)?;//TODO use always CPU? no clc
 
         for fragment in channels_motifslices {
@@ -588,16 +588,16 @@ mod motifs_tests {
         let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
         println!("dir={}", dir);
 
-        let mut eeg_id_fragments_map: HashMap<i64, Vec<MotifSlice>> = HashMap::new();
+        let mut eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>> = HashMap::new();
 
-        eeg_id_fragments_map.insert(0i64, vec![
+        eeg_id_fragments_map.insert("0".to_string(), vec![
             MotifSlice::new(7, 100, 0),
             MotifSlice::new(7, 301, 1),
             MotifSlice::new(9, 500, 0),
             MotifSlice::new(9, 701, 1)
         ]);
 
-        eeg_id_fragments_map.insert(1i64, vec![
+        eeg_id_fragments_map.insert("i".to_string(), vec![
             MotifSlice::new(7, 200, 0),
             MotifSlice::new(7, 401, 1),
             MotifSlice::new(9, 600, 0),

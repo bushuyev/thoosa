@@ -42,12 +42,15 @@ pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
 
     debug!("separated_groups={:?}", separated_groups);
     let separated_groups_map = if !separated_groups.is_empty() {
-        let map = group_slices(separated_groups.into_iter()).values().fold(HashMap::new(), |mut h, v| {
-            for i in v.iter().skip(1) {
-                h.insert(v[0], *i);
-            }
-            h
-        });
+        let map = group_slices(separated_groups.into_iter()) //group separated groups same as slices
+            .values()
+            .fold(HashMap::new(), |mut h, v| {
+
+                for i in v.iter().skip(1) {
+                    h.insert(v[0], *i);
+                }
+                h
+            });
         debug!("separated_groups group_motifs={:?}", map);
         Some(map)
     } else {
@@ -56,7 +59,7 @@ pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
 
     let mut groups: HashMap<u16, Vec<T>> = HashMap::new();
     for (val, group) in pairs_groups {
-        let group= separated_groups_map.as_ref().and_then(|m|m.get(&group)).unwrap_or(&group);
+        let group= separated_groups_map.as_ref().and_then(|m|m.get(&group)).unwrap_or(&group); //replace separted group pairs with one in pair
         let mut gr_vec = groups.entry(*group).or_insert_with(|| vec![]);
         gr_vec.push(val);
     }
