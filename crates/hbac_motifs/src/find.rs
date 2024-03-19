@@ -15,7 +15,7 @@ use clap::clap_derive::{Args, Parser, Subcommand};
 use hbac_shared::parse_key_val;
 
 use log::{debug, info, warn};
-use rayon::iter::{ParallelBridge, ParallelIterator};
+use rayon::iter::{ParallelBridge, ParallelIterator, split};
 use rayon::iter::IntoParallelIterator;
 use tch::{Device, IndexOp, Tensor};
 use hbac_common::utils::*;
@@ -33,7 +33,7 @@ use crate::distance::slice_t;
 use crate::distance::dist_d2;
 use core::slice::Windows;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {
     #[arg(long, default_value_t = 1000)]
     step: usize,
@@ -46,6 +46,9 @@ pub struct FindMotifsParams {
 
     #[arg(long, default_value = "seizure_vote")]
     kind: String,
+
+    // #[arg(long, default_value = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])]
+    // classes: String,
 
     #[arg(long, default_value = "../../data_local/motifs")]
     descr: String,
@@ -67,6 +70,13 @@ impl FindMotifsParams {
     pub fn kind(&self) -> &str {
         &self.kind
     }
+
+    pub fn for_class(class:&str, other:FindMotifsParams)->Self {
+        FindMotifsParams{
+            kind: class.to_string(),
+            ..other
+        }
+    }
 }
 
 
@@ -75,7 +85,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
 
     let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
-    let slots_to_process = slots_to_process.pow(2) / 2 - slots_to_process; // n x n - diagonal
+    let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
 
 
     let ids = eegs.filter(|e|e.is_some()).map(|e|e.unwrap()).collect::<Vec<i64>>();
@@ -88,15 +98,14 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let mut all_motif_trackers = min_dot
         .into_iter()
         .enumerate()
-        // .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))))//TODO name
         .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, i)))//TODO name
         .collect::<Vec<SimpMotifTracker<_>>>();
 
-
+    let class = find_motifs_params.kind.clone();
     let mut cache = CacheOnThreads::new(loader, find_motifs_params.max_keys_fifo, Some(Box::new(move ||{
         // let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
 
-        warn!("blocking")
+        warn!("blocking for {}", class)
     })));
 
 
@@ -104,12 +113,11 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     v_w_0.push(&[]);//to get last window processed
     let mut v_w_1 = eeg_ids_str.chunks(find_motifs_params.chunk_size).collect::<Vec<&[String]>>();
     v_w_1.push(&[]);
-    let mut c = 0;
 
     let t1 = Instant::now();
     let mut slots_processed = 0;
 
-    v_w_0.windows(2).enumerate().for_each(|(chunk_i_0, vw_0_01)|{
+    v_w_0.windows(2).enumerate().for_each(|(chunk_i_0, vw_0_01)|{//curren,preload windows
         let vw_0 = vw_0_01[0];
 
         let t_0_tensors = cache.blocking_get_1(vw_0).into_iter().map(|t|{
@@ -129,7 +137,6 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
         let sizes_0 = t_0_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
 
-        // let t_0_sliced = z_norm(&Tensor::vstack(&t_0_tensors), 2);
         let t_0_sliced = Tensor::vstack(&t_0_tensors);
 
         debug!("find_motifs_euc: t_0_sliced i_0={} merged={:?} sizes_0={:?}", chunk_i_0, t_0_sliced.size(), sizes_0);
@@ -155,7 +162,6 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
             let sizes_1 = t_1_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
 
-            // let t_1_sliced = z_norm(&Tensor::vstack(&t_1_tensors), 2);
             let t_1_sliced = Tensor::vstack(&t_1_tensors);
             debug!("find_motifs_euc: t_1_sliced merged={:?} sizes_1={:?}", t_1_sliced.size(), sizes_1);
 
@@ -196,25 +202,28 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                 if  (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < mean {
                                     mt.track((vw_0[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64).into(), (vw_1[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)
                                 }
-                                slots_processed+=1;
+
+                                if c == 0 {
+                                    slots_processed += 1;
+                                    if slots_processed % 100_000 == 0 {
+                                        let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
+                                        let (remaining, overflow) = if slots_to_process > slots_processed {
+                                            ((slots_to_process - slots_processed) / (slots_per_sec + 1), false)
+                                        } else {
+                                            ((slots_processed - slots_to_process) / (slots_per_sec + 1), true)
+                                        };
+                                        info!("class: {} pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min {}", find_motifs_params.kind, slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, remaining/60, if overflow {"overflow"} else {""} )
+                                    }
+                                }
                             }
                         }
                         i_0+= 1;
                     }
 
-                    if slots_processed > 0 && slots_processed % 10_000 == 0 {
-
-                        let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
-                        let (remaining, overflow) = if slots_to_process > slots_processed {
-                            ((slots_to_process - slots_processed)/(slots_per_sec +1), false)
-                        }  else {
-                            ((slots_processed - slots_to_process )/(slots_per_sec +1), true)
-                        };
-                        info!("pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min {}", slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, remaining/60, if overflow {"overflow"} else {""} )
-                    }
                 }
                 mt.dump();
             }
+
         })
     });
 
@@ -222,7 +231,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
         { store.lock()?.set_motifs(run_id, i as i64)}?;
     }
 
-    info!("done {}/{}", slots_to_process, slots_processed);
+    info!("{} done {}/{}", find_motifs_params.kind, slots_to_process, slots_processed);
 
     Ok(())
 }
@@ -516,8 +525,55 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
 }
 
 
-fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<i64>)>>>>, eegs_iter_f: I, class_label: i64, limit: Option<usize>, step: usize, threshold: f32) -> Result<(), HbacError>
-    where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
+/**
+ * series - [channel x data]
+ * motifs = [channel x motif x data slice]
+ */
+fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
+
+    let channels_num = series.size()[0];
+    let series_len = series.size()[1];
+    let motifs_num = motifs.size()[1];
+    let motif_len = motifs.size()[2];
+
+    //channels, motif, motif x series dots
+    let mut matches:Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_|Vec::new()).collect();
+
+    let slices = slice_t(&series, step as i32, motif_len);
+
+    for c in 0..channels_num {
+        let t_0 = slices.i((.., c, ..));
+
+        let t_1 = motifs.i((c, .., ..));
+
+        let dt = dist_d2(1, &t_0, &t_1).expect(format!("dist_d2 on channel={}", c).as_str());
+        debug!("t_0={:?} t_1={:?} dt.size={:?}", t_0.size(), t_1.size(), dt.size());
+
+
+        for motif in 0..motifs_num{
+            let vec = from::<Vec<f32>>(&dt.i((.., motif)));
+            debug!("c={} motif={} vec={:?}", c, motif,  vec);
+
+            matches[c as usize].push(vec);
+        }
+    }
+
+    let matches = Tensor::vstack(matches.into_iter().map(|channel_motifs| {
+
+        Tensor::from_slice(channel_motifs.into_iter().map(|motifs_dots| {
+
+            motifs_dots.into_iter().map(|v| if v< threshold { 1 } else {0}).sum()
+
+        }).collect::<Vec<i32>>().as_slice())
+
+    }).collect::<Vec<Tensor>>().as_slice());
+
+    Ok(matches)
+}
+
+
+fn clc_motifs_matches_for_class<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<i64>)>>>>, eegs_iter_f: I, class_label: i64, limit: Option<usize>, step: usize, threshold: f32) -> Result<(), HbacError>
+    where I:Iterator<Item=Box<Tensor>>, I: std::marker::Send {
 
     let mut count = AtomicU64::new(0);
 
@@ -528,7 +584,8 @@ fn dot_motifs<I>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Ar
 
     for eeg in eegs_iter_f {
 
-        let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
+        // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
+        let matches = clc_dist_matches(&eeg, &motifs, step, threshold)?;
 
         for motif_i in 0..motifs_num {
 
@@ -577,14 +634,14 @@ pub struct SelectMotifsParams {
     window: usize,
 
     #[arg(long, value_parser=parse_key_val::<i64, String>)]
-    label_tensors: Vec<(i64, String)>,//TODO rename to label_kinds
+    classes_tensors: Vec<(i64, String)>,
 
 }
 
 impl SelectMotifsParams {
 
-    pub fn label_tensors(&self) -> &Vec<(i64, String)> {
-        &self.label_tensors
+    pub fn classes_tensors(&self) -> &Vec<(i64, String)> {
+        &self.classes_tensors
     }
 
     pub fn run_id(&self) -> usize {
@@ -599,7 +656,7 @@ impl SelectMotifsParams {
 }
 
 pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
-    where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+    where I:Iterator<Item=Box<Tensor>> + Send + Sync {
     let motifs_size = motifs.size();
 
     debug!("select_motifs: find_good_motifs: motifs={:?}", motifs_size);
@@ -624,7 +681,7 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
 
 
     labels_loaders.into_iter().par_bridge().try_for_each(|(label, loader)|{
-        dot_motifs(
+        clc_motifs_matches_for_class(
             &unsafe {Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor)},
             &Tensor::zeros(slice_len, (tch::Kind::Float, device)), //TODO
             Arc::clone(&channels_motifs_classes_lock),
@@ -1704,6 +1761,57 @@ mod motif_find_tests {
     }
 
     #[test]
+    fn test_clc_dist_matches() -> Result<(), HbacError>{
+        let t_0 = Tensor::vstack(&[
+            Tensor::from_slice(&[1.,  1.,  1.,  1.,  2.,  2.,  3.,  3.,  1.]),//channel 0
+            Tensor::from_slice(&[10., 10., 10., 20., 20., 20., 30., 30., 10.])//channel 1
+        ]);
+
+        let motifs_t = Tensor::vstack(&[
+            Tensor::vstack(&[ //channel 0
+                Tensor::from_slice(&[1.,  1.,  1.]),//motif 0  - matches twice
+                Tensor::from_slice(&[1.,  2.,  2.]),//motif 1  - matches once
+                Tensor::from_slice(&[3.,  3.,  1.]),//motif 2  - matches once
+                Tensor::from_slice(&[1.,  7.,  1.]),//motif 3  - no matches
+            ]),
+            Tensor::vstack(&[//channel 1
+                Tensor::from_slice(&[10.,  70.,  10.]),//no matches
+                Tensor::from_slice(&[30.,  30.,  10.]),//matches once
+                Tensor::from_slice(&[10.,  20.,  20.]),//matches once
+                Tensor::from_slice(&[10.,  10.,  10.]),//matches once
+            ])
+        ]).view((2, 4, -1));
+
+        let matches_t = Tensor::vstack(&[
+            Tensor::from_slice(&[ //channel 0
+                2,//motif 0
+                1,//motif 1
+                1,//motif 2
+                0,//motif 3
+            ]),
+            Tensor::from_slice(&[//channel 1
+                0,//motif 3
+                1,//motif 2
+                1,//motif 1
+                1,//motif 0
+            ])
+        ]).totype(Int);
+
+
+
+        let tensor = super::clc_dist_matches(&t_0, &motifs_t, 1, 0.01)?;
+
+        tensor.print();
+
+        assert_eq!(matches_t, tensor);
+
+
+
+        Ok(())
+
+    }
+
+    #[test]
     fn test_par(){
         let t = Tensor::from_slice(&[1., 2., 3.]);
         let ptr = t.as_ptr() as usize;
@@ -1729,57 +1837,75 @@ mod motif_find_tests {
 
     #[test]
     fn test_test(){
-        let v = vec!["a1a2a3a4", "b1b2b3b4", "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4", "g1g2g3g4"];
+        let params_1 = crate::find::FindMotifsParams {
+            step: 100,
+            window: 111,
+            min_dot: 0.9,
+            kind: "zzz".to_string(),
+            descr: "".to_string(),
+            preload_d: 0,
+            max_keys_fifo: 0,
+            chunk_size: 0,
+            max_dist_k: 0.0,
+        };
 
-        let v_w_0 = v.chunks(2).collect::<Vec<&[&str]>>();
-        let v_w_1 = v.chunks(2).collect::<Vec<&[&str]>>();
-        let mut c = 0;
+        println!("params_1={:?}", params_1);
 
-        for (c_i, chunk) in v_w_0.iter().enumerate(){
-            println!("c_i={} chunk={:?}", c_i, chunk);
-        }
+        let params_2 = crate::find::FindMotifsParams::for_class("aaa", params_1);
 
 
-        // let mut vw_0_windows = v_w_0.windows(2); //.collect::<Vec<Windows<'_, &[&[&str]]>>>();
-        // // vw_1_windows.  //push(vw_1_windows.last().unwrap().clone());
-        // for (w_i, window) in vw_0_windows.clone().enumerate(){
-        //     println!("w_i={} window={:?}", w_i, window);
+        println!("params_2={:?}", params_2);
+        // let v = vec!["a1a2a3a4", "b1b2b3b4", "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4", "g1g2g3g4"];
+        //
+        // let v_w_0 = v.chunks(2).collect::<Vec<&[&str]>>();
+        // let v_w_1 = v.chunks(2).collect::<Vec<&[&str]>>();
+        // let mut c = 0;
+        //
+        // for (c_i, chunk) in v_w_0.iter().enumerate(){
+        //     println!("c_i={} chunk={:?}", c_i, chunk);
         // }
         //
         //
-        // let vw_1_windows = v_w_1.windows(2); //.collect::<Vec<Windows<'_, &[&[&str]]>>>();
-        // vw_2_windows.push(vw_2_windows.last().unwrap().clone());
-        let mut v_w_0_i = v_w_0.iter();
-        let mut next = v_w_0_i.next();
-
-        v_w_0_i.enumerate().for_each(|(i_0, vw0_01)|{
-            // let vw0 = vw0_01[0];
-            println!("chunk={:?}", next.replace(vw0_01));
-
-
-
-            // FirstLastRepeat::new(vw_1_windows.clone(), Repeat::Last).enumerate().skip(i_0).for_each(|(i_1, vw1_01)| {
-            //     let vw1 = vw1_01[0];
-            //     println!("vw1={:?} vw2={:?}", vw0, vw1);
-            //
-            //     vw0.chunks(2).flat_map(|v|v.into_iter()).for_each(|w1|{
-            //         w1.chars().collect::<Vec<char>>().chunks(2).for_each(|c1|{
-            //
-            //             vw1.chunks(2).flat_map(|v|v.into_iter()).for_each(|w2|{
-            //
-            //                 w2.chars().collect::<Vec<char>>().chunks(2).for_each(|c2| {
-            //                     println!("c1={:?} c2={:?}", c1.into_iter().collect::<String>(), c2.into_iter().collect::<String>());
-            //                     c+=1;
-            //                 });
-            //             })
-            //         })
-            //
-            //     });
-            // });
-        });
-
-        println!("chunk={:?}", next.take());
-
-        println!("c={}", c);
+        // // let mut vw_0_windows = v_w_0.windows(2); //.collect::<Vec<Windows<'_, &[&[&str]]>>>();
+        // // // vw_1_windows.  //push(vw_1_windows.last().unwrap().clone());
+        // // for (w_i, window) in vw_0_windows.clone().enumerate(){
+        // //     println!("w_i={} window={:?}", w_i, window);
+        // // }
+        // //
+        // //
+        // // let vw_1_windows = v_w_1.windows(2); //.collect::<Vec<Windows<'_, &[&[&str]]>>>();
+        // // vw_2_windows.push(vw_2_windows.last().unwrap().clone());
+        // let mut v_w_0_i = v_w_0.iter();
+        // let mut next = v_w_0_i.next();
+        //
+        // v_w_0_i.enumerate().for_each(|(i_0, vw0_01)|{
+        //     // let vw0 = vw0_01[0];
+        //     println!("chunk={:?}", next.replace(vw0_01));
+        //
+        //
+        //
+        //     // FirstLastRepeat::new(vw_1_windows.clone(), Repeat::Last).enumerate().skip(i_0).for_each(|(i_1, vw1_01)| {
+        //     //     let vw1 = vw1_01[0];
+        //     //     println!("vw1={:?} vw2={:?}", vw0, vw1);
+        //     //
+        //     //     vw0.chunks(2).flat_map(|v|v.into_iter()).for_each(|w1|{
+        //     //         w1.chars().collect::<Vec<char>>().chunks(2).for_each(|c1|{
+        //     //
+        //     //             vw1.chunks(2).flat_map(|v|v.into_iter()).for_each(|w2|{
+        //     //
+        //     //                 w2.chars().collect::<Vec<char>>().chunks(2).for_each(|c2| {
+        //     //                     println!("c1={:?} c2={:?}", c1.into_iter().collect::<String>(), c2.into_iter().collect::<String>());
+        //     //                     c+=1;
+        //     //                 });
+        //     //             })
+        //     //         })
+        //     //
+        //     //     });
+        //     // });
+        // });
+        //
+        // println!("chunk={:?}", next.take());
+        //
+        // println!("c={}", c);
     }
 }

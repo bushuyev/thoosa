@@ -1042,6 +1042,7 @@ dependencies = [
  "regex",
  "simplelog",
  "tch",
+ "torch-sys",
 ]
 
 [[package]]

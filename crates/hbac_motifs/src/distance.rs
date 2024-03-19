@@ -28,9 +28,8 @@ pub fn dist_d2(dim: i64, slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, H
 }
 
 pub fn slice_t(t_0: &Tensor, step: i32, window: i64) -> Tensor {
-    Tensor::stack(&(0..=t_0.size()[1] - window).step_by(step as usize).map(|i|
-        t_0.i((.., i..i + window))
-    ).collect::<Vec<Tensor>>(), 0)
+
+    Tensor::stack(&(0..=t_0.size()[1] - window).step_by(step as usize).map(|i| t_0.i((.., i..i + window))).collect::<Vec<Tensor>>(), 0)
 }
 
 
@@ -141,4 +140,10 @@ mod distance_tests {
         Ok(())
     }
 
+    #[test]
+    fn test_slice_t(){
+        let tensor = super::slice_t(&Tensor::from_slice(&[1., 2., 3., 4., 5.]).view((1, -1)), 1, 2);
+
+        assert_eq!(Tensor::from_slice(&[1., 2., 2., 3., 3., 4., 4., 5.,]).view((4, 1, 2)), tensor);
+    }
 }

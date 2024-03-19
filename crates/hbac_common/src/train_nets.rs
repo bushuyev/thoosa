@@ -168,7 +168,7 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor)
 }
 
 pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<VarStore, HbacError>
-    where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+    where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
     let mut labels_loaders = labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
@@ -198,7 +198,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
                 .into_iter()
                 .map(|l|{
                     l.map(|t|{
-                        Ok(apply_motifs(motif_n, step, &t.unwrap(), &motif_nets, motif_batch_size, channels, max_motif_batches, device))
+                        Ok(apply_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, channels, max_motif_batches, device))
                     })
                 })
                 .collect::<Vec<_>>())

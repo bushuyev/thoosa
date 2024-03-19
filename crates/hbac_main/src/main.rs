@@ -15,7 +15,7 @@ use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::Series;
-use hbac_common::utils::{cdt, DataBatch, dot_norm, from, load_tensor, norm_2, plot_series};
+use hbac_common::utils::{cdt, DataBatch, dot_norm, from, list_devices, load_tensor, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
 use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
@@ -24,8 +24,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use plotters::prelude::BLACK;
+use polars::export::rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use tch::Device::Cpu;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
+
 use hbac_common::builder::{Node, SeqBuilder};
 use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams, infer};
 use hbac_common::simp::DummyDs;
@@ -34,6 +36,7 @@ use hbac_store::{SqlStore, Store};
 use hbac_shared::*;
 use hbac_shared::TensorSliceIdx;
 use crate::Commands::TrainOnEEG;
+use polars::export::rayon::iter::ParallelIterator;
 
 
 mod data;
@@ -113,6 +116,9 @@ fn _main() -> Result<(), HbacError> {
         ]
     )?;
 
+
+
+    let devices = list_devices();
     let device = if tch::utils::has_cuda() {
         Device::Cuda(0)
     } else {
@@ -128,32 +134,71 @@ fn _main() -> Result<(), HbacError> {
 
 
     rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
-
-    let base_path = cli.base_path.clone();
+    let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];//TODO conf
 
     match &cli.command {
 
+        /**
+        good_eegs_of
+        class=seizure_vote len=2227
+        class=lpd_vote len=1181
+        class=gpd_vote len=806
+        class=lrda_vote len=384
+        class=grda_vote len=1154
+        class=other_vote len=4208
+        */
         Some(Commands::FindMotifs(find_motifs_params)) => {
-            info!("find_motifs_params={:?}", find_motifs_params);
+            info!("find_motifs_params={:?} devices={:?}", find_motifs_params, devices);
 
-            let eeg_id_series = EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind(), cli.limit)?;
 
-            let records_num = clc_records(&eeg_id_series, base_path.as_str())?;
-            debug!("records_num={}", records_num);
+            let devices_classes = devices.into_iter().cycle().zip(classes.into_iter()).collect::<Vec<(Device, &str)>>();
+            // let base_path = base_path.clone();
+            // let tensors_path = cli.tensors_path.clone();
+            devices_classes.into_par_iter().for_each( move |(device_i, class)|{
 
-            find::find_motifs_euc(
-                move |key: &String| {
-                    if let Some(tensors_path) = cli.tensors_path.as_ref() {
-                        Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
-                    } else {
-                        Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
-                    }
-                },
-                find_motifs_params,
-                records_num,
-                eeg_id_series.i64()?.into_iter(),
-                Arc::clone(&store), 20,
-            )?;
+                let eeg_id_series = EEGs::good_eegs_of(cli.base_path.as_str(), class, cli.limit).unwrap();
+
+                let records_num = clc_records(&eeg_id_series, cli.base_path.as_str()).unwrap();
+                debug!("records_num={}", records_num);
+                let tensors_path = cli.tensors_path.clone();
+                let base_path = cli.base_path.clone();
+                find::find_motifs_euc(
+                    move |key: &String| {
+                        if let Some(tensors_path) = tensors_path.as_ref() {
+                            Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device_i).unwrap())
+                        } else {
+                            Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device_i).unwrap())
+                        }
+                    },
+                    &FindMotifsParams::for_class(class, find_motifs_params.clone()),
+                    records_num,
+                    eeg_id_series.i64().unwrap().into_iter(),
+                    Arc::clone(&store), 20,
+                ).unwrap();
+            });
+
+            // for ((device_i, class)) in devices_classes.par_iter() {
+            //     let eeg_id_series = EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind(), cli.limit)?;
+            //
+            //     let records_num = clc_records(&eeg_id_series, base_path.as_str())?;
+            //     debug!("records_num={}", records_num);
+            //
+            //     find::find_motifs_euc(
+            //         move |key: &String| {
+            //             if let Some(tensors_path) = cli.tensors_path.as_ref() {
+            //                 Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device_i).unwrap())
+            //             } else {
+            //                 Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device_i).unwrap())
+            //             }
+            //         },
+            //         find_motifs_params,
+            //         records_num,
+            //         eeg_id_series.i64()?.into_iter(),
+            //         Arc::clone(&store), 20,
+            //     )?;
+            // }
+
+
         }
 
         Some(Commands::PlotMotifSlices(plot_motif_slices_params)) => {
@@ -180,12 +225,18 @@ fn _main() -> Result<(), HbacError> {
         Some(Commands::MotifsToTensor(choose_fragments_params)) => {
 
             let mut store_guard = store.lock()?;
-
+            let base_path = cli.base_path.clone();
             let t = motifs_to_tensor(
                 cli.base_path.as_str(),
                 store_guard.motifs_to_eeg_slices(choose_fragments_params.run_id())?,
                 store_guard.list_run_resources(choose_fragments_params.run_id())?,
-                data::parquet_to_tensor,
+                move |key: &String| {
+                    if let Some(tensors_path) = cli.tensors_path.as_ref() {
+                        Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
+                    } else {
+                        Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
+                    }
+                },
                 choose_fragments_params.window(),
                 20,
                 device
@@ -201,11 +252,21 @@ fn _main() -> Result<(), HbacError> {
             info!("select_motifs: select_motifs_params={:?}", select_motifs_params);
 
             let mut store_guard = store.lock()?;
+            let tensors_path = cli.tensors_path.clone();
+            let base_path = cli.base_path.clone();
+
             let (motifs, channel_motif_ids) = motifs_to_tensor(
                 cli.base_path.as_str(),
                 store_guard.motifs_to_eeg_slices(select_motifs_params.run_id())?,
                 store_guard.list_run_resources(select_motifs_params.run_id())?,
-                data::parquet_to_tensor,
+                // data::parquet_to_tensor,
+                move |key: &String| {
+                    if let Some(tensors_path) = tensors_path.as_ref() {
+                        Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
+                    } else {
+                        Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
+                    }
+                },
                 select_motifs_params.window() as i64,
                 20,
                 device
@@ -213,9 +274,10 @@ fn _main() -> Result<(), HbacError> {
 
             info!("select_motifs: motifs tensor built, size={:?}", motifs.size());
 
+            let tensors_path =  cli.tensors_path.clone();
             let channels_good_motif_idxs = select_motifs(
                 motifs,
-                eegs_to_labels_tensors(cli.base_path.as_str(), select_motifs_params.label_tensors(), &device, cli.limit.as_ref()),
+                eegs_to_labels_tensors(cli.base_path.as_str(), tensors_path, select_motifs_params.classes_tensors(), &device, cli.limit.as_ref()),
                 cli.limit,
                 select_motifs_params.step(),
                 device
@@ -230,7 +292,7 @@ fn _main() -> Result<(), HbacError> {
             debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
             info!("select_motifs: motifs_corrs.len()={:?}", motifs_corrs.len());
 
-            store_guard.save_motifs_corrs(format!("{:?}", select_motifs_params.label_tensors()).as_str(), motifs_corrs)?;//TODO label_tensors
+            store_guard.save_motifs_corrs(format!("{:?}", select_motifs_params.classes_tensors()).as_str(), motifs_corrs)?;//TODO label_tensors
 
             // t.save(find_good_motifs_params.output_motifs_tensor_path())?;
         }
@@ -301,6 +363,7 @@ fn _main() -> Result<(), HbacError> {
                 train_on_eeg_params,
                 eegs_to_labels_tensors(
                     cli.base_path.as_str(),
+                    cli.tensors_path,
                     &labels_kinds,
                     &device,
                     cli.limit.as_ref()
@@ -386,7 +449,7 @@ fn _main() -> Result<(), HbacError> {
 mod main_tests {
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
-    use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
+    // use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
 
     #[test]
     fn test_it() -> Result<(), HbacError>{
@@ -412,36 +475,36 @@ mod main_tests {
         Ok(())
     }
 
-    #[test]
-    fn motifs_to_store() -> Result<(), HbacError>{
-        let runs = vec![
-            ("2024-02-14T17:36:36Z", "seizure"),
-            ("2024-02-15T17:14:09Z", "lpd"),
-            ("2024-02-16T06:34:04Z", "gpd"),
-            ("2024-02-16T11:31:30Z", "lrda"),
-            ("2024-02-16T16:29:11Z", "grda"),
-            ("2024-02-19T07:12:01Z", "other"),
-        ];
-
-        let mut store = SqlStore::new("hbac_imp.db3")?;
-
-        for (dir, desc) in runs {
-            let (_, eeg_ids) = read_eeg_index(format!("../../data_down/14_02_results/{}", dir).as_str())?;
-
-            let run_id = store.save_run(format!("{}/csv motifs import", desc).as_str(), &eeg_ids)?;
-
-            for channel in 0..20 {
-                let r = read_motif_to_iter_imp(format!("../../data_down/14_02_results/{}/motifs_{}.csv", dir, channel).as_str())?;
-
-                for chunk in r.chunks(500) {
-                    store.save_slices(run_id, channel, chunk.to_vec());
-                }
-
-                store.set_motifs(run_id, channel);
-
-                println!("desc={}, channel={}, run_id={}, r.len()={}", desc, channel, run_id, r.len());
-            }
-        }
-        Ok(())
-    }
+    // #[test]
+    // fn motifs_to_store() -> Result<(), HbacError>{
+    //     let runs = vec![
+    //         ("2024-02-14T17:36:36Z", "seizure"),
+    //         ("2024-02-15T17:14:09Z", "lpd"),
+    //         ("2024-02-16T06:34:04Z", "gpd"),
+    //         ("2024-02-16T11:31:30Z", "lrda"),
+    //         ("2024-02-16T16:29:11Z", "grda"),
+    //         ("2024-02-19T07:12:01Z", "other"),
+    //     ];
+    //
+    //     let mut store = SqlStore::new("hbac_imp.db3")?;
+    //
+    //     for (dir, desc) in runs {
+    //         let (_, eeg_ids) = read_eeg_index(format!("../../data_down/14_02_results/{}", dir).as_str())?;
+    //
+    //         let run_id = store.save_run(format!("{}/csv motifs import", desc).as_str(), &eeg_ids)?;
+    //
+    //         for channel in 0..20 {
+    //             let r = read_motif_to_iter_imp(format!("../../data_down/14_02_results/{}/motifs_{}.csv", dir, channel).as_str())?;
+    //
+    //             for chunk in r.chunks(500) {
+    //                 store.save_slices(run_id, channel, chunk.to_vec());
+    //             }
+    //
+    //             store.set_motifs(run_id, channel);
+    //
+    //             println!("desc={}, channel={}, run_id={}, r.len()={}", desc, channel, run_id, r.len());
+    //         }
+    //     }
+    //     Ok(())
+    // }
 }

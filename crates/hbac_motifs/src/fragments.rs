@@ -176,15 +176,15 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when motifs in channel < max
 */
 pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
-    where F:Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
+    where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let mut channels_motifs_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
 
     for (eeg_idx, channels_motifslices) in eeg_id_fragments_map {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
-        let eeg_id = eeg_idx; //eegs[eeg_idx].clone();
-        let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), device)?;//TODO use always CPU? no clc
+        // let eeg_id = eeg_idx; //eegs[eeg_idx].clone();
+        let eeg_t = (read_eeg_to_tensor)(&eeg_idx);//TODO use always CPU? no clc
 
         for fragment in channels_motifslices {
 
@@ -604,22 +604,22 @@ mod motifs_tests {
             MotifSlice::new(9, 801, 1)
         ]);
 
-        fn test_eeg_to_t(base_dir:&str, eeg_id:&str, _:Device) -> Result<Tensor, HbacError> {
+        fn test_eeg_to_t(eeg_id:&String) -> Box<Tensor> {
             let data = (0..1000).map(|i| i as f64).collect::<Vec<f64>>();
-            Ok(match eeg_id {
-                "111"=>Tensor::vstack(&[
+            match eeg_id.as_str() {
+                "111"=>Box::new(Tensor::vstack(&[
                     Tensor::from_slice(data.as_slice()),//ch 0
                     Tensor::from_slice(data.as_slice()) //ch 1
-                ]),
+                ])),
 
-                "222"=>Tensor::vstack(&[
+                "222"=>Box::new(Tensor::vstack(&[
                     Tensor::from_slice(data.as_slice()),//ch 0
                     Tensor::from_slice(data.as_slice()) //ch 1
-                ]),
+                ])),
 
                 _=>panic!("eeg_id={}", eeg_id)
 
-            })
+            }
         }
 
         let (t, motif_ids) = super::motifs_to_tensor(

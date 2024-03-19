@@ -115,25 +115,26 @@ impl Store for SqlStore {
 
         assert!(slices.len() > 0);
 
-        let (mut q, params) = slices.into_iter().fold(
-            (vec!["INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
-            a.0.push("(?, ?, ?, ?, ?, ?, ?)");
-            a.0.push(", ");
+        for slices_chunk in slices.chunks(500) {
+            let (mut q, params) = slices_chunk.into_iter().fold(
+                (vec!["INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+                    a.0.push("(?, ?, ?, ?, ?, ?, ?)");
+                    a.0.push(", ");
 
-            a.1.push(Value::Integer(run_id as i64));
-            a.1.push(Value::Integer(channel as i64));
-            a.1.push(Value::Text(v.0.0));
-            a.1.push(Value::Integer(v.0.1));
-            a.1.push(Value::Text(v.1.0));
-            a.1.push(Value::Integer(v.1.1));
-            a.1.push(Value::Real(v.2 as f64));
-            a
-        });
+                    a.1.push(Value::Integer(run_id as i64));
+                    a.1.push(Value::Integer(channel as i64));
+                    a.1.push(Value::Text(v.0.0.clone()));
+                    a.1.push(Value::Integer(v.0.1));
+                    a.1.push(Value::Text(v.1.0.clone()));
+                    a.1.push(Value::Integer(v.1.1));
+                    a.1.push(Value::Real(v.2 as f64));
+                    a
+                });
 
-        q.pop();
+            q.pop();
 
-        t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-
+            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+        }
         t.commit()?;
 
         Ok(())
@@ -333,15 +334,15 @@ impl Store for SqlStore {
             let (slices, channel_set, run_id) = stmt.query_map(params, |row| {
                 Ok((
                     row.get::<usize, i64>(0)?,//channel_id
-                    row.get::<usize, i64>(1)?,//tensor_id_0
+                    row.get::<usize, String>(1)?,//tensor_id_0
                     row.get::<usize, i64>(2)?,//slice_idx_0
-                    row.get::<usize, i64>(3)?,//tensor_id_1
+                    row.get::<usize, String>(3)?,//tensor_id_1
                     row.get::<usize, i64>(4)?,//slice_idx_1
                     row.get::<usize, usize>(5)?,//run_id
                 ))
             })?.map(|v| v.unwrap()).fold((HashSet::new(), HashSet::new(), None), |(mut a, mut channel_set, mut run_id), v| {
-                a.insert(TensorSliceIdx(v.1.to_string(), v.2 as i64));
-                a.insert(TensorSliceIdx(v.3.to_string(), v.4 as i64));
+                a.insert(TensorSliceIdx(v.1, v.2 as i64));
+                a.insert(TensorSliceIdx(v.3, v.4 as i64));
 
                 channel_set.insert(v.0);//TODO replace with Option
 
@@ -470,12 +471,12 @@ mod store_tests{
         fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
 
-        let map :Vec<((usize, i64),(usize, i64),f32)> = vec![
-            ((0usize, 100i64), (0usize, 200i64), 0.91),
-            ((0usize, 100i64), (1usize, 200i64), 0.92),
-            ((3usize, 100i64), (3usize, 200i64), 0.93),
-            ((3usize, 200i64), (5usize, 200i64), 0.94),
-            ((3usize, 200i64), (5usize, 300i64), 0.94),
+        let map :Vec<((String, i64),(String, i64),f32)> = vec![
+            (("0".to_string(), 100i64), ("0".to_string(), 200i64), 0.91),
+            (("0".to_string(), 100i64), ("1".to_string(), 200i64), 0.92),
+            (("3".to_string(), 100i64), ("3".to_string(), 200i64), 0.93),
+            (("3".to_string(), 200i64), ("5".to_string(), 200i64), 0.94),
+            (("3".to_string(), 200i64), ("5".to_string(), 300i64), 0.94),
         ];
 
         let run_id= store.save_run("test", &vec!["aaa".to_string(), "bbb".to_string()])?;
@@ -499,22 +500,22 @@ mod store_tests{
                     row.get(5)?,//slice_idx_1
                     row.get(6)? //motif_id
                 ))
-            })?.map(|v|v.unwrap()).collect::<Vec<(i64, i64, i64, i64, i64, i64, i64)>>();
+            })?.map(|v|v.unwrap()).collect::<Vec<(i64, i64, String, i64, String, i64, i64)>>();
 
             let m_1_first = vec![
-                (1, 7, 0, 100, 0, 200, 1),
-                (1, 7, 0, 100, 1, 200, 1),
-                (1, 7, 3, 100, 3, 200, 2),
-                (1, 7, 3, 200, 5, 200, 2),
-                (1, 7, 3, 200, 5, 300, 2)
+                (1, 7, "0".to_string(), 100, "0".to_string(), 200, 1),
+                (1, 7, "0".to_string(), 100, "1".to_string(), 200, 1),
+                (1, 7, "3".to_string(), 100, "3".to_string(), 200, 2),
+                (1, 7, "3".to_string(), 200, "5".to_string(), 200, 2),
+                (1, 7, "3".to_string(), 200, "5".to_string(), 300, 2)
             ] == rows;
 
             let m_2_first = vec![
-                (1, 7, 0, 100, 0, 200, 2),
-                (1, 7, 0, 100, 1, 200, 2),
-                (1, 7, 3, 100, 3, 200, 1),
-                (1, 7, 3, 200, 5, 200, 1),
-                (1, 7, 3, 200, 5, 300, 1)
+                (1, 7, "0".to_string(), 100, "0".to_string(), 200, 2),
+                (1, 7, "0".to_string(), 100, "1".to_string(), 200, 2),
+                (1, 7, "3".to_string(), 100, "3".to_string(), 200, 1),
+                (1, 7, "3".to_string(), 200, "5".to_string(), 200, 1),
+                (1, 7, "3".to_string(), 200, "5".to_string(), 300, 1)
             ] == rows;
 
             assert!(m_2_first  || m_1_first  );                        //TODO motif ids are random
@@ -535,10 +536,10 @@ mod store_tests{
         println!("map={:?}", map);
 
         assert_eq!(4, map.len());
-        assert_eq!(3, map.get(&0).unwrap().len());
-        assert_eq!(1, map.get(&1).unwrap().len());
-        assert_eq!(4, map.get(&3).unwrap().len());
-        assert_eq!(2, map.get(&5).unwrap().len());
+        assert_eq!(3, map.get(&"0".to_string()).unwrap().len());
+        assert_eq!(1, map.get(&"1".to_string()).unwrap().len());
+        assert_eq!(4, map.get(&"3".to_string()).unwrap().len());
+        assert_eq!(2, map.get(&"5".to_string()).unwrap().len());
 
         assert_eq!(vec!["aaa".to_owned(), "bbb".to_owned()], store.list_run_resources(run_id)?);
 
@@ -552,15 +553,15 @@ mod store_tests{
         assert_eq!(2, motifs[7][1].0);
 
         let (channel, run_id_, mut slices) = store.list_motif_slices(1, None, None)?;
-        slices.sort_by(|a, b| if a.0 + (a.1 as usize) < b.0 + (b.1 as usize) { Ordering::Less } else {Ordering::Greater});
+        slices.sort();
 
         if m_1_first {
             assert_eq!(vec![
-                TensorSliceIdx(0, 100), TensorSliceIdx(0, 200), TensorSliceIdx(1, 200)
+                TensorSliceIdx("0".to_string(), 100), TensorSliceIdx("0".to_string(), 200), TensorSliceIdx("1".to_string(), 200)
             ], slices);
         } else {
             assert_eq!(vec![
-                TensorSliceIdx(3, 100), TensorSliceIdx(3, 200), TensorSliceIdx(5, 200), TensorSliceIdx(5, 300)
+                TensorSliceIdx("3".to_string(), 100), TensorSliceIdx("3".to_string(), 200), TensorSliceIdx("5".to_string(), 200), TensorSliceIdx("5".to_string(), 300)
             ], slices);
         }
 
@@ -569,15 +570,15 @@ mod store_tests{
 
         let (channel, run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id as usize, channel as usize)))?;
 
-        slices.sort_by(|a, b| if a.0 + (a.1 as usize) < b.0 + (b.1 as usize) { Ordering::Less } else {Ordering::Greater});
+        slices.sort();
 
         if !m_1_first {
             assert_eq!(vec![
-                TensorSliceIdx(0, 100), TensorSliceIdx(0, 200), TensorSliceIdx(1, 200)
+                TensorSliceIdx("0".to_string(), 100), TensorSliceIdx("0".to_string(), 200), TensorSliceIdx("1".to_string(), 200)
             ], slices);
         } else {
             assert_eq!(vec![
-                TensorSliceIdx(3, 100), TensorSliceIdx(3, 200), TensorSliceIdx(5, 200), TensorSliceIdx(5, 300)
+                TensorSliceIdx("3".to_string(), 100), TensorSliceIdx("3".to_string(), 200), TensorSliceIdx("5".to_string(), 200), TensorSliceIdx("5".to_string(), 300)
             ], slices);
         }
 

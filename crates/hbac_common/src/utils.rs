@@ -17,7 +17,8 @@ use crate::my_tch::{Fp, LossFp};
 use tch::nn::Optimizer;
 use tch::IndexOp;
 use tch::Kind::Float;
-
+use torch_sys::*;
+use torch_sys::cuda::atc_cuda_device_count;
 
 pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -59,6 +60,15 @@ pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Err
 
 
     Ok(())
+}
+
+pub fn list_devices() ->Vec<Device> {
+    let devices = unsafe {atc_cuda_device_count()};
+    if devices == 0 {
+        vec![Device::Cpu]
+    } else {
+        (0..devices).map(|i|Device::Cuda(i.try_into().unwrap())).collect()
+    }
 }
 
 pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), HbacError> {
@@ -298,6 +308,16 @@ pub mod tests {
         assert_eq!(sample, loaded);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_devices(){
+        let devices = vec!["dev1", "dev2"];
+        let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];
+
+        for (device, class) in devices.into_iter().cycle().zip(classes.into_iter()) {
+            println!("device={} class={}", device, class);
+        }
     }
 }
 

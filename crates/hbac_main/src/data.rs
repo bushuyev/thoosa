@@ -30,7 +30,7 @@ use hbac_shared::HbacError;
 use hbac_shared::MotifSlice;
 use hbac_shared::TensorSliceIdx;
 
-use hbac_common::utils::{DataBatch, from};
+use hbac_common::utils::{DataBatch, from, load_tensor};
 use crate::data;
 
 
@@ -553,6 +553,17 @@ pub fn parquet_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Resul
     parquet_to_tensor_by_path(path, device)
 }
 
+pub fn parquet_or_load_tensor(base_path: &str, tensors_path:Option<String>, key: &str, device: Device) -> Box<Tensor> {
+
+    if let Some(tensors_path) = tensors_path {
+        Box::new(load_tensor(tensors_path.as_str(), key, device).unwrap())
+    } else {
+        Box::new(parquet_to_tensor(base_path, key, device).unwrap())
+    }
+}
+
+
+
 pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
     let df = read_eeg_to_df(path)?;
 
@@ -561,9 +572,10 @@ pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Resu
     Ok(tensor.to_device(device))
 }
 
-pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64, String)>, device: &'a Device, limit:Option<&'a usize>) -> Vec<(i64, impl Iterator<Item=Result<Tensor, HbacError>> + Send + Sync + 'a)> {
+pub fn eegs_to_labels_tensors<'a>( base_path:&'a str, tensors_path:Option<String>, classes_tensor_selectors: &'a Vec<(i64, String)>, device: &'a Device, limit:Option<&'a usize>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
 
-    labels_kinds.into_iter().map(|label_tensors_path| {
+    classes_tensor_selectors.into_iter().map(move |label_tensors_path| {
+        let tensors_path = tensors_path.clone();
 
         let eeg_ids = EEGs::good_eegs_of(base_path, label_tensors_path.1.as_str(), limit.map(|v|*v)).expect("good_eegs_of")
             .i64().expect("good_eegs_of/i64")
@@ -571,10 +583,11 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64,
             .enumerate()
             .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
             .collect::<Vec<String>>();
+
         (
             label_tensors_path.0,
-            eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
-                parquet_to_tensor(base_path, eeg_id.as_str(), *device)
+            eeg_ids.into_iter().map(move |eeg_id| {//TODO CacheOnThreads
+                parquet_or_load_tensor(base_path, tensors_path.clone(), eeg_id.as_str(), *device)
             })
         )//(label, path)
 
@@ -652,29 +665,29 @@ pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx<String>
 
 }
 
-// pub fn read_motif_to_iter(motif_file:&str) -> Result<impl Iterator<Item = (TensorSliceIdx, TensorSliceIdx)>, HbacError>{ TODO LazyCsvReader ?
-pub fn read_motif_to_iter_imp(motif_file:&str) -> Result<Vec<((usize, i64), (usize, i64), f32)>, HbacError>{
-
-    let motif_df = CsvReader::from_path(motif_file)?.has_header(false).finish()?;
-    let columns = motif_df.get_columns();
-
-    Ok(columns[0].i64()?.into_iter().zip(
-        columns[1].i64()?.into_iter().zip(
-            columns[2].i64()?.into_iter().zip(
-                columns[3].i64()?.into_iter().zip(
-                    if columns.len() == 7 {columns[6].f64()?.into_iter()} else {columns[4].f64()?.into_iter()}
-                )
-            )
-        )
-
-    ).map(|v|{
-        let (Some(id_0), (Some(sl_0), (Some(id_1), (Some(sl_1), (Some(dot)))))) = v else {
-            panic!("unexpected entry in motif");
-        };
-        ((id_0 as usize, sl_0), (id_1 as usize, sl_1), dot as f32)
-    }).collect::<Vec<((usize, i64), (usize, i64), f32)>>())
-
-}
+// // pub fn read_motif_to_iter(motif_file:&str) -> Result<impl Iterator<Item = (TensorSliceIdx, TensorSliceIdx)>, HbacError>{ TODO LazyCsvReader ?
+// pub fn read_motif_to_iter_imp(motif_file:&str) -> Result<Vec<((usize, i64), (usize, i64), f32)>, HbacError>{
+//
+//     let motif_df = CsvReader::from_path(motif_file)?.has_header(false).finish()?;
+//     let columns = motif_df.get_columns();
+//
+//     Ok(columns[0].i64()?.into_iter().zip(
+//         columns[1].i64()?.into_iter().zip(
+//             columns[2].i64()?.into_iter().zip(
+//                 columns[3].i64()?.into_iter().zip(
+//                     if columns.len() == 7 {columns[6].f64()?.into_iter()} else {columns[4].f64()?.into_iter()}
+//                 )
+//             )
+//         )
+//
+//     ).map(|v|{
+//         let (Some(id_0), (Some(sl_0), (Some(id_1), (Some(sl_1), (Some(dot)))))) = v else {
+//             panic!("unexpected entry in motif");
+//         };
+//         ((id_0 as usize, sl_0), (id_1 as usize, sl_1), dot as f32)
+//     }).collect::<Vec<((usize, i64), (usize, i64), f32)>>())
+//
+// }
 
 
 pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), HbacError> {
@@ -1128,8 +1141,8 @@ mod data_tests {
         let motifs_iter = read_motif_to_iter("../../data_local/test_motifs/motifs_0.csv")?;
 
         assert_eq!(motifs_iter.len(), 4);
-        assert_eq!((TensorSliceIdx(0, 1000), TensorSliceIdx(1, 3000)), motifs_iter[0]);
-        assert_eq!((TensorSliceIdx(1, 3000), TensorSliceIdx(2, 25000)), motifs_iter[1]);
+        assert_eq!((TensorSliceIdx(0.to_string(), 1000), TensorSliceIdx(1.to_string(), 3000)), motifs_iter[0]);
+        assert_eq!((TensorSliceIdx(1.to_string(), 3000), TensorSliceIdx(2.to_string(), 25000)), motifs_iter[1]);
 
         Ok(())
     }
@@ -1241,7 +1254,10 @@ mod data_tests {
         // println!("good_df={:?}", good_df.head(Some(100)));
 
         // find_max_size()?;
-
+        for class in ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"] {
+            let eeg_id_series = EEGs::good_eegs_of("../../data", class, None).unwrap();
+            println!("class={} len={}", class, eeg_id_series.len());
+        }
 
 
         // good_eegs
