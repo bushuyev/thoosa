@@ -21,7 +21,7 @@ use std::sync::Mutex;
 use crate::my_tch::apply_channel_motifs;
 use regex::Regex;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct TrainOnEEGParams {
 
     #[arg(long)]
@@ -466,7 +466,7 @@ fn load_motif_models(motif_models_path: impl AsRef<Path>, corr_run:usize, channe
 
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct TrainOnMotifsParams {
     #[arg(long)]
     motif_ids: MotifsBy,
@@ -735,7 +735,7 @@ fn apply_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<
     channels_motifs
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct TrainFinalParams {
 
     #[arg(long, default_value_t = 1000)]
@@ -763,7 +763,7 @@ impl TrainFinalParams{
     }
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct InferParams {
 
     #[arg(long, default_value = "../../data_local/corr_motif_models")]

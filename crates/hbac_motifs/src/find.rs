@@ -621,7 +621,7 @@ fn clc_motifs_matches_for_class<I>(motifs: &Tensor, all_zero: &Tensor, channels_
     Ok(())
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
 
     #[arg(long)]
@@ -652,6 +652,13 @@ impl SelectMotifsParams {
     }
     pub fn window(&self) -> usize {
         self.window
+    }
+
+    pub fn for_class(classes_tensors:Vec<(i64, String)>, other:SelectMotifsParams)->Self {
+        SelectMotifsParams{
+            classes_tensors,
+            ..other
+        }
     }
 }
 

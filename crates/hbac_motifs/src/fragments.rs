@@ -282,7 +282,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
     Ok(())
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct PlotMotifSlicesParams {
 
     #[arg(long)]
@@ -361,7 +361,7 @@ pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: V
 }
 
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct MotifsToTensorParams {
 
     #[arg(long)]

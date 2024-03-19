@@ -45,7 +45,7 @@ mod utils;
 mod version;
 
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
 struct Cli {
     #[arg(long, default_value="../../data")]
@@ -77,7 +77,7 @@ struct Cli {
 }
 
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommand, Clone)]
 enum Commands {
     #[command()]
     FindMotifs (FindMotifsParams),
@@ -107,12 +107,12 @@ fn main()  {
 fn _main() -> Result<(), HbacError> {
     let cli = Cli::parse();
 
-    let store = Arc::new(Mutex::new(SqlStore::new(cli.store_path)?));
+    let store = Arc::new(Mutex::new(SqlStore::new(&cli.store_path)?));
 
     CombinedLogger::init(
         vec![
             TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
-            WriteLogger::new(LevelFilter::from_str(cli.write_logger_level.as_str())?, Config::default(), File::create(cli.logfile)?),
+            WriteLogger::new(LevelFilter::from_str(cli.write_logger_level.as_str())?, Config::default(), File::create(&cli.logfile)?),
         ]
     )?;
 
@@ -152,8 +152,7 @@ fn _main() -> Result<(), HbacError> {
 
 
             let devices_classes = devices.into_iter().cycle().zip(classes.into_iter()).collect::<Vec<(Device, &str)>>();
-            // let base_path = base_path.clone();
-            // let tensors_path = cli.tensors_path.clone();
+
             devices_classes.into_par_iter().for_each( move |(device_i, class)|{
 
                 let eeg_id_series = EEGs::good_eegs_of(cli.base_path.as_str(), class, cli.limit).unwrap();
@@ -250,49 +249,23 @@ fn _main() -> Result<(), HbacError> {
         Some(Commands::SelectMotifs(select_motifs_params)) => {
 
             info!("select_motifs: select_motifs_params={:?}", select_motifs_params);
+            let class_run_id:HashMap<&str, usize> = HashMap::from([
+                ("other_vote", 1usize),
+                ("gpd_vote",   2usize),
+                ("grda_vote",  3usize),
+                ("lpd_vote",   4usize),
+                ("lrda_vote",  5usize),
+                ("seizure_vote",  6usize),
+            ]);
 
-            let mut store_guard = store.lock()?;
-            let tensors_path = cli.tensors_path.clone();
-            let base_path = cli.base_path.clone();
+            let devices_classes = devices.into_iter().cycle().zip(classes.into_iter()).collect::<Vec<(Device, &str)>>();
+            let cli_clone = cli.clone();
+            devices_classes.into_par_iter().for_each( move |(device_i, class)| {
+                let classes_tensors = classes.iter().map(|cl|(if class.eq(*cl) {1} else {0}, cl.to_string())).collect();
+                debug!("SelectMotifs: classes_tensors: {:?}", classes_tensors);
 
-            let (motifs, channel_motif_ids) = motifs_to_tensor(
-                cli.base_path.as_str(),
-                store_guard.motifs_to_eeg_slices(select_motifs_params.run_id())?,
-                store_guard.list_run_resources(select_motifs_params.run_id())?,
-                // data::parquet_to_tensor,
-                move |key: &String| {
-                    if let Some(tensors_path) = tensors_path.as_ref() {
-                        Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
-                    } else {
-                        Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
-                    }
-                },
-                select_motifs_params.window() as i64,
-                20,
-                device
-            )?;
-
-            info!("select_motifs: motifs tensor built, size={:?}", motifs.size());
-
-            let tensors_path =  cli.tensors_path.clone();
-            let channels_good_motif_idxs = select_motifs(
-                motifs,
-                eegs_to_labels_tensors(cli.base_path.as_str(), tensors_path, select_motifs_params.classes_tensors(), &device, cli.limit.as_ref()),
-                cli.limit,
-                select_motifs_params.step(),
-                device
-            )?;
-
-            let motifs_corrs = channel_motif_ids.into_iter().zip(channels_good_motif_idxs.into_iter()).map(|(motif_ids, motif_idxs_corss)|{
-                motif_idxs_corss.into_iter().map(|(motif_id, motif_idx_corr)|{
-                    (motif_ids[motif_id as usize], motif_idx_corr)
-                }).collect::<Vec<(usize, f64)>>()
-            }).collect::<Vec<Vec<(usize, f64)>>>();
-
-            debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
-            info!("select_motifs: motifs_corrs.len()={:?}", motifs_corrs.len());
-
-            store_guard.save_motifs_corrs(format!("{:?}", select_motifs_params.classes_tensors()).as_str(), motifs_corrs)?;//TODO label_tensors
+                select_motifs_in_class(&cli_clone, Arc::clone(&store), device, &SelectMotifsParams::for_class(classes_tensors, select_motifs_params.clone()), *class_run_id.get(class).expect("run_id")/*select_motifs_params.run_id()*/).expect("select_motifs_in_class");
+            });
 
             // t.save(find_good_motifs_params.output_motifs_tensor_path())?;
         }
@@ -441,6 +414,61 @@ fn _main() -> Result<(), HbacError> {
         }
     }
 
+    Ok(())
+}
+
+fn select_motifs_in_class(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, select_motifs_params: &SelectMotifsParams, run_id: usize) -> Result<(), HbacError> {
+
+    let tensors_path = cli.tensors_path.clone();
+    let base_path = cli.base_path.clone();
+
+    let (fragments_map, run_resources) = {
+        let mut store_guard = store.lock()?;
+
+        (
+            store_guard.motifs_to_eeg_slices(run_id)?,
+            store_guard.list_run_resources(run_id)?
+        )
+    };
+
+    let (motifs, channel_motif_ids) = motifs_to_tensor(
+        cli.base_path.as_str(),
+        fragments_map,
+        run_resources,
+        // data::parquet_to_tensor,
+        move |key: &String| {
+            if let Some(tensors_path) = tensors_path.as_ref() {
+                Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
+            } else {
+                Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
+            }
+        },
+        select_motifs_params.window() as i64,
+        20,
+        device
+    )?;
+
+    info!("select_motifs: motifs tensor built, size={:?}", motifs.size());
+
+    let tensors_path = cli.tensors_path.clone();
+    let channels_good_motif_idxs = select_motifs(
+        motifs,
+        eegs_to_labels_tensors(cli.base_path.as_str(), tensors_path, select_motifs_params.classes_tensors(), &device, cli.limit.as_ref()),
+        cli.limit,
+        select_motifs_params.step(),
+        device
+    )?;
+
+    let motifs_corrs = channel_motif_ids.into_iter().zip(channels_good_motif_idxs.into_iter()).map(|(motif_ids, motif_idxs_corss)| {
+        motif_idxs_corss.into_iter().map(|(motif_id, motif_idx_corr)| {
+            (motif_ids[motif_id as usize], motif_idx_corr)
+        }).collect::<Vec<(usize, f64)>>()
+    }).collect::<Vec<Vec<(usize, f64)>>>();
+
+    debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
+    info!("select_motifs: motifs_corrs.len()={:?}", motifs_corrs.len());
+
+    store.lock()?.save_motifs_corrs(format!("{:?}", select_motifs_params.classes_tensors()).as_str(), motifs_corrs)?;//TODO label_tensors
     Ok(())
 }
 
