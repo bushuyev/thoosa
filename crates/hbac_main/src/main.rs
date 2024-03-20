@@ -77,9 +77,20 @@ struct Cli {
 }
 
 
+#[derive(Debug, Args, Clone)]
+pub struct RunAllParams {
+
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct InitResourcesParams {
+
+}
+
 #[derive(Debug, Subcommand, Clone)]
 enum Commands {
     #[command()]
+    InitResources (InitResourcesParams),
     FindMotifs (FindMotifsParams),
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
@@ -87,6 +98,7 @@ enum Commands {
     TrainOnMotifs(TrainOnMotifsParams),
     TrainOnEEG(TrainOnEEGParams),
     TrainFinal(TrainFinalParams),
+    RunAll(RunAllParams),
     Infer(InferParams),
 }
 
@@ -138,6 +150,13 @@ fn _main() -> Result<(), HbacError> {
 
     match &cli.command {
 
+        Some(Commands::InitResources(init_resources_params)) => {
+            init_resources(
+                &cli,
+                init_resources_params,
+                Arc::clone(&store)
+            );
+        }
         /**
         good_eegs_of
         class=seizure_vote len=2227
@@ -149,7 +168,6 @@ fn _main() -> Result<(), HbacError> {
         */
         Some(Commands::FindMotifs(find_motifs_params)) => {
             info!("find_motifs_params={:?} devices={:?}", find_motifs_params, devices);
-
 
             let devices_classes = devices.into_iter().cycle().zip(classes.into_iter()).collect::<Vec<(Device, &str)>>();
 
@@ -175,28 +193,6 @@ fn _main() -> Result<(), HbacError> {
                     Arc::clone(&store), 20,
                 ).unwrap();
             });
-
-            // for ((device_i, class)) in devices_classes.par_iter() {
-            //     let eeg_id_series = EEGs::good_eegs_of(base_path.as_str(), find_motifs_params.kind(), cli.limit)?;
-            //
-            //     let records_num = clc_records(&eeg_id_series, base_path.as_str())?;
-            //     debug!("records_num={}", records_num);
-            //
-            //     find::find_motifs_euc(
-            //         move |key: &String| {
-            //             if let Some(tensors_path) = cli.tensors_path.as_ref() {
-            //                 Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device_i).unwrap())
-            //             } else {
-            //                 Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device_i).unwrap())
-            //             }
-            //         },
-            //         find_motifs_params,
-            //         records_num,
-            //         eeg_id_series.i64()?.into_iter(),
-            //         Arc::clone(&store), 20,
-            //     )?;
-            // }
-
 
         }
 
@@ -312,6 +308,10 @@ fn _main() -> Result<(), HbacError> {
             vs.save(format!("{}/final.safetensors", train_final_params.models_dir()))?;
         }
 
+        Some(Commands::RunAll(run_all_params)) => {
+
+        }
+
         Some(Commands::Infer(infer_params)) => {
             let t = infer(
                 &infer_params,
@@ -376,6 +376,13 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
     }
     Ok(())
 }
+
+fn init_resources(cli:&Cli, params:&InitResourcesParams, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError> {
+    let mut store_guard = store.lock()?;
+
+    Ok(())
+}
+
 
 fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, plot_motif_slices_params: &&PlotMotifSlicesParams) -> Result<(), HbacError> {
     let mut store_guard = store.lock()?;

@@ -91,7 +91,6 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let ids = eegs.filter(|e|e.is_some()).map(|e|e.unwrap()).collect::<Vec<i64>>();
     let eeg_ids_str = ids.iter().map(|v| v.to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
 
-
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
     let run_id = { store.lock()?.save_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.kind, min_dot).as_str(), &eeg_ids_str)}?;
 
@@ -219,11 +218,9 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                         }
                         i_0+= 1;
                     }
-
                 }
                 mt.dump();
             }
-
         })
     });
 

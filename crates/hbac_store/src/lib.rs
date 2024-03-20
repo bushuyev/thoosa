@@ -55,6 +55,8 @@ impl Hash for IdSlice {
 
 pub trait Store:Sync + Send{
     fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
+    fn save_resources(&mut self, resources:Vec<String>) -> Result<(), HbacError>;
+    fn save_resources_set(&mut self, set:String, resources:Vec<String>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), HbacError>;
     fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
@@ -106,6 +108,58 @@ impl Store for SqlStore {
         t.commit()?;
 
         Ok(run_id)
+    }
+
+    fn save_resources(&mut self, resources:Vec<String>) -> Result<(), HbacError>{
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        for resources_chunk in resources.chunks(500) {
+            let (mut q, params) = resources_chunk.into_iter().fold(
+                (vec!["INSERT INTO resources (key) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+                    a.0.push("(?)");
+                    a.0.push(", ");
+
+                    a.1.push(Value::Text(v.clone()));
+                    a
+                });
+
+            q.pop();
+
+            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+        }
+        t.commit()?;
+
+        Ok(())
+    }
+
+    fn save_resources_set(&mut self, descr:String, resources:Vec<String>) -> Result<(), HbacError>{
+
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+
+        t.execute("INSERT INTO resource_set (descr) VALUES (?)", params![descr])?;
+
+        let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?.to_string();//FIXME escape
+
+        let q = vec!["INSERT INTO resource_resources_set (set_id, resource_id) SELECT ", resource_set_id.as_str(), ", id FROM resources WHERE key IN ("];
+
+        for resources_chunk in resources.chunks(500) {
+            let mut q = resources_chunk.into_iter().fold(q.clone(), |mut q, v|{
+                q.push(v.as_str());//FIXME escape
+                q.push(",");
+                q
+            });
+
+            q.pop();
+            q.push(")");
+            t.execute(&q.into_iter().collect::<String>(), ())?;
+        }
+
+        t.commit()?;
+
+        Ok(())
     }
 
 
@@ -393,6 +447,40 @@ impl SqlStore {
         {
             let mut t = conn.transaction()?;
 
+            t.execute(//TODO UNIQUE(key) doesn't work - no error
+                "CREATE TABLE IF NOT EXISTS resources (
+                id          INTEGER PRIMARY KEY,
+                key         VARCHAR(256),
+                UNIQUE(key)
+            )", ())?;
+
+            t.execute("CREATE UNIQUE INDEX idx_resources_key ON resources (key);", ())?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS resource_set (
+                id          INTEGER PRIMARY KEY,
+                descr       VARCHAR(256)
+            )", ())?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS resource_resources_set (
+                resource_id  REFERENCES resources(id) ON DELETE CASCADE,
+                set_id       REFERENCES resource_set(id) ON DELETE CASCADE
+            )", ())?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS labels (
+                id          INTEGER PRIMARY KEY,
+                label       VARCHAR(256)
+            )", ())?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS labeled_resources (
+                resource_id    REFERENCES resources(id) ON DELETE CASCADE,
+                label_id       REFERENCES labels(id) ON DELETE CASCADE
+            )", ())?;
+
+            //descr - dot, dist etc
             t.execute(
                 "CREATE TABLE IF NOT EXISTS matches_run (
                 id          INTEGER PRIMARY KEY,
@@ -400,6 +488,14 @@ impl SqlStore {
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS matches_run (
+                id          INTEGER PRIMARY KEY,
+                descr       VARCHAR(256),
+                run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
+            )", ())?;
+
+            //key - resource id
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
                 run_id     REFERENCES matches_run(id) ON DELETE CASCADE,
@@ -416,6 +512,8 @@ impl SqlStore {
                 channel_id      INTEGER NOT NULL
             )", ())?;
 
+            //dot - similarity
+            //tensor_id_0 - resource_id
             t.execute(
             "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
@@ -429,6 +527,7 @@ impl SqlStore {
                 motif_id        REFERENCES motifs(id) ON DELETE CASCADE DEFAULT NULL
             )", ())?;
 
+            //resource_set_id-
             t.execute(
                 "CREATE TABLE IF NOT EXISTS corrs_run (
                 id          INTEGER PRIMARY KEY,
@@ -436,6 +535,7 @@ impl SqlStore {
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
+            //labels_motifs on resource_set
             t.execute(
                 "CREATE TABLE IF NOT EXISTS motifs_corrs (
                 motif_id   REFERENCES motifs(id),
@@ -460,16 +560,38 @@ mod store_tests{
     use std::collections::HashMap;
     use std::error::Error;
     use std::fs;
+    use log::LevelFilter;
     use rusqlite::Connection;
     use rusqlite::types::Value;
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use crate::{SqlStore, Store, HbacError};
     use hbac_shared::TensorSliceIdx;
 
+
+    #[ctor::ctor]
+    fn init() {
+        match CombinedLogger::init(
+            vec![
+                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ){
+            Ok(_) => {}
+            Err(e) => {
+                println!("logger error: {:?}", e);
+            }
+        };
+    }
 
     #[test]
     fn test_save_slices() -> Result<(), HbacError> {
         fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
+
+
+        store.save_resources(vec!["1111".to_string(), "2222".to_string(), "3333".to_string()]);
+        // store.save_resources((0..100_000).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
+
+        store.save_resources_set("Set1".to_string(), vec!["1111".to_string(), "2222".to_string()]);
 
         let map :Vec<((String, i64),(String, i64),f32)> = vec![
             (("0".to_string(), 100i64), ("0".to_string(), 200i64), 0.91),
@@ -590,5 +712,10 @@ mod store_tests{
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_test(){
+        println!("{:?}", (0..10).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
     }
 }
