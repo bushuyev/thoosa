@@ -10,7 +10,7 @@ use log::{debug, error, info, LevelFilter, warn};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use hbac_motifs::find::{FindMotifsParams, iter_all_in_dir, select_motifs, SelectMotifsParams};
-use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, eegs_to_logits_tensors, read_eeg_index, read_motif_to_iter};
+use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, eegs_to_logits_tensors, parquet_or_load_tensor, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
@@ -200,52 +200,6 @@ fn _main() -> Result<(), HbacError> {
 
         }
 
-        Some(Commands::PlotMotifSlices(plot_motif_slices_params)) => {
-            let mut store_guard = store.lock()?;
-
-            let (channel, run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
-
-            let slices = load_motif_slices(cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?, data::parquet_to_tensor, device);
-
-            let all_sices = slices.iter().flat_map(|(eeg_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
-
-            check_slices(&all_sices, 0.9);
-
-            plot_series(
-                all_sices.into_iter().map(|t|{
-                    (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)|(i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
-                }).collect(),
-                format!("Motif {}", plot_motif_slices_params.motif_id()).as_str(),
-                (10000, 10000),
-                &Path::new(plot_motif_slices_params.output_dir()).join(format!("motif_{}.png", plot_motif_slices_params.motif_id()))
-            ).unwrap();
-        }
-
-        Some(Commands::MotifsToTensor(choose_fragments_params)) => {
-
-            let mut store_guard = store.lock()?;
-            let base_path = cli.base_path.clone();
-            let t = motifs_to_tensor(
-                cli.base_path.as_str(),
-                store_guard.motifs_to_eeg_slices(choose_fragments_params.run_id())?,
-                store_guard.list_run_resources(choose_fragments_params.run_id())?,
-                move |key: &String| {
-                    if let Some(tensors_path) = cli.tensors_path.as_ref() {
-                        Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
-                    } else {
-                        Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
-                    }
-                },
-                choose_fragments_params.window(),
-                20,
-                device
-            )?;
-
-            if let Some(out) =  choose_fragments_params.output_dir() {
-                t.0.save(Path::new(out).join(format!("motifs_in_{}", choose_fragments_params.run_id())));
-            }
-        }
-
         Some(Commands::SelectMotifs(select_motifs_params)) => {
             info!("select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
 
@@ -259,17 +213,19 @@ fn _main() -> Result<(), HbacError> {
             ]);
             let devices_len = devices.len();
             let devices_classes = devices.into_iter().cycle().zip(classes.chunks(devices_len).into_iter()).collect::<Vec<(Device, &[&str])>>();
+
             let cli_clone = cli.clone();
             devices_classes.into_par_iter().for_each( move |(device_i, classes)| {
                 for class in classes {
-                    let classes_tensors = classes.iter().map(|cl|(if class.eq(*cl) {1} else {0}, cl.to_string())).collect();
+                    let classes_tensors = classes.iter().map(|cl|(if class.eq(cl) {1} else {0}, cl.to_string())).collect();
                     debug!("SelectMotifs: classes_tensors: {:?} device_i={:?}", classes_tensors, device_i);
 
                     select_motifs_in_class(
                         &cli_clone, Arc::clone(&store),
                         device_i,
                         &SelectMotifsParams::for_class(classes_tensors, select_motifs_params.clone()),
-                        *class_run_id.get(class).expect("run_id")/*select_motifs_params.run_id()*/).expect("select_motifs_in_class");
+                        *class_run_id.get(class).expect("run_id")/*select_motifs_params.run_id()*/
+                    ).expect("select_motifs_in_class");
                 }
             });
 
@@ -378,11 +334,75 @@ fn _main() -> Result<(), HbacError> {
             )
 
         }
+        Some(Commands::PlotMotifSlices(plot_motif_slices_params)) => {
+            plot_motif_slices(&cli, &store, device, &plot_motif_slices_params)?;
+        }
+
+        Some(Commands::MotifsToTensor(choose_fragments_params)) => {
+            motifs_to_tensor_cmd(&cli, &store, device, choose_fragments_params)?;
+        }
         None => {
             warn!("No command");
         }
     }
 
+    Ok(())
+}
+
+fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, choose_fragments_params: &MotifsToTensorParams) -> Result<(), HbacError> {
+    let mut store_guard = store.lock()?;
+    let base_path = cli.base_path.clone();
+    let base_path_1 = cli.base_path.clone();
+    let tensors_path = cli.tensors_path.clone();
+    let t = motifs_to_tensor(
+        base_path.as_str(),
+        store_guard.motifs_to_eeg_slices(choose_fragments_params.run_id())?,
+        store_guard.list_run_resources(choose_fragments_params.run_id())?,
+        move |key: &String| {
+
+            if let Some(tensors_path) = tensors_path.as_ref() {
+                Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
+            } else {
+                Box::new(data::parquet_to_tensor(base_path_1.as_str(), key.as_ref(), device).unwrap())
+            }
+        },
+        choose_fragments_params.window(),
+        20,
+        device
+    )?;
+
+    if let Some(out) = choose_fragments_params.output_dir() {
+        t.0.save(Path::new(out).join(format!("motifs_in_{}", choose_fragments_params.run_id())));
+    }
+    Ok(())
+}
+
+fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, plot_motif_slices_params: &&PlotMotifSlicesParams) -> Result<(), HbacError> {
+    let mut store_guard = store.lock()?;
+
+    let (channel, run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
+    let base_path = cli.base_path.as_str();
+
+    let slices = load_motif_slices(
+        cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?,
+        move |eeg_id| {
+            parquet_or_load_tensor(base_path, cli.tensors_path.clone(), eeg_id, device)
+        },
+        device
+    );
+
+    let all_sices = slices.iter().flat_map(|(eeg_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+
+    check_slices(&all_sices, 0.9);
+
+    plot_series(
+        all_sices.into_iter().map(|t| {
+            (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+        }).collect(),
+        format!("Motif {}", plot_motif_slices_params.motif_id()).as_str(),
+        (10000, 10000),
+        &Path::new(plot_motif_slices_params.output_dir()).join(format!("motif_{}.png", plot_motif_slices_params.motif_id()))
+    ).unwrap();
     Ok(())
 }
 
@@ -403,7 +423,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
 
     let node = train_nets::motif_node(train_on_motif_params.window() as i64);
 
-    let output_dir = Path::new(train_on_motif_params.output_dir()).join(format!("corr_run_{}", train_on_motif_params.corr_run()));
+    let output_dir = Path::new(train_on_motif_params.output_dir()).join(format!("corr_run_{}", corr_run));//TODO corr_run
 
     fs::create_dir_all(&output_dir);
 
@@ -416,7 +436,13 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
         debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
         let all_sices_1 = train_nets::flat_map(
-            load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::parquet_to_tensor, device)
+            load_motif_slices(
+                cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?,
+                move |eeg_id| {
+                    parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.clone(), eeg_id, device)
+                },
+                device
+            )
         );
 
 
@@ -424,7 +450,15 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
 
         debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
-        let all_sices_0 = train_nets::flat_map(load_motif_slices(cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?, data::parquet_to_tensor, device));
+        let all_sices_0 = train_nets::flat_map(
+            load_motif_slices(
+                cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?,
+                move |eeg_id| {
+                    parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.clone(), eeg_id, device)
+                },
+                device
+            )
+        );
 
 
         debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());

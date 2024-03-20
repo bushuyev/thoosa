@@ -327,7 +327,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 
 
 pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, eegs: Vec<String>, load_tensor: F, device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
-    where F: Fn(&str, &str, Device) -> Result<Tensor, HbacError> + Sync {
+    where F: Fn(&str) -> Box<Tensor> + Sync {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
@@ -348,7 +348,7 @@ pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: V
             let slices = tensors_ids_slices.get(*tensor_idx).expect(format!("no {}", tensor_idx).as_str());
 
             // let resource = eegs[tensor_idx].clone();
-            let t = load_tensor(base_path, tensor_idx.as_str(), device).unwrap();
+            let t = load_tensor(tensor_idx.as_str());
 
             let take = t.size()[1]/widow;
             debug!("load_motif_slices: tensor_idx={} slices.len={} t.size={:?} take={}", tensor_idx, slices.len(), t.size(),  take  );
@@ -695,13 +695,13 @@ mod motifs_tests {
     #[test]
     fn test_load_motif_slices()-> Result<(), HbacError>{
 
-        fn test_eeg_to_t(base_dir:&str, eeg_id:&str, _:Device) -> Result<Tensor, HbacError> {
+        fn test_eeg_to_t(eeg_id:&str) -> Box<Tensor> {
             let t = Tensor::vstack(&[
                 Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
             ]);
 
-            Ok(t)
+            Box::new(t)
         }
 
         let motif_slices = super::load_motif_slices(

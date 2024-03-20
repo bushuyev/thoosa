@@ -551,16 +551,14 @@ pub fn final_node(features: i64, classes_num: i64) -> Node {
 }
 
 pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainOnMotifsParams, device: Device, node: &Node) -> Result<(f32, VarStore), HbacError> {
-
+    info!("train_on_motif: device={:?} training on {} slices", device, all_slices_0.len());
 
     let vs = nn::VarStore::new(device);
 
     let net = node.build_tch_module(&vs.root())?;
 
-    info!("train_on_motif: training on {} slices", all_slices_0.len());
-
     let valid_loss = crate::utils::train(
-        &Device::Cpu,
+        &device,
         &mut ClassTensorsDataBatch::new(
             vec![
                 all_slices_0,
@@ -573,7 +571,7 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
         |pred: &Tensor, target: &Tensor| {
             // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
             let pred_y = pred.i((.., 0, 0));
-            debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
+            debug!("train_on_motif: pred_y.device={:?}, target.device()={:?} pred_y ={:?} ", pred_y.device(), target.device(), from::<Vec<f32>>(&pred_y));
             pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
         },
         train_on_motif_params.cycles,
@@ -647,8 +645,8 @@ impl ClassTensorsDataBatch {
         let mut rng = thread_rng();
 
         let per_class_len = batch_size / class_tensors.len();//TODO make balanced
-
-        debug!("ClassTensorsDataBatch::to_x_y: per_class_len={}", per_class_len);
+        let device= class_tensors[0][0].device();
+        debug!("ClassTensorsDataBatch::to_x_y: per_class_len={} device={:?}", per_class_len, device);
 
         let mut x_y_vecs = class_tensors.iter().enumerate().fold(vec![], |mut x_y_acc, (class, tensors)| {
 
@@ -674,14 +672,16 @@ impl ClassTensorsDataBatch {
 
         });
 
-        let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice());
+        let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice()).to_device(device);
 
         let tensor = Tensor::stack(
             x_y_vecs.into_iter().map(|e|e.0).collect::<Vec<_>>().as_slice(),
             0,
         ).view((batch_size as i64, 1, -1));
 
-        debug!("ClassTensorsDataBatch::to_x_y: tensor.size()={:?}", tensor.size());
+
+
+        debug!("ClassTensorsDataBatch::to_x_y: tensor.size()={:?} tensor.device()={:?}", tensor.size(), tensor.device());
 
         (
             tensor,
