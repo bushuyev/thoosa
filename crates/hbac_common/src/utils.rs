@@ -206,7 +206,7 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
 }
 
 pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
-    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id))).map_err(|e|HbacError::new(e.to_string()))
+    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id))).map(|t|t.to_device(device)).map_err(|e|HbacError::new(e.to_string()))
 }
 
 

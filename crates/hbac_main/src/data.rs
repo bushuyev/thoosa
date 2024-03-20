@@ -586,7 +586,7 @@ pub fn eegs_to_labels_tensors<'a>( base_path:&'a str, tensors_path:Option<String
 
         (
             label_tensors_path.0,
-            eeg_ids.into_iter().map(move |eeg_id| {//TODO CacheOnThreads
+            eeg_ids.into_iter().map(move |eeg_id| {
                 parquet_or_load_tensor(base_path, tensors_path.clone(), eeg_id.as_str(), *device)
             })
         )//(label, path)

@@ -178,6 +178,8 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
+    debug!("motifs_to_tensor: device={:?}", device);
+
     let mut channels_motifs_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
 
     for (eeg_idx, channels_motifslices) in eeg_id_fragments_map {
@@ -185,6 +187,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<String,
 
         // let eeg_id = eeg_idx; //eegs[eeg_idx].clone();
         let eeg_t = (read_eeg_to_tensor)(&eeg_idx);//TODO use always CPU? no clc
+        debug!("motifs_to_tensor: eeg_t.device={:?}", eeg_t.device());
 
         for fragment in channels_motifslices {
 
@@ -196,13 +199,17 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<String,
             let  mut channels_motifs = channels_motifs_slices.entry(fragment.channel_idx).or_insert_with(||HashMap::new());
             let  mut groups_slices = channels_motifs.entry(fragment.motif).or_insert_with(||Vec::new());
 
+            // debug!("motifs_to_tensor: motifslice_t.device={:?}", motifslice_t.device());
+            motifslice_t.to_device(device);
+
             groups_slices.push(motifslice_t);
         }
     }
 
     fn choose_slice(slices:&mut Vec<Tensor>) ->Tensor {
-
-         slices.pop().unwrap()//TODO choose best or blend slices
+        let tensor = slices.pop().unwrap();
+        debug!("motifs_to_tensor: choose_slice tensor.device={:?}", tensor.device());
+        tensor//TODO choose best or blend slices
     }
 
     let groups_num = channels_motifs_slices.values().map(|groups_slices|groups_slices.len()).max().expect("groups_num") as i64;
