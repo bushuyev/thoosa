@@ -372,7 +372,7 @@ impl EEGs {
         }))
     }
 
-    fn group_by_eeg_id(filter: Option<Expr>, df: LazyFrame) -> Result<DataFrame, HbacError> {
+    pub fn group_by_eeg_id(filter: Option<Expr>, df: LazyFrame) -> Result<DataFrame, HbacError> {
         Ok(df
             .clone()
             // .collect()?
@@ -404,6 +404,7 @@ impl EEGs {
             ])
             .collect()?)
     }
+
 
     pub fn len(&self) -> usize {
         self.train_set.len()
@@ -470,6 +471,7 @@ impl DataBatch for EEGs {
         Self::random_subset(self.batch_size, &self.valid_set)
     }
 }
+
 
 fn series_to_tensor(s: &Series) ->  Result<Tensor, HbacError> {
 
@@ -730,6 +732,68 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
     CsvWriter::new(&mut file).finish(&mut df).unwrap();
 
 }
+
+pub fn labeled_resourses(path: impl AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, HbacError>{
+    let df = LazyCsvReader::new(path)
+        .finish()?
+        .with_streaming(true);
+
+    let gr_by_eeg_id_df = EEGs::group_by_eeg_id(None, df)?;
+
+    Ok(gr_by_eeg_id_df
+        .column("eeg_id")?.i64()?.into_iter()
+        // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
+        // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
+        .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
+        .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
+        .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
+        .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
+        .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
+        .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+        .map(|
+            (((((((eeg_id),
+                // eeg_label_offset_seconds),
+                seizure_vote),
+                lpd_vote),
+                gpd_vote),
+                lrda_vote),
+                grda_vote),
+                other_vote)
+        | {
+            (
+                eeg_id.unwrap_or_default(),
+                // eeg_label_offset_seconds.unwrap_or_default(),
+                seizure_vote.unwrap_or_default(),
+                lpd_vote.unwrap_or_default(),
+                gpd_vote.unwrap_or_default(),
+                lrda_vote.unwrap_or_default(),
+                grda_vote.unwrap_or_default(),
+                other_vote.unwrap_or_default(),
+            )
+        }).map(|(eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote)|{
+        let sum = (seizure_vote + lpd_vote + gpd_vote + lrda_vote + grda_vote + other_vote) as f32;
+
+        (
+            eeg_id.to_string(),
+            [
+                ("seizure".to_string(), seizure_vote as f32 / sum),
+                ("lpd".to_string(), lpd_vote as f32 / sum),
+                ("gpd".to_string(), gpd_vote as f32 / sum),
+                ("lrda".to_string(), lrda_vote as f32 / sum),
+                ("grda".to_string(), grda_vote as f32 / sum),
+                ("other".to_string(), other_vote as f32 / sum)
+
+            ].into_iter().filter(|v| v.1 > 0.).collect()
+        )
+
+    }).fold(HashMap::new(), |mut h, v| {
+        h.insert(v.0, v.1);
+        h
+    })
+    )
+
+}
+
 
 #[cfg(test)]
 mod data_tests {
@@ -1254,11 +1318,16 @@ mod data_tests {
         // println!("good_df={:?}", good_df.head(Some(100)));
 
         // find_max_size()?;
-        for class in ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"] {
-            let eeg_id_series = EEGs::good_eegs_of("../../data", class, None).unwrap();
-            println!("class={} len={}", class, eeg_id_series.len());
-        }
+        // for class in ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"] {
+        //     let eeg_id_series = EEGs::good_eegs_of("../../data", class, None).unwrap();
+        //     println!("class={} len={}", class, eeg_id_series.len());
+        // }
 
+        let resources = super::labeled_resourses("../../data/train.csv")?;
+        debug!("len={}", resources.len());
+        // for r in resources {
+        //     debug!("r={:?}", r);
+        // }
 
         // good_eegs
 

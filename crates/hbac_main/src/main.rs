@@ -14,7 +14,7 @@ use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, eegs_to_logits_tens
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
-use polars::prelude::Series;
+use polars::prelude::{LazyCsvReader, Series};
 use hbac_common::utils::{cdt, DataBatch, dot_norm, from, list_devices, load_tensor, norm_2, plot_series};
 use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
@@ -119,15 +119,14 @@ fn main()  {
 fn _main() -> Result<(), HbacError> {
     let cli = Cli::parse();
 
-    let store = Arc::new(Mutex::new(SqlStore::new(&cli.store_path)?));
-
     CombinedLogger::init(
         vec![
             TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
             WriteLogger::new(LevelFilter::from_str(cli.write_logger_level.as_str())?, Config::default(), File::create(&cli.logfile)?),
         ]
-    )?;
+    ).expect("failed to init logging");
 
+    let store = Arc::new(Mutex::new(SqlStore::new(&cli.store_path)?));
 
 
     let devices = list_devices();
@@ -151,6 +150,7 @@ fn _main() -> Result<(), HbacError> {
     match &cli.command {
 
         Some(Commands::InitResources(init_resources_params)) => {
+            debug!("InitResources: init_resources_params={:?}", init_resources_params);
             init_resources(
                 &cli,
                 init_resources_params,
@@ -380,6 +380,28 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
 fn init_resources(cli:&Cli, params:&InitResourcesParams, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError> {
     let mut store_guard = store.lock()?;
 
+    store_guard.save_label("seizure");
+    store_guard.save_label("lpd");
+    store_guard.save_label("gpd");
+    store_guard.save_label("lrda");
+    store_guard.save_label("grda");
+    store_guard.save_label("other");
+
+
+    store_guard.save_resources_labels(data::labeled_resourses(Path::new(&cli.base_path).join("train.csv"))?)?;
+
+    store_guard.save_pure_sets(1000);
+    store_guard.save_pure_sets(200);
+    /*
+    sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
+    2227|seizure
+    1181|lpd
+    806|gpd
+    384|lrda
+    1154|grda
+    4208|other
+    */
+
     Ok(())
 }
 
@@ -552,6 +574,8 @@ mod main_tests {
     #[test]
     fn test_it() -> Result<(), HbacError>{
 
+        
+        
         // clc_records()
         // debug!("XXXXXXXXXXXXXXXXX");
         // main();

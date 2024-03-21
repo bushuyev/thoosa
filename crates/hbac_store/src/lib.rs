@@ -57,6 +57,7 @@ pub trait Store:Sync + Send{
     fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>) -> Result<(), HbacError>;
+    fn save_pure_sets(&mut self, max_len:usize)  -> Result<(), HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
@@ -151,6 +152,7 @@ impl Store for SqlStore {
 
     //TODO folds to util fn
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>{
+        debug!("save_resources_labels: resource_labels_probs.len()={}", resource_labels_probs.len());
 
         fn _do_insert(resource_keys_iter: IntoIter<(String, Vec<(String, f32)>), 500>, t:&Transaction) -> Result<(), HbacError>{
 
@@ -172,7 +174,7 @@ impl Store for SqlStore {
 
                     let labels_ids = labels.into_iter().map(|(label, p)|
                         (
-                            t.query_row("SELECT id FROM labels WHERE label=?", [label], |row| row.get(0)).unwrap(),
+                            t.query_row("SELECT id FROM labels WHERE label=?", [&label], |row| row.get(0)).expect(format!("label {} not found", label).as_str()),
                             p
                         )
                     ).collect::<Vec<(i64, f32)>>();
@@ -252,8 +254,6 @@ impl Store for SqlStore {
         Ok(())
     }
 
-
-
     fn save_resources_set(&mut self, descr:String, resource_keys:Vec<String>) -> Result<(), HbacError>{
 
         let mut conn_guard = self.conn.lock()?;
@@ -276,6 +276,32 @@ impl Store for SqlStore {
             q.pop();
             q.push(")");
             t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+        }
+
+        t.commit()?;
+
+        Ok(())
+    }
+
+    fn save_pure_sets(&mut self, limit:usize) -> Result<(), HbacError> {
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        {
+            let mut stmt = t.prepare("SELECT id, label FROM labels")?;
+            let mut resource_resources_set_stmt = t.prepare(
+                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (SELECT resource_id FROM labeled_resources GROUP BY resource_id HAVING sum(p)=max(p) AND label_id=?) LIMIT ?"
+            )?;
+
+            let mut rows = stmt.query(())?;
+            while let Some(label_row) = rows.next()? {
+                debug!("row={:?}", label_row);
+                t.execute("INSERT INTO resource_set (descr) VALUES (?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, limit)])?;
+
+                let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?.to_string();
+
+                resource_resources_set_stmt.execute( params![resource_set_id, label_row.get::<usize, usize>(0)?, limit])?;
+            }
         }
 
         t.commit()?;
@@ -575,7 +601,7 @@ impl SqlStore {
                 UNIQUE(key) )",
             ())?;
 
-            t.execute("CREATE UNIQUE INDEX idx_resources_key ON resources (key);", ())?;
+            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_key ON resources (key);", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS resource_set (
@@ -597,7 +623,7 @@ impl SqlStore {
                 UNIQUE(label)
             )", ())?;
 
-            t.execute("CREATE UNIQUE INDEX idx_labels_label ON labels (label);", ())?;
+            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_labels_label ON labels (label);", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS labeled_resources (
@@ -726,16 +752,18 @@ mod store_tests{
             ("2222".into(), vec![("aaa".into(), 1.0)]),
             ("3333".into(), vec![("ccc".into(), 1.0)]),
         ]));
-0
-        store.save_resources_labels(HashMap::from(
-            (0..100_001).map(|i| (format!("{:0>10}", i),  vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)])).fold(HashMap::new(), |mut a, v|{
-                a.insert(v.0, v.1);
-                a
-            })
-        ));
+
+        // store.save_resources_labels(HashMap::from(
+        //     (0..100_001).map(|i| (format!("{:0>10}", i),  vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)])).fold(HashMap::new(), |mut a, v|{
+        //         a.insert(v.0, v.1);
+        //         a
+        //     })
+        // ));
 
         store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()]);
         store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()]);
+        store.save_pure_sets(10);
+        // store.ini
 
         let map :Vec<((String, i64),(String, i64),f32)> = vec![
             (("0".to_string(), 100i64), ("0".to_string(), 200i64), 0.91),
@@ -860,6 +888,7 @@ mod store_tests{
 
     #[test]
     fn test_test(){
+        //sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
         println!("{:?}", (0..10).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
     }
 }
