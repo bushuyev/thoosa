@@ -1,11 +1,12 @@
-extern crate core;
+#![feature(iter_array_chunks)]
 
+use std::array::IntoIter;
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::path::Path;
-use rusqlite::{Connection, params, ToSql};
+use rusqlite::{Connection, params, ToSql, Transaction};
 use log::{debug, error};
 use rusqlite::types::{ToSqlOutput, Value};
 use rusqlite::types::ValueRef::Real;
@@ -14,7 +15,6 @@ use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, PoisonError};
 use hbac_shared::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
-
 
 
 pub struct StoreDumper {
@@ -55,8 +55,10 @@ impl Hash for IdSlice {
 
 pub trait Store:Sync + Send{
     fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
-    fn save_resources(&mut self, resources:Vec<String>) -> Result<(), HbacError>;
-    fn save_resources_set(&mut self, set:String, resources:Vec<String>) -> Result<(), HbacError>;
+    fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
+    fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>) -> Result<(), HbacError>;
+    fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
+    fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), HbacError>;
     fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
@@ -133,28 +135,147 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_resources_set(&mut self, descr:String, resources:Vec<String>) -> Result<(), HbacError>{
+
+    fn save_label(&mut self, label:&str) -> Result<usize, HbacError>{
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
+
+        let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+
+        t.commit()?;
+
+        Ok(label_id)
+    }
+
+    //TODO folds to util fn
+    fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>{
+
+        fn _do_insert(resource_keys_iter: IntoIter<(String, Vec<(String, f32)>), 500>, t:&Transaction) -> Result<(), HbacError>{
+
+            let (mut insert_resources_q, insert_resources_params, insert_labeled_resources_params) = resource_keys_iter.fold(
+                (
+                    vec!["INSERT INTO resources (key) VALUES"],
+                    vec![],
+                    vec![]
+
+                ), |
+                    (mut insert_resources_q, mut insert_resources_params, mut insert_labeled_resources_params),
+                    (resource_key, labels)
+                |{
+
+                    insert_resources_params.push(resource_key.clone());
+                    insert_resources_q.push("(?)");
+                    insert_resources_q.push(",");
+
+
+                    let labels_ids = labels.into_iter().map(|(label, p)|
+                        (
+                            t.query_row("SELECT id FROM labels WHERE label=?", [label], |row| row.get(0)).unwrap(),
+                            p
+                        )
+                    ).collect::<Vec<(i64, f32)>>();
+                    insert_labeled_resources_params.push(labels_ids);
+
+
+                    (insert_resources_q, insert_resources_params, insert_labeled_resources_params)
+            });
+
+            insert_resources_q.pop();
+            insert_resources_q.push(" RETURNING id");
+
+            let q = insert_resources_q.into_iter().collect::<String>();
+            let mut stmt = t.prepare(&q)?;
+
+            let mut rows = stmt.query(rusqlite::params_from_iter(insert_resources_params.into_iter()))?;
+
+            let mut resource_ids:Vec<i64> = vec![];
+            while let Some(row) = rows.next()? {
+                resource_ids.push(row.get_unwrap(0));
+            }
+            let mut labels_iter = resource_ids.into_iter().zip(insert_labeled_resources_params).flat_map(move |(id, labels)|labels.into_iter().map(move |(l, p)|(id, l, p))).array_chunks::<500>();
+
+            fn _insert_labels(resource_labels: IntoIter<(i64, i64, f32), 500>, t: &Transaction){
+
+                let (mut q, params) = resource_labels.fold((vec!["INSERT INTO labeled_resources (resource_id, label_id, p) VALUES"], vec![]), |(mut q, mut params):(Vec<&str>, Vec<Value>), v|{
+                    q.push("(?, ?, ?)");
+                    q.push(",");
+
+                    params.push(Value::Integer(v.0));//resource id
+                    params.push(Value::Integer(v.1));//label id
+                    params.push(Value::Real(v.2 as f64));//p
+                    //
+                    (q, params)
+                });
+
+                if params.len()>0 {
+                    q.pop();
+
+                    let q_str = q.into_iter().collect::<String>();
+
+                    t.execute(&q_str, rusqlite::params_from_iter(params.into_iter())).unwrap();
+                }
+            }
+
+            while let Some(resource_labels) =  labels_iter.next() {
+                _insert_labels(resource_labels.into_iter(), t);
+            }
+
+            if let Some(reminder) = labels_iter.into_remainder() {
+                _insert_labels(reminder, t);
+            }
+
+
+            Ok(())
+        }
+
 
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
 
+
+        let mut resource_labels_iter = resource_labels_probs.into_iter().array_chunks::<500>();
+
+
+        while let Some(resource_keys) =  resource_labels_iter.next() {
+            _do_insert(resource_keys.into_iter(), &t);
+        }
+
+        if let Some(reminder) = resource_labels_iter.into_remainder() {
+            _do_insert(reminder, &t);
+        }
+
+        t.commit()?;
+
+        Ok(())
+    }
+
+
+
+    fn save_resources_set(&mut self, descr:String, resource_keys:Vec<String>) -> Result<(), HbacError>{
+
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
         t.execute("INSERT INTO resource_set (descr) VALUES (?)", params![descr])?;
 
-        let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?.to_string();//FIXME escape
+        let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?.to_string();
 
-        let q = vec!["INSERT INTO resource_resources_set (set_id, resource_id) SELECT ", resource_set_id.as_str(), ", id FROM resources WHERE key IN ("];
-
-        for resources_chunk in resources.chunks(500) {
-            let mut q = resources_chunk.into_iter().fold(q.clone(), |mut q, v|{
-                q.push(v.as_str());//FIXME escape
+        let q = vec!["INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, id FROM resources WHERE key IN ("];
+        let params = vec![resource_set_id.as_str()];
+        for resources_chunk in resource_keys.chunks(500) {
+            let (mut q, params) = resources_chunk.into_iter().fold((q.clone(), params.clone()), |(mut q, mut params), key|{
+                params.push(key.as_str());
+                q.push("?");
                 q.push(",");
-                q
+                (q, params)
             });
 
             q.pop();
             q.push(")");
-            t.execute(&q.into_iter().collect::<String>(), ())?;
+            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
         }
 
         t.commit()?;
@@ -451,33 +572,39 @@ impl SqlStore {
                 "CREATE TABLE IF NOT EXISTS resources (
                 id          INTEGER PRIMARY KEY,
                 key         VARCHAR(256),
-                UNIQUE(key)
-            )", ())?;
+                UNIQUE(key) )",
+            ())?;
 
             t.execute("CREATE UNIQUE INDEX idx_resources_key ON resources (key);", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS resource_set (
                 id          INTEGER PRIMARY KEY,
-                descr       VARCHAR(256)
-            )", ())?;
+                descr       VARCHAR(256))",
+            ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS resource_resources_set (
                 resource_id  REFERENCES resources(id) ON DELETE CASCADE,
-                set_id       REFERENCES resource_set(id) ON DELETE CASCADE
+                set_id       REFERENCES resource_set(id) ON DELETE CASCADE,
+                PRIMARY KEY (resource_id, set_id)
             )", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS labels (
                 id          INTEGER PRIMARY KEY,
-                label       VARCHAR(256)
+                label       VARCHAR(256),
+                UNIQUE(label)
             )", ())?;
+
+            t.execute("CREATE UNIQUE INDEX idx_labels_label ON labels (label);", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS labeled_resources (
                 resource_id    REFERENCES resources(id) ON DELETE CASCADE,
-                label_id       REFERENCES labels(id) ON DELETE CASCADE
+                label_id       REFERENCES labels(id) ON DELETE CASCADE,
+                p              FLOAT NOT NULL,
+                PRIMARY KEY (resource_id, label_id)
             )", ())?;
 
             //descr - dot, dist etc
@@ -588,10 +715,27 @@ mod store_tests{
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
 
 
-        store.save_resources(vec!["1111".to_string(), "2222".to_string(), "3333".to_string()]);
+        // store.save_resources(vec!["1111".into(), "2222".into(), "3333".into()]);
         // store.save_resources((0..100_000).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
+        let aaa_id = store.save_label("aaa");
+        let bbb_id = store.save_label("bbb");
+        let ccc_id = store.save_label("ccc");
 
-        store.save_resources_set("Set1".to_string(), vec!["1111".to_string(), "2222".to_string()]);
+        store.save_resources_labels(HashMap::from([
+            ("1111".into(), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]),
+            ("2222".into(), vec![("aaa".into(), 1.0)]),
+            ("3333".into(), vec![("ccc".into(), 1.0)]),
+        ]));
+0
+        store.save_resources_labels(HashMap::from(
+            (0..100_001).map(|i| (format!("{:0>10}", i),  vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)])).fold(HashMap::new(), |mut a, v|{
+                a.insert(v.0, v.1);
+                a
+            })
+        ));
+
+        store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()]);
+        store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()]);
 
         let map :Vec<((String, i64),(String, i64),f32)> = vec![
             (("0".to_string(), 100i64), ("0".to_string(), 200i64), 0.91),
@@ -601,7 +745,7 @@ mod store_tests{
             (("3".to_string(), 200i64), ("5".to_string(), 300i64), 0.94),
         ];
 
-        let run_id= store.save_run("test", &vec!["aaa".to_string(), "bbb".to_string()])?;
+        let run_id= store.save_run("test", &vec!["aaa".into(), "bbb".into()])?;
 
         store.save_slices(run_id,  7, map)?;
 
