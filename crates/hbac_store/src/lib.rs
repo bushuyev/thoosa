@@ -53,11 +53,49 @@ impl Hash for IdSlice {
 
 }
 
+#[derive(Debug)]
+pub enum SetCond {
+    Eq(f32),
+    Gt(f32),
+    Lt(f32),
+}
+
+impl SetCond {
+    fn p(&self) -> &'static str {
+        match self {
+            SetCond::Eq(v)=>{
+                "p="
+            }
+            SetCond::Gt(v)=>{
+                "p>"
+            }
+            SetCond::Lt(v)=>{
+               "p<"
+            }
+        }
+    }
+
+    fn v(&self) -> f32 {
+        match self {
+            SetCond::Eq(v)=>{
+                *v
+            }
+            SetCond::Gt(v)=>{
+                *v
+            }
+            SetCond::Lt(v)=>{
+                *v
+            }
+        }
+    }
+}
+
 pub trait Store:Sync + Send{
     fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>) -> Result<(), HbacError>;
     fn save_pure_sets(&mut self, max_len:usize)  -> Result<(), HbacError>;
+    fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
@@ -307,6 +345,36 @@ impl Store for SqlStore {
         t.commit()?;
 
         Ok(())
+    }
+
+    fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError> {
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        {
+            t.execute("INSERT INTO resource_set (descr) VALUES (?)", params!["save_set_by_labels"])?;
+
+            let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, i64>(0))?;
+
+            let q = [
+                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, id FROM (SELECT r.id FROM resources r LEFT JOIN labeled_resources lr ON lr.resource_id=r.id LEFT JOIN labels l on l.id=lr.label_id where ",
+                &conds_to_q(&conds),
+                " LIMIT ?)"
+            ].concat();
+            debug!("q={:?}", q);
+            let mut resource_resources_set_stmt = t.prepare(&q)?;
+
+            let mut params = vec![Value::Integer(resource_set_id)];
+            for cond in &conds {
+                params.push(Value::Real(cond.1.v() as f64));
+            }
+            params.push(Value::Integer(limit as i64));
+
+            if resource_resources_set_stmt.execute(rusqlite::params_from_iter(params.into_iter()))? == 0 {
+                HbacError::new(format!("no resources for set on {:?}", conds));
+            }
+        }
+        Ok(t.commit()?)
     }
 
 
@@ -705,6 +773,15 @@ impl SqlStore {
     }
 
 }
+fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
+    assert!(input.len() > 0);
+    let inp_len = input.len() * 6 - 1;
+
+    input.into_iter().flat_map(|v| {
+        ["(l.label='", v.0.as_str(), "' and ", v.1.p(), "?)", " or "]
+    }).take(inp_len).collect::<String>()
+}
+
 
 
 #[cfg(test)]
@@ -717,7 +794,7 @@ mod store_tests{
     use rusqlite::Connection;
     use rusqlite::types::Value;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use crate::{SqlStore, Store, HbacError};
+    use crate::{SqlStore, Store, HbacError, SetCond};
     use hbac_shared::TensorSliceIdx;
 
 
@@ -763,6 +840,7 @@ mod store_tests{
         store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()]);
         store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()]);
         store.save_pure_sets(10);
+        store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10);
         // store.ini
 
         let map :Vec<((String, i64),(String, i64),f32)> = vec![
@@ -885,6 +963,16 @@ mod store_tests{
 
         Ok(())
     }
+
+    #[test]
+    fn test_conv_cond(){
+        let input = vec![("aaa".into(), SetCond::Lt(0.4)), ("bbb".into(), SetCond::Gt(0.1))];
+
+        let conds = super::conds_to_q(&input);
+        assert_eq!("(l.label='aaa' and p<?) or (l.label='bbb' and p>?)", conds);
+        println!("conds={:?}", conds);
+    }
+
 
     #[test]
     fn test_test(){
