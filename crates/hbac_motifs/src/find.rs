@@ -45,7 +45,10 @@ pub struct FindMotifsParams {
     min_dot: f32,
 
     #[arg(long, default_value = "seizure_vote")]
-    kind: String,
+    kind: String,//todo remove
+
+    #[arg(long, default_value = "pure group 10")]
+    resource_group: String,
 
     // #[arg(long, default_value = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"])]
     // classes: String,
@@ -67,28 +70,79 @@ pub struct FindMotifsParams {
 }
 
 impl FindMotifsParams {
+
+    pub fn for_label(label:&str, other:FindMotifsParams) ->Self {
+        FindMotifsParams{
+            kind: label.to_string(),
+            ..other
+        }
+    }
+
+    // #[cfg(test)]
+    pub fn dummy(resource_group:Option<String>) ->Self {
+        FindMotifsParams {
+            step: 10,
+
+            window: 10,
+
+            min_dot: 0.1,
+
+            kind: "xxx".into(),
+
+            resource_group: resource_group.unwrap_or("xxx".into()),
+
+            descr: "xxx".into(),
+
+            preload_d: 10,
+
+            max_keys_fifo: 10,
+
+            chunk_size: 10,
+
+            max_dist_k: 0.3
+        }
+    }
+
+
+    pub fn step(&self) -> usize {
+        self.step
+    }
+    pub fn window(&self) -> usize {
+        self.window
+    }
+    pub fn min_dot(&self) -> f32 {
+        self.min_dot
+    }
     pub fn kind(&self) -> &str {
         &self.kind
     }
-
-    pub fn for_class(class:&str, other:FindMotifsParams)->Self {
-        FindMotifsParams{
-            kind: class.to_string(),
-            ..other
-        }
+    pub fn resource_group(&self) -> &str {
+        &self.resource_group
+    }
+    pub fn descr(&self) -> &str {
+        &self.descr
+    }
+    pub fn preload_d(&self) -> usize {
+        self.preload_d
+    }
+    pub fn max_keys_fifo(&self) -> usize {
+        self.max_keys_fifo
+    }
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+    pub fn max_dist_k(&self) -> f32 {
+        self.max_dist_k
     }
 }
 
 
-pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<(), HbacError>
+pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eeg_ids_str: Vec<String>, store:Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<usize, HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
     let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
 
-
-    let ids = eegs.filter(|e|e.is_some()).map(|e|e.unwrap()).collect::<Vec<i64>>();
-    let eeg_ids_str = ids.iter().map(|v| v.to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
 
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
     let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.kind, min_dot).as_str(), &eeg_ids_str)}?;
@@ -229,21 +283,21 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
     info!("{} done {}/{}", find_motifs_params.kind, slots_to_process, slots_processed);
 
-    Ok(())
+    Ok(run_id)
 }
 
-pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:usize, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>, channels: i32) -> Result<(), HbacError>
+pub fn find_motifs<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>, channels: i32) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
-    let slots_to_process = (records_num - cli.window) / cli.step;
+    let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
     let slots_to_process = slots_to_process.pow(2) / 2 - slots_to_process; // n x n - diagonale
 
 
     let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
 
 
-    let min_dot = (0..channels).map(|_| cli.min_dot).collect::<Vec<f32>>();
-    let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", cli.kind, min_dot).as_str(), &eeg_ids_str)}?;
+    let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
+    let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.kind, min_dot).as_str(), &eeg_ids_str)}?;
 
     let all_motif_trackers = min_dot
         .into_iter()
@@ -252,8 +306,8 @@ pub fn find_motifs<F>(loader:F, cli: &FindMotifsParams, records_num:usize, eegs:
         .collect::<Vec<Mutex<SimpMotifTracker<_>>>>();
 
     let ts_iter = crate::tensor_iter::TensorsIter::new(
-        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, eeg_ids_str, cli.preload_d, cli.max_keys_fifo)),
-        1, cli.window, cli.step
+        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, eeg_ids_str, find_motifs_params.preload_d, find_motifs_params.max_keys_fifo)),
+        1, find_motifs_params.window, find_motifs_params.step
     );
 
     let t1 = Instant::now();
@@ -632,6 +686,10 @@ pub struct SelectMotifsParams {
     #[arg(long, value_parser=parse_key_val::<i64, String>)]
     classes_tensors: Vec<(i64, String)>,
 
+
+    #[arg(long, value_parser=parse_key_val::<String, String>, default_value="xxx=yyy")]
+    labels_datasets: Vec<(String, String)>,
+
 }
 
 impl SelectMotifsParams {
@@ -639,6 +697,8 @@ impl SelectMotifsParams {
     pub fn classes_tensors(&self) -> &Vec<(i64, String)> {
         &self.classes_tensors
     }
+
+
 
     pub fn run_id(&self) -> usize {
         self.run_id
@@ -655,6 +715,20 @@ impl SelectMotifsParams {
             classes_tensors,
             ..other
         }
+    }
+
+    pub fn dummy(run_id:usize, labels_datasets:Vec<(String, String)>) -> Self{
+
+        SelectMotifsParams{
+            run_id,
+            step: 10,
+            window: 10,
+            classes_tensors: vec![],
+            labels_datasets
+        }
+    }
+    pub fn labels_datasets(&self) -> &Vec<(String, String)> {
+        &self.labels_datasets
     }
 }
 
@@ -732,21 +806,17 @@ pub fn select_motifs<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Opt
     //     Tensor::from_slice(good_motifs_idxs.as_slice())
     // }).collect::<Vec<Tensor>>().as_slice()))
 }
-
-pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> Result<impl Iterator<Item=Result<Tensor, HbacError>>, HbacError> {
+//TODO for tests only?
+pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> impl Iterator<Item=Box<Tensor>> {
 
     fs::read_dir(path.as_ref()).map(|r|
         r.map(|e_r| e_r.and_then(|e| {
                 debug!("select_motifs: load_all_in_dir");
-                Tensor::load(e.path()).map_err(|e| std::io::Error::other(e.to_string()))
-            }).map_err(|e| HbacError::new(e.to_string()))
+                Ok(Box::new(Tensor::load(e.path()).expect(format!("can't load {:?}", e.path()).as_str())))
+            }).expect("")
         )
-    ).map_err(|e| HbacError::new(format!("got {} while reading {:?} ", e, path.as_ref())))
+    ).expect("iter_all_in_dir")
 }
-
-
-
-
 
 #[cfg(test)]
 mod motif_find_tests {
@@ -1209,8 +1279,8 @@ mod motif_find_tests {
             // Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
             motifs_tensor,
             vec![
-                (1, iter_all_in_dir(test_dir.join("0"))?),
-                (0, iter_all_in_dir(test_dir.join("1"))?),
+                (1, iter_all_in_dir(test_dir.join("0"))),
+                (0, iter_all_in_dir(test_dir.join("1"))),
 
                 // (1, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/")?),
                 // (0, iter_all_in_dir("/media/bu/KINGSTON/eegs.pt/lpd_vote_eegs.txt/")?),
@@ -1465,6 +1535,7 @@ mod motif_find_tests {
                 window: 100,
                 min_dot: 0.99,
                 kind: "seizure_vote".to_string(),
+                resource_group: "".to_string(),
                 descr: "test".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
@@ -1488,7 +1559,7 @@ mod motif_find_tests {
 
     #[test]
     pub fn test_find_motifs_euc() -> Result<(), HbacError> {
-        let eeg_id_series =  [Some(1111i64), Some(2222), Some(3333)];
+        let eeg_id_series =  vec!["1111i64".into(), "2222".into(), "3333".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
         let store = Arc::new(Mutex::new(SqlStore::new(store_path)?));
@@ -1533,6 +1604,7 @@ mod motif_find_tests {
                 window: 100,
                 min_dot: 0.99,
                 kind: "seizure_vote".to_string(),
+                resource_group: "".to_string(),
                 descr: "test".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
@@ -1540,7 +1612,7 @@ mod motif_find_tests {
                 max_dist_k: 0.0001,
             },
             3 * N as usize,
-            eeg_id_series.into_iter(),
+            eeg_id_series,
             Arc::clone(&store),
             1,
 
@@ -1840,24 +1912,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_test(){
-        let params_1 = crate::find::FindMotifsParams {
-            step: 100,
-            window: 111,
-            min_dot: 0.9,
-            kind: "zzz".to_string(),
-            descr: "".to_string(),
-            preload_d: 0,
-            max_keys_fifo: 0,
-            chunk_size: 0,
-            max_dist_k: 0.0,
-        };
 
-        println!("params_1={:?}", params_1);
-
-        let params_2 = crate::find::FindMotifsParams::for_class("aaa", params_1);
-
-
-        println!("params_2={:?}", params_2);
         // let v = vec!["a1a2a3a4", "b1b2b3b4", "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4", "g1g2g3g4"];
         //
         // let v_w_0 = v.chunks(2).collect::<Vec<&[&str]>>();

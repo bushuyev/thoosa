@@ -95,6 +95,8 @@ pub trait Store:Sync + Send{
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>) -> Result<usize, HbacError>;
     fn save_pure_sets(&mut self, max_len:usize)  -> Result<(), HbacError>;
+    fn list_resource_set_group_sets(&mut self, group_descr:&str)  -> Result<Vec<(usize, String)>, HbacError>;
+    fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, HbacError>;
     fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
@@ -125,7 +127,7 @@ impl Store for SqlStore {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
-        t.execute("INSERT INTO matches_run (descr) VALUES (?)", params![descr])?;
+        t.execute("INSERT INTO motifs_run (descr) VALUES (?)", params![descr])?;
 
         let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
@@ -302,7 +304,8 @@ impl Store for SqlStore {
         let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
         let q = vec!["INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, id FROM resources WHERE key IN ("];
-        let params = vec![resource_set_id.to_string().as_str()];
+        let resoure_id_str = resource_set_id.to_string();
+        let params = vec![resoure_id_str.as_str()];
         for resources_chunk in resource_keys.chunks(500) {
             let (mut q, params) = resources_chunk.into_iter().fold((q.clone(), params.clone()), |(mut q, mut params), key|{
                 params.push(key.as_str());
@@ -328,23 +331,74 @@ impl Store for SqlStore {
         {
             let mut stmt = t.prepare("SELECT id, label FROM labels")?;
             let mut resource_resources_set_stmt = t.prepare(
-                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (SELECT resource_id FROM labeled_resources GROUP BY resource_id HAVING sum(p)=max(p) AND label_id=?) LIMIT ?"
+                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (SELECT resource_id FROM labeled_resources GROUP BY resource_id HAVING sum(p)=max(p) AND label_id=? ORDER BY resource_id) LIMIT ?"
             )?;
 
             let mut rows = stmt.query(())?;
+            t.execute("INSERT INTO resource_set_group (descr) VALUES (?)", params![format!("pure group {}", limit)])?;
+            let group_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
+
             while let Some(label_row) = rows.next()? {
                 debug!("row={:?}", label_row);
-                t.execute("INSERT INTO resource_set (descr) VALUES (?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, limit)])?;
+                t.execute("INSERT INTO resource_set (descr, group_id) VALUES (?, ?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, limit), group_id])?;
 
-                let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?.to_string();
+                let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
                 resource_resources_set_stmt.execute( params![resource_set_id, label_row.get::<usize, usize>(0)?, limit])?;
+
             }
         }
 
         t.commit()?;
 
         Ok(())
+    }
+
+    fn list_resource_set_group_sets(&mut self, group_descr:&str)  -> Result<Vec<(usize, String)>, HbacError> {
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+
+        let group_sets = {
+            let mut stmt = t.prepare("SELECT rs.id, rs.descr FROM resource_set rs LEFT JOIN resource_set_group rsg ON rsg.id=rs.group_id WHERE rsg.descr=?")?;
+
+
+            let vec = stmt.query_map([group_descr], |row| {//TODO move group_slices out, not for store
+                Ok((
+                row.get::<usize, usize>(0).expect("row 0 in list_resource_set_group_sets"),
+                row.get::<usize, String>(1).expect("row 1 in list_resource_set_group_sets")
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            vec
+
+        };
+
+        t.commit();
+
+        Ok(group_sets)
+    }
+
+    fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, HbacError> {
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+
+        let set_resources = {
+            let mut stmt = t.prepare("SELECT key FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=?")?;
+
+
+            let vec = stmt.query_map([set_id], |row| {//TODO move group_slices out, not for store
+                Ok((
+                    row.get::<usize, String>(0).expect("row 1 in list_resource_set_group_sets")
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            vec
+
+        };
+
+        t.commit();
+
+        Ok(set_resources)
     }
 
     fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError> {
@@ -676,8 +730,15 @@ impl SqlStore {
             t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_key ON resources (key);", ())?;
 
             t.execute(
+                "CREATE TABLE IF NOT EXISTS resource_set_group (
+                id          INTEGER PRIMARY KEY,
+                descr       VARCHAR(256)
+            )", ())?;
+
+            t.execute(
                 "CREATE TABLE IF NOT EXISTS resource_set (
                 id          INTEGER PRIMARY KEY,
+                group_id    REFERENCES resource_set_group(id) ON DELETE CASCADE,
                 descr       VARCHAR(256))",
             ())?;
 
@@ -707,22 +768,22 @@ impl SqlStore {
 
             //descr - dot, dist etc
             t.execute(
-                "CREATE TABLE IF NOT EXISTS matches_run (
+                "CREATE TABLE IF NOT EXISTS motifs_run (
                 id          INTEGER PRIMARY KEY,
                 descr       VARCHAR(256),
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS matches_run_resources (
-                resource_id    REFERENCES resources(id) ON DELETE CASCADE,
-                matches_run_id    REFERENCES matches_run(id) ON DELETE CASCADE
-            )", ())?;
+            // t.execute(
+            //     "CREATE TABLE IF NOT EXISTS motifs_run_resources ( TODO set?
+            //     resource_id    REFERENCES resources(id) ON DELETE CASCADE,
+            //     motifs_run_id    REFERENCES motifs_run(id) ON DELETE CASCADE
+            // )", ())?;
 
             //key - resource id
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
-                run_id     REFERENCES matches_run(id) ON DELETE CASCADE,
+                run_id     REFERENCES motifs_run(id) ON DELETE CASCADE,
                 ord_id     INTEGER NOT NULL,
                 key        VARCHAR(256),
                 PRIMARY KEY (run_id, ord_id)
@@ -732,16 +793,16 @@ impl SqlStore {
                 "CREATE TABLE IF NOT EXISTS motifs (
                 id              INTEGER PRIMARY KEY,
                 group_ord       INTEGER NOT NULL,
-                run_id          REFERENCES matches_run(id) ON DELETE CASCADE,
+                run_id          REFERENCES motifs_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL
             )", ())?;
 
             //dot - similarity
-            //tensor_id_0 - resource_id
+            //TODO tensor_id_0 - resource_id
             t.execute(
             "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
-                run_id          REFERENCES matches_run(id) ON DELETE CASCADE,
+                run_id          REFERENCES motifs_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
                 tensor_id_0     VARCHAR(256) NOT NULL,
                 slice_idx_0     INTEGER NOT NULL,
@@ -752,7 +813,7 @@ impl SqlStore {
             )", ())?;
 
             //resource_set_id-
-            t.execute(
+            t.execute(//todo corrs_run -> sets
                 "CREATE TABLE IF NOT EXISTS corrs_run (
                 id          INTEGER PRIMARY KEY,
                 descr       VARCHAR(256),
@@ -760,7 +821,7 @@ impl SqlStore {
             )", ())?;
 
             //labels_motifs on resource_set
-            t.execute(
+            t.execute(//todo label
                 "CREATE TABLE IF NOT EXISTS motifs_corrs (
                 motif_id   REFERENCES motifs(id),
                 corr_id    REFERENCES corrs_run(id) ON DELETE CASCADE,
@@ -844,7 +905,9 @@ mod store_tests{
         let set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()])?;
         store.save_pure_sets(10);
         store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10);
-        // store.ini
+
+        let group_sets = store.list_resource_set_group_sets("pure group 10")?;
+        assert_eq!(3, group_sets.len());
 
         let map :Vec<((String, i64),(String, i64),f32)> = vec![
             (("0".to_string(), 100i64), ("0".to_string(), 200i64), 0.91),

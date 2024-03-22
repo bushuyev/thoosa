@@ -609,7 +609,7 @@ pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, labels_kinds: &'a Vec<(i64,
         (
             label_tensors_path.0,
             eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
-                parquet_to_tensor(base_path, eeg_id.as_str(), *device).map(|v|(v, Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
+                parquet_to_tensor(base_path, eeg_id.as_str(), *device).map(|v|(v, Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))//TODO
             })
         )//(label, path)
 
@@ -627,19 +627,18 @@ pub fn read_eeg_to_df(path: impl AsRef<Path>) -> Result<DataFrame, HbacError> {
     Ok(eeg_df.collect()?)
 }
 
-pub fn clc_records(eeg_id_series: &Series, base_dir: &str) -> Result<usize, HbacError> {
+pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, HbacError> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
 
-    Ok(eeg_id_series.i64()?.into_iter().map(|eeg_id| {
+    Ok(resource_ids.iter().map(|resource_id| {
         // println!("eeg_id={:?}", eeg_id.unwrap_or_default());
-        let eeg_id = eeg_id.unwrap();
         let eeg_df = LazyFrame::scan_parquet(
-            format!("{}/train_eegs/{}.parquet", base_dir, eeg_id),
+            format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
             scan_conf.clone(),
         ).unwrap().collect().unwrap();
 
-        debug!("eeg_id={:?} eeg_df.shape()={:?}", eeg_id, eeg_df.shape());
+        debug!("eeg_id={:?} eeg_df.shape()={:?}", resource_id, eeg_df.shape());
 
         eeg_df.shape().0
     }).sum())

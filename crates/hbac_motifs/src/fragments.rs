@@ -175,7 +175,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
+pub fn motifs_to_tensor<F>(eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     debug!("motifs_to_tensor: device={:?}", device);
@@ -194,7 +194,7 @@ pub fn motifs_to_tensor<F>(base_path:&str, eeg_id_fragments_map: HashMap<String,
             let channel_t = eeg_t.get(fragment.channel_idx as i64);
             let channel_t = channel_t.view([1, -1]);
 
-            let motifslice_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx + window), 1)?;
+            let motifslice_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx + window), 1)?;//TODO save window when finding motifs
 
             let  mut channels_motifs = channels_motifs_slices.entry(fragment.channel_idx).or_insert_with(||HashMap::new());
             let  mut groups_slices = channels_motifs.entry(fragment.motif).or_insert_with(||Vec::new());
@@ -597,14 +597,14 @@ mod motifs_tests {
 
         let mut eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>> = HashMap::new();
 
-        eeg_id_fragments_map.insert("0".to_string(), vec![
+        eeg_id_fragments_map.insert("111".to_string(), vec![
             MotifSlice::new(7, 100, 0),
             MotifSlice::new(7, 301, 1),
             MotifSlice::new(9, 500, 0),
             MotifSlice::new(9, 701, 1)
         ]);
 
-        eeg_id_fragments_map.insert("i".to_string(), vec![
+        eeg_id_fragments_map.insert("222".to_string(), vec![
             MotifSlice::new(7, 200, 0),
             MotifSlice::new(7, 401, 1),
             MotifSlice::new(9, 600, 0),
@@ -630,9 +630,7 @@ mod motifs_tests {
         }
 
         let (t, motif_ids) = super::motifs_to_tensor(
-            "zzz",
             eeg_id_fragments_map,
-            vec!["111".into(), "222".into()],
             test_eeg_to_t,
             10, 2,
             Device::Cpu
