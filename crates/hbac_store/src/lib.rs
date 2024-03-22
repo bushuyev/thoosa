@@ -91,9 +91,9 @@ impl SetCond {
 }
 
 pub trait Store:Sync + Send{
-    fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
+    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
-    fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>) -> Result<(), HbacError>;
+    fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>) -> Result<usize, HbacError>;
     fn save_pure_sets(&mut self, max_len:usize)  -> Result<(), HbacError>;
     fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
@@ -121,7 +121,7 @@ pub struct SqlStore {
 
 impl Store for SqlStore {
 
-    fn save_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError> {
+    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError> {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
@@ -292,17 +292,17 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_resources_set(&mut self, descr:String, resource_keys:Vec<String>) -> Result<(), HbacError>{
+    fn save_resources_set(&mut self, descr:String, resource_keys:Vec<String>) -> Result<usize, HbacError>{
 
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
         t.execute("INSERT INTO resource_set (descr) VALUES (?)", params![descr])?;
 
-        let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?.to_string();
+        let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
         let q = vec!["INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, id FROM resources WHERE key IN ("];
-        let params = vec![resource_set_id.as_str()];
+        let params = vec![resource_set_id.to_string().as_str()];
         for resources_chunk in resource_keys.chunks(500) {
             let (mut q, params) = resources_chunk.into_iter().fold((q.clone(), params.clone()), |(mut q, mut params), key|{
                 params.push(key.as_str());
@@ -318,7 +318,7 @@ impl Store for SqlStore {
 
         t.commit()?;
 
-        Ok(())
+        Ok(resource_set_id)
     }
 
     fn save_pure_sets(&mut self, limit:usize) -> Result<(), HbacError> {
@@ -357,9 +357,13 @@ impl Store for SqlStore {
             let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, i64>(0))?;
 
             let q = [
-                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, id FROM (SELECT r.id FROM resources r LEFT JOIN labeled_resources lr ON lr.resource_id=r.id LEFT JOIN labels l on l.id=lr.label_id where ",
+                "INSERT INTO resource_resources_set (set_id, resource_id) \
+                SELECT ?, id FROM (\
+                SELECT r.id FROM resources r LEFT JOIN labeled_resources lr ON lr.resource_id=r.id LEFT JOIN labels l on l.id=lr.label_id where ",
+                //(l.label='aaa' and p>0.9) or...
                 &conds_to_q(&conds),
-                " LIMIT ?)"
+                " LIMIT ?\
+                )"
             ].concat();
             debug!("q={:?}", q);
             let mut resource_resources_set_stmt = t.prepare(&q)?;
@@ -710,10 +714,9 @@ impl SqlStore {
             )", ())?;
 
             t.execute(
-                "CREATE TABLE IF NOT EXISTS matches_run (
-                id          INTEGER PRIMARY KEY,
-                descr       VARCHAR(256),
-                run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
+                "CREATE TABLE IF NOT EXISTS matches_run_resources (
+                resource_id    REFERENCES resources(id) ON DELETE CASCADE,
+                matches_run_id    REFERENCES matches_run(id) ON DELETE CASCADE
             )", ())?;
 
             //key - resource id
@@ -837,8 +840,8 @@ mod store_tests{
         //     })
         // ));
 
-        store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()]);
-        store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()]);
+        let set_1_id = store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()])?;
+        let set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()])?;
         store.save_pure_sets(10);
         store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10);
         // store.ini
@@ -851,7 +854,7 @@ mod store_tests{
             (("3".to_string(), 200i64), ("5".to_string(), 300i64), 0.94),
         ];
 
-        let run_id= store.save_run("test", &vec!["aaa".into(), "bbb".into()])?;
+        let run_id= store.save_motifs_run("test", &vec!["aaa".into(), "bbb".into()])?;
 
         store.save_slices(run_id,  7, map)?;
 

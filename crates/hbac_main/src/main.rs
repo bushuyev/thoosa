@@ -139,7 +139,7 @@ fn _main() -> Result<(), HbacError> {
     let cpu_num = std::thread::available_parallelism()?;
     let num_threads = cli.num_threads.unwrap_or_else(||max(2, cpu_num.get()/2));
 
-    info!("VERSION: {} device={:?}, base_path={:?} cpus={} num_threads={}", VERSION, device, cli.base_path, cpu_num, num_threads);
+    info!("VERSION: {} devices={:?}, base_path={:?} cpus={} num_threads={}", VERSION, devices, cli.base_path, cpu_num, num_threads);
     info!("limit_eeg: {:?}", cli.limit);
     std::io::stdout().flush()?;
 
@@ -155,7 +155,7 @@ fn _main() -> Result<(), HbacError> {
                 &cli,
                 init_resources_params,
                 Arc::clone(&store)
-            );
+            )?;
         }
         /**
         good_eegs_of
@@ -316,7 +316,7 @@ fn _main() -> Result<(), HbacError> {
             let t = infer(
                 &infer_params,
                 |path:&Path|{
-                    data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), device)
+                    data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), *devices.first().expect("first device"))
                 },
                 1000,
                 100,
@@ -335,11 +335,11 @@ fn _main() -> Result<(), HbacError> {
 
         }
         Some(Commands::PlotMotifSlices(plot_motif_slices_params)) => {
-            plot_motif_slices(&cli, &store, device, &plot_motif_slices_params)?;
+            plot_motif_slices(&cli, &store, *devices.first().expect("first device"), &plot_motif_slices_params)?;
         }
 
         Some(Commands::MotifsToTensor(choose_fragments_params)) => {
-            motifs_to_tensor_cmd(&cli, &store, device, choose_fragments_params)?;
+            motifs_to_tensor_cmd(&cli, &store, *devices.first().expect("first device"), choose_fragments_params)?;
         }
         None => {
             warn!("No command");
