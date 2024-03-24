@@ -94,9 +94,10 @@ pub trait Store:Sync + Send{
     fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>) -> Result<usize, HbacError>;
-    fn save_pure_sets(&mut self, max_len:usize)  -> Result<(), HbacError>;
+    fn save_pure_sets(&mut self, max_len:usize, only_unused: bool) -> Result<(), HbacError>;
     fn list_resource_set_group_sets(&mut self, group_descr:&str)  -> Result<Vec<(usize, String)>, HbacError>;
     fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, HbacError>;
+    fn list_resource_set_resources_by_descr(&mut self, descr:&str)  -> Result<Vec<String>, HbacError>;
     fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
@@ -104,7 +105,8 @@ pub trait Store:Sync + Send{
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), HbacError>;
     fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
-    fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>) -> Result<usize, HbacError>;
+    fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, HbacError>;
+    fn list_corrs(&mut self) -> Result<Vec<(usize, String)>, HbacError>;
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), HbacError>;
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError>;
@@ -324,27 +326,37 @@ impl Store for SqlStore {
         Ok(resource_set_id)
     }
 
-    fn save_pure_sets(&mut self, limit:usize) -> Result<(), HbacError> {
+    fn save_pure_sets(&mut self, max_len:usize, only_unused: bool) -> Result<(), HbacError> {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
         {
             let mut stmt = t.prepare("SELECT id, label FROM labels")?;
             let mut resource_resources_set_stmt = t.prepare(
-                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (SELECT resource_id FROM labeled_resources GROUP BY resource_id HAVING sum(p)=max(p) AND label_id=? ORDER BY resource_id) LIMIT ?"
+                if only_unused {
+                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                    SELECT lr.resource_id FROM labeled_resources lr LEFT JOIN resource_resources_set rrs ON rrs.resource_id=lr.resource_id \
+                    GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id AND rrs.set_id IS NULL\
+                    ) LIMIT ?"
+                } else {
+                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                    SELECT lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id\
+                    ) LIMIT ?"
+                }
+
             )?;
 
             let mut rows = stmt.query(())?;
-            t.execute("INSERT INTO resource_set_group (descr) VALUES (?)", params![format!("pure group {}", limit)])?;
+            t.execute("INSERT INTO resource_set_group (descr) VALUES (?)", params![format!("pure group {}", max_len)])?;
             let group_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
             while let Some(label_row) = rows.next()? {
                 debug!("row={:?}", label_row);
-                t.execute("INSERT INTO resource_set (descr, group_id) VALUES (?, ?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, limit), group_id])?;
+                t.execute("INSERT INTO resource_set (descr, group_id) VALUES (?, ?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, max_len), group_id])?;
 
                 let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
-                resource_resources_set_stmt.execute( params![resource_set_id, label_row.get::<usize, usize>(0)?, limit])?;
+                resource_resources_set_stmt.execute( params![resource_set_id, label_row.get::<usize, usize>(0)?, max_len])?;
 
             }
         }
@@ -378,23 +390,22 @@ impl Store for SqlStore {
         Ok(group_sets)
     }
 
+    fn list_resource_set_resources_by_descr(&mut self, descr:&str)  -> Result<Vec<String>, HbacError> {
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+
+        let r = Self::_list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
+
+        t.commit();
+
+        Ok(r)
+    }
+
     fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, HbacError> {
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
-        let set_resources = {
-            let mut stmt = t.prepare("SELECT key FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=?")?;
-
-
-            let vec = stmt.query_map([set_id], |row| {//TODO move group_slices out, not for store
-                Ok((
-                    row.get::<usize, String>(0).expect("row 1 in list_resource_set_group_sets")
-                ))
-            })?.map(|v| v.unwrap()).collect();
-
-            vec
-
-        };
+        let set_resources = Self::_list_resource_set_resources(set_id, &t)?;
 
         t.commit();
 
@@ -585,35 +596,65 @@ impl Store for SqlStore {
         result
     }
 
-    fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>) -> Result<usize, HbacError>{
+    fn save_motifs_corrs(&mut self, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, HbacError>{
+        debug!("save_motifs_corrs: motifs_corrs={:?}", motifs_corrs);
+
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
-        t.execute("INSERT INTO corrs_run (descr) VALUES (?)", params![descr])?;
-
+        t.execute("INSERT INTO corrs_run (descr, label) VALUES (?, ?)", params![descr, label])?;
         let corr_run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
+        let motifs_corrs = motifs_corrs.into_iter().filter(|corrs|corrs.len() > 0).collect::<Vec<Vec<(usize, f64)>>>();
+        debug!("save_motifs_corrs: filtered motifs_corrs={:?}", motifs_corrs);
 
-        let (mut q, params) = motifs_corrs.into_iter().flat_map(|channel_motif_corrs|channel_motif_corrs.into_iter()).into_iter().fold(
-            (vec!["INSERT INTO motifs_corrs (corr_id, motif_id, corr) VALUES "], vec![]), //TODO check if channel matches one in motif
-            |mut a: (Vec<&str>, Vec<Value>), (motif_id, corr)| {
-                a.0.push("(?, ?, ?)");
-                a.0.push(", ");
-                a.1.push(Value::Integer(corr_run_id as i64));
-                a.1.push(Value::Integer(motif_id as i64));
-                a.1.push(Value::Real(corr));
+        if motifs_corrs.len() > 0 {
 
-                a
-            });
+            for motifs_corrs_chunk in motifs_corrs.chunks(500) {
 
-        q.pop();
+                let (mut q, params) = motifs_corrs_chunk.into_iter().flat_map(|channel_motif_corrs| channel_motif_corrs.into_iter()).into_iter().fold(
+                    (vec!["INSERT INTO motifs_corrs (corr_id, motif_id, corr) VALUES "], vec![]), //TODO check if channel matches one in motif
+                    |mut a: (Vec<&str>, Vec<Value>), (motif_id, corr)| {
+                        a.0.push("(?, ?, ?)");
+                        a.0.push(", ");
+                        a.1.push(Value::Integer(corr_run_id as i64));
+                        a.1.push(Value::Integer(*motif_id as i64));
+                        a.1.push(Value::Real(*corr));
 
-        t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+                        a
+                    });
+
+                q.pop();
+
+
+                t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+            }
+
+
+        }
         t.commit()?;
 
         Ok(corr_run_id)
     }
 
+    fn list_corrs(&mut self) -> Result<Vec<(usize, String)>, HbacError> {
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+
+        let corrs = {
+            let mut stmt = t.prepare("SELECT id, label FROM corrs_run")?;
+
+            let r= stmt.query_map([], |row| {
+                Ok((row.get::<usize, usize>(0)?, row.get::<usize, String>(0)?))
+            })?.map(|v| v.unwrap()).collect();
+
+            r
+        };
+        t.commit()?;
+
+
+        Ok(corrs)
+    }
     /**
     * returns vec of channel X (motif id, corr)
     */
@@ -817,6 +858,7 @@ impl SqlStore {
                 "CREATE TABLE IF NOT EXISTS corrs_run (
                 id          INTEGER PRIMARY KEY,
                 descr       VARCHAR(256),
+                label       VARCHAR(256),
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
@@ -836,6 +878,21 @@ impl SqlStore {
         })
     }
 
+    fn _list_resource_set_resources(set_id: usize, t: &Transaction) -> Result<Vec<String>, HbacError> {
+        let set_resources = {
+            let mut stmt = t.prepare("SELECT key FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=?")?;
+
+
+            let vec = stmt.query_map([set_id], |row| {//TODO move group_slices out, not for store
+                Ok((
+                    row.get::<usize, String>(0).expect("row 1 in list_resource_set_group_sets")
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            vec
+        };
+        Ok(set_resources)
+    }
 }
 fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
     assert!(input.len() > 0);
@@ -903,7 +960,7 @@ mod store_tests{
 
         let set_1_id = store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()])?;
         let set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()])?;
-        store.save_pure_sets(10);
+        store.save_pure_sets(10, false);
         store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10);
 
         let group_sets = store.list_resource_set_group_sets("pure group 10")?;
@@ -981,7 +1038,14 @@ mod store_tests{
 
         assert_eq!(vec!["aaa".to_owned(), "bbb".to_owned()], store.list_run_resources(run_id)?);
 
-        let corr_id = store.save_motifs_corrs("[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]", vec![vec![(1, 0.1), (2, 0.2)]])?;
+        let corr_id = store.save_motifs_corrs(
+            "[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]",
+            vec![vec![(1, 0.1), (2, 0.2)]],
+            "seizure_vote".into()
+        )?;
+
+        let corrs = store.list_corrs()?;
+        assert_eq!([1], corrs.as_slice());
 
         let motifs = store.list_corr_motifs(corr_id)?;
 

@@ -20,9 +20,14 @@ use tch::Kind::{Double, Float};
 use std::sync::Mutex;
 use crate::my_tch::apply_channel_motifs;
 use regex::Regex;
+use hbac_shared::parse_key_val;
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainOnEEGParams {
+
+
+    #[arg(long, value_parser=parse_key_val::<String, String>, default_value="xxx=yyy")]
+    labels_datasets: Vec<(String, String)>,
 
     #[arg(long)]
     corr_run: usize,
@@ -56,6 +61,22 @@ impl TrainOnEEGParams {
     }
     pub fn eeg_models_dir(&self) -> &str {
         &self.eeg_models_dir
+    }
+
+
+
+    pub fn dummy(motif_models_dir:String, eeg_models_dir:String, labels_datasets: Vec<(String, String)>) ->Self {
+        TrainOnEEGParams {
+            corr_run:0,
+            motif_models_dir,
+            eeg_models_dir,
+            cycles: 1000,
+            lr:1.0e-5,
+            labels_datasets
+        }
+    }
+    pub fn labels_datasets(&self) -> &Vec<(String, String)> {
+        &self.labels_datasets
     }
 }
 
@@ -261,15 +282,21 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
                     let models = &models;
                     loader_iter.map( move |t|{
                         let t = &t?;
-                        Ok((Tensor::stack(models.iter().map(|model|{
-                            let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
-                            let t_x = t.view((1, -1));
-                            debug!("motif models i={} model.corr_run={} t.size()={:?} t_x.size()={:?}", i, model.corr_run, t.size(), t_x.size());
+                        Ok(
+                            (
+                                Tensor::stack(models.iter().map(|model|{
+                                    let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
+                                    let t_x = t.view((1, -1));
+                                    debug!("motif models i={} model.corr_run={} t.size()={:?} t_x.size()={:?}", i, model.corr_run, t.size(), t_x.size());
 
-                            let t = model.corr_model.lock().unwrap().forward(&t_x);
-                            debug!("corr_model {} out .size()={:?}", i, t.size());
-                            t
-                        }).collect::<Vec<Tensor>>().as_slice(), 0), t.1.shallow_clone()))
+                                    let t = model.corr_model.lock().unwrap().forward(&t_x);
+                                    debug!("corr_model {} out .size()={:?}", i, t.size());
+                                    t
+                                }).collect::<Vec<Tensor>>().as_slice(), 0),
+
+                                t.1.shallow_clone()
+                            )
+                        )
                     })
                 })
                 .collect::<Vec<_>>())
@@ -379,7 +406,7 @@ impl CorrModels {
 * features without x motif nets
 */
 fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64, motif_n: i64, channels: usize, device: &Device) -> Result<Vec<CorrModels>, HbacError> {
-    let re = Regex::new(r"corr_model_(?<corr_run>[0-9]+).safetensors").unwrap();//TODO lazy_static
+    let re = Regex::new(r"corr_model_(?<label>[a-zA-Z0-9_]+).safetensors").unwrap();//TODO lazy_static
 
     let mut models = vec![];
     for e in fs::read_dir(motif_models_path.as_ref())? {
@@ -394,12 +421,12 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64
                 continue
             };
 
-            let corr_run = caps["corr_run"].parse::<usize>()?;
-            debug!("corr_run={} ", corr_run);
+            let label = caps["label"].parse::<String>()?;
+            debug!("corr_run={} ", label);
 
             let mut vs = nn::VarStore::new(device.clone());
 
-            let motif_nets = load_motif_models(motif_models_path.as_ref(), corr_run, channels, motif_n, &device)?;
+            let motif_nets = load_motif_models(motif_models_path.as_ref(), label, channels, motif_n, &device)?;
 
             let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
             assert!(motif_nets.len() > 0);
@@ -410,7 +437,7 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64
             vs.load(entry.path())?;
             vs.freeze();
 
-            models.push(crate::train_nets::CorrModels::new(corr_run, corr_model, motif_nets))
+            models.push(crate::train_nets::CorrModels::new(label, corr_model, motif_nets))
         }
 
     }
@@ -420,13 +447,13 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64
     Ok(models)
 }
 
-fn load_motif_models(motif_models_path: impl AsRef<Path>, corr_run:usize, channels:usize, motif_n: i64, device: &Device) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
-    debug!("load_motif_models: motif_models_path={:?} corr_run={:?}, channels={:?}, motif_n={:?}", motif_models_path.as_ref(), corr_run, channels, motif_n);
+fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels:usize, motif_n: i64, device: &Device) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
+    debug!("load_motif_models: motif_models_path={:?} label={:?}, channels={:?}, motif_n={:?}", motif_models_path.as_ref(), label, channels, motif_n);
 
 
     let mut channels_motifs_models = vec![];
 
-    let corr_run_motif_models_path = motif_models_path.as_ref().join(format!("corr_run_{}", corr_run));
+    let corr_run_motif_models_path = motif_models_path.as_ref().join(label); //format!("corr_run_{}", corr_run));
 
     for channel in 0..channels {
 
@@ -524,6 +551,26 @@ impl TrainOnMotifsParams {
 
     pub fn min_corr(&self) -> f64 {
         self.min_corr
+    }
+
+    pub fn dummy(output_dir: &String) ->Self{
+        TrainOnMotifsParams {
+            motif_ids: MotifsBy::CorrRunId(0),
+
+            corr_run: 0,
+
+            window: 1000,//should be same as one used when finding motifs or TODO center bigger/smaller window
+
+            output_dir: output_dir.clone(),
+
+            cycles: 1000,
+
+            lr: 1.0e-5,
+
+            max_loss: 0.2,
+
+            min_corr: 0.05,
+        }
     }
 }
 
@@ -990,10 +1037,10 @@ mod train_tests {
         ])
     }
 
-    fn load_test_tensor(id:String) ->Result<Tensor, HbacError> {
+    fn load_test_tensor(id:String) ->Box<Tensor> {
         debug!("test_load_tensor: {}", id);
 
-        Ok(make_test_eeg(1000))
+        Box::new(make_test_eeg(1000))
     }
 
 
