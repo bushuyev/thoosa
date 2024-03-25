@@ -246,22 +246,23 @@ fn _main() -> Result<(), HbacError> {
 
         Some(Commands::TrainFinal(train_final_params)) => {
 
-            let labels_kinds = vec![
-                (0, "seizure_vote".to_string()),
-                (1, "lpd_vote".to_string()),
-                (2, "gpd_vote".to_string()),
-                (3, "lrda_vote".to_string()),
-                (4, "grda_vote".to_string()),
-                (5, "other_vote".to_string())
-            ];
+            // let labels_datasets = vec![
+            //     ("seizure".into(), "seizure/100".into()),
+            //     ("lpd".into(), "lpd/100".into()),
+            //     ("gpd".into(), "gpd/100".into()),
+            //     ("lrda".into(), "lrda/100".into()),
+            //     ("grda".into(), "grda/100".into()),
+            //     ("other".into(), "other/100".into()),
+            // ];
 
             let vs = train_final(
                 train_final_params,
                 eegs_to_logits_tensors(
                     cli.base_path.as_str(),
-                    &labels_kinds,//TODO load from corrs_run
+                    cli.tensors_path.clone(),
+                    "pure group 100",//TODO load from corrs_run
                     &device,
-                    cli.limit.as_ref()
+                    Arc::clone(&store) //cli.limit.as_ref()
                     //684400 - TODO cut at max_input
                 ),
                 5,

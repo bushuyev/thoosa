@@ -102,7 +102,7 @@ impl <I> DataBatch for ClassTensorsLoaderDataBatch<I> where I:Iterator<Item=Resu
     }
 
     fn valid_batch(&mut self) -> (Tensor, Tensor){
-        self.batch() //no replacement, just pull next
+        self.batch() //TODO replacement, just pull next
     }
 }
 
@@ -145,16 +145,14 @@ impl<I> ClassTensorsLoaderDataBatch<I> where I: Iterator<Item=Result<Tensor, Hba
 
 
 struct ClassTensorsLoaderData<I> {
-    classes_tensor_loaders: Vec<Vec<I>>,
-    current:usize
+    loader: I,
 }
 
 impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
-    pub fn new(classes_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
+    pub fn new(loader: I, items_per_label: usize, train_valid_split: f32) -> Self {
         Self {
-            classes_tensor_loaders,
-            current: 0
+            loader,
         }
     }
 
@@ -175,12 +173,8 @@ impl <I> DataBatch for ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(T
 impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
     fn batch(&mut self) -> (Tensor, Tensor) {
-        let t = self.classes_tensor_loaders[self.current][0].next().unwrap().unwrap();
+        let t = self.loader.next().expect("next").expect("result");//TODO expects
 
-        self.current+=1;
-        if self.current == self.classes_tensor_loaders.len() {
-            self.current = 0;
-        }
         (
             t.0,
             t.1
@@ -252,64 +246,52 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     Ok(vs_0)
 }
 
-pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<VarStore, HbacError>
+pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<VarStore, HbacError>
     where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
-    let mut labels_loaders = labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
-        a.entry(label).or_insert_with(||vec![]).push(loader);
-        a
-    });
+    // let mut labels_loaders = tensors_loader.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
+    //     a.entry(label).or_insert_with(||vec![]).push(loader);
+    //     a
+    // });
 
-    let mut keys = labels_loaders.keys().map(|v|*v).collect::<Vec<i64>>();
-    keys.sort();
+    // let mut keys = labels_loaders.keys().map(|v|*v).collect::<Vec<i64>>();
+    // keys.sort();
 
     let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
-    debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, labels_loaders.keys());
     debug!("train_on_eeg: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
     let models = load_corr_and_motif_models(params.models_dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?;//TODO num channels
 
     debug!("models.size={:?} models={:?}", models.len(), models);
 
-    let loaders_vec = keys.into_iter()
-        .map(
-            |label| labels_loaders
-                .remove(&label).expect(format!("no {}", label).as_str())
-                .into_iter()
-                .enumerate()
-                .map(|(i, loader_iter)|{
-                    let models = &models;
-                    loader_iter.map( move |t|{
-                        let t = &t?;
-                        Ok(
-                            (
-                                Tensor::stack(models.iter().map(|model|{
-                                    let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
-                                    let t_x = t.view((1, -1));
-                                    debug!("motif models i={} model.label={} t.size()={:?} t_x.size()={:?}", i, model.label, t.size(), t_x.size());
+    let tensors_loader =  tensors_loader.map( move |t|{
+        let t = &t?;
+        Ok(
+            (
+                Tensor::stack(models.iter().map(|model|{
+                    let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
+                    let t_x = t.view((1, -1));
+                    debug!("motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
 
-                                    let t = model.corr_model.lock().unwrap().forward(&t_x);
-                                    debug!("corr_model {} out .size()={:?}", i, t.size());
-                                    t
-                                }).collect::<Vec<Tensor>>().as_slice(), 0),
+                    let t = model.corr_model.lock().unwrap().forward(&t_x);
+                    debug!("corr_model out .size()={:?}", t.size());
+                    t
+                }).collect::<Vec<Tensor>>().as_slice(), 0),
 
-                                t.1.shallow_clone()
-                            )
-                        )
-                    })
-                })
-                .collect::<Vec<_>>())
-        .collect::<Vec<Vec<_>>>();
+                t.1.shallow_clone()
+            )
+        )
+    });
 
     let mut vs_0 = nn::VarStore::new(device.clone());
 
     train(
         device,
         // &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
-        &mut ClassTensorsLoaderData::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
+        &mut ClassTensorsLoaderData::new(tensors_loader, items_per_label, 0.8) as &mut dyn DataBatch,
         &final_node(6, 6).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
 
@@ -408,7 +390,7 @@ impl CorrModels {
 * features without x motif nets
 */
 fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64, motif_n: i64, channels: usize, device: &Device) -> Result<Vec<CorrModels>, HbacError> {
-    let re = Regex::new(r"corr_model_(?<label>[a-zA-Z0-9_]+).safetensors").unwrap();//TODO lazy_static
+    let re = Regex::new(r"^(?<label>[a-zA-Z0-9]+?)_(?<corr_run>\d+).safetensors").unwrap();//TODO lazy_static
 
     let mut models = vec![];
     for e in fs::read_dir(motif_models_path.as_ref())? {
@@ -1056,22 +1038,23 @@ mod train_tests {
             motif_models_dir: models_path.to_str().unwrap().to_string(),
             eeg_models_dir: models_path.to_str().unwrap().to_string(),
             cycles: 3,
-            lr: 1.0e-5
+            lr: 1.0e-5,
+            labels_datasets: vec![]
         };
 
-        save_test_motif_model(&models_path, 0, "0", "00", 100)?;
-        save_test_motif_model(&models_path, 0, "0", "01", 100)?;
-        save_test_motif_model(&models_path, 0, "0", "02", 100)?;
-        save_test_motif_model(&models_path, 0, "0", "03", 100)?;
-        save_test_motif_model(&models_path, 0, "1", "10", 100)?;
-        save_test_motif_model(&models_path, 0, "1", "11", 100)?;
-        save_test_motif_model(&models_path, 0, "2", "20", 100)?;
+        save_test_motif_model(&models_path, "seizure", "0", "00", 100)?;
+        save_test_motif_model(&models_path, "seizure", "0", "01", 100)?;
+        save_test_motif_model(&models_path, "lpd", "0", "02", 100)?;
+        save_test_motif_model(&models_path, "gpd", "0", "03", 100)?;
+        save_test_motif_model(&models_path, "lrda", "1", "10", 100)?;
+        save_test_motif_model(&models_path, "grda", "1", "11", 100)?;
+        save_test_motif_model(&models_path, "other", "2", "20", 100)?;
 
         super::train_on_eeg(
             &params,
             vec![
                 (1, "seizure_vote".to_string()),
-                (0, "lpd_vote".to_string()),
+                (0, "other".to_string()),
                 (0, "gpd_vote".to_string()),
                 (0, "lrda_vote".to_string()),
                 (0, "grda_vote".to_string()),
@@ -1087,7 +1070,7 @@ mod train_tests {
             13, 100, 100, 7, 5,
             684400,
             &Cpu,
-            "seizure_vote"
+            &"seizure".to_string()
         )?;
 
         Ok(())
@@ -1121,22 +1104,9 @@ mod train_tests {
 
         super::train_final(
             &params,
-            vec![
-                (0, "seizure_vote".to_string()),
-                (1, "lpd_vote".to_string()),
-                (2, "gpd_vote".to_string()),
-                (3, "lrda_vote".to_string()),
-                (4, "grda_vote".to_string()),
-                (5, "other_vote".to_string())
-
-            ].into_iter().map(|(label, kind)|{
-
-                (label, (0..13).map( move |id|{
-                    debug!("{}-{}-{}", label, kind, id);
-                    Ok((make_test_eeg(1000), Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
-                }))
-
-            }).collect::<Vec<_>>(),
+            (0..13).map( move |id|{
+                Ok((make_test_eeg(1000), Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
+            }),
             13, 100, 100, motif_batch_size, channels,
             684400,
             &Cpu
@@ -1147,51 +1117,51 @@ mod train_tests {
 
     //6 corrs 4 motif models
     fn save_test_models(models_path: &PathBuf, channels: i64, motif_batch_size: i64, max_motif_batches: i32, features: i64) -> Result<(), HbacError> {
-        save_test_corr_model(&models_path, 0, features);
+        save_test_corr_model(&models_path, "seizure", features);
 
-        save_test_motif_model(&models_path, 0, "0", "00", 100)?;
-        save_test_motif_model(&models_path, 0, "0", "01", 100)?;
-        save_test_motif_model(&models_path, 0, "0", "02", 100)?;
-        save_test_motif_model(&models_path, 0, "0", "03", 100)?;
-        save_test_motif_model(&models_path, 0, "1", "10", 100)?;
-        save_test_motif_model(&models_path, 0, "1", "11", 100)?;
-        save_test_motif_model(&models_path, 0, "2", "20", 100)?;
+        save_test_motif_model(&models_path, "seizure", "0", "00", 100)?;
+        save_test_motif_model(&models_path, "seizure", "0", "01", 100)?;
+        save_test_motif_model(&models_path, "seizure", "0", "02", 100)?;
+        save_test_motif_model(&models_path, "seizure", "0", "03", 100)?;
+        save_test_motif_model(&models_path, "seizure", "1", "10", 100)?;
+        save_test_motif_model(&models_path, "seizure", "1", "11", 100)?;
+        save_test_motif_model(&models_path, "seizure", "2", "20", 100)?;
 
         let max_nets = 1;
         let features = channels * max_nets * max_motif_batches as i64 * motif_batch_size;
-        save_test_corr_model(&models_path, 1, features);
+        save_test_corr_model(&models_path, "lpd", features);
 
-        save_test_motif_model(&models_path, 1, "0", "00", 100)?;
-        save_test_motif_model(&models_path, 1, "1", "10", 100)?;
-        save_test_motif_model(&models_path, 1, "2", "20", 100)?;
-
-
-        save_test_corr_model(&models_path, 2, features);
-
-        save_test_motif_model(&models_path, 2, "0", "00", 100)?;
-        save_test_motif_model(&models_path, 2, "1", "10", 100)?;
-        save_test_motif_model(&models_path, 2, "2", "20", 100)?;
+        save_test_motif_model(&models_path, "lpd", "0", "00", 100)?;
+        save_test_motif_model(&models_path, "lpd", "1", "10", 100)?;
+        save_test_motif_model(&models_path, "lpd", "2", "20", 100)?;
 
 
-        save_test_corr_model(&models_path, 3, features);
+        save_test_corr_model(&models_path, "gpd", features);
 
-        save_test_motif_model(&models_path, 3, "0", "00", 100)?;
-        save_test_motif_model(&models_path, 3, "1", "10", 100)?;
-        save_test_motif_model(&models_path, 3, "2", "20", 100)?;
-
-
-        save_test_corr_model(&models_path, 4, features);
-
-        save_test_motif_model(&models_path, 4, "0", "00", 100)?;
-        save_test_motif_model(&models_path, 4, "1", "10", 100)?;
-        save_test_motif_model(&models_path, 4, "2", "20", 100)?;
+        save_test_motif_model(&models_path, "gpd", "0", "00", 100)?;
+        save_test_motif_model(&models_path, "gpd", "1", "10", 100)?;
+        save_test_motif_model(&models_path, "gpd", "2", "20", 100)?;
 
 
-        save_test_corr_model(&models_path, 5, features);
+        save_test_corr_model(&models_path, "lrda", features);
 
-        save_test_motif_model(&models_path, 5, "0", "00", 100)?;
-        save_test_motif_model(&models_path, 5, "1", "10", 100)?;
-        save_test_motif_model(&models_path, 5, "2", "20", 100)?;
+        save_test_motif_model(&models_path, "lrda", "0", "00", 100)?;
+        save_test_motif_model(&models_path, "lrda", "1", "10", 100)?;
+        save_test_motif_model(&models_path, "lrda", "2", "20", 100)?;
+
+
+        save_test_corr_model(&models_path, "grda", features);
+
+        save_test_motif_model(&models_path, "grda", "0", "00", 100)?;
+        save_test_motif_model(&models_path, "grda", "1", "10", 100)?;
+        save_test_motif_model(&models_path, "grda", "2", "20", 100)?;
+
+
+        save_test_corr_model(&models_path, "other", features);
+
+        save_test_motif_model(&models_path, "other", "0", "00", 100)?;
+        save_test_motif_model(&models_path, "other", "1", "10", 100)?;
+        save_test_motif_model(&models_path, "other", "2", "20", 100)?;
         Ok(())
     }
 
@@ -1277,7 +1247,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_corr_model(models_path: &PathBuf, corr_run:i64, features: i64) -> Result<(), HbacError> {
+    fn save_test_corr_model(models_path: &PathBuf, label:&str, features: i64) -> Result<(), HbacError> {
         fs::create_dir_all(models_path.clone());
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
@@ -1285,12 +1255,12 @@ mod train_tests {
 
         vs_0.freeze();
         debug!("save_test_corr_model: features={} vs_0.variables()={:?}", features, vs_0.variables());
-        vs_0.save(models_path.join(format!("corr_model_{}.safetensors", corr_run)))?;
+        vs_0.save(models_path.join(format!("{}_0.safetensors", label)))?;
         Ok(())
     }
 
-    fn save_test_motif_model(models_path: &PathBuf, corr_run: i64, channel: &str, motif_id: &str, window: i64) -> Result<(), HbacError> {
-        let channel_0 = models_path.join(format!("corr_run_{}", corr_run)).join(channel);
+    fn save_test_motif_model(models_path: &PathBuf, label: &str, channel: &str, motif_id: &str, window: i64) -> Result<(), HbacError> {
+        let channel_0 = models_path.join(format!("{}", label)).join(channel);
         fs::create_dir_all(channel_0.clone());
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);

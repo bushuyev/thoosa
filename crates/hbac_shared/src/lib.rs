@@ -290,7 +290,7 @@ pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Syn
 }
 
 
-pub fn batch_windows(input_n: usize, motif_n: usize, step: usize, batch_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
+pub fn batch_windows(input_n: usize, motif_n: usize, step: usize, batch_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) { // (batches, reminder)
     debug!("slice_windows: input_n={}, motif_n={}, step={}", input_n, motif_n, step);
 
     (0..=input_n - motif_n).step_by(step).fold((vec![], vec![]), |mut a, v| {
