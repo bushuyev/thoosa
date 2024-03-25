@@ -138,7 +138,7 @@ impl<I> ClassTensorsLoaderDataBatch<I> where I: Iterator<Item=Result<Tensor, Hba
 
         (
             Tensor::stack(x_y.0.as_slice(), 0).totype(Float),
-            Tensor::from_slice(x_y.1.as_slice()).totype(Float)
+            Tensor::from_slice(x_y.1.as_slice()).totype(Float).to_device(x_y.0[0].device())//TODO device
         )
     }
 }

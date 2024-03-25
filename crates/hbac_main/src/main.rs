@@ -272,7 +272,7 @@ fn _main() -> Result<(), HbacError> {
             //     ("grda".into(), "grda/3".into()),
             //     ("other".into(), "other/3".into()),
             // ];
-            let labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets("pure group 3")?};
+            let labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets(run_all_params.resource_group())?};
 
             debug!("run all: labels_datasets={:?}", labels_datasets);
 

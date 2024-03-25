@@ -614,7 +614,7 @@ pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
                 debug!("labels_p={:?}", labels_p);
                 (
                     parquet_or_load_tensor(base_path, tensors_path.clone(), key.as_str(), *device),
-                    Box::new(Tensor::from_slice(labels_p.as_slice()))
+                    Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
                 )
         })
         .cycle()
