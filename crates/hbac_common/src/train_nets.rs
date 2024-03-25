@@ -835,10 +835,10 @@ impl TrainFinalParams{
 #[derive(Debug, Args, Clone)]
 pub struct InferParams {
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models")]
+    #[arg(long, default_value = "/tmp/")]
     models_dir: String,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models/final.safetensors")]
+    #[arg(long, default_value = "/tmp/")]
     final_model: Option<String>,
 
     #[arg(long, default_value = "../../data_local/test_eegs")]

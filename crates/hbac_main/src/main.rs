@@ -264,14 +264,18 @@ fn _main() -> Result<(), HbacError> {
 
             info!("find_motifs done");
 
-            let labels_datasets = vec![
-                ("seizure".into(), "seizure/3".into()),
-                ("lpd".into(), "lpd/3".into()),
-                ("gpd".into(), "gpd/3".into()),
-                ("lrda".into(), "lrda/3".into()),
-                ("grda".into(), "grda/3".into()),
-                ("other".into(), "other/3".into()),
-            ];
+            // let labels_datasets = vec![
+            //     ("seizure".into(), "seizure/3".into()),
+            //     ("lpd".into(), "lpd/3".into()),
+            //     ("gpd".into(), "gpd/3".into()),
+            //     ("lrda".into(), "lrda/3".into()),
+            //     ("grda".into(), "grda/3".into()),
+            //     ("other".into(), "other/3".into()),
+            // ];
+            let labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets("pure group 3")?};
+
+            debug!("run all: labels_datasets={:?}", labels_datasets);
+
             run_select_motifs(&cli, &store, devices.clone(), classes, &SelectMotifsParams::dummy(run_all_params.step, run_all_params.window, run_ids, labels_datasets.clone()))?;
 
             info!("select_motifs done");

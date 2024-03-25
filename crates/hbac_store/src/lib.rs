@@ -96,7 +96,8 @@ pub trait Store:Sync + Send{
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>, group_id: Option<usize>) -> Result<usize, HbacError>;
     fn save_resource_set_group(&mut self, descr:String) -> Result<usize, HbacError>;
     fn save_pure_sets(&mut self, max_len:usize, only_unused: bool) -> Result<(), HbacError>;
-    fn list_resource_set_group_sets(&mut self, group_descr:&str)  -> Result<Vec<(usize, String)>, HbacError>;
+    fn list_resource_set_group_sets(&mut self, group_descr:&str) -> Result<Vec<(usize, String)>, HbacError>;
+    fn list_group_labeled_resources_sets(&mut self, group_decr:&str) -> Result<Vec<(String, String)>, HbacError>;
     fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, HbacError>;
     fn list_resource_set_resources_by_descr(&mut self, descr:&str)  -> Result<Vec<String>, HbacError>;
     fn list_resource_random_not_label(&mut self, label:&str, limit:i64)  -> Result<Vec<String>, HbacError>;
@@ -367,7 +368,7 @@ impl Store for SqlStore {
         {
             let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), &mut t)?;
 
-            let mut stmt = t.prepare("SELECT id, label FROM labels")?;
+            let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;//TODO replace with Self::list_labels
             let mut resource_resources_set_stmt = t.prepare(
                 if only_unused {
                     "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
@@ -385,11 +386,12 @@ impl Store for SqlStore {
             let mut rows = stmt.query(())?;
             while let Some(label_row) = rows.next()? {
                 debug!("row={:?}", label_row);
-                t.execute("INSERT INTO resource_set (descr, group_id) VALUES (?, ?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, max_len), group_id])?;
+                let label_id = label_row.get::<usize, usize>(0)?;
+                t.execute("INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, max_len), group_id, label_id])?;
 
                 let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
-                resource_resources_set_stmt.execute(params![resource_set_id, label_row.get::<usize, usize>(0)?, max_len])?;
+                resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
             }
         }
 
@@ -420,6 +422,30 @@ impl Store for SqlStore {
         t.commit();
 
         Ok(group_sets)
+    }
+
+    fn list_group_labeled_resources_sets(&mut self, group_descr:&str) -> Result<Vec<(String, String)>, HbacError> {
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+
+        let labeled_resources_sets = {
+            let mut stmt = t.prepare("SELECT  l.label , rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
+
+
+            let vec = stmt.query_map([group_descr], |row| {//TODO move group_slices out, not for store
+                Ok((
+                    row.get::<usize, String>(0).expect("row 0 in list_group_labeled_resources_sets"),
+                    row.get::<usize, String>(1).expect("row 1 in list_group_labeled_resources_sets")
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            vec
+
+        };
+
+        t.commit();
+
+        Ok(labeled_resources_sets)
     }
 
     fn list_resource_set_resources_by_descr(&mut self, descr:&str)  -> Result<Vec<String>, HbacError> {
@@ -874,13 +900,14 @@ impl SqlStore {
                 "CREATE TABLE IF NOT EXISTS resource_set (
                 id          INTEGER PRIMARY KEY,
                 group_id    REFERENCES resource_set_group(id) ON DELETE CASCADE,
+                label_id    REFERENCES labels(id) ON DELETE CASCADE,
                 descr       VARCHAR(256))",
             ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS resource_resources_set (
-                resource_id  REFERENCES resources(id) ON DELETE CASCADE,
-                set_id       REFERENCES resource_set(id) ON DELETE CASCADE,
+                resource_id  NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                set_id       NOT NULL REFERENCES resource_set(id) ON DELETE CASCADE,
                 PRIMARY KEY (resource_id, set_id)
             )", ())?;
 
@@ -895,8 +922,8 @@ impl SqlStore {
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS labeled_resources (
-                resource_id    REFERENCES resources(id) ON DELETE CASCADE,
-                label_id       REFERENCES labels(id) ON DELETE CASCADE,
+                resource_id    NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                label_id       NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
                 p              FLOAT NOT NULL,
                 PRIMARY KEY (resource_id, label_id)
             )", ())?;
@@ -918,7 +945,7 @@ impl SqlStore {
             //key - resource id
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
-                run_id     REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id     NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
                 ord_id     INTEGER NOT NULL,
                 key        VARCHAR(256),
                 PRIMARY KEY (run_id, ord_id)
@@ -928,16 +955,16 @@ impl SqlStore {
                 "CREATE TABLE IF NOT EXISTS motifs (
                 id              INTEGER PRIMARY KEY,
                 group_ord       INTEGER NOT NULL,
-                run_id          REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id          NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL
             )", ())?;
 
             //dot - similarity
-            //TODO tensor_id_0 - resource_id
+            //TODO!! tensor_id_0 - REFERENCES resource_id
             t.execute(
             "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
-                run_id          REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id          NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
                 tensor_id_0     VARCHAR(256) NOT NULL,
                 slice_idx_0     INTEGER NOT NULL,
@@ -960,7 +987,7 @@ impl SqlStore {
             t.execute(//todo label
                 "CREATE TABLE IF NOT EXISTS motifs_corrs (
                 motif_id   REFERENCES motifs(id),
-                corr_id    REFERENCES corrs_run(id) ON DELETE CASCADE,
+                corr_id    NOT NULL REFERENCES corrs_run(id) ON DELETE CASCADE,
                 corr       FLOAT NOT NULL
             )", ())?;
 
