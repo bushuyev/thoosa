@@ -104,7 +104,7 @@ impl TensorsStore for LazyTensorsStore {
 
         match loaded_tensor {
             None => {
-                Err(HbacError::new("not tensor".into()))
+                Err(HbacError::new("not tensor"))
             }
             Some(tensor) => {
                 Ok(tensor)

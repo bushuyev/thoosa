@@ -98,6 +98,7 @@ pub trait Store:Sync + Send{
     fn list_resource_set_group_sets(&mut self, group_descr:&str)  -> Result<Vec<(usize, String)>, HbacError>;
     fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, HbacError>;
     fn list_resource_set_resources_by_descr(&mut self, descr:&str)  -> Result<Vec<String>, HbacError>;
+    fn list_resource_random_not_label(&mut self, label:&str, limit:i64)  -> Result<Vec<String>, HbacError>;
     fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
@@ -395,6 +396,23 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         let r = Self::_list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
+
+        t.commit();
+
+        Ok(r)
+    }
+
+    fn list_resource_random_not_label(&mut self, label:&str, limit:i64)  -> Result<Vec<String>, HbacError> {
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+
+        let r = t.prepare(
+            "SELECT r.key FROM resources r INNER JOIN labeled_resources lr ON r.id=lr.resource_id INNER JOIN labels l ON l.id=lr.label_id WHERE l.label != ? ORDER BY RANDOM() limit ?;"
+        )?.query_map([Value::Text(label.to_string()), Value::Integer(limit)], |row| {//TODO move group_slices out, not for store
+            Ok(
+                row.get(0)?
+            )
+        })?.map(|v| v.unwrap()).collect();
 
         t.commit();
 

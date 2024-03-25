@@ -577,8 +577,9 @@ pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Resu
 }
 
 pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
-    let mut store_lock = store.lock()?;
+    debug!("eegs_to_labels_tensors: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
+    let mut store_lock = store.lock().unwrap();
 
     // classes_tensor_selectors.into_iter().map(move |label_tensors_path| {
     //     let tensors_path = tensors_path.clone();
@@ -598,8 +599,26 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
     //     )//(label, path)
     //
     // }).collect::<Vec<_>>()
+    // let tensors_path = tensors_path.clone();
+
+    let parquet_or_load_tensor_fn = move |resource: String| parquet_or_load_tensor(base_path, tensors_path.clone(), resource.as_str(), *device);
     vec![
-        (1, store_lock.list_resource_set_resources_by_descr(resource_set_descr)?.into_iter().map(|resource|parquet_or_load_tensor(base_path, tensors_path.clone(), resource.as_str(), *device)))
+        (
+            1,
+            store_lock.list_resource_set_resources_by_descr(resource_set_descr)
+                .expect("list_resource_set_resources_by_descr")
+                .into_iter()
+                .map(parquet_or_load_tensor_fn.clone())
+                .cycle()
+        ),
+        (
+            0,
+            store_lock.list_resource_random_not_label(label.as_str(), 100)
+                .expect("list_resource_random_not_label")
+                .into_iter()
+                .map( parquet_or_load_tensor_fn)
+                .cycle()
+        )
     ]
 }
 

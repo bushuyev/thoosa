@@ -232,7 +232,16 @@ fn _main() -> Result<(), HbacError> {
         }
 
         Some(TrainOnEEG(train_on_eeg_params)) => {
-            run_train_on_eeg(&cli, &store, &device, train_on_eeg_params)?;
+            let labels_datasets = vec![
+                ("seizure".into(), "seizure/100".into()),
+                ("lpd".into(), "lpd/100".into()),
+                ("gpd".into(), "gpd/100".into()),
+                ("lrda".into(), "lrda/100".into()),
+                ("grda".into(), "grda/100".into()),
+                ("other".into(), "other/100".into()),
+            ];
+
+            run_train_on_eeg(&cli, &store, &device, &TrainOnEEGParams::dummy("../../data_local/corr_motif_models_on_100_pure".into(), "../../data_local/corr_motif_models_on_100_pure".into(), labels_datasets.clone())/*train_on_eeg_params*/)?;
         }
 
         Some(Commands::TrainFinal(train_final_params)) => {
@@ -342,11 +351,13 @@ fn _main() -> Result<(), HbacError> {
 }
 
 fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, train_on_eeg_params: &TrainOnEEGParams) -> Result<(), HbacError> {
-
+    debug!("run_train_on_eeg: train_on_eeg_params={:?}", train_on_eeg_params);
     // let labels_kinds = store_guard.corrs_descr(train_on_eeg_params.corr_run())?;
 
     for (label, dataset) in train_on_eeg_params.labels_datasets() {
-        let vs = train_on_eeg(
+        info!("training {} on {}", label, dataset);
+
+        match train_on_eeg(
             train_on_eeg_params,
             eegs_to_labels_tensors(
                 cli.base_path.as_str(),
@@ -362,10 +373,18 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
             100,
             20,
             684400,
-            &device
-        )?;
+            &device,
+            label
+        ) {
+            Ok(vs) => {
+                vs.save(format!("{}/{}_{}.safetensors", train_on_eeg_params.eeg_models_dir(), label, train_on_eeg_params.corr_run()))?;
+            }
+            Err(e) => {//should be no motif nets found only
+                warn!("e:{:?}", e);
+            }
+        }
 
-        vs.save(format!("{}/corr_model_{}.safetensors", train_on_eeg_params.eeg_models_dir(), train_on_eeg_params.corr_run()))?;
+
     }
     Ok(())
 }

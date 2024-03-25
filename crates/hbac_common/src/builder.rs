@@ -86,6 +86,8 @@ impl Node {
                 Box::new(MyBatchNorm1d::new())
             }
             Node::Linear {in_feats, out_feats, config} => {
+                assert!(in_feats > &0);
+                assert!(out_feats > &0);
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
                 Box::new(my_linear(vs/ "layer1", *in_feats, *out_feats, config.unwrap_or(LinearConfig::default()))?)
             }
@@ -195,6 +197,7 @@ impl SeqBuilder {
 
 
     pub fn linear_s(&mut self, out_feats:i64) -> &mut Self {
+        assert!(out_feats > 0);
         self.elts.push(
             Node::Linear { in_feats:self.num_features, out_feats, config:None}
         );

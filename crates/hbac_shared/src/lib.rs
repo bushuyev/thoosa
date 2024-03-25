@@ -90,17 +90,17 @@ impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug{
 }
 
 #[derive(Debug)]
-pub struct HbacError {
+pub struct HbacError {//TODO enum
     msg:String,
     backtrace:Backtrace
 }
 
 impl HbacError {
 
-    pub fn new(msg:String) -> Self {
+    pub fn new(msg:impl Into<String> + Display) -> Self {
         error!("HbacError::new: msg={}", msg);
         Self {
-            msg,
+            msg: msg.into(),
             backtrace:Backtrace::capture()
         }
     }

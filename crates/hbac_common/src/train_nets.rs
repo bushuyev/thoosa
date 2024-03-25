@@ -32,13 +32,13 @@ pub struct TrainOnEEGParams {
     #[arg(long)]
     corr_run: usize,
 
-    #[arg(long)]
+    #[arg(long, default_value = "../../data_local/corr_motif_models_on_100_pure")]
     motif_models_dir: String,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models")]
+    #[arg(long, default_value = "../../data_local/corr_motif_models_on_100_pure")]
     eeg_models_dir: String,
 
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 10)]
     cycles: usize,
 
     #[arg(long, default_value_t = 1.0e-5)]
@@ -70,7 +70,7 @@ impl TrainOnEEGParams {
             corr_run:0,
             motif_models_dir,
             eeg_models_dir,
-            cycles: 1000,
+            cycles: 100,
             lr:1.0e-5,
             labels_datasets
         }
@@ -188,7 +188,7 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor)
     }
 }
 
-pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<VarStore, HbacError>
+pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, label: &String) -> Result<VarStore, HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
@@ -201,13 +201,15 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     keys.sort();
 
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, labels_loaders.keys());
-    let models = load_motif_models(params.motif_models_dir.as_str(), params.corr_run, channels as usize, motif_n, device)?;//TODO num channels
+    let models = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, motif_n, device)?;//TODO num channels
     debug!("train_on_eeg: models.size={:?} models={:?}", models.len(), models);
 
     let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
     let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
-    assert!(motif_nets.len() > 0);
+    if max_nets <= 0 {
+        return Err(HbacError::new("no motif nets found"));
+    }
 
     let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
@@ -287,7 +289,7 @@ pub fn train_final<I>(params: &TrainFinalParams, labels_loaders:Vec<(i64, I)>, i
                                 Tensor::stack(models.iter().map(|model|{
                                     let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
                                     let t_x = t.view((1, -1));
-                                    debug!("motif models i={} model.corr_run={} t.size()={:?} t_x.size()={:?}", i, model.corr_run, t.size(), t_x.size());
+                                    debug!("motif models i={} model.label={} t.size()={:?} t_x.size()={:?}", i, model.label, t.size(), t_x.size());
 
                                     let t = model.corr_model.lock().unwrap().forward(&t_x);
                                     debug!("corr_model {} out .size()={:?}", i, t.size());
@@ -354,7 +356,7 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
         let t = Tensor::stack(corr_models.iter().enumerate().map(|(model_i, model)| {
             let t = apply_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
             let t_x = t.view((1, -1));
-            debug!("infer: motif models model_i={} model.corr_run={} t.size()={:?} t_x.size()={:?}", model_i, model.corr_run, t.size(), t_x.size());
+            debug!("infer: motif models model_i={} model.label={} t.size()={:?} t_x.size()={:?}", model_i, model.label, t.size(), t_x.size());
 
             let t = model.corr_model.lock().unwrap().forward(&t_x);
             debug!("corr_model out .size()={:?}", t.size());
@@ -385,16 +387,16 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
 
 #[derive(Debug)]
 struct CorrModels {
-    corr_run:usize,
+    label:String,
     corr_model:Mutex<Box<dyn Module>>,
     motif_models:Vec<Vec<Mutex<Box<dyn Module>>>>
 }
 
 impl CorrModels {
 
-    pub fn new(corr_run: usize, corr_model: Box<dyn Module>, motif_models: Vec<Vec<Box<dyn Module>>>) -> Self {
+    pub fn new(label:String, corr_model: Box<dyn Module>, motif_models: Vec<Vec<Box<dyn Module>>>) -> Self {
         Self {
-            corr_run,
+            label,
             corr_model: Mutex::new(corr_model),
             motif_models: motif_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>()
         }
@@ -426,7 +428,7 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64
 
             let mut vs = nn::VarStore::new(device.clone());
 
-            let motif_nets = load_motif_models(motif_models_path.as_ref(), label, channels, motif_n, &device)?;
+            let motif_nets = load_motif_models(motif_models_path.as_ref(), label.clone(), channels, motif_n, &device)?;
 
             let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
             assert!(motif_nets.len() > 0);
@@ -442,7 +444,7 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64
 
     }
     //TODO should be sorted as labels and same len
-    models.sort_by(|a, b|a.corr_run.cmp(&b.corr_run));
+    models.sort_by(|a, b|a.label.cmp(&b.label));
 
     Ok(models)
 }
@@ -1084,7 +1086,8 @@ mod train_tests {
             }).collect::<Vec<_>>(),
             13, 100, 100, 7, 5,
             684400,
-            &Cpu
+            &Cpu,
+            "seizure_vote"
         )?;
 
         Ok(())

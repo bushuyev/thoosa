@@ -162,6 +162,9 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
     out_dim: i64,
     c: LinearConfig,
 ) -> Result<Linear, HbacError> {
+    assert!(in_dim> 0);
+    assert!(out_dim> 0);
+
     let vs = vs.borrow();
     let bs = if c.bias {
         let bs_init = c.bs_init.unwrap_or_else(|| {
