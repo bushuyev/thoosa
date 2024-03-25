@@ -100,9 +100,10 @@ pub trait Store:Sync + Send{
     fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, HbacError>;
     fn list_resource_set_resources_by_descr(&mut self, descr:&str)  -> Result<Vec<String>, HbacError>;
     fn list_resource_random_not_label(&mut self, label:&str, limit:i64)  -> Result<Vec<String>, HbacError>;
-    fn list_resource_random_in_group(&mut self, group_descr:&str)  -> Result<Vec<(String, Vec<(String, f32)>)>, HbacError>;
+    fn list_resource_random_in_group(&mut self, group_descr:&str)  -> Result<Vec<(String, Vec<f32>)>, HbacError>;
     fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
+    fn list_labels(&mut self) -> Result<Vec<String>, HbacError>;
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), HbacError>;
@@ -193,6 +194,17 @@ impl Store for SqlStore {
         t.commit()?;
 
         Ok(label_id)
+    }
+
+    fn list_labels(&mut self) -> Result<Vec<String>, HbacError> {
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        let labels = Self::list_labels(&t);
+
+        t.commit()?;
+
+        labels
     }
 
     //TODO folds to util fn
@@ -414,7 +426,7 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
-        let r = Self::_list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
+        let r = Self::list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
 
         t.commit();
 
@@ -438,9 +450,11 @@ impl Store for SqlStore {
         Ok(r)
     }
 
-    fn list_resource_random_in_group(&mut self, group_descr:&str)  -> Result<Vec<(String, Vec<(String, f32)>)>, HbacError> {//vec<(key, vec<(lablel, p)>>
+    fn list_resource_random_in_group(&mut self, group_descr:&str)  -> Result<Vec<(String, Vec<f32>)>, HbacError> {//vec<(key, vec<(lablel, p)>>
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
+
+        let labels = Self::list_labels(&t)?;
 
         let r = t.prepare(
             "SELECT r.key, GROUP_CONCAT(l.label || '/' || lr.p, ',') FROM resource_set_group rsg \
@@ -454,17 +468,24 @@ impl Store for SqlStore {
             let key = row.get::<usize, String>(0)?;
             let labels_p = row.get::<usize, String>(1)?;
 
-            let labels_p_vec = labels_p.split(",")
-                .map(
-                    |label_p| {
+            let labels_p_vec =labels_p.split(",")
+                .map(|label_p| {
                         let mut label_p_v = label_p.split("/");
-                        (label_p_v.next().expect("label").into(), label_p_v.next().expect("p").parse::<f32>().expect("parse"))
-                    }).collect::<Vec<(String, f32)>>();
+                        (
+                            label_p_v.next().expect("label").into(),
+                            label_p_v.next().expect("p").parse::<f32>().expect("parse")
+                        )
+
+                    }
+                ).fold( HashMap::new(), |mut a:HashMap<String, f32>, v|{
+                    a.insert(v.0, v.1);
+                    a
+                });
 
             debug!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
 
             Ok(
-                (key, labels_p_vec)
+                (key, labels.iter().map(|label|*labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>())
             )
         })?.map(|v| v.unwrap()).collect();
 
@@ -477,7 +498,7 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
-        let set_resources = Self::_list_resource_set_resources(set_id, &t)?;
+        let set_resources = Self::list_resource_set_resources(set_id, &t)?;
 
         t.commit();
 
@@ -762,13 +783,14 @@ impl Store for SqlStore {
 
             let mut stmt = t.prepare(&[
                 "SELECT channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, run_id FROM slice_matches where motif_id",
-                if all_but_in_run_id.is_none() {"=? AND ? IS NOT NULL AND ? IS NOT NULL "} else {"!=? AND run_id=? AND channel_id=?"},
+                // if all_but_in_run_id.is_none() {"=? AND ? IS NOT NULL AND ? IS NOT NULL "} else {"!=? AND run_id=? AND channel_id=?"}, run_id? //TODO
+                if all_but_in_run_id.is_none() {"=? AND ? IS NOT NULL "} else {"!=? AND channel_id=?"},
                 &limit.map(|limit| format!("LIMIT {}", limit)).unwrap_or("".to_owned())
             ].join(""))?;
 
             let params = match all_but_in_run_id {
-                Some((run_id, channel_id))=>[motif_id, run_id, channel_id],
-                None =>[motif_id, 0, 0],
+                Some((run_id, channel_id))=>[motif_id, channel_id],
+                None =>[motif_id, 0],
             };
 
             let (slices, channel_set, run_id) = stmt.query_map(params, |row| {
@@ -950,14 +972,33 @@ impl SqlStore {
         })
     }
 
-    fn _list_resource_set_resources(set_id: usize, t: &Transaction) -> Result<Vec<String>, HbacError> {
+    fn list_resource_set_resources(set_id: usize, t: &Transaction) -> Result<Vec<String>, HbacError> {
         let set_resources = {
             let mut stmt = t.prepare("SELECT key FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=?")?;
 
 
-            let vec = stmt.query_map([set_id], |row| {//TODO move group_slices out, not for store
+            let vec = stmt.query_map([set_id], |row| {
                 Ok((
                     row.get::<usize, String>(0).expect("row 1 in list_resource_set_group_sets")
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            vec
+        };
+        Ok(set_resources)
+    }
+
+
+    /**
+    defines global label order
+    */
+    fn list_labels(t: &Transaction) -> Result<Vec<String>, HbacError> {
+        let set_resources = {
+            let mut stmt = t.prepare("SELECT label FROM labels ORDER BY id")?;
+
+            let vec = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<usize, String>(0).expect("row 1 in _list_labels")
                 ))
             })?.map(|v| v.unwrap()).collect();
 
@@ -1058,9 +1099,9 @@ mod store_tests{
 
         assert_eq!(
             vec![
-                ("1111".to_string(), vec![("aaa".to_string(), 0.5), ("bbb".to_string(), 0.5)]),
-                ("2222".to_string(), vec![("aaa".to_string(), 1.0)]),
-                ("3333".to_string(), vec![("ccc".to_string(), 1.0)]),
+                ("1111".to_string(), vec![0.5, 0.5, 0.0]),
+                ("2222".to_string(), vec![1.0, 0.0, 0.0]),
+                ("3333".to_string(), vec![0.0, 0.0, 1.0]),
             ],
             keys_labels_p
         );

@@ -581,25 +581,6 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
 
     let mut store_lock = store.lock().expect("store_lock");
 
-    // classes_tensor_selectors.into_iter().map(move |label_tensors_path| {
-    //     let tensors_path = tensors_path.clone();
-    //
-    //     let eeg_ids = EEGs::good_eegs_of(base_path, label_tensors_path.1.as_str(), limit.map(|v|*v)).expect("good_eegs_of")
-    //         .i64().expect("good_eegs_of/i64")
-    //         .into_iter()
-    //         .enumerate()
-    //         .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
-    //         .collect::<Vec<String>>();
-    //
-    //     (
-    //         label_tensors_path.0,
-    //         eeg_ids.into_iter().map(move |eeg_id| {
-    //             parquet_or_load_tensor(base_path, tensors_path.clone(), eeg_id.as_str(), *device)
-    //         })
-    //     )//(label, path)
-    //
-    // }).collect::<Vec<_>>()
-    // let tensors_path = tensors_path.clone();
 
     let parquet_or_load_tensor_fn = move |resource: String| parquet_or_load_tensor(base_path, tensors_path.clone(), resource.as_str(), *device);
     vec![
@@ -622,40 +603,19 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
     ]
 }
 
-pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, group:&str, device: &'a Device, store: Arc<Mutex<SqlStore>>) -> impl Iterator<Item=Result<(Tensor,Tensor), HbacError>> + Send + Sync + 'a {
+pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, group:&str, device: &'a Device, store: Arc<Mutex<SqlStore>>) -> impl Iterator<Item=(Box<Tensor>,Box<Tensor>)> + Send + Sync + 'a {
 
     let mut store_lock = store.lock().expect("store_lock");
-    // labels_kinds.into_iter().map(|label_tensors_path| {
-    //
-    //     let eeg_ids = EEGs::good_eegs_of(base_path, label_tensors_path.1.as_str(), limit.map(|v|*v)).expect("good_eegs_of")
-    //         .i64().expect("good_eegs_of/i64")
-    //         .into_iter()
-    //         .enumerate()
-    //         .map(|(i, v)| v.expect(format!("no value in {}", i).as_str()).to_string())
-    //         .collect::<Vec<String>>();
-    //     (
-    //         label_tensors_path.0,
-    //         eeg_ids.into_iter().map(|eeg_id| {//TODO CacheOnThreads
-    //             parquet_or_load_tensor(base_path, tensors_path.clone(), eeg_id.as_str(), *device).map(|v|
-    //                 (
-    //                     v,
-    //                     Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])
-    //                 )
-    //             )//TODO
-    //         })
-    //     )//(label, path)
-    //
-    // }).collect::<Vec<_>>()
-    store_lock.list_resource_random_in_group(group)?
+
+    store_lock.list_resource_random_in_group(group).expect("list_resource_random_in_group")
         .into_iter()
-        .map(|(key, labels_p)|{
-            parquet_or_load_tensor(base_path, tensors_path.clone(), key.as_str(), *device).map(|t| {
+        .map(move |(key, labels_p)|{
+
                 debug!("labels_p={:?}", labels_p);
                 (
-                    t,
-                    Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])//TODO
+                    parquet_or_load_tensor(base_path, tensors_path.clone(), key.as_str(), *device),
+                    Box::new(Tensor::from_slice(labels_p.as_slice()))
                 )
-            })
         })
         .cycle()
 }
@@ -1366,8 +1326,8 @@ mod data_tests {
         //     println!("class={} len={}", class, eeg_id_series.len());
         // }
 
-        let resources = super::labeled_resourses("../../data/train.csv")?;
-        debug!("len={}", resources.len());
+        // let resources = super::labeled_resourses("../../data/train.csv")?;
+        // debug!("len={}", resources.len());
         // for r in resources {
         //     debug!("r={:?}", r);
         // }

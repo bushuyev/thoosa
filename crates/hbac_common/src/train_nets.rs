@@ -32,10 +32,10 @@ pub struct TrainOnEEGParams {
     #[arg(long)]
     corr_run: usize,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models_on_100_pure")]
+    #[arg(long, default_value = "/tmp/")]
     motif_models_dir: String,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models_on_100_pure")]
+    #[arg(long, default_value = "/tmp/")]
     eeg_models_dir: String,
 
     #[arg(long, default_value_t = 10)]
@@ -246,8 +246,8 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     Ok(vs_0)
 }
 
-pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<VarStore, HbacError>
-    where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
+pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
+    where I:Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync {
 
     //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
     // let mut labels_loaders = tensors_loader.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
@@ -263,22 +263,34 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, items_per_lab
 
     debug!("train_on_eeg: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
-    let models = load_corr_and_motif_models(params.models_dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?;//TODO num channels
+    let models = load_corr_and_motif_models(params.models_dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?
+        .into_iter().fold(HashMap::new(), |mut a, v|{
+            a.insert(v.label.clone(), v);
+            a
+        });//TODO num channels
 
     debug!("models.size={:?} models={:?}", models.len(), models);
 
     let tensors_loader =  tensors_loader.map( move |t|{
-        let t = &t?;
         Ok(
             (
-                Tensor::stack(models.iter().map(|model|{
-                    let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
-                    let t_x = t.view((1, -1));
-                    debug!("motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
+                Tensor::stack(labels.iter().map(|label|{
+                    match models.get(label) {
+                        Some(model)=>{
 
-                    let t = model.corr_model.lock().unwrap().forward(&t_x);
-                    debug!("corr_model out .size()={:?}", t.size());
-                    t
+                            let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
+                            let t_x = t.view((1, -1));
+                            debug!("motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
+
+                            let t = model.corr_model.lock().unwrap().forward(&t_x);
+                            debug!("corr_model out .size()={:?}", t.size());
+                            t
+                        }
+                        None => {
+                            Tensor::zeros(&[1, 1], (Float, *device))
+                        }
+                    }
+
                 }).collect::<Vec<Tensor>>().as_slice(), 0),
 
                 t.1.shallow_clone()
@@ -488,7 +500,7 @@ pub struct TrainOnMotifsParams {
     #[arg(long,  default_value_t = 1000)]
     window: usize,//should be same as one used when finding motifs or TODO center bigger/smaller window
 
-    #[arg(long, default_value = "../data_local/corr_motif_models")]
+    #[arg(long, default_value = "/tmp/")]
     output_dir: String,
 
     #[arg(long, default_value_t = 1000)]
@@ -584,6 +596,9 @@ pub fn final_node(features: i64, classes_num: i64) -> Node {
 pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainOnMotifsParams, device: Device, node: &Node) -> Result<(f32, VarStore), HbacError> {
     info!("train_on_motif: device={:?} training on {} slices", device, all_slices_0.len());
 
+    assert!(all_slices_0.len() > 0, "all_slices_0 len");
+    assert!(all_slices_1.len() > 0, "all_slices_1 len");
+
     let vs = nn::VarStore::new(device);
 
     let net = node.build_tch_module(&vs.root())?;
@@ -595,8 +610,9 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
                 all_slices_0,
                 all_slices_1
             ],
-            10,
-            0.8
+            4,
+            0.8,
+            device
         ) as &mut dyn DataBatch,
         &net,
         |pred: &Tensor, target: &Tensor| {
@@ -621,12 +637,13 @@ pub fn flat_map(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
 pub struct ClassTensorsDataBatch {
     train :Vec<Vec<Box<Tensor>>>,//index - class
     val :Vec<Vec<Box<Tensor>>>,
-    batch_size: usize
+    batch_size: usize,
+    device:Device
 }
 
 impl ClassTensorsDataBatch {
 
-    pub fn new(classes_tensors: Vec<Vec<Box<Tensor>>>, batch_size: usize, train_valid_split:f32) -> Self {
+    pub fn new(classes_tensors: Vec<Vec<Box<Tensor>>>, batch_size: usize, train_valid_split:f32, device:Device) -> Self {
         /*
         TODO impl - shuffle first
         let mut rng = thread_rng();
@@ -642,6 +659,7 @@ impl ClassTensorsDataBatch {
         */
 
         let classes_len = classes_tensors.len();
+        assert!(classes_len > 0);
         assert!(batch_size % classes_len == 0);
 
         let (train, val):(Vec<Vec<Box<Tensor>>>, Vec<Vec<Box<Tensor>>>) = classes_tensors
@@ -669,14 +687,14 @@ impl ClassTensorsDataBatch {
             train,
             val,
             batch_size,
+            device
         }
     }
 
-    fn to_x_y(class_tensors: &Vec<Vec<Box<Tensor>>>, batch_size: usize) -> (Tensor, Tensor) {
+    fn to_x_y(class_tensors: &Vec<Vec<Box<Tensor>>>, batch_size: usize, device:&Device) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
         let per_class_len = batch_size / class_tensors.len();//TODO make balanced
-        let device= class_tensors[0][0].device();
         debug!("ClassTensorsDataBatch::to_x_y: per_class_len={} device={:?}", per_class_len, device);
 
         let mut x_y_vecs = class_tensors.iter().enumerate().fold(vec![], |mut x_y_acc, (class, tensors)| {
@@ -703,7 +721,7 @@ impl ClassTensorsDataBatch {
 
         });
 
-        let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice()).to_device(device);
+        let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice()).to_device(*device);
 
         let tensor = Tensor::stack(
             x_y_vecs.into_iter().map(|e|e.0).collect::<Vec<_>>().as_slice(),
@@ -724,11 +742,11 @@ impl ClassTensorsDataBatch {
 impl DataBatch for ClassTensorsDataBatch {
 
     fn train_batch(&mut self) -> (Tensor, Tensor) {
-        Self::to_x_y(&self.train, self.batch_size)
+        Self::to_x_y(&self.train, self.batch_size, &self.device)
     }
 
     fn valid_batch(&mut self) -> (Tensor, Tensor) {
-        Self::to_x_y(&self.val, self.batch_size)
+        Self::to_x_y(&self.val, self.batch_size, &self.device)
     }
 }
 
@@ -775,11 +793,14 @@ pub struct TrainFinalParams {
     #[arg(long, default_value_t = 1.0e-5)]
     lr: f64,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models")]
+    #[arg(long, default_value = "../../data_local/corr_motif_models_on_3_pure")]
     models_dir: String,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models/final.safetensors")]
+    #[arg(long, default_value = "../../data_local/corr_motif_models_on_3_pure/final.safetensors")]
     final_model: Option<String>,//TODO
+
+    #[arg(long, default_value = "pure group 10")]
+    group: String,
 }
 
 impl TrainFinalParams{
@@ -791,6 +812,23 @@ impl TrainFinalParams{
     }
     pub fn models_dir(&self) -> &str {
         &self.models_dir
+    }
+
+    pub fn final_model(&self) -> &Option<String> {
+        &self.final_model
+    }
+    pub fn group(&self) -> &str {
+        &self.group
+    }
+
+    pub fn dummy(models_dir:String, final_model:String, group:String )->Self {
+        TrainFinalParams {
+            cycles: 100,
+            lr: 1.0e-5,
+            models_dir,
+            final_model: Some(final_model),
+            group
+        }
     }
 }
 
@@ -869,7 +907,8 @@ mod train_tests {
 
             ],
             10,
-            0.5
+            0.5,
+                Cpu
         );
 
         let train_batch = batch.train_batch();
@@ -1109,7 +1148,7 @@ mod train_tests {
             }),
             13, 100, 100, motif_batch_size, channels,
             684400,
-            &Cpu
+            &Cpu,
         )?;
 
         Ok(())

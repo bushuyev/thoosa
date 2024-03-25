@@ -1,4 +1,3 @@
-extern crate core;
 
 use std::backtrace::Backtrace;
 use std::{env, fs};
@@ -92,7 +91,7 @@ pub struct RunAllParams {
     #[arg(long, default_value_t = 1000)]
     window: usize,
 
-    #[arg(long, default_value = "../data_local/corr_motif_models")]
+    #[arg(long, default_value = "/tmp")]
     models_dir: String,
 
 
@@ -246,36 +245,7 @@ fn _main() -> Result<(), HbacError> {
 
         Some(Commands::TrainFinal(train_final_params)) => {
 
-            // let labels_datasets = vec![
-            //     ("seizure".into(), "seizure/100".into()),
-            //     ("lpd".into(), "lpd/100".into()),
-            //     ("gpd".into(), "gpd/100".into()),
-            //     ("lrda".into(), "lrda/100".into()),
-            //     ("grda".into(), "grda/100".into()),
-            //     ("other".into(), "other/100".into()),
-            // ];
-
-            let vs = train_final(
-                train_final_params,
-                eegs_to_logits_tensors(
-                    cli.base_path.as_str(),
-                    cli.tensors_path.clone(),
-                    "pure group 100",//TODO load from corrs_run
-                    &device,
-                    Arc::clone(&store) //cli.limit.as_ref()
-                    //684400 - TODO cut at max_input
-                ),
-                5,
-                1000,
-                100,
-                100,
-                20,
-                684400,
-
-                &device
-            )?;
-
-            vs.save(format!("{}/final.safetensors", train_final_params.models_dir()))?;
+            run_train_final(&cli, &store, &device, train_final_params)?;
         }
 
         Some(Commands::RunAll(run_all_params)) => {
@@ -295,12 +265,12 @@ fn _main() -> Result<(), HbacError> {
             info!("find_motifs done");
 
             let labels_datasets = vec![
-                ("seizure".into(), "seizure/100".into()),
-                ("lpd".into(), "lpd/100".into()),
-                ("gpd".into(), "gpd/100".into()),
-                ("lrda".into(), "lrda/100".into()),
-                ("grda".into(), "grda/100".into()),
-                ("other".into(), "other/100".into()),
+                ("seizure".into(), "seizure/3".into()),
+                ("lpd".into(), "lpd/3".into()),
+                ("gpd".into(), "gpd/3".into()),
+                ("lrda".into(), "lrda/3".into()),
+                ("grda".into(), "grda/3".into()),
+                ("other".into(), "other/3".into()),
             ];
             run_select_motifs(&cli, &store, devices.clone(), classes, &SelectMotifsParams::dummy(run_all_params.step, run_all_params.window, run_ids, labels_datasets.clone()))?;
 
@@ -312,6 +282,11 @@ fn _main() -> Result<(), HbacError> {
 
             run_train_on_eeg(&cli, &store, &device, &TrainOnEEGParams::dummy(run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), labels_datasets.clone()))?;
 
+            info!("run_train_on_eeg done");
+
+            run_train_final(&cli, &store, &device, &TrainFinalParams::dummy(run_all_params.models_dir.clone(), format!("{}/final.safetensors", run_all_params.models_dir), run_all_params.resource_group.clone()))?;
+
+            info!("run_train_final done");
         }
 
         Some(Commands::Infer(infer_params)) => {
@@ -348,6 +323,33 @@ fn _main() -> Result<(), HbacError> {
         }
     }
 
+    Ok(())
+}
+
+fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, train_final_params: &TrainFinalParams) -> Result<(), HbacError> {
+
+    let labels = {store.lock().expect("mutex_guard").list_labels()? };
+    let vs = train_final(
+        train_final_params,
+        eegs_to_logits_tensors(
+            cli.base_path.as_str(),
+            cli.tensors_path.clone(),
+            train_final_params.group(),
+            &device,
+            Arc::clone(&store) //cli.limit.as_ref()
+            //684400 - TODO cut at max_input
+        ),
+        5,
+        1000,
+        100,
+        100,
+        20,
+        684400,
+        &device,
+        labels
+    )?;
+
+    vs.save(format!("{}/final.safetensors", train_final_params.models_dir()))?;
     Ok(())
 }
 
@@ -435,6 +437,8 @@ fn run_find_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>
     // let devices_classes = devices.into_iter().cycle().zip(classes.into_iter()).collect::<Vec<(Device, &str)>>();
 
     let resource_sets = { store.lock().unwrap().list_resource_set_group_sets(run_all_params.resource_group()).expect("list_resource_set_group_sets")};
+
+    assert!(resource_sets.len() > 0, "{} is empty", run_all_params.resource_group());
 
     let chunk_len = resource_sets.len()/devices.len();
     let devices_resource_sets = devices.into_iter().cycle().zip(resource_sets.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, String)])>>();
@@ -618,6 +622,9 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
 
             (all_sices_0, all_sices_1, channel)
         };
+
+        assert!(all_sices_1.len() > 0, "all_sices_1.len(), motif={}", motif_id);
+        assert!(all_sices_0.len() > 0, "all_sices_0.len(), motif={}", motif_id);
 
 
         debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
