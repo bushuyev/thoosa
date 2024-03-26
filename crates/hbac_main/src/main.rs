@@ -264,14 +264,6 @@ fn _main() -> Result<(), HbacError> {
 
             info!("find_motifs done");
 
-            // let labels_datasets = vec![
-            //     ("seizure".into(), "seizure/3".into()),
-            //     ("lpd".into(), "lpd/3".into()),
-            //     ("gpd".into(), "gpd/3".into()),
-            //     ("lrda".into(), "lrda/3".into()),
-            //     ("grda".into(), "grda/3".into()),
-            //     ("other".into(), "other/3".into()),
-            // ];
             let labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets(run_all_params.resource_group())?};
 
             debug!("run all: labels_datasets={:?}", labels_datasets);

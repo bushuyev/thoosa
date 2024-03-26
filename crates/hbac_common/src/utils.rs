@@ -127,18 +127,18 @@ pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, capti
 
 
 
-    let motif_area = |x: i32, dx: i32| {
-        return EmptyElement::at((x as f32, 10.))
-            + Rectangle::new([(0, 0), ((dx as f32 *0.963) as i32, w_h.1 as i32 - 80)], &BLUE)//TODO 963?
-            + Text::new(
-            format!("({:.2},{:.2})", x, dx),
-            (5, 5),
-            ("sans-serif", 15.0).into_font(),
-        );
-    };
-
-
-    chart.plotting_area().draw(&motif_area(100, 100)).expect("Drawing Failure");
+    // let motif_area = |x: i32, dx: i32| {
+    //     return EmptyElement::at((x as f32, 10.))
+    //         + Rectangle::new([(0, 0), ((dx as f32 *0.963) as i32, w_h.1 as i32 - 80)], &BLUE)//TODO 963?
+    //         + Text::new(
+    //         format!("({:.2},{:.2})", x, dx),
+    //         (5, 5),
+    //         ("sans-serif", 15.0).into_font(),
+    //     );
+    // };
+    //
+    //
+    // chart.plotting_area().draw(&motif_area(100, 100)).expect("Drawing Failure");
 
     root.present()?;
 
@@ -362,7 +362,6 @@ pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
 pub fn lin_t(n: i64) -> Tensor {
     Tensor::from((0..n).map(|x| x as f32).collect::<Vec<f32>>().as_slice())
 }
-
 
 
 pub trait DataBatch {

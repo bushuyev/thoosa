@@ -14,7 +14,7 @@ use clap::parser::*;
 use clap::clap_derive::{Args, Parser, Subcommand};
 use hbac_shared::parse_key_val;
 
-use log::{debug, info, warn};
+use log::{debug, info, warn, trace};
 use rayon::iter::{ParallelBridge, ParallelIterator, split};
 use rayon::iter::IntoParallelIterator;
 use tch::{Device, IndexOp, Tensor};
@@ -144,11 +144,11 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let t1 = Instant::now();
     let mut slots_processed = 0;
 
-    v_w_0.windows(2).enumerate().for_each(|(chunk_i_0, vw_0_01)|{//curren,preload windows
+    v_w_0.windows(2).enumerate().for_each(|(chunk_i_0, vw_0_01)|{//vw_0_01 - current,preload windows
         let vw_0 = vw_0_01[0];
 
         let t_0_tensors = cache.blocking_get_1(vw_0).into_iter().map(|t|{
-            debug!("find_motifs_euc: t_0 size={:?}", t.size());
+            debug!("find_motifs_euc: vw_0={:?} t_0 size={:?}", vw_0, t.size());
             let sliced = slice_t(&t, find_motifs_params.step as i32, find_motifs_params.window as i64);
 
             debug!("find_motifs_euc: t_0 sliced size={:?}", sliced.size());
@@ -162,7 +162,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
             cache.preload(vw_0_01[1]);
         }
 
-        let sizes_0 = t_0_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
+        let sizes_0 = t_0_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();//num slices in each tensor
 
         let t_0_sliced = Tensor::vstack(&t_0_tensors);
 
@@ -172,11 +172,11 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
             let vw_1 = vw_1_01[0];
 
             let t_1_tensors = cache.blocking_get_1(vw_1).into_iter().map(|t|{
-                debug!("find_motifs_euc: t_0 size={:?}", t.size());
+                debug!("find_motifs_euc: vw_1={:?} t_1 size={:?}", vw_1, t.size());
 
                 let sliced = slice_t(&t, find_motifs_params.step as i32, find_motifs_params.window as i64);
 
-                debug!("find_motifs_euc: t_0 sliced size={:?}", sliced.size());
+                debug!("find_motifs_euc: t_1 sliced size={:?}", sliced.size());
 
                 sliced
             }).collect::<Vec<Tensor>>();
@@ -187,19 +187,22 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                 cache.preload(vw_1_01[1]);
             }
 
-            let sizes_1 = t_1_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
+            let sizes_1 = t_1_tensors.iter().map(|t|t.size()[0]).collect::<Vec<_>>();//num slices in each tensor
 
             let t_1_sliced = Tensor::vstack(&t_1_tensors);
             debug!("find_motifs_euc: t_1_sliced merged={:?} sizes_1={:?}", t_1_sliced.size(), sizes_1);
+
+            debug!("find_motifs_euc:  vw_0={:?}, vw_1={:?}", vw_0, vw_1);
 
             for (c, mt) in all_motif_trackers.iter_mut().enumerate() {
                 let tensor_0 = t_0_sliced.i((.., c as i64, ..)).squeeze();
                 let tensor_1 = t_1_sliced.i((.., c as i64, ..)).squeeze();
                 debug!("tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
+
                 let t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}, chunk_0={} chunk_1={}", c, chunk_i_0, chunk_i_1).as_str());
                 let t_size =t.size();
                 let mean = find_motifs_params.max_dist_k * t.mean(None).double_value(&[]) as f32;
-                debug!("find_motifs_euc: t={:?} mean={:?}", t.size(), mean);
+                debug!("find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", t.size(), tensor_0.size(), tensor_1.size(), mean);
 
                 let mut i_0 = 0;
                 let mut i_1 = 0;
@@ -208,25 +211,33 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                 for (t_idx_0, t_size_0) in sizes_0.iter().enumerate() {
                     let skip_idx_1 = if chunk_i_0 == chunk_i_1 {
                         //if first chunk both in outer and inner cycles
-                        let skip_ = (0..t_idx_0).map(|i|sizes_0[i]).sum();
+                        let skip_ = sizes_0.iter().take(t_idx_0).sum::<i64>();
                         debug!("find_motifs_euc: skipping t_idx_0={} skip_={}", t_idx_0, skip_);
                         skip_
                     } else {
                         0
                     };
 
-                    for s_0 in  0..*t_size_0 {
+                    'tl0: for s_0 in  0..*t_size_0 {
                         i_1 = skip_idx_1 as i64;
 
                         for (t_idx_1, t_size_1) in sizes_1.iter().enumerate().skip(t_idx_0) {
 
                             for s_1 in  0..*t_size_1 {
+
                                 if i_0 >= t_size[0] || i_1 >= t_size[1]{
-                                    warn!("wrong index for c={:?}, i_0={:?}, i_1={:?}, t_size={:?}", c, i_0, i_1, t_size);//TODO
+                                    warn!("wrong index for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}", c, t_idx_0, vw_0[t_idx_0 as usize], i_0, t_idx_1, vw_1[t_idx_1 as usize], i_1, t_size);//TODO
+                                    if i_1 >= t_size[1]{
+                                        break;
+                                    }
+                                    if i_0 >= t_size[0]{
+                                        break 'tl0;
+                                    }
+
                                 } else {
                                     let dist = t.double_value(&[i_0, i_1]);
 
-                                    debug!("find_motifs_euc:  t_idx_0={} chunk_i_0={}, chunk_i_1={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}", t_idx_0,chunk_i_0, chunk_i_1,  vw_0[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist);
+                                    trace!("find_motifs_euc:  t_idx_0={} chunk_i_0={}, chunk_i_1={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}", t_idx_0,chunk_i_0, chunk_i_1,  vw_0[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist);
 
                                     i_1 += 1;
                                     if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < mean {
@@ -1482,8 +1493,8 @@ mod motif_find_tests {
 
         let x = lin_t(n);
 
-        let conv_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n-conv_t.size()[1])/2) as usize, vec_f32_from(&conv_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
-        let pool_v = join_with_offset::<f32>(n, 0.0, 1., &[(((n-pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
+        let conv_v = join_with_offset::<f32>(0.0, 1., &[(((n-conv_t.size()[1])/2) as usize, vec_f32_from(&conv_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
+        let pool_v = join_with_offset::<f32>(0.0, 1., &[(((n-pool_t.size()[1])/2) as usize, vec_f32_from(&pool_t))], (0..1000).map(|x|0.).collect::<Vec<f32>>());
         plot_series(
             vec![
                 (format!("Sig"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c.g_mul_scalar(10.))).collect::<Vec<(f32, f32)>>()),
@@ -1651,9 +1662,9 @@ mod motif_find_tests {
 
 
 
-        let sig_0=  join_with_offset::<f32>(N, 0., 10.0, &[(100, pulse.clone())], random_saw());
-        let sig_1=  join_with_offset::<f32>(N, 0., 10.0, &[(500, pulse.clone())], random_saw());
-        let sig_2=  join_with_offset::<f32>(N, 0., 10.0, &[(800, pulse.clone())], random_saw());
+        let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
+        let sig_1=  join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
+        let sig_2=  join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
        /*
        let x = lin_t(N);
@@ -1716,28 +1727,36 @@ mod motif_find_tests {
 
     #[test]
     pub fn test_find_motifs_euc_diff_sizes() -> Result<(), HbacError> {
-        let eeg_id_series =  vec!["1111".into(), "2222".into(), "3333".into()];
+        let eeg_id_series =  vec!["0000".into(), "1111".into(), "2222".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
         let store = Arc::new(Mutex::new(SqlStore::new(store_path)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
+
+        let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(550));
+        let sig_1=  join_with_offset::<f32>(0., 10.0, &[(600, pulse.clone())], random_saw(1100));
+        let sig_2=  join_with_offset::<f32>(0., 10.0, &[(1000, pulse.clone())], random_saw(1950));
+
         let N = 3000i64;
-
-
-        let sig_0=  join_with_offset::<f32>(555, 0., 10.0, &[(100, pulse.clone())], random_saw());
-        let sig_1=  join_with_offset::<f32>(1111, 0., 10.0, &[(600, pulse.clone())], random_saw());
-        let sig_2=  join_with_offset::<f32>(2222, 0., 10.0, &[(900, pulse.clone())], random_saw());
-
+        // plot_series(
+        //     vec![
+        //         (format!("Sig0"), RED, (0..N).map(|x|x as f32).zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
+        //         (format!("Sig1"), GREEN, (0..N).map(|x|x as f32).zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
+        //         (format!("Sig2"), BLACK, (0..N).map(|x|x as f32).zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
+        //
+        //     ], "EEG", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        // ).unwrap();
 
         super::find_motifs_euc(
             move |key:&String| {
                 let sig = match key.as_str() {
-                    "1111" => &sig_0,
-                    "2222" => &sig_1,
-                    "3333" => &sig_2,
+                    "0000" => &sig_0,
+                    "1111" => &sig_1,
+                    "2222" => &sig_2,
                     _=> panic!("no")
                 };
+
 
                 Box::new(Tensor::vstack(&[
                     Tensor::from_slice(
@@ -1746,7 +1765,7 @@ mod motif_find_tests {
                 ]))
             },
             &FindMotifsParams {
-                step: 100,
+                step: 50,
                 window: 100,
                 min_dot: 0.99,
                 descr: "seizure_vote".to_string(),
@@ -1764,28 +1783,91 @@ mod motif_find_tests {
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
         let eeg_slices= store.lock()?.motifs_to_eeg_slices(1)?;
-        debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
-        debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
-        debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
+        debug!("0: {:?}", eeg_slices.get(&"0000".to_string()));
+        debug!("1: {:?}", eeg_slices.get(&"1111".to_string()));
+        debug!("2: {:?}", eeg_slices.get(&"2222".to_string()));
 
         //TODO
-        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
-        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
-        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&"3333".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"0000".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
 
         Ok(())
     }
 
 
-    fn random_saw() -> Vec<f32> {
-        let mut rng = rand::thread_rng();
+    #[test]
+    pub fn test_find_motifs_euc_wrong_index() -> Result<(), HbacError> {
+        let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
+        debug!("store_path={}", store_path);
+        let store = Arc::new(Mutex::new(SqlStore::new(store_path)?));
 
-        (0..20)
-            .map(|i| rng.gen_range(-10. .. 10.))
-            .flat_map(
-                |v| (0..25).map(move |i| v * i as f32).chain((0..25).map(move |i| 25. * v - v * i as f32))
-            ).collect::<Vec<f32>>()
+        let pulse = pulse_v(50., 10., 100, 20.);
+
+        let tensor_sizes = [
+            92000, 35600, 33200, 14000, 16800, 26400, 12800, 37600, 28800, 16400, //2549997195
+            8800, 10000, 14800, 22000, 18000, 25200, 16000, 24000, 14800, 10000   //3712981357
+        ];
+
+        let tensors = tensor_sizes.into_iter().map(|s| join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(s as usize))).collect::<Vec<Vec<f32>>>();
+
+        let N = 684400i64;
+        // plot_series(
+        //     vec![
+        //         (format!("Sig0"), RED, (0..N).map(|x|x as f32).zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
+        //         (format!("Sig1"), GREEN, (0..N).map(|x|x as f32).zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
+        //         (format!("Sig2"), BLACK, (0..N).map(|x|x as f32).zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
+        //
+        //     ], "EEG", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        // ).unwrap();
+
+        // let tensors_ref = &tensors;
+
+        let tensors_len = tensors.len();
+        super::find_motifs_euc(
+            move |key:&String| {
+                let sig = tensors.get(key.parse::<usize>().expect(format!("parse {}", key).as_str())).expect(format!("tensor {}", key).as_str());
+
+                Box::new(Tensor::vstack(&[
+                    Tensor::from_slice(
+                        sig.as_slice()
+                    ), //ch 0
+                ]))
+            },
+
+            &FindMotifsParams {
+                step: 1000,
+                window: 1000,
+                min_dot: 0.99,
+                descr: "seizure_vote".to_string(),
+                preload_d: 10,
+                max_keys_fifo: 1000,
+                chunk_size: 10,
+                max_dist_k: 0.001,
+            },
+            3 * N as usize,
+            (0..tensors_len).map(|v|format!("{}", v)).collect(),
+            Arc::clone(&store),
+            1,
+
+        );
+
+        debug!("{:?}", store.lock()?.list_run_resources(1)?);
+        let eeg_slices= store.lock()?.motifs_to_eeg_slices(1)?;
+        // debug!("0: {:?}", eeg_slices.get(&"0000".to_string()));
+        // debug!("1: {:?}", eeg_slices.get(&"1111".to_string()));
+        // debug!("2: {:?}", eeg_slices.get(&"2222".to_string()));
+        //
+        //TODO
+        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"0000".to_string()).and_then(|v|v.get(0)).unwrap());
+        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
+        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
+
+        Ok(())
     }
+
+
+
 
     #[test]
     pub fn test_simple_motif_tracker() -> Result<(), HbacError>{

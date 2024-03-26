@@ -148,6 +148,7 @@ impl MotifSlice {
 pub mod tests {
     use log::LevelFilter;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+    use crate::{join_with_offset, pulse_v};
 
     #[ctor::ctor]
     fn init() {
@@ -163,7 +164,32 @@ pub mod tests {
         std::env::set_var("POLARS_FMT_MAX_COLS", "100");
         std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
     }
+
+    #[test]
+    fn test_join_with_offset(){
+        let pulse = pulse_v(50., 10., 100, 20.);
+        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(550));
+        assert_eq!(550, v.len());
+
+        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(2200));
+        assert_eq!(2200, v.len());
+
+    }
 }
+
+pub fn random_saw(n: usize) -> Vec<f32> {
+    let mut rng = rand::thread_rng();
+    let step = 25usize;
+
+    (0..n/step/2)
+        .map(|i| rng.gen_range(-10. .. 10.))
+        .flat_map(
+            |v| {
+                (0..step).map(move |i| v * i as f32).chain((0..step).map(move |i| step as f32 * v - v * i as f32))
+            }
+        ).collect::<Vec<f32>>()
+}
+
 
 pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
     let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset + pulse.len()).sum();
@@ -186,11 +212,12 @@ pub fn pulse_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], random_amplitude: f32
     let random = random_v(n, random_amplitude, max_slope);
     let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
 
-    join_with_offset::<f32>(n, 0., pulse_scale, pulses, random)
+    join_with_offset::<f32>(0., pulse_scale, pulses, random)
 }
 
-pub fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T> + PartialEq + Default{
+pub fn join_with_offset<T>(def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T> + PartialEq + Default{
     let mut x:T = T::default();
+    let main_len = main.len();
     main.into_iter().zip(
         pulses
             .into_iter()
@@ -200,7 +227,8 @@ pub fn join_with_offset<T>(n: i64, def:T, scale:T, pulses: &[(usize, Vec<T>)], m
                         .take(*offset)
                         .chain(pulse.into_iter().map(|v| *v))
             )
-            .chain(std::iter::repeat(def).take(n as usize - pulses.len()))
+            .chain(std::iter::repeat(def).take(main_len as usize - pulses.last().map(|p|p.0+p.1.len()).unwrap_or(0)))
+
     ).map(|(v1, v2)| if v2!=def {
         x + scale * v2
     } else {
