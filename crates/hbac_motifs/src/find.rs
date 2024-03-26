@@ -44,8 +44,8 @@ pub struct FindMotifsParams {
     #[arg(long, default_value_t = 0.9)]
     min_dot: f32,
 
-    #[arg(long, default_value = "seizure_vote")]
-    descr: String,//todo remove
+    #[arg(long)]
+    resource_set: String,
 
     #[arg(long, default_value_t = 10)]
     preload_d: usize,
@@ -64,7 +64,7 @@ impl FindMotifsParams {
 
 
     // #[cfg(test)]
-    pub fn dummy(step: usize, window: usize, descr:String) ->Self {
+    pub fn dummy(step: usize, window: usize, resource_set:String) ->Self {
         FindMotifsParams {
             step,
 
@@ -72,7 +72,7 @@ impl FindMotifsParams {
 
             min_dot: 0.1,
 
-            descr,
+            resource_set,
 
             preload_d: 10,
 
@@ -94,8 +94,8 @@ impl FindMotifsParams {
     pub fn min_dot(&self) -> f32 {
         self.min_dot
     }
-    pub fn descr(&self) -> &str {
-        &self.descr
+    pub fn resource_set(&self) -> &str {
+        &self.resource_set
     }
     pub fn preload_d(&self) -> usize {
         self.preload_d
@@ -120,7 +120,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
 
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
-    let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.descr, min_dot).as_str(), &eeg_ids_str)}?;
+    let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.resource_set, min_dot).as_str(), &eeg_ids_str)}?;
 
     let mut all_motif_trackers = min_dot
         .into_iter()
@@ -128,7 +128,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
         .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, i)))//TODO name
         .collect::<Vec<SimpMotifTracker<_>>>();
 
-    let descr = find_motifs_params.descr.clone();
+    let descr = find_motifs_params.resource_set.clone();
     let mut cache = CacheOnThreads::new(loader, find_motifs_params.max_keys_fifo, Some(Box::new(move ||{
         // let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
 
@@ -249,7 +249,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                             } else {
                                                 ((slots_processed - slots_to_process) / (slots_per_sec + 1), true)
                                             };
-                                            info!("class: {} pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min {}", find_motifs_params.descr, slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, remaining/60, if overflow {"overflow"} else {""} )
+                                            info!("class: {} pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min {}", find_motifs_params.resource_set, slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, remaining/60, if overflow {"overflow"} else {""} )
                                         }
                                     }
                                 }
@@ -269,7 +269,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
         { store.lock()?.set_motifs(run_id, i as i64)}?;
     }
 
-    info!("{} done {}/{}", find_motifs_params.descr, slots_to_process, slots_processed);
+    info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
 
     Ok(run_id)
 }
@@ -285,7 +285,7 @@ pub fn find_motifs<F>(loader:F, find_motifs_params: &FindMotifsParams, records_n
 
 
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
-    let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.descr, min_dot).as_str(), &eeg_ids_str)}?;
+    let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.resource_set, min_dot).as_str(), &eeg_ids_str)}?;
 
     let all_motif_trackers = min_dot
         .into_iter()
@@ -1627,7 +1627,7 @@ mod motif_find_tests {
                 step: 50,
                 window: 100,
                 min_dot: 0.99,
-                descr: "seizure_vote".to_string(),
+                resource_set: "seizure_vote".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
                 chunk_size: 0,
@@ -1696,7 +1696,7 @@ mod motif_find_tests {
                 step: 100,
                 window: 100,
                 min_dot: 0.99,
-                descr: "seizure_vote".to_string(),
+                resource_set: "seizure_vote".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
                 chunk_size: 2,
@@ -1766,7 +1766,7 @@ mod motif_find_tests {
                 step: 50,
                 window: 100,
                 min_dot: 0.99,
-                descr: "seizure_vote".to_string(),
+                resource_set: "seizure_vote".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
                 chunk_size: 2,
@@ -1829,7 +1829,7 @@ mod motif_find_tests {
                 step: 100,
                 window: 100,
                 min_dot: 0.99,
-                descr: "seizure_vote".to_string(),
+                resource_set: "seizure_vote".to_string(),
                 preload_d: 100,
                 max_keys_fifo: 1000,
                 chunk_size: 3,

@@ -26,7 +26,7 @@ use hbac_shared::parse_key_val;
 pub struct TrainOnEEGParams {
 
 
-    #[arg(long, value_parser=parse_key_val::<String, String>, default_value="xxx=yyy")]
+    #[arg(long, value_parser=parse_key_val::<String, String>, default_value="seizure=seizure/100,lpd=lpd/10")]
     labels_datasets: Vec<(String, String)>,
 
     #[arg(long)]
@@ -249,14 +249,6 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
 pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
     where I:Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync {
 
-    //TODO it should be either Vec or HashMap for labels - in ClassTensorsDataBatch etc
-    // let mut labels_loaders = tensors_loader.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
-    //     a.entry(label).or_insert_with(||vec![]).push(loader);
-    //     a
-    // });
-
-    // let mut keys = labels_loaders.keys().map(|v|*v).collect::<Vec<i64>>();
-    // keys.sort();
 
     let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
@@ -324,7 +316,7 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, items_per_lab
     Ok(vs_0)
 }
 
-pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device) -> Result<(Vec<String>, Tensor), HbacError>
+pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<(Vec<String>, Tensor), HbacError>
     where F:Fn(&Path) -> Result<Tensor, HbacError> + Sync{
 
     let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
@@ -332,14 +324,18 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
 
     debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
-    let corr_models = load_corr_and_motif_models(&params.models_dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?;//TODO num channels
+    let models = load_corr_and_motif_models(params.models_dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?
+        .into_iter().fold(HashMap::new(), |mut a, v|{
+        a.insert(v.label.clone(), v);
+        a
+    });
 
     let mut vs = nn::VarStore::new(*device);
     let final_model = Mutex::new(train_nets::final_node(6, 6).build_tch_module(&vs.root())?);
     vs.load(params.final_model.as_ref().unwrap_or(&Path::new(&params.models_dir).join("final.safetensors").to_str().unwrap().to_string()))?;
     vs.freeze();
 
-    debug!("infer: params.input_data={:?} corr_models.len()={}", params.input_data, corr_models.len());
+    debug!("infer: params.input_data={:?} models={:?}", params.input_data, models);
 
     let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|eeg| {
         let eeg = eeg.expect("file: ");
@@ -347,14 +343,22 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
         let t = eeg_to_tensor(eeg.path().as_path()).expect("eeg");
         debug!("infer: t.size={:?}", t.size());
 
-        let t = Tensor::stack(corr_models.iter().enumerate().map(|(model_i, model)| {
-            let t = apply_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
-            let t_x = t.view((1, -1));
-            debug!("infer: motif models model_i={} model.label={} t.size()={:?} t_x.size()={:?}", model_i, model.label, t.size(), t_x.size());
+        let t = Tensor::stack(labels.iter().map(|label|{
+            match models.get(label) {
+                Some(model)=>{
+                    let t = apply_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, channels, max_motif_batches, device);
+                    let t_x = t.view((1, -1));
+                    debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
 
-            let t = model.corr_model.lock().unwrap().forward(&t_x);
-            debug!("corr_model out .size()={:?}", t.size());
-            t.view(1)
+                    let t = model.corr_model.lock().unwrap().forward(&t_x);
+                    debug!("corr_model out .size()={:?}", t.size());
+                    t.view(1)
+                }
+                None => {
+                    Tensor::zeros(&[1], (Float, *device))
+                }
+            }
+
         }).collect::<Vec<Tensor>>().as_slice(), 0);
 
         debug!("infer: t.size()={:?}", t.size());
@@ -495,7 +499,7 @@ pub struct TrainOnMotifsParams {
     motif_ids: MotifsBy,
 
     #[arg(long)]
-    corr_run: usize,
+    corr_run_ids: Vec<usize>,
 
     #[arg(long,  default_value_t = 1000)]
     window: usize,//should be same as one used when finding motifs or TODO center bigger/smaller window
@@ -537,8 +541,8 @@ impl TrainOnMotifsParams {
         &self.motif_ids
     }
 
-    pub fn corr_run(&self) -> usize {//TODO should be in MotifsBy
-        self.corr_run
+    pub fn corr_run_ids(&self) -> &Vec<usize> {
+        &self.corr_run_ids
     }
 
     pub fn max_loss(&self) -> f32 {
@@ -549,11 +553,11 @@ impl TrainOnMotifsParams {
         self.min_corr
     }
 
-    pub fn dummy(output_dir: &String) ->Self{
+    pub fn dummy(output_dir: &String, corr_run_ids:Vec<usize>) ->Self{
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
-            corr_run: 0,
+            corr_run_ids,
 
             window: 1000,//should be same as one used when finding motifs or TODO center bigger/smaller window
 
@@ -1124,6 +1128,7 @@ mod train_tests {
             lr: 1.0e-5,
             models_dir: models_path.to_str().unwrap().to_string(),
             final_model: None,
+            group: "zzz".into()
         };
         let channels = 5;
 
@@ -1144,11 +1149,12 @@ mod train_tests {
         super::train_final(
             &params,
             (0..13).map( move |id|{
-                Ok((make_test_eeg(1000), Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
+                (Box::new(make_test_eeg(1000)), Box::new(Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
             }),
             13, 100, 100, motif_batch_size, channels,
             684400,
             &Cpu,
+            vec!["label".into()]
         )?;
 
         Ok(())
@@ -1260,6 +1266,7 @@ mod train_tests {
             channels,
             max_input,
             &Cpu,
+            vec!["label_a".into(), "label_b".into()],
         )?;
 
         debug!("t={:?}", t.1.size());
