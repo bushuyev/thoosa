@@ -208,29 +208,36 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                 let mut i_1 = 0;
 
 
-                for (t_idx_0, t_size_0) in sizes_0.iter().enumerate() {
-                    let skip_idx_1 = if chunk_i_0 == chunk_i_1 {
+                for (t_idx_0, t_size_0) in sizes_0.iter().enumerate() {//t_size_0 - num slices in t_idx_0 tensors
+
+                    let (skip_idx, skip_s_1) = if chunk_i_0 == chunk_i_1 && t_idx_0 > 0 {
                         //if first chunk both in outer and inner cycles
-                        let skip_ = sizes_0.iter().take(t_idx_0).sum::<i64>();
-                        debug!("find_motifs_euc: skipping t_idx_0={} skip_={}", t_idx_0, skip_);
-                        skip_
+                        let skip_s_1 = sizes_0.iter().take(t_idx_0 - 1).sum::<i64>();
+                        debug!("find_motifs_euc: skipping t_idx_0={} skip_={}", t_idx_0, skip_s_1);
+                        (t_idx_0, skip_s_1,)
                     } else {
-                        0
+                        (0, 0)
                     };
 
-                    'tl0: for s_0 in  0..*t_size_0 {
-                        i_1 = skip_idx_1 as i64;
+                    'tl0: for (mut s_0_idx, s_0) in  (0..*t_size_0).enumerate() {
+                        i_1 = skip_s_1 as i64 + s_0; //number of slices in tensors before current _0 tensor + number of slices processed in current _0 tensor
+
 
                         for (t_idx_1, t_size_1) in sizes_1.iter().enumerate().skip(t_idx_0) {
 
-                            for s_1 in  0..*t_size_1 {
+
+                            for s_1 in  s_0_idx as i64..*t_size_1 {
 
                                 if i_0 >= t_size[0] || i_1 >= t_size[1]{
-                                    warn!("wrong index for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}", c, t_idx_0, vw_0[t_idx_0 as usize], i_0, t_idx_1, vw_1[t_idx_1 as usize], i_1, t_size);//TODO
+
                                     if i_1 >= t_size[1]{
+                                        warn!("wrong index 1 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}", c, t_idx_0, vw_0[t_idx_0 as usize], i_0, t_idx_1, vw_1[t_idx_1 as usize], i_1, t_size);//TODO
+
                                         break;
                                     }
                                     if i_0 >= t_size[0]{
+                                        warn!("wrong index 0 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}", c, t_idx_0, vw_0[t_idx_0 as usize], i_0, t_idx_1, vw_1[t_idx_1 as usize], i_1, t_size);//TODO
+
                                         break 'tl0;
                                     }
 
@@ -247,7 +254,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                     if c == 0 {
                                         slots_processed += 1;
                                         if slots_processed % 100_000 == 0 {
-                                            let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
+                                            let slots_per_sec = (slots_processed as u64 / (t1.elapsed().as_secs() + 1)) as usize;
                                             let (remaining, overflow) = if slots_to_process > slots_processed {
                                                 ((slots_to_process - slots_processed) / (slots_per_sec + 1), false)
                                             } else {
@@ -258,6 +265,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                     }
                                 }
                             }
+                            s_0_idx = 0; //in next _1 tensors starting from 0 slice
                         }
                         i_0+= 1;
                     }
@@ -1806,7 +1814,9 @@ mod motif_find_tests {
 
         let tensor_sizes = [
             92000, 35600, 33200, 14000, 16800, 26400, 12800, 37600, 28800, 16400, //2549997195
-            8800, 10000, 14800, 22000, 18000, 25200, 16000, 24000, 14800, 10000   //3712981357
+            92000, 35600, 33200, 14000, 16800, 26400, 12800, 37600, 28800, 16400, //2549997195
+            18800, 10000, 14800, 22000, 18000, 25200, 16000, 24000, 14800, 10000,   //3712981357
+            18800, 10000, 14800, 22000, 18000, 25200, 16000, 24000, 14800, 10000,   //3712981357
         ];
 
         let tensors = tensor_sizes.into_iter().map(|s| join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(s as usize))).collect::<Vec<Vec<f32>>>();
