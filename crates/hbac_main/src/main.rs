@@ -159,6 +159,7 @@ fn main()  {
             error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
         }
     }
+    std::process::exit(0x0000);//for jupyter
 }
 fn _main() -> Result<(), HbacError> {
     let cli = Cli::parse();

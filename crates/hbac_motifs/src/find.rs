@@ -191,7 +191,6 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
             let t_1_sliced = Tensor::vstack(&t_1_tensors);
             debug!("find_motifs_euc: t_1_sliced merged={:?} sizes_1={:?}", t_1_sliced.size(), sizes_1);
-
             debug!("find_motifs_euc:  vw_0={:?}, vw_1={:?}", vw_0, vw_1);
 
             for (c, mt) in all_motif_trackers.iter_mut().enumerate() {
@@ -210,23 +209,13 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
                 for (t_idx_0, t_size_0) in sizes_0.iter().enumerate() {//t_size_0 - num slices in t_idx_0 tensors
 
-                    let (skip_idx, skip_s_1) = if chunk_i_0 == chunk_i_1 && t_idx_0 > 0 {
-                        //if first chunk both in outer and inner cycles
-                        let skip_s_1 = sizes_0.iter().take(t_idx_0 - 1).sum::<i64>();
-                        debug!("find_motifs_euc: skipping t_idx_0={} skip_={}", t_idx_0, skip_s_1);
-                        (t_idx_0, skip_s_1,)
-                    } else {
-                        (0, 0)
-                    };
-
                     'tl0: for (mut s_0_idx, s_0) in  (0..*t_size_0).enumerate() {
-                        i_1 = skip_s_1 as i64 + s_0; //number of slices in tensors before current _0 tensor + number of slices processed in current _0 tensor
 
+                        for (t_idx_1, t_size_1) in sizes_1.iter().enumerate() { //.skip(t_idx_0)
 
-                        for (t_idx_1, t_size_1) in sizes_1.iter().enumerate().skip(t_idx_0) {
+                            debug!("find_motifs_euc: i_1 in {}  s_0_idx={}, *t_size_1={}", i_1,  s_0_idx, *t_size_1);
 
-
-                            for s_1 in  s_0_idx as i64..*t_size_1 {
+                            for s_1 in  0 as i64..*t_size_1 {
 
                                 if i_0 >= t_size[0] || i_1 >= t_size[1]{
 
@@ -241,12 +230,12 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                         break 'tl0;
                                     }
 
-                                } else {
+                                } else if t_idx_1 >= t_idx_0 &&  s_1>=s_0 {//skipping all under diagonal
                                     let dist = t.double_value(&[i_0, i_1]);
 
                                     trace!("find_motifs_euc:  t_idx_0={} chunk_i_0={}, chunk_i_1={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}", t_idx_0,chunk_i_0, chunk_i_1,  vw_0[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist);
 
-                                    i_1 += 1;
+
                                     if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < mean {
                                         mt.track((vw_0[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64).into(), (vw_1[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)
                                     }
@@ -264,9 +253,10 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                         }
                                     }
                                 }
+                                i_1 += 1;
                             }
-                            s_0_idx = 0; //in next _1 tensors starting from 0 slice
                         }
+                        i_1 = 0;
                         i_0+= 1;
                     }
                 }
@@ -1812,26 +1802,16 @@ mod motif_find_tests {
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
+
         let tensor_sizes = [
-            92000, 35600, 33200, 14000, 16800, 26400, 12800, 37600, 28800, 16400, //2549997195
-            92000, 35600, 33200, 14000, 16800, 26400, 12800, 37600, 28800, 16400, //2549997195
-            18800, 10000, 14800, 22000, 18000, 25200, 16000, 24000, 14800, 10000,   //3712981357
-            18800, 10000, 14800, 22000, 18000, 25200, 16000, 24000, 14800, 10000,   //3712981357
+            1000, 1000, 1000,
+            500,  500,  500,
         ];
 
         let tensors = tensor_sizes.into_iter().map(|s| join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(s as usize))).collect::<Vec<Vec<f32>>>();
 
         let N = 684400i64;
-        // plot_series(
-        //     vec![
-        //         (format!("Sig0"), RED, (0..N).map(|x|x as f32).zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
-        //         (format!("Sig1"), GREEN, (0..N).map(|x|x as f32).zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
-        //         (format!("Sig2"), BLACK, (0..N).map(|x|x as f32).zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
-        //
-        //     ], "EEG", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        // ).unwrap();
 
-        // let tensors_ref = &tensors;
 
         let tensors_len = tensors.len();
         super::find_motifs_euc(
@@ -1846,13 +1826,13 @@ mod motif_find_tests {
             },
 
             &FindMotifsParams {
-                step: 1000,
-                window: 1000,
+                step: 100,
+                window: 100,
                 min_dot: 0.99,
                 descr: "seizure_vote".to_string(),
-                preload_d: 10,
+                preload_d: 100,
                 max_keys_fifo: 1000,
-                chunk_size: 10,
+                chunk_size: 3,
                 max_dist_k: 0.001,
             },
             3 * N as usize,
@@ -1864,19 +1844,12 @@ mod motif_find_tests {
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
         let eeg_slices= store.lock()?.motifs_to_eeg_slices(1)?;
-        // debug!("0: {:?}", eeg_slices.get(&"0000".to_string()));
-        // debug!("1: {:?}", eeg_slices.get(&"1111".to_string()));
-        // debug!("2: {:?}", eeg_slices.get(&"2222".to_string()));
-        //
-        //TODO
-        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"0000".to_string()).and_then(|v|v.get(0)).unwrap());
-        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
-        // assert_eq!(&MotifSlice { motif: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
+
+
+        assert_eq!(6, eeg_slices.len());
 
         Ok(())
     }
-
-
 
 
     #[test]
