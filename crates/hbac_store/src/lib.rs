@@ -400,7 +400,15 @@ impl Store for SqlStore {
 
                 let num_groups = max(1, (max_labels_resources/max_resources_in_set)).ilog2();
                 let groups_max_resources = (0..num_groups).map(|i|max_resources_in_set * 2usize.pow(i as u32) as usize).collect::<Vec<usize>>();
-                let groups_max_ids = groups_max_resources.iter().map(|max_r| Self::save_resource_set_group(format!("group {} labels/{}", labels_cnt, max_r), &mut t)).collect::<Result<Vec<usize>, HbacError>>()?;
+
+                let groups_max_ids = groups_max_resources.iter().map(
+                    |max_r| {
+                        (0..max_labels_resources).step_by(*max_r).map(|i| {
+                            Self::save_resource_set_group(format!("group {} labels/{}/{}-{}", labels_cnt, max_r, i, i+*max_r), &mut t).map(|g| (i, i+*max_r, g))
+                        }).collect::<Result<Vec<(usize, usize, usize)>, HbacError>>()
+                    }
+                ).collect::<Result<Vec<Vec<(usize, usize, usize)>>, HbacError>>()?;
+
                 let group_all_id = Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), &mut t)?;
 
                 debug!("save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}", num_groups, groups_max_resources);
@@ -418,7 +426,11 @@ impl Store for SqlStore {
                         // let mut resources_1 = &resources[split_at..];
 
                         for (group_id, max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
-                            Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels), &resources[..min(resources.len() - 1, *max_resources)])?;
+                            for (resources_0, resources_1, group_id) in group_id {
+                                if *resources_0 < resources.len() - 1 {
+                                    Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels), &resources[*resources_0..min(resources.len() - 1, *resources_1)])?;
+                                }
+                            }
                             // Self::insert_resources(&mut t, labels_cnt, groups[group_i], format!("{}/{}/{}_valid", labels_cnt, labels, chunk_i), resources_1)?;
                         }
                     }
@@ -1473,6 +1485,7 @@ mod store_tests{
         //sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
         // println!("{:?}", (0..10).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
 
-        println!("{}", 16usize.ilog2());
+        // println!("{}", 16usize.ilog2());
+        println!("{:?}", (0..110).step_by(20).collect::<Vec<usize>>());
     }
 }
