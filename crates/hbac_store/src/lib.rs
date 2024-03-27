@@ -17,7 +17,7 @@ use hbac_shared::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use rand::{Rng, thread_rng};
 use rand::prelude::SliceRandom;
-use std::cmp::max;
+use std::cmp::{min, max};
 
 pub struct StoreDumper {
     pub store:Arc<Mutex<dyn Store>>, //TODO pub
@@ -398,7 +398,12 @@ impl Store for SqlStore {
                 let max_labels_resources = labels_resources.values().map(|r|r.len()).sum::<usize>();
                 debug!("save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}", labels_cnt, max_labels_resources, max_resources_in_set, max_labels_resources/max_resources_in_set);
 
-                let groups = (1..=max(1, max_labels_resources/max_resources_in_set)).map(|i| Self::save_resource_set_group(format!("group {} labels/{}", labels_cnt, max_resources_in_set * i), &mut t).expect("save_resource_set_group")).collect::<Vec<_>>();
+                let num_groups = max(1, (max_labels_resources/max_resources_in_set)).ilog2();
+                let groups_max_resources = (0..num_groups).map(|i|max_resources_in_set * 2usize.pow(i as u32) as usize).collect::<Vec<usize>>();
+                let groups_max_ids = groups_max_resources.iter().map(|max_r| Self::save_resource_set_group(format!("group {} labels/{}", labels_cnt, max_r), &mut t)).collect::<Result<Vec<usize>, HbacError>>()?;
+                let group_all_id = Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), &mut t)?;
+
+                debug!("save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}", num_groups, groups_max_resources);
 
                 for (labels, mut resources) in labels_resources {
                     debug!("save_groups_by_label_cnt: labels={} resources.len()={}",labels, resources.len());
@@ -406,32 +411,63 @@ impl Store for SqlStore {
                     resources.shuffle(&mut rng);
 
 
-                    for (chunk_i, resources_chunk) in resources.chunks(max_resources_in_set).enumerate() {
-                        if resources.len() > 10 {//TODO min resources
-                            let split = 0.8;
-                            let split_at = (resources.len() * 0.8 as usize);
-                            let mut resources_0 = &resources[..split_at];
-                            let mut resources_1 = &resources[split_at..];
+                    if resources.len() > 10 {//TODO min resources
+                        // let split = 0.8;
+                        // let split_at = (resources.len() * 0.8 as usize);
+                        // let mut resources_0 = &resources[..split_at];
+                        // let mut resources_1 = &resources[split_at..];
 
-                            for group_i in chunk_i..=groups.len()-1 {
-                                Self::insert_resources(&mut t, labels_cnt, groups[group_i], format!("{}/{}/{}_tain", labels_cnt, labels, chunk_i), resources_0)?;
-                                Self::insert_resources(&mut t, labels_cnt, groups[group_i], format!("{}/{}/{}_valid", labels_cnt, labels, chunk_i), resources_1)?;
-                            }
-                        } else {
-                            Self::insert_resources(&mut t, labels_cnt, groups[0], format!("{}/{}", labels_cnt, labels), resources.as_slice())?;
+                        for (group_id, max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
+                            Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels), &resources[..min(resources.len() - 1, *max_resources)])?;
+                            // Self::insert_resources(&mut t, labels_cnt, groups[group_i], format!("{}/{}/{}_valid", labels_cnt, labels, chunk_i), resources_1)?;
                         }
                     }
-
+                    Self::insert_resource_set_resources(&mut t, labels_cnt, group_all_id, format!("{}/{}", labels_cnt, labels), resources.as_slice())?;
                 }
-
             }
-
         }
 
         t.commit()?;
 
         Ok(())
     }
+
+    /**
+    TODO
+        for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
+
+        let max_labels_resources = labels_resources.values().map(|r|r.len()).sum::<usize>();
+        debug!("save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}", labels_cnt, max_labels_resources, max_resources_in_set, max_labels_resources/max_resources_in_set);
+
+        let num_groups = max(1, (max_labels_resources/max_resources_in_set)).ilog2();
+        let groups_max_resources = (0..num_groups).map(|i|max_resources_in_set * 2usize.pow(i as u32) as usize).collect::<Vec<usize>>();
+        let groups_max_ids = groups_max_resources.iter().map(|max_r| Self::save_resource_set_group(format!("group {} labels/{}", labels_cnt, max_r), &mut t)).collect::<Result<Vec<usize>, HbacError>>()?;
+        let group_all_id = Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), &mut t)?;
+
+        debug!("save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}", num_groups, groups_max_resources);
+
+        for (labels, mut resources) in labels_resources {
+            debug!("save_groups_by_label_cnt: labels={} resources.len()={}",labels, resources.len());
+
+            resources.shuffle(&mut rng);
+
+
+            if resources.len() > 10 {//TODO min resources
+                // let split = 0.8;
+                // let split_at = (resources.len() * 0.8 as usize);
+                // let mut resources_0 = &resources[..split_at];
+                // let mut resources_1 = &resources[split_at..];
+
+                for (group_id, max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
+                    Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels), &resources[..min(resources.len() - 1, *max_resources)])?;
+                    // Self::insert_resources(&mut t, labels_cnt, groups[group_i], format!("{}/{}/{}_valid", labels_cnt, labels, chunk_i), resources_1)?;
+                }
+            }
+            Self::insert_resource_set_resources(&mut t, labels_cnt, group_all_id, format!("{}/{}", labels_cnt, labels), resources.as_slice())?;
+        }
+    }
+
+     */
 
     fn save_pure_sets(&mut self, max_len: usize, only_unused: bool) -> Result<(), HbacError> {
         let mut conn_guard = self.conn.lock()?;
@@ -1124,7 +1160,7 @@ impl SqlStore {
         Ok(group_id)
     }
 
-    fn insert_resources(t: &mut Transaction, labels_cnt: usize, group_id: usize, descr:String, resources: &[usize]) -> Result<(), HbacError> {
+    fn insert_resource_set_resources(t: &mut Transaction, labels_cnt: usize, group_id: usize, descr:String, resources: &[usize]) -> Result<(), HbacError> {
         t.execute(
             "INSERT INTO resource_set (descr, group_id) VALUES (?, ?)",
             params![descr, group_id]//labels?
@@ -1241,7 +1277,7 @@ mod store_tests{
         }));
 
         let t1 = Instant::now();
-        store.save_groups_by_label_cnt(100);
+        store.save_groups_by_label_cnt(10);
 
         debug!("done in {}", t1.elapsed().as_millis());
 
@@ -1435,6 +1471,8 @@ mod store_tests{
     #[test]
     fn test_test(){
         //sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
-        println!("{:?}", (0..10).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
+        // println!("{:?}", (0..10).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
+
+        println!("{}", 16usize.ilog2());
     }
 }
