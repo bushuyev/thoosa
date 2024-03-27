@@ -12,3 +12,4 @@ log = "0.4.20"
 simplelog = "0.12.1"
 ctor = "0.2.7"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
+rand = "0.8.5"

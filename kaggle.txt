@@ -1,0 +1,39 @@
+
+
+RUN ALL
+print("----------------------------------------------------")
+print("----------------------------------------------------")
+print("----------------------------------------------------")
+# !cp /kaggle/input/hbac-db/hbac_euc_all_limit_400_with_corrs.db3 ./
+!cp -r /kaggle/input/hbac-model ./ && chmod 755 ./hbac-model/hbac_main
+!export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/kaggle/input/pytorch-libs/lib RUST_BACKTRACE=full && ./hbac-model/hbac_main \
+--base-path=/kaggle/input/hms-harmful-brain-activity-classification \
+--store-path=/kaggle/working/hbac_100.db3 \
+--tensors-path=/kaggle/input/hbac-eegs-pt \
+run-all \
+--models-dir=/kaggle/working/100_models/ \
+--resource-group="pure group 100" \
+--init
+
+print("------------------done------------------------------")
+
+
+
+
+INFER
+print("----------------------------------------------------")
+print("----------------------------------------------------")
+print("----------------------------------------------------")
+# !cp /kaggle/input/hbac-db/hbac_euc_all_limit_400_with_corrs.db3 ./
+!cp -r /kaggle/input/hbac-model ./ && chmod 755 ./hbac-model/hbac_main
+!export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/kaggle/input/pytorch-libs/lib RUST_BACKTRACE=full && \
+./hbac-model/hbac_main \
+--store-path=/kaggle/input/hbac-model/hbac_100.db3 \
+infer \
+--models-dir=/kaggle/input/hbac-model/100_models \
+--final-model=/kaggle/input/hbac-model/100_models/final.safetensors \
+--input-data=/kaggle/input/hms-harmful-brain-activity-classification/test_eegs
+
+
+print("------------------done------------------------------")
+!rm -rf hbac-model hbac.db3 hbac.log

@@ -214,7 +214,7 @@ fn _main() -> Result<(), HbacError> {
         Some(Commands::SelectMotifs(select_motifs_params)) => {
             info!("select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
 
-            let corr_ids = run_select_motifs(&cli, &store, devices, classes, &select_motifs_params);
+            let corr_ids = run_select_motifs(&cli, &store, devices, &select_motifs_params);
 
             info!("run_select_motifs done, corr_ids={:?}", corr_ids);
 
@@ -228,16 +228,8 @@ fn _main() -> Result<(), HbacError> {
 
         Some(TrainOnEEG(train_on_eeg_params)) => {
             debug!("train_on_eeg_params={:?}", train_on_eeg_params);
-            // let labels_datasets = vec![
-            //     ("seizure".into(), "seizure/100".into()),
-            //     ("lpd".into(), "lpd/100".into()),
-            //     ("gpd".into(), "gpd/100".into()),
-            //     ("lrda".into(), "lrda/100".into()),
-            //     ("grda".into(), "grda/100".into()),
-            //     ("other".into(), "other/100".into()),
-            // ];
-            //
-            // run_train_on_eeg(&cli, &store, &device, &TrainOnEEGParams::dummy("../../data_local/corr_motif_models_on_100_pure".into(), "../../data_local/corr_motif_models_on_100_pure".into(), labels_datasets.clone())/*train_on_eeg_params*/)?;
+
+            run_train_on_eeg(&cli, &store, &device, &train_on_eeg_params)?;
         }
 
         Some(Commands::TrainFinal(train_final_params)) => {
@@ -265,7 +257,7 @@ fn _main() -> Result<(), HbacError> {
 
             info!("run all: labels_datasets={:?}", labels_datasets);
 
-            let corr_ids = run_select_motifs(&cli, &store, devices.clone(), classes, &SelectMotifsParams::dummy(run_all_params.step, run_all_params.window, run_ids, labels_datasets.clone()))?;
+            let corr_ids = run_select_motifs(&cli, &store, devices.clone(), &SelectMotifsParams::dummy(run_all_params.step, run_all_params.window, run_ids, labels_datasets.clone()))?;
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
@@ -408,7 +400,7 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
     Ok(())
 }
 
-pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, classes: [&str; 6], select_motifs_params: &SelectMotifsParams) -> Result<Vec<usize>, HbacError>{
+pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, select_motifs_params: &SelectMotifsParams) -> Result<Vec<usize>, HbacError>{
 
     let chunk_len = select_motifs_params.run_ids().len()/devices.len();
 
@@ -531,6 +523,8 @@ fn init_resources(cli:&Cli, params:Option<&InitResourcesParams>, store:Arc<Mutex
     store_guard.save_pure_sets(100, true);
     store_guard.save_pure_sets(10, true);
     store_guard.save_pure_sets(3, true);
+
+    store_guard.save_groups_by_label_cnt(100);
     /*
     sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
     2227|seizure
@@ -663,17 +657,14 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     let tensors_path = cli.tensors_path.clone();
     let base_path = cli.base_path.clone();
 
-    let (fragments_map, _) = {
+    let fragments_map = {
         let mut store_guard = store.lock()?;
-        (
-            store_guard.motifs_to_eeg_slices(run_id)?,
-            () //store_guard.list_run_resources(select_motifs_params.run_id())?
-        )
+        store_guard.motifs_to_eeg_slices(run_id)?
     };
 
     let (motifs, channel_motif_ids) = motifs_to_tensor(
         fragments_map,
-        // data::parquet_to_tensor,
+
         move |key: &String| {
             if let Some(tensors_path) = tensors_path.as_ref() {
                 Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
@@ -689,8 +680,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
     info!("select_motifs: motifs tensor built, size={:?}", motifs.size());
 
-    let tensors_path = cli.tensors_path.clone();
-    // let channels_good_motif_idxs = select_motifs_by_corr(
+
     let labels_channels_good_motif_idxs = select_motifs_by_ratio(
         motifs,
         select_motifs_params.labels_datasets().into_iter().map(|(label_dataset)|{
@@ -718,7 +708,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
         debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
 
-        store.lock().expect("store").save_motifs_corrs(format!("{:?}", select_motifs_params.classes_tensors()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
+        store.lock().expect("store").save_motifs_corrs(run_id, format!("{:?}", select_motifs_params.classes_tensors()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
     }).collect::<Vec<usize>>())
 
 }
@@ -813,7 +803,6 @@ mod main_tests {
             &cli,
             &store,
             vec![Cpu],
-            classes,
             &SelectMotifsParams::dummy(10, 10, vec![0, 1], vec![("seizure".into(), "seizure/10".into())])
         )?;
 
