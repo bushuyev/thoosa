@@ -209,18 +209,10 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
-    let loaders_vec = keys.into_iter()
-        .map(
-            |label| labels_loaders
-                .remove(&label).expect(format!("no {}", label).as_str())
-                .into_iter()
-                .map(|l|{
-                    l.map(|t|{
-                        Box::new(apply_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, max_motif_batches, device))
-                    })
-                })
-                .collect::<Vec<_>>())
-        .collect::<Vec<Vec<_>>>();
+    let loaders_vec = apply_motifs_to_loaders(
+        motif_n, step, motif_batch_size, device, labels_loaders, &mut keys, &motif_nets, max_motif_batches,
+        |t|Box::new(apply_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, max_motif_batches, device))
+    );
 
     let mut vs_0 = nn::VarStore::new(device.clone());
 
@@ -245,6 +237,18 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     )?;
 
     Ok(vs_0)
+}
+
+fn apply_motifs_to_loaders<I, F>(motif_n: i64, step: usize, motif_batch_size: i64, device: &Device, mut labels_loaders: HashMap<i64, Vec<I>>, keys: &mut Vec<i64>, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, max_motif_batches: usize,
+apply_motifs:F) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Send + Sync, F: Fn(Box<Tensor>)->Box<Tensor> +Copy{
+    keys.into_iter()
+        .map(
+            |label| labels_loaders
+                .remove(&label).expect(format!("no {}", label).as_str())
+                .into_iter()
+                .map( |l| l.map(apply_motifs))
+                .collect::<Vec<_>>())
+        .collect::<Vec<Vec<_>>>()
 }
 
 pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
