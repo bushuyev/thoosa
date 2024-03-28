@@ -27,8 +27,11 @@ use hbac_shared::parse_key_val;
 pub struct TrainOnEEGParams {
 
 
-    #[arg(long, value_parser=parse_key_val::<String, String>, default_value="seizure=seizure/100,lpd=lpd/10")]
-    labels_datasets: Vec<(String, String)>,
+    #[arg(long, value_parser=parse_key_val::<String, String>)]
+    train_labels_datasets: Vec<(String, String)>,
+
+    #[arg(long, value_parser=parse_key_val::<String, String>)]
+    valid_labels_datasets: Vec<(String, String)>,
 
     #[arg(long)]
     corr_run: usize,
@@ -66,18 +69,24 @@ impl TrainOnEEGParams {
 
 
 
-    pub fn dummy(motif_models_dir:String, eeg_models_dir:String, labels_datasets: Vec<(String, String)>) ->Self {
+    pub fn dummy(motif_models_dir:String, eeg_models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>) ->Self {
         TrainOnEEGParams {
             corr_run:0,
             motif_models_dir,
             eeg_models_dir,
             cycles: 100,
             lr:1.0e-5,
-            labels_datasets
+            train_labels_datasets,
+            valid_labels_datasets
         }
     }
-    pub fn labels_datasets(&self) -> &Vec<(String, String)> {
-        &self.labels_datasets
+
+    pub fn train_labels_datasets(&self) -> &Vec<(String, String)> {
+        &self.train_labels_datasets
+    }
+
+    pub fn valid_labels_datasets(&self) -> &Vec<(String, String)> {
+        &self.valid_labels_datasets
     }
 }
 
@@ -109,11 +118,11 @@ impl <I> DataBatch for LabeledTensorsLoaderDataBatch<I> where I:Iterator<Item=Bo
 
 impl<I> LabeledTensorsLoaderDataBatch<I> where I: Iterator<Item=Box<Tensor>> + Send + Sync {
 
-    pub fn new(train_labels_tensor_loaders: Vec<Vec<I>>, valid_labels_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
+    pub fn new(train_labels_tensor_loaders: Vec<Vec<I>>, valid_labels_tensor_loaders: Vec<Vec<I>>, items_per_label: usize) -> Self {
         Self {
             train_labels_tensor_loaders,
             valid_labels_tensor_loaders,
-            items_per_label: items_per_label //TODO it should be batch_size
+            items_per_label,
         }
     }
 
@@ -146,14 +155,14 @@ impl<I> LabeledTensorsLoaderDataBatch<I> where I: Iterator<Item=Box<Tensor>> + S
 
 
 struct ClassTensorsLoaderData<I> {
-    loader: I,
+    train_loader: I,
 }
 
 impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
-    pub fn new(loader: I, train_valid_split: f32) -> Self {
+    pub fn new(train_loader: I, train_valid_split: f32) -> Self {
         Self {
-            loader,
+            train_loader: train_loader,
         }
     }
 
@@ -176,7 +185,7 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor)
     fn batch(&mut self) -> (Tensor, Tensor) {
         debug!("ClassTensorsLoaderData.batch:");
 
-        let t = self.loader.next().expect("next").expect("result");//TODO expects
+        let t = self.train_loader.next().expect("next").expect("result");//TODO expects
 
         (
             t.0,
@@ -223,7 +232,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
     let mut vs_0 = nn::VarStore::new(device.clone());
 
     debug!("train_on_eeg: channels={:?}  max_nets={:?}  max_motif_batches={:?}", channels,  max_nets,  max_motif_batches);
-    let apply_motifs = |t:Box<Tensor>| Box::new(apply_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, max_motif_batches, device));
+    let apply_motifs = |t:Box<Tensor>| Box::new(apply_eeg_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, max_motif_batches, device));
     train(
         device,
         &mut LabeledTensorsLoaderDataBatch::new(
@@ -237,7 +246,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
                 apply_motifs,
             ),
 
-            items_per_label, 0.8
+            items_per_label
 
         ) as &mut dyn DataBatch,
 
@@ -273,7 +282,7 @@ apply_motifs:F) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Sen
         .collect::<Vec<Vec<_>>>()
 }
 
-pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
+pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
     where I:Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync {
 
 
@@ -295,7 +304,7 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64,
 
     debug!("train_final: models.size={:?} models={:?}", labels_models.len(), labels_models);
 
-    let tensors_loader =  tensors_loader.map( move |t|{
+    let tensors_loader =  train_tensors_loader.map( move |t|{
         debug!("train_final: tensors_loader.map: t.0.size={:?} t.1.size={:?}", t.0.size(), t.1.size());
 
         Ok(
@@ -305,7 +314,7 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64,
                         Some(label_models)=>{
 
                             Tensor::stack(label_models.iter().map(|model|{
-                                let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                                let t = apply_eeg_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
                                 let t_x = t.view((1, -1));
                                 debug!("train_final: motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
 
@@ -385,7 +394,7 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
         let t = Tensor::stack(labels.iter().map(|label|{
             match models.get(label) {
                 Some(model)=>{
-                    let t = apply_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                    let t = apply_eeg_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
                     let t_x = t.view((1, -1));
                     debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
 
@@ -813,7 +822,7 @@ impl From<&str> for MotifsBy {
     }
 }
 
-fn apply_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
+fn apply_eeg_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
     let max_nets = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
 
     debug!("apply_motifs: max_motif_nets_in_channel={:?} motif_batch_size={:?} max_motif_batches={:?}, ", max_nets, motif_batch_size, max_motif_batches);
@@ -843,11 +852,14 @@ pub struct TrainFinalParams {
     #[arg(long)]
     models_dir: Vec<String>,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models_on_3_pure/final.safetensors")]
+    #[arg(long)]
     final_model: String,//TODO
 
-    #[arg(long, default_value = "pure group 10")]
-    group: String,
+    #[arg(long)]
+    train_resource_group: String,
+
+    #[arg(long)]
+    valid_resource_group: String,
 }
 
 impl TrainFinalParams {
@@ -868,18 +880,21 @@ impl TrainFinalParams {
         &self.final_model
     }
 
-    pub fn group(&self) -> &str {
-        &self.group
-    }
-
-    pub fn dummy(models_dir:Vec<String>, final_model:String, group:String, cycles: usize) ->Self {
+    pub fn dummy(models_dir:Vec<String>, final_model:String, train_resource_group:String, valid_resource_group:String, cycles: usize) ->Self {
         TrainFinalParams {
             cycles,
             lr: 1.0e-5,
             models_dir,
             final_model,
-            group
+            train_resource_group,
+            valid_resource_group
         }
+    }
+    pub fn train_resource_group(&self) -> &str {
+        &self.train_resource_group
+    }
+    pub fn valid_resource_group(&self) -> &str {
+        &self.valid_resource_group
     }
 }
 
@@ -1041,7 +1056,7 @@ mod train_tests {
 
         println!("channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
-        let channels_motifs = super::apply_motifs(motif_n, step, &eeg_t, &motif_nets, batch_size as i64, max_motif_batches, &Cpu);
+        let channels_motifs = super::apply_eeg_motifs(motif_n, step, &eeg_t, &motif_nets, batch_size as i64, max_motif_batches, &Cpu);
 
         assert_eq!(
             Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
@@ -1074,11 +1089,11 @@ mod train_tests {
 
         debug!("max_motif_batches={}", max_motif_batches);
 
-        let channels_motifs_0 = super::apply_motifs(motif_n, step, &eeg_t_0, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_0 = super::apply_eeg_motifs(motif_n, step, &eeg_t_0, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
 
         println!("channels_motifs_0.size={:?}", channels_motifs_0.size());
 
-        let channels_motifs_1 = super::apply_motifs(motif_n, step, &eeg_t_1, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_1 = super::apply_eeg_motifs(motif_n, step, &eeg_t_1, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
 
         println!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
@@ -1115,7 +1130,8 @@ mod train_tests {
             eeg_models_dir: models_path.to_str().unwrap().to_string(),
             cycles: 3,
             lr: 1.0e-5,
-            labels_datasets: vec![]
+            train_labels_datasets: vec![],
+            valid_labels_datasets: vec![]
         };
 
         save_test_motif_model(&models_path, "seizure", "0", "00", 100)?;
@@ -1176,7 +1192,8 @@ mod train_tests {
                 models_path_1.to_str().unwrap().to_string()
             ],
             final_model: test_base.join("final.safetensors").to_str().expect("final_model path").to_string(),
-            group: "zzz".into()
+            train_resource_group: "zzz".into(),
+            valid_resource_group: "zzz".into()
         };
         let channels = 5;
 

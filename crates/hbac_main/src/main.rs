@@ -79,8 +79,11 @@ struct Cli {
 #[derive(Debug, Args, Clone)]
 pub struct RunAllParams {
 
-    #[arg(long, default_value = "pure group 3")]
-    resource_group: String,
+    #[arg(long)]
+    train_resource_group: String,
+
+    #[arg(long)]
+    valid_resource_group: String,
 
     #[arg(long, default_value_t = false)]
     init:bool,
@@ -98,9 +101,11 @@ pub struct RunAllParams {
 }
 
 impl RunAllParams {
-    pub fn resource_group(&self) -> &str {
-        &self.resource_group
+
+    pub fn train_resource_group(&self) -> &str {
+        &self.train_resource_group
     }
+
     pub fn init(&self) -> bool {
         self.init
     }
@@ -117,12 +122,19 @@ impl RunAllParams {
 
     fn dummy()-> Self {
         Self {
-            resource_group: "".to_string(),
+            train_resource_group: "".to_string(),
+            valid_resource_group: "".to_string(),
             init: false,
             step: 0,
             window: 0,
             models_dir: "".to_string(),
         }
+    }
+    pub fn valid_resource_group(&self) -> &str {
+        &self.valid_resource_group
+    }
+    pub fn models_dir(&self) -> &str {
+        &self.models_dir
     }
 }
 
@@ -190,7 +202,6 @@ fn _main() -> Result<(), HbacError> {
 
 
     rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
-    let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];//TODO conf
 
     match &cli.command {
 
@@ -252,11 +263,13 @@ fn _main() -> Result<(), HbacError> {
 
             info!("find_motifs done: run_ids={:?}", run_ids);
 
-            let labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets(run_all_params.resource_group())?};
+            let train_labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets(run_all_params.train_resource_group())?};
+            let valid_labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets(run_all_params.valid_resource_group())?};
 
-            info!("run all: labels_datasets={:?}", labels_datasets);
+            info!("run all: train_labels_datasets={:?}", train_labels_datasets);
+            info!("run all: valid_labels_datasets={:?}", valid_labels_datasets);
 
-            let corr_ids = run_select_motifs(&cli, &store, devices.clone(), &SelectMotifsParams::dummy(run_all_params.step, run_all_params.window, run_ids, labels_datasets.clone()))?;
+            let corr_ids = run_select_motifs(&cli, &store, devices.clone(), &SelectMotifsParams::dummy(run_all_params.step, run_all_params.window, run_ids, train_labels_datasets.clone()))?;
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
@@ -264,7 +277,7 @@ fn _main() -> Result<(), HbacError> {
 
             info!("run_train_on_motifs done");
 
-            run_train_on_eeg(&cli, &store, &device, &TrainOnEEGParams::dummy(run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), labels_datasets.clone()))?;
+            run_train_on_eeg(&cli, &store, &device, &TrainOnEEGParams::dummy(run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone()))?;
 
             info!("run_train_on_eeg done");
 
@@ -274,7 +287,8 @@ fn _main() -> Result<(), HbacError> {
                 &TrainFinalParams::dummy(
                     vec![run_all_params.models_dir.clone()],
                     format!("{}/final.safetensors", run_all_params.models_dir),
-                    run_all_params.resource_group.clone(),
+                    run_all_params.train_resource_group.clone(),
+                    run_all_params.valid_resource_group.clone(),
                     100,
                 )
             )?;
@@ -334,7 +348,7 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
         eegs_to_logits_tensors(
             cli.base_path.as_str(),
             cli.tensors_path.clone(),
-            train_final_params.group(),
+            train_final_params.train_resource_group(),
             &device,
             Arc::clone(&store) //cli.limit.as_ref()
             //684400 - TODO cut at max_input
@@ -356,7 +370,15 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
     debug!("run_train_on_eeg: train_on_eeg_params={:?}", train_on_eeg_params);
     // let labels_kinds = store_guard.corrs_descr(train_on_eeg_params.corr_run())?;
 
-    for (label, dataset) in train_on_eeg_params.labels_datasets() {
+
+    let valid_datasets_map = train_on_eeg_params.valid_labels_datasets().into_iter().fold(HashMap::new(), |mut a, v|{
+        a.insert(v.0.clone(), v.1.clone());
+        a
+    });
+
+    assert!(valid_datasets_map.len() == train_on_eeg_params.train_labels_datasets().len()); //TODO check keys
+
+    for (label, dataset) in train_on_eeg_params.train_labels_datasets() {
         info!("training {} on {}", label, dataset);
 
         match train_on_eeg(
@@ -373,7 +395,7 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
                 cli.base_path.as_str(),
                 cli.tensors_path.clone(),
                 label,
-                dataset,
+                valid_datasets_map.get(label).expect(format!("valid dataset for {}", label).as_str()),
                 &device,
                 Arc::clone(&store)
             ),
@@ -447,9 +469,9 @@ pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<D
 
 fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams) -> Result<Vec<usize>, HbacError>{
 
-    let resource_sets = { store.lock().unwrap().list_resource_set_group_sets(run_all_params.resource_group()).expect("list_resource_set_group_sets")};
+    let resource_sets = { store.lock().unwrap().list_resource_set_group_sets(run_all_params.train_resource_group()).expect("list_resource_set_group_sets")};
 
-    assert!(resource_sets.len() > 0, "{} is empty", run_all_params.resource_group());
+    assert!(resource_sets.len() > 0, "{} is empty", run_all_params.train_resource_group());
 
     let chunk_len = resource_sets.len()/devices.len();
     let devices_resource_sets = devices.into_iter().cycle().zip(resource_sets.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, String)])>>();
