@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::iter::Map;
 use std::marker::PhantomData;
 use hbac_shared::{HbacError, batch_windows};
 use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
@@ -89,12 +90,12 @@ fn run_motif_nets<I>(loader: I) where I:Iterator<Item=Result<Tensor, HbacError>>
 /**
 * returns num labels * items_per_label x channels x motifs x motifs batch size
 */
-struct ClassTensorsLoaderDataBatch<I> {
+struct LabeledTensorsLoaderDataBatch<I> {
     classes_tensor_loaders: Vec<Vec<I>>,
     items_per_label: usize
 }
 
-impl <I> DataBatch for ClassTensorsLoaderDataBatch<I> where I:Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
+impl <I> DataBatch for LabeledTensorsLoaderDataBatch<I> where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
         self.batch()
@@ -105,10 +106,11 @@ impl <I> DataBatch for ClassTensorsLoaderDataBatch<I> where I:Iterator<Item=Resu
     }
 }
 
-impl<I> ClassTensorsLoaderDataBatch<I> where I: Iterator<Item=Result<Tensor, HbacError>> + Send + Sync {
-    pub fn new(classes_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
+impl<I> LabeledTensorsLoaderDataBatch<I> where I: Iterator<Item=Box<Tensor>> + Send + Sync {
+
+    pub fn new(labels_tensor_loaders: Vec<Vec<I>>, items_per_label: usize, train_valid_split: f32) -> Self {
         Self {
-            classes_tensor_loaders,
+            classes_tensor_loaders: labels_tensor_loaders,
             items_per_label: items_per_label //TODO it should be batch_size
         }
     }
@@ -121,9 +123,8 @@ impl<I> ClassTensorsLoaderDataBatch<I> where I: Iterator<Item=Result<Tensor, Hba
 
             (label as i64, loaders.iter_mut()
                 .flat_map(|loader| loader.take(take))
-                .map(|t| t.unwrap())//TODO move unwrap to loader
-                .collect::<Vec<Tensor>>())
-        }).collect::<Vec<(i64, Vec<Tensor>)>>();
+                .collect::<Vec<Box<Tensor>>>())
+        }).collect::<Vec<(i64, Vec<Box<Tensor>>)>>();
 
         debug!("train_batch: label_tensors={} label_tensors={:?}", label_tensors.len(), label_tensors);
 
@@ -215,7 +216,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
                 .into_iter()
                 .map(|l|{
                     l.map(|t|{
-                        Ok(apply_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, max_motif_batches, device))
+                        Box::new(apply_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, max_motif_batches, device))
                     })
                 })
                 .collect::<Vec<_>>())
@@ -226,7 +227,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, labels_loaders:Vec<(i64, I)>, 
     debug!("train_on_eeg: channels={:?}  max_nets={:?}  max_motif_batches={:?}", channels,  max_nets,  max_motif_batches);
     train(
         device,
-        &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
+        &mut LabeledTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         &corr_full_node(channels * max_nets *  max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
 

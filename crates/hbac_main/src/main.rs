@@ -392,10 +392,10 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
 fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_motif_params: &TrainOnMotifsParams) -> Result<(), HbacError> {
     let corr_run_ids = train_on_motif_params.corr_run_ids().clone();
 
-    let devices_len = corr_run_ids.len()/devices.len();
-    let run_ids = { store.lock()?.list_corrs(corr_run_ids)? }; //(1..=36).collect::<Vec<usize>>();
+    let chunk_len = corr_run_ids.len()/devices.len();
+    let corr_run_id_labels = { store.lock()?.list_corrs(corr_run_ids)? }; //(1..=36).collect::<Vec<usize>>();
 
-    let devices_corr_run = devices.into_iter().cycle().zip(run_ids.chunks(devices_len).into_iter()).collect::<Vec<(Device, &[(usize, String)])>>();//corrs_run(id, label)
+    let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, String)])>>();//corrs_run(id, label)
 
     let cli_clone = cli.clone();
     devices_corr_run.into_par_iter().for_each(move |(device_i, corrs_run)| {
