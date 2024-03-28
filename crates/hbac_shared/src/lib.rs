@@ -1,3 +1,5 @@
+#![feature(backtrace_frames)]
+
 pub mod repeat_iter;
 
 use std::collections::HashMap;
@@ -11,6 +13,7 @@ use std::f32::consts::PI;
 use std::ops::Mul;
 use rand::Rng;
 use regex::Regex;
+use std::fmt;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
@@ -88,8 +91,7 @@ impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug{
         write!(f, "{},{}", self.0, self.1)
     }
 }
-
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct HbacError {//TODO enum
     msg:String,
     backtrace:Backtrace
@@ -103,6 +105,22 @@ impl HbacError {
             msg: msg.into(),
             backtrace:Backtrace::capture()
         }
+    }
+}
+
+//TODO https://github.com/rust-lang/rust/issues/65280
+impl Debug for HbacError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug_struct = f.debug_struct("HbacError");
+        let mut x=  debug_struct
+            .field("msg", &self.msg);
+
+        for (i, frame) in self.backtrace.frames().iter().enumerate() {
+            x = x.field(format!("frame_{}\n", i).as_str(), frame);
+        }
+
+        x.finish()
+
     }
 }
 

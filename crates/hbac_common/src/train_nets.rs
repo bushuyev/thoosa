@@ -255,13 +255,18 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64,
 
     debug!("train_final: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
-    let models = load_corr_and_motif_models(params.models_dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?
-        .into_iter().fold(HashMap::new(), |mut a, v|{
-            a.insert(v.label.clone(), v);
-            a
-        });
+    let models = params.models_dir.iter().flat_map(|dir|
+            load_corr_and_motif_models(dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
+    ).collect::<Vec<CorrModels>>();
 
-    debug!("train_final: models.size={:?} models={:?}", models.len(), models);
+
+    let labels_models = models.into_iter().fold(HashMap::new(), |mut a, corr_models| {
+        a.entry(corr_models.label.clone()).or_insert_with(||vec![]).push(corr_models);
+        a
+    });
+
+
+    debug!("train_final: models.size={:?} models={:?}", labels_models.len(), labels_models);
 
     let tensors_loader =  tensors_loader.map( move |t|{
         debug!("train_final: tensors_loader.map: t.0.size={:?} t.1.size={:?}", t.0.size(), t.1.size());
@@ -269,21 +274,24 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64,
         Ok(
             (
                 Tensor::stack(labels.iter().map(|label|{
-                    match models.get(label) {
-                        Some(model)=>{
+                    match labels_models.get(label) {
+                        Some(label_models)=>{
 
-                            let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
-                            let t_x = t.view((1, -1));
-                            debug!("train_final: motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
+                            Tensor::stack(label_models.iter().map(|model|{
+                                let t = apply_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                                let t_x = t.view((1, -1));
+                                debug!("train_final: motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
 
-                            let t = model.corr_model.lock().unwrap().forward(&t_x);
-                            debug!("train_final: corr_model out .size()={:?}", t.size());
-                            t
+                                let t = model.corr_model.lock().unwrap().forward(&t_x);
+                                debug!("train_final: corr_model out .size()={:?}", t.size());
+                                t
+                            }).collect::<Vec<Tensor>>().as_slice(), 0)
                         }
                         None => {
                             debug!("train_final: no model for label {:?}", label);
 
-                            Tensor::zeros(&[1, 1], (Float, *device))
+
+                            Tensor::zeros(&[params.models_dir.len() as i64, 1], (Float, *device))
                         }
                     }
 
@@ -299,7 +307,7 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64,
     train(
         device,
         &mut ClassTensorsLoaderData::new(tensors_loader, 0.8) as &mut dyn DataBatch,
-        &final_node(6, 6).build_tch_module(&vs_0.root())?,
+        &final_node(params.models_dir.len() as i64* 6, 6).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
 
             let pred_y = pred; //pred.i((.., 0, 0));
@@ -311,7 +319,7 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, motif_n: i64,
         nn::AdamW::default().build(&vs_0, 1.0e-4)?,
         |t:Tensor|{
             debug!("t.size()={:?} ", t.size());
-            let t_out = t.view((t.size()[0]));
+            let t_out = t.view((t.size()[0] * t.size()[1])); //model_dirs * labels
             debug!(" t_out.size()={:?}",  t_out.size());
             t_out
         }
@@ -805,40 +813,44 @@ pub struct TrainFinalParams {
     #[arg(long, default_value_t = 1.0e-5)]
     lr: f64,
 
-    #[arg(long, default_value = "../../data_local/corr_motif_models_on_3_pure")]
-    models_dir: String,
+    #[arg(long)]
+    models_dir: Vec<String>,
 
     #[arg(long, default_value = "../../data_local/corr_motif_models_on_3_pure/final.safetensors")]
-    final_model: Option<String>,//TODO
+    final_model: String,//TODO
 
     #[arg(long, default_value = "pure group 10")]
     group: String,
 }
 
-impl TrainFinalParams{
+impl TrainFinalParams {
+
     pub fn cycles(&self) -> usize {
         self.cycles
     }
+
     pub fn lr(&self) -> f64 {
         self.lr
     }
-    pub fn models_dir(&self) -> &str {
+
+    pub fn models_dir(&self) -> &Vec<String> {
         &self.models_dir
     }
 
-    pub fn final_model(&self) -> &Option<String> {
+    pub fn final_model(&self) -> &String {
         &self.final_model
     }
+
     pub fn group(&self) -> &str {
         &self.group
     }
 
-    pub fn dummy(models_dir:String, final_model:String, group:String, cycles: usize) ->Self {
+    pub fn dummy(models_dir:Vec<String>, final_model:String, group:String, cycles: usize) ->Self {
         TrainFinalParams {
             cycles,
             lr: 1.0e-5,
             models_dir,
-            final_model: Some(final_model),
+            final_model,
             group
         }
     }
@@ -1115,13 +1127,20 @@ mod train_tests {
 
     #[test]
     fn test_train_final() -> Result<(), HbacError> {
-        let models_path = Path::new("/tmp/test_train_final").join(cdt_for_dir());
+        let test_base = Path::new("/tmp/test_train_final").join(cdt_for_dir());
+        debug!("test_train_final: test_base: {:?}", test_base);
+
+        let models_path_0 = test_base.join("0");
+        let models_path_1 = test_base.join("1");
 
         let params = TrainFinalParams {
             cycles: 3,
             lr: 1.0e-5,
-            models_dir: models_path.to_str().unwrap().to_string(),
-            final_model: None,
+            models_dir: vec![
+                models_path_0.to_str().unwrap().to_string(),
+                models_path_1.to_str().unwrap().to_string()
+            ],
+            final_model: test_base.join("final.safetensors").to_str().expect("final_model path").to_string(),
             group: "zzz".into()
         };
         let channels = 5;
@@ -1135,9 +1154,10 @@ mod train_tests {
         debug!("features={}", features);
 
 
-        save_test_models(&models_path, channels, motif_batch_size, max_motif_batches, features)?;
+        save_test_models(&models_path_0, channels, motif_batch_size, max_motif_batches, features)?;
+        save_test_models(&models_path_1, channels, motif_batch_size, max_motif_batches, features)?;
 
-        fs::write(&models_path.join("unexpected.file"), "lalala");
+        fs::write(&models_path_1.join("unexpected.file"), "lalala");
 
 
         super::train_final(

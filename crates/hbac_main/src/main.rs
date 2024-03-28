@@ -268,7 +268,16 @@ fn _main() -> Result<(), HbacError> {
 
             info!("run_train_on_eeg done");
 
-            run_train_final(&cli, &store, &device, &TrainFinalParams::dummy(run_all_params.models_dir.clone(), format!("{}/final.safetensors", run_all_params.models_dir), run_all_params.resource_group.clone(), 100))?;
+            run_train_final(
+                &cli, &store,
+                &device,
+                &TrainFinalParams::dummy(
+                    vec![run_all_params.models_dir.clone()],
+                    format!("{}/final.safetensors", run_all_params.models_dir),
+                    run_all_params.resource_group.clone(),
+                    100,
+                )
+            )?;
 
             info!("run_train_final done");
         }
@@ -339,7 +348,7 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
         labels
     )?;
 
-    vs.save(format!("{}/final.safetensors", train_final_params.models_dir()))?;
+    vs.save(train_final_params.final_model())?;
     Ok(())
 }
 
@@ -831,7 +840,10 @@ mod main_tests {
     fn test_run_train_final() -> Result<(), HbacError>{
 
         let train_final_params = TrainFinalParams::dummy(
-            "../../data_down/group_1_labels_100_100_200/100_200_models".into(),
+            vec![
+                "../../data_down/group_1_labels_100_0-100/0_100_models".into(),
+                "../../data_down/group_1_labels_100_100_200/100_200_models".into()
+            ],
             "/tmp/final.safetensors".into(),
             "pure group 3".into(),
             10
