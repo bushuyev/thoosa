@@ -369,6 +369,14 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
                 &device,
                Arc::clone(&store)
             ),
+            eegs_to_labels_tensors(
+                cli.base_path.as_str(),
+                cli.tensors_path.clone(),
+                label,
+                dataset,
+                &device,
+                Arc::clone(&store)
+            ),
             5,
             1000,
             100,
@@ -775,8 +783,6 @@ mod main_tests {
         // let ce = Tensor::from_slice(&[1., 1., 0., 0.]).binary_cross_entropy::<Tensor>(&Tensor::from_slice(&[1., 1., 0., 0.1]), None, Reduction::Mean);
         // ce.print();
 
-
-
         Ok(())
     }
 
@@ -796,9 +802,6 @@ mod main_tests {
 
         fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         let store = Arc::new(Mutex::new(SqlStore::new("/tmp/test_main_db.db3")?));
-
-        let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];//TODO conf
-
 
         run_find_motifs_on_group(
             &cli,
