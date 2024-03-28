@@ -268,7 +268,7 @@ fn _main() -> Result<(), HbacError> {
 
             info!("run_train_on_eeg done");
 
-            run_train_final(&cli, &store, &device, &TrainFinalParams::dummy(run_all_params.models_dir.clone(), format!("{}/final.safetensors", run_all_params.models_dir), run_all_params.resource_group.clone()))?;
+            run_train_final(&cli, &store, &device, &TrainFinalParams::dummy(run_all_params.models_dir.clone(), format!("{}/final.safetensors", run_all_params.models_dir), run_all_params.resource_group.clone(), 100))?;
 
             info!("run_train_final done");
         }
@@ -317,6 +317,9 @@ fn _main() -> Result<(), HbacError> {
 fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, train_final_params: &TrainFinalParams) -> Result<(), HbacError> {
 
     let labels = {store.lock().expect("mutex_guard").list_labels()? };
+
+    debug!("run_train_final: labels={:?}", labels);
+
     let vs = train_final(
         train_final_params,
         eegs_to_logits_tensors(
@@ -327,7 +330,6 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
             Arc::clone(&store) //cli.limit.as_ref()
             //684400 - TODO cut at max_input
         ),
-        5,
         1000,
         100,
         100,
@@ -716,13 +718,32 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 mod main_tests {
     use std::fs;
     use std::sync::{Arc, Mutex};
+    use log::LevelFilter;
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+    use tch::Device;
     use tch::Device::Cpu;
+    use hbac_common::train_nets::TrainFinalParams;
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
-    use crate::{Cli, Commands, run_find_motifs_on_group, run_select_motifs, RunAllParams};
-    use crate::Commands::{FindMotifs, SelectMotifs};
+    use crate::{Cli, Commands, run_find_motifs_on_group, run_select_motifs, run_train_final, RunAllParams};
+    use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal};
     // use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
+
+    #[ctor::ctor]
+    fn init() {
+        CombinedLogger::init(
+            vec![
+                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ).unwrap_or_else(|e|{
+            println!("CombinedLogger::init failed: {:?}", e);
+        });
+
+
+        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
+        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    }
 
     #[test]
     fn test_it() -> Result<(), HbacError>{
@@ -795,7 +816,6 @@ mod main_tests {
         };
 
         let store = Arc::new(Mutex::new(SqlStore::new("/tmp/test_main_db.db3")?));
-        let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];//TODO conf
 
         run_select_motifs(
             &cli,
@@ -803,6 +823,40 @@ mod main_tests {
             vec![Cpu],
             &SelectMotifsParams::dummy(10, 10, vec![0, 1], vec![("seizure".into(), "seizure/10".into())])
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_train_final() -> Result<(), HbacError>{
+
+        let train_final_params = TrainFinalParams::dummy(
+            "../../data_down/group_1_labels_100_100_200/100_200_models".into(),
+            "/tmp/final.safetensors".into(),
+            "pure group 3".into(),
+            10
+        );
+
+        let cli = Cli{
+            base_path: "../../data/".into(),
+            tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
+            store_path: "../../data_down/group_1_labels_100_100_200/hbac-model/hbac_all.db3".to_string(),
+            term_logger_level: "DEBUG".into(),
+            write_logger_level: "DEBUG".into(),
+            logfile: "/tmp/hbac_test.log".into(),
+            limit: None,
+            num_threads: None,
+            command: Some(TrainFinal(train_final_params.clone())),
+        };
+
+        let store = Arc::new(Mutex::new(SqlStore::new(cli.store_path.clone())?));
+
+         run_train_final(
+             &cli,
+             &store,
+             &Cpu,
+             &train_final_params
+         )?;
 
         Ok(())
     }

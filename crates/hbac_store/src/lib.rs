@@ -610,7 +610,9 @@ impl Store for SqlStore {
 
         let labels = Self::list_labels(&t)?;
 
-        let r = t.prepare(
+        debug!("list_resource_random_in_group: group_descr={:?} labels={:?}", group_descr, labels);
+
+        let r:Vec<(String, Vec<f32>)> = t.prepare(
             "SELECT r.key, GROUP_CONCAT(l.label || '/' || lr.p, ',') FROM resource_set_group rsg \
             JOIN resource_set rs ON rs.group_id=rsg.id \
             JOIN resource_resources_set rrs ON rrs.set_id=rs.id \
@@ -644,6 +646,8 @@ impl Store for SqlStore {
         })?.map(|v| v.unwrap()).collect();
 
         t.commit();
+
+        debug!("list_resource_random_in_group: r.len={:?}", r.len());
 
         Ok(r)
     }
@@ -1331,7 +1335,7 @@ mod store_tests{
         store.save_pure_sets(10, false);
         store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10);
 
-        let all_group_id = store.save_resource_set_group("TestAll".into())?;
+        let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into())?;
         let set_all_id = store.save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
 
 
@@ -1339,7 +1343,7 @@ mod store_tests{
         assert_eq!(3, group_sets.len());
 
 
-        let mut keys_labels_p = store.list_resource_random_in_group("TestAll")?;
+        let mut keys_labels_p = store.list_resource_random_in_group("group 1 labels/100/100-200")?;
 
         keys_labels_p.sort_by(|a, b|a.0.cmp(&b.0));
 
