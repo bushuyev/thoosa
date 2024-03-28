@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::path::Path;
-use rusqlite::{Connection, params, Rows, Statement, ToSql, Transaction};
+use rusqlite::{Connection, Error, params, Rows, Statement, ToSql, Transaction};
 use log::{debug, error};
 use rusqlite::types::{ToSqlOutput, Value};
 use rusqlite::types::ValueRef::Real;
@@ -204,11 +204,11 @@ impl Store for SqlStore {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
-        let labels = Self::list_labels(&t);
+        let labels = Self::list_labels(&t)?.into_iter().map(|id_label|id_label.1).collect();
 
         t.commit()?;
 
-        labels
+        Ok(labels)
     }
 
 
@@ -373,7 +373,9 @@ impl Store for SqlStore {
 
         {
             let labels_cnt_labels_resources:HashMap<usize, HashMap<String, Vec<usize>>> = {
-                let mut stmt = t.prepare("SELECT r.id, GROUP_CONCAT(l.label, ','), count(lr.resource_id) labels_cnt FROM resources r JOIN labeled_resources lr ON lr.resource_id=r.id JOIN labels l ON l.id=lr.label_id GROUP BY resource_id ORDER BY labels_cnt")?;
+                let mut stmt = t.prepare(
+                    "SELECT r.id, GROUP_CONCAT(l.label, ','), count(lr.resource_id) labels_cnt FROM resources r JOIN labeled_resources lr ON lr.resource_id=r.id JOIN labels l ON l.id=lr.label_id GROUP BY resource_id ORDER BY labels_cnt"
+                )?;
                 let mut rows = stmt.query(())?;
                 let mut labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> = HashMap::new(); //labels_cnt -> Labels->Resources. labels_cnt==1 - pure resources
 
@@ -393,10 +395,19 @@ impl Store for SqlStore {
             debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len()={:?}", labels_cnt_labels_resources.len());
             let mut rng = thread_rng();
 
+            let labels_ids:HashMap<String, usize> = Self::list_labels(&t)?.into_iter().fold(HashMap::new(), |mut a, v|{
+                a.insert(v.1, v.0);
+                a
+            });
+
+            //labels_cnt number of labels a resource has
             for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
 
                 let max_labels_resources = labels_resources.values().map(|r|r.len()).sum::<usize>();
-                debug!("save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}", labels_cnt, max_labels_resources, max_resources_in_set, max_labels_resources/max_resources_in_set);
+                debug!(
+                    "save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}",
+                    labels_cnt, max_labels_resources, max_resources_in_set, max_labels_resources/max_resources_in_set
+                );
 
                 let num_groups = max(1, (max_labels_resources/max_resources_in_set)).ilog2();
                 let groups_max_resources = (0..num_groups).map(|i|max_resources_in_set * 2usize.pow(i as u32) as usize).collect::<Vec<usize>>();
@@ -414,27 +425,25 @@ impl Store for SqlStore {
                 debug!("save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}", num_groups, groups_max_resources);
 
                 for (labels, mut resources) in labels_resources {
-                    debug!("save_groups_by_label_cnt: labels={} resources.len()={}",labels, resources.len());
+
 
                     resources.shuffle(&mut rng);
 
+                    let label_id = labels_ids.get(&labels);//if more than one label - label_id is None and Null in the db
+
+                    debug!("save_groups_by_label_cnt: labels={} resources.len()={} label_id={:?}",labels, resources.len(), label_id);
 
                     if resources.len() > 10 {//TODO min resources
-                        // let split = 0.8;
-                        // let split_at = (resources.len() * 0.8 as usize);
-                        // let mut resources_0 = &resources[..split_at];
-                        // let mut resources_1 = &resources[split_at..];
 
                         for (group_id, max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
                             for (resources_0, resources_1, group_id) in group_id {
                                 if *resources_0 < resources.len() - 1 {
-                                    Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels), &resources[*resources_0..min(resources.len() - 1, *resources_1)])?;
+                                    Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels),  label_id, &resources[*resources_0..min(resources.len() - 1, *resources_1)])?;
                                 }
                             }
-                            // Self::insert_resources(&mut t, labels_cnt, groups[group_i], format!("{}/{}/{}_valid", labels_cnt, labels, chunk_i), resources_1)?;
                         }
                     }
-                    Self::insert_resource_set_resources(&mut t, labels_cnt, group_all_id, format!("{}/{}", labels_cnt, labels), resources.as_slice())?;
+                    Self::insert_resource_set_resources(&mut t, labels_cnt, group_all_id, format!("{}/{}", labels_cnt, labels), label_id, resources.as_slice())?;
                 }
             }
         }
@@ -548,7 +557,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         let labeled_resources_sets = {
-            let mut stmt = t.prepare("SELECT  l.label , rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
+            let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
 
 
             let vec = stmt.query_map([group_descr], |row| {//TODO move group_slices out, not for store
@@ -630,7 +639,7 @@ impl Store for SqlStore {
             debug!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
 
             Ok(
-                (key, labels.iter().map(|label|*labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>())
+                (key, labels.iter().map(|(label_id, label)|*labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>())
             )
         })?.map(|v| v.unwrap()).collect();
 
@@ -1150,15 +1159,16 @@ impl SqlStore {
     /**
     defines global label order
     */
-    fn list_labels(t: &Transaction) -> Result<Vec<String>, HbacError> {
+    fn list_labels(t: &Transaction) -> Result<Vec<(usize, String)>, HbacError> {
         let set_resources = {
-            let mut stmt = t.prepare("SELECT label FROM labels ORDER BY id")?;
+            let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
 
             let vec = stmt.query_map([], |row| {
                 Ok((
-                    row.get::<usize, String>(0).expect("row 1 in _list_labels")
+                    row.get::<usize, usize>(0)?,
+                    row.get::<usize, String>(1)?
                 ))
-            })?.map(|v| v.unwrap()).collect();
+            })?.collect::<Result<Vec<(usize, String)>, Error>>()?;
 
             vec
         };
@@ -1172,10 +1182,14 @@ impl SqlStore {
         Ok(group_id)
     }
 
-    fn insert_resource_set_resources(t: &mut Transaction, labels_cnt: usize, group_id: usize, descr:String, resources: &[usize]) -> Result<(), HbacError> {
-        t.execute(
-            "INSERT INTO resource_set (descr, group_id) VALUES (?, ?)",
-            params![descr, group_id]//labels?
+    /**
+    * label_id - for pure sets
+    */
+    fn insert_resource_set_resources(t: &mut Transaction, labels_cnt: usize, group_id: usize, descr:String, label_id:Option<&usize>, resources: &[usize]) -> Result<(), HbacError> {
+
+         t.execute(
+            "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
+            params![descr, group_id, label_id]//labels?
         )?;
 
         let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;

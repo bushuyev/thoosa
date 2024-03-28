@@ -217,24 +217,29 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
                             for s_1 in  0 as i64..*t_size_1 {
 
+                                // debug!("-------------{} {} {} {}", vw_0[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64);
+
                                 if i_0 >= t_size[0] || i_1 >= t_size[1]{
 
-                                    if i_1 >= t_size[1]{
-                                        warn!("wrong index 1 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}", c, t_idx_0, vw_0[t_idx_0 as usize], i_0, t_idx_1, vw_1[t_idx_1 as usize], i_1, t_size);//TODO
-
-                                        break;
-                                    }
                                     if i_0 >= t_size[0]{
                                         warn!("wrong index 0 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}", c, t_idx_0, vw_0[t_idx_0 as usize], i_0, t_idx_1, vw_1[t_idx_1 as usize], i_1, t_size);//TODO
 
                                         break 'tl0;
                                     }
 
-                                } else if t_idx_1 >= t_idx_0 &&  s_1>=s_0 {//skipping all under diagonal
+                                    if i_1 >= t_size[1]{
+                                        warn!("wrong index 1 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}", c, t_idx_0, vw_0[t_idx_0 as usize], i_0, t_idx_1, vw_1[t_idx_1 as usize], i_1, t_size);//TODO
+
+                                        break;
+                                    }
+
+
+                                } else if t_idx_0 < t_idx_1 ||  (t_idx_0 == t_idx_1 && s_0 < s_1) {//skipping all under diagonal
+                                    trace!("find_motifs_euc skipping: t_idx_0={}, s_0={}, t_idx_1={}, s_1={} ", t_idx_0, s_0, t_idx_1, s_1);
+                                } else {
                                     let dist = t.double_value(&[i_0, i_1]);
 
                                     trace!("find_motifs_euc:  t_idx_0={} chunk_i_0={}, chunk_i_1={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}", t_idx_0,chunk_i_0, chunk_i_1,  vw_0[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist);
-
 
                                     if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < mean {
                                         mt.track((vw_0[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64).into(), (vw_1[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)

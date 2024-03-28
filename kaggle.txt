@@ -11,8 +11,8 @@ print("----------------------------------------------------")
 --store-path=/kaggle/working/hbac_100.db3 \
 --tensors-path=/kaggle/input/hbac-eegs-pt \
 run-all \
---models-dir=/kaggle/working/100_models/ \
---resource-group="pure group 100" \
+--models-dir=/kaggle/working/0_100_models/ \
+--resource-group="group 1 labels/100/0-100" \
 --init
 
 print("------------------done------------------------------")

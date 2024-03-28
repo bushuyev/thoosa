@@ -294,7 +294,6 @@ pub fn train_final<I>(params: &TrainFinalParams, tensors_loader:I, items_per_lab
 
     train(
         device,
-        // &mut ClassTensorsLoaderDataBatch::new(loaders_vec, items_per_label, 0.8) as &mut dyn DataBatch,
         &mut ClassTensorsLoaderData::new(tensors_loader, items_per_label, 0.8) as &mut dyn DataBatch,
         &final_node(6, 6).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
@@ -592,6 +591,8 @@ pub fn corr_full_node(features: i64) -> Node {
 
 pub fn final_node(features: i64, classes_num: i64) -> Node {
     SeqBuilder::new(features)
+        .linear_s(classes_num)
+        .func(Tensor::relu)
         .linear_s(classes_num)
         // .func(|t|t.softmax(0, Float))
         .end_seq()

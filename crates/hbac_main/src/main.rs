@@ -217,7 +217,6 @@ fn _main() -> Result<(), HbacError> {
             let corr_ids = run_select_motifs(&cli, &store, devices, &select_motifs_params);
 
             info!("run_select_motifs done, corr_ids={:?}", corr_ids);
-
         }
 
         Some(Commands::TrainOnMotifs(train_on_motif_params)) => {
@@ -428,7 +427,6 @@ pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<D
 }
 
 fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams) -> Result<Vec<usize>, HbacError>{
-    // let devices_classes = devices.into_iter().cycle().zip(classes.into_iter()).collect::<Vec<(Device, &str)>>();
 
     let resource_sets = { store.lock().unwrap().list_resource_set_group_sets(run_all_params.resource_group()).expect("list_resource_set_group_sets")};
 
