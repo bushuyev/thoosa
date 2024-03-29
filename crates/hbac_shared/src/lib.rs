@@ -135,20 +135,20 @@ impl<D> From<D> for HbacError where D: Display {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct MotifSlice {
-    pub motif: u16, //TODO pub
+    pub motif_id: usize, //TODO pub
     pub slise_idx: i64,
     pub channel_idx: u16,
 }
 
 impl MotifSlice {
 
-    pub fn new(motif: u16, slise_idx: i64, channel_idx: u16) -> Self {
-        Self { motif, slise_idx, channel_idx }
+    pub fn new(motif_id: usize, slise_idx: i64, channel_idx: u16) -> Self {
+        Self { motif_id, slise_idx, channel_idx }
     }
 
     #[inline]
-    pub fn motif(&self) -> u16 {
-        self.motif
+    pub fn motif_id(&self) -> usize {
+        self.motif_id
     }
 
     #[inline]

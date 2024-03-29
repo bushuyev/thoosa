@@ -41,7 +41,7 @@ pub struct TrainOnEEGParams {
     motif_models_dir: String,
 
     #[arg(long, default_value = "/tmp/")]
-    eeg_models_dir: String,
+    models_dir: String,
 
     #[arg(long, default_value_t = 10)]
     cycles: usize,
@@ -64,17 +64,17 @@ impl TrainOnEEGParams {
     pub fn lr(&self) -> f64 {
         self.lr
     }
-    pub fn eeg_models_dir(&self) -> &str {
-        &self.eeg_models_dir
+    pub fn models_dir(&self) -> &str {
+        &self.models_dir
     }
 
 
 
-    pub fn dummy(motif_models_dir:String, eeg_models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>) ->Self {
+    pub fn dummy(motif_models_dir:String, models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>) ->Self {
         TrainOnEEGParams {
             corr_run:0,
             motif_models_dir,
-            eeg_models_dir,
+            models_dir,
             cycles: 100,
             lr:1.0e-5,
             train_labels_datasets,
@@ -1141,7 +1141,7 @@ mod train_tests {
             corr_run: 0,
 
             motif_models_dir: models_path.to_str().unwrap().to_string(),
-            eeg_models_dir: models_path.to_str().unwrap().to_string(),
+            models_dir: models_path.to_str().unwrap().to_string(),
             cycles: 3,
             lr: 1.0e-5,
             train_labels_datasets: vec![],

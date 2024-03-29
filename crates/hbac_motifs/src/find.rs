@@ -13,7 +13,7 @@ use std::cmp::max;
 use clap::value_parser;
 use clap::parser::*;
 use clap::clap_derive::{Args, Parser, Subcommand};
-use hbac_shared::parse_key_val;
+use hbac_shared::{MotifSlice, parse_key_val};
 
 use log::{debug, info, warn, trace};
 use rayon::iter::{ParallelBridge, ParallelIterator, split};
@@ -581,15 +581,17 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
  * series - [channel x data]
  * motifs = [channel x motif x data slice]
  */
-fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
+fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<Tensor, HbacError> {
 
     let channels_num = series.size()[0];
     let series_len = series.size()[1];
     let motifs_num = motifs.size()[1];
     let motif_len = motifs.size()[2];
 
+
+
     //channels, motif, motif x series dots
-    let mut matches:Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_|Vec::new()).collect();
+    let mut channels_matches:Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_|Vec::new()).collect();
 
     let slices = slice_t(&series, step as i32, motif_len);
 
@@ -601,20 +603,53 @@ fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32
         let dt = dist_d2(1, &t_0, &t_1).expect(format!("dist_d2 on channel={}", c).as_str());
         debug!("clc_dist_matches: t_0={:?} t_1={:?} dt.size={:?}", t_0.size(), t_1.size(), dt.size());
 
-
-        for motif in 0..motifs_num{
+        for motif in 0..motifs_num {
             let vec = from::<Vec<f32>>(&dt.i((.., motif)));
             debug!("clc_dist_matches: c={} motif={} vec={:?}", c, motif,  vec);
 
-            matches[c as usize].push(vec);
+            channels_matches[c as usize].push(vec);
         }
     }
 
-    let matches = Tensor::vstack(matches.into_iter().map(|channel_motifs| {
+    let channels_matches_lens = channels_matches.iter().map(|c|c.len()).collect::<Vec<usize>>();
+    let channel_motif_ids_lens = channel_motif_ids.iter().map(|c|c.len()).collect::<Vec<usize>>();
 
-        Tensor::from_slice(channel_motifs.into_iter().map(|motifs_dots| {
+    debug!("clc_dist_matches: channels_matches_lens={:?}", channels_matches_lens);
+    debug!("clc_dist_matches: channel_motif_ids_lens={:?}", channel_motif_ids_lens);
 
-            motifs_dots.into_iter().map(|v| if v< threshold { 1 } else {0}).sum()
+    let channel_motif_ids:Vec<Vec<Option<usize>>>  = channel_motif_ids.iter().map(|ids_in_c|{
+        let mut x:Vec<Option<usize>> = ids_in_c.iter().map(|v|Some(*v)).collect();
+
+        for _ in x.len()..motifs_num as usize {
+            x.push(None)
+        }
+
+        x
+    }).collect();
+
+    // assert!(channels_matches_lens.eq(&channel_motif_ids_lens), "channels_matches_lens={:?}, channel_motif_ids_lens={:?}", channels_matches_lens, channel_motif_ids_lens);
+
+
+    let matches = Tensor::vstack(channels_matches.into_iter().zip(channel_motif_ids.iter()).map(|(channel_motifs, motif_ids)| {
+
+
+        debug!("motif_ids={:?}", motif_ids);
+        Tensor::from_slice(channel_motifs.into_iter().zip(motif_ids.into_iter()).map(|(motifs_dists, motif_id_op)| {
+
+
+            debug!("motifs_dists={:?}", motifs_dists);
+
+            motifs_dists.into_iter().map(|motif_dist|{
+
+                // debug!("motif_id={:?} motif_dist={}", motif_id, motif_dist);
+
+                if motif_id_op.as_ref().map(|motif_id|motifs_distances.get(motif_id).expect(format!("no motif with motif_id={}", motif_id).as_str()) > &motif_dist).unwrap_or(false) {
+                    1
+                } else {
+                    0
+                }
+
+            }).sum()
 
         }).collect::<Vec<i32>>().as_slice())
 
@@ -624,7 +659,17 @@ fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32
 }
 
 
-fn clc_motifs_matches_for_label<I, L>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>, tensor_loader: I, class_label: L, limit: Option<usize>, step: usize, threshold: f32) -> Result<(), HbacError>
+fn clc_motifs_matches_for_label<I, L>(
+    motifs: &Tensor,
+    all_zero: &Tensor,
+    channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>,
+    tensor_loader: I,
+    class_label: L,
+    limit: Option<usize>,
+    step: usize,
+    motifs_distances: &HashMap<usize, f32>,
+    channel_motif_ids: &Vec<Vec<usize>>
+) -> Result<(), HbacError>
     where I:Iterator<Item=Box<Tensor>>, I: std::marker::Send, L:Clone {
 
     let mut count = AtomicU64::new(0);
@@ -637,7 +682,7 @@ fn clc_motifs_matches_for_label<I, L>(motifs: &Tensor, all_zero: &Tensor, channe
     for eeg in tensor_loader {
 
         // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
-        let matches = clc_dist_matches(&eeg, &motifs, step, threshold)?;
+        let matches = clc_dist_matches(&eeg, &motifs, step, motifs_distances, channel_motif_ids)?;
 
         for motif_i in 0..motifs_num {
 
@@ -743,7 +788,7 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, HbacError>
+pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     let mut labels_channels_good_motifs = labels_loaders.iter().fold(HashMap::new(), |mut a, v|{
@@ -751,7 +796,7 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
         a
     });
 
-    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device);
+    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, motifs_distances, channel_motif_ids);
 
     let Ok(channels_motifs_classes_guard) = channels_motifs_classes_lock.lock() else {
         panic!("select_motifs: can't lock channels_motifs_classes_lock");
@@ -800,7 +845,7 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
 pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device, min_corr: f64) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
-    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device);
+    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, HashMap::new(), &vec![]);
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>();
 
@@ -841,7 +886,7 @@ pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, li
 
 }
 
-fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
+fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
     where I:Iterator<Item=Box<Tensor>> + Send + Sync, L:Clone{
     let motifs_size = motifs.size();
 
@@ -868,7 +913,7 @@ fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>,
             &unsafe { Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor) },
             &Tensor::zeros(slice_len, (tch::Kind::Float, *device)), //TODO
             Arc::clone(&channels_motifs_classes_lock),
-            loader, label, limit, step, 0.97, //TODO step - k * slice_len
+            loader, label, limit, step, &motifs_distances, channel_motif_ids //TODO step - k * slice_len
         )
     });
     (channels_num, motifs_num, channels_motifs_classes_lock)
@@ -1397,7 +1442,9 @@ mod motif_find_tests {
             Some(3),
             1,
             Device::Cpu,
-            0.5
+            0.5,
+            HashMap::new(),
+            &vec![]
         )?;
 
         println!("2. t={:?}", labels_channels_good_motifs);
@@ -1653,7 +1700,7 @@ mod motif_find_tests {
         );
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.motifs_to_eeg_slices(1)?;
+        let eeg_slices= store.lock()?.list_motifs_slices(1)?;
         debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
@@ -1724,14 +1771,14 @@ mod motif_find_tests {
         );
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.motifs_to_eeg_slices(1)?;
+        let eeg_slices= store.lock()?.list_motifs_slices(1)?;
         debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
 
-        assert_eq!(&MotifSlice { motif: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&"3333".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&"3333".to_string()).and_then(|v|v.get(0)).unwrap());
 
         Ok(())
     }
@@ -1794,15 +1841,15 @@ mod motif_find_tests {
         );
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.motifs_to_eeg_slices(1)?;
+        let eeg_slices= store.lock()?.list_motifs_slices(1)?;
         debug!("0: {:?}", eeg_slices.get(&"0000".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"2222".to_string()));
 
         //TODO
-        assert_eq!(&MotifSlice { motif: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"0000".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"0000".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
 
         Ok(())
     }
@@ -1857,7 +1904,7 @@ mod motif_find_tests {
         );
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.motifs_to_eeg_slices(1)?;
+        let eeg_slices= store.lock()?.list_motifs_slices(1)?;
 
 
         assert_eq!(6, eeg_slices.len());
@@ -2097,15 +2144,25 @@ mod motif_find_tests {
             ])
         ]).totype(Int);
 
+        let threshold = 2.;
+        let tensor = super::clc_dist_matches(&t_0, &motifs_t, 1, &HashMap::from([
+            (1, 0.01),
+            (2, 0.01),
+            (3, 0.01),
+            (4, 0.01),
 
-
-        let tensor = super::clc_dist_matches(&t_0, &motifs_t, 1, 0.01)?;
+            (10, 0.01),
+            (20, 0.01),
+            (30, 0.01),
+            (40, 0.01),
+        ]), &vec![
+            vec![1, 2, 3, 4],
+            vec![10,20,30,40],
+        ])?;
 
         tensor.print();
 
         assert_eq!(matches_t, tensor);
-
-
 
         Ok(())
 

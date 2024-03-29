@@ -111,7 +111,8 @@ pub trait Store:Sync + Send{
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), HbacError>;
-    fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
+    fn list_motifs_distances(&mut self, run_id:usize) -> Result<HashMap<usize, f32>, HbacError>;
+    fn list_motifs_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
     fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, HbacError>;
     fn list_corrs(&mut self, ids:Vec<usize>) -> Result<Vec<(usize, String)>, HbacError>;
@@ -779,6 +780,35 @@ impl Store for SqlStore {
         Ok(())
     }
 
+    fn list_motifs_distances(&mut self, run_id:usize) -> Result<HashMap<usize, f32>, HbacError>{
+
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+        let tensor_motifs: HashMap<usize, f32> = {
+
+            let mut stmt = t.prepare("SELECT motif_id, avg(dot) FROM slice_matches GROUP BY motif_id HAVING run_id=?")?;
+
+            let tensor_motifs: HashMap<usize, f32> = stmt.query_map([run_id], |row| {
+                Ok((
+                    row.get::<usize, usize>(0)?, // motif_id,
+                    row.get::<usize, f32>(1)?, // dist
+                ))
+            })?.fold(HashMap::new(), |mut a, v| {
+                let v = v.unwrap();
+                a.insert(v.0, v.1);
+                a
+            });
+
+
+
+            tensor_motifs
+        };
+
+        t.commit()?;
+
+        Ok(tensor_motifs)
+    }
+
     fn delete_slices_without_matches(&mut self) -> Result<(), HbacError>{
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
@@ -791,43 +821,46 @@ impl Store for SqlStore {
     }
 
     /**
-    * returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
+    * returns map tensor_key - MotifSlice(motif_group, tensor slice idx, channel)
     */
-    fn motifs_to_eeg_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>{
+    fn list_motifs_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>{
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
+        let tensor_motifs = {
+            let mut stmt = t.prepare("SELECT id, motif_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=?")?;
 
-        let mut stmt = t.prepare("SELECT id, motif_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=?")?;
+            let tensor_motifs: HashMap<String, Vec<MotifSlice>> = stmt.query_map([run_id], |row| {
+                Ok((
+                    row.get(0)?, // id,
+                    row.get::<usize, usize>(1).ok(), // motif_id,
+                    row.get(2)?, // channel_id,
+                    row.get(3)?, // tensor_id_0,
+                    row.get(4)?, // slice_idx_0,
+                    row.get(5)?, // tensor_id_1,
+                    row.get(6)?, // slice_idx_1
+                ))
+            })?.fold(Ok(HashMap::new()), |a: Result<HashMap<String, Vec<hbac_shared::MotifSlice>>, rusqlite::Error>, v: Result<(i64, Option<usize>, i64, String, i64, String, i64), rusqlite::Error>| {
+                let v = v?;
+                if let Some(motif_id) = v.1 {
+                    let mut a = a?;
 
-        let tensor_motifs:HashMap<String, Vec<MotifSlice>> = stmt.query_map([run_id], |row| {
-            Ok((
-                row.get(0)?, // id,
-                row.get(1).unwrap_or(-1), // motif,
-                row.get(2)?, // channel_id,
-                row.get(3)?, // tensor_id_0,
-                row.get(4)?, // slice_idx_0,
-                row.get(5)?, // tensor_id_1,
-                row.get(6)?, // slice_idx_1
-            ))
+                    a.entry(v.3).or_insert_with(|| vec![]).push(MotifSlice::new(motif_id, v.4, v.2 as u16));
+                    a.entry(v.5).or_insert_with(|| vec![]).push(MotifSlice::new(motif_id, v.6, v.2 as u16));
 
-        })?.fold(Ok(HashMap::new()), |a:Result<HashMap<String, Vec<hbac_shared::MotifSlice>>, rusqlite::Error>, v:Result<(i64, i64, i64, String, i64, String, i64), rusqlite::Error>|{
-            let v = v?;
-            if v.1 >=0 {
-                let mut a = a?;
+                    Ok(a)
+                } else {
+                    a
+                }
+            })?;
 
-                a.entry(v.3).or_insert_with(|| vec![]).push(MotifSlice::new(v.1 as u16, v.4, v.2 as u16));
-                a.entry(v.5).or_insert_with(|| vec![]).push(MotifSlice::new(v.1 as u16, v.6, v.2 as u16));
-
-                Ok(a)
-            } else {
-                a
+            if tensor_motifs.len() < 10 {
+                debug!("motifs_to_eeg_slices: eeg_motifs={:?}", tensor_motifs);
             }
-        })?;
 
-        if tensor_motifs.len() < 10 {
-            debug!("motifs_to_eeg_slices: eeg_motifs={:?}", tensor_motifs);
-        }
+            tensor_motifs
+        };
+        t.commit()?;
 
         Ok(tensor_motifs)
     }
@@ -836,24 +869,27 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
-        let count:i64 = t.query_row("SELECT count(*) FROM run_resources WHERE run_id=?", [run_id], |row| row.get(0))?;
+        let result = {
+            let count: i64 = t.query_row("SELECT count(*) FROM run_resources WHERE run_id=?", [run_id], |row| row.get(0))?;
 
-        debug!("list_run_resources: count={}", count);
+            debug!("list_run_resources: count={}", count);
 
-        let mut stmt = t.prepare("SELECT ord_id, key FROM run_resources WHERE run_id=? ORDER BY ord_id")?;
+            let mut stmt = t.prepare("SELECT ord_id, key FROM run_resources WHERE run_id=? ORDER BY ord_id")?;
 
 
-        let result = stmt.query_map([run_id], |row| {
+            let result = stmt.query_map([run_id], |row| {
+                Ok((row.get::<usize, i64>(0)?, row.get::<usize, String>(1)?))
+            })?.enumerate().map(|(i, ord_key)| {
+                ord_key.map(|(ord, key)| {
+                    assert!(ord == i as i64);
+                    key
+                }).map_err(|e| HbacError::new(e.to_string()))
+            }).collect::<Result<Vec<String>, HbacError>>();
 
-            Ok((row.get::<usize, i64>(0)?, row.get::<usize, String>(1)?))
+            result
+        };
 
-        })?.enumerate().map(|(i, ord_key)|{
-            ord_key.map(|(ord, key)| {
-                assert!(ord == i as i64);
-                key
-            }).map_err(|e|HbacError::new(e.to_string()))
-        }).collect::<Result<Vec<String>, HbacError>>();
-
+        t.commit()?;
         debug!("list_run_resources: result.is_ok={}", result.is_ok());
 
         result
@@ -1434,7 +1470,7 @@ mod store_tests{
             m_1_first
         };
 
-        let map = store.motifs_to_eeg_slices(run_id)?;
+        let map = store.list_motifs_slices(run_id)?;
         println!("map={:?}", map);
 
         assert_eq!(4, map.len());

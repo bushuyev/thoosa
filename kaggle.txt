@@ -11,6 +11,17 @@ select-motifs \
 --run-ids=1 --run-ids=2 --run-ids=3 --run-ids=4 --run-ids=5 --run-ids=6 \
 --train-resource-group="group 1 labels/200/0-200"
 
+RUN ALL LOCAL
+target/x86_64-unknown-linux-gnu/release/hbac_main \
+--write-logger-level=DEBUG \
+--base-path=../../data \
+--store-path=/tmp/hbac/run_all_test.db3 \
+--tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
+run-all \
+--models-dir=/tmp/hbac/test_models/ \
+--train-resource-group="pure group 10" \
+--valid-resource-group="pure group 10" \
+--init
 
 
 RUN TRAIN FINAL LOCAL
@@ -41,8 +52,27 @@ print("----------------------------------------------------")
 --tensors-path=/kaggle/input/hbac-eegs-pt \
 run-all \
 --models-dir=/kaggle/working/0_100_models/ \
---resource-group="group 1 labels/100/0-100" \
+--train-resource-group="group 1 labels/400/0-400" \
+--valid-resource-group="group 1 labels/400/400-800" \
 --init
+
+print("------------------done------------------------------")
+
+TRAIN ON EEG
+print("----------------------------------------------------")
+print("----------------------------------------------------")
+print("----------------------------------------------------")
+# !cp /kaggle/input/hbac-db/hbac_euc_all_limit_400_with_corrs.db3 ./
+!cp -r /kaggle/input/hbac-model ./ && chmod 755 ./hbac-model/hbac_main
+!export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/kaggle/input/pytorch-libs/lib RUST_BACKTRACE=full && ./hbac-model/hbac_main \
+--base-path=/kaggle/input/hms-harmful-brain-activity-classification \
+--store-path=/kaggle/working/hbac_100.db3 \
+--tensors-path=/kaggle/input/hbac-eegs-pt \
+train-on-eeg \
+--corr-run=777 \
+--models-dir=/kaggle/working/0_100_models/ \
+///--train-resource-group="group 1 labels/400/0-400" \
+///--valid-resource-group="group 1 labels/400/400-800"
 
 print("------------------done------------------------------")
 

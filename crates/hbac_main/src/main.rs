@@ -408,7 +408,11 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
         a
     });
 
-    assert!(valid_datasets_map.len() == train_on_eeg_params.train_labels_datasets().len()); //TODO check keys
+    if valid_datasets_map.len() != train_on_eeg_params.train_labels_datasets().len() {
+        error!("valid_datasets_map={:?}", valid_datasets_map);
+        error!("train_on_eeg_params.train_labels_datasets()={:?}", train_on_eeg_params.train_labels_datasets());
+        panic!("valid_datasets_map.len() != train_on_eeg_params.train_labels_datasets().len()");
+    } //TODO check keys
 
     for (label, dataset) in train_on_eeg_params.train_labels_datasets() {
         info!("training {} on {}", label, dataset);
@@ -441,7 +445,7 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
             label
         ) {
             Ok(vs) => {
-                vs.save(format!("{}/{}_{}.safetensors", train_on_eeg_params.eeg_models_dir(), label, train_on_eeg_params.corr_run()))?;
+                vs.save(format!("{}/{}_{}.safetensors", train_on_eeg_params.models_dir(), label, train_on_eeg_params.corr_run()))?;
             }
             Err(e) => {//should be no motif nets found only
                 warn!("e:{:?}", e);
@@ -561,7 +565,7 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
     let base_path_1 = cli.base_path.clone();
     let tensors_path = cli.tensors_path.clone();
     let t = motifs_to_tensor(
-        store_guard.motifs_to_eeg_slices(choose_fragments_params.run_id())?,
+        store_guard.list_motifs_slices(choose_fragments_params.run_id())?,
         move |key: &String| {
 
             if let Some(tensors_path) = tensors_path.as_ref() {
@@ -732,14 +736,15 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     let tensors_path = cli.tensors_path.clone();
     let base_path = cli.base_path.clone();
 
-    let resource_id_motif_slices = {
+    let (resource_id_motif_slices, motifs_distances) = {
         let mut store_guard = store.lock()?;
-        store_guard.motifs_to_eeg_slices(run_id)?
+
+        (store_guard.list_motifs_slices(run_id)?, store_guard.list_motifs_distances(run_id)?)
     };
 
     assert!(resource_id_motif_slices.len() > 0, "no slices for run_id={}", run_id);
 
-    let (motifs, channel_motif_ids) = motifs_to_tensor(
+    let (motifs, channel_motif_ids, motifs_slices_map) = motifs_to_tensor(
         resource_id_motif_slices,
 
         move |key: &String| {
@@ -770,10 +775,13 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
         cli.limit,
         select_motifs_params.step(),
         device,
-        select_motifs_params.min_ratio()
+        select_motifs_params.min_ratio(),
+        motifs_distances,//TODO keeps motif indexes with motif tensors
+        &channel_motif_ids
     )?;
 
     Ok(labels_channels_good_motif_idxs.into_iter().map(|(label, channels_good_motif_idxs)| {
+
         let motifs_corrs = channel_motif_ids.iter()
             .zip(channels_good_motif_idxs.into_iter())
             .map(|(motif_ids, motif_idxs_corss)| {

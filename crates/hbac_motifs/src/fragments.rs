@@ -153,7 +153,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
             for tensor_slice in group_slices.1 {
                 let mut eegs_fragments = tensorid_motifs_sets.entry(tensor_slice.0).or_insert_with(|| HashSet::new());
 
-                eegs_fragments.insert(MotifSlice::new(group_slices.0, tensor_slice.1, channel_motifs.0)); //motifs group, slice, channel_idx (column in eeg file)
+                eegs_fragments.insert(MotifSlice::new(group_slices.0 as usize, tensor_slice.1, channel_motifs.0)); //motifs group, slice, channel_idx (column in eeg file)
             }
         }
     }
@@ -175,12 +175,13 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
+pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>, HashMap<usize, MotifSlice>), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     debug!("motifs_to_tensor: device={:?}", device);
 
-    let mut channels_motifs_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
+    let mut channels_motifs_slices:HashMap<u16, HashMap<usize, Vec<Tensor>>> = HashMap::new();
+    let mut motifs_slices_map:HashMap<usize, MotifSlice> = HashMap::new();
 
     for (eeg_idx, motif_slices) in resource_id_motif_slices {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
@@ -197,12 +198,13 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
             let motifslice_t = channel_t.f_slice(1, Some(motif_slice.slise_idx), Some(motif_slice.slise_idx + window), 1)?;//TODO save window when finding motifs
 
             let  mut channels_motifs = channels_motifs_slices.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
-            let  mut motif_slices = channels_motifs.entry(motif_slice.motif).or_insert_with(||Vec::new());
+            let  mut motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
 
             // debug!("motifs_to_tensor: motifslice_t.device={:?}", motifslice_t.device());
             motifslice_t.to_device(device);
 
             motif_slices.push(motifslice_t);
+            motifs_slices_map.insert(motif_slice.motif_id(), motif_slice);
         }
     }
 
@@ -243,7 +245,7 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
     );
 
     let tensor = tensor.view((channels, motifs_num, -1));
-    Ok((tensor, channel_motif_ids))
+    Ok((tensor, channel_motif_ids, motifs_slices_map))
 
 }
 
@@ -267,7 +269,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 
         for fragment in channels_fragments {
             let channel_path = output_dir.join(fragment.channel_idx.to_string());
-            let motif_path = channel_path.join(fragment.motif.to_string());
+            let motif_path = channel_path.join(fragment.motif_id.to_string());
             fs::create_dir_all(motif_path.clone())?;
 
 
@@ -569,7 +571,7 @@ mod motifs_tests {
         values.sort_by(|a, b|b.len().cmp(&a.len()));
 
         let groups  = values.iter().flat_map(|v|v.iter()).fold(HashSet::new(), |mut a, motif_slice|{
-            a.insert(motif_slice.motif);
+            a.insert(motif_slice.motif_id);
             a
         });
 
@@ -642,7 +644,7 @@ mod motifs_tests {
             }
         }
 
-        let (t, motif_ids) = super::motifs_to_tensor(
+        let (t, motif_ids, _) = super::motifs_to_tensor(
             eeg_id_fragments_map,
             test_eeg_to_t,
             10, 2,
