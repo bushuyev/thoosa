@@ -1,5 +1,17 @@
 
 
+RUN SELECT MOTIFS LOCAL
+
+target/x86_64-unknown-linux-gnu/release/hbac_main \
+--write-logger-level=DEBUG \
+--base-path=../../data \
+--store-path=last_hbac_all.db3 \
+--tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
+select-motifs \
+--run-ids=1 --run-ids=2 --run-ids=3 --run-ids=4 --run-ids=5 --run-ids=6 \
+--train-resource-group="group 1 labels/200/0-200"
+
+
 
 RUN TRAIN FINAL LOCAL
 target/x86_64-unknown-linux-gnu/release/hbac_main \

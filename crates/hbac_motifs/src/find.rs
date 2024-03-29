@@ -8,6 +8,7 @@ use std::time::Instant;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::path::Path;
+use std::cmp::max;
 
 use clap::value_parser;
 use clap::parser::*;
@@ -278,6 +279,8 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
         { store.lock()?.set_motifs(run_id, i as i64)}?;
     }
 
+    { store.lock()?.delete_slices_without_matches() }?;
+
     info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
 
     Ok(run_id)
@@ -345,6 +348,8 @@ pub fn find_motifs<F>(loader:F, find_motifs_params: &FindMotifsParams, records_n
     for i in 0..channels { //TODO channels len
         { store.lock()?.set_motifs(run_id, i as i64)}?;
     }
+
+    { store.lock()?.delete_slices_without_matches() }?;
 
     Ok(())
 }
@@ -619,7 +624,7 @@ fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32
 }
 
 
-fn clc_motifs_matches_for_class<I, L>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>, eegs_iter_f: I, class_label: L, limit: Option<usize>, step: usize, threshold: f32) -> Result<(), HbacError>
+fn clc_motifs_matches_for_label<I, L>(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>, tensor_loader: I, class_label: L, limit: Option<usize>, step: usize, threshold: f32) -> Result<(), HbacError>
     where I:Iterator<Item=Box<Tensor>>, I: std::marker::Send, L:Clone {
 
     let mut count = AtomicU64::new(0);
@@ -629,7 +634,7 @@ fn clc_motifs_matches_for_class<I, L>(motifs: &Tensor, all_zero: &Tensor, channe
 
     debug!("dot_motifs: channels_num={} motifs_num={}", channels_num, motifs_num);
 
-    for eeg in eegs_iter_f {
+    for eeg in tensor_loader {
 
         // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
         let matches = clc_dist_matches(&eeg, &motifs, step, threshold)?;
@@ -684,6 +689,9 @@ pub struct SelectMotifsParams {
     #[arg(long, value_parser=parse_key_val::<String, String>, default_value="xxx=yyy")]
     labels_datasets: Vec<(String, String)>,
 
+    #[arg(long)]
+    train_resource_group: Option<String>, //TODO enum with labels_datasets?
+
     #[arg(long,  default_value_t = 0.5)]
     min_ratio:f32
 
@@ -708,6 +716,7 @@ impl SelectMotifsParams {
             run_ids,
             step,
             window,
+            train_resource_group:None,
             labels_datasets,
             min_ratio
         }
@@ -716,9 +725,21 @@ impl SelectMotifsParams {
         &self.labels_datasets
     }
 
+    pub fn with_labels_datasets(&self, labels_datasets: Vec<(String, String)>) -> Self {
+        let mut clone = self.clone();
+        clone.labels_datasets = labels_datasets;
+
+        clone
+    }
+
 
     pub fn min_ratio(&self) -> f32 {
         self.min_ratio
+    }
+
+
+    pub fn train_resource_group(&self) -> Option<&String> {
+        self.train_resource_group.as_ref()
     }
 }
 
@@ -730,7 +751,7 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
         a
     });
 
-    let (channels_num, motifs_num, channels_motifs_classes_lock) = build_channels_motifs_classes(motifs, labels_loaders, limit, step, &device);
+    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device);
 
     let Ok(channels_motifs_classes_guard) = channels_motifs_classes_lock.lock() else {
         panic!("select_motifs: can't lock channels_motifs_classes_lock");
@@ -751,11 +772,14 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
             });
 
             debug!("select_motifs_by_ratio: labels_counts={:?}", labels_counts);
-            let sum:f32 = labels_counts.values().map(|v|*v as f32).sum();
-            for (label, counts) in labels_counts {
-                let ratio = counts as f32 / sum;
-                if ratio > min_ratio {
-                    labels_channels_good_motifs.get_mut(&label).unwrap()[channel_i as usize].push((motif_i, ratio as f64));
+            let sum:f32 = labels_counts.values().map(|v|*v as f32).sum::<f32>();
+            if sum > 0. {
+
+                for (label, counts) in labels_counts {
+                    let ratio = counts as f32 / sum;
+                    if ratio > min_ratio {
+                        labels_channels_good_motifs.get_mut(&label).unwrap()[channel_i as usize].push((motif_i, ratio as f64));
+                    }
                 }
             }
 
@@ -776,7 +800,7 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
 pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device, min_corr: f64) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
-    let (channels_num, motifs_num, channels_motifs_classes_lock) = build_channels_motifs_classes(motifs, labels_loaders, limit, step, &device);
+    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device);
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>();
 
@@ -817,7 +841,7 @@ pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, li
 
 }
 
-fn build_channels_motifs_classes<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
+fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
     where I:Iterator<Item=Box<Tensor>> + Send + Sync, L:Clone{
     let motifs_size = motifs.size();
 
@@ -836,17 +860,15 @@ fn build_channels_motifs_classes<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I
         channels_motifs_classes.push(motifs_classes);
     }
 
-
     let motifs_ptr = motifs.as_ptr() as usize;
     let channels_motifs_classes_lock = Arc::new(Mutex::new(channels_motifs_classes));
 
-
     labels_loaders.into_iter()/*.par_bridge()*/.try_for_each(|(label, loader)| {
-        clc_motifs_matches_for_class(
+        clc_motifs_matches_for_label(
             &unsafe { Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor) },
             &Tensor::zeros(slice_len, (tch::Kind::Float, *device)), //TODO
             Arc::clone(&channels_motifs_classes_lock),
-            loader, label, limit, step, 0.97 //TODO step - k * slice_len
+            loader, label, limit, step, 0.97, //TODO step - k * slice_len
         )
     });
     (channels_num, motifs_num, channels_motifs_classes_lock)

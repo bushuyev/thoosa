@@ -173,31 +173,31 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 }
 
 /**
-* returns tensor cahnnels x max motifs in channels x first slice in motifs group. Fills with Tensor::zeros when motifs in channel < max
+* returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor<F>(eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
+pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     debug!("motifs_to_tensor: device={:?}", device);
 
     let mut channels_motifs_slices:HashMap<u16, HashMap<u16, Vec<Tensor>>> = HashMap::new();
 
-    for (eeg_idx, channels_motifslices) in eeg_id_fragments_map {
+    for (eeg_idx, motif_slices) in resource_id_motif_slices {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
         // let eeg_id = eeg_idx; //eegs[eeg_idx].clone();
         let eeg_t = (read_eeg_to_tensor)(&eeg_idx);//TODO use always CPU? no clc
         debug!("motifs_to_tensor: eeg_t.device={:?}", eeg_t.device());
 
-        for fragment in channels_motifslices {
+        for motif_slice in motif_slices {
 
-            let channel_t = eeg_t.get(fragment.channel_idx as i64);
+            let channel_t = eeg_t.get(motif_slice.channel_idx as i64);
             let channel_t = channel_t.view([1, -1]);
 
-            let motifslice_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx + window), 1)?;//TODO save window when finding motifs
+            let motifslice_t = channel_t.f_slice(1, Some(motif_slice.slise_idx), Some(motif_slice.slise_idx + window), 1)?;//TODO save window when finding motifs
 
-            let  mut channels_motifs = channels_motifs_slices.entry(fragment.channel_idx).or_insert_with(||HashMap::new());
-            let  mut motif_slices = channels_motifs.entry(fragment.motif).or_insert_with(||Vec::new());
+            let  mut channels_motifs = channels_motifs_slices.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
+            let  mut motif_slices = channels_motifs.entry(motif_slice.motif).or_insert_with(||Vec::new());
 
             // debug!("motifs_to_tensor: motifslice_t.device={:?}", motifslice_t.device());
             motifslice_t.to_device(device);
@@ -219,22 +219,27 @@ pub fn motifs_to_tensor<F>(eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>
     let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::new()).collect();
 
 
-
     let tensor = Tensor::vstack(
-         (0..channels).map(|channel| (channel, channels_motifs_slices.remove(&(channel as u16)).unwrap_or(HashMap::new())))
-            .map(|(channel, mut motif_slices)| motif_slices.into_iter().map(|(motif_id, mut slices)| {
-                channel_motif_ids[channel as usize].push(motif_id as usize);
-                choose_slice(&mut slices)
-            }).collect::<Vec<Tensor>>()).map(|mut motifs| {
+         (0..channels).map(|channel| {
+                let motif_slices =  channels_motifs_slices.remove(&(channel as u16)).unwrap_or(HashMap::new());
 
-            if (motifs.len() as i64) < motifs_num {
-                motifs.extend((0..motifs_num - motifs.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, device))))
-            }
+                let mut motifs = motif_slices.into_iter().map(|(motif_id, mut slices)| {
 
-            let t = Tensor::vstack(motifs.as_slice());
+                    channel_motif_ids[channel as usize].push(motif_id as usize);
+                    choose_slice(&mut slices)
 
-            t.view((motifs_num, window))
-        }).collect::<Vec<Tensor>>().as_slice()
+                }).collect::<Vec<Tensor>>();
+
+
+                if (motifs.len() as i64) < motifs_num {
+                    motifs.extend((0..motifs_num - motifs.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, device))))
+                }
+
+                let t = Tensor::vstack(motifs.as_slice());
+
+                t.view((motifs_num, window))
+
+            }).collect::<Vec<Tensor>>().as_slice()
     );
 
     let tensor = tensor.view((channels, motifs_num, -1));

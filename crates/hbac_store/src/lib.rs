@@ -118,6 +118,7 @@ pub trait Store:Sync + Send{
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), HbacError>;
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError>;
+    fn delete_slices_without_matches(&mut self) -> Result<(), HbacError>;
 }
 
 impl Debug for StoreDumper {
@@ -778,6 +779,17 @@ impl Store for SqlStore {
         Ok(())
     }
 
+    fn delete_slices_without_matches(&mut self) -> Result<(), HbacError>{
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+        t.execute("DELETE FROM slice_matches WHERE motif_id IS NULL", [])?;
+        t.commit()?;
+
+        guard.execute("VACUUM", [])?;
+
+        Ok(())
+    }
+
     /**
     * returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
     */
@@ -1390,6 +1402,8 @@ mod store_tests{
                 ))
             })?.map(|v|v.unwrap()).collect::<Vec<(i64, i64, String, i64, String, i64, i64)>>();
 
+            println!("rows={:?}", rows);
+
             let m_1_first = vec![
                 (1, 7, "0".to_string(), 100, "0".to_string(), 200, 1),
                 (1, 7, "0".to_string(), 100, "1".to_string(), 200, 1),
@@ -1484,6 +1498,8 @@ mod store_tests{
             vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
             store.corrs_descr(corr_id)?
         );
+
+        store.delete_slices_without_matches()?;
 
         Ok(())
     }

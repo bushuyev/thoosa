@@ -34,7 +34,7 @@ use hbac_common::train_nets;
 use hbac_store::{SqlStore, Store};
 use hbac_shared::*;
 use hbac_shared::TensorSliceIdx;
-use crate::Commands::{TrainOnEEG, TrainOnMotifs};
+use crate::Commands::*;
 use polars::export::rayon::iter::ParallelIterator;
 
 
@@ -220,7 +220,7 @@ fn _main() -> Result<(), HbacError> {
 
     match &cli.command {
 
-        Some(Commands::InitResources(init_resources_params)) => {
+        Some(InitResources(init_resources_params)) => {
             debug!("InitResources: init_resources_params={:?}", init_resources_params);
             init_resources(
                 &cli,
@@ -229,7 +229,7 @@ fn _main() -> Result<(), HbacError> {
             )?;
         }
 
-        Some(Commands::FindMotifs(find_motifs_params)) => {
+        Some(FindMotifs(find_motifs_params)) => {
             info!("find_motifs_params={:?} devices={:?}", find_motifs_params, devices);
 
             let run_id = run_find_motifs_on_set(&cli, &store, devices[0], find_motifs_params);
@@ -237,15 +237,22 @@ fn _main() -> Result<(), HbacError> {
             info!("run_find_motifs_on_set done, run_id={:?}", run_id);
         }
 
-        Some(Commands::SelectMotifs(select_motifs_params)) => {
+        Some(SelectMotifs(select_motifs_params)) => {
             info!("select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
+
+            let select_motifs_params = if let Some(train_resource_group) = select_motifs_params.train_resource_group() {
+                let train_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_resource_group.as_str())? };
+                select_motifs_params.with_labels_datasets(train_labels_datasets)
+            } else {
+                select_motifs_params.clone()
+            };
 
             let corr_ids = run_select_motifs(&cli, &store, devices, &select_motifs_params);
 
             info!("run_select_motifs done, corr_ids={:?}", corr_ids);
         }
 
-        Some(Commands::TrainOnMotifs(train_on_motif_params)) => {
+        Some(TrainOnMotifs(train_on_motif_params)) => {
             debug!("train_on_motif: train_on_motif_params={:?}", train_on_motif_params);
 
             run_train_on_motifs(&cli, &store, devices, train_on_motif_params)?;
@@ -257,14 +264,14 @@ fn _main() -> Result<(), HbacError> {
             run_train_on_eeg(&cli, &store, &device, &train_on_eeg_params)?;
         }
 
-        Some(Commands::TrainFinal(train_final_params)) => {
+        Some(TrainFinal(train_final_params)) => {
 
             debug!("train_final_params={:?}", train_final_params);
 
             run_train_final(&cli, &store, &device, train_final_params)?;
         }
 
-        Some(Commands::RunAll(run_all_params)) => {
+        Some(RunAll(run_all_params)) => {
             debug!("RunAll: run_all_params={:?}", run_all_params);
 
             if run_all_params.init {
@@ -475,15 +482,15 @@ pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<D
 
     devices.into_iter().cycle().zip(select_motifs_params.run_ids().chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[usize])>>().into_par_iter().for_each(move |(device_i, run_ids)| {
         for run_id in run_ids {
-
-            corr_ids_for_iter.lock().expect("corr_ids lock").extend(
-            select_motifs_for_label(
+            let corr_ids = select_motifs_for_label(
                 &cli_clone, Arc::clone(&store),
                 device_i,
                 &select_motifs_params,
                 *run_id
                 // *class_run_id.get(class).expect("run_id")/*select_motifs_params.run_id()*/
-            ).expect("select_motifs_in_class"));
+            ).expect("select_motifs_in_class");
+
+            corr_ids_for_iter.lock().expect("corr_ids lock").extend(corr_ids);
         }
     });
 
@@ -725,13 +732,15 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     let tensors_path = cli.tensors_path.clone();
     let base_path = cli.base_path.clone();
 
-    let fragments_map = {
+    let resource_id_motif_slices = {
         let mut store_guard = store.lock()?;
         store_guard.motifs_to_eeg_slices(run_id)?
     };
 
+    assert!(resource_id_motif_slices.len() > 0, "no slices for run_id={}", run_id);
+
     let (motifs, channel_motif_ids) = motifs_to_tensor(
-        fragments_map,
+        resource_id_motif_slices,
 
         move |key: &String| {
             if let Some(tensors_path) = tensors_path.as_ref() {
@@ -742,12 +751,11 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
             }
         },
         select_motifs_params.window() as i64,
-        20,
+        20,//TODO
         device
     )?;
 
     info!("select_motifs: motifs tensor built, size={:?}", motifs.size());
-
 
     let labels_channels_good_motif_idxs = select_motifs_by_ratio(
         motifs,
@@ -798,6 +806,7 @@ mod main_tests {
     use hbac_store::{SqlStore, Store};
     use crate::{Cli, Commands, run_find_motifs_on_group, run_select_motifs, run_train_final, RunAllParams};
     use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal};
+    use log::debug;
     // use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
 
     #[ctor::ctor]
@@ -882,12 +891,14 @@ mod main_tests {
 
         let store = Arc::new(Mutex::new(SqlStore::new("/tmp/test_main_db.db3")?));
 
-        run_select_motifs(
+        let corr_ids = run_select_motifs(
             &cli,
             &store,
             vec![Cpu],
             &SelectMotifsParams::dummy(10, 10, vec![0, 1], vec![("seizure".into(), "seizure/10".into())], 0.1)
         )?;
+
+        debug!("corr_ids={:?}", corr_ids);
 
         Ok(())
     }
