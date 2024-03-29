@@ -212,11 +212,13 @@ pub fn motifs_to_tensor<F>(eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>
         tensor//TODO choose best or blend slices
     }
 
+    debug!("motifs_to_tensor: channels_motifs_slices={:?}", channels_motifs_slices);
+
     let motifs_num = channels_motifs_slices.values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
 
     let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::new()).collect();
 
-    debug!("motifs_to_tensor: channels_motifs_slices={:?}", channels_motifs_slices);
+
 
     let tensor = Tensor::vstack(
          (0..channels).map(|channel| (channel, channels_motifs_slices.remove(&(channel as u16)).unwrap_or(HashMap::new())))

@@ -64,7 +64,7 @@ impl FindMotifsParams {
 
 
     // #[cfg(test)]
-    pub fn dummy(step: usize, window: usize, resource_set:String) ->Self {
+    pub fn dummy(step: usize, window: usize, resource_set:String, chunk_size: usize, max_dist_k: f32) ->Self {
         FindMotifsParams {
             step,
 
@@ -78,9 +78,9 @@ impl FindMotifsParams {
 
             max_keys_fifo: 1000,
 
-            chunk_size: 10,
+            chunk_size,
 
-            max_dist_k: 0.3
+            max_dist_k
         }
     }
 
@@ -114,6 +114,10 @@ impl FindMotifsParams {
 
 pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eeg_ids_str: Vec<String>, store:Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<usize, HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
+
+    if records_num < find_motifs_params.window {
+        return Err(HbacError::new("too few records"))
+    }
 
     let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
     let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
@@ -200,8 +204,8 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
                 let t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}, chunk_0={} chunk_1={}", c, chunk_i_0, chunk_i_1).as_str());
                 let t_size =t.size();
-                let mean = find_motifs_params.max_dist_k * t.mean(None).double_value(&[]) as f32;
-                debug!("find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", t.size(), tensor_0.size(), tensor_1.size(), mean);
+                let max_dist = find_motifs_params.max_dist_k * t.mean(None).double_value(&[]) as f32;
+                debug!("find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", t.size(), tensor_0.size(), tensor_1.size(), max_dist);
 
                 let mut i_0 = 0;
                 let mut i_1 = 0;
@@ -241,7 +245,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
                                     trace!("find_motifs_euc:  t_idx_0={} chunk_i_0={}, chunk_i_1={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}", t_idx_0,chunk_i_0, chunk_i_1,  vw_0[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, vw_1[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist);
 
-                                    if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < mean {
+                                    if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < max_dist {
                                         mt.track((vw_0[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64).into(), (vw_1[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)
                                     }
 
@@ -677,10 +681,6 @@ pub struct SelectMotifsParams {
     #[arg(long,  default_value_t = 1000)]
     window: usize,
 
-    #[arg(long, value_parser=parse_key_val::<i64, String>)]
-    classes_tensors: Vec<(i64, String)>,
-
-
     #[arg(long, value_parser=parse_key_val::<String, String>, default_value="xxx=yyy")]
     labels_datasets: Vec<(String, String)>,
 
@@ -690,12 +690,6 @@ pub struct SelectMotifsParams {
 }
 
 impl SelectMotifsParams {
-
-    pub fn classes_tensors(&self) -> &Vec<(i64, String)> {
-        &self.classes_tensors
-    }
-
-
 
     pub fn run_ids(&self) -> &Vec<usize> {
         &self.run_ids
@@ -707,22 +701,15 @@ impl SelectMotifsParams {
         self.window
     }
 
-    pub fn for_class(classes_tensors:Vec<(i64, String)>, other:SelectMotifsParams)->Self {
-        SelectMotifsParams{
-            classes_tensors,
-            ..other
-        }
-    }
 
-    pub fn dummy(step: usize, window: usize, run_ids:Vec<usize>, labels_datasets:Vec<(String, String)>) -> Self{
+    pub fn dummy(step: usize, window: usize, run_ids:Vec<usize>, labels_datasets:Vec<(String, String)>, min_ratio: f32) -> Self{
 
         SelectMotifsParams{
             run_ids,
             step,
             window,
-            classes_tensors: vec![],
             labels_datasets,
-            min_ratio:0.1
+            min_ratio
         }
     }
     pub fn labels_datasets(&self) -> &Vec<(String, String)> {

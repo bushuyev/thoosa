@@ -6,7 +6,7 @@ use hbac_shared::{HbacError, batch_windows};
 use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use clap::clap_derive::Args;
-use log::{debug, info, warn};
+use log::{debug, info, warn, trace};
 use rand::{Rng, thread_rng};
 use crate::builder::{Node, SeqBuilder};
 use crate::utils::{DataBatch, pad_to, train};
@@ -22,6 +22,7 @@ use std::sync::Mutex;
 use crate::my_tch::apply_channel_motifs;
 use regex::Regex;
 use hbac_shared::parse_key_val;
+
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainOnEEGParams {
@@ -156,13 +157,15 @@ impl<I> LabeledTensorsLoaderDataBatch<I> where I: Iterator<Item=Box<Tensor>> + S
 
 struct ClassTensorsLoaderData<I> {
     train_loader: I,
+    valid_loader: I,
 }
 
 impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
-    pub fn new(train_loader: I, train_valid_split: f32) -> Self {
+    pub fn new(train_loader: I, valid_loader: I) -> Self {
         Self {
-            train_loader: train_loader,
+            train_loader,
+            valid_loader,
         }
     }
 
@@ -172,20 +175,20 @@ impl <I> ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(Tensor, Tensor)
 impl <I> DataBatch for ClassTensorsLoaderData<I> where I:Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
-        self.batch()
+        Self::batch(&mut self.train_loader)
     }
 
     fn valid_batch(&mut self) -> (Tensor, Tensor){
-        self.batch() //no replacement, just pull next
+        Self::batch(&mut self.valid_loader) //no replacement, just pull next
     }
 }
 
 impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor), HbacError>> + Send + Sync {
 
-    fn batch(&mut self) -> (Tensor, Tensor) {
+    fn batch(i: &mut I) -> (Tensor, Tensor) {
         debug!("ClassTensorsLoaderData.batch:");
 
-        let t = self.train_loader.next().expect("next").expect("result");//TODO expects
+        let t = i.next().expect("next").expect("result");//TODO expects
 
         (
             t.0,
@@ -282,7 +285,7 @@ apply_motifs:F) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Sen
         .collect::<Vec<Vec<_>>>()
 }
 
-pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
+pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_tensors_loader: I, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
     where I:Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync {
 
 
@@ -301,60 +304,67 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, motif_n
         a
     });
 
-
     debug!("train_final: models.size={:?} models={:?}", labels_models.len(), labels_models);
 
-    let tensors_loader =  train_tensors_loader.map( move |t|{
+    let apply_final_nets_f =  |t:(Box<Tensor>, Box<Tensor>)| {
         debug!("train_final: tensors_loader.map: t.0.size={:?} t.1.size={:?}", t.0.size(), t.1.size());
 
+        let apply_nets = |label| {
+            match labels_models.get(label) {
+                Some(label_models) => {//label_models in one of the model dirs
+                    Tensor::stack(label_models.iter().map(|model| {
+                        let t = apply_eeg_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                        let t_x = t.view((1, -1));
+                        debug!("train_final: motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
+
+                        let t = model.corr_model.lock().unwrap().forward(&t_x);
+                        debug!("train_final: corr_model out .size()={:?}", t.size());
+                        t
+                    }).collect::<Vec<Tensor>>().as_slice(), 0)
+                }
+                None => {
+                    debug!("train_final: no model for label {:?}", label);
+
+                    Tensor::zeros(&[params.models_dir.len() as i64, 1, 1], (Float, *device))
+                }
+            }
+        };
         Ok(
             (
-                Tensor::stack(labels.iter().map(|label|{
-                    match labels_models.get(label) {
-                        Some(label_models)=>{
-
-                            Tensor::stack(label_models.iter().map(|model|{
-                                let t = apply_eeg_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
-                                let t_x = t.view((1, -1));
-                                debug!("train_final: motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
-
-                                let t = model.corr_model.lock().unwrap().forward(&t_x);
-                                debug!("train_final: corr_model out .size()={:?}", t.size());
-                                t
-                            }).collect::<Vec<Tensor>>().as_slice(), 0)
-                        }
-                        None => {
-                            debug!("train_final: no model for label {:?}", label);
-
-
-                            Tensor::zeros(&[params.models_dir.len() as i64, 1], (Float, *device))
-                        }
-                    }
-
-                }).collect::<Vec<Tensor>>().as_slice(), 0),
-
+                Tensor::stack(labels.iter().map(apply_nets).collect::<Vec<Tensor>>().as_slice(), 0),
                 t.1.shallow_clone()
             )
         )
-    });
+    };
 
     let mut vs_0 = nn::VarStore::new(device.clone());
 
     train(
         device,
-        &mut ClassTensorsLoaderData::new(tensors_loader, 0.8) as &mut dyn DataBatch,
+        &mut ClassTensorsLoaderData::new(
+            train_tensors_loader.map(apply_final_nets_f),
+            valid_tensors_loader.map(apply_final_nets_f)
+        ) as &mut dyn DataBatch,
         &final_node(params.models_dir.len() as i64* 6, 6).build_tch_module(&vs_0.root())?,
+
         |pred: &Tensor, target: &Tensor| {
 
             let pred_y = pred; //pred.i((.., 0, 0));
-            debug!("pred_y ={:?} target={:?}", pred_y.size(), target.size());
+            debug!("pred_y.size ={:?} target.size={:?}", pred_y.size(), target.size());
+            debug!("xxxxx: target={:?}", from::<Vec<f32>>(&target));
+            debug!("xxxxx: pred_y={:?} ", from::<Vec<f32>>(&pred_y));
             pred_y.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0)
 
         },
         params.cycles,
-        nn::AdamW::default().build(&vs_0, 1.0e-4)?,
+        nn::AdamW::default().build(&vs_0, params.lr)?,
         |t:Tensor|{
             debug!("t.size()={:?} ", t.size());
+
+            debug!("xxxxx: 0 ={:?}",  from::<Vec<f32>>(&t.i((.., 0)).squeeze()));
+            debug!("xxxxx: 1 ={:?}",  from::<Vec<f32>>(&t.i((.., 1)).squeeze()));
+            debug!("xxxxx: 2 ={:?}",  from::<Vec<f32>>(&t.i((.., 2)).squeeze()));
+
             let t_out = t.view((t.size()[0] * t.size()[1])); //model_dirs * labels
             debug!(" t_out.size()={:?}",  t_out.size());
             t_out
@@ -642,7 +652,11 @@ pub fn corr_full_node(features: i64) -> Node {
 
 pub fn final_node(features: i64, classes_num: i64) -> Node {
     SeqBuilder::new(features)
-        .linear_s(classes_num)
+        .linear_s(features)
+        .func(Tensor::relu)
+        .linear_s(2*features)
+        .func(Tensor::relu)
+        .linear_s(features)
         .func(Tensor::relu)
         .linear_s(classes_num)
         // .func(|t|t.softmax(0, Float))
@@ -853,7 +867,7 @@ pub struct TrainFinalParams {
     models_dir: Vec<String>,
 
     #[arg(long)]
-    final_model: String,//TODO
+    final_model: String,
 
     #[arg(long)]
     train_resource_group: String,
@@ -1212,18 +1226,20 @@ mod train_tests {
         fs::write(&models_path_1.join("unexpected.file"), "lalala");
 
 
+        let load_cl = move |id| {
+            (Box::new(make_test_eeg(1000)), Box::new(Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
+        };
         super::train_final(
             &params,
-            (0..13).map( move |id|{
-                (Box::new(make_test_eeg(1000)), Box::new(Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
-            }),
+            (0..13).map(load_cl),
+            (0..13).map(load_cl),
             100,
             100,
             motif_batch_size,
             channels,
             684400,
             &Cpu,
-            vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect()
+            vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect(),
         )?;
 
         Ok(())

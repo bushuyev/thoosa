@@ -1,5 +1,22 @@
 
 
+
+RUN TRAIN FINAL LOCAL
+target/x86_64-unknown-linux-gnu/release/hbac_main \
+--base-path=../../data \
+--store-path=../../data_down/group_1_labels_100_200_300/hbac_all.db3 \
+--tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
+train-final \
+--models-dir=../../data_down/group_1_labels_100_0-100/0_100_models/ \
+--models-dir=../../data_down/group_1_labels_100_100_200/100_200_models/ \
+--models-dir=../../data_down/group_1_labels_100_200_300/200_300_models/ \
+--train-resource-group="group 1 labels/400/0-400" \
+--valid-resource-group="group 1 labels/400/400-800" \
+--final-model=../../data_local/final_0_300.safetensors
+
+print("------------------done------------------------------")
+
+
 RUN ALL
 print("----------------------------------------------------")
 print("----------------------------------------------------")
