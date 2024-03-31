@@ -5,7 +5,7 @@ use log::debug;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
 use hbac_shared::HbacError;
-use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyFuncModule, MyMaxPool1d, MySequential};
+use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
@@ -30,7 +30,9 @@ pub enum Node {
     Linear { in_feats: i64, out_feats: i64, config:Option<LinearConfig>},
     Func { func:Fp},
     MaxPool { kernel_size:i64, stride:i64, padding:i64},
-    AvgPool { kernel_size:i64, stride:i64, padding:i64}
+    AvgPool { kernel_size:i64, stride:i64, padding:i64},
+    Flatten { from_dim:i64, to_dim:i64},
+    Closure { cl:Box<dyn Fn(&Tensor)->Tensor + Send + Sync>}
 }
 
 impl Debug for Node {
@@ -67,11 +69,11 @@ impl NthParams for NthConst {
 
 impl Node {
 
-    pub fn build_tch_module(&self, vs: &nn::Path) -> Result<Box<dyn Module>, HbacError>  {
+    pub fn build_tch_module(self, vs: &nn::Path) -> Result<Box<dyn Module>, HbacError>  {
         Ok(match self {
             Node::Seq { elts } => {
 
-                let layers:Vec<Box<dyn Module>> = elts.iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn Module>>, node| {
+                let layers:Vec<Box<dyn Module>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn Module>>, node| {
                     kids.push(node.build_tch_module(vs)?);
                     Ok::<Vec<Box<dyn Module>>, HbacError>(kids)
                 })?;
@@ -80,25 +82,33 @@ impl Node {
 
             }
             Node::Conv { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv1d(vs/ "cnn", *in_channels, *out_channels, *kernel, *config))
+                Box::new(nn::conv1d(vs/ "cnn", in_channels, out_channels, kernel, config))
             }
             Node::BatchNorm { .. } => {
                 Box::new(MyBatchNorm1d::new())
             }
             Node::Linear {in_feats, out_feats, config} => {
-                assert!(in_feats > &0);
-                assert!(out_feats > &0);
+                assert!(in_feats > 0);
+                assert!(out_feats > 0);
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
-                Box::new(my_linear(vs/ "layer1", *in_feats, *out_feats, config.unwrap_or(LinearConfig::default()))?)
+                Box::new(my_linear(vs/ "layer1", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)
             }
             Node::MaxPool { kernel_size, stride, padding } => {
-                Box::new(MyMaxPool1d::new(*kernel_size, *stride, *padding))
+                Box::new(MyMaxPool1d::new(kernel_size, stride, padding))
             }
             Node::AvgPool { kernel_size, stride, padding } => {
-                Box::new(MyAvgPool1d::new(*kernel_size, *stride, *padding))
+                Box::new(MyAvgPool1d::new(kernel_size, stride, padding))
             }
             Node::Func { func } => {
-                Box::new(MyFuncModule::new(func.clone()))
+                Box::new(MyFuncModule::new(func))
+            }
+            Node::Flatten { from_dim, to_dim } => {
+                let from_dim = from_dim;
+                let to_dim = to_dim;
+                Box::new(MyClosureModule::new(Box::new(move |t:&Tensor|t.flatten(from_dim, to_dim))))
+            }
+            Node::Closure { cl: closure } => {
+                Box::new(MyClosureModule::new(Box::new(closure)))
             }
         })
     }
@@ -229,6 +239,14 @@ impl SeqBuilder {
         self.elts.push(
             Node::Func { func }
         );
+        self
+    }
+
+    pub fn closure(&mut self, cl: Box<dyn Fn(&Tensor)->Tensor + Send + Sync>, i: i64) -> &mut Self {
+        self.elts.push(
+            Node::Closure { cl }
+        );
+        self.num_features = i;
         self
     }
 

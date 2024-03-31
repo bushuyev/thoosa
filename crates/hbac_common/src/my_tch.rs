@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::Mutex;
 use std::time::Instant;
+use core::fmt;
 
 use log::{debug, info};
 use plotters::prelude::*;
@@ -24,6 +25,7 @@ use hbac_shared::HbacError;
 use crate::utils::*;
 use hbac_shared::*;
 // use linfa::prelude::*;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct MySequential {
@@ -156,14 +158,40 @@ impl Module for MyFuncModule {
     }
 }
 
+
+pub struct MyClosureModule {
+    func: Box<dyn Fn(&Tensor)->Tensor + Send>
+}
+
+impl MyClosureModule {
+    pub fn new(func: Box<impl Fn(&Tensor) -> Tensor  + Send + 'static>) -> Self {
+        Self { func }
+    }
+}
+
+impl Debug for MyClosureModule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("MyClosureModule")
+            .finish()
+    }
+}
+
+
+impl Module for MyClosureModule {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        (self.func)(xs)
+    }
+}
+
+
 pub fn my_linear<'a, T: Borrow<Path<'a>>>(
     vs: T,
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
 ) -> Result<Linear, HbacError> {
-    assert!(in_dim> 0);
-    assert!(out_dim> 0);
+    assert!(in_dim > 0);
+    assert!(out_dim > 0);
 
     let vs = vs.borrow();
     let bs = if c.bias {
@@ -754,10 +782,15 @@ mod tch_tests {
     #[test]
     pub fn test_test() -> Result<(), HbacError> {
 
-        let folds = batch_windows(684400, 1000, 100, 1000);
+        // SeqBuilder::new(num_features)
+        //     .linear_s(1)
+        //     .func(Tensor::sigmoid)
+        //     .end_seq().build_tch_module(&vs.root());
 
-        println!("folds.0.len={:?} folds.1.len={:?}", folds.0.len(), folds.1.len());
-        println!("folds={:?}", folds);
+        // let folds = batch_windows(684400, 1000, 100, 1000);
+        //
+        // println!("folds.0.len={:?} folds.1.len={:?}", folds.0.len(), folds.1.len());
+        // println!("folds={:?}", folds);
 
         // let t = Tensor::from_slice(&[1., 2., 3., 4.]);
         //

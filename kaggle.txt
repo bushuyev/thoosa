@@ -24,6 +24,21 @@ run-all \
 --init
 
 
+TRAIN ON EEG LOCAL
+
+target/x86_64-unknown-linux-gnu/release/hbac_main \
+--base-path=../../data \
+--store-path=../../data_down/group_1_100_0_100_dist_1/hbac_100.db3 \
+--tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
+train-on-eeg \
+--corr-run=777 \
+--motif-models-dir=../../data_down/group_1_100_0_100_dist_1/0_100_models/ \
+--models-dir=../../data_down/group_1_100_0_100_dist_1/0_100_models/ \
+--train-resource-group="group 1 labels/100/0-100" \
+--valid-resource-group="group 1 labels/100/100-200"
+
+
+
 RUN TRAIN FINAL LOCAL
 target/x86_64-unknown-linux-gnu/release/hbac_main \
 --base-path=../../data \
@@ -71,8 +86,8 @@ print("----------------------------------------------------")
 train-on-eeg \
 --corr-run=777 \
 --models-dir=/kaggle/working/0_100_models/ \
-///--train-resource-group="group 1 labels/400/0-400" \
-///--valid-resource-group="group 1 labels/400/400-800"
+--train-resource-group="group 1 labels/400/0-400" \
+--valid-resource-group="group 1 labels/400/400-800"
 
 print("------------------done------------------------------")
 

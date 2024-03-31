@@ -261,6 +261,14 @@ fn _main() -> Result<(), HbacError> {
         Some(TrainOnEEG(train_on_eeg_params)) => {
             debug!("train_on_eeg_params={:?}", train_on_eeg_params);
 
+            let train_on_eeg_params = if let Some(train_resource_group) = train_on_eeg_params.train_resource_group() {
+                let train_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_resource_group.as_str())? };
+                let valid_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_on_eeg_params.valid_resource_group().expect("valid_resource_group").as_str())? };
+                train_on_eeg_params.with_labels_datasets(train_labels_datasets, valid_labels_datasets)
+            } else {
+                train_on_eeg_params.clone()
+            };
+
             run_train_on_eeg(&cli, &store, &device, &train_on_eeg_params)?;
         }
 
@@ -662,7 +670,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
             .map(|(motif_id, corr)| motif_id).collect::<Vec<usize>>()
     };
 
-    let node = train_nets::motif_node(train_on_motif_params.window() as i64);
+
 
     let output_dir = Path::new(train_on_motif_params.output_dir()).join(label);//TODO corr_run
 
@@ -714,7 +722,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
 
         debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
 
-        let (loss, mut vs) = train_nets::train_on_motif(all_sices_0, all_sices_1, train_on_motif_params, device, &node)?;
+        let (loss, mut vs) = train_nets::train_on_motif(all_sices_0, all_sices_1, train_on_motif_params, device, train_nets::motif_node(train_on_motif_params.window() as i64))?;
 
         debug!("train_on_motif: motif_id={} loss={}", motif_id, loss);
 
