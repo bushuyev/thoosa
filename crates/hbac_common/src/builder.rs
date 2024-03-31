@@ -25,7 +25,8 @@ type TFN = dyn Fn(&Tensor) -> Tensor;
 
 pub enum Node {
     Seq {elts: Vec<Node>},
-    Conv {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
+    Conv_1d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
+    Conv_2d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     BatchNorm {num_features: i64},
     Linear { in_feats: i64, out_feats: i64, config:Option<LinearConfig>},
     Func { func:Fp},
@@ -81,8 +82,11 @@ impl Node {
                 Box::new(MySequential::new(layers))
 
             }
-            Node::Conv { kernel, in_channels, out_channels, config} => {
+            Node::Conv_1d { kernel, in_channels, out_channels, config} => {
                 Box::new(nn::conv1d(vs/ "cnn", in_channels, out_channels, kernel, config))
+            }
+            Node::Conv_2d { kernel, in_channels, out_channels, config} => {
+                Box::new(nn::conv2d(vs/ "cnn", in_channels, out_channels, kernel, config))
             }
             Node::BatchNorm { .. } => {
                 Box::new(MyBatchNorm1d::new())
@@ -154,10 +158,10 @@ impl SeqBuilder {
         self
     }
 
-    pub fn conv(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
+    pub fn conv_1d(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
 
         self.elts.push(
-            Node::Conv {kernel, in_channels, out_channels, config },
+            Node::Conv_1d {kernel, in_channels, out_channels, config },
         );
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, config);
@@ -165,6 +169,19 @@ impl SeqBuilder {
 
         self
     }
+
+    pub fn conv_2d(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
+
+        self.elts.push(
+            Node::Conv_2d {kernel, in_channels, out_channels, config },
+        );
+
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config);//TODO 2d
+        self.kernel = Some(kernel);
+
+        self
+    }
+
 
     pub fn max_pool(&mut self, kernel:i64, stride:i64, padding:i64) -> &mut Self {
         self.elts.push(
@@ -205,6 +222,15 @@ impl SeqBuilder {
         self
     }
 
+    pub fn linear_f(&mut self, f:f32) -> &mut Self {
+        let out_feats = (self.num_features as f32 * f) as i64;
+        self.elts.push(
+            Node::Linear { in_feats:self.num_features, out_feats, config:None}
+        );
+        self.num_features = out_feats;
+
+        self
+    }
 
     pub fn linear_s(&mut self, out_feats:i64) -> &mut Self {
         assert!(out_feats > 0);

@@ -1,16 +1,5 @@
 
 
-RUN SELECT MOTIFS LOCAL
-
-target/x86_64-unknown-linux-gnu/release/hbac_main \
---write-logger-level=DEBUG \
---base-path=../../data \
---store-path=last_hbac_all.db3 \
---tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
-select-motifs \
---run-ids=1 --run-ids=2 --run-ids=3 --run-ids=4 --run-ids=5 --run-ids=6 \
---train-resource-group="group 1 labels/200/0-200"
-
 RUN ALL LOCAL
 target/x86_64-unknown-linux-gnu/release/hbac_main \
 --write-logger-level=DEBUG \
@@ -24,8 +13,18 @@ run-all \
 --init
 
 
-TRAIN ON EEG LOCAL
+RUN SELECT MOTIFS LOCAL
+target/x86_64-unknown-linux-gnu/release/hbac_main \
+--write-logger-level=DEBUG \
+--base-path=../../data \
+--store-path=last_hbac_all.db3 \
+--tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
+select-motifs \
+--run-ids=1 --run-ids=2 --run-ids=3 --run-ids=4 --run-ids=5 --run-ids=6 \
+--train-resource-group="group 1 labels/200/0-200"
 
+
+TRAIN ON EEG LOCAL
 target/x86_64-unknown-linux-gnu/release/hbac_main \
 --base-path=../../data \
 --store-path=../../data_down/group_1_100_0_100_dist_1/hbac_100.db3 \
@@ -33,6 +32,17 @@ target/x86_64-unknown-linux-gnu/release/hbac_main \
 train-on-eeg \
 --corr-run=777 \
 --motif-models-dir=../../data_down/group_1_100_0_100_dist_1/0_100_models/ \
+--models-dir=../../data_down/group_1_100_0_100_dist_1/0_100_models/ \
+--train-resource-group="group 1 labels/100/0-100" \
+--valid-resource-group="group 1 labels/100/100-200"
+
+TRAIN FINAL LOCAL
+target/x86_64-unknown-linux-gnu/release/hbac_main \
+--base-path=../../data \
+--store-path=../../data_down/group_1_100_0_100_dist_1/hbac_100.db3 \
+--tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
+train-final \
+--final-model=../../data_down/group_1_100_0_100_dist_1/0_100_models/final.safetensors \
 --models-dir=../../data_down/group_1_100_0_100_dist_1/0_100_models/ \
 --train-resource-group="group 1 labels/100/0-100" \
 --valid-resource-group="group 1 labels/100/100-200"

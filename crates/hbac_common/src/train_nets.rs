@@ -40,6 +40,7 @@ pub struct TrainOnEEGParams {
     #[arg(long, value_parser=parse_key_val::<String, String>)]
     valid_labels_datasets: Vec<(String, String)>,
 
+
     #[arg(long)]
     corr_run: usize,
 
@@ -73,8 +74,6 @@ impl TrainOnEEGParams {
     pub fn models_dir(&self) -> &str {
         &self.models_dir
     }
-
-
 
     pub fn dummy(motif_models_dir:String, models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>) ->Self {
         TrainOnEEGParams {
@@ -290,7 +289,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
         nn::AdamW::default().build(&vs_0, params.lr)?,
         |t: Tensor| {
             debug!("t.size()={:?} ", t.size());
-            let t_out = t.view([items_per_label as i64* 2, channels, max_nets, max_motif_batches as i64 * motif_batch_size]); //.view((t.size()[0], -1));
+            let t_out = view_for_label_model(items_per_label, motif_batch_size, channels, max_nets, max_motif_batches, t); //.view((t.size()[0], -1));
             //t.size()[0] - batch size
             debug!(" t_out.size()={:?}",  t_out.size());
             t_out
@@ -298,6 +297,10 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
     )?;
 
     Ok(vs_0)
+}
+
+fn view_for_label_model(items_per_label: usize, motif_batch_size: i64, channels: i64, max_nets: i64, max_motif_batches: usize, t: Tensor) -> Tensor {
+    t.view([-1/*items_per_label as i64 * 2*/, channels, max_nets, max_motif_batches as i64 * motif_batch_size])
 }
 
 fn apply_motifs_to_loaders<I, F>(motif_n: i64, step: usize, motif_batch_size: i64, device: &Device, mut labels_loaders: HashMap<i64, Vec<I>>, keys: &mut Vec<i64>, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, max_motif_batches: usize,
@@ -341,8 +344,13 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_t
                 Some(label_models) => {//label_models in one of the model dirs
                     Tensor::stack(label_models.iter().map(|model| {
                         let t = apply_eeg_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
-                        let t_x = t.view((1, -1));
-                        debug!("train_final: motif models model.label={} t.size()={:?} t_x.size()={:?}", model.label, t.size(), t_x.size());
+
+                        //TODO move into CorrModels
+                        let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
+                        debug!("train_final: motif models model.label={} t.size()={:?}", model.label, t.size());
+                        let t_x = view_for_label_model(0, motif_batch_size, channels, max_nets, max_motif_batches, t);
+                        debug!("train_final: t_x.size()={:?}", t_x.size());
+
 
                         let t = model.corr_model.lock().unwrap().forward(&t_x);
                         debug!("train_final: corr_model out .size()={:?}", t.size());
@@ -515,9 +523,9 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, channels: usi
             let mut vs = nn::VarStore::new(device.clone());
 
             let motif_nets = load_motif_models(motif_models_path.as_ref(), label.clone(), channels, motif_n, &device)?;
-
-            let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
             assert!(motif_nets.len() > 0);
+            let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
+
 
             let corr_model = train_nets::corr_full_node(channels as i64, max_nets, max_motif_batches, motif_batch_size).build_tch_module(&vs.root())?;
             vs.load(entry.path())?;
@@ -663,7 +671,7 @@ impl TrainOnMotifsParams {
 pub fn motif_node(window: i64) -> Node {
     SeqBuilder::new(window)
         .batch_norm()
-        .conv(10, 1, 1, ConvConfig::default())
+        .conv_1d(10, 1, 1, ConvConfig::default())
         .linear_s(1)
         .func(Tensor::sigmoid)
         .end_seq()
@@ -671,6 +679,7 @@ pub fn motif_node(window: i64) -> Node {
 
 pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_batch_size:i64) -> Node {
 
+    /*
     let features = max_motif_batches as i64 * motif_batch_size;
     let dims = [max_motif_batches as i64 * motif_batch_size, max_nets, channels, 1];
 
@@ -678,25 +687,38 @@ pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_b
 
     build_multidim(&mut builder, &dims);
     builder.end_seq()
+    */
 
-
-    // SeqBuilder::new(features)
-    //     .func(Tensor::relu)
-    //     .linear_s(features)
-    //     .func(Tensor::relu)
-    //     .linear_s(1)
-    //     .func(Tensor::sigmoid)
+    /*
+        SeqBuilder::new(features)
+            .func(Tensor::relu)
+            .linear_s(features)
+            .func(Tensor::relu)
+            .linear_s(1)
+            .func(Tensor::sigmoid)
+            .end_seq()
+    */
+    SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
+        .batch_norm()
+        .closure(Box::new(|t:&Tensor|t.flatten(1, 2)), max_motif_batches as i64 * motif_batch_size)
+        .conv_1d(motif_batch_size, max_nets*channels, 1, ConvConfig::default())
+        // .max_pool(motif_batch_size, 1, 0)
+        .linear_f(0.5)
+        .func(Tensor::relu)
+        .linear_s(1)
+        .func(Tensor::sigmoid)
+        .end_seq()
 
 }
 
 pub fn final_node(features: i64, classes_num: i64) -> Node {
     SeqBuilder::new(features)
-        .linear_s(features)
-        .func(Tensor::relu)
-        .linear_s(2*features)
-        .func(Tensor::relu)
-        .linear_s(features)
-        .func(Tensor::relu)
+        // .linear_s(features)
+        // .func(Tensor::relu)
+        // .linear_s(2*features)
+        // .func(Tensor::relu)
+        // .linear_s(features)
+        // .func(Tensor::relu)
         .linear_s(classes_num)
         // .func(|t|t.softmax(0, Float))
         .end_seq()

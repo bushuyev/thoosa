@@ -214,25 +214,25 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
         .n_blocks(
             |b:&mut SeqBuilder, i| b
                 .func(Tensor::elu)
-                .conv(kernel, channels, channels, ConvConfig::default())
+                .conv_1d(kernel, channels, channels, ConvConfig::default())
                 .func(Tensor::elu)
-                .conv(kernel, channels, channels, ConvConfig::default())
+                .conv_1d(kernel, channels, channels, ConvConfig::default())
                 .end(),
             num_layers_in_block)
         .end();
 
 
     builder
-        .conv(kernel, channels, channels, ConvConfig::default())
+        .conv_1d(kernel, channels, channels, ConvConfig::default())
         .func(|t|t.elu())
         .max_pool( 3, 2, 1)
         .n_blocks(|b:&mut SeqBuilder, i| b
             .block(dense_block)
             .block(|b:&mut SeqBuilder| b
                 .func(Tensor::elu)
-                .conv(kernel, channels, channels, ConvConfig::default())
+                .conv_1d(kernel, channels, channels, ConvConfig::default())
                 .func(Tensor::elu)
-                .conv(kernel, channels, channels, ConvConfig::default())
+                .conv_1d(kernel, channels, channels, ConvConfig::default())
                 .end())
             .end(), num_blocks)
         .block(dense_block)
@@ -517,7 +517,7 @@ mod tch_tests {
             .end_seq();
 
         let conv_seq = SeqBuilder::new(10)
-            .conv(5, 5, 5, ConvConfig::default())
+            .conv_1d(5, 5, 5, ConvConfig::default())
             .end_seq();
 
         let main = SeqBuilder::new(10)
@@ -597,7 +597,7 @@ mod tch_tests {
     fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn Module>, HbacError> {
         SeqBuilder::new(num_features)
             .batch_norm()
-            .conv(num_features/10, 1, 1, ConvConfig::default())
+            .conv_1d(num_features/10, 1, 1, ConvConfig::default())
             .linear_s(1)
             .func(Tensor::sigmoid)
             .end_seq().build_tch_module(&vs.root())
