@@ -279,7 +279,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
         ) as &mut dyn DataBatch,
 
         // &corr_full_node(channels * max_nets * max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
-        &corr_full_node(max_motif_batches as i64 * motif_batch_size, &[max_motif_batches as i64 * motif_batch_size, max_nets, channels, 1]).build_tch_module(&vs_0.root())?,
+        &corr_full_node(channels, max_nets, max_motif_batches as i64,  motif_batch_size).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred;
             //pred.i((.., 0, 0));
@@ -322,7 +322,7 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_t
     debug!("train_final: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
     let models = params.models_dir.iter().flat_map(|dir|
-            load_corr_and_motif_models(dir.as_str(), channels *  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
+            load_corr_and_motif_models(dir.as_str(), channels as usize, motif_n, max_motif_batches as i64, motif_batch_size, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
     ).collect::<Vec<CorrModels>>();
 
 
@@ -409,7 +409,7 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
 
     debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
-    let models = load_corr_and_motif_models(params.models_dir.as_str(),  max_motif_batches as i64 * motif_batch_size, motif_n, channels as usize, device)?
+    let models = load_corr_and_motif_models(params.models_dir.as_str(), channels as usize, motif_n, max_motif_batches as i64, motif_batch_size, device)?
         .into_iter().fold(HashMap::new(), |mut a, v|{
         a.insert(v.label.clone(), v);
         a
@@ -490,8 +490,10 @@ impl CorrModels {
 /**
 * features without x motif nets
 */
-fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64, motif_n: i64, channels: usize, device: &Device) -> Result<Vec<CorrModels>, HbacError> {
+fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, channels: usize, motif_n: i64, max_motif_batches: i64, motif_batch_size: i64, device: &Device) -> Result<Vec<CorrModels>, HbacError> {
     let re = Regex::new(r"^(?<label>[a-zA-Z0-9]+?)_(?<corr_run>\d+).safetensors").unwrap();//TODO lazy_static
+
+    debug!("load_corr_and_motif_models: channels={:?}, motif_n={:?}, max_motif_batches={:?}, motif_batch_size={:?}", channels, motif_n, max_motif_batches, motif_batch_size);
 
     let mut models = vec![];
     for e in fs::read_dir(motif_models_path.as_ref())? {
@@ -517,10 +519,7 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, features: i64
             let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
             assert!(motif_nets.len() > 0);
 
-            let features = max_nets * features;
-
-            debug!("load_corr_and_motif_models: corr_full_node max_nets={} features={:?}", max_nets, features);
-            let corr_model = train_nets::corr_full_node(features, &[channels as i64, max_nets, features, 1]).build_tch_module(&vs.root())?;
+            let corr_model = train_nets::corr_full_node(channels as i64, max_nets, max_motif_batches, motif_batch_size).build_tch_module(&vs.root())?;
             vs.load(entry.path())?;
             vs.freeze();
 
@@ -670,11 +669,16 @@ pub fn motif_node(window: i64) -> Node {
         .end_seq()
 }
 
-pub fn corr_full_node(features: i64, dims: &[i64]) -> Node {
+pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_batch_size:i64) -> Node {
+
+    let features = max_motif_batches as i64 * motif_batch_size;
+    let dims = [max_motif_batches as i64 * motif_batch_size, max_nets, channels, 1];
 
     let mut builder = SeqBuilder::new(features);
 
-    build_multidim(&mut builder, dims);
+    build_multidim(&mut builder, &dims);
+    builder.end_seq()
+
 
     // SeqBuilder::new(features)
     //     .func(Tensor::relu)
@@ -682,7 +686,7 @@ pub fn corr_full_node(features: i64, dims: &[i64]) -> Node {
     //     .func(Tensor::relu)
     //     .linear_s(1)
     //     .func(Tensor::sigmoid)
-    builder.end_seq()
+
 }
 
 pub fn final_node(features: i64, classes_num: i64) -> Node {
@@ -1436,7 +1440,7 @@ mod train_tests {
         fs::create_dir_all(models_path.clone());
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
-        let test_corr_model = train_nets::corr_full_node(features, &[10, 10, 10, 1]).build_tch_module(&vs_0.root())?;
+        let test_corr_model = train_nets::corr_full_node(10, 10, 10, 10).build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
         debug!("save_test_corr_model: features={} vs_0.variables()={:?}", features, vs_0.variables());
