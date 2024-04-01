@@ -268,11 +268,14 @@ impl SeqBuilder {
         self
     }
 
-    pub fn closure(&mut self, cl: Box<dyn Fn(&Tensor)->Tensor + Send + Sync>, i: i64) -> &mut Self {
+    pub fn closure(&mut self, cl: Box<dyn Fn(&Tensor)->Tensor + Send + Sync>, num_features: Option<i64>) -> &mut Self {
         self.elts.push(
             Node::Closure { cl }
         );
-        self.num_features = i;
+        if let Some(num_features) = num_features{
+            self.num_features = num_features;
+        }
+
         self
     }
 

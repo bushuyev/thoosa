@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::VecDeque;
 use std::io::Write;
 use chrono::SecondsFormat;
@@ -10,8 +11,9 @@ use tch::nn::{Module, OptimizerConfig, VarStore};
 use plotters::drawing::IntoDrawingArea;
 use hbac_shared::{gauss_i, HbacError, pulse_v, pulses_in_const, pulse_in_rand};
 use std::error::Error;
-use std::fs;
+use std::{fs, mem};
 use std::ops::Deref;
+use std::time::Instant;
 use log::{debug, info, trace, warn};
 use crate::my_tch::{Fp, LossFp};
 use tch::nn::Optimizer;
@@ -206,7 +208,10 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
 }
 
 pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
-    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id))).map(|t|t.to_device(device)).map_err(|e|HbacError::new(e.to_string()))
+    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id))).map(|t|t.to_device(device)).map_err(|e|HbacError::new(e.to_string())).map(|t|{
+        debug!("load_tensor: t.kind()={:?}", t.kind());
+        t.avg_pool1d(10, 1, 0, false, false)
+    })
 }
 
 
@@ -380,14 +385,17 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
     for idx in 1..cycles {
 
         let (x_t_0, y_t) = data.train_batch();
-        debug!("x_t_0.size()={:?} ", x_t_0.size());
+        debug!("train: x_t_0.size()={:?} ", x_t_0.size());
 
         let x_t = x_f(x_t_0);
 
-        debug!("x_t.size()={:?} y_t.size()={:?}", x_t.size(), y_t.size());
+        debug!("train: x_t.size()={:?} y_t.size()={:?}", x_t.size(), y_t.size());
 
 
         let pred_y = model.forward(&x_t);
+
+        mem::drop(x_t);
+        unsafe { at_autocast_clear_cache(); }
 
         debug!("train: pred_y.size()={:?}", pred_y.size());
         debug!("train:   y_t ={:?}", from::<Vec<f32>>(&y_t));
@@ -396,11 +404,19 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
 
         let loss = loss_fn(&pred_y, &y_t);
 
+        let t1 = Instant::now();
+
+
+
         opt.backward_step(&loss);
 
-        tch::no_grad(||{
+        debug!("train: backward_step done in {}", t1.elapsed().as_millis());
 
-            if idx % 10 == 0 {
+
+
+        if idx % 10 == 0 {
+
+            tch::no_grad(||{
                 let (x_t_0, y_t) = data.valid_batch();
 
                 let x_t = x_f(x_t_0);
@@ -419,15 +435,16 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss.double_value(&[]) as f32;
                 info!("train:  loss={:?}, valid loss={:?} avg loss={}", loss, valid_loss, last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
                 std::io::stdout().flush().unwrap();
-            }
+            });
+        }
 
-        });
+
 
         debug!("train: idx={} loss={:?}", idx, loss);
         std::io::stdout().flush()?;
 
 
-        drop(x_t);
+        // drop(x_t);
         drop(y_t);
         drop(pred_y);
         drop(loss);

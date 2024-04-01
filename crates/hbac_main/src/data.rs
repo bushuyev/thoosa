@@ -572,8 +572,7 @@ pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Resu
     let df = read_eeg_to_df(path)?;
 
     let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>());
-    tensor.set_requires_grad(false);
-    Ok(tensor.to_device(device))
+    Ok(tensor.set_requires_grad(false).to_device(device))
 }
 
 pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {

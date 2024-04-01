@@ -443,10 +443,10 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
                 &device,
                 Arc::clone(&store)
             ),
-            5,
+            train_on_eeg_params.items_per_label(),
             1000,
             100,
-            100,
+            train_on_eeg_params.motif_batch_size(),
             20,
             684400,
             &device,

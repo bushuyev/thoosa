@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::iter::Map;
@@ -55,6 +56,12 @@ pub struct TrainOnEEGParams {
 
     #[arg(long, default_value_t = 1.0e-5)]
     lr: f64,
+
+    #[arg(long, default_value_t = 10)]
+    motif_batch_size:i64,
+
+    #[arg(long, default_value_t = 5)]
+    items_per_label:usize //TODO eeg batch size?
 }
 
 impl TrainOnEEGParams {
@@ -85,7 +92,9 @@ impl TrainOnEEGParams {
             train_labels_datasets,
             valid_labels_datasets,
             train_resource_group: None,
-            valid_resource_group: None
+            valid_resource_group: None,
+            motif_batch_size: 10,
+            items_per_label:5
         }
     }
 
@@ -112,11 +121,15 @@ impl TrainOnEEGParams {
     pub fn valid_resource_group(&self) -> Option<&String> {
         self.valid_resource_group.as_ref()
     }
-}
 
-fn run_motif_nets<I>(loader: I) where I:Iterator<Item=Result<Tensor, HbacError>>, I: std::marker::Send {
-    for eeg in loader {
 
+    pub fn motif_batch_size(&self) -> i64 {
+        self.motif_batch_size
+    }
+
+
+    pub fn items_per_label(&self) -> usize {
+        self.items_per_label
     }
 }
 
@@ -242,10 +255,11 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
     assert!(keys == valid_keys);
 
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, train_labels_loaders_map.keys());
-    let models = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, motif_n, device)?;//TODO num channels
-    debug!("train_on_eeg: models.size={:?} models={:?}", models.len(), models);
+    let channels_motifs_models = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, motif_n, device)?;//TODO num channels
+    debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
 
-    let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
+    //TODO remove mutexes
+    let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
     let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
     if max_nets <= 0 {
@@ -282,16 +296,16 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred;
             //pred.i((.., 0, 0));
-            debug!("pred_y ={:?} target={:?}", pred_y.size(), target.size());
-            pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
+            debug!("train_on_eeg: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
+            pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
         },
         params.cycles,
         nn::AdamW::default().build(&vs_0, params.lr)?,
         |t: Tensor| {
-            debug!("t.size()={:?} ", t.size());
+            debug!("train_on_eeg: t.size()={:?} ", t.size());
             let t_out = view_for_label_model(items_per_label, motif_batch_size, channels, max_nets, max_motif_batches, t); //.view((t.size()[0], -1));
             //t.size()[0] - batch size
-            debug!(" t_out.size()={:?}",  t_out.size());
+            debug!("train_on_eeg: t_out.size()={:?}",  t_out.size());
             t_out
         },
     )?;
@@ -360,7 +374,7 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_t
                 None => {
                     debug!("train_final: no model for label {:?}", label);
 
-                    Tensor::zeros(&[params.models_dir.len() as i64, 1, 1], (Float, *device))
+                    Tensor::zeros(&[params.models_dir.len() as i64, 1, 1, 1], (Float, *device))
                 }
             }
         };
@@ -397,8 +411,8 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_t
             debug!("t.size()={:?} ", t.size());
 
             debug!("xxxxx: 0 ={:?}",  from::<Vec<f32>>(&t.i((.., 0)).squeeze()));
-            debug!("xxxxx: 1 ={:?}",  from::<Vec<f32>>(&t.i((.., 1)).squeeze()));
-            debug!("xxxxx: 2 ={:?}",  from::<Vec<f32>>(&t.i((.., 2)).squeeze()));
+            // debug!("xxxxx: 1 ={:?}",  from::<Vec<f32>>(&t.i((.., 1)).squeeze()));
+            // debug!("xxxxx: 2 ={:?}",  from::<Vec<f32>>(&t.i((.., 2)).squeeze()));
 
             let t_out = t.view((t.size()[0] * t.size()[1])); //model_dirs * labels
             debug!(" t_out.size()={:?}",  t_out.size());
@@ -522,16 +536,16 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, channels: usi
 
             let mut vs = nn::VarStore::new(device.clone());
 
-            let motif_nets = load_motif_models(motif_models_path.as_ref(), label.clone(), channels, motif_n, &device)?;
-            assert!(motif_nets.len() > 0);
-            let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
+            let channels_motifs_models = load_motif_models(motif_models_path.as_ref(), label.clone(), channels, motif_n, &device)?;
+            assert!(channels_motifs_models.len() > 0);
+            let max_nets =  channels_motifs_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
 
 
             let corr_model = train_nets::corr_full_node(channels as i64, max_nets, max_motif_batches, motif_batch_size).build_tch_module(&vs.root())?;
             vs.load(entry.path())?;
             vs.freeze();
 
-            models.push(crate::train_nets::CorrModels::new(label, corr_model, motif_nets))
+            models.push(crate::train_nets::CorrModels::new(label, corr_model, channels_motifs_models))
         }
 
     }
@@ -572,10 +586,10 @@ fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels
                 let node = train_nets::motif_node(motif_n).build_tch_module(&vs.root())?;//TODO window
                 vs.load(&motif_path.join(motif))?;
                 vs.freeze();
-                // debug!("load_models: len={:?}", vs.variables().len());
-                // for key in  vs.variables().keys() {
-                //     debug!("load_models: key={:?}", key);
-                // }
+                debug!("load_motif_models: len={:?}", vs.variables().len());
+                for (key, t) in  vs.variables() {
+                    debug!("load_motif_models: key={:?} kind={:?}", key, t.kind());
+                }
 
                 channels_motifs.push(node);
             }
@@ -678,7 +692,7 @@ pub fn motif_node(window: i64) -> Node {
 }
 
 pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_batch_size:i64) -> Node {
-
+    debug!("corr_full_node: channels={}, max_nets={}, max_motif_batches={}, motif_batch_size={}", channels, max_nets, max_motif_batches, motif_batch_size);
     /*
     let features = max_motif_batches as i64 * motif_batch_size;
     let dims = [max_motif_batches as i64 * motif_batch_size, max_nets, channels, 1];
@@ -699,11 +713,22 @@ pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_b
             .end_seq()
     */
     SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
-        .batch_norm()
-        .closure(Box::new(|t:&Tensor|t.flatten(1, 2)), max_motif_batches as i64 * motif_batch_size)
-        .conv_1d(motif_batch_size, max_nets*channels, 1, ConvConfig::default())
+        // .batch_norm()
+        .closure(Box::new(|t:&Tensor|{
+            debug!("corr_full_node: flatten t.size()={:?}", t.size());
+            let t_0 = t.flatten(2, 3);
+
+            debug!("corr_full_node: flatten t_0.size()={:?}", t_0.size());
+
+            t_0
+        }), Some(max_nets * max_motif_batches as i64 * motif_batch_size))
+        .conv_1d(motif_batch_size, channels, 1, ConvConfig::default())
+        .closure(Box::new(|t:&Tensor|{
+            debug!("corr_full_node: conv_1d t.size()={:?}", t.size());
+            t.squeeze()
+        }), None)
         // .max_pool(motif_batch_size, 1, 0)
-        .linear_f(0.5)
+        .linear()
         .func(Tensor::relu)
         .linear_s(1)
         .func(Tensor::sigmoid)
@@ -1013,7 +1038,7 @@ fn build_multidim<'a>( builder:&'a mut SeqBuilder, dims:&'a [i64])  {
             // .func(Tensor::relu)
             .linear_s(1)
             // .func(Tensor::sigmoid)
-            .closure(Box::new(|t:&Tensor|t.squeeze()), d[1])
+            .closure(Box::new(|t:&Tensor|t.squeeze()), Some(d[1]))
 
     });
 

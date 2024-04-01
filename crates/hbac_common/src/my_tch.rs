@@ -26,6 +26,7 @@ use crate::utils::*;
 use hbac_shared::*;
 // use linfa::prelude::*;
 use std::sync::Arc;
+use hbac_shared::{gauss_i};
 
 #[derive(Debug)]
 pub struct MySequential {
@@ -332,23 +333,23 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     }
 
     let nets_len = nets.len();
-    let mut net_tensors_vec = (0..nets_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / step)).collect::<Vec<Vec<Tensor>>>();
+    let mut net_batches = (0..nets_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / step)).collect::<Vec<Vec<Tensor>>>();
 
 
     for slice_0_idx in folds.0 {
         debug!("apply_channel_motifs: slice_0_idx={:?}", slice_0_idx);
 
         let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| eeg_t_channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-        debug!("apply_channel_motifs: batch.size={:?} motif_batch_size={:?}", batch.size(), motif_batch_size);
+        debug!("apply_channel_motifs: batch.size={:?} motif_batch_size={:?} motif_n={:?}", batch.size(), motif_batch_size, motif_n);
 
         let batch = batch.view((motif_batch_size, 1, motif_n));
 
-        for ((net_i, net), net_tensors_vec) in nets.iter().enumerate().zip(net_tensors_vec.iter_mut()) {
+        for ((net_i, net), net_batch) in nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
-            let net_rs = net.lock().unwrap().forward(&batch);
-            debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?}", batch.size(), net_rs.size());
-            net_tensors_vec.push(
-                pad_to(&net_rs.view((net_rs.size()[0])), &[motif_batch_size as i64]).unwrap()
+            let net_rs = net.lock().unwrap().forward(&batch).squeeze();
+            debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
+            net_batch.push(
+                pad_to(&net_rs, &[motif_batch_size as i64]).unwrap()
             );
         };
     }
@@ -358,27 +359,32 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
         debug!("apply_channel_motifs: reminder={:?}", folds.1);
 
         let batch = Tensor::stack(folds.1.into_iter().map(|i| eeg_t_channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-        debug!("apply_channel_motifs: reminder, batch.size={:?} motif_batch_size={:?}", batch.size(), motif_batch_size);
+        debug!("apply_channel_motifs: reminder, batch.size={:?} motif_batch_size={:?} motif_n={:?}", batch.size(), motif_batch_size, motif_n);
 
         let batch = batch.view((-1, 1, motif_n));
 
-        for ((net_i, net), net_tensors_vec) in nets.iter().enumerate().zip(net_tensors_vec.iter_mut()) {
+        for ((net_i, net), net_batch) in nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
-            let net_rs = net.lock().unwrap().forward(&batch);
-            let net_rs_1 = net_rs.squeeze();
-            debug!("apply_channel_motifs: reminder, batch.size()={:?} net_rs size={:?}", batch.size(), net_rs.size());
+            let net_rs = net.lock().unwrap().forward(&batch).set_requires_grad(false).squeeze();
 
-            net_tensors_vec.push(
-                pad_to(&net_rs_1, &[motif_batch_size as i64]).unwrap()
-            );
+            if net_rs.size().len() > 0 {
+                debug!("apply_channel_motifs: reminder, batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
+
+                net_batch.push(
+                    pad_to(&net_rs, &[motif_batch_size as i64]).unwrap()
+                );
+
+            } else {
+                debug!("apply_channel_motifs: reminder, no rs for net_i={} batch.size()={:?}", net_i, batch.size());
+            }
         };
     }
 
     //nets x slices in tensor/motif_batch_size x motif_batch_size
-    net_tensors_vec.iter().enumerate().for_each(|(i, net)| {
+    net_batches.iter().enumerate().for_each(|(i, net)| {
         debug!("apply_channel_motifs: net={:?} sizes={:?}", i, net.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
     });
-    let mut net_tensors = net_tensors_vec.into_iter().map(|net_batches| Tensor::stack(net_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
+    let mut net_tensors = net_batches.into_iter().map(|net_batches| Tensor::stack(net_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
     debug!("apply_channel_motifs: net_tensors.len()={:?} sizes={:?}", net_tensors.len(), net_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
 
 
@@ -396,8 +402,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     let nets_t = pad_to(&nets_t, &[max_nets as i64, max_motif_batches as i64, motif_batch_size as i64]).unwrap();
 
     debug!("apply_channel_motifs: 2. nets_t={:?}", nets_t.size());
-
-    nets_t
+    nets_t.set_requires_grad(false)
 }
 
 
@@ -601,6 +606,48 @@ mod tch_tests {
             .linear_s(1)
             .func(Tensor::sigmoid)
             .end_seq().build_tch_module(&vs.root())
+    }
+
+    #[test]
+    pub fn test_plot_eeg() -> Result<(), HbacError>{
+
+        let g_n = 5;
+        // let g = gauss_i(2.5, 2.0, g_n);
+        let g = gauss_i( (g_n as f32 - 1.0) /2.0, 1.0, g_n);
+        let g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
+
+        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1014084064", Cpu)?;
+
+        println!("t={:?}", t.size());
+        let t = t.i((1..3, ..)).view((2, -1));//.view((1, -1));
+
+        println!("t={:?}", t.size());
+
+        let x = lin_t(t.size()[1]);
+
+        // let t_f1 = t.conv1d(&Tensor::from_slice(g_v.as_slice()).totype(Float).view((1, 1, -1)), None::<Tensor>, 1, 0, 1, 1);
+        let t_f1 = t.avg_pool1d(10, 1, 0, false, false);
+
+        println!("t_f1={:?}", t_f1.size());
+        let n = t.size()[1] as u32;//11; //
+
+
+        println!("g={:?}", g_v);
+
+        plot_series(
+            vec![
+                (format!("t"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                (format!("t_f1"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((1, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                // (format!("G"), RED, (0..g_n).map(|i| 10. * i as f32).zip(g_v.into_iter()).collect::<Vec<(f32, f32)>>()),
+
+            ], "EEG", (n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            // ], "EEG", ((g_n*30) as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        );
+
+
+
+
+        Ok(())
     }
 
     #[test]
