@@ -9,7 +9,7 @@ use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use clap::clap_derive::Args;
 use log::{debug, info, warn, trace};
 use rand::{Rng, thread_rng};
-use crate::builder::{Node, SeqBuilder};
+use crate::builder::{clc_conv1d_out, Node, SeqBuilder};
 use crate::utils::{DataBatch, pad_to, train};
 use crate::utils::from;
 use rand::prelude::SliceRandom;
@@ -715,14 +715,22 @@ pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_b
     SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
         // .batch_norm()
         .closure(Box::new(|t:&Tensor|{
+            //t - batch x channels x motif nets
             debug!("corr_full_node: flatten t.size()={:?}", t.size());
-            let t_0 = t.flatten(2, 3);
+            let t_0 = t.flatten(1, 2);//channels x max_nets
 
-            debug!("corr_full_node: flatten t_0.size()={:?}", t_0.size());
+            debug!("1. corr_full_node: flatten t_0.size()={:?}", t_0.size());
 
+            // let t_0 = t_0.flatten(1, 2);
+            //
+            // debug!("2. corr_full_node: flatten t_0.size()={:?}", t_0.size());
+
+            // t_0.i((.., .., 0, ..) ).con(1000, max_nets, 1, ConvConfig::default())
+            // t.shallow_clone()
             t_0
-        }), Some(max_nets * max_motif_batches as i64 * motif_batch_size))
-        .conv_1d(motif_batch_size, channels, 1, ConvConfig::default())
+
+        }), Some(max_motif_batches as i64 * motif_batch_size))
+        .conv_1d(1000, channels * max_nets, 1, ConvConfig::default())
         .closure(Box::new(|t:&Tensor|{
             debug!("corr_full_node: conv_1d t.size()={:?}", t.size());
             t.squeeze()
@@ -1251,6 +1259,8 @@ mod train_tests {
             valid_labels_datasets: vec![],
             train_resource_group: None,
             valid_resource_group: None,
+            items_per_label: 5,
+            motif_batch_size: 5
         };
 
         save_test_motif_model(&models_path, "seizure", "0", "00", 100)?;
