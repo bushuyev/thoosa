@@ -191,6 +191,8 @@ fn main()  {
 fn _main() -> Result<(), HbacError> {
     let cli = Cli::parse();
 
+
+
     CombinedLogger::init(
         vec![
             TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),

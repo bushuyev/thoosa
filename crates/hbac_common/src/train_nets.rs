@@ -256,7 +256,8 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
 
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, train_labels_loaders_map.keys());
     let channels_motifs_models = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, motif_n, device)?;//TODO num channels
-    debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
+    // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
+    debug!("train_on_eeg: models.size={:?}", channels_motifs_models.len());
 
     //TODO remove mutexes
     let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
@@ -294,7 +295,7 @@ pub fn train_on_eeg<I>(params: &TrainOnEEGParams, train_labels_loaders:Vec<(i64,
         // &corr_full_node(channels * max_nets * max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
         &corr_full_node(channels, max_nets, max_motif_batches as i64,  motif_batch_size).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
-            let pred_y = pred;
+            let pred_y = pred.squeeze();
             //pred.i((.., 0, 0));
             debug!("train_on_eeg: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
@@ -714,10 +715,24 @@ pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_b
     */
     SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
         // .batch_norm()
+        .split(
+            (0..max_nets).map(|i|
+                SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
+                    .conv_1d(1000, channels, 1, ConvConfig::default())
+                    .linear_s(1)
+                    .func(Tensor::sigmoid)
+                    .end_seq()
+            ).collect(),
+
+            Box::new(move |t:&Tensor|  (0..max_nets).map(|i|t.i((.., .., i, ..))).collect()),
+
+            Box::new(move |t:Vec<Tensor>|Tensor::stack(t.as_slice(), 1))
+
+        )
         .closure(Box::new(|t:&Tensor|{
             //t - batch x channels x motif nets
             debug!("corr_full_node: flatten t.size()={:?}", t.size());
-            let t_0 = t.flatten(1, 2);//channels x max_nets
+            let t_0 = t.squeeze(); //flatten(1, 2);//channels x max_nets
 
             debug!("1. corr_full_node: flatten t_0.size()={:?}", t_0.size());
 
@@ -729,12 +744,12 @@ pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_b
             // t.shallow_clone()
             t_0
 
-        }), Some(max_motif_batches as i64 * motif_batch_size))
-        .conv_1d(1000, channels * max_nets, 1, ConvConfig::default())
-        .closure(Box::new(|t:&Tensor|{
-            debug!("corr_full_node: conv_1d t.size()={:?}", t.size());
-            t.squeeze()
-        }), None)
+        }), Some(max_nets))
+        // .conv_1d(1000, channels * max_nets, 1, ConvConfig::default())
+        // .closure(Box::new(|t:&Tensor|{
+        //     debug!("corr_full_node: conv_1d t.size()={:?}", t.size());
+        //     t.squeeze()
+        // }), None)
         // .max_pool(motif_batch_size, 1, 0)
         .linear()
         .func(Tensor::relu)

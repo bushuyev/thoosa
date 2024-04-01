@@ -51,6 +51,50 @@ impl Module for MySequential {
     }
 }
 
+pub struct MyParallel {
+    layers: Vec<Box<dyn Module>>,
+    split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>,
+    join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>,
+}
+
+impl Debug for MyParallel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("")
+            .field("layers", &self.layers)
+            .finish()
+    }
+}
+
+impl crate::my_tch::MyParallel {
+
+    pub fn new(layers: Vec<Box<dyn Module>>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>) -> Self {
+
+        assert!(layers.len() > 0, "layers len > 0");
+
+        Self {
+            layers,
+            split,
+            join
+        }
+    }
+}
+
+impl Module for crate::my_tch::MyParallel {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        debug!("MyParallel::forward: xs={:?}", xs.size());
+        let t = (self.join)(
+            (self.split)(xs).into_iter().zip(self.layers.iter()).map(|(t, net)| {
+                net.forward(&t)
+            }).collect::<Vec<Tensor>>()
+        );
+
+        debug!("MyParallel::forward: t={:?}", t.size());
+
+        t
+
+    }
+}
+
 #[derive(Debug)]
 pub struct MyMaxPool1d {
     kernel_size: i64,
@@ -516,7 +560,7 @@ mod tch_tests {
     // }
 
     #[test]
-    pub fn test_res_seq(){
+    pub fn test_res_seq() -> Result<(), HbacError>{
         let res_seq = SeqBuilder::new(10)
             .linear()
             .end_seq();
@@ -527,12 +571,18 @@ mod tch_tests {
 
         let main = SeqBuilder::new(10)
             .split(
-                res_seq,
-                conv_seq,
-                |t|t.copy(),
-                |t|t.copy()
+                vec![res_seq, conv_seq],
+                Box::new(|t:&Tensor|vec![t.i((0))]),
+                Box::new(|t:Vec<Tensor>|Tensor::stack(t.as_slice(), 0))
+
             ).end_seq();
 
+        let mut vs = nn::VarStore::new(Device::Cpu);
+
+        let net = main.build_tch_module(&vs.root())?;
+
+
+        Ok(())
     }
 
 

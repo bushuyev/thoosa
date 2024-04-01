@@ -5,7 +5,7 @@ use log::debug;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
 use hbac_shared::HbacError;
-use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MySequential};
+use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
@@ -25,6 +25,7 @@ type TFN = dyn Fn(&Tensor) -> Tensor;
 
 pub enum Node {
     Seq {elts: Vec<Node>},
+    Par {elts: Vec<Node>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>},
     Conv_1d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     Conv_2d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     BatchNorm {num_features: i64},
@@ -32,7 +33,6 @@ pub enum Node {
     Func { func:Fp},
     MaxPool { kernel_size:i64, stride:i64, padding:i64},
     AvgPool { kernel_size:i64, stride:i64, padding:i64},
-    Flatten { from_dim:i64, to_dim:i64},
     Closure { cl:Box<dyn Fn(&Tensor)->Tensor + Send + Sync>}
 }
 
@@ -82,35 +82,47 @@ impl Node {
                 Box::new(MySequential::new(layers))
 
             }
+
+            Node::Par {elts,  split, join } => {
+                let layers:Vec<Box<dyn Module>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn Module>>, node| {
+                    kids.push(node.build_tch_module(vs)?);
+                    Ok::<Vec<Box<dyn Module>>, HbacError>(kids)
+                })?;
+
+                Box::new(MyParallel::new(layers, split, join))
+            }
+
             Node::Conv_1d { kernel, in_channels, out_channels, config} => {
                 Box::new(nn::conv1d(vs/ "cnn", in_channels, out_channels, kernel, config))
             }
+
             Node::Conv_2d { kernel, in_channels, out_channels, config} => {
                 Box::new(nn::conv2d(vs/ "cnn", in_channels, out_channels, kernel, config))
             }
+
             Node::BatchNorm { .. } => {
                 Box::new(MyBatchNorm1d::new())
             }
+
             Node::Linear {in_feats, out_feats, config} => {
                 assert!(in_feats > 0);
                 assert!(out_feats > 0);
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
                 Box::new(my_linear(vs/ "layer1", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)
             }
+
             Node::MaxPool { kernel_size, stride, padding } => {
                 Box::new(MyMaxPool1d::new(kernel_size, stride, padding))
             }
+
             Node::AvgPool { kernel_size, stride, padding } => {
                 Box::new(MyAvgPool1d::new(kernel_size, stride, padding))
             }
+
             Node::Func { func } => {
                 Box::new(MyFuncModule::new(func))
             }
-            Node::Flatten { from_dim, to_dim } => {
-                let from_dim = from_dim;
-                let to_dim = to_dim;
-                Box::new(MyClosureModule::new(Box::new(move |t:&Tensor|t.flatten(from_dim, to_dim))))
-            }
+
             Node::Closure { cl: closure } => {
                 Box::new(MyClosureModule::new(Box::new(closure)))
             }
@@ -135,9 +147,12 @@ impl SeqBuilder {
         }
     }
 
-    pub fn split<F, G>(&mut self, seq_1:Node, seq_2:Node, split_f:F, glue_f:G) -> &mut Self
-        where F: for<'a> FnMut(&Tensor) -> Tensor,
-              G: for<'a> FnMut(&Tensor) -> Tensor {
+    pub fn split(&mut self, elts:Vec<Node>,  split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>) -> &mut Self {
+
+        self.elts.push(
+            Node::Par {elts, split, join}
+        );
+
         self
     }
 
