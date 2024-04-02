@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 use core::fmt;
 
-use log::{debug, info};
+use log::{debug, info, error};
 use plotters::prelude::*;
 // use polars::prelude::{col, lit, NamedFrom, Series};
 use simplelog::*;
@@ -228,13 +228,30 @@ impl Module for MyClosureModule {
     }
 }
 
+#[derive(Debug)]
+pub struct MyLinear {
+    pub ws: Tensor,
+    pub bs: Option<Tensor>,
+}
+
+impl Module for MyLinear {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        match xs.f_linear(&self.ws, self.bs.as_ref()) {//TODO error
+            Ok(t) => t,
+            Err(e) => {
+                error!("{:?}", e);
+                panic!("{:?}", e);
+            }
+        }
+    }
+}
 
 pub fn my_linear<'a, T: Borrow<Path<'a>>>(
     vs: T,
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
-) -> Result<Linear, HbacError> {
+) -> Result<MyLinear, HbacError> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
@@ -249,7 +266,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
         None
     };
 
-    Ok(Linear { ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs })
+    Ok(MyLinear { ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs })
 }
 
 pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node  {
@@ -666,7 +683,7 @@ mod tch_tests {
         let g = gauss_i( (g_n as f32 - 1.0) /2.0, 1.0, g_n);
         let g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
 
-        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1014084064", Cpu)?;
+        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "2259539799", Cpu)?;
 
         println!("t={:?}", t.size());
         let t = t.i((1..3, ..)).view((2, -1));//.view((1, -1));
@@ -681,16 +698,47 @@ mod tch_tests {
         println!("t_f1={:?}", t_f1.size());
         let n = t.size()[1] as u32;//11; //
 
+        let channels_motifs_models = crate::train_nets::load_motif_models(
+            "/home/bu/dvl/kaggle/HMS_Harmful_Brain_Activity_Classification/data_down/200_model_08_max_ratio_dist/0_200/models/",
+            "gpd".into(),
+            20,
+            1000,
+            &Cpu
+        )?;
+        let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
-        println!("g={:?}", g_v);
+        println!("nets_in_channel={:?}", motif_nets.iter().map(|nets_in_channel|nets_in_channel.len()).collect::<Vec<usize>>());
 
+        let motif_batches = batch_windows(684400, 1000, 100, 100);
+        let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+
+
+
+        let motifs_t = super::apply_channel_motifs(
+            1000,
+            100,
+            &motif_nets[0],
+            t_f1.i((0,..) ),
+            100,
+            1,
+            max_motif_batches,
+            &Cpu
+        );
+
+        println!("motifs_t.size()={:?}", motifs_t.squeeze().flatten(0,1).size());
+
+        let motifs_vec = vec_f32_from(&motifs_t.squeeze());
+
+        println!("motifs_vec={:?}", motifs_vec);
+        let motif_len = motifs_vec.len();
         plot_series(
             vec![
-                (format!("t"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
-                (format!("t_f1"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((1, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                // (format!("t"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                // (format!("t_f1"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((1, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                (format!("motif"), RED, (0..motif_len).into_iter().map(|i|i as f32).zip(motifs_vec).collect::<Vec<(f32, f32)>>()),
                 // (format!("G"), RED, (0..g_n).map(|i| 10. * i as f32).zip(g_v.into_iter()).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "EEG", (motif_len as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
             // ], "EEG", ((g_n*30) as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         );
 

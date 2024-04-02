@@ -191,8 +191,6 @@ fn main()  {
 fn _main() -> Result<(), HbacError> {
     let cli = Cli::parse();
 
-
-
     CombinedLogger::init(
         vec![
             TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
@@ -267,11 +265,12 @@ fn _main() -> Result<(), HbacError> {
                 let train_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_resource_group.as_str())? };
                 let valid_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_on_eeg_params.valid_resource_group().expect("valid_resource_group").as_str())? };
                 train_on_eeg_params.with_labels_datasets(train_labels_datasets, valid_labels_datasets)
+
             } else {
                 train_on_eeg_params.clone()
             };
 
-            run_train_on_eeg(&cli, &store, &device, &train_on_eeg_params)?;
+            run_train_on_eeg(&cli, &store, devices, &train_on_eeg_params)?;
         }
 
         Some(TrainFinal(train_final_params)) => {
@@ -307,11 +306,11 @@ fn _main() -> Result<(), HbacError> {
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            run_train_on_motifs(&cli, &store, devices, &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids))?;
+            run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids))?;
 
             info!("run_train_on_motifs done");
 
-            run_train_on_eeg(&cli, &store, &device, &TrainOnEEGParams::dummy(run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone()))?;
+            run_train_on_eeg(&cli, &store, devices.clone(), &TrainOnEEGParams::dummy(run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone()))?;
 
             info!("run_train_on_eeg done");
 
@@ -408,7 +407,7 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
     Ok(())
 }
 
-fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, train_on_eeg_params: &TrainOnEEGParams) -> Result<(), HbacError> {
+fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_eeg_params: &TrainOnEEGParams) -> Result<(), HbacError> {
     debug!("run_train_on_eeg: train_on_eeg_params={:?}", train_on_eeg_params);
     // let labels_kinds = store_guard.corrs_descr(train_on_eeg_params.corr_run())?;
 
@@ -424,44 +423,52 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tr
         panic!("valid_datasets_map.len() != train_on_eeg_params.train_labels_datasets().len()");
     } //TODO check keys
 
-    for (label, dataset) in train_on_eeg_params.train_labels_datasets() {
-        info!("training {} on {}", label, dataset);
+    let chunk_len = max(1, train_on_eeg_params.train_labels_datasets().len()/devices.len());
 
-        match train_on_eeg(
-            train_on_eeg_params,
-            eegs_to_labels_tensors(
-                cli.base_path.as_str(),
-                cli.tensors_path.clone(),
-                label,
-                dataset,
-                &device,
-               Arc::clone(&store)
-            ),
-            eegs_to_labels_tensors(
-                cli.base_path.as_str(),
-                cli.tensors_path.clone(),
-                label,
-                valid_datasets_map.get(label).expect(format!("valid dataset for {}", label).as_str()),
-                &device,
-                Arc::clone(&store)
-            ),
-            train_on_eeg_params.items_per_label(),
-            1000,
-            100,
-            train_on_eeg_params.motif_batch_size(),
-            20,
-            684400,
-            &device,
-            label
-        ) {
-            Ok(vs) => {
-                vs.save(format!("{}/{}_{}.safetensors", train_on_eeg_params.models_dir(), label, train_on_eeg_params.corr_run()))?;
-            }
-            Err(e) => {//should be no motif nets found only
-                warn!("e:{:?}", e);
+    let devices_train_labels_datasets = devices.into_iter().cycle().zip(train_on_eeg_params.train_labels_datasets().chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(String, String)])>>();//corrs_run(id, label)
+    devices_train_labels_datasets.into_par_iter().for_each(move |(device_i, chunk_resource_sets)| {
+
+        for (label, resource_set) in chunk_resource_sets {
+
+            info!("training {} on {} device={:?}", label, resource_set, device_i);
+
+            match train_on_eeg(
+                train_on_eeg_params,
+                eegs_to_labels_tensors(
+                    cli.base_path.as_str(),
+                    cli.tensors_path.clone(),
+                    label,
+                    resource_set,
+                    &device_i,
+                   Arc::clone(&store)
+                ),
+                eegs_to_labels_tensors(
+                    cli.base_path.as_str(),
+                    cli.tensors_path.clone(),
+                    label,
+                    valid_datasets_map.get(label).expect(format!("valid dataset for {}", label).as_str()),
+                    &device_i,
+                    Arc::clone(&store)
+                ),
+                train_on_eeg_params.items_per_label(),
+                1000,
+                100,
+                train_on_eeg_params.motif_batch_size(),
+                20,
+                684400,
+                &device_i,
+                label
+            ) {
+                Ok(vs) => {
+                    vs.save(format!("{}/{}_{}.safetensors", train_on_eeg_params.models_dir(), label, train_on_eeg_params.corr_run())).expect("save vs");
+                }
+                Err(e) => {//should be no motif nets found only
+                    warn!("e:{:?}", e);
+                }
             }
         }
-    }
+
+    });
     Ok(())
 }
 

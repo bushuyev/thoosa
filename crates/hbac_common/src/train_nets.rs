@@ -556,7 +556,7 @@ fn load_corr_and_motif_models(motif_models_path: impl AsRef<Path>, channels: usi
     Ok(models)
 }
 
-fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels:usize, motif_n: i64, device: &Device) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
+pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels:usize, motif_n: i64, device: &Device) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
     debug!("load_motif_models: motif_models_path={:?} label={:?}, channels={:?}, motif_n={:?}", motif_models_path.as_ref(), label, channels, motif_n);
 
 
@@ -692,8 +692,8 @@ pub fn motif_node(window: i64) -> Node {
         .end_seq()
 }
 
-pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_batch_size:i64) -> Node {
-    debug!("corr_full_node: channels={}, max_nets={}, max_motif_batches={}, motif_batch_size={}", channels, max_nets, max_motif_batches, motif_batch_size);
+pub fn corr_full_node(channels:i64, max_motif_nets:i64, max_motif_batches:i64, motif_batch_size:i64) -> Node {
+    debug!("corr_full_node: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={}", channels, max_motif_nets, max_motif_batches, motif_batch_size);
     /*
     let features = max_motif_batches as i64 * motif_batch_size;
     let dims = [max_motif_batches as i64 * motif_batch_size, max_nets, channels, 1];
@@ -714,45 +714,77 @@ pub fn corr_full_node(channels:i64, max_nets:i64, max_motif_batches:i64, motif_b
             .end_seq()
     */
     SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
-        // .batch_norm()
+        .batch_norm()
+        .closure(Box::new(move |t:&Tensor|{
+            //batch x max_motif_nets
+            debug!("000.  t.size()={:?}", t.size());
+
+            let t_0 = t.shallow_clone();
+
+            t_0
+
+        }), None)
         .split(
-            (0..max_nets).map(|i|
+            (0..max_motif_nets).map( |i|
                 SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
-                    .conv_1d(1000, channels, 1, ConvConfig::default())
+                    .closure(Box::new(move |t:&Tensor|{
+                        debug!(">>>>>>>>>>>>>> 0 {:?}", t.size());
+                        t.view((-1, 1, max_motif_batches as i64 * motif_batch_size))
+                    }), None)
+                    .conv_1d(10, 1, 1, ConvConfig::default())
+                    .max_pool(10, 1, 0)
+                    // .func(Tensor::relu)
+                    // .linear_s(channels)
+                    // .func(Tensor::sigmoid)
+                    // .closure(Box::new(|t:&Tensor|{
+                    //     debug!(">>>>>>>>>>>>>> 1 {:?}", t.size());
+                    //     t.squeeze()
+                    // }), Some(channels))
+                    // .func(Tensor::relu)
+                    // .linear_s(1)
+                    // .func(Tensor::sigmoid)
+                    // .closure(Box::new(|t:&Tensor|{
+                    //     debug!(">>>>>>>>>>>>>> 2 {:?}", t.size());
+                    //     t.squeeze()
+                    // }), Some(channels))
+
+                    .func(Tensor::relu)
+                    .linear_f(0.5)
+                    .linear_f(0.5)
                     .linear_s(1)
                     .func(Tensor::sigmoid)
+                    .closure(Box::new(|t:&Tensor|{
+                        debug!(">>>>>>>>>>>>>> 3 {:?}", t.size());
+                        t.view((-1, 1))
+                    }), Some(1))
+
                     .end_seq()
             ).collect(),
 
-            Box::new(move |t:&Tensor|  (0..max_nets).map(|i|t.i((.., .., i, ..))).collect()),
+            Box::new(move |t:&Tensor|  (0..max_motif_nets).zip((0..channels)).map(|(net_i, channel_id)|t.i((.., channel_id, net_i, ..))).collect()),//batch, channel, max_motif_nets, max motif_net batches x motif_net batch size
 
             Box::new(move |t:Vec<Tensor>|Tensor::stack(t.as_slice(), 1))
 
         )
-        .closure(Box::new(|t:&Tensor|{
-            //t - batch x channels x motif nets
-            debug!("corr_full_node: flatten t.size()={:?}", t.size());
-            let t_0 = t.squeeze(); //flatten(1, 2);//channels x max_nets
+        .closure(Box::new(move |t:&Tensor|{
+            //batch x max_motif_nets
+            debug!("0. corr_full_node: flatten t.size()={:?}", t.size());
+            let t_size = t.size();
 
+            // assert!(t_size.len()==4, "t_size.len() {}, not 4", t_size.len());
+            // assert!(t_size[1] == max_motif_nets, "unexpected t_size[1]={}, should be max_motif_nets={}", t_size[1], max_motif_nets);
+            // assert!(t_size[2] == 1, "unexpected t_size[2]={}, should be 1", t_size[2]); //.conv_1d - channels -> 1
+            // assert!(t_size[3] == 1, "unexpected t_size[3]={}, should be 1", t_size[2]);
+            // let t_0 = t.squeeze_dims(&[2,3]);
+            let t_0 = t.squeeze_dims(2);
             debug!("1. corr_full_node: flatten t_0.size()={:?}", t_0.size());
 
-            // let t_0 = t_0.flatten(1, 2);
-            //
-            // debug!("2. corr_full_node: flatten t_0.size()={:?}", t_0.size());
-
-            // t_0.i((.., .., 0, ..) ).con(1000, max_nets, 1, ConvConfig::default())
-            // t.shallow_clone()
             t_0
 
-        }), Some(max_nets))
-        // .conv_1d(1000, channels * max_nets, 1, ConvConfig::default())
-        // .closure(Box::new(|t:&Tensor|{
-        //     debug!("corr_full_node: conv_1d t.size()={:?}", t.size());
-        //     t.squeeze()
-        // }), None)
-        // .max_pool(motif_batch_size, 1, 0)
+        }), Some(max_motif_nets))
+
         .linear()
-        .func(Tensor::relu)
+        // .func(Tensor::relu)
         .linear_s(1)
         .func(Tensor::sigmoid)
         .end_seq()
