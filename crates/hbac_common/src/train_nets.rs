@@ -1210,8 +1210,7 @@ mod train_tests {
                 Tensor::from_slice(&[9900., 29900., 49900., 69900., 89900., 109900., 129900., 149900., 169900., 189900.]) // ch. 0 net 1 (k=2)
             ], 0
         ).totype(Float).view((2, 1, 10));
-        assert_eq!(
-            channel_0_motifs, channel_0_t);
+        assert_eq!(channel_0_motifs, channel_0_t);
 
         let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
@@ -1222,9 +1221,7 @@ mod train_tests {
                 Tensor::from_slice(&[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]),  //ch 1 net 0 (k=1)
             ], 0
         ).totype(Float).view((2, 1, 10));
-        assert_eq!(
-            channel_1_motifs, channel_1_t
-        );
+        assert_eq!(channel_1_motifs, channel_1_t);
 
         println!("channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 

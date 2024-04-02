@@ -923,6 +923,55 @@ mod tch_tests {
         Ok(())
     }
 
+    //TODO ignores values when decreasing length
+    fn scale_x(series: &[f32], new_length: usize) -> Vec<f32> {
+        let mut stretched_series = Vec::with_capacity(new_length);
+        let old_length = series.len();
+        let factor = (old_length - 1) as f32 / (new_length - 1) as f32;
+
+        for new_index in 0..new_length {
+
+            let old_index = (new_index as f32 * factor) as usize;
+            let remainder = new_index as f32 * factor - old_index as f32;
+
+            debug!("new_index={}, old_index={} remainder={}", new_index, old_index, remainder);
+
+            if old_index == old_length - 1 {
+                stretched_series.push(series[old_index]);
+            } else {
+                let value = series[old_index] * (1.0 - remainder) + series[old_index + 1] * remainder;
+                stretched_series.push(value);
+            }
+        }
+
+        stretched_series
+    }
+
+
+    #[test]
+    pub fn test_scale_x(){
+        let v_5 = (0..5).map(|i| i as f32).collect::<Vec<f32>>();
+        let t_5 = Tensor::from_slice(v_5.as_slice());
+
+        let v_10 = (0..10).map(|i| i as f32).collect::<Vec<f32>>();
+        let t_10 = Tensor::from_slice(v_10.as_slice());
+
+        let v_20 = (0..20).map(|i| i as f32).collect::<Vec<f32>>();
+        let t_20 = Tensor::from_slice(v_20.as_slice());
+
+        // (0..10).zip(v_5.into_iter()).map(|v|)
+
+        debug!("v_5={:?} x={:?}",  v_5, scale_x(v_5.as_slice(), 10));
+        debug!("v_10={:?} x={:?}", v_10, scale_x(v_10.as_slice(), 10));
+        debug!("v_20 ={:?} x={:?}", v_20, scale_x(v_20.as_slice(), 10));
+
+        // let v_20_x = [0.0, 100.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0];
+        // debug!("v_20_x={:?} x={:?}", v_20_x, scale_horizontally(v_20_x.as_slice(), 10));
+
+        //[1, 2, 10, 4, 5] -> [1, 1.5, 2, 2.5, 10., 3.5, 4., 4.5. 5.]
+        //[1, 2, 3, 4, 5, 6, 7, 8, 9, 100, 11, 12, 13, 14, 15, 16, 17, 18, 19] -> [1,3,5,7,9,100,13,15,17,19]
+        //TODO
+    }
 
     #[test]
     pub fn test_test() -> Result<(), HbacError> {
