@@ -82,19 +82,19 @@ impl TrainOnEEGParams {
         &self.models_dir
     }
 
-    pub fn dummy(motif_models_dir:String, models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>) ->Self {
+    pub fn dummy(motif_models_dir:String, models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
         TrainOnEEGParams {
             corr_run:0,
             motif_models_dir,
             models_dir,
-            cycles: 100,
-            lr:1.0e-5,
+            cycles,
+            lr,
             train_labels_datasets,
             valid_labels_datasets,
             train_resource_group: None,
             valid_resource_group: None,
-            motif_batch_size: 10,
-            items_per_label:5
+            motif_batch_size,
+            items_per_label
         }
     }
 
@@ -714,7 +714,7 @@ pub fn corr_full_node(channels:i64, max_motif_nets:i64, max_motif_batches:i64, m
             .end_seq()
     */
     SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
-        .batch_norm()
+        // .batch_norm()
         .closure(Box::new(move |t:&Tensor|{
             //batch x max_motif_nets
             debug!("000.  t.size()={:?}", t.size());
@@ -728,10 +728,12 @@ pub fn corr_full_node(channels:i64, max_motif_nets:i64, max_motif_batches:i64, m
             (0..max_motif_nets).map( |i|
                 SeqBuilder::new(max_motif_batches as i64 * motif_batch_size)
                     .closure(Box::new(move |t:&Tensor|{
-                        debug!(">>>>>>>>>>>>>> 0 {:?}", t.size());
-                        t.view((-1, 1, max_motif_batches as i64 * motif_batch_size))
+                        debug!(">>>>>>>>>>>>>> 0 {:?} t.is_nonzero()={}", t.size(), is_nonzero(&t).unwrap());
+                        // let t = t.view((-1, channels, max_motif_batches as i64 * motif_batch_size));
+                        // debug!(">>>>>>>>>>>>>> 0 {:?}", t.size());
+                        t.shallow_clone()
                     }), None)
-                    .conv_1d(10, 1, 1, ConvConfig::default())
+                    .conv_1d(10, channels, channels, ConvConfig::default())
                     .max_pool(10, 1, 0)
                     // .func(Tensor::relu)
                     // .linear_s(channels)
@@ -755,15 +757,29 @@ pub fn corr_full_node(channels:i64, max_motif_nets:i64, max_motif_batches:i64, m
                     .func(Tensor::sigmoid)
                     .closure(Box::new(|t:&Tensor|{
                         debug!(">>>>>>>>>>>>>> 3 {:?}", t.size());
-                        t.view((-1, 1))
+                        // t.view((-1, 1))
+                        t.shallow_clone()
                     }), Some(1))
 
                     .end_seq()
             ).collect(),
 
-            Box::new(move |t:&Tensor|  (0..max_motif_nets).zip((0..channels)).map(|(net_i, channel_id)|t.i((.., channel_id, net_i, ..))).collect()),//batch, channel, max_motif_nets, max motif_net batches x motif_net batch size
+            Box::new(
+                move |t:&Tensor|  (0..max_motif_nets)
+                // .zip((0..channels))
+                // .map(|(net_i, channel_id)|t.i((.., channel_id, net_i, ..)))
+                .map(|net_i|t.i((.., .., net_i, ..)))
+                // .filter(|t|{
+                //     let nonzero = is_nonzero(&t).unwrap();
+                //     if !nonzero {
+                //         info!("zero filter");
+                //     }
+                //     nonzero
+                // })
+                .collect()
+            ),//batch, channel, max_motif_nets, max motif_net batches x motif_net batch size
 
-            Box::new(move |t:Vec<Tensor>|Tensor::stack(t.as_slice(), 1))
+            Box::new(move |t:Vec<Tensor>|Tensor::stack(t.as_slice(), 1).mean_dim(1, false, Float))
 
         )
         .closure(Box::new(move |t:&Tensor|{
@@ -781,7 +797,7 @@ pub fn corr_full_node(channels:i64, max_motif_nets:i64, max_motif_batches:i64, m
 
             t_0
 
-        }), Some(max_motif_nets))
+        }), Some(channels))
 
         .linear()
         // .func(Tensor::relu)
@@ -1099,6 +1115,11 @@ fn build_multidim<'a>( builder:&'a mut SeqBuilder, dims:&'a [i64])  {
 
     builder.func(Tensor::sigmoid);
 }
+
+pub fn is_nonzero(t_1: &Tensor) -> Result<bool, HbacError> {
+    Ok(t_1.flatten(0, (t_1.size().len() - 1) as i64).iter::<f64>()?.find(|v| v > &0.).is_some())
+}
+
 
 
 #[cfg(test)]
@@ -1571,29 +1592,44 @@ mod train_tests {
         Ok(())
     }
 
+    #[test]
+    fn test_is_nonzero() -> Result<(), HbacError> {
+
+        assert!(super::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
+        assert!(super::is_nonzero(&Tensor::stack(&[Tensor::from_slice(&[0., 1., 0.]), Tensor::from_slice(&[0., 0., 0.])], 0))?);
+        assert!(!super::is_nonzero(&Tensor::from_slice(&[0., 0., 0.]))?);
+
+        Ok(())
+    }
 
     #[test]
     fn test_test() -> Result<(), HbacError> {
-
-        let mut vs_0 = nn::VarStore::new(Cpu);
-
-        let batch_len = 11;
-        let d_0 = 3;
-        let d_1 = 7;
-        let d_2 = 5;
-
-        let mut builder = SeqBuilder::new(d_2);
+        let t_1 = Tensor::stack(&[Tensor::from_slice(&[0., 0., 0.]), Tensor::from_slice(&[0., 0., 0.])], 0);
 
 
-        super::build_multidim(&mut builder, &[d_2, d_1, d_0, 1]);
+        println!("size={:?} t={}", t_1.size(), super::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
 
+        // println!("t={}", t.is_nonzero());
 
-        let net = builder.end_seq().build_tch_module(&vs_0.root())?;
-
-        let tensor = Tensor::zeros(&[batch_len, d_0, d_1, d_2], (Float, Cpu));
-        let out = net.forward(&tensor);
-
-        debug!("out.size={:?}", out.size());
+        // let mut vs_0 = nn::VarStore::new(Cpu);
+        //
+        // let batch_len = 11;
+        // let d_0 = 3;
+        // let d_1 = 7;
+        // let d_2 = 5;
+        //
+        // let mut builder = SeqBuilder::new(d_2);
+        //
+        //
+        // super::build_multidim(&mut builder, &[d_2, d_1, d_0, 1]);
+        //
+        //
+        // let net = builder.end_seq().build_tch_module(&vs_0.root())?;
+        //
+        // let tensor = Tensor::zeros(&[batch_len, d_0, d_1, d_2], (Float, Cpu));
+        // let out = net.forward(&tensor);
+        //
+        // debug!("out.size={:?}", out.size());
 
 
         // let t =

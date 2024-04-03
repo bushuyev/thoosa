@@ -210,7 +210,8 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
 pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
     Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id))).map(|t|t.to_device(device)).map_err(|e|HbacError::new(e.to_string())).map(|t|{
         debug!("load_tensor: t.kind()={:?}", t.kind());
-        t.avg_pool1d(10, 1, 0, false, false)
+        t.avg_pool1d(20, 1, 0, false, false)
+        // t
     })
 }
 

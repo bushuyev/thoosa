@@ -310,7 +310,9 @@ fn _main() -> Result<(), HbacError> {
 
             info!("run_train_on_motifs done");
 
-            run_train_on_eeg(&cli, &store, devices.clone(), &TrainOnEEGParams::dummy(run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone()))?;
+            run_train_on_eeg(&cli, &store, devices.clone(), &TrainOnEEGParams::dummy(
+                run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone(), 10, 5, 100, 1.0e-5)
+            )?;
 
             info!("run_train_on_eeg done");
 
@@ -825,12 +827,12 @@ mod main_tests {
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::Device;
     use tch::Device::Cpu;
-    use hbac_common::train_nets::TrainFinalParams;
+    use hbac_common::train_nets::{TrainFinalParams, TrainOnEEGParams};
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
-    use crate::{Cli, Commands, run_find_motifs_on_group, run_select_motifs, run_train_final, RunAllParams};
-    use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal};
+    use crate::{Cli, Commands, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_eeg, RunAllParams};
+    use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnEEG};
     use log::debug;
     // use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
 
@@ -924,6 +926,41 @@ mod main_tests {
         )?;
 
         debug!("corr_ids={:?}", corr_ids);
+
+        Ok(())
+    }
+
+
+
+    #[test]
+    fn test_run_train_on_eeg() -> Result<(), HbacError>{
+        let train_eeg_params = TrainOnEEGParams::dummy(
+            "../../data_local/test_models/".into(),
+            "/tmp".into(),
+            vec![("grda".into(), "grda/3".into())],
+            vec![("grda".into(), "grda/3".into())], 100, 2, 2, 1.0e-5,
+        );
+
+        let cli = Cli{
+            base_path: "../../data/".into(),
+            tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
+            store_path: "../../data_down/group_1_labels_100_100_200/hbac-model/hbac_all.db3".to_string(),
+            term_logger_level: "DEBUG".into(),
+            write_logger_level: "DEBUG".into(),
+            logfile: "/tmp/hbac_test.log".into(),
+            limit: None,
+            num_threads: None,
+            command: Some(TrainOnEEG(train_eeg_params.clone())),
+        };
+
+        let store = Arc::new(Mutex::new(SqlStore::new(cli.store_path.clone())?));
+
+        run_train_on_eeg(
+            &cli,
+            &store,
+            vec![Cpu],
+            &train_eeg_params,
+        )?;
 
         Ok(())
     }

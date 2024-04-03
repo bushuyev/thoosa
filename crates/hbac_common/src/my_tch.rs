@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 use core::fmt;
 
-use log::{debug, info, error};
+use log::{debug, info, warn, error};
 use plotters::prelude::*;
 // use polars::prelude::{col, lit, NamedFrom, Series};
 use simplelog::*;
@@ -409,12 +409,9 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
 
             let net_rs = net.lock().unwrap().forward(&batch).squeeze();
             debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
-            net_batch.push(
-                pad_to(&net_rs, &[motif_batch_size as i64]).unwrap()
-            );
+            add_net_batch(motif_batch_size, net_batch, net_rs);
         };
     }
-
 
     if folds.1.len() > 0 {
         debug!("apply_channel_motifs: reminder={:?}", folds.1);
@@ -429,14 +426,10 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
             let net_rs = net.lock().unwrap().forward(&batch).set_requires_grad(false).squeeze();
 
             if net_rs.size().len() > 0 {
-                debug!("apply_channel_motifs: reminder, batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
-
-                net_batch.push(
-                    pad_to(&net_rs, &[motif_batch_size as i64]).unwrap()
-                );
+                add_net_batch(motif_batch_size, net_batch, net_rs);
 
             } else {
-                debug!("apply_channel_motifs: reminder, no rs for net_i={} batch.size()={:?}", net_i, batch.size());
+                warn!("apply_channel_motifs: reminder, no rs for net_i={} batch.size()={:?}", net_i, batch.size());
             }
         };
     }
@@ -447,7 +440,6 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     });
     let mut net_tensors = net_batches.into_iter().map(|net_batches| Tensor::stack(net_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
     debug!("apply_channel_motifs: net_tensors.len()={:?} sizes={:?}", net_tensors.len(), net_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
-
 
     let nets_t = Tensor::stack(
         net_tensors.as_slice(),
@@ -464,6 +456,18 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
 
     debug!("apply_channel_motifs: 2. nets_t={:?}", nets_t.size());
     nets_t.set_requires_grad(false)
+}
+
+fn add_net_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Tensor) {
+    if net_rs.size()[0] < motif_batch_size as i64 {
+        net_batch.push(
+            pad_to(&net_rs, &[motif_batch_size as i64]).expect("pad_to failed")
+        );
+    } else {
+        net_batch.push(
+            net_rs
+        );
+    }
 }
 
 
@@ -683,7 +687,7 @@ mod tch_tests {
         let g = gauss_i( (g_n as f32 - 1.0) /2.0, 1.0, g_n);
         let g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
 
-        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "2259539799", Cpu)?;
+        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1221753362", Cpu)?;//2259539799
 
         println!("t={:?}", t.size());
         let t = t.i((1..3, ..)).view((2, -1));//.view((1, -1));
@@ -694,51 +698,53 @@ mod tch_tests {
 
         // let t_f1 = t.conv1d(&Tensor::from_slice(g_v.as_slice()).totype(Float).view((1, 1, -1)), None::<Tensor>, 1, 0, 1, 1);
         let t_f1 = t.avg_pool1d(10, 1, 0, false, false);
+        let t_f100 = t.avg_pool1d(20, 1, 0, false, false);
 
         println!("t_f1={:?}", t_f1.size());
         let n = t.size()[1] as u32;//11; //
 
-        let channels_motifs_models = crate::train_nets::load_motif_models(
-            "/home/bu/dvl/kaggle/HMS_Harmful_Brain_Activity_Classification/data_down/200_model_08_max_ratio_dist/0_200/models/",
-            "gpd".into(),
-            20,
-            1000,
-            &Cpu
-        )?;
-        let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
+        // let channels_motifs_models = crate::train_nets::load_motif_models(
+        //     "/home/bu/dvl/kaggle/HMS_Harmful_Brain_Activity_Classification/data_down/200_model_08_max_ratio_dist/0_200/models/",
+        //     "gpd".into(),
+        //     20,
+        //     1000,
+        //     &Cpu
+        // )?;
+        // let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
-        println!("nets_in_channel={:?}", motif_nets.iter().map(|nets_in_channel|nets_in_channel.len()).collect::<Vec<usize>>());
+        // println!("nets_in_channel={:?}", motif_nets.iter().map(|nets_in_channel|nets_in_channel.len()).collect::<Vec<usize>>());
 
-        let motif_batches = batch_windows(684400, 1000, 100, 100);
-        let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+        // let motif_batches = batch_windows(684400, 1000, 100, 100);
+        // let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
 
 
-        let motifs_t = super::apply_channel_motifs(
-            1000,
-            100,
-            &motif_nets[0],
-            t_f1.i((0,..) ),
-            100,
-            1,
-            max_motif_batches,
-            &Cpu
-        );
+        // let motifs_t = super::apply_channel_motifs(
+        //     1000,
+        //     100,
+        //     &motif_nets[0],
+        //     t_f1.i((0,..) ),
+        //     100,
+        //     1,
+        //     max_motif_batches,
+        //     &Cpu
+        // );
 
-        println!("motifs_t.size()={:?}", motifs_t.squeeze().flatten(0,1).size());
+        // println!("motifs_t.size()={:?}", motifs_t.squeeze().flatten(0,1).size());
 
-        let motifs_vec = vec_f32_from(&motifs_t.squeeze());
+        // let motifs_vec = vec_f32_from(&motifs_t.squeeze());
 
-        println!("motifs_vec={:?}", motifs_vec);
-        let motif_len = motifs_vec.len();
+        // println!("motifs_vec={:?}", motifs_vec);
+        // let motif_len = motifs_vec.len();
         plot_series(
             vec![
-                // (format!("t"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
-                // (format!("t_f1"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((1, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
-                (format!("motif"), RED, (0..motif_len).into_iter().map(|i|i as f32).zip(motifs_vec).collect::<Vec<(f32, f32)>>()),
+                (format!("t"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                (format!("t_f1"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                (format!("t_f1"), GREEN, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f100.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
+                // (format!("motif"), RED, (0..motif_len).into_iter().map(|i|i as f32).zip(motifs_vec).collect::<Vec<(f32, f32)>>()),
                 // (format!("G"), RED, (0..g_n).map(|i| 10. * i as f32).zip(g_v.into_iter()).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (motif_len as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "EEG", (n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
             // ], "EEG", ((g_n*30) as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         );
 

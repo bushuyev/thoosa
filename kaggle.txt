@@ -72,7 +72,7 @@ print("----------------------------------------------------")
 !cp -r /kaggle/input/hbac-model ./ && chmod 755 ./hbac-model/hbac_main
 !export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/kaggle/input/pytorch-libs/lib RUST_BACKTRACE=full && ./hbac-model/hbac_main \
 --base-path=/kaggle/input/hms-harmful-brain-activity-classification \
---store-path=/kaggle/working/hbac_100.db3 \
+--store-path=/kaggle/working/hbac_all.db3 \
 --tensors-path=/kaggle/input/hbac-eegs-pt \
 run-all \
 --models-dir=/kaggle/working/0_100_models/ \
