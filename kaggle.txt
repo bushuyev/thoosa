@@ -26,14 +26,18 @@ select-motifs \
 TRAIN ON EEG LOCAL
 target/x86_64-unknown-linux-gnu/release/hbac_main \
 --base-path=../../data \
---store-path=../../data_down/200_model_08_max_ratio_dist/0_200/hbac_200_min_ratio_08.db3 \
+--store-path=../../data_down/window_5000/0_400/hbac_all.db3 \
 --tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
 train-on-eeg \
 --corr-run=777 \
---motif-models-dir=../../data_down/200_model_08_max_ratio_dist/0_200/models/ \
---models-dir=../../data_down/200_model_08_max_ratio_dist/0_200/models/777 \
+--motif-models-dir=../../data_down/window_5000/0_400/0_400_models_window_5000_avg_20 \
+--models-dir=../../data_down/window_5000/0_400/777 \
 --train-resource-group="group 1 labels/200/0-200" \
---valid-resource-group="group 1 labels/200/200-400"
+--valid-resource-group="group 1 labels/200/200-400" \
+--motif-batch-size=100 \
+--items-per-label=10 \
+--window=5000 \
+--step=1000
 
 TRAIN FINAL LOCAL
 target/x86_64-unknown-linux-gnu/release/hbac_main \
@@ -88,18 +92,18 @@ print("----------------------------------------------------")
 print("----------------------------------------------------")
 print("----------------------------------------------------")
 # --write-logger-level=DEBUG \
-!cp /kaggle/input/hbac-db/hbac_200_min_ratio_08.db3 ./
+!cp /kaggle/input/hbac-db/0_400_mr_08_avg_20/hbac_all.db3 ./
 !cp -r /kaggle/input/hbac-model ./ && chmod 755 ./hbac-model/hbac_main
 #!export PYTORCH_CUDA_ALLOC_CONF='max_split_size_mb:512' && \
 !export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/kaggle/input/pytorch-libs/lib RUST_BACKTRACE=full && ./hbac-model/hbac_main \
 --base-path=/kaggle/input/hms-harmful-brain-activity-classification \
---store-path=/kaggle/working/hbac_200_min_ratio_08.db3 \
+--store-path=/kaggle/working/hbac_all.db3 \
 --tensors-path=/kaggle/input/hbac-eegs-pt \
 train-on-eeg --corr-run=777 \
 --models-dir=/kaggle/working/ \
---motif-models-dir=/kaggle/input/hbac-db/0_600 \
---train-resource-group="group 1 labels/200/0-200"
---valid-resource-group="group 1 labels/200/200-400" \
+--motif-models-dir=/kaggle/input/hbac-db/0_400_mr_08_avg_20/0_400_models \
+--train-resource-group="group 1 labels/200/0-400" \
+--valid-resource-group="group 1 labels/200/0-200" \
 --motif-batch-size=100 \
 --items-per-label=10 \
 --cycles=300 \

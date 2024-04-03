@@ -275,7 +275,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
         })
     });
 
-    for i in 0..channels { //TODO channels len
+    for i in 0..channels {
         { store.lock()?.set_motifs(run_id, i as i64)}?;
     }
 
@@ -1454,72 +1454,6 @@ mod motif_find_tests {
 
 
         Ok(())
-    }
-
-
-    fn conv_motifs(motifs: &Tensor, all_zero: &Tensor, channels_motifs_classes: &mut Vec<Vec<(Vec<f64>, Vec<f64>)>>, eeg_path: &str, class_label: f64) -> Result<(), HbacError> {
-        let motifs_flat = motifs.view((20*120, 1, 1000)); //.transpose(0, 1);
-        println!("motifs={:?}", motifs_flat.size());
-
-        let mut count = 0;
-        for f in fs::read_dir(eeg_path)? {
-            let e = f?;
-            let eeg = Tensor::load(e.path())?;
-
-            let conv_t = eeg.conv1d(&motifs_flat, None::<Tensor>, 10, 0, 1, 20);
-            let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
-
-            let val_t = pool_t.view((20, 120, -1));
-
-            for motif_i in 0..120 {//TODO
-                for channel_i in 0..20 {
-                    let motif_t = motifs.i((channel_i as i64, motif_i as i64));
-
-                    let v_label = if motif_t.equal(&all_zero) {
-                        (0., class_label)
-                    } else {
-                        let eeg_x_motif = val_t.i((channel_i as i64, motif_i as i64, ..));
-                        let conv_val = eeg_x_motif.max().double_value(&[]);
-
-                        (conv_val, class_label)
-                    };
-
-                    channels_motifs_classes[channel_i][motif_i].0.push(v_label.0);
-                    channels_motifs_classes[channel_i][motif_i].1.push(v_label.1);
-                }
-            }
-
-            if count > 100 {
-                break
-            }
-            count +=1;
-
-        }
-        Ok(())
-    }
-
-
-    fn pool_eeg_vs_fragment(eeg: String, pulse: String) -> Result<Vec<f32>, HbacError> {
-        let t = Tensor::load(eeg)?;
-        let pulse = Tensor::load(pulse)?;
-        // println!("t={:?}", t.size());
-        // println!("pulse={:?}", pulse.size());
-
-        let t_0 = t.get(3).view([1, -1]);
-
-        // println!("t_0={:?}", t_0.size());
-
-        let conv_t = t_0.view([1, -1]).conv1d(&pulse.view([1, 1, -1]), None::<Tensor>, 1000, 0, 1, 1);
-
-        // println!("conv_t.size = {:?}", conv_t.size());
-
-        let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
-
-        // println!("pool.size = {:?}", pool_t.size());
-
-        let n = t_0.size()[1];
-        let x = lin_t(n);
-        Ok(vec_f32_from(&pool_t))
     }
 
     #[test]

@@ -107,7 +107,10 @@ pub struct RunAllParams {
     select_motifs_min_ratio: f32,
 
     #[arg(long, default_value_t = 100)]
-    train_final_cycles:usize
+    train_final_cycles:usize,
+
+    #[arg(long,  default_value_t = 100)]
+    motif_batch_size: i64,
 
 }
 
@@ -143,6 +146,7 @@ impl RunAllParams {
             find_motifs_max_dist_k: 0.3,
             select_motifs_min_ratio: 0.3,
             train_final_cycles: 1000,
+            motif_batch_size: 100
         }
     }
     pub fn valid_resource_group(&self) -> &str {
@@ -306,12 +310,14 @@ fn _main() -> Result<(), HbacError> {
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids))?;
+            run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids, run_all_params.window, 1000))?;
 
             info!("run_train_on_motifs done");
 
             run_train_on_eeg(&cli, &store, devices.clone(), &TrainOnEEGParams::dummy(
-                run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone(), 10, 5, 100, 1.0e-5)
+                run_all_params.step,
+                run_all_params.window,
+                run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone(), run_all_params.motif_batch_size, 5, 100, 1.0e-5)
             )?;
 
             info!("run_train_on_eeg done");
@@ -320,18 +326,21 @@ fn _main() -> Result<(), HbacError> {
                 &cli, &store,
                 &device,
                 &TrainFinalParams::dummy(
+                    run_all_params.step,
+                    run_all_params.window,
                     vec![run_all_params.models_dir.clone()],
                     format!("{}/final.safetensors", run_all_params.models_dir),
                     run_all_params.train_resource_group.clone(),
                     run_all_params.valid_resource_group.clone(),
                     run_all_params.train_final_cycles,
+                    run_all_params.motif_batch_size,
                 )
             )?;
 
             info!("run_train_final done");
         }
 
-        Some(Commands::Infer(infer_params)) => {
+        Some(Infer(infer_params)) => {
 
             let labels = store.lock().expect("store").list_labels()?;
 
@@ -340,9 +349,9 @@ fn _main() -> Result<(), HbacError> {
                 |path:&Path|{
                     data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), *devices.first().expect("first device"))
                 },
-                1000,
-                100,
-                100,
+                infer_params.window() as i64,
+                infer_params.step(),
+                infer_params.motif_batch_size(),
                 20,
                 684400,
                 &device,
@@ -357,11 +366,11 @@ fn _main() -> Result<(), HbacError> {
             )
 
         }
-        Some(Commands::PlotMotifSlices(plot_motif_slices_params)) => {
+        Some(PlotMotifSlices(plot_motif_slices_params)) => {
             plot_motif_slices(&cli, &store, *devices.first().expect("first device"), &plot_motif_slices_params)?;
         }
 
-        Some(Commands::MotifsToTensor(choose_fragments_params)) => {
+        Some(MotifsToTensor(choose_fragments_params)) => {
             motifs_to_tensor_cmd(&cli, &store, *devices.first().expect("first device"), choose_fragments_params)?;
         }
         None => {
@@ -396,9 +405,9 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
             Arc::clone(&store) //cli.limit.as_ref()
             //684400 - TODO cut at max_input
         ),
-        1000,
-        100,
-        100,
+        train_final_params.window() as i64,
+        train_final_params.step(),
+        train_final_params.motif_batch_size(),
         20,
         684400,
         &device,
@@ -453,8 +462,8 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device
                     Arc::clone(&store)
                 ),
                 train_on_eeg_params.items_per_label(),
-                1000,
-                100,
+                train_on_eeg_params.window() as i64,
+                train_on_eeg_params.step(),
                 train_on_eeg_params.motif_batch_size(),
                 20,
                 684400,
@@ -935,6 +944,8 @@ mod main_tests {
     #[test]
     fn test_run_train_on_eeg() -> Result<(), HbacError>{
         let train_eeg_params = TrainOnEEGParams::dummy(
+            1000,
+            1000,
             "../../data_local/test_models/".into(),
             "/tmp".into(),
             vec![("grda".into(), "grda/3".into())],
@@ -969,6 +980,8 @@ mod main_tests {
     fn test_run_train_final() -> Result<(), HbacError>{
 
         let train_final_params = TrainFinalParams::dummy(
+            1000,
+            1000,
             vec![
                 "../../data_down/group_1_labels_100_0-100/0_100_models".into(),
                 "../../data_down/group_1_labels_100_100_200/100_200_models".into()
@@ -976,7 +989,8 @@ mod main_tests {
             "/tmp/final.safetensors".into(),
             "pure group 3".into(),
             "pure group 3".into(),
-            10
+            10,
+            100
         );
 
         let cli = Cli{

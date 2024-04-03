@@ -28,6 +28,12 @@ use hbac_shared::parse_key_val;
 #[derive(Debug, Args, Clone)]
 pub struct TrainOnEEGParams {
 
+    #[arg(long,  default_value_t = 1000)]
+    step: usize,
+
+    #[arg(long,  default_value_t = 1000)]
+    window: usize,
+
     #[arg(long)]
     train_resource_group: Option<String>,
 
@@ -82,8 +88,10 @@ impl TrainOnEEGParams {
         &self.models_dir
     }
 
-    pub fn dummy(motif_models_dir:String, models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
+    pub fn dummy(step: usize, window: usize, motif_models_dir:String, models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
         TrainOnEEGParams {
+            step,
+            window,
             corr_run:0,
             motif_models_dir,
             models_dir,
@@ -130,6 +138,14 @@ impl TrainOnEEGParams {
 
     pub fn items_per_label(&self) -> usize {
         self.items_per_label
+    }
+
+
+    pub fn step(&self) -> usize {
+        self.step
+    }
+    pub fn window(&self) -> usize {
+        self.window
     }
 }
 
@@ -662,17 +678,17 @@ impl TrainOnMotifsParams {
         self.min_corr
     }
 
-    pub fn dummy(output_dir: &String, corr_run_ids:Vec<usize>) ->Self{
+    pub fn dummy(output_dir: &String, corr_run_ids:Vec<usize>, window: usize, cycles: usize) ->Self{
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
             corr_run_ids,
 
-            window: 1000,//should be same as one used when finding motifs or TODO center bigger/smaller window
+            window,//should be same as one used when finding motifs or TODO center bigger/smaller window
 
             output_dir: output_dir.clone(),
 
-            cycles: 1000,
+            cycles,
 
             lr: 1.0e-5,
 
@@ -1013,6 +1029,14 @@ fn apply_eeg_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainFinalParams {
+    #[arg(long,  default_value_t = 1000)]
+    step: usize,
+
+    #[arg(long,  default_value_t = 1000)]
+    window: usize,
+
+    #[arg(long,  default_value_t = 100)]
+    motif_batch_size: i64,
 
     #[arg(long, default_value_t = 1000)]
     cycles: usize,
@@ -1051,14 +1075,17 @@ impl TrainFinalParams {
         &self.final_model
     }
 
-    pub fn dummy(models_dir:Vec<String>, final_model:String, train_resource_group:String, valid_resource_group:String, cycles: usize) ->Self {
+    pub fn dummy(step: usize, window: usize, models_dir:Vec<String>, final_model:String, train_resource_group:String, valid_resource_group:String, cycles: usize, motif_batch_size: i64) ->Self {
         TrainFinalParams {
+            step,
+            window,
             cycles,
             lr: 1.0e-5,
             models_dir,
             final_model,
             train_resource_group,
-            valid_resource_group
+            valid_resource_group,
+            motif_batch_size
         }
     }
     pub fn train_resource_group(&self) -> &str {
@@ -1067,10 +1094,30 @@ impl TrainFinalParams {
     pub fn valid_resource_group(&self) -> &str {
         &self.valid_resource_group
     }
+
+
+    pub fn step(&self) -> usize {
+        self.step
+    }
+    pub fn window(&self) -> usize {
+        self.window
+    }
+
+    pub fn motif_batch_size(&self) -> i64 {
+        self.motif_batch_size
+    }
 }
 
 #[derive(Debug, Args, Clone)]
 pub struct InferParams {
+    #[arg(long,  default_value_t = 1000)]
+    step: usize,
+
+    #[arg(long,  default_value_t = 1000)]
+    window: usize,
+
+    #[arg(long,  default_value_t = 100)]
+    motif_batch_size: i64,
 
     #[arg(long, default_value = "/tmp/")]
     models_dir: String,
@@ -1097,6 +1144,16 @@ impl InferParams {
     }
     pub fn output(&self) -> &str {
         &self.output
+    }
+
+    pub fn step(&self) -> usize {
+        self.step
+    }
+    pub fn window(&self) -> usize {
+        self.window
+    }
+    pub fn motif_batch_size(&self) -> i64 {
+        self.motif_batch_size
     }
 }
 

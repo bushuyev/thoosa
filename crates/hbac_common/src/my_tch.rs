@@ -372,8 +372,6 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
     )
 }
 
-
-
 pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let input_t_size = eeg_t_channel.size();
