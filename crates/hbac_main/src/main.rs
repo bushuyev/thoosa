@@ -28,7 +28,7 @@ use tch::Device::Cpu;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
 
 use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_eeg, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams, infer};
+use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_label, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams, infer};
 use hbac_common::simp::DummyDs;
 use hbac_common::train_nets;
 use hbac_store::{SqlStore, Store};
@@ -36,7 +36,7 @@ use hbac_shared::*;
 use hbac_shared::TensorSliceIdx;
 use crate::Commands::*;
 use polars::export::rayon::iter::ParallelIterator;
-
+use hbac_common::train_nets::MotifNodeParams;
 
 mod data;
 mod utils;
@@ -443,7 +443,7 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device
 
             info!("training {} on {} device={:?}", label, resource_set, device_i);
 
-            match train_on_eeg(
+            match train_on_label(
                 train_on_eeg_params,
                 eegs_to_labels_tensors(
                     cli.base_path.as_str(),
@@ -470,8 +470,9 @@ fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device
                 &device_i,
                 label
             ) {
-                Ok(vs) => {
+                Ok((vs,node_params)) => {
                     vs.save(format!("{}/{}_{}.safetensors", train_on_eeg_params.models_dir(), label, train_on_eeg_params.corr_run())).expect("save vs");
+                    fs::write(Path::new(train_on_eeg_params.models_dir()).join(format!("{}_{}.json", label, train_on_eeg_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
                 }
                 Err(e) => {//should be no motif nets found only
                     warn!("e:{:?}", e);
@@ -492,15 +493,25 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
     let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, String)])>>();//corrs_run(id, label)
 
     let cli_clone = cli.clone();
-    devices_corr_run.into_par_iter().for_each(move |(device_i, corrs_run)| {
+    let node_params = MotifNodeParams::new(train_on_motif_params.window() as i64);
+    devices_corr_run.into_par_iter().for_each( |(device_i, corrs_run)| {
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?}", corrs_run, device_i);
 
         for (corr_run_id, label) in corrs_run {
-            train_on_motifs(&cli_clone, Arc::clone(&store), device_i, train_on_motif_params, *corr_run_id, label).unwrap();
+            train_on_motifs(
+                &cli_clone,
+                Arc::clone(&store),
+                device_i,
+                train_on_motif_params,
+                *corr_run_id, label,
+                &node_params
+            ).unwrap();
         }
 
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?} done ", corrs_run, device_i);
     });
+
+    fs::write(Path::new(train_on_motif_params.output_dir()).join("motif_model.json"), serde_json::to_string(&node_params)?);
     Ok(())
 }
 
@@ -675,7 +686,7 @@ fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, pl
     Ok(())
 }
 
-fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, train_on_motif_params: &TrainOnMotifsParams, corr_run: usize, label: &String) -> Result<(), HbacError> {
+fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, train_on_motif_params: &TrainOnMotifsParams, corr_run: usize, label: &String, node_params: &MotifNodeParams) -> Result<(), HbacError> {
     debug!("train_on_motifs: device={:?}, corr_run={:?}", device, corr_run);
 
     let motifs_iter = {
@@ -689,8 +700,6 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
             .filter(|(motif_id, corr)| *corr > train_on_motif_params.min_corr())
             .map(|(motif_id, corr)| motif_id).collect::<Vec<usize>>()
     };
-
-
 
     let output_dir = Path::new(train_on_motif_params.output_dir()).join(label);//TODO corr_run
 
@@ -739,10 +748,28 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
         assert!(all_sices_1.len() > 0, "all_sices_1.len(), motif={}", motif_id);
         assert!(all_sices_0.len() > 0, "all_sices_0.len(), motif={}", motif_id);
 
+        let batch_size = 2; //TODO, purge small motifs
+        if all_sices_1.len() < batch_size {
+            warn!("num of motif_id {} {} in channel {} is less than {}", motif_id, all_sices_1.len(), channel, batch_size);
+            continue;
+        }
+
+        if all_sices_0.len() < batch_size {
+            warn!("num of not motif_id {} {} in channel {} is less than {}", motif_id, all_sices_0.len(),  channel, batch_size);
+            continue;
+        }
 
         debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
 
-        let (loss, mut vs) = train_nets::train_on_motif(all_sices_0, all_sices_1, train_on_motif_params, device, train_nets::motif_node(train_on_motif_params.window() as i64))?;
+
+        let (loss, mut vs) = train_nets::train_on_motif(
+            all_sices_0,
+            all_sices_1,
+            train_on_motif_params,
+            device,
+            node_params,
+            batch_size
+        )?;
 
         debug!("train_on_motif: motif_id={} loss={}", motif_id, loss);
 

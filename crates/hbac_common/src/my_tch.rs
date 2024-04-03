@@ -484,6 +484,7 @@ mod tch_tests {
     use crate::utils::*;
     use hbac_shared::*;
     use core::f32::consts::PI;
+    use std::fs;
     use std::iter::{ArrayChunks, StepBy};
     use std::ops::RangeInclusive;
     use chrono::Utc;
@@ -494,6 +495,8 @@ mod tch_tests {
     use std::sync::Mutex;
     use tch::Device::Cpu;
     use tch::Kind::Float;
+    use serde::{Serialize, Deserialize};
+
 
     #[ctor::ctor]
     fn init() {
@@ -975,6 +978,41 @@ mod tch_tests {
         //[1, 2, 10, 4, 5] -> [1, 1.5, 2, 2.5, 10., 3.5, 4., 4.5. 5.]
         //[1, 2, 3, 4, 5, 6, 7, 8, 9, 100, 11, 12, 13, 14, 15, 16, 17, 18, 19] -> [1,3,5,7,9,100,13,15,17,19]
         //TODO
+    }
+
+    #[test]
+    pub fn test_save_load() -> Result<(), HbacError> {
+        let vs_0 = nn::VarStore::new(Device::Cpu);
+
+        SeqBuilder::new(123)
+            .linear_s(10)
+            .conv_1d(3, 1, 2, ConvConfig::default())
+            .conv_1d(5, 1, 2, ConvConfig::default())
+            .linear_s(20)
+            .func(Tensor::sigmoid)
+            .end_seq().build_tch_module(&vs_0.root());
+
+        println!("vs_0.variables()={:?}", vs_0.variables());
+
+        vs_0.save("/tmp/test.pt")?;
+
+        let mut vs_1 = nn::VarStore::new(Device::Cpu);
+        vs_1.load("/tmp/test.pt");
+
+        println!("vs_1.variables()={:?}", vs_1.variables());
+        #[derive(Debug, Serialize, Deserialize)]
+        struct T {
+            i: i32,
+            f: f64,
+        }
+
+        let t = T { i: 1, f: 321.456 };
+
+        fs::write("/tmp/model.json", serde_json::to_string(&t)?);
+
+        println!("{:?}", serde_json::from_str::<T>(&fs::read_to_string("/tmp/model.json").unwrap()).unwrap());
+
+        Ok(())
     }
 
     #[test]
