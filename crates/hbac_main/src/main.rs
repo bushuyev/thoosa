@@ -366,19 +366,19 @@ fn _main() -> Result<(), HbacError> {
             info!("run_train_on_motifs done");
 
             run_train_on_label(&cli, &store, devices.clone(),
-                               &TrainOnLabelParams::dummy(
-                    run_all_params.step,
-                    run_all_params.window,
-                    run_all_params.models_dir.clone(),
-                    run_all_params.models_dir.clone(),
-                    train_labels_datasets.clone(),
-                    valid_labels_datasets.clone(),
-                    run_all_params.motif_batch_size,
-                    5,
-                    100,
-                    1.0e-5
-                 ),
-                 Arc::clone(&loader)
+               &TrainOnLabelParams::dummy(
+                   run_all_params.step,
+                   run_all_params.window,
+                   run_all_params.models_dir.clone(),
+                   run_all_params.models_dir.clone(),
+                   train_labels_datasets.clone(),
+                   valid_labels_datasets.clone(),
+                   run_all_params.motif_batch_size,
+                   5,
+                   100,
+                   1.0e-5,
+               ),
+               Arc::clone(&loader),
             )?;
 
             info!("run_train_on_eeg done");
