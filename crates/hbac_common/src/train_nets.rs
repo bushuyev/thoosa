@@ -1236,7 +1236,7 @@ mod train_tests {
     use std::path::{Path, PathBuf};
     use tch::{Device, nn, Tensor};
     use hbac_shared::{HbacError, batch_windows};
-    use crate::train_nets::{ClassTensorsDataBatch, load_motif_models, motif_node, TrainOnEEGParams, TrainFinalParams, InferParams, LabelNodeParams, FinalNodeParams};
+    use crate::train_nets::{ClassTensorsDataBatch, load_motif_models, motif_node, TrainOnEEGParams, TrainFinalParams, InferParams, LabelNodeParams, FinalNodeParams, MotifNodeParams};
     use crate::utils::{cdt_for_dir, from};
     use crate::utils::DataBatch;
     use tch::IndexOp;
@@ -1419,6 +1419,8 @@ mod train_tests {
     #[test]
     fn test_train_on_eeg() -> Result<(), HbacError> {
         let models_path = Path::new("/tmp/test_train_on_eeg").join(cdt_for_dir());
+        fs::create_dir_all(&models_path);
+        fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(100))?)?;
 
         let params = TrainOnEEGParams {
             corr_run: 0,
