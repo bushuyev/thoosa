@@ -42,11 +42,11 @@ train-on-eeg \
 TRAIN FINAL LOCAL
 target/x86_64-unknown-linux-gnu/release/hbac_main \
 --base-path=../../data \
---store-path=../../data_down/group_1_100_0_100_dist_1/hbac_100.db3 \
+--store-path=/tmp/hbac/run_all_test.db3 \
 --tensors-path=/media/bu/KINGSTON/all_eegs.pt/all/ \
 train-final \
---final-model=../../data_down/group_1_100_0_100_dist_1/0_100_models/final.safetensors \
---models-dir=../../data_down/group_1_100_0_100_dist_1/0_100_models/ \
+--final-model=/tmp/hbac/final.safetensors \
+--models-dir=/tmp/hbac/ \
 --train-resource-group="group 1 labels/100/0-100" \
 --valid-resource-group="group 1 labels/100/100-200"
 

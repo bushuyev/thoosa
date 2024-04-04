@@ -665,7 +665,7 @@ fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, pl
     let base_path = cli.base_path.as_str();
 
     let slices = load_motif_slices(
-        cli.base_path.as_str(), channel, 1000, slices, store_guard.list_run_resources(run_id)?,
+        cli.base_path.as_str(), channel, 1000, slices,
         move |eeg_id| {
             parquet_or_load_tensor(base_path, cli.tensors_path.clone(), eeg_id, device)
         },
@@ -717,7 +717,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
 
             let all_sices_1 = train_nets::flat_map(
                 load_motif_slices(
-                    cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?,
+                    cli.base_path.as_str(), channel, window, slices,
                     move |eeg_id| {
                         parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.clone(), eeg_id, device)
                     },
@@ -733,7 +733,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
 
             let all_sices_0 = train_nets::flat_map(
                 load_motif_slices(
-                    cli.base_path.as_str(), channel, window, slices, store_guard.list_run_resources(run_id)?,
+                    cli.base_path.as_str(), channel, window, slices,
                     move |eeg_id| {
                         parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.clone(), eeg_id, device)
                     },

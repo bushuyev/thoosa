@@ -640,7 +640,7 @@ impl Store for SqlStore {
                     a
                 });
 
-            debug!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
+            trace!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
 
             Ok(
                 (key, labels.iter().map(|(label_id, label)|*labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>())

@@ -337,7 +337,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, eegs: Vec<String>, load_tensor: F, device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
+pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, load_tensor: F, device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
     where F: Fn(&str) -> Box<Tensor> + Sync {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
@@ -354,7 +354,7 @@ pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: V
 
     let mut all_slices:Vec<(String, Vec<Box<Tensor>>)> = vec![];
 
-    tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).for_each(|tensor_idxs|{
+    tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).for_each(|tensor_idxs|{//TODO remove chunks?
 
         debug!("load_motif_slices: tensor_idxs={:?}", tensor_idxs);
 
@@ -368,8 +368,15 @@ pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: V
             let take = t.size()[1]/widow;
             debug!("load_motif_slices: tensor_idx={} slices.len={} t.size={:?} take={}", tensor_idx, slices.len(), t.size(),  take  );
 
-            //take - to skip last slice which might be not full
-            (tensor_idx.to_string(), slices.into_iter().take(take as usize).map(|slice_idx| Box::new(t.i((channel, *slice_idx..*slice_idx + widow)))).collect::<Vec<Box<Tensor>>>())
+            (tensor_idx.to_string(), slices.into_iter().filter(|slice_idx|{
+                let slice_ok = t.size()[1] >= **slice_idx + widow;
+
+                if !slice_ok {
+                    warn!("slice doesn't fit into tensor: tensor_idx={:?}, t.size()={:?}, *slice_idx={:?}, widow={:?}", tensor_idx, t.size(), *slice_idx, widow)
+                }
+
+                slice_ok
+            }).map(|slice_idx| Box::new(t.i((channel, *slice_idx..*slice_idx + widow)))).collect::<Vec<Box<Tensor>>>())
         }).collect::<Vec<(String, Vec<Box<Tensor>>)>>();
 
 
@@ -721,8 +728,7 @@ mod motifs_tests {
             "base",
             0,
             2,
-            vec![TensorSliceIdx(0.to_string(), 2)],
-            vec!["123".into()],
+            vec![TensorSliceIdx(123.to_string(), 2)],
             test_eeg_to_t,
             Device::Cpu
         );
@@ -733,6 +739,34 @@ mod motifs_tests {
 
         Ok(())
     }
+
+    // #[test]
+    // fn test_load_motif_slices_5000()-> Result<(), HbacError>{
+    //     fn test_eeg_to_t(eeg_id:&str) -> Box<Tensor> {
+    //
+    //         let t = Tensor::vstack(&[
+    //             Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
+    //         ]);
+    //
+    //         Box::new(t)
+    //     }
+    //
+    //     let motif_slices = super::load_motif_slices(
+    //         "base",
+    //         0,
+    //         5000,
+    //         vec![TensorSliceIdx(123.to_string(), 2)],
+    //         test_eeg_to_t,
+    //         Device::Cpu
+    //     );
+    //
+    //     assert_eq!(vec![("123".to_string(), vec![Box::new(Tensor::from_slice(&[2.0, 3.0]))])], motif_slices);
+    //
+    //     println!("motif_slices={:?}", motif_slices);
+    //
+    //     Ok(())
+    // }
+
 
     #[test]
     fn test_check_slices()-> Result<(), HbacError> {

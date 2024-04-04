@@ -273,7 +273,7 @@ pub fn train_on_label<I>(params: &TrainOnLabelParams, train_labels_loaders:Vec<(
 
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, train_labels_loaders_map.keys());
 
-    let channels_motifs_models = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, device)?;//TODO num channels
+    let (channels_motifs_models, motif_node_params) = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, device)?;//TODO num channels
     // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
     debug!("train_on_eeg: models.size={:?}", channels_motifs_models.len());
 
@@ -356,15 +356,9 @@ apply_motifs:F) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Sen
 pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_tensors_loader: I, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
     where I:Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync {
 
-
-    let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
-    let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
-
-    debug!("train_final: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
-
-    let models = params.models_dir.iter().flat_map(|dir|
-            load_label_and_motif_models(dir.as_str(), channels as usize, motif_n, max_motif_batches as i64, motif_batch_size, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
-    ).collect::<Vec<LabelModels>>();
+    let models = params.models_dir.iter().flat_map(|dir| {
+        load_label_and_motif_models(dir.as_str(), channels as usize, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
+    }).collect::<Vec<LabelModels>>();
 
 
     let labels_models = models.into_iter().fold(HashMap::new(), |mut a, corr_models| {
@@ -381,7 +375,13 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_t
             match labels_models.get(label) {
                 Some(label_models) => {//label_models in one of the model dirs
                     Tensor::stack(label_models.iter().map(|model| {
-                        let t = apply_label_motifs(motif_n, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
+
+                        let motif_batches = batch_windows(max_input, model.motif_node_params.window as usize, step, motif_batch_size as usize);
+                        let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+
+                        debug!("train_final: model.motif_node_params={:?} motif_batches={}", model.motif_node_params, max_motif_batches);
+
+                        let t = apply_label_motifs(model.motif_node_params.window, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
 
                         //TODO move into CorrModels
                         let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
@@ -451,12 +451,8 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_t
 pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<(Vec<String>, Tensor), HbacError>
     where F:Fn(&Path) -> Result<Tensor, HbacError> + Sync{
 
-    let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
-    let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
-    debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
-
-    let models = load_label_and_motif_models(params.models_dir.as_str(), channels as usize, motif_n, max_motif_batches as i64, motif_batch_size, device)?
+    let models = load_label_and_motif_models(params.models_dir.as_str(), channels as usize, device)?
         .into_iter().fold(HashMap::new(), |mut a, v|{
         a.insert(v.label.clone(), v);
         a
@@ -478,7 +474,13 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
         let t = Tensor::stack(labels.iter().map(|label|{
             match models.get(label) {
                 Some(model)=>{
-                    let t = apply_label_motifs(motif_n, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                    let motif_batches = batch_windows(max_input, model.motif_node_params.window as usize, step, motif_batch_size as usize);
+                    let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+
+                    debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
+
+
+                    let t = apply_label_motifs(model.motif_node_params.window, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
                     let t_x = t.view((1, -1));
                     debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
 
@@ -519,28 +521,31 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
 struct LabelModels {
     label:String,
     label_model:Mutex<Box<dyn Module>>,
-    motif_models:Vec<Vec<Mutex<Box<dyn Module>>>>
+    motif_models:Vec<Vec<Mutex<Box<dyn Module>>>>,
+    motif_node_params:MotifNodeParams,
+    label_node_params:LabelNodeParams
 }
 
 impl LabelModels {
 
-    pub fn new(label:String, corr_model: Box<dyn Module>, motif_models: Vec<Vec<Box<dyn Module>>>) -> Self {
+    pub fn new(label:String, corr_model: Box<dyn Module>, motif_models: Vec<Vec<Box<dyn Module>>>,  motif_node_params:MotifNodeParams, label_node_params:LabelNodeParams) -> Self {
         Self {
             label,
             label_model: Mutex::new(corr_model),
-            motif_models: motif_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>()
+            motif_models: motif_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>(),
+            motif_node_params,
+            label_node_params
         }
     }
 
 }
-
 /**
 * features without x motif nets
 */
-fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: usize, motif_n: i64, max_motif_batches: i64, motif_batch_size: i64, device: &Device) -> Result<Vec<LabelModels>, HbacError> {
+fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: usize, device: &Device) -> Result<Vec<LabelModels>, HbacError> {
     let re = Regex::new(r"^(?<label>[a-zA-Z0-9]+?)_(?<corr_run>\d+).safetensors").unwrap();//TODO lazy_static
 
-    debug!("load_corr_and_motif_models: channels={:?}, motif_n={:?}, max_motif_batches={:?}, motif_batch_size={:?}", channels, motif_n, max_motif_batches, motif_batch_size);
+    debug!("load_corr_and_motif_models: motif_models_path={:?}", motif_models_path.as_ref());
 
     let mut models = vec![];
     for e in fs::read_dir(motif_models_path.as_ref())? {
@@ -562,7 +567,7 @@ fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: us
 
             let mut vs = nn::VarStore::new(device.clone());
 
-            let channels_motifs_models = load_motif_models(motif_models_path.as_ref(), label.clone(), channels, &device)?;
+            let (channels_motifs_models, motif_node_params) = load_motif_models(motif_models_path.as_ref(), label.clone(), channels, &device)?;
             assert!(channels_motifs_models.len() > 0);
             let max_nets =  channels_motifs_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
 
@@ -574,7 +579,7 @@ fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: us
             vs.load(entry.path())?;
             vs.freeze();
 
-            models.push(crate::train_nets::LabelModels::new(label, corr_model, channels_motifs_models))
+            models.push(crate::train_nets::LabelModels::new(label, corr_model, channels_motifs_models, motif_node_params, label_node_params))
         }
 
     }
@@ -584,7 +589,7 @@ fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: us
     Ok(models)
 }
 
-pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels:usize, device: &Device) -> Result<Vec<Vec<Box<dyn Module>>>, HbacError> {
+pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels:usize, device: &Device) -> Result<(Vec<Vec<Box<dyn Module>>>, MotifNodeParams), HbacError> {
     debug!("load_motif_models: motif_models_path={:?} label={:?}", motif_models_path.as_ref(), label);
 
     let motif_node_params = serde_json::from_str::<MotifNodeParams>(
@@ -631,7 +636,7 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
 
         channels_motifs_models.push(channels_motifs);
     }
-    Ok(channels_motifs_models)
+    Ok((channels_motifs_models, motif_node_params))
 
 }
 
