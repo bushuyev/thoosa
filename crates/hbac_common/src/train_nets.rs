@@ -148,6 +148,10 @@ impl TrainOnLabelParams {
     pub fn window(&self) -> usize {
         self.window
     }
+
+    pub fn dsp_filter(&self) ->Box<impl Fn(Tensor)->Tensor> {
+        Box::new(|t:Tensor|t)
+    }
 }
 
 /**

@@ -27,6 +27,7 @@ use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use regex::Regex;
 use tch::{Device, IndexOp, Kind, Tensor};
+use hbac_common::ResourceLoader;
 use hbac_shared::HbacError;
 use hbac_shared::MotifSlice;
 use hbac_shared::TensorSliceIdx;
@@ -557,15 +558,6 @@ pub fn parquet_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Resul
     parquet_to_tensor_by_path(path, device)
 }
 
-pub fn parquet_or_load_tensor (base_path: &str, tensors_path:Option<&String>, key: &str, device: Device) -> Box<Tensor> {
-
-    if let Some(tensors_path) = tensors_path {
-        Box::new(load_tensor(tensors_path.as_str(), key, device).unwrap())
-    } else {
-        Box::new(parquet_to_tensor(base_path, key, device).unwrap())
-    }
-}
-
 pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
     let df = read_eeg_to_df(path)?;
 
@@ -573,13 +565,13 @@ pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Resu
     Ok(tensor.set_requires_grad(false).to_device(device))
 }
 
-pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
+pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
     debug!("eegs_to_labels_tensors: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock().expect("store_lock");
 
 
-    let parquet_or_load_tensor_fn = move |resource: String| parquet_or_load_tensor(base_path, tensors_path.as_ref(), resource.as_str(), *device);
+    let parquet_or_load_tensor_fn = move |resource: String| loader.load(&resource, *device);
     vec![
         (
             1,
@@ -600,7 +592,7 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
     ]
 }
 
-pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, group:&str, device: &'a Device, store: Arc<Mutex<SqlStore>>) -> impl Iterator<Item=(Box<Tensor>,Box<Tensor>)> + Send + Sync + 'a {
+pub fn load_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, group:&str, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> impl Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync + 'a {
 
     let mut store_lock = store.lock().expect("store_lock");
 
@@ -610,7 +602,7 @@ pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
 
                 debug!("labels_p={:?}", labels_p);
                 (
-                    parquet_or_load_tensor(base_path, tensors_path.as_ref(), key.as_str(), *device),
+                    loader.load(&key, *device),
                     Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
                 )
         })
