@@ -353,7 +353,7 @@ apply_motifs:F) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Sen
         .collect::<Vec<Vec<_>>>()
 }
 
-pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_tensors_loader: I, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
+pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_tensors_loader: I, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
     where I:Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync {
 
     let models = params.models_dir.iter().flat_map(|dir| {
@@ -1545,7 +1545,6 @@ mod train_tests {
             &params,
             (0..13).map(load_cl),
             (0..13).map(load_cl),
-            100,
             100,
             motif_batch_size,
             channels,

@@ -557,7 +557,7 @@ pub fn parquet_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Resul
     parquet_to_tensor_by_path(path, device)
 }
 
-pub fn parquet_or_load_tensor(base_path: &str, tensors_path:Option<String>, key: &str, device: Device) -> Box<Tensor> {
+pub fn parquet_or_load_tensor (base_path: &str, tensors_path:Option<&String>, key: &str, device: Device) -> Box<Tensor> {
 
     if let Some(tensors_path) = tensors_path {
         Box::new(load_tensor(tensors_path.as_str(), key, device).unwrap())
@@ -565,8 +565,6 @@ pub fn parquet_or_load_tensor(base_path: &str, tensors_path:Option<String>, key:
         Box::new(parquet_to_tensor(base_path, key, device).unwrap())
     }
 }
-
-
 
 pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, HbacError> {
     let df = read_eeg_to_df(path)?;
@@ -581,7 +579,7 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
     let mut store_lock = store.lock().expect("store_lock");
 
 
-    let parquet_or_load_tensor_fn = move |resource: String| parquet_or_load_tensor(base_path, tensors_path.clone(), resource.as_str(), *device);
+    let parquet_or_load_tensor_fn = move |resource: String| parquet_or_load_tensor(base_path, tensors_path.as_ref(), resource.as_str(), *device);
     vec![
         (
             1,
@@ -612,7 +610,7 @@ pub fn eegs_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
 
                 debug!("labels_p={:?}", labels_p);
                 (
-                    parquet_or_load_tensor(base_path, tensors_path.clone(), key.as_str(), *device),
+                    parquet_or_load_tensor(base_path, tensors_path.as_ref(), key.as_str(), *device),
                     Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
                 )
         })

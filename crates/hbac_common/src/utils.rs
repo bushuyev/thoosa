@@ -309,7 +309,7 @@ pub mod tests {
 
         sample.save(format!("{}/{}.pt", base_path.as_str(), id));
 
-        let loaded = super::load_tensor(base_path.as_str(), id, Cpu)?;
+        let loaded = super::load_tensor(base_path.as_str(), id, Cpu, None)?;
 
         assert_eq!(sample, loaded);
 

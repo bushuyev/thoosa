@@ -97,6 +97,9 @@ pub struct RunAllParams {
     #[arg(long, default_value = "/tmp")]
     models_dir: String,
 
+    #[arg(long)]
+    input_filters_kernel: Option<i64>,
+
     #[arg(long, default_value_t = 1000)]
     find_motifs_chunk_size: usize,
 
@@ -146,7 +149,8 @@ impl RunAllParams {
             find_motifs_max_dist_k: 0.3,
             select_motifs_min_ratio: 0.3,
             train_final_cycles: 1000,
-            motif_batch_size: 100
+            motif_batch_size: 100,
+            input_filters_kernel: None
         }
     }
     pub fn valid_resource_group(&self) -> &str {
@@ -310,7 +314,7 @@ fn _main() -> Result<(), HbacError> {
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids, run_all_params.window, 1000))?;
+            run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids, run_all_params.window, 300))?;
 
             info!("run_train_on_motifs done");
 
@@ -406,7 +410,6 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
             Arc::clone(&store) //cli.limit.as_ref()
             //684400 - TODO cut at max_input
         ),
-        train_final_params.window() as i64,
         train_final_params.step(),
         train_final_params.motif_batch_size(),
         20,
@@ -585,11 +588,7 @@ fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Devic
 
     find::find_motifs_euc(
         move |key: &String| {
-            if let Some(tensors_path) = tensors_path.as_ref() {
-                Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
-            } else {
-                Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
-            }
+            parquet_or_load_tensor(base_path.as_str(), tensors_path.as_ref(), key.as_str(), device)
         },
         find_motifs_params,
         records_num,
@@ -608,11 +607,13 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
         store_guard.list_motifs_slices(choose_fragments_params.run_id())?,
         move |key: &String| {
 
-            if let Some(tensors_path) = tensors_path.as_ref() {
-                Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
-            } else {
-                Box::new(data::parquet_to_tensor(base_path_1.as_str(), key.as_ref(), device).unwrap())
-            }
+            // if let Some(tensors_path) = tensors_path.as_ref() {
+            //     Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device, None).unwrap())
+            // } else {
+            //     Box::new(data::parquet_to_tensor(base_path_1.as_str(), key.as_ref(), device).unwrap())
+            // }
+
+            parquet_or_load_tensor(base_path_1.as_str(), tensors_path.as_ref(), key.as_str(), device)
         },
         choose_fragments_params.window(),
         20,
@@ -667,7 +668,7 @@ fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, pl
     let slices = load_motif_slices(
         cli.base_path.as_str(), channel, 1000, slices,
         move |eeg_id| {
-            parquet_or_load_tensor(base_path, cli.tensors_path.clone(), eeg_id, device)
+            parquet_or_load_tensor(base_path, cli.tensors_path.as_ref(), eeg_id, device)
         },
         device
     );
@@ -719,7 +720,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
                 load_motif_slices(
                     cli.base_path.as_str(), channel, window, slices,
                     move |eeg_id| {
-                        parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.clone(), eeg_id, device)
+                        parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.as_ref(), eeg_id, device)
                     },
                     device
                 )
@@ -735,7 +736,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
                 load_motif_slices(
                     cli.base_path.as_str(), channel, window, slices,
                     move |eeg_id| {
-                        parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.clone(), eeg_id, device)
+                        parquet_or_load_tensor(cli.base_path.as_str(), cli.tensors_path.as_ref(), eeg_id, device)
                     },
                     device
                 )
@@ -804,12 +805,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
         resource_id_motif_slices,
 
         move |key: &String| {
-            if let Some(tensors_path) = tensors_path.as_ref() {
-                Box::new(load_tensor(tensors_path.as_str(), key.as_ref(), device).unwrap())
-            } else {
-
-                Box::new(data::parquet_to_tensor(base_path.as_str(), key.as_ref(), device).unwrap())
-            }
+            parquet_or_load_tensor(base_path.as_str(), tensors_path.as_ref(), key.as_str(), device)
         },
         select_motifs_params.window() as i64,
         20,//TODO
@@ -824,7 +820,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
             (
                 label_dataset.0.clone(),
                 store.lock().expect("store").list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(move |eeg_id| {
-                    parquet_or_load_tensor(cli.base_path.clone().as_str(), cli.tensors_path.clone().clone(), eeg_id.as_str(), device)
+                    parquet_or_load_tensor(cli.base_path.clone().as_str(), cli.tensors_path.as_ref(), eeg_id.as_str(), device)
                 })
             )
         }).collect(),

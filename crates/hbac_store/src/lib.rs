@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::path::Path;
 use rusqlite::{Connection, Error, params, Rows, Statement, ToSql, Transaction};
-use log::{debug, error};
+use log::{debug, error, trace};
 use rusqlite::types::{ToSqlOutput, Value};
 use rusqlite::types::ValueRef::Real;
 use std::fmt;

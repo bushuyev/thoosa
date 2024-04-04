@@ -688,7 +688,7 @@ mod tch_tests {
         let g = gauss_i( (g_n as f32 - 1.0) /2.0, 1.0, g_n);
         let g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
 
-        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1221753362", Cpu)?;//2259539799
+        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1221753362", Cpu, None)?;//2259539799
 
         println!("t={:?}", t.size());
         let t = t.i((1..3, ..)).view((2, -1));//.view((1, -1));
