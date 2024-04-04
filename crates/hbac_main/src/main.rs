@@ -28,7 +28,7 @@ use tch::Device::Cpu;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
 
 use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_label, TrainOnEEGParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams, infer};
+use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_label, TrainOnLabelParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams, infer};
 use hbac_common::simp::DummyDs;
 use hbac_common::train_nets;
 use hbac_store::{SqlStore, Store};
@@ -171,7 +171,7 @@ enum Commands {
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
     TrainOnMotifs(TrainOnMotifsParams),
-    TrainOnEEG(TrainOnEEGParams),
+    TrainOnEEG(TrainOnLabelParams),
     TrainFinal(TrainFinalParams),
     RunAll(RunAllParams),
     Infer(InferParams),
@@ -314,7 +314,7 @@ fn _main() -> Result<(), HbacError> {
 
             info!("run_train_on_motifs done");
 
-            run_train_on_eeg(&cli, &store, devices.clone(), &TrainOnEEGParams::dummy(
+            run_train_on_eeg(&cli, &store, devices.clone(), &TrainOnLabelParams::dummy(
                 run_all_params.step,
                 run_all_params.window,
                 run_all_params.models_dir.clone(), run_all_params.models_dir.clone(), train_labels_datasets.clone(), valid_labels_datasets.clone(), run_all_params.motif_batch_size, 5, 100, 1.0e-5)
@@ -334,6 +334,7 @@ fn _main() -> Result<(), HbacError> {
                     run_all_params.valid_resource_group.clone(),
                     run_all_params.train_final_cycles,
                     run_all_params.motif_batch_size,
+                    5,
                 )
             )?;
 
@@ -418,7 +419,7 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
     Ok(())
 }
 
-fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_eeg_params: &TrainOnEEGParams) -> Result<(), HbacError> {
+fn run_train_on_eeg(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_eeg_params: &TrainOnLabelParams) -> Result<(), HbacError> {
     debug!("run_train_on_eeg: train_on_eeg_params={:?}", train_on_eeg_params);
     // let labels_kinds = store_guard.corrs_descr(train_on_eeg_params.corr_run())?;
 
@@ -863,7 +864,7 @@ mod main_tests {
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::Device;
     use tch::Device::Cpu;
-    use hbac_common::train_nets::{TrainFinalParams, TrainOnEEGParams};
+    use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
@@ -970,7 +971,7 @@ mod main_tests {
 
     #[test]
     fn test_run_train_on_eeg() -> Result<(), HbacError>{
-        let train_eeg_params = TrainOnEEGParams::dummy(
+        let train_eeg_params = TrainOnLabelParams::dummy(
             1000,
             1000,
             "../../data_local/test_models/".into(),
@@ -1017,7 +1018,8 @@ mod main_tests {
             "pure group 3".into(),
             "pure group 3".into(),
             10,
-            100
+            100,
+            5
         );
 
         let cli = Cli{
