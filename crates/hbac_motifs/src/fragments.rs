@@ -175,7 +175,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, read_eeg_to_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>, HashMap<usize, MotifSlice>), HbacError>
+pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, load_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>, HashMap<usize, MotifSlice>), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send {
 
     debug!("motifs_to_tensor: device={:?}", device);
@@ -183,16 +183,15 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
     let mut channels_motifs_slices:HashMap<u16, HashMap<usize, Vec<Tensor>>> = HashMap::new();
     let mut motifs_slices_map:HashMap<usize, MotifSlice> = HashMap::new();
 
-    for (eeg_idx, motif_slices) in resource_id_motif_slices {
+    for (resource_id, motif_slices) in resource_id_motif_slices {
         // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
-        // let eeg_id = eeg_idx; //eegs[eeg_idx].clone();
-        let eeg_t = (read_eeg_to_tensor)(&eeg_idx);//TODO use always CPU? no clc
-        debug!("motifs_to_tensor: eeg_t.device={:?}", eeg_t.device());
+        let t = (load_tensor)(&resource_id);
+        debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
 
         for motif_slice in motif_slices {
 
-            let channel_t = eeg_t.get(motif_slice.channel_idx as i64);
+            let channel_t = t.get(motif_slice.channel_idx as i64);
             let channel_t = channel_t.view([1, -1]);
 
             let motifslice_t = channel_t.f_slice(1, Some(motif_slice.slise_idx), Some(motif_slice.slise_idx + window), 1)?;//TODO save window when finding motifs
@@ -200,7 +199,6 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
             let  mut channels_motifs = channels_motifs_slices.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
             let  mut motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
 
-            // debug!("motifs_to_tensor: motifslice_t.device={:?}", motifslice_t.device());
             motifslice_t.to_device(device);
 
             motif_slices.push(motifslice_t);
@@ -359,10 +357,8 @@ pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: V
         debug!("load_motif_slices: tensor_idxs={:?}", tensor_idxs);
 
         let slices = tensor_idxs./*par_*/iter().map(|tensor_idx|{
-            // let tensor_idx:String = tensor_idx.clone();
             let slices = tensors_ids_slices.get(*tensor_idx).expect(format!("no {}", tensor_idx).as_str());
 
-            // let resource = eegs[tensor_idx].clone();
             let t = load_tensor(tensor_idx.as_str());
 
             let take = t.size()[1]/widow;

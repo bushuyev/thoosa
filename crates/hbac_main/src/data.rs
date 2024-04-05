@@ -565,20 +565,20 @@ pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Resu
     Ok(tensor.set_requires_grad(false).to_device(device))
 }
 
-pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
+pub fn eegs_to_labels_tensors<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
     debug!("eegs_to_labels_tensors: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock().expect("store_lock");
 
 
-    let parquet_or_load_tensor_fn = move |resource: String| loader.load(&resource, *device);
+    let loader_fn = move |resource: String| loader.load(&resource, *device);
     vec![
         (
             1,
             store_lock.list_resource_set_resources_by_descr(resource_set_descr)
                 .expect("list_resource_set_resources_by_descr")
                 .into_iter()
-                .map(parquet_or_load_tensor_fn.clone())
+                .map(loader_fn.clone())
                 .cycle()
         ),
         (
@@ -586,7 +586,7 @@ pub fn eegs_to_labels_tensors<'a>(base_path:&'a str, tensors_path:Option<String>
             store_lock.list_resource_random_not_label(label.as_str(), 100)//TODO limit
                 .expect("list_resource_random_not_label")
                 .into_iter()
-                .map( parquet_or_load_tensor_fn)
+                .map(loader_fn)
                 .cycle()
         )
     ]

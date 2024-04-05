@@ -117,12 +117,11 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     if records_num < find_motifs_params.window {
-        return Err(HbacError::new("too few records"))
+        return Err(HbacError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)))
     }
 
     let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
     let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
-
 
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
     let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.resource_set, min_dot).as_str(), &eeg_ids_str)}?;

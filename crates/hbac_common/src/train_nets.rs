@@ -267,15 +267,15 @@ pub fn train_on_label<I>(params: &TrainOnLabelParams, train_labels_loaders:Vec<(
         a
     });
 
-    let mut keys = train_labels_loaders_map.keys().map(|v|*v).collect::<Vec<i64>>();
-    keys.sort();
+    let mut labels = train_labels_loaders_map.keys().map(|v|*v).collect::<Vec<i64>>();
+    labels.sort();
 
     let mut valid_keys = valid_labels_loaders_map.keys().map(|v|*v).collect::<Vec<i64>>();
     valid_keys.sort();
 
-    assert!(keys == valid_keys);
+    assert!(labels == valid_keys);
 
-    debug!("train_on_eeg: keys={:?} labels_loaders={:?}", keys, train_labels_loaders_map.keys());
+    debug!("train_on_eeg: keys={:?} labels_loaders={:?}", labels, train_labels_loaders_map.keys());
 
     let (channels_motifs_models, motif_node_params) = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, device)?;//TODO num channels
     // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
@@ -296,18 +296,23 @@ pub fn train_on_label<I>(params: &TrainOnLabelParams, train_labels_loaders:Vec<(
 
     debug!("train_on_eeg: channels={:?}  max_nets={:?}  max_motif_batches={:?} motif_batch_size={:?}", channels,  max_nets,  max_motif_batches, motif_batch_size);
     debug!("train_on_eeg: [items_per_label as i64* 2={:?}, channels={:?}, max_nets={:?}, max_motif_batches as i64 * motif_batch_size={:?}]", items_per_label as i64* 2, channels, max_nets, max_motif_batches as i64 * motif_batch_size);
+
     let apply_motifs = |t:Box<Tensor>| Box::new(apply_label_motifs(motif_n, step, &t, &motif_nets, motif_batch_size, max_motif_batches, device));
+
     let node_params = LabelNodeParams::new(channels, max_nets, max_motif_batches as i64, motif_batch_size);
+
     train(
         device,
         &mut LabeledTensorsLoaderDataBatch::new(
             apply_motifs_to_loaders(
-                motif_n, step, motif_batch_size, device, train_labels_loaders_map, &mut keys, &motif_nets, max_motif_batches,
+                train_labels_loaders_map,
+                &mut labels,
                 apply_motifs,
             ),
 
             apply_motifs_to_loaders(
-                motif_n, step, motif_batch_size, device, valid_labels_loaders_map, &mut keys, &motif_nets, max_motif_batches,
+                valid_labels_loaders_map,
+                &mut labels,
                 apply_motifs,
             ),
 
@@ -315,8 +320,8 @@ pub fn train_on_label<I>(params: &TrainOnLabelParams, train_labels_loaders:Vec<(
 
         ) as &mut dyn DataBatch,
 
-        // &corr_full_node(channels * max_nets * max_motif_batches as i64 * motif_batch_size).build_tch_module(&vs_0.root())?,
         &label_node(&node_params).build_tch_module(&vs_0.root())?,
+
         |pred: &Tensor, target: &Tensor| {
             let pred_y = pred.squeeze();
             //pred.i((.., 0, 0));
@@ -345,9 +350,13 @@ fn view_for_label_model(t: Tensor, channels: i64, max_nets: i64, motif_batch_siz
     t.view([-1/*items_per_label as i64 * 2*/, channels, max_nets, max_motif_batches as i64 * motif_batch_size])
 }
 
-fn apply_motifs_to_loaders<I, F>(motif_n: i64, step: usize, motif_batch_size: i64, device: &Device, mut labels_loaders: HashMap<i64, Vec<I>>, keys: &mut Vec<i64>, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, max_motif_batches: usize,
-apply_motifs:F) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Send + Sync, F: Fn(Box<Tensor>)->Box<Tensor> +Copy{
-    keys.into_iter()
+fn apply_motifs_to_loaders<I, F>(
+    mut labels_loaders: HashMap<i64, Vec<I>>,
+    labels: &mut Vec<i64>,
+    apply_motifs:F
+) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Send + Sync, F: Fn(Box<Tensor>) -> Box<Tensor> + Copy {
+
+    labels.into_iter()
         .map(
             |label| labels_loaders
                 .remove(&label).expect(format!("no {}", label).as_str())
@@ -937,8 +946,8 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
     Ok((valid_loss, vs))
 }
 
-pub fn flat_map(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
-    slices.into_iter().flat_map(|(eeg_id, slices)| slices.into_iter()).collect::<Vec<Box<Tensor>>>()
+pub fn slices_in_all_resources(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
+    slices.into_iter().flat_map(|(_resource_key, slices)| slices.into_iter()).collect::<Vec<Box<Tensor>>>()
 }
 
 

@@ -115,7 +115,7 @@ pub trait Store:Sync + Send{
     fn list_motifs_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
     fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, HbacError>;
-    fn list_corrs(&mut self, ids:Vec<usize>) -> Result<Vec<(usize, String)>, HbacError>;
+    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, String)>, HbacError>;
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), HbacError>;
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError>;
@@ -799,8 +799,6 @@ impl Store for SqlStore {
                 a
             });
 
-
-
             tensor_motifs
         };
 
@@ -936,7 +934,7 @@ impl Store for SqlStore {
         Ok(corr_run_id)
     }
 
-    fn list_corrs(&mut self, ids:Vec<usize>) -> Result<Vec<(usize, String)>, HbacError> {
+    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, String)>, HbacError> {
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
@@ -944,7 +942,7 @@ impl Store for SqlStore {
         let (mut q, params) = ids.into_iter().fold((vec!["SELECT id, label FROM corrs_run WHERE id IN ("], vec![]), |mut a, v|{
             a.0.push("?");
             a.0.push(",");
-            a.1.push(v);
+            a.1.push(*v);
             a
         });
 
@@ -1488,7 +1486,7 @@ mod store_tests{
             "seizure_vote".into()
         )?;
 
-        let corrs = store.list_corrs(vec![corr_id])?;
+        let corrs = store.list_corrs(&vec![corr_id])?;
         assert_eq!([(1, "seizure_vote".to_string())], corrs.as_slice());
 
         let motifs = store.list_corr_motifs(corr_id)?;
