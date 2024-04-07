@@ -58,7 +58,36 @@ pub struct FindMotifsParams {
     chunk_size: usize,
 
     #[arg(long, default_value_t = 0.01)]
-    max_dist_k: f32
+    max_dist_k: f32,
+
+    #[arg(long, default_value_t = 10)]
+    smooth_kernel: usize
+}
+
+impl Default for FindMotifsParams {
+    fn default() -> Self {
+        FindMotifsParams {
+            step: 100,
+
+            window: 100,
+
+            min_dot: 0.1,
+
+            resource_set: "".into(),
+
+            preload_d: 10,
+
+            max_keys_fifo: 1000,
+
+            chunk_size: 100,
+
+            max_dist_k: 0.01,
+
+            smooth_kernel: 10
+        }
+
+
+    }
 }
 
 impl FindMotifsParams {
@@ -81,7 +110,9 @@ impl FindMotifsParams {
 
             chunk_size,
 
-            max_dist_k
+            max_dist_k,
+
+            smooth_kernel: 10
         }
     }
 
@@ -137,8 +168,16 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let t1 = Instant::now();
     let mut slots_processed = 0;
 
-    chunk_and_slice(loader, eeg_ids_str, find_motifs_params.max_keys_fifo, find_motifs_params.chunk_size, find_motifs_params.step as i32, find_motifs_params.window as i64,
-                    move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors| {
+    chunk_and_slice(
+        move |key:&String| {
+         loader(key)
+        },
+        eeg_ids_str,
+        find_motifs_params.max_keys_fifo,
+        find_motifs_params.chunk_size,
+        find_motifs_params.step as i32,
+        find_motifs_params.window as i64,
+move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors| {
 
         for (c, mt) in all_motif_trackers.iter_mut().enumerate() {
             let tensor_0 = chunk_0.t.i((.., c as i64, ..)).squeeze();
@@ -260,12 +299,13 @@ fn chunk_and_slice<F, G>(
     let mut cache = CacheOnThreads::new(loader, max_keys_fifo, Some(Box::new(move || {
         // let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
 
-        // warn!("blocking for {}", descr);
+        warn!("blocking");
     })));
 
 
     let mut v_w_0 = eeg_ids_str.chunks(chunk_size).collect::<Vec<&[String]>>();
     v_w_0.push(&[]);//to get last window processed
+
     let mut v_w_1 = eeg_ids_str.chunks(chunk_size).collect::<Vec<&[String]>>();
     v_w_1.push(&[]);
 
@@ -1661,16 +1701,7 @@ mod motif_find_tests {
                     // )  //ch 1, not used
                 ]))
             },
-            &FindMotifsParams {
-                step: 50,
-                window: 100,
-                min_dot: 0.99,
-                resource_set: "seizure_vote".to_string(),
-                preload_d: 3,
-                max_keys_fifo: 3,
-                chunk_size: 0,
-                max_dist_k: 0.0,
-            },
+            &FindMotifsParams::default(),
             3 * N as usize,
             eeg_id_series.into_iter(),
             Arc::clone(&store), 1
@@ -1761,7 +1792,6 @@ mod motif_find_tests {
         let pulse = pulse_v(50., 10., 100, 20.);
         let N = 1000i64;
 
-
         let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
         let sig_1=  join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
         let sig_2=  join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
@@ -1803,6 +1833,7 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
+                smooth_kernel: 10
             },
             3 * N as usize,
             eeg_id_series,
@@ -1873,6 +1904,7 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
+                smooth_kernel: 10
             },
             3 * N as usize,
             eeg_id_series,
@@ -1936,6 +1968,7 @@ mod motif_find_tests {
                 max_keys_fifo: 1000,
                 chunk_size: 3,
                 max_dist_k: 0.001,
+                smooth_kernel: 10
             },
             3 * N as usize,
             (0..tensors_len).map(|v|format!("{}", v)).collect(),

@@ -2,6 +2,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use log::debug;
+use serde::Serialize;
 use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
 use hbac_shared::HbacError;
@@ -23,6 +24,7 @@ pub fn clc_avgpool1d_out(l_in: i64, kernel: i64, padding:i64, stride:i64) -> i64
 
 type TFN = dyn Fn(&Tensor) -> Tensor;
 
+// #[derive(Serialize)]
 pub enum Node {
     Seq {elts: Vec<Node>},
     Par {elts: Vec<Node>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>},

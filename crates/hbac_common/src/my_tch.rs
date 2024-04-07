@@ -688,7 +688,7 @@ mod tch_tests {
         let g = gauss_i( (g_n as f32 - 1.0) /2.0, 1.0, g_n);
         let g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
 
-        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1221753362", Cpu, None)?;//2259539799
+        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1221753362", Cpu)?;//2259539799
 
         println!("t={:?}", t.size());
         let t = t.i((1..3, ..)).view((2, -1));//.view((1, -1));
@@ -984,15 +984,21 @@ mod tch_tests {
     pub fn test_save_load() -> Result<(), HbacError> {
         let vs_0 = nn::VarStore::new(Device::Cpu);
 
-        SeqBuilder::new(123)
+        let node = SeqBuilder::new(123)
             .linear_s(10)
             .conv_1d(3, 1, 2, ConvConfig::default())
             .conv_1d(5, 1, 2, ConvConfig::default())
             .linear_s(20)
             .func(Tensor::sigmoid)
-            .end_seq().build_tch_module(&vs_0.root());
+            .end_seq();
+        let my_mod = node.build_tch_module(&vs_0.root())?;
 
         println!("vs_0.variables()={:?}", vs_0.variables());
+
+        // let x = tch::jit::CModule::
+        // let x = tch::CModule::save(my_mod);
+
+        // x.save("/tmp/test_mod.pt");
 
         vs_0.save("/tmp/test.pt")?;
 

@@ -639,7 +639,6 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
 
 }
 
-//TODO ResourceLoader instead of EEGLoader
 fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, find_motifs_params: &FindMotifsParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'static>>) -> Result<usize, HbacError> {
     let eeg_id_series = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 

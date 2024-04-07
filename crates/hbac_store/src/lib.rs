@@ -92,6 +92,38 @@ impl SetCond {
     }
 }
 
+pub enum Val {
+    Real(f32),
+    Int(i64),
+    Str(String)
+}
+
+impl From<f32> for Val {
+    fn from(v: f32) -> Self {
+        Val::Real(v)
+    }
+}
+
+impl From<usize> for Val {
+    fn from(v: usize) -> Self {
+        Val::Int(v as i64)
+    }
+}
+
+impl From<i64> for Val {
+    fn from(v: i64) -> Self {
+        Val::Int(v)
+    }
+}
+
+impl From<&str> for Val {
+    fn from(v: &str) -> Self {
+        Val::Str(v.to_string())
+    }
+}
+
+
+
 pub trait Store:Sync + Send{
     fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
@@ -108,6 +140,10 @@ pub trait Store:Sync + Send{
     fn list_resource_random_in_group(&mut self, group_descr:&str)  -> Result<Vec<(String, Vec<f32>)>, HbacError>;
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
     fn list_labels(&mut self) -> Result<Vec<String>, HbacError>;
+
+    fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, HbacError>;
+    fn save_param_value(&mut self, param_name:&str, value:Val) -> Result<usize, HbacError>;
+
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), HbacError>;
@@ -201,6 +237,46 @@ impl Store for SqlStore {
 
         Ok(label_id)
     }
+
+
+    fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, HbacError>{
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        t.execute("INSERT INTO params (name, type) VALUES (?, ?)", params![name, data_type])?;
+
+        let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+
+        t.commit()?;
+
+        Ok(label_id)
+    }
+
+    fn save_param_value(&mut self, param_name:&str, value:Val) -> Result<usize, HbacError>{
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+        match value {
+            Val::Real(v)=>{
+                t.execute("INSERT INTO param_values (param_id, real_value) VALUES ((SELECT id FROM params WHERE name=?), ?)", params![param_name, v])?;
+            }
+            Val::Int(v)=>{
+                t.execute("INSERT INTO param_values (param_id, int_value) VALUES ((SELECT id FROM params WHERE name=?), ?)", params![param_name, v])?;
+
+            }
+            Val::Str(v)=>{
+                t.execute("INSERT INTO param_values (param_id, str_value) VALUES ((SELECT id FROM params WHERE name=?), ?)", params![param_name, v])?;
+            }
+        }
+
+
+        let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+
+        t.commit()?;
+
+        Ok(label_id)
+    }
+
 
     fn list_labels(&mut self) -> Result<Vec<String>, HbacError> {
         let mut conn_guard = self.conn.lock()?;
@@ -1125,11 +1201,6 @@ impl SqlStore {
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
-            // t.execute(
-            //     "CREATE TABLE IF NOT EXISTS motifs_run_resources ( TODO set?
-            //     resource_id    REFERENCES resources(id) ON DELETE CASCADE,
-            //     motifs_run_id    REFERENCES motifs_run(id) ON DELETE CASCADE
-            // )", ())?;
 
             //key - resource id
             t.execute(
@@ -1139,6 +1210,35 @@ impl SqlStore {
                 key        VARCHAR(256),
                 PRIMARY KEY (run_id, ord_id)
             )", ())?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS params (
+                id          INTEGER PRIMARY KEY,
+                name        VARCHAR(256),
+                type        VARCHAR(256),
+                UNIQUE(name) )",
+                (),
+            )?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS param_values (
+                id          INTEGER PRIMARY KEY,
+                param_id    NOT NULL REFERENCES params(id) ON DELETE CASCADE,
+                real_value        REAL,
+                int_value         INTEGER,
+                str_value         VARCHAR(256)
+                )",
+                (),
+            )?;
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS runs_param_values (
+                id          INTEGER PRIMARY KEY,
+                value_id    NOT NULL REFERENCES param_values(id) ON DELETE CASCADE,
+                run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE
+            )",
+            (),
+            )?;
 
             t.execute( //group - ordinal as appeared when grouping, not needed
                 "CREATE TABLE IF NOT EXISTS motifs (
@@ -1360,7 +1460,39 @@ mod store_tests{
         Ok(())
     }
 
+
+
     #[test]
+    fn test_params() -> Result<(), HbacError> {
+        fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+        let mut store = SqlStore::new("/tmp/test_db.db3")?;
+
+        let aaa_id = store.save_param("aaa", "real")?;
+        let bbb_id = store.save_param("bbb",  "real")?;
+        let ccc_id = store.save_param("ccc", "real")?;
+
+        let param_value_id_0 = store.save_param_value("aaa", 33.into())?;
+        let param_value_id_1 = store.save_param_value("aaa", 33.2.into())?;
+        let param_value_id_2 = store.save_param_value("aaa", "33".into())?;
+
+
+        struct TestParams {
+            param_aaa: usize,
+            param_bbb: f32
+        }
+
+        impl TestParams {
+            pub fn new(param_aaa: usize, param_bbb: f32) -> Self {
+                Self { param_aaa, param_bbb }
+            }
+        }
+
+        // store.save_param()
+
+        Ok(())
+    }
+
+        #[test]
     fn test_save_slices() -> Result<(), HbacError> {
         fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
