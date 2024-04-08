@@ -214,11 +214,14 @@ pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tens
 
 #[cfg(test)]
 pub mod tests {
+    use std::collections::HashSet;
     use std::fs;
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::{Device, Tensor};
     use hbac_shared::HbacError;
+    use clap::{arg, command, value_parser, ArgAction, Command};
+
 
     #[test]
     fn test_cdt_for_dir(){
@@ -317,9 +320,25 @@ pub mod tests {
         let devices = vec!["dev1", "dev2"];
         let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];
 
-        for (device, class) in devices.into_iter().cycle().zip(classes.into_iter()) {
-            println!("device={} class={}", device, class);
-        }
+
+        let chunk_len = classes.len()/devices.len();
+        let devices_classes = devices.into_iter().cycle().zip(classes.chunks(chunk_len).into_iter()).collect::<Vec<(&str, &[&str])>>();
+        let mut processed_classes:HashSet<&str> = HashSet::new();
+        devices_classes.into_iter().for_each( |(device, classes_chunk)| {
+            println!("2. device={:?} class={:?}", device, classes_chunk);
+            processed_classes.extend(classes_chunk)
+        });
+
+        assert_eq!(processed_classes.len(), 6);
+        //TODO devices
+
+        println!("processed_classes={:?}", processed_classes);
+
+    }
+
+    #[test]
+    fn test_param_ranges(){
+
     }
 }
 

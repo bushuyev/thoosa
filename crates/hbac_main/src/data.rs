@@ -620,6 +620,7 @@ pub fn read_eeg_to_df(path: impl AsRef<Path>) -> Result<DataFrame, HbacError> {
     Ok(eeg_df.collect()?)
 }
 
+//TODO loader
 pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, HbacError> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;

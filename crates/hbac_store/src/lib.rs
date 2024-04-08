@@ -116,6 +116,12 @@ impl From<i64> for Val {
     }
 }
 
+impl From<i32> for Val {
+    fn from(v: i32) -> Self {
+        Val::Int(v as i64)
+    }
+}
+
 impl From<&str> for Val {
     fn from(v: &str) -> Self {
         Val::Str(v.to_string())

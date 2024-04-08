@@ -162,38 +162,6 @@ impl MotifSlice {
     }
 }
 
-#[cfg(test)]
-pub mod tests {
-    use log::LevelFilter;
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use crate::{join_with_offset, pulse_v};
-
-    #[ctor::ctor]
-    fn init() {
-        CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ).unwrap_or_else(|e|{
-            println!("CombinedLogger::init failed: {:?}", e);
-        });
-
-
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    }
-
-    #[test]
-    fn test_join_with_offset(){
-        let pulse = pulse_v(50., 10., 100, 20.);
-        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(550));
-        assert_eq!(550, v.len());
-
-        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(2200));
-        assert_eq!(2200, v.len());
-
-    }
-}
 
 pub fn random_saw(n: usize) -> Vec<f32> {
     let mut rng = rand::thread_rng();
@@ -373,6 +341,35 @@ mod shared_tests {
    */
 
     use crate::{group_slices, batch_windows, HbacError};
+    use log::LevelFilter;
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+    use crate::{join_with_offset, pulse_v};
+
+    #[ctor::ctor]
+    fn init() {
+        CombinedLogger::init(
+            vec![
+                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ).unwrap_or_else(|e|{
+            println!("CombinedLogger::init failed: {:?}", e);
+        });
+
+
+        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
+        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    }
+
+    #[test]
+    fn test_join_with_offset(){
+        let pulse = pulse_v(50., 10., 100, 20.);
+        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(550));
+        assert_eq!(550, v.len());
+
+        let v = super::join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], super::random_saw(2200));
+        assert_eq!(2200, v.len());
+
+    }
 
     #[test]
     fn test_group_motifs(){
@@ -468,5 +465,6 @@ mod shared_tests {
 
         Ok(())
     }
+
 
 }
