@@ -60,41 +60,16 @@ pub struct FindMotifsParams {
     #[arg(long, default_value_t = 0.01)]
     max_dist_k: f32,
 
-    #[arg(long, default_value_t = 10)]
-    smooth_kernel: usize
+    #[arg(long)]
+    smooth_kernel: Option<usize>
 }
 
-impl Default for FindMotifsParams {
-    fn default() -> Self {
-        FindMotifsParams {
-            step: 100,
-
-            window: 100,
-
-            min_dot: 0.1,
-
-            resource_set: "".into(),
-
-            preload_d: 10,
-
-            max_keys_fifo: 1000,
-
-            chunk_size: 100,
-
-            max_dist_k: 0.01,
-
-            smooth_kernel: 10
-        }
-
-
-    }
-}
 
 impl FindMotifsParams {
 
 
     // #[cfg(test)]
-    pub fn dummy(step: usize, window: usize, resource_set:String, chunk_size: usize, max_dist_k: f32) ->Self {
+    pub fn dummy(step: usize, window: usize, resource_set:String, chunk_size: usize, max_dist_k: f32, smooth_kernel: Option<usize>) ->Self {
         FindMotifsParams {
             step,
 
@@ -112,7 +87,7 @@ impl FindMotifsParams {
 
             max_dist_k,
 
-            smooth_kernel: 10
+            smooth_kernel
         }
     }
 
@@ -141,6 +116,33 @@ impl FindMotifsParams {
     pub fn max_dist_k(&self) -> f32 {
         self.max_dist_k
     }
+
+    pub fn to_chunk_and_slice_params(&self) -> Vec<ChunkAndSliceParams>{
+        match self.smooth_kernel {
+            None=> {
+                vec![
+                    ChunkAndSliceParams::new(self.step, self.window as i64, Box::new(|t: Box<Tensor>| {
+                        t.shallow_clone()
+                    }))
+                ]
+            }
+            Some(smooth_kernel) => {
+                vec![
+                    vec![ ChunkAndSliceParams::new(self.step, (self.window * i) as i64, Box::new(move |t: Box<Tensor>| {
+                        t.shallow_clone()
+                    }))],
+
+                    (1..=2).map(|i|{
+                        ChunkAndSliceParams::new(self.step, (self.window * i) as i64, Box::new(move |t: Box<Tensor>| {
+                            t.avg_pool1d((smooth_kernel*i) as i64, 1, 0, false, false)
+                        }))
+
+                    }).collect()
+                ].concat()
+            }
+        }
+
+    }
 }
 
 
@@ -162,14 +164,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let mut slots_processed = 0;
 
 
-    let param_set = vec![
-        ChunkAndSliceParams::new(find_motifs_params.step as i32, find_motifs_params.window as i64, Box::new(|t: Box<Tensor>| {
-            t.shallow_clone()
-        })),
-        ChunkAndSliceParams::new(find_motifs_params.step as i32 + 10, find_motifs_params.window as i64 + 10, Box::new(|t: Box<Tensor>| {
-            t.shallow_clone()
-        }))
-    ];
+    let param_set = find_motifs_params.to_chunk_and_slice_params();
 
     let  (run_ids, mut trackers) :(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]),|mut a:(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), _params| {
         let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.resource_set, &min_dot).as_str(), &eeg_ids_str) }?;
@@ -308,13 +303,13 @@ impl ChunkOfSicedTensors {
 }
 
 struct ChunkAndSliceParams {
-    step: i32,
+    step: usize,
     window: i64,
     tensor_map:Box<dyn Fn(Box<Tensor>)->Tensor>
 }
 
 impl ChunkAndSliceParams {
-    pub fn new(step: i32, window: i64, tensor_map: Box<dyn Fn(Box<Tensor>) -> Tensor>) -> Self {
+    pub fn new(step: usize, window: i64, tensor_map: Box<dyn Fn(Box<Tensor>) -> Tensor>) -> Self {
         Self { step, window, tensor_map }
     }
 }
@@ -373,7 +368,7 @@ fn chunk_and_slice<F, G>(
     Ok(())
 }
 
-fn slice_tensors_chunk(step: i32, window: i64, tensors_chunk_1: Vec<&Box<Tensor>>, vw_1_01: & [& [String]]) -> ChunkOfSicedTensors {
+fn slice_tensors_chunk(step: usize, window: i64, tensors_chunk_1: Vec<&Box<Tensor>>, vw_1_01: & [& [String]]) -> ChunkOfSicedTensors {
     let vw_1 = vw_1_01[0];
     // let tensors_chunk_1 = cache.blocking_get_1(vw_1);
 
@@ -704,7 +699,7 @@ fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, motifs_distanc
     //channels, motif, motif x series dots
     let mut channels_matches:Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_|Vec::new()).collect();
 
-    let slices = slice_t(&series, step as i32, motif_len);
+    let slices = slice_t(&series, step, motif_len);
 
     for c in 0..channels_num {
         let t_0 = slices.i((.., c, ..));
@@ -1729,7 +1724,7 @@ mod motif_find_tests {
                     // )  //ch 1, not used
                 ]))
             },
-            &FindMotifsParams::default(),
+            &FindMotifsParams::dummy(1000, 1000, "".into(), 1000, 0.01, None),
             3 * N as usize,
             eeg_id_series.into_iter(),
             Arc::clone(&store), 1
@@ -1861,7 +1856,7 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                smooth_kernel: 10
+                smooth_kernel: None
             },
             3 * N as usize,
             eeg_id_series,
@@ -1932,7 +1927,7 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                smooth_kernel: 10
+                smooth_kernel: None
             },
             3 * N as usize,
             eeg_id_series,
@@ -1996,7 +1991,7 @@ mod motif_find_tests {
                 max_keys_fifo: 1000,
                 chunk_size: 3,
                 max_dist_k: 0.001,
-                smooth_kernel: 10
+                smooth_kernel: None
             },
             3 * N as usize,
             (0..tensors_len).map(|v|format!("{}", v)).collect(),

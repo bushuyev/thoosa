@@ -27,9 +27,9 @@ pub fn dist_d2(dim: i64, slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, H
     Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
 }
 
-pub fn slice_t(t_0: &Tensor, step: i32, window: i64) -> Tensor {
+pub fn slice_t(t_0: &Tensor, step: usize, window: i64) -> Tensor {
 
-    Tensor::stack(&(0..=t_0.size()[1] - window).step_by(step as usize).map(|i| t_0.i((.., i..i + window))).collect::<Vec<Tensor>>(), 0)
+    Tensor::stack(&(0..=t_0.size()[1] - window).step_by(step).map(|i| t_0.i((.., i..i + window))).collect::<Vec<Tensor>>(), 0)
 }
 
 

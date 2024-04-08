@@ -103,6 +103,9 @@ pub struct RunAllParams {
     #[arg(long, default_value_t = 1000)]
     find_motifs_chunk_size: usize,
 
+    #[arg(long)]
+    find_motifs_smooth_kernel: Option<usize>,
+
     #[arg(long, default_value_t = 0.3)]
     find_motifs_max_dist_k: f32,
 
@@ -134,7 +137,7 @@ impl RunAllParams {
     }
 
     fn find_motifs_params(&self, resource_set: String) -> FindMotifsParams {
-        FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k)
+        FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_smooth_kernel)
     }
 
     fn dummy()-> Self {
@@ -146,10 +149,12 @@ impl RunAllParams {
             window: 1000,
             models_dir: "".to_string(),
             find_motifs_chunk_size: 1000,
+            find_motifs_smooth_kernel: None,
             find_motifs_max_dist_k: 0.3,
             select_motifs_min_ratio: 0.3,
             train_final_cycles: 1000,
             motif_batch_size: 100
+            
         }
     }
     pub fn valid_resource_group(&self) -> &str {
@@ -635,11 +640,11 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
     });
 
     let guard = run_ids.lock().expect("run_ids lock on return");
-    Ok(guard.clone())
+    Ok(guard.iter().flat_map(|v|v.iter().map(|v:&usize|*v)).collect())
 
 }
 
-fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, find_motifs_params: &FindMotifsParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'static>>) -> Result<usize, HbacError> {
+fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, find_motifs_params: &FindMotifsParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'static>>) -> Result<Vec<usize>, HbacError> {
     let eeg_id_series = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 
     let records_num = clc_records(&eeg_id_series, cli.base_path.as_str()).unwrap();
@@ -971,7 +976,7 @@ mod main_tests {
             logfile: "".to_string(),
             limit: None,
             num_threads: None,
-            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10, "xxx".into(), 10, 0.3))),
+            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10, "xxx".into(), 10, 0.3, None))),
             input_filters_kernel: None,
         };
 

@@ -9,6 +9,7 @@ run-all \
 --models-dir=/tmp/hbac/test_models/ \
 --train-resource-group="pure group 10" \
 --valid-resource-group="pure group 10" \
+--find-motifs-smooth-kernel=10
 --init
 
 
