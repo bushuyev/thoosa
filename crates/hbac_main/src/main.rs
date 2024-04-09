@@ -8,7 +8,7 @@ use std::str::FromStr;
 use log::{debug, error, info, LevelFilter, warn};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-use hbac_motifs::find::{FindMotifsParams, iter_all_in_dir, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
+use hbac_motifs::find::{FindMotifsParams, InputFilter, iter_all_in_dir, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
 use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
@@ -103,8 +103,8 @@ pub struct RunAllParams {
     #[arg(long, default_value_t = 1000)]
     find_motifs_chunk_size: usize,
 
-    #[arg(long)]
-    find_motifs_smooth_kernel: Option<usize>,
+    #[command(subcommand)]
+    find_motifs_input_filter: Option<InputFilter>,
 
     #[arg(long, default_value_t = 0.3)]
     find_motifs_max_dist_k: f32,
@@ -137,7 +137,7 @@ impl RunAllParams {
     }
 
     fn find_motifs_params(&self, resource_set: String) -> FindMotifsParams {
-        FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_smooth_kernel)
+        FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
     }
 
     fn dummy()-> Self {
@@ -149,7 +149,7 @@ impl RunAllParams {
             window: 1000,
             models_dir: "".to_string(),
             find_motifs_chunk_size: 1000,
-            find_motifs_smooth_kernel: None,
+            find_motifs_input_filter: None,
             find_motifs_max_dist_k: 0.3,
             select_motifs_min_ratio: 0.3,
             train_final_cycles: 1000,

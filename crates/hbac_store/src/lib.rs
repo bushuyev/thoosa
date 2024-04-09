@@ -18,6 +18,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use rand::{Rng, thread_rng};
 use rand::prelude::SliceRandom;
 use std::cmp::{min, max};
+use serde::Deserialize;
 
 pub struct StoreDumper {
     pub store:Arc<Mutex<dyn Store>>, //TODO pub
@@ -92,6 +93,8 @@ impl SetCond {
     }
 }
 
+//TODO move to shared
+#[derive(Debug)]
 pub enum Val {
     Real(f32),
     Int(i64),
@@ -1469,7 +1472,6 @@ mod store_tests{
 
         Ok(())
     }
-
 
 
     #[test]

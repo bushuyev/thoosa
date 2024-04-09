@@ -220,7 +220,8 @@ pub mod tests {
     use tch::Kind::Float;
     use tch::{Device, Tensor};
     use hbac_shared::HbacError;
-    use clap::{arg, command, value_parser, ArgAction, Command};
+    use clap::{arg, command, value_parser, ArgAction, Command, Parser, Subcommand, Args};
+    use log::debug;
 
 
     #[test]
@@ -339,6 +340,62 @@ pub mod tests {
     #[test]
     fn test_param_ranges(){
 
+        #[derive(Parser, Clone)]
+        #[command(version, about, long_about = None)]
+        struct TestCli {
+            #[arg(long)]
+            some_field: String,
+
+            #[command(subcommand)]
+            command: Option<Commands>,
+        }
+
+        #[derive(Debug, Subcommand, Clone)]
+        enum Commands {
+            TestCommand(TestCommandParams),
+        }
+
+        #[derive(Debug, Args, Clone)]
+        struct TestCommandParams{
+            #[arg(long)]
+            window:usize,
+
+            #[arg(long)]
+            step:usize,
+
+            #[arg(long)]
+            command_param:String,
+
+            #[command(subcommand)]
+            input_filter: InputFilter
+        }
+
+        #[derive(Debug, Subcommand, Clone)]
+        enum InputFilter {
+            Conv1(Conv1Params)
+        }
+
+
+        #[derive(Debug, Args, Clone)]
+        struct Conv1Params {
+            #[arg(long)]
+            kernel:usize
+        }
+
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--command-param", "command-param-value", "--window", "11", "--step", "22", "conv1", "--kernel", "10"]);
+        debug!("cli.some_field={:?}", cli.some_field);
+
+        match cli.command.unwrap() {
+            Commands::TestCommand(cmd)=>{
+                debug!("cmd.command_param={:?}", cmd.command_param);
+
+                match cmd.input_filter {
+                    InputFilter::Conv1(filter_params) => {
+                        debug!("filter_params={:?}", filter_params);
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -1117,6 +1117,7 @@ dependencies = [
  "log",
  "rand",
  "rusqlite",
+ "serde",
  "simplelog",
 ]
 

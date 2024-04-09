@@ -27,13 +27,14 @@ use hbac_common::utils::*;
 use rayon::iter::IntoParallelRefIterator;
 use torch_sys::C_tensor;
 use hbac_shared::TensorSliceIdx;
-use hbac_store::Store;
+use hbac_store::{Store, Val};
 use hbac_store::StoreDumper;
 use std::cell::RefCell;
 use crate::cache_on_threads::CacheOnThreads;
 use crate::distance::slice_t;
 use crate::distance::dist_d2;
 use core::slice::Windows;
+use std::ops::Range;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {
@@ -61,8 +62,52 @@ pub struct FindMotifsParams {
     #[arg(long, default_value_t = 0.01)]
     max_dist_k: f32,
 
+    #[command(subcommand)]
+    input_filter: Option<InputFilter>
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub enum InputFilter {
+    Conv1(Conv1Params)
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct Conv1Params {
     #[arg(long)]
-    smooth_kernel: Option<usize>
+    kernel:i64,
+
+    #[arg(long)]
+    stride:i64,
+
+    #[arg(long)]
+    padding:i64
+}
+
+impl InputFilter {
+    pub fn to_properties_map(&self) -> HashMap<String, Val> {
+        match self {
+            Self::Conv1(conv1_params) => {
+                conv1_params.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v|{
+                    a.insert(format!("conv_1.{}", v.0), v.1);
+                    a
+                })
+            }
+        }
+    }
+}
+
+impl Conv1Params {
+    pub fn new(kernel: i64, stride: i64, padding: i64) -> Self {
+        Self { kernel, stride, padding }
+    }
+
+    pub fn to_properties_map(&self) -> HashMap<String, Val> {
+        HashMap::from([
+            ("kernel".into(),  self.kernel.into()),
+            ("stride".into(),  self.stride.into()),
+            ("padding".into(), self.padding.into()),
+        ])
+    }
 }
 
 
@@ -70,7 +115,7 @@ impl FindMotifsParams {
 
 
     // #[cfg(test)]
-    pub fn dummy(step: usize, window: usize, resource_set:String, chunk_size: usize, max_dist_k: f32, smooth_kernel: Option<usize>) ->Self {
+    pub fn dummy(step: usize, window: usize, resource_set:String, chunk_size: usize, max_dist_k: f32, input_filter: Option<&InputFilter>) ->Self {
         FindMotifsParams {
             step,
 
@@ -88,7 +133,7 @@ impl FindMotifsParams {
 
             max_dist_k,
 
-            smooth_kernel
+            input_filter: input_filter.cloned()
         }
     }
 
@@ -117,44 +162,34 @@ impl FindMotifsParams {
         self.max_dist_k
     }
 
-    pub fn to_chunk_and_slice_params(&self) -> Vec<ChunkAndSliceParams>{
-        match self.smooth_kernel {
-            None=> {
-                vec![
-                    ChunkAndSliceParams::new(self.step, self.window as i64, Box::new(|t: Box<Tensor>| {
-                                            t.shallow_clone()
-                    }),
-                 "no smoth")
-                ]
-            }
-
-            Some(smooth_kernel) => {
-                let mut params =  vec![
-                    ChunkAndSliceParams::new(self.step, self.window as i64, Box::new(move |t: Box<Tensor>| {
-                        t.shallow_clone()
-                    }),
-                "no smoth"),
-
-                ];
-
-                params.extend(
-
-                    (1..=2).map(|i|{
-                        ChunkAndSliceParams::new(self.step, (self.window  * i) as i64, Box::new(move |t: Box<Tensor>| {
-                            t.avg_pool1d((smooth_kernel*i) as i64, 1, 0, false, false)
-                            // t.shallow_clone()
-                        }),
-                         format!("avg_pool1d with kernel_size={} ", smooth_kernel*i))
-
-                    }).collect::<Vec<_>>()
-                );
-
-                params
-            }
-        }
+    pub fn to_chunk_and_slice_params(&self, expander:&dyn Expander<T=FilterAndSlicerParams>) -> Vec<FilterAndSlicerParams>{
+        expander.expand(FilterAndSlicerParams::new(self.step, self.window as i64, "no filter", self.input_filter.clone() ))
     }
 }
 
+pub trait Expander {
+    type T:Clone;
+    fn expand(&self, t:Self::T)->Vec<Self::T>;
+}
+
+pub struct  LinearExpander {
+    n:usize
+}
+
+impl LinearExpander {
+    pub fn new(n: usize) -> Self {
+        Self { n }
+    }
+}
+
+impl Expander for LinearExpander {
+    type T= FilterAndSlicerParams;
+
+    fn expand(&self, t: FilterAndSlicerParams) ->Vec<FilterAndSlicerParams> {
+        vec![t]
+    }
+
+}
 
 pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eeg_ids_str: Vec<String>, store:Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<Vec<usize>, HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
@@ -174,11 +209,16 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let mut slots_processed = 0;
 
 
-    let param_set = find_motifs_params.to_chunk_and_slice_params();
+    let param_set = find_motifs_params.to_chunk_and_slice_params(&LinearExpander::new(3));
 
     let  (run_ids, mut trackers) :(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]),|mut a:(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
 
-        let run_id = { store.lock()?.save_motifs_run(format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(), &eeg_ids_str) }?;
+        let run_id = {
+            store.lock()?.save_motifs_run(
+                format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
+                &eeg_ids_str
+             )
+        }?;
 
         let all_motif_trackers = min_dot
             .iter()
@@ -204,7 +244,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
         eeg_ids_str,
         find_motifs_params.max_keys_fifo,
         find_motifs_params.chunk_size,
-        param_set,
+        param_set.into_iter().map(|v|v.into()).collect(),
         move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors, params_idx:usize| {
 
             debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
@@ -324,14 +364,42 @@ impl ChunkOfSicedTensors {
     }
 }
 
-struct ChunkAndSliceParams {
+#[derive(Clone)]
+pub struct FilterAndSlicerParams {
     step: usize,
     window: i64,
-    tensor_map:Box<dyn Fn(Box<Tensor>)->Tensor>,
+    filter:Option<InputFilter>,
     descr:String
 }
 
-impl Debug for ChunkAndSliceParams {
+struct FilterAndSlicer {
+    step: usize,
+    window: i64,
+    filter:Box<dyn Fn(&Box<Tensor>)->Tensor>,
+}
+
+impl From<FilterAndSlicerParams> for FilterAndSlicer {
+
+    fn from(params: FilterAndSlicerParams) -> Self {
+        Self {
+            step: params.step,
+            window: params.window,
+            filter: match &params.filter {
+                None => Box::new(|t: &Box<Tensor>| t.shallow_clone()),
+
+                Some(input_filter) => {
+                    match input_filter {
+                        InputFilter::Conv1(filter_params) => {
+                            Box::new(|t: &Box<Tensor>| t.shallow_clone())
+                        }
+                    }
+                }
+            },
+        }
+    }
+}
+
+impl Debug for FilterAndSlicerParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChunkAndSliceParams")
             .field("step", &self.step)
@@ -340,17 +408,70 @@ impl Debug for ChunkAndSliceParams {
     }
 }
 
-impl ChunkAndSliceParams {
-    pub fn new(step: usize, window: i64, tensor_map: Box<dyn Fn(Box<Tensor>) -> Tensor>, descr: impl Into<String>) -> Self {
-        Self { step, window, tensor_map, descr:descr.into() }
+impl FilterAndSlicerParams {
+    pub fn new(
+        step: usize,
+        window: i64,
+        descr: impl Into<String>,
+        filter: Option<InputFilter>
+    ) -> Self {
+        Self {
+            step,
+            window,
+            filter,
+            descr: descr.into()
+        }
     }
+
+    pub fn to_properties_map(&self) -> HashMap<String, Val> {
+        let mut map = HashMap::from([
+            ("step".into(),  self.step.into()),
+            ("window".into(),  self.window.into()),
+        ]);
+
+        if let Some(filter) = self.filter.as_ref() {
+
+            map.extend(filter.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v|{
+                a.insert(format!("filter.{}", v.0), v.1);
+                a
+            }).into_iter())
+
+        }
+
+        map
+
+    }
+}
+
+impl FilterAndSlicer {
+
+    fn slice_tensors_chunk(&self, tensors_chunk_1: Vec<&Box<Tensor>>, keys: & [String]) -> ChunkOfSicedTensors {
+        // let vw_1 = vw_1_01[0];
+        // let tensors_chunk_1 = cache.blocking_get_1(vw_1);
+
+        let t_1_tensors = tensors_chunk_1.into_iter().map(|t| {
+            // debug!("find_motifs_euc: vw_1={:?} t_1 size={:?}", vw_1, t.size());
+
+            let sliced = slice_t(&(self.filter)(t), self.step, self.window);
+
+            // debug!("find_motifs_euc: t_1 sliced size={:?}", sliced.size());
+
+            sliced
+        }).collect::<Vec<Tensor>>();
+
+
+        let sizes_1 = t_1_tensors.iter().map(|t| t.size()[0]).collect::<Vec<_>>();//num slices in each tensor
+
+        ChunkOfSicedTensors::new(keys.to_vec(), sizes_1, Tensor::vstack(&t_1_tensors))
+    }
+
 }
 
 fn chunk_and_slice<G>(
     resources_ids_str: Vec<String>,
     max_keys_fifo: usize,
     chunk_size: usize,
-    param_set:Vec<ChunkAndSliceParams>,
+    filter_and_slicer:Vec<FilterAndSlicer>,
     mut callback:G,
     cache: &mut CacheOnThreads<String, Box<Tensor>>
 ) -> Result<(), HbacError>
@@ -378,10 +499,10 @@ fn chunk_and_slice<G>(
                 cache.preload(vw_1_01[1]);
             }
 
-            for (params_idx, params) in param_set.iter().enumerate() {
+            for (params_idx, filter_slicer) in filter_and_slicer.iter().enumerate() {
                 callback(
-                    slice_tensors_chunk(params.step, params.window, cache.blocking_get_1(vw_0_01[0]), vw_0_01),
-                    slice_tensors_chunk(params.step, params.window, cache.blocking_get_1(vw_1_01[0]), vw_1_01),
+                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(vw_0_01[0]), vw_0_01[0]),
+                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(vw_1_01[0]), vw_1_01[0]),
                     params_idx
                 ).expect("cb");
             }
@@ -391,31 +512,31 @@ fn chunk_and_slice<G>(
     Ok(())
 }
 
-fn slice_tensors_chunk(step: usize, window: i64, tensors_chunk_1: Vec<&Box<Tensor>>, vw_1_01: & [& [String]]) -> ChunkOfSicedTensors {
-    let vw_1 = vw_1_01[0];
-    // let tensors_chunk_1 = cache.blocking_get_1(vw_1);
+// fn slice_tensors_chunk(step: usize, window: i64, tensors_chunk_1: Vec<&Box<Tensor>>, vw_1_01: & [& [String]]) -> ChunkOfSicedTensors {
+//     let vw_1 = vw_1_01[0];
+//     // let tensors_chunk_1 = cache.blocking_get_1(vw_1);
+//
+//     let t_1_tensors = tensors_chunk_1.into_iter().map(|t| {
+//         debug!("find_motifs_euc: vw_1={:?} t_1 size={:?}", vw_1, t.size());
+//
+//         let sliced = slice_t(&t, step, window);
+//
+//         debug!("find_motifs_euc: t_1 sliced size={:?}", sliced.size());
+//
+//         sliced
+//     }).collect::<Vec<Tensor>>();
+//
+//
+//
+//     let sizes_1 = t_1_tensors.iter().map(|t| t.size()[0]).collect::<Vec<_>>();//num slices in each tensor
+//
+//
+//
+//     ChunkOfSicedTensors::new(vw_1.to_vec(), sizes_1, Tensor::vstack(&t_1_tensors))
+// }
 
-    let t_1_tensors = tensors_chunk_1.into_iter().map(|t| {
-        debug!("find_motifs_euc: vw_1={:?} t_1 size={:?}", vw_1, t.size());
 
-        let sliced = slice_t(&t, step, window);
-
-        debug!("find_motifs_euc: t_1 sliced size={:?}", sliced.size());
-
-        sliced
-    }).collect::<Vec<Tensor>>();
-
-
-
-    let sizes_1 = t_1_tensors.iter().map(|t| t.size()[0]).collect::<Vec<_>>();//num slices in each tensor
-
-
-
-    ChunkOfSicedTensors::new(vw_1.to_vec(), sizes_1, Tensor::vstack(&t_1_tensors))
-}
-
-
-pub fn find_motifs<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>, channels: i32) -> Result<(), HbacError>
+/*pub fn find_motifs<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>, channels: i32) -> Result<(), HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
     let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
@@ -482,7 +603,7 @@ pub fn find_motifs<F>(loader:F, find_motifs_params: &FindMotifsParams, records_n
 
     Ok(())
 }
-
+*/
 
 pub trait MotifDumper {
     fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), HbacError>;
@@ -1094,14 +1215,14 @@ mod motif_find_tests {
     use torch_sys::C_tensor;
 
     use crate::*;
-    use crate::find::{FileDumper, FindMotifsParams, MotifTracker, select_motifs_by_ratio};
+    use crate::find::{Conv1Params, FileDumper, FilterAndSlicerParams, FindMotifsParams, InputFilter, MotifTracker, select_motifs_by_ratio};
     use hbac_common::utils::*;
     use crate::find::select_motifs_by_corr;
     use crate::fragments::{list_motifs, write_motifs_slices};
     use crate::find::iter_all_in_dir;
     use hbac_common::utils::cdt_for_dir;
     use hbac_shared::*;
-    use hbac_store::{SqlStore, Store};
+    use hbac_store::{SqlStore, Store, Val};
     use core::slice::Windows;
     use hbac_shared::repeat_iter::{FirstLastRepeat, Repeat};
 
@@ -1710,59 +1831,59 @@ mod motif_find_tests {
     }
 
 
-    #[test]
-    pub fn test_find_motifs() -> Result<(), HbacError>{
-        let eeg_id_series =  [Some(1111i64), Some(2222), Some(3333)];
-        let store = Arc::new(Mutex::new(SqlStore::new(format!("/tmp/test_store_{}.db3", cdt_for_dir()))?));
-
-        let pulse = pulse_v(80., 30., 200, 20.);
-        let N = 1000i64;
-
-        let x = lin_t(N);
-        let sig_0 = pulse_in_rand(N, &[(100, pulse.clone())], 0.1, 0.1, 1.);
-        let sig_1 = pulse_in_rand(N, &[(200, pulse.clone())], 0.1, 0.1, 1.);
-        let sig_2 = pulse_in_rand(N, &[(300, pulse.clone())], 0.1, 0.1, 1.);
-        plot_series(
-            vec![
-                (format!("Sig0"), RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
-                (format!("Sig1"), GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
-                (format!("Sig2"), BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
-
-            ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        ).unwrap();
-
-        super::find_motifs(
-            move |key:&String| {
-                let sig = match key.as_str() {
-                    "1111" => &sig_0,
-                    "2222" => &sig_1,
-                    "3333" => &sig_2,
-                    _=> panic!("no")
-                };
-
-                Box::new(Tensor::vstack(&[
-                    Tensor::from_slice(
-                        sig.as_slice()
-                    ), //ch 0
-                    // Tensor::from_slice(
-                    //     sig_in_rand(N, &[], 10., 0.1, 0.1).as_slice()
-                    // )  //ch 1, not used
-                ]))
-            },
-            &FindMotifsParams::dummy(1000, 1000, "".into(), 1000, 0.01, None),
-            3 * N as usize,
-            eeg_id_series.into_iter(),
-            Arc::clone(&store), 1
-        );
-
-        debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.list_motifs_slices(1)?;
-        debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
-        debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
-        debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
-
-        Ok(())
-    }
+    // #[test]
+    // pub fn test_find_motifs() -> Result<(), HbacError>{
+    //     let eeg_id_series =  [Some(1111i64), Some(2222), Some(3333)];
+    //     let store = Arc::new(Mutex::new(SqlStore::new(format!("/tmp/test_store_{}.db3", cdt_for_dir()))?));
+    //
+    //     let pulse = pulse_v(80., 30., 200, 20.);
+    //     let N = 1000i64;
+    //
+    //     let x = lin_t(N);
+    //     let sig_0 = pulse_in_rand(N, &[(100, pulse.clone())], 0.1, 0.1, 1.);
+    //     let sig_1 = pulse_in_rand(N, &[(200, pulse.clone())], 0.1, 0.1, 1.);
+    //     let sig_2 = pulse_in_rand(N, &[(300, pulse.clone())], 0.1, 0.1, 1.);
+    //     plot_series(
+    //         vec![
+    //             (format!("Sig0"), RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
+    //             (format!("Sig1"), GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
+    //             (format!("Sig2"), BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
+    //
+    //         ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+    //     ).unwrap();
+    //
+    //     super::find_motifs(
+    //         move |key:&String| {
+    //             let sig = match key.as_str() {
+    //                 "1111" => &sig_0,
+    //                 "2222" => &sig_1,
+    //                 "3333" => &sig_2,
+    //                 _=> panic!("no")
+    //             };
+    //
+    //             Box::new(Tensor::vstack(&[
+    //                 Tensor::from_slice(
+    //                     sig.as_slice()
+    //                 ), //ch 0
+    //                 // Tensor::from_slice(
+    //                 //     sig_in_rand(N, &[], 10., 0.1, 0.1).as_slice()
+    //                 // )  //ch 1, not used
+    //             ]))
+    //         },
+    //         &FindMotifsParams::dummy(1000, 1000, "".into(), 1000, 0.01, None),
+    //         3 * N as usize,
+    //         eeg_id_series.into_iter(),
+    //         Arc::clone(&store), 1
+    //     );
+    //
+    //     debug!("{:?}", store.lock()?.list_run_resources(1)?);
+    //     let eeg_slices= store.lock()?.list_motifs_slices(1)?;
+    //     debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
+    //     debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
+    //     debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
+    //
+    //     Ok(())
+    // }
 
 
     // fn run_on_all_combinations_chunked<K, V, F>(keys:Vec<K>, chunk_size:usize, loader:F) -> Result<(), HbacError>
@@ -1881,7 +2002,7 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                smooth_kernel: None
+                input_filter: None
             },
             3 * N as usize,
             eeg_id_series,
@@ -1954,7 +2075,7 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                smooth_kernel: Some(3)
+                input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1)))
             },
             3 * N as usize,
             eeg_id_series,
@@ -2028,7 +2149,7 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                smooth_kernel: None
+                input_filter: None
             },
             3 * N as usize,
             eeg_id_series,
@@ -2092,7 +2213,7 @@ mod motif_find_tests {
                 max_keys_fifo: 1000,
                 chunk_size: 3,
                 max_dist_k: 0.001,
-                smooth_kernel: None
+                input_filter: None
             },
             3 * N as usize,
             (0..tensors_len).map(|v|format!("{}", v)).collect(),
@@ -2388,6 +2509,15 @@ mod motif_find_tests {
             }
 
         });
+    }
+
+    #[test]
+    fn test_filter_and_slicer_params(){
+        let params = FilterAndSlicerParams::new(10, 10, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
+
+        let properties:HashMap<String, Val> = params.to_properties_map();
+
+        debug!("properties={:?}", properties);
     }
 
     #[test]
