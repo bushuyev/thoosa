@@ -76,10 +76,10 @@ pub struct Conv1Params {
     #[arg(long)]
     kernel:i64,
 
-    #[arg(long)]
+    #[arg(long, default_value_t = 1)]
     stride:i64,
 
-    #[arg(long)]
+    #[arg(long, default_value_t = 0)]
     padding:i64
 }
 
@@ -204,7 +204,14 @@ impl Expander for LinearExpander {
     type T= FilterAndSlicerParams;
 
     fn expand(&self, t: FilterAndSlicerParams) ->Vec<FilterAndSlicerParams> {
-        vec![t]
+        (0..self.n as i64).map(|i|{
+            let mut t = t.clone();
+            t.window * i;
+            t.filter = Some(InputFilter::Conv1(t.filter.map(|InputFilter::Conv1(f)|  {
+                Conv1Params::new(f.kernel * i, f.stride, f.padding)
+            }).unwrap_or(Conv1Params::new(10, 10, 10))));
+            t
+        }).collect()
     }
 
 }
@@ -234,7 +241,8 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
         let run_id = {
             store.lock()?.save_motifs_run(
                 format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
-                &eeg_ids_str
+                &eeg_ids_str,
+                params.to_properties_map()
              )
         }?;
 

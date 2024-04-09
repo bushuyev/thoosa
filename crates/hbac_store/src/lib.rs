@@ -182,7 +182,7 @@ impl From<&i32> for Val {
 
 
 pub trait Store:Sync + Send{
-    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError>;
+    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>, group_id: Option<usize>) -> Result<usize, HbacError>;
     fn save_resource_set_group(&mut self, descr:String) -> Result<usize, HbacError>;
@@ -198,8 +198,8 @@ pub trait Store:Sync + Send{
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>;
     fn list_labels(&mut self) -> Result<Vec<String>, HbacError>;
 
-    fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, HbacError>;
-    fn save_param_value(&mut self, param_name:&str, value:Val) -> Result<usize, HbacError>;
+    // fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, HbacError>;
+    // fn save_param_value(&mut self, param_name:&str, value:Val) -> Result<usize, HbacError>;
 
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
@@ -228,7 +228,7 @@ pub struct SqlStore {
 
 impl Store for SqlStore {
 
-    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>) -> Result<usize, HbacError> {
+    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError> {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
@@ -251,6 +251,12 @@ impl Store for SqlStore {
             q.pop();
 
             t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+        }
+
+        if properties_vals.len() > 0 {
+            for property_val in properties_vals.into_iter() {
+                Self::save_param_value(&t, run_id, &property_val.0, property_val.1);
+            }
         }
 
         t.commit()?;
@@ -296,43 +302,19 @@ impl Store for SqlStore {
     }
 
 
-    fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, HbacError>{
-        let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+    // fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, HbacError>{
+    //     let mut conn_guard = self.conn.lock()?;
+    //     let mut t = conn_guard.transaction()?;
+    //
+    //     t.execute("INSERT INTO params (name, type) VALUES (?, ?)", params![name, data_type])?;
+    //
+    //     let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+    //
+    //     t.commit()?;
+    //
+    //     Ok(label_id)
+    // }
 
-        t.execute("INSERT INTO params (name, type) VALUES (?, ?)", params![name, data_type])?;
-
-        let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
-
-        t.commit()?;
-
-        Ok(label_id)
-    }
-
-    fn save_param_value(&mut self, param_name:&str, value:Val) -> Result<usize, HbacError>{
-        let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
-
-        match value {
-            Val::Real(v)=>{
-                t.execute("INSERT INTO param_values (param_id, real_value) VALUES ((SELECT id FROM params WHERE name=?), ?)", params![param_name, v])?;
-            }
-            Val::Int(v)=>{
-                t.execute("INSERT INTO param_values (param_id, int_value) VALUES ((SELECT id FROM params WHERE name=?), ?)", params![param_name, v])?;
-
-            }
-            Val::Str(v)=>{
-                t.execute("INSERT INTO param_values (param_id, str_value) VALUES ((SELECT id FROM params WHERE name=?), ?)", params![param_name, v])?;
-            }
-        }
-
-
-        let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
-
-        t.commit()?;
-
-        Ok(label_id)
-    }
 
 
     fn list_labels(&mut self) -> Result<Vec<String>, HbacError> {
@@ -1272,19 +1254,20 @@ impl SqlStore {
                 PRIMARY KEY (run_id, ord_id)
             )", ())?;
 
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS params (
-                id          INTEGER PRIMARY KEY,
-                name        VARCHAR(256),
-                type        VARCHAR(256),
-                UNIQUE(name) )",
-                (),
-            )?;
+            // t.execute(
+            //     "CREATE TABLE IF NOT EXISTS params (
+            //     id          INTEGER PRIMARY KEY,
+            //     name        VARCHAR(256),
+            //     type        VARCHAR(256),
+            //     UNIQUE(name) )",
+            //     (),
+            // )?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS param_values (
                 id          INTEGER PRIMARY KEY,
-                param_id    NOT NULL REFERENCES params(id) ON DELETE CASCADE,
+                run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
+                name        VARCHAR(256),
                 real_value        REAL,
                 int_value         INTEGER,
                 str_value         VARCHAR(256)
@@ -1292,14 +1275,14 @@ impl SqlStore {
                 (),
             )?;
 
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS runs_param_values (
-                id          INTEGER PRIMARY KEY,
-                value_id    NOT NULL REFERENCES param_values(id) ON DELETE CASCADE,
-                run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE
-            )",
-            (),
-            )?;
+            // t.execute(
+            //     "CREATE TABLE IF NOT EXISTS runs_param_values (
+            //     id          INTEGER PRIMARY KEY,
+            //     value_id    NOT NULL REFERENCES param_values(id) ON DELETE CASCADE,
+            //     run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE
+            // )",
+            // (),
+            // )?;
 
             t.execute( //group - ordinal as appeared when grouping, not needed
                 "CREATE TABLE IF NOT EXISTS motifs (
@@ -1386,6 +1369,25 @@ impl SqlStore {
         Ok(set_resources)
     }
 
+    fn save_param_value(t: &Transaction, run_id:usize, param_name:&str, value:Val) -> Result<(), HbacError>{
+
+        match value {
+            Val::Real(v)=>{
+                t.execute("INSERT INTO param_values (run_id, name, real_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+            }
+            Val::Int(v)=>{
+                t.execute("INSERT INTO param_values (run_id, name, int_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+
+            }
+            Val::Str(v)=>{
+                t.execute("INSERT INTO param_values (run_id, name, str_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+            }
+        }
+
+        Ok(())
+    }
+
+
     fn save_resource_set_group(descr: String, t: &mut Transaction) -> Result<usize, HbacError> {
 
         t.execute("INSERT INTO resource_set_group (descr) VALUES (?)", params![descr])?;
@@ -1446,7 +1448,7 @@ mod store_tests{
     use rusqlite::Connection;
     use rusqlite::types::Value;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use crate::{SqlStore, Store, HbacError, SetCond};
+    use crate::{SqlStore, Store, HbacError, SetCond, Val};
     use hbac_shared::TensorSliceIdx;
     use log::debug;
 
@@ -1521,38 +1523,7 @@ mod store_tests{
         Ok(())
     }
 
-
     #[test]
-    fn test_params() -> Result<(), HbacError> {
-        fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        let mut store = SqlStore::new("/tmp/test_db.db3")?;
-
-        let aaa_id = store.save_param("aaa", "real")?;
-        let bbb_id = store.save_param("bbb",  "real")?;
-        let ccc_id = store.save_param("ccc", "real")?;
-
-        let param_value_id_0 = store.save_param_value("aaa", 33.into())?;
-        let param_value_id_1 = store.save_param_value("aaa", 33.2.into())?;
-        let param_value_id_2 = store.save_param_value("aaa", "33".into())?;
-
-
-        struct TestParams {
-            param_aaa: usize,
-            param_bbb: f32
-        }
-
-        impl TestParams {
-            pub fn new(param_aaa: usize, param_bbb: f32) -> Self {
-                Self { param_aaa, param_bbb }
-            }
-        }
-
-        // store.save_param()
-
-        Ok(())
-    }
-
-        #[test]
     fn test_save_slices() -> Result<(), HbacError> {
         fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
@@ -1605,7 +1576,10 @@ mod store_tests{
             (("3".to_string(), 200i64), ("5".to_string(), 300i64), 0.94),
         ];
 
-        let run_id= store.save_motifs_run("test", &vec!["aaa".into(), "bbb".into()])?;
+        let run_id= store.save_motifs_run(
+            "test", &vec!["aaa".into(), "bbb".into()],
+            HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Int(2))])
+        )?;
 
         store.save_slices(run_id,  7, map)?;
 
@@ -1725,7 +1699,7 @@ mod store_tests{
             store.corrs_descr(corr_id)?
         );
 
-        store.delete_slices_without_matches()?;
+        store.delete_slices_without_matches(run_id)?;
 
         Ok(())
     }
