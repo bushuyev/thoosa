@@ -161,7 +161,7 @@ pub trait Store:Sync + Send{
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), HbacError>;
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError>;
-    fn delete_slices_without_matches(&mut self) -> Result<(), HbacError>;
+    fn delete_slices_without_matches(&mut self, run_id:usize) -> Result<(), HbacError>;
 }
 
 impl Debug for StoreDumper {
@@ -817,6 +817,8 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
+        debug!("set_motifs: run_id={:?}, channel={:?}", run_id, channel);
+
         {
             let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=? AND channel_id=?")?;
 
@@ -831,9 +833,11 @@ impl Store for SqlStore {
                 })?.map(|v| v.unwrap())
             );
 
+            debug!("set_motifs: run_id={:?}, channel={:?} groups={:?}", run_id, channel, groups);
+
             //TODO sort?
             for (group, slices) in groups {
-                debug!("set_motifs: group={:?}, slices={:?}", group, slices);
+                debug!("set_motifs: group={:?}, slices={:?} run_id={:?}", group, slices, run_id);
 
                 t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])?;//TODO group not needed?
 
@@ -889,10 +893,10 @@ impl Store for SqlStore {
         Ok(tensor_motifs)
     }
 
-    fn delete_slices_without_matches(&mut self) -> Result<(), HbacError>{
+    fn delete_slices_without_matches(&mut self, run_id:usize) -> Result<(), HbacError>{
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
-        t.execute("DELETE FROM slice_matches WHERE motif_id IS NULL", [])?;
+        t.execute("DELETE FROM slice_matches WHERE run_id=? AND motif_id IS NULL", [run_id])?;
         t.commit()?;
 
         guard.execute("VACUUM", [])?;
