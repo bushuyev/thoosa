@@ -66,12 +66,12 @@ pub struct FindMotifsParams {
     input_filter: Option<InputFilter>
 }
 
-#[derive(Debug, Subcommand, Clone)]
+#[derive(Debug, Subcommand, PartialEq, Clone)]
 pub enum InputFilter {
     Conv1(Conv1Params)
 }
 
-#[derive(Debug, Args, Clone)]
+#[derive(Debug, Args, PartialEq, Clone)]//PartialEq - for tests
 pub struct Conv1Params {
     #[arg(long)]
     kernel:i64,
@@ -94,6 +94,16 @@ impl InputFilter {
             }
         }
     }
+
+    pub fn from_properties_map(properties:&HashMap<String, Val>) -> Result<Self, HbacError> {
+        let conv_1_props = unprefix_properties("conv_1", &properties);
+        if conv_1_props.len() > 0 {
+            assert!(conv_1_props.len() == 3);
+            return Ok(crate::find::InputFilter::Conv1(Conv1Params::from_properties_map(conv_1_props)?));
+        }
+
+        Err(HbacError::new(format!("can't build InputFiltre from {:?}", properties)))
+    }
 }
 
 impl Conv1Params {
@@ -107,6 +117,14 @@ impl Conv1Params {
             ("stride".into(),  self.stride.into()),
             ("padding".into(), self.padding.into()),
         ])
+    }
+
+    pub fn from_properties_map(properties:HashMap<String, Val>) -> Result<Self, HbacError> {
+        Ok(Conv1Params {
+            kernel: properties.get("kernel").expect("kernel").as_i64().expect("kernel as_i64"),
+            stride: properties.get("stride").expect("stride").as_i64().expect("stride as_i64"),
+            padding: properties.get("padding").expect("padding").as_i64().expect("padding as_i64"),
+        })
     }
 }
 
@@ -364,7 +382,7 @@ impl ChunkOfSicedTensors {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct FilterAndSlicerParams {
     step: usize,
     window: i64,
@@ -399,14 +417,6 @@ impl From<FilterAndSlicerParams> for FilterAndSlicer {
     }
 }
 
-impl Debug for FilterAndSlicerParams {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ChunkAndSliceParams")
-            .field("step", &self.step)
-            .field("window", &self.window)
-            .finish()
-    }
-}
 
 impl FilterAndSlicerParams {
     pub fn new(
@@ -427,20 +437,45 @@ impl FilterAndSlicerParams {
         let mut map = HashMap::from([
             ("step".into(),  self.step.into()),
             ("window".into(),  self.window.into()),
+            ("descr".into(),  self.descr.as_str().into()),
         ]);
 
         if let Some(filter) = self.filter.as_ref() {
-
-            map.extend(filter.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v|{
-                a.insert(format!("filter.{}", v.0), v.1);
-                a
-            }).into_iter())
+            map.extend(prefix_properties("filter", filter.to_properties_map()).into_iter());
 
         }
 
         map
 
     }
+
+
+
+    pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
+
+        FilterAndSlicerParams::new(
+            properties.get("step").expect("step").as_usize().expect("step as_usize"),
+            properties.get("window").expect("window").as_i64().expect("window as_i64"),
+            properties.get("descr").expect("descr").as_str().expect("descr as_str"),
+            crate::find::InputFilter::from_properties_map(&unprefix_properties("filter", &properties)).ok()
+        )
+    }
+}
+
+fn prefix_properties(prefix:&str, map: HashMap<String, Val>) -> HashMap<String, Val>{
+    map.into_iter().fold(HashMap::new(), |mut a, v| {
+        a.insert(format!("{}.{}", prefix, v.0), v.1);
+        a
+    })
+}
+
+fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<String, Val> {
+    map.into_iter().fold(HashMap::new(),  |mut a, v| {
+        if let Some(p) = v.0.strip_prefix(prefix) {
+            a.insert(p.strip_prefix(".").expect("no . after prefix").to_string(), v.1.clone());
+        }
+        a
+    })
 }
 
 impl FilterAndSlicer {
@@ -2518,6 +2553,25 @@ mod motif_find_tests {
         let properties:HashMap<String, Val> = params.to_properties_map();
 
         debug!("properties={:?}", properties);
+
+        let sample_properties:HashMap<String, Val> = HashMap::from([
+            ("window".into(), 10.into()),
+            ("step".into(), 10.into()),
+            ("descr".into(), "test".into()),
+            ("filter.conv_1.padding".into(), 1.into()),
+            ("filter.conv_1.stride".into(), 1.into()),
+            ("filter.conv_1.kernel".into(), 10.into()),
+        ]);
+
+        assert_eq!(sample_properties, properties);
+
+
+        let loaded_params = crate::find::FilterAndSlicerParams::from_properties_map(properties);
+
+        debug!("loaded_params={:?}", loaded_params);
+
+        assert_eq!(params, loaded_params);
+
     }
 
     #[test]
