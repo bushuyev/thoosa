@@ -24,7 +24,7 @@ use crate::my_tch::apply_channel_motifs;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use hbac_shared::parse_key_val;
-
+use hbac_shared::val::Val;
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainOnLabelParams {
@@ -389,12 +389,12 @@ pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_t
                 Some(label_models) => {//label_models in one of the model dirs
                     Tensor::stack(label_models.iter().map(|model| {
 
-                        let motif_batches = batch_windows(max_input, model.motif_node_params.window as usize, step, motif_batch_size as usize);
+                        let motif_batches = batch_windows(max_input, model.motif_node_params.num_features as usize, step, motif_batch_size as usize);
                         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
                         debug!("train_final: model.motif_node_params={:?} motif_batches={}", model.motif_node_params, max_motif_batches);
 
-                        let t = apply_label_motifs(model.motif_node_params.window, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                        let t = apply_label_motifs(model.motif_node_params.num_features, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
 
                         //TODO move into CorrModels
                         let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
@@ -487,13 +487,13 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
         let t = Tensor::stack(labels.iter().map(|label|{
             match models.get(label) {
                 Some(model)=>{
-                    let motif_batches = batch_windows(max_input, model.motif_node_params.window as usize, step, motif_batch_size as usize);
+                    let motif_batches = batch_windows(max_input, model.motif_node_params.num_features as usize, step, motif_batch_size as usize);
                     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
                     debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
 
-                    let t = apply_label_motifs(model.motif_node_params.window, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                    let t = apply_label_motifs(model.motif_node_params.num_features, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
                     let t_x = t.view((1, -1));
                     debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
 
@@ -608,6 +608,8 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
     let motif_node_params = serde_json::from_str::<MotifNodeParams>(
         fs::read_to_string(&motif_models_path.as_ref().join("motif_model.json"))?.as_str()
     )?;
+
+    MotifNodeParams::from_properties_map(store_guard.list_run_params(run_id, None)?)
 
     debug!("train_on_eeg: motif_node_params={:?}", motif_node_params);
 
@@ -727,17 +729,31 @@ impl TrainOnMotifsParams {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MotifNodeParams {
-    window: i64
+    num_features: i64
 }
 
 impl MotifNodeParams {
-    pub fn new(window: i64) -> Self {
-        Self { window }
+    pub fn new(num_features: i64) -> Self {
+        Self { num_features }
     }
+
+    pub fn to_properties_map(&self) -> HashMap<String, Val> {
+        HashMap::from([
+            ("num_features".into(),  self.num_features.into()),
+        ])
+    }
+
+    pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
+
+        MotifNodeParams::new(
+            properties.get("num_features").expect("num_features").as_i64().expect("num_features as_i64"),
+        )
+    }
+
 }
 
 pub fn motif_node(params: &MotifNodeParams) -> Node {
-    SeqBuilder::new(params.window)
+    SeqBuilder::new(params.num_features)
         .batch_norm()
         .conv_1d(10, 1, 1, ConvConfig::default())
         .linear_s(1)

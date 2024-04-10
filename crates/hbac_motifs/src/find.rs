@@ -16,7 +16,7 @@ use clap::parser::*;
 use clap::clap_derive::{Args, Parser, Subcommand};
 use hbac_shared::{MotifSlice, parse_key_val};
 
-use log::{debug, info, warn, trace};
+use log::{debug, info, trace, warn};
 use rayon::iter::{ParallelBridge, ParallelIterator, split};
 use rayon::iter::IntoParallelIterator;
 use tch::{Device, IndexOp, Tensor};
@@ -27,7 +27,7 @@ use hbac_common::utils::*;
 use rayon::iter::IntoParallelRefIterator;
 use torch_sys::C_tensor;
 use hbac_shared::TensorSliceIdx;
-use hbac_store::{Store, Val};
+use hbac_store::Store;
 use hbac_store::StoreDumper;
 use std::cell::RefCell;
 use crate::cache_on_threads::CacheOnThreads;
@@ -35,6 +35,7 @@ use crate::distance::slice_t;
 use crate::distance::dist_d2;
 use core::slice::Windows;
 use std::ops::Range;
+use hbac_shared::val::Val;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {
@@ -468,14 +469,14 @@ impl FilterAndSlicerParams {
     }
 }
 
-fn prefix_properties(prefix:&str, map: HashMap<String, Val>) -> HashMap<String, Val>{
+pub fn prefix_properties(prefix:&str, map: HashMap<String, Val>) -> HashMap<String, Val>{
     map.into_iter().fold(HashMap::new(), |mut a, v| {
         a.insert(format!("{}.{}", prefix, v.0), v.1);
         a
     })
 }
 
-fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<String, Val> {
+pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<String, Val> {
     map.into_iter().fold(HashMap::new(),  |mut a, v| {
         if let Some(p) = v.0.strip_prefix(prefix) {
             a.insert(p.strip_prefix(".").expect("no . after prefix").to_string(), v.1.clone());
@@ -1228,7 +1229,7 @@ mod motif_find_tests {
     use std::fs::{File, OpenOptions, ReadDir};
     use std::{fs, io};
     use std::io::Write;
-    use std::iter::{Map};
+    use std::iter::Map;
     use std::mem::size_of_val;
     use std::ops::Mul;
     use std::ops::Range;
@@ -1260,9 +1261,10 @@ mod motif_find_tests {
     use crate::find::iter_all_in_dir;
     use hbac_common::utils::cdt_for_dir;
     use hbac_shared::*;
-    use hbac_store::{SqlStore, Store, Val};
+    use hbac_store::{SqlStore, Store};
     use core::slice::Windows;
     use hbac_shared::repeat_iter::{FirstLastRepeat, Repeat};
+    use hbac_shared::val::Val;
 
     #[ctor::ctor]
     fn init() {

@@ -1,6 +1,7 @@
 #![feature(backtrace_frames)]
 
 pub mod repeat_iter;
+pub mod val;
 
 use std::collections::HashMap;
 use std::hash::Hash;

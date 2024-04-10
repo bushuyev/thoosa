@@ -17,8 +17,9 @@ use hbac_shared::*;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use rand::{Rng, thread_rng};
 use rand::prelude::SliceRandom;
-use std::cmp::{min, max};
+use std::cmp::{max, min};
 use serde::Deserialize;
+use hbac_shared::val::Val;
 
 pub struct StoreDumper {
     pub store:Arc<Mutex<dyn Store>>, //TODO pub
@@ -93,106 +94,6 @@ impl SetCond {
     }
 }
 
-//TODO move to shared
-#[derive(Debug, PartialEq, Clone)]
-pub enum Val {
-    Real(f64),
-    Int(i64),
-    Str(String)
-}
-
-impl Val {
-
-    pub fn as_usize(&self) -> Result<usize, HbacError> {
-        match self {
-            Self::Int(v)=> Ok(*v as usize),
-            _=> Err(HbacError::new("can't be usize"))
-        }
-    }
-
-    pub fn as_i64(&self) -> Result<i64, HbacError> {
-        match self {
-            Self::Int(v)=> Ok(*v as i64),
-            _=> Err(HbacError::new("can't be i64"))
-        }
-    }
-
-    pub fn as_str(&self) -> Result<String, HbacError> {
-        match self {
-            Self::Str(v)=> Ok(v.clone()),
-            Self::Int(v)=> Ok(format!("{}", v)),
-            Self::Real(v)=> Ok(format!("{}", v))
-        }
-    }
-}
-
-impl From<f32> for Val {
-    fn from(v: f32) -> Self {
-        Val::Real(v as f64)
-    }
-}
-
-impl From<usize> for Val {
-    fn from(v: usize) -> Self {
-        Val::Int(v as i64)
-    }
-}
-
-impl From<i64> for Val {
-    fn from(v: i64) -> Self {
-        Val::Int(v)
-    }
-}
-
-impl From<i32> for Val {
-    fn from(v: i32) -> Self {
-        Val::Int(v as i64)
-    }
-}
-
-impl From<f64> for Val {
-    fn from(v: f64) -> Self {
-        Val::Real(v)
-    }
-}
-
-
-impl From<&str> for Val {
-    fn from(v: &str) -> Self {
-        Val::Str(v.to_string())
-    }
-}
-
-impl From<String> for Val {
-    fn from(v: String) -> Self {
-        Val::Str(v)
-    }
-}
-
-impl From<&f32> for Val {
-    fn from(v: &f32) -> Self {
-        Val::Real(*v as f64)
-    }
-}
-
-impl From<&usize> for Val {
-    fn from(v: &usize) -> Self {
-        Val::Int(*v as i64)
-    }
-}
-
-impl From<&i64> for Val {
-    fn from(v: &i64) -> Self {
-        Val::Int(*v)
-    }
-}
-
-impl From<&i32> for Val {
-    fn from(v: &i32) -> Self {
-        Val::Int(*v as i64)
-    }
-}
-
 
 pub trait Store:Sync + Send{
     fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError>;
@@ -212,7 +113,7 @@ pub trait Store:Sync + Send{
     fn list_labels(&mut self) -> Result<Vec<String>, HbacError>;
 
     // fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, HbacError>;
-    // fn save_param_value(&mut self, param_name:&str, value:Val) -> Result<usize, HbacError>;
+    fn save_params_value(&mut self, params:HashMap<String, Val>, run_id:usize, label:Option<&str>) -> Result<(), HbacError>;
 
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>;
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>;
@@ -220,7 +121,7 @@ pub trait Store:Sync + Send{
     fn list_motifs_distances(&mut self, run_id:usize) -> Result<HashMap<usize, f32>, HbacError>;
     fn list_motifs_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
-    fn list_run_params(&mut self, run_id:usize) -> Result<HashMap<String, Val>, HbacError>;
+    fn list_run_params(&mut self, run_id:usize, label: Option<&str>) -> Result<HashMap<String, Val>, HbacError>;
     fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, HbacError>;
     fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, HbacError>;//corr_run_id, run_id, label
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
@@ -268,13 +169,29 @@ impl Store for SqlStore {
 
         if properties_vals.len() > 0 {
             for property_val in properties_vals.into_iter() {
-                Self::save_param_value(&t, run_id, &property_val.0, property_val.1);
+                Self::save_param_value(&t, run_id, &property_val.0, property_val.1, None);
             }
         }
 
         t.commit()?;
 
         Ok(run_id)
+    }
+
+    fn save_params_value(&mut self, params:HashMap<String, Val>, run_id:usize, label:Option<&str>) -> Result<(), HbacError> {
+        let mut conn_guard = self.conn.lock()?;
+        let mut t = conn_guard.transaction()?;
+
+
+        let label_id = t.query_row("SELECT id FROM labels WHERE label=?", [label], |row| row.get(0)).ok();
+
+        for property_val in params.into_iter() {
+            Self::save_param_value(&t, run_id, &property_val.0, property_val.1, label_id);
+        }
+
+        t.commit()?;
+
+        Ok(())
     }
 
     fn save_resources(&mut self, resources:Vec<String>) -> Result<(), HbacError>{
@@ -1025,7 +942,7 @@ impl Store for SqlStore {
         result
     }
 
-    fn list_run_params(&mut self, run_id:usize) -> Result<HashMap<String, Val>, HbacError> {
+    fn list_run_params(&mut self, run_id:usize, label: Option<&str>) -> Result<HashMap<String, Val>, HbacError> {
 
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
@@ -1327,13 +1244,14 @@ impl SqlStore {
                 id          INTEGER PRIMARY KEY,
                 run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
                 name        VARCHAR(256),
-                real_value        REAL,
-                int_value         INTEGER,
-                str_value         VARCHAR(256)
+                real_value  REAL,
+                int_value   INTEGER,
+                str_value   VARCHAR(256),
+                label_id    REFERENCES labels(id) ON DELETE CASCADE
                 )",
                 (),
             )?;
-            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_param_values_name_run_id ON run_param_values (run_id, name);", ())?;
+            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_param_values_name_run_id ON run_param_values (run_id, name, label_id);", ())?;
 
             // t.execute(
             //     "CREATE TABLE IF NOT EXISTS runs_run_param_values (
@@ -1429,18 +1347,18 @@ impl SqlStore {
         Ok(set_resources)
     }
 
-    fn save_param_value(t: &Transaction, run_id:usize, param_name:&str, value:Val) -> Result<(), HbacError>{
+    fn save_param_value(t: &Transaction, run_id:usize, param_name:&str, value:Val, label_id:Option<usize>) -> Result<(), HbacError>{
 
         match value {
             Val::Real(v)=>{
-                t.execute("INSERT INTO run_param_values (run_id, name, real_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+                t.execute("INSERT INTO run_param_values (run_id, label_id, name, real_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::Int(v)=>{
-                t.execute("INSERT INTO run_param_values (run_id, name, int_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+                t.execute("INSERT INTO run_param_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
 
             }
             Val::Str(v)=>{
-                t.execute("INSERT INTO run_param_values (run_id, name, str_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+                t.execute("INSERT INTO run_param_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
         }
 
@@ -1508,9 +1426,10 @@ mod store_tests{
     use rusqlite::Connection;
     use rusqlite::types::Value;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use crate::{SqlStore, Store, HbacError, SetCond, Val};
+    use crate::{HbacError, SetCond, SqlStore, Store};
     use hbac_shared::TensorSliceIdx;
     use log::debug;
+    use hbac_shared::val::Val;
 
     #[ctor::ctor]
     fn init() {
@@ -1589,9 +1508,9 @@ mod store_tests{
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
 
 
-        let aaa_id = store.save_label("aaa");
-        let bbb_id = store.save_label("bbb");
-        let ccc_id = store.save_label("ccc");
+        let aaa_id = store.save_label("aaa")?;
+        let bbb_id = store.save_label("bbb")?;
+        let ccc_id = store.save_label("ccc")?;
 
         store.save_resources_labels(HashMap::from([
             ("1111".into(), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]),
@@ -1644,13 +1563,36 @@ mod store_tests{
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))])
         )?;
 
-        let loaded_params = store.list_run_params(run_id)?;
+        store.save_params_value(
+            HashMap::from([("label.prop1".into(), Val::Int(10)), ("label.prop2".into(), Val::Real(20.0)), ("label.prop3".into(), Val::Str("3330".to_string()))]),
+            run_id,
+            Some("aaa")
+        );
+
+        store.save_params_value(
+            HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
+            run_id,
+            Some("bbb")
+        );
+
+        store.save_params_value(
+            HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
+            run_id,
+            None
+        );
+
+        let loaded_params = store.list_run_params(run_id, None)?;
+
+        println!("loaded_params={:?}", loaded_params);
 
 
         assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
         assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
         assert_eq!(loaded_params.get("prop3").expect("prop3"), &Val::Str("333".to_string()));
 
+        let loaded_params_aaa = store.list_run_params(run_id, Some("aaa"))?;
+
+        println!("loaded_params_aaa={:?}", loaded_params_aaa);
 
         store.save_slices(run_id,  7, map)?;
 

@@ -8,7 +8,7 @@ use std::str::FromStr;
 use log::{debug, error, info, LevelFilter, warn};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, iter_all_in_dir, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
+use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, iter_all_in_dir, prefix_properties, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
 use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
@@ -28,7 +28,7 @@ use tch::Device::Cpu;
 use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
 
 use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, train_on_label, TrainOnLabelParams, TrainOnMotifsParams, TrainFinalParams, train_final, InferParams, infer};
+use hbac_common::train_nets::{ClassTensorsDataBatch, infer, InferParams, train_final, train_on_label, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use hbac_common::simp::DummyDs;
 use hbac_common::{ResourceLoader, train_nets};
 use hbac_store::{SqlStore, Store};
@@ -37,6 +37,7 @@ use hbac_shared::TensorSliceIdx;
 use crate::Commands::*;
 use polars::export::rayon::iter::ParallelIterator;
 use hbac_common::train_nets::MotifNodeParams;
+use hbac_shared::val::Val;
 
 mod data;
 mod utils;
@@ -370,7 +371,9 @@ fn _main() -> Result<(), HbacError> {
 
             info!("run_train_on_motifs done");
 
-            run_train_on_label(&store, devices.clone(),
+            run_train_on_label(
+                &store,
+                devices.clone(),
                &TrainOnLabelParams::dummy(
                    run_all_params.step,
                    run_all_params.window,
@@ -576,7 +579,7 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
                 Arc::clone(&loader)
             ).unwrap();
 
-            fs::write(Path::new(train_on_motif_params.output_dir()).join(format!("motif_model_{}.json", run_id)), serde_json::to_string(&node_params).expect("serde_json::to_string"));
+            // fs::write(Path::new(train_on_motif_params.output_dir()).join(format!("motif_model_{}.json", run_id)), serde_json::to_string(&node_params).expect("serde_json::to_string"));
         }
 
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?} done ", corrs_run, device_i);
@@ -763,7 +766,7 @@ fn train_on_motifs(cli: &Cli, run_id: usize, corr_run: usize, store:Arc<Mutex<im
                 .filter(|(motif_id, corr)| *corr > train_on_motif_params.min_corr())
                 .map(|(motif_id, corr)| motif_id).collect::<Vec<usize>>(),
 
-            FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id)?)
+            FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id, None)?)
         )
     };
 
@@ -776,7 +779,19 @@ fn train_on_motifs(cli: &Cli, run_id: usize, corr_run: usize, store:Arc<Mutex<im
     let filter_and_slice:FilterAndSlicer = params.into();
     let filter_op = filter_and_slice.filter();
 
-    let node_params = MotifNodeParams::new(filter_and_slice.window());//1111
+    let node_params = MotifNodeParams::new(filter_and_slice.window());//TODO expand
+
+    {
+        let mut store_guard = store.lock()?;
+
+        store_guard.save_params_value(
+            prefix_properties("motifs_node", node_params.to_properties_map()),
+            run_id,
+            Some(label.as_str())
+        )?;
+
+    }
+
 
     for motif_id in motifs_iter.into_iter() {
         let (all_sices_0, all_sices_1, channel) = {
@@ -804,7 +819,6 @@ fn train_on_motifs(cli: &Cli, run_id: usize, corr_run: usize, store:Arc<Mutex<im
                 )
             );
             debug!("train_on_motif: 1. run_id={}, done", run_id);
-
 
             let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, Some(all_sices_1.len()), Some((run_id, channel as usize)))?;
 
@@ -872,7 +886,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     let (resource_id_motif_slices, motifs_avg_distances, params) = {
         let mut store_guard = store.lock()?;
 
-        (store_guard.list_motifs_slices(run_id)?, store_guard.list_motifs_distances(run_id)?, FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id)?))
+        (store_guard.list_motifs_slices(run_id)?, store_guard.list_motifs_distances(run_id)?, FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id, None)?))
     };
 
 
