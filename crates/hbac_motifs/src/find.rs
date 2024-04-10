@@ -208,7 +208,7 @@ impl Expander for LinearExpander {
             let mut t = t.clone();
             t.window * i;
             t.filter = Some(InputFilter::Conv1(t.filter.map(|InputFilter::Conv1(f)|  {
-                Conv1Params::new(f.kernel * i, f.stride, f.padding)
+                Conv1Params::new(f.kernel + f.kernel * i, f.stride, f.padding)
             }).unwrap_or(Conv1Params::new(10, 10, 10))));
             t
         }).collect()
@@ -234,7 +234,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let mut slots_processed = 0;
 
 
-    let param_set = find_motifs_params.to_chunk_and_slice_params(&LinearExpander::new(3));
+    let param_set = find_motifs_params.to_chunk_and_slice_params(&LinearExpander::new(2));
 
     let  (run_ids, mut trackers) :(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]),|mut a:(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
 

@@ -521,7 +521,7 @@ mod tch_tests {
     }
 
     #[test]
-    pub fn test_seq_linear(){
+    pub fn test_seq_linear_same_size(){
         let seq = SeqBuilder::new(2)
             .linear()
             .end_seq();
@@ -532,70 +532,25 @@ mod tch_tests {
 
         let y_p = net.forward(&tch::Tensor::randn([10, 2], (Kind::Float, Device::Cpu)));
 
-        y_p.print()
+        assert_eq!(vec![10,2], y_p.size())
     }
 
-    // #[test]
-    // pub fn test_configure_dense(){
-    //     let vs = nn::VarStore::new(Device::Cpu);
-    //
-    //     let model = configure_dense(50 * 200, 4, 4, 100, 20).build_tch_module(&vs.root()).unwrap();
-    //
-    //
-    //     let eegs = EEGs::load_all_eegs("../../data").unwrap();
-    //
-    //     let mut opt = nn::AdamW::default().build(&vs, 1e-2).unwrap();
-    //
-    //
-    //     // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
-    //     let (tensor, y_t) = eegs.train_batch(10);
-    //     // debug!("size:   {:?}", tensor.size());
-    //     let pred_y = model.forward(
-    //         &tensor.totype(Kind::Float) //batch, channels, L in
-    //     );
-    //     let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
-    //     debug!("1. pred size:   pred_y.size()={:?}     y_t.size()={:?}", pred_y_mean.size(), y_t.size());
-    //     // let loss = y_t.mse_loss(&pred_y_mean, Reduction::Mean); //.sum(kind::Kind::Float);;
-    //     let loss = y_t.cross_entropy_loss::<Tensor>(&pred_y_mean, None, Reduction::Mean, -100, 0.0);
-    //     // let loss_1 = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
-    //     debug!(":::::::::::::::::::::::::::: pred_y.size()={:?} y_t.size()={:?}, pred_y_mean.size()={:?},  loss.size()={:?}", pred_y.size(), y_t.size(), pred_y_mean.size(),  loss.size());
-    //     loss.print();
-    //     debug!("::::::::::::::::::::::::::::: loss={:?}", loss);
-    //     opt.backward_step(&loss);
-    //     //
-    //     // // let tensor = Tensor::randn([10, 20, 10000], (Kind::Float, Device::Cpu));
-    //     // let (tensor, y_t) = eegs.batch_tensor(10);
-    //     // debug!("size:   {:?}", tensor.size());
-    //     // let pred_y = model.forward(
-    //     //     &tensor //batch, channels, L in
-    //     // );
-    //     // debug!("2. pred size:   {:?}", pred_y.size());
-    //     // let pred_y_mean = pred_y.mean_dim(1, false, kind::Kind::Float);
-    //     // // let loss = (pred_y_mean - y_t).pow_tensor_scalar(2).sum(kind::Kind::Float);
-    //     // let loss = y_t.mse_loss(&pred_y_mean, Reduction::None);
-    //     // opt.backward_step(&loss);
-    //     // pred_y.print();
-    //
-    //
-    //
-    //
-    // }
-
     #[test]
-    pub fn test_res_seq() -> Result<(), HbacError>{
+    pub fn test_split_seq() -> Result<(), HbacError>{
         let res_seq = SeqBuilder::new(10)
-            .linear()
+            .linear_s(1)
             .end_seq();
 
         let conv_seq = SeqBuilder::new(10)
-            .conv_1d(5, 5, 5, ConvConfig::default())
+            .conv_1d(5, 1, 1, ConvConfig::default())
+            .linear_s(1)
             .end_seq();
 
         let main = SeqBuilder::new(10)
             .split(
                 vec![res_seq, conv_seq],
-                Box::new(|t:&Tensor|vec![t.i((0))]),
-                Box::new(|t:Vec<Tensor>|Tensor::stack(t.as_slice(), 0))
+                Box::new(|t:&Tensor|vec![t.i((.., 0, ..)).view((10, 1, 10)), t.i((.., 1, ..)).view((10, 1, 10))]),
+                Box::new(|t:Vec<Tensor>|Tensor::stack(t.as_slice(), 1).squeeze())
 
             ).end_seq();
 
@@ -603,6 +558,11 @@ mod tch_tests {
 
         let net = main.build_tch_module(&vs.root())?;
 
+
+        let y_p = net.forward(&tch::Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)));
+
+
+        assert_eq!(vec![10,2], y_p.size());
 
         Ok(())
     }
