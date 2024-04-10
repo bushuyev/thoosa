@@ -96,7 +96,7 @@ impl SetCond {
 //TODO move to shared
 #[derive(Debug, PartialEq, Clone)]
 pub enum Val {
-    Real(f32),
+    Real(f64),
     Int(i64),
     Str(String)
 }
@@ -128,7 +128,7 @@ impl Val {
 
 impl From<f32> for Val {
     fn from(v: f32) -> Self {
-        Val::Real(v)
+        Val::Real(v as f64)
     }
 }
 
@@ -150,15 +150,28 @@ impl From<i32> for Val {
     }
 }
 
+impl From<f64> for Val {
+    fn from(v: f64) -> Self {
+        Val::Real(v)
+    }
+}
+
+
 impl From<&str> for Val {
     fn from(v: &str) -> Self {
         Val::Str(v.to_string())
     }
 }
 
+impl From<String> for Val {
+    fn from(v: String) -> Self {
+        Val::Str(v)
+    }
+}
+
 impl From<&f32> for Val {
     fn from(v: &f32) -> Self {
-        Val::Real(*v)
+        Val::Real(*v as f64)
     }
 }
 
@@ -207,8 +220,9 @@ pub trait Store:Sync + Send{
     fn list_motifs_distances(&mut self, run_id:usize) -> Result<HashMap<usize, f32>, HbacError>;
     fn list_motifs_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, HbacError>;
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, HbacError>;
+    fn list_run_params(&mut self, run_id:usize) -> Result<HashMap<String, Val>, HbacError>;
     fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, HbacError>;
-    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, String)>, HbacError>;
+    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, HbacError>;//corr_run_id, run_id, label
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, HbacError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), HbacError>;
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError>;
@@ -235,7 +249,6 @@ impl Store for SqlStore {
         t.execute("INSERT INTO motifs_run (descr) VALUES (?)", params![descr])?;
 
         let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
-
 
         if keys.len() > 0 {
             let (mut q, params) = keys.into_iter().enumerate().fold(
@@ -1012,6 +1025,48 @@ impl Store for SqlStore {
         result
     }
 
+    fn list_run_params(&mut self, run_id:usize) -> Result<HashMap<String, Val>, HbacError> {
+
+        let mut guard = self.conn.lock()?;
+        let t = guard.transaction()?;
+
+        let result = {
+
+
+            let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value FROM run_param_values WHERE run_id=?")?;
+
+
+            let result = stmt.query_map([run_id], |row| {
+                Ok(
+                    (
+                        row.get::<usize, String>(0)?,
+                        row.get::<usize, f64>(1).ok(),
+                        row.get::<usize, i64>(2).ok(),
+                        row.get::<usize, String>(3).ok()
+                    )
+                )
+            })?.map(|v|v.expect(format!("can't get run_param_values for {}", run_id).as_str())).fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value)|{
+                a.insert(
+                    name.clone(),
+                    real_value.map(|v|v.into())
+                    .or(int_value.map(|v|v.into()))
+                    .or(str_value.map(|v|v.into()))
+                    .expect(format!("no value for {}", name).as_str())
+                );
+                a
+            });
+
+            result
+        };
+
+        t.commit()?;
+        debug!("list_run_resources: result={:?}", result);
+
+        Ok(result)
+
+    }
+
+
     fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, HbacError>{
         debug!("save_motifs_corrs: motifs_corrs={:?}", motifs_corrs);
 
@@ -1053,12 +1108,12 @@ impl Store for SqlStore {
         Ok(corr_run_id)
     }
 
-    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, String)>, HbacError> {
+    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, HbacError> {
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
 
 
-        let (mut q, params) = ids.into_iter().fold((vec!["SELECT id, label FROM corrs_run WHERE id IN ("], vec![]), |mut a, v|{
+        let (mut q, params) = ids.into_iter().fold((vec!["SELECT id, run_id, label FROM corrs_run WHERE id IN ("], vec![]), |mut a, v|{
             a.0.push("?");
             a.0.push(",");
             a.1.push(*v);
@@ -1072,7 +1127,11 @@ impl Store for SqlStore {
             let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
 
             let r= stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
-                Ok((row.get::<usize, usize>(0)?, row.get::<usize, String>(1)?))
+                Ok((
+                    row.get::<usize, usize>(0)?,
+                    row.get::<usize, usize>(1)?,
+                    row.get::<usize, String>(2)?
+                ))
             })?.map(|v| v.unwrap()).collect();
 
             r
@@ -1245,7 +1304,7 @@ impl SqlStore {
             )", ())?;
 
 
-            //key - resource id
+            //key - resource id  //TODO remove ord_id?
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
                 run_id     NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
@@ -1264,7 +1323,7 @@ impl SqlStore {
             // )?;
 
             t.execute(
-                "CREATE TABLE IF NOT EXISTS param_values (
+                "CREATE TABLE IF NOT EXISTS run_param_values (
                 id          INTEGER PRIMARY KEY,
                 run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
                 name        VARCHAR(256),
@@ -1274,11 +1333,12 @@ impl SqlStore {
                 )",
                 (),
             )?;
+            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_param_values_name_run_id ON run_param_values (run_id, name);", ())?;
 
             // t.execute(
-            //     "CREATE TABLE IF NOT EXISTS runs_param_values (
+            //     "CREATE TABLE IF NOT EXISTS runs_run_param_values (
             //     id          INTEGER PRIMARY KEY,
-            //     value_id    NOT NULL REFERENCES param_values(id) ON DELETE CASCADE,
+            //     value_id    NOT NULL REFERENCES run_param_values(id) ON DELETE CASCADE,
             //     run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE
             // )",
             // (),
@@ -1311,7 +1371,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS corrs_run (
                 id          INTEGER PRIMARY KEY,
-                run_id          NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
                 descr       VARCHAR(256),
                 label       VARCHAR(256),
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -1373,14 +1433,14 @@ impl SqlStore {
 
         match value {
             Val::Real(v)=>{
-                t.execute("INSERT INTO param_values (run_id, name, real_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+                t.execute("INSERT INTO run_param_values (run_id, name, real_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
             }
             Val::Int(v)=>{
-                t.execute("INSERT INTO param_values (run_id, name, int_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+                t.execute("INSERT INTO run_param_values (run_id, name, int_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
 
             }
             Val::Str(v)=>{
-                t.execute("INSERT INTO param_values (run_id, name, str_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
+                t.execute("INSERT INTO run_param_values (run_id, name, str_value) VALUES (?, ?, ?)", params![run_id, param_name, v])?;
             }
         }
 
@@ -1541,11 +1601,14 @@ mod store_tests{
 
         let set_1_id = store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()], None)?;
         let set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()], None)?;
+
         store.save_pure_sets(10, false);
         store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10);
 
         let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into())?;
         let set_all_id = store.save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
+
+
 
 
         let group_sets = store.list_resource_set_group_sets("pure group 10")?;
@@ -1578,8 +1641,16 @@ mod store_tests{
 
         let run_id= store.save_motifs_run(
             "test", &vec!["aaa".into(), "bbb".into()],
-            HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Int(2))])
+            HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))])
         )?;
+
+        let loaded_params = store.list_run_params(run_id)?;
+
+
+        assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
+        assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
+        assert_eq!(loaded_params.get("prop3").expect("prop3"), &Val::Str("333".to_string()));
+
 
         store.save_slices(run_id,  7, map)?;
 
@@ -1653,7 +1724,7 @@ mod store_tests{
         )?;
 
         let corrs = store.list_corrs(&vec![corr_id])?;
-        assert_eq!([(1, "seizure_vote".to_string())], corrs.as_slice());
+        assert_eq!([(1, 1, "seizure_vote".to_string())], corrs.as_slice());
 
         let motifs = store.list_corr_motifs(corr_id)?;
 

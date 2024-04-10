@@ -176,7 +176,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
 pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, load_tensor:F, window: i64, channels: i64, device: Device) -> Result<(Tensor, Vec<Vec<usize>>, HashMap<usize, MotifSlice>), HbacError>
-    where F:Fn(&String) -> Box<Tensor> + Sync + Send {
+    where F:Fn(&String) -> Box<Tensor> {
 
     debug!("motifs_to_tensor: device={:?}", device);
 
@@ -336,7 +336,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 
 
 pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, load_tensor: F, device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
-    where F: Fn(&str) -> Box<Tensor> + Sync {
+    where F: Fn(&str) -> Box<Tensor>  {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 

@@ -180,7 +180,7 @@ impl FindMotifsParams {
         self.max_dist_k
     }
 
-    pub fn to_chunk_and_slice_params(&self, expander:&dyn Expander<T=FilterAndSlicerParams>) -> Vec<FilterAndSlicerParams>{
+    pub fn to_filter_and_slice_params(&self, expander:&dyn Expander<T=FilterAndSlicerParams>) -> Vec<FilterAndSlicerParams>{
         expander.expand(FilterAndSlicerParams::new(self.step, self.window as i64, "no filter", self.input_filter.clone() ))
     }
 }
@@ -234,7 +234,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let mut slots_processed = 0;
 
 
-    let param_set = find_motifs_params.to_chunk_and_slice_params(&LinearExpander::new(2));
+    let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(2));
 
     let  (run_ids, mut trackers) :(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]),|mut a:(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
 
@@ -398,10 +398,10 @@ pub struct FilterAndSlicerParams {
     descr:String
 }
 
-struct FilterAndSlicer {
+pub struct FilterAndSlicer {
     step: usize,
     window: i64,
-    filter:Box<dyn Fn(&Box<Tensor>)->Tensor>,
+    filter:Option<Box<dyn Fn(&Box<Tensor>)->Tensor>>,
 }
 
 impl From<FilterAndSlicerParams> for FilterAndSlicer {
@@ -411,12 +411,12 @@ impl From<FilterAndSlicerParams> for FilterAndSlicer {
             step: params.step,
             window: params.window,
             filter: match &params.filter {
-                None => Box::new(|t: &Box<Tensor>| t.shallow_clone()),
+                None => None, //Box::new(|t: &Box<Tensor>| t.shallow_clone()),
 
                 Some(input_filter) => {
                     match input_filter {
                         InputFilter::Conv1(filter_params) => {
-                            Box::new(|t: &Box<Tensor>| t.shallow_clone())
+                            Some(Box::new(|t: &Box<Tensor>| t.shallow_clone()))
                         }
                     }
                 }
@@ -457,8 +457,6 @@ impl FilterAndSlicerParams {
 
     }
 
-
-
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
 
         FilterAndSlicerParams::new(
@@ -495,7 +493,8 @@ impl FilterAndSlicer {
         let t_1_tensors = tensors_chunk_1.into_iter().map(|t| {
             // debug!("find_motifs_euc: vw_1={:?} t_1 size={:?}", vw_1, t.size());
 
-            let sliced = slice_t(&(self.filter)(t), self.step, self.window);
+            let x = self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone()));
+            let sliced = slice_t(&x, self.step, self.window);
 
             // debug!("find_motifs_euc: t_1 sliced size={:?}", sliced.size());
 
@@ -508,6 +507,17 @@ impl FilterAndSlicer {
         ChunkOfSicedTensors::new(keys.to_vec(), sizes_1, Tensor::vstack(&t_1_tensors))
     }
 
+
+    pub fn step(&self) -> usize {
+        self.step
+    }
+    pub fn window(&self) -> i64 {
+        self.window
+    }
+
+    pub fn filter(&self) -> Option<&Box<dyn Fn(&Box<Tensor>) -> Tensor>> {
+        self.filter.as_ref()
+    }
 }
 
 fn chunk_and_slice<G>(
@@ -1020,12 +1030,6 @@ pub struct SelectMotifsParams {
     #[arg(long)]
     run_ids: Vec<usize>,
 
-    #[arg(long,  default_value_t = 1000)]
-    step: usize,
-
-    #[arg(long,  default_value_t = 1000)]
-    window: usize,
-
     #[arg(long, value_parser=parse_key_val::<String, String>, default_value="xxx=yyy")]
     labels_datasets: Vec<(String, String)>,
 
@@ -1042,20 +1046,11 @@ impl SelectMotifsParams {
     pub fn run_ids(&self) -> &Vec<usize> {
         &self.run_ids
     }
-    pub fn step(&self) -> usize {
-        self.step
-    }
-    pub fn window(&self) -> usize {
-        self.window
-    }
 
-
-    pub fn dummy(step: usize, window: usize, run_ids:Vec<usize>, labels_datasets:Vec<(String, String)>, min_ratio: f32) -> Self{
+    pub fn dummy(run_ids:Vec<usize>, labels_datasets:Vec<(String, String)>, min_ratio: f32) -> Self{
 
         SelectMotifsParams{
             run_ids,
-            step,
-            window,
             train_resource_group:None,
             labels_datasets,
             min_ratio

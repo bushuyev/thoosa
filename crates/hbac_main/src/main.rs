@@ -8,7 +8,7 @@ use std::str::FromStr;
 use log::{debug, error, info, LevelFilter, warn};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-use hbac_motifs::find::{FindMotifsParams, InputFilter, iter_all_in_dir, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
+use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, iter_all_in_dir, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
 use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
@@ -360,13 +360,13 @@ fn _main() -> Result<(), HbacError> {
                 &cli,
                 &store,
                 devices.clone(),
-                &SelectMotifsParams::dummy(run_all_params.step, run_all_params.window, motif_run_ids, train_labels_datasets.clone(), run_all_params.select_motifs_min_ratio),
+                &SelectMotifsParams::dummy(motif_run_ids, train_labels_datasets.clone(), run_all_params.select_motifs_min_ratio),
                 Arc::clone(&loader)
             )?;
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids, run_all_params.window, 300), Arc::clone(&loader))?;
+            run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids, 300), Arc::clone(&loader))?;
 
             info!("run_train_on_motifs done");
 
@@ -557,30 +557,32 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
     let chunk_len = corr_run_ids.len()/devices.len();
     let corr_run_id_labels = { store.lock()?.list_corrs(corr_run_ids)? }; //(1..=36).collect::<Vec<usize>>();
 
-    let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, String)])>>();//corrs_run(id, label)
+    let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, usize, String)])>>();//corrs_run(id, label)
 
     let cli_clone = cli.clone();
-    let node_params = MotifNodeParams::new(train_on_motif_params.window() as i64);
 
     devices_corr_run.into_par_iter().for_each( |(device_i, corrs_run)| {
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?}", corrs_run, device_i);
 
-        for (corr_run_id, label) in corrs_run {
-            train_on_motifs(
+        for (corr_run_id, run_id, label) in corrs_run {
+            let node_params = train_on_motifs(
                 &cli_clone,
+                *run_id,
+                *corr_run_id,
                 Arc::clone(&store),
                 device_i,
                 train_on_motif_params,
-                *corr_run_id, label,
-                &node_params,
+                label,
                 Arc::clone(&loader)
             ).unwrap();
+
+            fs::write(Path::new(train_on_motif_params.output_dir()).join(format!("motif_model_{}.json", run_id)), serde_json::to_string(&node_params).expect("serde_json::to_string"));
         }
 
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?} done ", corrs_run, device_i);
     });
 
-    fs::write(Path::new(train_on_motif_params.output_dir()).join("motif_model.json"), serde_json::to_string(&node_params)?);
+
     Ok(())
 }
 
@@ -746,29 +748,39 @@ fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, pl
     Ok(())
 }
 
-fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, train_on_motif_params: &TrainOnMotifsParams, corr_run: usize, label: &String, node_params: &MotifNodeParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), HbacError> {
+fn train_on_motifs(cli: &Cli, run_id: usize, corr_run: usize, store:Arc<Mutex<impl Store + 'static>>, device: Device, train_on_motif_params: &TrainOnMotifsParams, label: &String, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<MotifNodeParams, HbacError> {
     debug!("train_on_motifs: device={:?}, corr_run={:?}", device, corr_run);
 
-    let motifs_iter = {
+    let (motifs_iter, params) = {
         let mut store_guard = store.lock()?;
 
         // for motif_id in train_on_motif_params.motif_ids() {
 
-        store_guard.list_corr_motifs(corr_run)?//TODO param
-            .into_iter()
-            .flat_map(|channel_motifs| channel_motifs.into_iter())
-            .filter(|(motif_id, corr)| *corr > train_on_motif_params.min_corr())
-            .map(|(motif_id, corr)| motif_id).collect::<Vec<usize>>()
+        (
+            store_guard.list_corr_motifs(corr_run)?//TODO param
+                .into_iter()
+                .flat_map(|channel_motifs| channel_motifs.into_iter())
+                .filter(|(motif_id, corr)| *corr > train_on_motif_params.min_corr())
+                .map(|(motif_id, corr)| motif_id).collect::<Vec<usize>>(),
+
+            FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id)?)
+        )
     };
+
 
     let output_dir = Path::new(train_on_motif_params.output_dir()).join(label);//TODO corr_run
 
     fs::create_dir_all(&output_dir);
 
+
+    let filter_and_slice:FilterAndSlicer = params.into();
+    let filter_op = filter_and_slice.filter();
+
+    let node_params = MotifNodeParams::new(filter_and_slice.window());//1111
+
     for motif_id in motifs_iter.into_iter() {
         let (all_sices_0, all_sices_1, channel) = {
             let mut store_guard = store.lock()?;
-            let window = train_on_motif_params.window() as i64;
 
             let (channel, run_id, slices) = store_guard.list_motif_slices(motif_id, None, None)?;
 
@@ -776,9 +788,17 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
             let loader_m = Arc::clone(&loader);
             let all_sices_1 = train_nets::slices_in_all_resources(
                 load_motif_slices(
-                    cli.base_path.as_str(), channel, window, slices,
+                    cli.base_path.as_str(), channel, filter_and_slice.window(), slices,
                     move |eeg_id| {
-                        loader_m.load(&eeg_id.to_string(), device)
+                        // loader_m.load(&eeg_id.to_string(), device)
+
+                        let t = loader_m.load(&eeg_id.to_string(), device);
+
+                        if let Some(filter) = filter_op {
+                            Box::new(filter(&t))
+                        } else {
+                            t
+                        }
                     },
                     device
                 )
@@ -793,7 +813,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
             let loader_m = Arc::clone(&loader);
             let all_sices_0 = train_nets::slices_in_all_resources(
                 load_motif_slices(
-                    cli.base_path.as_str(), channel, window, slices,
+                    cli.base_path.as_str(), channel, filter_and_slice.window(), slices,
                     move |eeg_id| {
                         loader_m.load(&eeg_id.to_string(), device)
                     },
@@ -828,7 +848,7 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
             all_sices_1,
             train_on_motif_params,
             device,
-            node_params,
+            &node_params,
             batch_size
         )?;
 
@@ -843,27 +863,39 @@ fn train_on_motifs(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: De
             vs.save(channel_models.join(format!("{}_{}_{:3}.safetensors", corr_run, motif_id, loss)))?;
         }
     }
-    Ok(())
+    Ok(node_params)
 }
 
 fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, select_motifs_params: &SelectMotifsParams, run_id:usize, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<Vec<usize>, HbacError> {
     debug!("select_motifs_in_class: device={:?} cli.tensors_path={:?}", device, cli.tensors_path);
 
-    let (resource_id_motif_slices, motifs_avg_distances) = {
+    let (resource_id_motif_slices, motifs_avg_distances, params) = {
         let mut store_guard = store.lock()?;
 
-        (store_guard.list_motifs_slices(run_id)?, store_guard.list_motifs_distances(run_id)?)
+        (store_guard.list_motifs_slices(run_id)?, store_guard.list_motifs_distances(run_id)?, FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id)?))
     };
+
 
     assert!(resource_id_motif_slices.len() > 0, "no slices for run_id={}", run_id);
     let loader_m = Arc::clone(&loader);
+
+    let filter_and_slice:FilterAndSlicer = params.into();
+    let filter_op = filter_and_slice.filter();
+
     let (motifs, channel_motif_ids, motifs_slices_map) = motifs_to_tensor(
         resource_id_motif_slices,
 
         move |key: &String| {
-            loader_m.load(key, device)
+            let t = loader_m.load(key, device);
+
+            if let Some(filter) = filter_op {
+                Box::new(filter(&t))
+            } else {
+                t
+            }
+
         },
-        select_motifs_params.window() as i64,
+        filter_and_slice.window() as i64,
         20,//TODO
         device
     )?;
@@ -882,7 +914,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
             )
         }).collect(),
         cli.limit,
-        select_motifs_params.step(),
+        filter_and_slice.step(),
         device,
         select_motifs_params.min_ratio(),
         motifs_avg_distances,//TODO keeps motif indexes with motif tensors
@@ -1006,7 +1038,7 @@ mod main_tests {
             logfile: "".to_string(),
             limit: None,
             num_threads: None,
-            command: Some(SelectMotifs(SelectMotifsParams::dummy(10, 10, vec![0, 1], vec![], 0.1))),
+            command: Some(SelectMotifs(SelectMotifsParams::dummy(vec![0, 1], vec![], 0.1))),
             input_filters_kernel: None,
         };
 
@@ -1016,7 +1048,7 @@ mod main_tests {
             &cli,
             &store,
             vec![Cpu],
-            &SelectMotifsParams::dummy(10, 10, vec![0, 1], vec![("seizure".into(), "seizure/10".into())], 0.1),
+            &SelectMotifsParams::dummy(vec![0, 1], vec![("seizure".into(), "seizure/10".into())], 0.1),
             Arc::clone(&loader)
         )?;
 

@@ -661,9 +661,6 @@ pub struct TrainOnMotifsParams {
     #[arg(long)]
     corr_run_ids: Vec<usize>,
 
-    #[arg(long,  default_value_t = 1000)]
-    window: usize,//should be same as one used when finding motifs or TODO center bigger/smaller window
-
     #[arg(long, default_value = "/tmp/")]
     output_dir: String,
 
@@ -693,9 +690,6 @@ impl TrainOnMotifsParams {
         self.lr
     }
 
-    pub fn window(&self) -> usize {
-        self.window
-    }
 
     pub fn motif_ids(&self) -> &MotifsBy {
         &self.motif_ids
@@ -713,13 +707,11 @@ impl TrainOnMotifsParams {
         self.min_corr
     }
 
-    pub fn dummy(output_dir: &String, corr_run_ids:Vec<usize>, window: usize, cycles: usize) ->Self{
+    pub fn dummy(output_dir: &String, corr_run_ids:Vec<usize>, cycles: usize) ->Self{
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
             corr_run_ids,
-
-            window,//should be same as one used when finding motifs or TODO center bigger/smaller window
 
             output_dir: output_dir.clone(),
 
