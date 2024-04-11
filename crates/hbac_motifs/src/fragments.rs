@@ -304,17 +304,11 @@ pub struct PlotMotifSlicesParams {
     #[arg(long)]
     motif_id: usize,
 
-    #[arg(long, default_value = "/tmp/motif_plots")]
-    output_dir: String,
-
 }
 
 impl PlotMotifSlicesParams {
     pub fn motif_id(&self) -> usize {
         self.motif_id
-    }
-    pub fn output_dir(&self) -> &str {
-        &self.output_dir
     }
 }
 
@@ -392,20 +386,11 @@ pub struct MotifsToTensorParams {
     #[arg(long)]
     run_id: usize,
 
-    #[arg(long)]
-    output_dir: Option<String>,
-
     #[arg(long, default_value_t = 1000)]
     window: i64,
 }
 
 impl MotifsToTensorParams {
-
-    pub fn output_dir(&self) -> Option<&str> {
-        self.output_dir.as_ref().map(|x|x.as_str())
-    }
-
-
 
     pub fn window(&self) -> i64 {
         self.window

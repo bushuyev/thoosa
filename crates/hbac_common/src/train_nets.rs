@@ -52,12 +52,6 @@ pub struct TrainOnLabelParams {
     #[arg(long)]
     corr_run: usize,
 
-    #[arg(long, default_value = "/tmp/")]
-    motif_models_dir: String,
-
-    #[arg(long, default_value = "/tmp/")]
-    models_dir: String,
-
     #[arg(long, default_value_t = 10)]
     cycles: usize,
 
@@ -75,9 +69,6 @@ impl TrainOnLabelParams {
     pub fn corr_run(&self) -> usize {
         self.corr_run
     }
-    pub fn motif_models_dir(&self) -> &str {
-        &self.motif_models_dir
-    }
 
     pub fn cycles(&self) -> usize {
         self.cycles
@@ -85,17 +76,12 @@ impl TrainOnLabelParams {
     pub fn lr(&self) -> f64 {
         self.lr
     }
-    pub fn models_dir(&self) -> &str {
-        &self.models_dir
-    }
 
     pub fn dummy(step: usize, window: usize, motif_models_dir:String, models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
         TrainOnLabelParams {
             step,
             window,
             corr_run:0,
-            motif_models_dir,
-            models_dir,
             cycles,
             lr,
             train_labels_datasets,
@@ -254,7 +240,7 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor)
     }
 }
 
-pub fn train_on_label<I>(input_run_id:usize, params: &TrainOnLabelParams, train_labels_loaders:Vec<(i64, I)>, valid_labels_loaders: Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, label: &String) -> Result<(VarStore, LabelNodeParams), HbacError>
+pub fn train_on_label<I>(ws_dir: impl AsRef<Path>, input_run_id:usize, params: &TrainOnLabelParams, train_labels_loaders:Vec<(i64, I)>, valid_labels_loaders: Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, label: &String) -> Result<(VarStore, LabelNodeParams), HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     let mut train_labels_loaders_map = train_labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
@@ -278,7 +264,7 @@ pub fn train_on_label<I>(input_run_id:usize, params: &TrainOnLabelParams, train_
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", labels, train_labels_loaders_map.keys());
 
 
-    let (channels_motifs_models, motif_node_params) = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, device)?;//TODO num channels
+    let (channels_motifs_models, motif_node_params) = load_motif_models(Path::new(ws_dir.as_ref()).join("motifs"), label.clone(), channels as usize, device)?;//TODO num channels, motifs to util
     // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
     debug!("train_on_eeg: models.size={:?}", channels_motifs_models.len());
 
@@ -367,12 +353,14 @@ fn apply_motifs_to_loaders<I, F>(
         .collect::<Vec<Vec<_>>>()
 }
 
-pub fn train_final<I>(params: &TrainFinalParams, train_tensors_loader:I, valid_tensors_loader: I, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
+pub fn train_final<I>(ws_dir: impl AsRef<Path>, params: &TrainFinalParams, train_tensors_loader:I, valid_tensors_loader: I, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>) -> Result<VarStore, HbacError>
     where I:Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync {
 
-    let models = params.models_dir.iter().flat_map(|dir| {
-        load_label_and_motif_models(dir.as_str(), channels as usize, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
-    }).collect::<Vec<LabelModels>>();
+    // let models = Path::new(ws_dir.as_ref()).join("label_models").iter().flat_map(|dir| {
+    //     load_label_and_motif_models(dir.as_str(), channels as usize, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
+    // }).collect::<Vec<LabelModels>>();
+
+    let models: Vec<LabelModels> = vec![];
 
 
     let labels_models = models.into_iter().fold(HashMap::new(), |mut a, corr_models| {
@@ -664,9 +652,6 @@ pub struct TrainOnMotifsParams {
     #[arg(long)]
     corr_run_ids: Vec<usize>,
 
-    #[arg(long, default_value = "/tmp/")]
-    output_dir: String,
-
     #[arg(long, default_value_t = 1000)]
     cycles: usize,
 
@@ -681,10 +666,6 @@ pub struct TrainOnMotifsParams {
 }
 
 impl TrainOnMotifsParams {
-
-    pub fn output_dir(&self) -> &str {
-        &self.output_dir
-    }
 
     pub fn cycles(&self) -> usize {
         self.cycles
@@ -710,13 +691,11 @@ impl TrainOnMotifsParams {
         self.min_corr
     }
 
-    pub fn dummy(output_dir: &String, corr_run_ids:Vec<usize>, cycles: usize) ->Self{
+    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize) ->Self{
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
             corr_run_ids,
-
-            output_dir: output_dir.clone(),
 
             cycles,
 
@@ -1156,9 +1135,6 @@ impl TrainFinalParams {
         self.lr
     }
 
-    pub fn models_dir(&self) -> &Vec<String> {
-        &self.models_dir
-    }
 
     pub fn final_model(&self) -> &String {
         &self.final_model
@@ -1471,7 +1447,6 @@ mod train_tests {
             step: 1000,
             window: 1000,
             motif_models_dir: models_path.to_str().unwrap().to_string(),
-            models_dir: models_path.to_str().unwrap().to_string(),
             cycles: 3,
             lr: 1.0e-5,
             train_labels_datasets: vec![],
@@ -1496,6 +1471,7 @@ mod train_tests {
             }))
         };
         super::train_on_label(
+            &"/tmp",
             &params,
             vec![
                 (1, "seizure_vote".to_string()),
@@ -1564,6 +1540,7 @@ mod train_tests {
             (Box::new(make_test_eeg(1000)), Box::new(Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
         };
         super::train_final(
+            "/tmp/"
             &params,
             (0..13).map(load_cl),
             (0..13).map(load_cl),
@@ -1573,6 +1550,7 @@ mod train_tests {
             684400,
             &Cpu,
             vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect(),
+            cli.ws,
         )?;
 
         Ok(())

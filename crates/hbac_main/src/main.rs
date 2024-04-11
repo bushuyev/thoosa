@@ -51,6 +51,9 @@ struct Cli {
     #[arg(long, default_value="../../data")]
     base_path: String,
 
+    #[arg(long, default_value=".")]
+    ws_path: String,
+
     #[arg(long)]
     tensors_path: Option<String>,
 
@@ -180,7 +183,7 @@ enum Commands {
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
     TrainOnMotifs(TrainOnMotifsParams),
-    TrainOnEEG(TrainOnLabelParams),
+    TrainOnLabel(TrainOnLabelParams),
     TrainFinal(TrainFinalParams),
     RunAll(RunAllParams),
     Infer(InferParams),
@@ -313,7 +316,7 @@ fn _main() -> Result<(), HbacError> {
             run_train_on_motifs(&cli, &store, devices, train_on_motif_params, Arc::clone(&loader))?;
         }
 
-        Some(TrainOnEEG(train_on_eeg_params)) => {
+        Some(TrainOnLabel(train_on_eeg_params)) => {
             debug!("train_on_eeg_params={:?}", train_on_eeg_params);
 
             let train_on_eeg_params = if let Some(train_resource_group) = train_on_eeg_params.train_resource_group() {
@@ -325,7 +328,7 @@ fn _main() -> Result<(), HbacError> {
                 train_on_eeg_params.clone()
             };
 
-            run_train_on_label(vec![], &store, devices, &train_on_eeg_params, Arc::clone(&loader))?;
+            run_train_on_label(&cli, vec![], &store, devices, &train_on_eeg_params, Arc::clone(&loader))?;
         }
 
         Some(TrainFinal(train_final_params)) => {
@@ -368,27 +371,28 @@ fn _main() -> Result<(), HbacError> {
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(&run_all_params.models_dir, corr_ids, 300), Arc::clone(&loader))?;
+            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(corr_ids, 300), Arc::clone(&loader))?;
 
             info!("run_train_on_motifs done");
 
             run_train_on_label(
+                &cli,
                 run_ids,
                 &store,
                 devices.clone(),
-               &TrainOnLabelParams::dummy(
-                   run_all_params.step,
-                   run_all_params.window,
-                   run_all_params.models_dir.clone(),
-                   run_all_params.models_dir.clone(),
-                   train_labels_datasets.clone(),
-                   valid_labels_datasets.clone(),
-                   run_all_params.motif_batch_size,
-                   5,
-                   100,
-                   1.0e-5,
-               ),
-               Arc::clone(&loader),
+                &TrainOnLabelParams::dummy(
+                    run_all_params.step,
+                    run_all_params.window,
+                    run_all_params.models_dir.clone(),
+                    run_all_params.models_dir.clone(),
+                    train_labels_datasets.clone(),
+                    valid_labels_datasets.clone(),
+                    run_all_params.motif_batch_size,
+                    5,
+                    100,
+                    1.0e-5,
+                ),
+                Arc::clone(&loader),
             )?;
 
             info!("run_train_on_eeg done");
@@ -461,6 +465,7 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
     debug!("run_train_final: labels={:?}", labels);
 
     let vs = train_final(
+        &cli.ws_path,
         train_final_params,
         load_to_logits_tensors(
             cli.base_path.as_str(),
@@ -492,7 +497,7 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
     Ok(())
 }
 
-fn run_train_on_label(input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_eeg_params: &TrainOnLabelParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), HbacError> {
+fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_eeg_params: &TrainOnLabelParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), HbacError> {
     debug!("run_train_on_eeg: train_on_eeg_params={:?}", train_on_eeg_params);
     // let labels_kinds = store_guard.corrs_descr(train_on_eeg_params.corr_run())?;
 
@@ -508,7 +513,7 @@ fn run_train_on_label(input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, d
         panic!("valid_datasets_map.len() != train_on_eeg_params.train_labels_datasets().len()");
     } //TODO check keys
 
-    let label_datasets_with_run_id = train_on_eeg_params.train_labels_datasets().flat_map(|ds| input_run_ids.iter().map(|input_run_id|(ds, *input_run_id))).collect::<Vec<((String, String), usize)>>();
+    let label_datasets_with_run_id = train_on_eeg_params.train_labels_datasets().into_iter().flat_map( |ds| input_run_ids.iter().map(|input_run_id|((ds.0.clone(), ds.1.clone()), *input_run_id))).collect::<Vec<((String, String), usize)>>();
     let chunk_len = max(1, label_datasets_with_run_id.len()/devices.len());
 
     let devices_train_labels_datasets = devices.into_iter().cycle().zip(label_datasets_with_run_id.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[((String, String), usize)])>>();//corrs_run(id, label)
@@ -519,6 +524,7 @@ fn run_train_on_label(input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, d
             info!("training {} on {} device={:?}", label, resource_set, device_i);
 
             match train_on_label(
+                &cli.ws_path,
                 *input_run_id,
                 train_on_eeg_params,
                 eegs_to_labels_tensors(
@@ -545,8 +551,8 @@ fn run_train_on_label(input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, d
                 label
             ) {
                 Ok((vs,node_params)) => {
-                    vs.save(format!("{}/{}_{}.safetensors", train_on_eeg_params.models_dir(), label, train_on_eeg_params.corr_run())).expect("save vs");
-                    fs::write(Path::new(train_on_eeg_params.models_dir()).join(format!("{}_{}.json", label, train_on_eeg_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
+                    vs.save(Path::new(&cli.ws_path).join("label_models").join(format!("{}_{}.safetensors",  label, train_on_eeg_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
+                    // fs::write(Path::new(train_on_eeg_params.models_dir()).join(format!("{}_{}.json", label, train_on_eeg_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
                 }
                 Err(e) => {//should be no motif nets found only
                     warn!("e:{:?}", e);
@@ -693,9 +699,11 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
         device
     )?;
 
-    if let Some(out) = choose_fragments_params.output_dir() {
-        t.0.save(Path::new(out).join(format!("motifs_in_{}", choose_fragments_params.run_id())));
-    }
+
+    let out = Path::new(&cli.ws_path).join("out");
+    fs::create_dir_all(&out);
+    t.0.save(out.join(format!("motifs_in_{}", choose_fragments_params.run_id())));
+
     Ok(())
 }
 
@@ -750,13 +758,17 @@ fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, pl
 
     check_slices(&all_sices, 0.9);
 
+    let plots_dir = Path::new(cli.ws_path.as_str()).join("plots");
+
+    fs::create_dir_all(&plots_dir);
+
     plot_series(
         all_sices.into_iter().map(|t| {
             (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
         }).collect(),
         format!("Motif {}", plot_motif_slices_params.motif_id()).as_str(),
         (10000, 10000),
-        &Path::new(plot_motif_slices_params.output_dir()).join(format!("motif_{}.png", plot_motif_slices_params.motif_id()))
+        &plots_dir.join(format!("motif_{}.png", plot_motif_slices_params.motif_id()))
     ).unwrap();
     Ok(())
 }
@@ -781,7 +793,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
     };
 
 
-    let output_dir = Path::new(train_on_motif_params.output_dir()).join(input_run_id.to_string()).join(label);//TODO corr_run
+    let output_dir = Path::new(&cli.ws_path).join("motifs").join(input_run_id.to_string()).join(label);//TODO corr_run
 
     fs::create_dir_all(&output_dir);
 
@@ -988,7 +1000,7 @@ mod main_tests {
     use hbac_shared::HbacError;
     use hbac_store::{SqlStore, Store};
     use crate::{Cli, Commands, EEGLoader, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
-    use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnEEG};
+    use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use log::debug;
     // use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
 
@@ -1035,6 +1047,7 @@ mod main_tests {
     fn test_run_find_motifs() -> Result<(), HbacError>{
         let cli = Cli{
             base_path: "../../data/".to_string(),
+            ws_path: "/tmp".to_string(),
             tensors_path: None,
             store_path: "".to_string(),
             term_logger_level: "".to_string(),
@@ -1065,6 +1078,7 @@ mod main_tests {
     fn test_run_select_motifs() -> Result<(), HbacError>{
         let cli = Cli{
             base_path: "../../data/".to_string(),
+            ws_path: "/tmp".to_string(),
             tensors_path: None,
             store_path: "".to_string(),
             term_logger_level: "".to_string(),
@@ -1108,6 +1122,7 @@ mod main_tests {
 
         let cli = Cli{
             base_path: "../../data/".into(),
+            ws_path: "/tmp".to_string(),
             tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
             store_path: "../../data_down/group_1_labels_100_100_200/hbac-model/hbac_all.db3".to_string(),
             term_logger_level: "DEBUG".into(),
@@ -1115,13 +1130,14 @@ mod main_tests {
             logfile: "/tmp/hbac_test.log".into(),
             limit: None,
             num_threads: None,
-            command: Some(TrainOnEEG(train_eeg_params.clone())),
+            command: Some(TrainOnLabel(train_eeg_params.clone())),
             input_filters_kernel: None,
         };
 
         let store = Arc::new(Mutex::new(SqlStore::new(cli.store_path.clone())?));
 
         run_train_on_label(
+            &cli,
             vec![],
             &store,
             vec![Cpu],
@@ -1154,6 +1170,7 @@ mod main_tests {
 
         let cli = Cli{
             base_path: "../../data/".into(),
+            ws_path: "/tmp".to_string(),
             tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
             store_path: "../../data_down/group_1_labels_100_100_200/hbac-model/hbac_all.db3".to_string(),
             term_logger_level: "DEBUG".into(),
