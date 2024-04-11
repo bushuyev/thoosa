@@ -96,7 +96,7 @@ impl SetCond {
 
 
 pub trait Store:Sync + Send{
-    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError>;
+    fn save_tree_run(&mut self, input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), HbacError>;
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>, group_id: Option<usize>) -> Result<usize, HbacError>;
     fn save_resource_set_group(&mut self, descr:String) -> Result<usize, HbacError>;
@@ -143,11 +143,11 @@ pub struct SqlStore {
 
 impl Store for SqlStore {
 
-    fn save_motifs_run(&mut self, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError> {
+    fn save_tree_run(&mut self, input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError> {
         let mut conn_guard = self.conn.lock()?;
         let mut t = conn_guard.transaction()?;
 
-        t.execute("INSERT INTO motifs_run (descr) VALUES (?)", params![descr])?;
+        t.execute("INSERT INTO tree_run (descr) VALUES (?)", params![descr])?;
 
         let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
@@ -1214,17 +1214,18 @@ impl SqlStore {
 
             //descr - dot, dist etc
             t.execute(
-                "CREATE TABLE IF NOT EXISTS motifs_run (
-                id          INTEGER PRIMARY KEY,
-                descr       VARCHAR(256),
-                run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
+                "CREATE TABLE IF NOT EXISTS tree_run (
+                id              INTEGER PRIMARY KEY,
+                input_run_id    REFERENCES tree_run(id) ON DELETE CASCADE,
+                descr           VARCHAR(256),
+                run_on          DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
 
             //key - resource id  //TODO remove ord_id?
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
-                run_id     NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id     NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 ord_id     INTEGER NOT NULL,
                 key        VARCHAR(256),
                 PRIMARY KEY (run_id, ord_id)
@@ -1242,7 +1243,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_param_values (
                 id          INTEGER PRIMARY KEY,
-                run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 name        VARCHAR(256),
                 real_value  REAL,
                 int_value   INTEGER,
@@ -1257,7 +1258,7 @@ impl SqlStore {
             //     "CREATE TABLE IF NOT EXISTS runs_run_param_values (
             //     id          INTEGER PRIMARY KEY,
             //     value_id    NOT NULL REFERENCES run_param_values(id) ON DELETE CASCADE,
-            //     run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE
+            //     run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE
             // )",
             // (),
             // )?;
@@ -1266,7 +1267,7 @@ impl SqlStore {
                 "CREATE TABLE IF NOT EXISTS motifs (
                 id              INTEGER PRIMARY KEY,
                 group_ord       INTEGER NOT NULL,
-                run_id          NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL
             )", ())?;
 
@@ -1275,7 +1276,7 @@ impl SqlStore {
             t.execute(
             "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
-                run_id          NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
                 tensor_id_0     VARCHAR(256) NOT NULL,
                 slice_idx_0     INTEGER NOT NULL,
@@ -1289,7 +1290,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS corrs_run (
                 id          INTEGER PRIMARY KEY,
-                run_id      NOT NULL REFERENCES motifs_run(id) ON DELETE CASCADE,
+                run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 descr       VARCHAR(256),
                 label       VARCHAR(256),
                 run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -1558,7 +1559,8 @@ mod store_tests{
             (("3".to_string(), 200i64), ("5".to_string(), 300i64), 0.94),
         ];
 
-        let run_id= store.save_motifs_run(
+        let run_id= store.save_tree_run(
+            None,
             "test", &vec!["aaa".into(), "bbb".into()],
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))])
         )?;

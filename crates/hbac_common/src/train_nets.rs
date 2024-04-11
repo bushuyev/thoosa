@@ -254,7 +254,7 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor)
     }
 }
 
-pub fn train_on_label<I>(params: &TrainOnLabelParams, train_labels_loaders:Vec<(i64, I)>, valid_labels_loaders: Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, label: &String) -> Result<(VarStore, LabelNodeParams), HbacError>
+pub fn train_on_label<I>(input_run_id:usize, params: &TrainOnLabelParams, train_labels_loaders:Vec<(i64, I)>, valid_labels_loaders: Vec<(i64, I)>, items_per_label: usize, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, label: &String) -> Result<(VarStore, LabelNodeParams), HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     let mut train_labels_loaders_map = train_labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
@@ -276,6 +276,7 @@ pub fn train_on_label<I>(params: &TrainOnLabelParams, train_labels_loaders:Vec<(
     assert!(labels == valid_keys);
 
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", labels, train_labels_loaders_map.keys());
+
 
     let (channels_motifs_models, motif_node_params) = load_motif_models(params.motif_models_dir.as_str(), label.clone(), channels as usize, device)?;//TODO num channels
     // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
@@ -609,7 +610,7 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
         fs::read_to_string(&motif_models_path.as_ref().join("motif_model.json"))?.as_str()
     )?;
 
-    MotifNodeParams::from_properties_map(store_guard.list_run_params(run_id, None)?)
+    // let motif_node_params = MotifNodeParams::from_properties_map(store_guard.list_run_params(run_id, None)?);
 
     debug!("train_on_eeg: motif_node_params={:?}", motif_node_params);
 

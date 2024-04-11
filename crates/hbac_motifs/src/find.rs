@@ -97,6 +97,7 @@ impl InputFilter {
     }
 
     pub fn from_properties_map(properties:&HashMap<String, Val>) -> Result<Self, HbacError> {
+
         let conv_1_props = unprefix_properties("conv_1", &properties);
         if conv_1_props.len() > 0 {
             assert!(conv_1_props.len() == 3);
@@ -114,13 +115,15 @@ impl Conv1Params {
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
         HashMap::from([
-            ("kernel".into(),  self.kernel.into()),
-            ("stride".into(),  self.stride.into()),
-            ("padding".into(), self.padding.into()),
+            ("Conv1Params.kernel".into(),  self.kernel.into()),
+            ("Conv1Params.stride".into(),  self.stride.into()),
+            ("Conv1Params.padding".into(), self.padding.into()),
         ])
     }
 
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Result<Self, HbacError> {
+        let properties = unprefix_properties("Conv1Params", &properties);
+
         Ok(Conv1Params {
             kernel: properties.get("kernel").expect("kernel").as_i64().expect("kernel as_i64"),
             stride: properties.get("stride").expect("stride").as_i64().expect("stride as_i64"),
@@ -240,11 +243,12 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     let  (run_ids, mut trackers) :(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]),|mut a:(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
 
         let run_id = {
-            store.lock()?.save_motifs_run(
+            store.lock()?.save_tree_run(
+                None,
                 format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
                 &eeg_ids_str,
                 params.to_properties_map()
-             )
+            )
         }?;
 
         let all_motif_trackers = min_dot
@@ -444,13 +448,13 @@ impl FilterAndSlicerParams {
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
         let mut map = HashMap::from([
-            ("step".into(),  self.step.into()),
-            ("window".into(),  self.window.into()),
-            ("descr".into(),  self.descr.as_str().into()),
+            ("FilterAndSlicerParams.step".into(),  self.step.into()),
+            ("FilterAndSlicerParams.window".into(),  self.window.into()),
+            ("FilterAndSlicerParams.descr".into(),  self.descr.as_str().into()),
         ]);
 
         if let Some(filter) = self.filter.as_ref() {
-            map.extend(prefix_properties("filter", filter.to_properties_map()).into_iter());
+            map.extend(prefix_properties("FilterAndSlicerParams.filter", filter.to_properties_map()).into_iter());
 
         }
 
@@ -459,7 +463,7 @@ impl FilterAndSlicerParams {
     }
 
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
-
+        let properties = unprefix_properties("FilterAndSlicerParams", &properties);
         FilterAndSlicerParams::new(
             properties.get("step").expect("step").as_usize().expect("step as_usize"),
             properties.get("window").expect("window").as_i64().expect("window as_i64"),
@@ -601,7 +605,7 @@ fn chunk_and_slice<G>(
 
 
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
-    let run_id = { store.lock()?.save_motifs_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.resource_set, min_dot).as_str(), &eeg_ids_str)}?;
+    let run_id = { store.lock()?.save_tree_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.resource_set, min_dot).as_str(), &eeg_ids_str)}?;
 
     let all_motif_trackers = min_dot
         .into_iter()
@@ -2560,12 +2564,12 @@ mod motif_find_tests {
         debug!("properties={:?}", properties);
 
         let sample_properties:HashMap<String, Val> = HashMap::from([
-            ("window".into(), 10.into()),
-            ("step".into(), 10.into()),
-            ("descr".into(), "test".into()),
-            ("filter.conv_1.padding".into(), 1.into()),
-            ("filter.conv_1.stride".into(), 1.into()),
-            ("filter.conv_1.kernel".into(), 10.into()),
+            ("FilterAndSlicerParams.window".into(), 10.into()),
+            ("FilterAndSlicerParams.step".into(), 10.into()),
+            ("FilterAndSlicerParams.descr".into(), "test".into()),
+            ("FilterAndSlicerParams.filter.conv_1.Conv1Params.padding".into(), 1.into()),
+            ("FilterAndSlicerParams.filter.conv_1.Conv1Params.stride".into(), 1.into()),
+            ("FilterAndSlicerParams.filter.conv_1.Conv1Params.kernel".into(), 10.into()),
         ]);
 
         assert_eq!(sample_properties, properties);
@@ -2581,6 +2585,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_test(){
+
 
         // let v = vec!["a1a2a3a4", "b1b2b3b4", "c1c2c3c4", "d1d2d3d4", "e1e2e3e4", "f1f2f3f4", "g1g2g3g4"];
         //
@@ -2635,4 +2640,5 @@ mod motif_find_tests {
         //
         // println!("c={}", c);
     }
+
 }
