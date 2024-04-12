@@ -25,7 +25,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use hbac_shared::parse_key_val;
 use hbac_shared::val::Val;
-use hbac_shared::unprefix_properties;
+use hbac_shared::val::unprefix_properties;
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainOnLabelParams {
@@ -729,7 +729,7 @@ impl MotifNodeParams {
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
 
         MotifNodeParams::new(
-            properties.get("num_features").expect("num_features").as_i64().expect("num_features as_i64"),
+            properties.get("num_features").expect(format !("no num_features in {:?}", properties).as_str()).as_i64().expect("num_features as_i64"),
         )
     }
 
@@ -1475,7 +1475,6 @@ mod train_tests {
             corr_run: 0,
             step: 1000,
             window: 1000,
-            motif_models_dir: models_path.to_str().unwrap().to_string(),
             cycles: 3,
             lr: 1.0e-5,
             train_labels_datasets: vec![],
@@ -1501,6 +1500,8 @@ mod train_tests {
         };
         super::train_on_label(
             &"/tmp",
+            &MotifNodeParams::new(100),
+            &LabelNodeParams::new(13, 100, 100, 7),
             &params,
             vec![
                 (1, "seizure_vote".to_string()),
@@ -1569,7 +1570,7 @@ mod train_tests {
             (Box::new(make_test_eeg(1000)), Box::new(Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
         };
         super::train_final(
-            "/tmp/"
+            &"/tmp/",
             &params,
             (0..13).map(load_cl),
             (0..13).map(load_cl),
@@ -1579,7 +1580,6 @@ mod train_tests {
             684400,
             &Cpu,
             vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect(),
-            cli.ws,
         )?;
 
         Ok(())
@@ -1698,6 +1698,7 @@ mod train_tests {
             max_input,
             &Cpu,
             vec!["label_a".into(), "label_b".into()],
+            MotifNodeParams::new(1000)
         )?;
 
         debug!("t={:?}", t.1.size());

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::HbacError;
 
 //TODO move to shared
@@ -98,4 +99,20 @@ impl From<&i32> for Val {
     fn from(v: &i32) -> Self {
         Val::Int(*v as i64)
     }
+}
+
+pub fn prefix_properties(prefix:&str, map: HashMap<String, Val>) -> HashMap<String, Val>{
+    map.into_iter().fold(HashMap::new(), |mut a, v| {
+        a.insert(format!("{}.{}", prefix, v.0), v.1);
+        a
+    })
+}
+
+pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<String, Val> {
+    map.into_iter().fold(HashMap::new(),  |mut a, v| {
+        if let Some(p) = v.0.strip_prefix(prefix) {
+            a.insert(p.strip_prefix(".").expect("no . after prefix").to_string(), v.1.clone());
+        }
+        a
+    })
 }

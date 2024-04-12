@@ -15,7 +15,7 @@ use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::{LazyCsvReader, Series};
 use hbac_common::utils::{cdt, DataBatch, dot_norm, from, list_devices, load_tensor, norm_2, plot_series};
-use hbac_shared::{HbacError, prefix_properties};
+use hbac_shared::HbacError;
 use hbac_motifs::{find, fragments};
 use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ use hbac_shared::TensorSliceIdx;
 use crate::Commands::*;
 use polars::export::rayon::iter::ParallelIterator;
 use hbac_common::train_nets::MotifNodeParams;
-use hbac_shared::val::Val;
+use hbac_shared::val::{prefix_properties, unprefix_properties, Val};
 
 mod data;
 mod utils;
@@ -532,7 +532,7 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
 
             let motif_node_params =  {
                 let mut store_guard = store_in_threads.lock().expect("store_in_threads");
-                MotifNodeParams::from_properties_map(store_guard.list_run_params(*input_run_id, None).expect("list_run_params"))
+                MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store_guard.list_run_params(*input_run_id, None).expect("list_run_params")))
             };
 
             let channels_motifs_models = load_motif_models(Path::new(&cli.ws_path).join("motifs"), label.clone(), 10, &device_i, &motif_node_params).expect("load_motif_models");//TODO num channels, motifs to util
