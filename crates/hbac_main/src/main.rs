@@ -8,14 +8,14 @@ use std::str::FromStr;
 use log::{debug, error, info, LevelFilter, warn};
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, iter_all_in_dir, prefix_properties, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
+use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, iter_all_in_dir, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
 use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor, read_eeg_index, read_motif_to_iter};
 use crate::version::VERSION;
 use clap::{Args, Parser, Subcommand};
 use polars::export::rayon;
 use polars::prelude::{LazyCsvReader, Series};
 use hbac_common::utils::{cdt, DataBatch, dot_norm, from, list_devices, load_tensor, norm_2, plot_series};
-use hbac_shared::HbacError;
+use hbac_shared::{HbacError, prefix_properties};
 use hbac_motifs::{find, fragments};
 use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
 use std::collections::HashMap;
@@ -25,10 +25,10 @@ use std::time::Instant;
 use plotters::prelude::BLACK;
 use polars::export::rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use tch::Device::Cpu;
-use tch::nn::{ConvConfig, OptimizerConfig, VarStore};
+use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 
 use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, infer, InferParams, train_final, train_on_label, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
+use hbac_common::train_nets::{ClassTensorsDataBatch, infer, InferParams, LabelNodeParams, load_motif_models, train_final, train_on_label, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use hbac_common::simp::DummyDs;
 use hbac_common::{ResourceLoader, train_nets};
 use hbac_store::{SqlStore, Store};
@@ -419,7 +419,13 @@ fn _main() -> Result<(), HbacError> {
 
         Some(Infer(infer_params)) => {
 
-            let labels = store.lock().expect("store").list_labels()?;
+            let (labels,  motif_node_params) =  {
+                let mut store_guard = store.lock().expect("store_in_threads");
+                (
+                    store_guard.list_labels().expect("store_guard"),
+                    MotifNodeParams::from_properties_map(store_guard.list_run_params(777, None).expect("list_run_params"))
+                )
+            };
 
             let t = infer(
                 &infer_params,
@@ -432,7 +438,8 @@ fn _main() -> Result<(), HbacError> {
                 20,
                 684400,
                 &devices[0],
-                labels
+                labels,
+                motif_node_params
             )?;
 
             data::save_tensor(
@@ -517,45 +524,87 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
     let chunk_len = max(1, label_datasets_with_run_id.len()/devices.len());
 
     let devices_train_labels_datasets = devices.into_iter().cycle().zip(label_datasets_with_run_id.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[((String, String), usize)])>>();//corrs_run(id, label)
+    let store_in_threads =  Arc::clone(&store);
+
     devices_train_labels_datasets.into_par_iter().for_each(move |(device_i, chunk_resource_sets)| {
 
         for ((label, resource_set), input_run_id) in chunk_resource_sets {
 
-            info!("training {} on {} device={:?}", label, resource_set, device_i);
+            let motif_node_params =  {
+                let mut store_guard = store_in_threads.lock().expect("store_in_threads");
+                MotifNodeParams::from_properties_map(store_guard.list_run_params(*input_run_id, None).expect("list_run_params"))
+            };
 
-            match train_on_label(
-                &cli.ws_path,
-                *input_run_id,
-                train_on_eeg_params,
-                eegs_to_labels_tensors(
-                    label,
-                    resource_set,
+            let channels_motifs_models = load_motif_models(Path::new(&cli.ws_path).join("motifs"), label.clone(), 10, &device_i, &motif_node_params).expect("load_motif_models");//TODO num channels, motifs to util
+            // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
+            debug!("train_on_eeg: models.size={:?}", channels_motifs_models.len());
+
+
+            //TODO remove mutexes
+            let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
+
+            let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
+            if max_nets <= 0 {
+                panic!("no motif nets found");
+            }
+
+            let motif_batches = batch_windows(684400, motif_node_params.num_features() as usize, train_on_eeg_params.step(), train_on_eeg_params.motif_batch_size() as usize);
+            let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+
+
+            let (label_node_params_vec, run_ids) = {
+                let mut store_guard = store.lock().expect("store");
+
+                (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand
+                    let label_node_params = LabelNodeParams::new(20, max_nets, max_motif_batches as i64, train_on_eeg_params.motif_batch_size());
+
+                    a.1.push(store_guard.save_tree_run(Some(*input_run_id), "todo", &vec![], prefix_properties("motifs_node", label_node_params.to_properties_map())).expect("save_tree_run"));
+                    a.0.push(label_node_params);
+
+                    a
+                })
+
+            };
+
+
+            info!("training {} on {} device={:?}", label, resource_set, device_i);
+            for label_node_params in label_node_params_vec {
+                match train_on_label(
+                    &cli.ws_path,
+                    &motif_node_params,
+                    &label_node_params,
+                    train_on_eeg_params,
+                    eegs_to_labels_tensors(
+                        label,
+                        resource_set,
+                        &device_i,
+                        Arc::clone(&store),
+                        Arc::clone(&loader)
+                    ),
+                    eegs_to_labels_tensors(
+                        label,
+                        valid_datasets_map.get(label).expect(format!("valid dataset for {}", label).as_str()),
+                        &device_i,
+                        Arc::clone(&store),
+                        Arc::clone(&loader)
+                    ),
+                    train_on_eeg_params.items_per_label(),
+                    train_on_eeg_params.window() as i64,
+                    train_on_eeg_params.step(),
+                    train_on_eeg_params.motif_batch_size(),
+                    20,
+                    684400,
                     &device_i,
-                    Arc::clone(&store),
-                    Arc::clone(&loader)
-                ),
-                eegs_to_labels_tensors(
-                    label,
-                    valid_datasets_map.get(label).expect(format!("valid dataset for {}", label).as_str()),
-                    &device_i,
-                    Arc::clone(&store),
-                    Arc::clone(&loader)
-                ),
-                train_on_eeg_params.items_per_label(),
-                train_on_eeg_params.window() as i64,
-                train_on_eeg_params.step(),
-                train_on_eeg_params.motif_batch_size(),
-                20,
-                684400,
-                &device_i,
-                label
-            ) {
-                Ok((vs,node_params)) => {
-                    vs.save(Path::new(&cli.ws_path).join("label_models").join(format!("{}_{}.safetensors",  label, train_on_eeg_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
-                    // fs::write(Path::new(train_on_eeg_params.models_dir()).join(format!("{}_{}.json", label, train_on_eeg_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
-                }
-                Err(e) => {//should be no motif nets found only
-                    warn!("e:{:?}", e);
+                    label
+                ) {
+                    Ok(vs) => {
+                        vs.save(Path::new(&cli.ws_path).join("label_models").join(format!("{}_{}.safetensors", label, train_on_eeg_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
+                        // fs::write(Path::new(train_on_eeg_params.models_dir()).join(format!("{}_{}.json", label, train_on_eeg_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
+                    }
+                    Err(e) => {
+                        //should be no motif nets found only
+                        warn!("e:{:?}", e);
+                    }
                 }
             }
         }
@@ -803,12 +852,6 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
 
     let (node_params_vec, run_ids) = {
         let mut store_guard = store.lock()?;
-
-        // store_guard.save_params_value(
-        //     prefix_properties("motifs_node", node_params.to_properties_map()),
-        //     run_id,
-        //     Some(label.as_str())
-        // )?;
 
         (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand
             let node_params = MotifNodeParams::new(filter_and_slice.window());

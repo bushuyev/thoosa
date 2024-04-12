@@ -15,6 +15,7 @@ use std::ops::Mul;
 use rand::Rng;
 use regex::Regex;
 use std::fmt;
+use crate::val::Val;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
@@ -341,10 +342,10 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use crate::{group_slices, batch_windows, HbacError};
+    use crate::{batch_windows, group_slices, HbacError};
     use log::LevelFilter;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use crate::{join_with_offset, pulse_v};
+    use crate::pulse_v;
 
     #[ctor::ctor]
     fn init() {
@@ -468,4 +469,20 @@ mod shared_tests {
     }
 
 
+}
+
+pub fn prefix_properties(prefix:&str, map: HashMap<String, Val>) -> HashMap<String, Val>{
+    map.into_iter().fold(HashMap::new(), |mut a, v| {
+        a.insert(format!("{}.{}", prefix, v.0), v.1);
+        a
+    })
+}
+
+pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<String, Val> {
+    map.into_iter().fold(HashMap::new(),  |mut a, v| {
+        if let Some(p) = v.0.strip_prefix(prefix) {
+            a.insert(p.strip_prefix(".").expect("no . after prefix").to_string(), v.1.clone());
+        }
+        a
+    })
 }

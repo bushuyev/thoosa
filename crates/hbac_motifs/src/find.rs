@@ -98,7 +98,7 @@ impl InputFilter {
 
     pub fn from_properties_map(properties:&HashMap<String, Val>) -> Result<Self, HbacError> {
 
-        let conv_1_props = unprefix_properties("conv_1", &properties);
+        let conv_1_props = hbac_shared::unprefix_properties("conv_1", &properties);
         if conv_1_props.len() > 0 {
             assert!(conv_1_props.len() == 3);
             return Ok(crate::find::InputFilter::Conv1(Conv1Params::from_properties_map(conv_1_props)?));
@@ -122,7 +122,7 @@ impl Conv1Params {
     }
 
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Result<Self, HbacError> {
-        let properties = unprefix_properties("Conv1Params", &properties);
+        let properties = hbac_shared::unprefix_properties("Conv1Params", &properties);
 
         Ok(Conv1Params {
             kernel: properties.get("kernel").expect("kernel").as_i64().expect("kernel as_i64"),
@@ -454,7 +454,7 @@ impl FilterAndSlicerParams {
         ]);
 
         if let Some(filter) = self.filter.as_ref() {
-            map.extend(prefix_properties("FilterAndSlicerParams.filter", filter.to_properties_map()).into_iter());
+            map.extend(hbac_shared::prefix_properties("FilterAndSlicerParams.filter", filter.to_properties_map()).into_iter());
 
         }
 
@@ -463,30 +463,14 @@ impl FilterAndSlicerParams {
     }
 
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
-        let properties = unprefix_properties("FilterAndSlicerParams", &properties);
+        let properties = hbac_shared::unprefix_properties("FilterAndSlicerParams", &properties);
         FilterAndSlicerParams::new(
             properties.get("step").expect("step").as_usize().expect("step as_usize"),
             properties.get("window").expect("window").as_i64().expect("window as_i64"),
             properties.get("descr").expect("descr").as_str().expect("descr as_str"),
-            crate::find::InputFilter::from_properties_map(&unprefix_properties("filter", &properties)).ok()
+            crate::find::InputFilter::from_properties_map(&hbac_shared::unprefix_properties("filter", &properties)).ok()
         )
     }
-}
-
-pub fn prefix_properties(prefix:&str, map: HashMap<String, Val>) -> HashMap<String, Val>{
-    map.into_iter().fold(HashMap::new(), |mut a, v| {
-        a.insert(format!("{}.{}", prefix, v.0), v.1);
-        a
-    })
-}
-
-pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<String, Val> {
-    map.into_iter().fold(HashMap::new(),  |mut a, v| {
-        if let Some(p) = v.0.strip_prefix(prefix) {
-            a.insert(p.strip_prefix(".").expect("no . after prefix").to_string(), v.1.clone());
-        }
-        a
-    })
 }
 
 impl FilterAndSlicer {
