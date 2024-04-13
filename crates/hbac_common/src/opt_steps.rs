@@ -44,7 +44,7 @@ impl BuildParams for Box<dyn BuildParams> {
 struct OptStep {
     name:String,
     build_params:HashMap<String, Range<Val>>,
-    build:Box<dyn Fn(&HashMap<String, Val>, &Vec<String>)>,
+    build:Box<dyn Fn(&HashMap<String, Val>, &Vec<String>)->usize>,//returns run_ids
     exec:Box<dyn Fn(&Box<Tensor>, &HashMap<String, Val>)->Box<Tensor>>,
     data_keys:Vec<String>
 }
@@ -56,7 +56,7 @@ impl OptStep {
     fn new(
         name:impl Into<String>,
         build_params:HashMap<String, Range<Val>>,
-        build:Box<dyn Fn(&HashMap<String, Val>, &Vec<String>)>,
+        build:Box<dyn Fn(&HashMap<String, Val>, &Vec<String>)->usize>,
         exec:Box<dyn Fn(&Box<Tensor>, &HashMap<String, Val>)->Box<Tensor>>,
         data_keys:Vec<String>
     )->Self {
@@ -69,9 +69,11 @@ impl OptStep {
         }
     }
 
-    fn search(&self, run_id:usize, env_params: &EnvParams) -> Option<f64>{
+    fn search(&self, prev_run_id:usize, env_params: &EnvParams) -> Vec<usize>{
         // (self.build)(&self.build_params);
         let tries = 10;
+
+        let mut best_run_ids = vec![];
 
         for t in 0..tries {
             let try_props = self.build_params.iter().fold(HashMap::new(), |mut a:HashMap<String, Val>, prop_valrange|{
@@ -80,10 +82,13 @@ impl OptStep {
                 a
             });
 
-            (self.build)(&try_props, &self.data_keys);
+            let run_id = (self.build)(&try_props, &self.data_keys);
+
+            best_run_ids.push(run_id)
         }
 
-        Some(0.1)
+
+        best_run_ids
     }
 
     fn exec(&self, env_params: EnvParams, opt_params: OptParams) -> Option<f64>{
@@ -143,6 +148,7 @@ mod tests {
                 ]),
                 Box::new(|params:&HashMap<String, Val>, data_keys:&Vec<String>| {
                     println!("params={:?} data_keys={:?}", params, data_keys);
+                    1
                 }),
                 Box::new(|t: &Box<Tensor>, params:&HashMap<String, Val>| {
                     Box::new(t.shallow_clone().multiply(&Tensor::from_slice(&[1.])))
@@ -156,6 +162,7 @@ mod tests {
                 ]),
                 Box::new(|params:&HashMap<String, Val>, data_keys:&Vec<String>| {
                     println!("params={:?}", params);
+                    1
                 }),
                 Box::new(|t: &Box<Tensor>, params:&HashMap<String, Val>| {
                     Box::new(t.shallow_clone().multiply(&Tensor::from_slice(&[1.])))
@@ -166,6 +173,7 @@ mod tests {
 
         let env_params = EnvParams::new();
 
+        let mut run_ids :Option<Vec<usize>> = None;
         for step in steps {
 
             step.search(1, &env_params);
