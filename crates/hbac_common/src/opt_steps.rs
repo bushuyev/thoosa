@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+use std::ops::Range;
 use tch::Tensor;
+use hbac_shared::val::Val;
 
 enum Data {
     Tensors,
@@ -36,33 +39,54 @@ impl BuildParams for Box<dyn BuildParams> {
 
 }
 
-struct OptStep<BP:BuildParams> {
+
+
+struct OptStep {
     name:String,
-    build_params:Box<BP>,
-    build:Box<dyn Fn(&BP)>,
-    exec:Box<dyn Fn(&Box<Tensor>)->Box<Tensor>>,
-    next:Option<Box<OptStep<Box<dyn BuildParams>>>>
+    build_params:HashMap<String, Range<Val>>,
+    build:Box<dyn Fn(&HashMap<String, Val>, &Vec<String>)>,
+    exec:Box<dyn Fn(&Box<Tensor>, &HashMap<String, Val>)->Box<Tensor>>,
+    data_keys:Vec<String>
 }
 
-impl <BP:BuildParams> OptStep <BP> {
 
-    fn new(name:impl Into<String>, build_params:Box<BP>, build:Box<dyn Fn(&BP)>,  exec:Box<dyn Fn(&Box<Tensor>)->Box<Tensor>>, next:Option<Box<OptStep<Box<dyn BuildParams>>>>)->Self {
+
+impl OptStep {
+
+    fn new(
+        name:impl Into<String>,
+        build_params:HashMap<String, Range<Val>>,
+        build:Box<dyn Fn(&HashMap<String, Val>, &Vec<String>)>,
+        exec:Box<dyn Fn(&Box<Tensor>, &HashMap<String, Val>)->Box<Tensor>>,
+        data_keys:Vec<String>
+    )->Self {
         OptStep {
             name: name.into(),
             build_params,
-            next,
             build,
-            exec
+            exec,
+            data_keys
         }
     }
 
-    fn build(&self, env_params: EnvParams) -> Option<f64>{
-        (self.build)(&self.build_params);
+    fn search(&self, run_id:usize, env_params: &EnvParams) -> Option<f64>{
+        // (self.build)(&self.build_params);
+        let tries = 10;
+
+        for t in 0..tries {
+            let try_props = self.build_params.iter().fold(HashMap::new(), |mut a:HashMap<String, Val>, prop_valrange|{
+                a.insert(prop_valrange.0.clone(), prop_valrange.1.start.clone());
+
+                a
+            });
+
+            (self.build)(&try_props, &self.data_keys);
+        }
 
         Some(0.1)
     }
 
-    fn go(&self, env_params: EnvParams, opt_params: OptParams) -> Option<f64>{
+    fn exec(&self, env_params: EnvParams, opt_params: OptParams) -> Option<f64>{
         None
     }
 }
@@ -73,7 +97,12 @@ fn xxx(){
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::ops::Range;
+    use tch::Device::Cpu;
+    use tch::Kind::Float;
     use tch::Tensor;
+    use hbac_shared::val::Val;
     use crate::opt_steps::{BuildParams, EnvParams, OptParams, xxx};
     use crate::opt_steps::OptStep;
 
@@ -81,7 +110,7 @@ mod tests {
     fn test_xxx(){
 
         struct TestBulidParams {
-
+            window:Range<i64>
         }
 
         impl BuildParams for TestBulidParams {
@@ -104,48 +133,45 @@ mod tests {
 
         }
 
-        let mut find_motifs_step = OptStep::new(
-            "find_motifs",
-            Box::new(TestBulidParams{}),
-            Box::new(|bp|{
+        let mut props_store:HashMap<usize, String> = HashMap::new();
 
-            }),
-            Box::new(|t:&Box<Tensor>|{
-                Box::new(t.shallow_clone().multiply(&Tensor::from_slice(&[1.])))
-            }),
-            Some(Box::new(
-                OptStep::new(
-                    "select_motifs",
-                    Box::new(Box::new(TestBulidParams2 {
+        let mut steps:Vec<OptStep>  = vec![
+            OptStep::new(
+                "find_motifs",
+                HashMap::from([
+                    ("window".to_string(), Val::Int(100)..Val::Int(1000))
+                ]),
+                Box::new(|params:&HashMap<String, Val>, data_keys:&Vec<String>| {
+                    println!("params={:?} data_keys={:?}", params, data_keys);
+                }),
+                Box::new(|t: &Box<Tensor>, params:&HashMap<String, Val>| {
+                    Box::new(t.shallow_clone().multiply(&Tensor::from_slice(&[1.])))
+                }),
+                vec!["aaa".to_string(), "bbb".to_string()]
+            ),
+            OptStep::new(
+                "select_motifs",
+                HashMap::from([
+                    ("min_dist".to_string(), Val::Real(100.)..Val::Real(1000.0))
+                ]),
+                Box::new(|params:&HashMap<String, Val>, data_keys:&Vec<String>| {
+                    println!("params={:?}", params);
+                }),
+                Box::new(|t: &Box<Tensor>, params:&HashMap<String, Val>| {
+                    Box::new(t.shallow_clone().multiply(&Tensor::from_slice(&[1.])))
+                }),
+                vec!["aaa".to_string(), "bbb".to_string()]
+            )
+        ];
 
-                    })),
-                    Box::new(|bp|{
+        let env_params = EnvParams::new();
 
-                    }),
-                    Box::new(|t:&Box<Tensor>|{
-                        Box::new(t.shallow_clone())
-                    }),
-                    Some(Box::new(
-                        OptStep::new(
-                            "select_motifs3",
-                            Box::new(Box::new(TestBulidParams3 {
+        for step in steps {
 
-                            })),
-                            Box::new(|bp|{
-
-                            }),
-                            Box::new(|t:&Box<Tensor>|{
-                                Box::new(t.shallow_clone())
-                            }),
-                            None
-                        )
-                    ))
-
-                )
-            ))
-        );
-
-        find_motifs_step.build(EnvParams::new());
+            step.search(1, &env_params);
+        }
+        // find_motifs_step.build(1, EnvParams::new());
         // find_motifs_step.go(EnvParams::new(), OptParams::new());
     }
 }
+
