@@ -45,6 +45,31 @@ trait Apply {
 }
 
 
+struct CompApply<'a> {
+    applies:Vec<&'a Box<dyn Apply>>
+}
+
+impl <'a> CompApply<'a> {
+    pub fn new(applies: Vec<&'a Box<dyn Apply>>) -> Self {
+        println!("CompApply::new applies.len()={}", applies.len());
+        Self { applies }
+    }
+}
+
+impl Apply for CompApply<'_> {
+    fn apply(&self, t:&Box<Tensor>) -> Box<Tensor> {
+        // Box::new(t.shallow_clone())
+        let mut t = Box::new(t.shallow_clone());
+        for apply in &self.applies {
+            println!("Apply for CompApply apply *************");
+            t = apply.apply(&t)
+        }
+
+        t
+    }
+}
+
+
 struct OptStep {
     name:String,
     build_params:HashMap<String, Range<Val>>,
@@ -102,8 +127,8 @@ impl OptStep {
 
 
         for t in 0..tries {
-            let best_prev_run_ids = prev_run_ids_op.as_ref().and_then(|prev_run_ids|prev_run_ids.first());
-            println!("search: best_prev_run_ids={:?}", best_prev_run_ids);
+            let best_prev_run_ids = prev_run_ids_op.as_ref().and_then(|prev_run_ids|Some(&prev_run_ids[t]));
+
 
             let try_props = self.build_params.iter().fold(HashMap::new(), |mut a:HashMap<String, Val>, prop_valrange|{
                 // a.insert(prop_valrange.0.clone(), prop_valrange.1.start.clone());
@@ -113,37 +138,12 @@ impl OptStep {
             });
 
 
-            struct CompApply<'a> {
-                applies:Vec<&'a Box<dyn Apply>>
-            }
-
-            impl <'a> CompApply<'a> {
-                pub fn new(applies: Vec<&'a Box<dyn Apply>>) -> Self {
-                    println!("CompApply::new applies.len()={}", applies.len());
-                    Self { applies }
-                }
-            }
-
-            impl Apply for CompApply<'_> {
-                fn apply(&self, t:&Box<Tensor>) -> Box<Tensor> {
-                    // Box::new(t.shallow_clone())
-                    let mut t = Box::new(t.shallow_clone());
-                    for apply in &self.applies {
-                        println!("Apply for CompApply apply *************");
-                        t = apply.apply(&t)
-                    }
-
-                    t
-                }
-            }
-
 
             let best_run_id = (self.build)(&try_props, &self.data_keys, &CompApply::new(
                 best_prev_run_ids.map(|run_ids_stack|run_ids_stack.run_ids.iter().map(|run_id|applies_map.get(run_id).expect("applies_map.get(run_id)")).collect::<Vec<_>>()).unwrap_or(vec![])
-
             ) as &dyn Apply);
 
-            println!("applies_map.insert: best_run_id={}", best_run_id);
+            println!("applies_map.insert: best_run_id={}  best_prev_run_ids={:?} try_props={:?}", best_run_id, best_prev_run_ids, try_props);
             applies_map.insert(best_run_id, self.apply_fn.as_ref().map(|a|a(&try_props)).expect("apply_fn"));
 
             best_run_ids.push(RunIdsStack::new(best_run_id, best_prev_run_ids))
@@ -232,8 +232,8 @@ mod tests {
                     train(
                         &Cpu,
                         &mut crate::simp::DummyDs::new(
-                            Tensor::rand((10), FLOAT_CPU),
-                            Tensor::rand((10), FLOAT_CPU),
+                            Tensor::rand((100), FLOAT_CPU),
+                            Tensor::rand((100), FLOAT_CPU),
                         ) as &mut dyn DataBatch,
                         &node,
                         |pred: &Tensor, target: &Tensor|  pred.sigmoid().binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean),
@@ -258,8 +258,12 @@ mod tests {
 
                     impl Apply for Net1Apply {
                         fn apply(&self, t:&Box<Tensor>) -> Box<Tensor> {
-                            println!(">>>>>>>>>>>>>>>> apply 1");
-                            Box::new(self.net.forward(&t))
+
+                            let out = self.net.forward(&t);
+
+                            println!(">>>>>>>>>>>>>>>> apply 1  t.size()={:?}  out.size()={:?}", t.size(), out.size());
+
+                            Box::new(out)
                         }
                     }
 
@@ -272,42 +276,58 @@ mod tests {
                 vec!["aaa".to_string(), "bbb".to_string()]
             ),
             OptStep::new(
-                "select_motifs",
+                "net2",
                 HashMap::from([
-                    ("min_dist".to_string(), Val::Real(100.)..Val::Real(1000.0))
+                    ("window".to_string(), Val::Int(10)..Val::Int(100))
                 ]),
-                Box::new(move |params:&HashMap<String, Val>, data_keys:&Vec<String>,apply:&dyn Apply| {
-                    println!("params={:?}", params);
+                Box::new(move |params:&HashMap<String, Val>, data_keys:&Vec<String>, apply:&dyn Apply| {
+                    println!("params={:?} data_keys={:?}", params, data_keys);
+                    let mut vs = VarStore::new(Cpu);
 
-                    apply.apply(&Box::new(Tensor::rand(10, FLOAT_CPU)));
+                    let node = build_net_2(params, &mut vs);
+
+                    train(
+                        &Cpu,
+                        &mut crate::simp::DummyDs::new(
+                            *apply.apply(&Box::new(Tensor::rand((100), FLOAT_CPU))),
+                            Tensor::rand((100), FLOAT_CPU),
+                        ) as &mut dyn DataBatch,
+                        &node,
+                        |pred: &Tensor, target: &Tensor|  pred.sigmoid().binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean),
+                        1,
+                        AdamW::default().build(&vs, 1.0e-4).unwrap(),
+                        |t|t
+                    );
+
 
                     *run_id_build_2.borrow_mut()+=1;
                     *run_id_build_2.borrow()
                 }),
                 |t: &Box<Tensor>, params:&HashMap<String, Val>| {
-                    Box::new(t.shallow_clone().multiply(&Tensor::from_slice(&[1.])))
+                    Box::new(t.shallow_clone())
                 },
                 Some(Box::new(|params:&HashMap<String, Val>|{
-                    println!("new apply 2, params={:?}", params);
+                    println!("new apply 1, params={:?}", params);
 
-                    struct Net2Apply {
-
+                    struct Net1Apply {
+                        net:Box<dyn Module>
                     }
 
-                    impl Apply for Net2Apply {
+                    impl Apply for Net1Apply {
                         fn apply(&self, t:&Box<Tensor>) -> Box<Tensor> {
-                            println!("apply 2");
-                            Box::new(t.shallow_clone())
+                            println!(">>>>>>>>>>>>>>>> apply 2");
+                            Box::new(self.net.forward(&t))
                         }
                     }
 
-                    Box::new(Net2Apply {
+                    let mut vs = VarStore::new(Cpu);
 
+                    Box::new(Net1Apply {
+                        net: build_net_1(params, &mut vs)
                     })
                 })),
                 vec!["aaa".to_string(), "bbb".to_string()]
-            )
-        ];
+            )        ];
 
         let env_params = EnvParams::new();
 
@@ -320,15 +340,30 @@ mod tests {
             run_ids.replace(next_run_ids);
 
         }
-        // find_motifs_step.build(1, EnvParams::new());
-        // find_motifs_step.go(EnvParams::new(), OptParams::new());
+
+        println!("run_ids={:?}", run_ids);
+
     }
 
     fn build_net_1(params: &HashMap<String, Val>, vs: &mut VarStore) -> Box<dyn Module> {
-        SeqBuilder::new(params.get("window").expect("window").as_i64().expect("window as i64"))
+        let features = params.get("window").expect("window").as_i64().expect("window as i64");
+        println!("build_net_1: features={}", features);
+
+        SeqBuilder::new(100)
+            .linear_s(features)
+            .end_seq()
+            .build_tch_module(&vs.root()).expect("build_tch_module")
+    }
+
+    fn build_net_2(params: &HashMap<String, Val>, vs: &mut VarStore) -> Box<dyn Module> {
+        let features = params.get("window").expect("window").as_i64().expect("window as i64");
+        println!("build_net_1: features={}", features);
+
+        SeqBuilder::new(features)
             .linear_s(10)
             .end_seq()
             .build_tch_module(&vs.root()).expect("build_tch_module")
     }
+
 }
 
