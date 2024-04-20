@@ -4,6 +4,7 @@ use std::io::Write;
 use chrono::SecondsFormat;
 use plotters::prelude::*;
 use plotters::backend::BitMapBackend;
+use plotters::style::*;
 use plotters::chart::ChartBuilder;
 use plotters::element::PathElement;
 use tch::{Device, Kind, nn, Tensor};
@@ -73,7 +74,7 @@ pub fn list_devices() ->Vec<Device> {
     }
 }
 
-pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), HbacError> {
+pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), HbacError> where S:Into<ShapeStyle> + Clone{
     if let Some(parent) = path.as_ref().parent() {
         fs::create_dir_all(parent)?;
     }
@@ -114,10 +115,10 @@ pub fn plot_series(name_x_y_vec: Vec<(String, RGBColor, Vec<(f32, f32)>)>, capti
         chart
             .draw_series(LineSeries::new(
                 x_y,
-                &color,
+                color.clone(),
             ))?
             .label(name)
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
+            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.clone()));
     }
 
 
