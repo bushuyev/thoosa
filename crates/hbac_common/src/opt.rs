@@ -28,6 +28,7 @@ mod opt_tests {
     use rand::prelude::ThreadRng;
     use crate::utils::from;
     use tch::IndexOp;
+    use tch::kind::FLOAT_CPU;
 
     #[ctor::ctor]
     fn init() {
@@ -147,12 +148,15 @@ mod opt_tests {
             let k = kernel(&x_train, &x_train, l, sigma_f);
             println!("k={:?}", from::<Vec<f64>>(&k.flatten(0,1)));
 
-            let k_s = kernel(x_train, x_s, l, sigma_f);
+            let k_s = kernel(&x_train, x_s, l, sigma_f);
 
             println!("k_s={:?}", from::<Vec<f64>>(&k_s.flatten(0,1)));
 
             let k_s_T = k_s.transpose(0, 1);
-            let k_ss = kernel(x_s, x_s, l, sigma_f); //TODO + 1e-8 * np.eye(len(X_s));
+
+            let k_ss = kernel(x_s, x_s, l, sigma_f);
+            let k_ss_size = k_ss.size();
+            let k_ss = k_ss + Tensor::zeros(k_ss_size, FLOAT_CPU).fill_diagonal_(1, false); //TODO + 1e-8 * np.eye(len(X_s));
             println!("k_ss={:?}", from::<Vec<f64>>(&k_ss.flatten(0,1)));
 
             let k_inv = k.inverse();
@@ -161,20 +165,6 @@ mod opt_tests {
 
             let mu_s = k_s_T.matmul(&k_inv).matmul(y_train);
             let cov_s = k_ss - k_s_T.matmul(&k_inv).matmul(&k_s);
-            /*
-                K = kernel(X_train, X_train, l, sigma_f) + sigma_y**2 * np.eye(len(X_train))
-                K_s = kernel(X_train, X_s, l, sigma_f)
-                K_ss = kernel(X_s, X_s, l, sigma_f) + 1e-8 * np.eye(len(X_s))
-                K_inv = inv(K)
-
-                # Equation (7)
-                mu_s = K_s.T.dot(K_inv).dot(Y_train)
-
-                # Equation (8)
-                cov_s = K_ss - K_s.T.dot(K_inv).dot(K_s)
-
-                return mu_s, cov_s
-             */
 
             (mu_s, cov_s)
         }
@@ -188,7 +178,7 @@ mod opt_tests {
 
 
         let y_train_full = X.sin().multiply_scalar(10).view((-1, 1)).totype(Float);
-        let train_indexes = (0..20).step_by(4).collect::<Vec<i64>>();
+        let train_indexes = (0..20).step_by(2).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
         let y_train = y_train_full.i(train_indexes);
@@ -201,16 +191,17 @@ mod opt_tests {
 
 
         let (mu_s, cov_s) = posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
-
+        let cov_s = cov_s.round_decimals(3);
+        cov_s.print();
 
         let mu_v = from::<Vec<f64>>(&mu_s.flatten(0,1));
         println!("mu_v={:?}", mu_v);
         let mu_t = Tensor::from_slice(mu_v.as_slice()).view((20));
         // println!("cov_s={:?}", cov_s.size());
-        let cov_v = from::<Vec<f64>>(&cov_s.flatten(0,1));
-        for chunk in cov_v.chunks(4) {
-            println!("cov_v={:?}", chunk);
-        }
+        // let cov_v = from::<Vec<f64>>(&cov_s.flatten(0,1));
+        // for chunk in cov_v.chunks(4) {
+        //     println!("cov_v={:?}", chunk);
+        // }
 
 
         // let mut norm = MultivariateNormal::new(mu_v, cov_v).unwrap();
@@ -219,12 +210,12 @@ mod opt_tests {
         let n = 20;
         let sig_t = sig_3_norm(norm, rng, n);
 
-        // let chol = cov_s.totype(Float).cholesky(false);
+        let chol = cov_s.totype(Float).cholesky(false);
         // let sig_t_chol = chol.matmul(&sig_t);
 
         let x = (0..n).map(|x| x as f32).collect::<Vec<f32>>();
         let sig_0_conv = cov_s.matmul(&sig_t.i((0, ..)));
-        let sig_1_conv = cov_s.matmul(&sig_t.i((1, ..)));
+        let sig_1_conv = chol.matmul(&sig_t.i((1, ..)));
 
         println!("mu_t.={:?} sig_0_conv={:?} sig_t.i={:?}", mu_t.size(), sig_0_conv.size(), sig_t.i((0, ..)).size());
         plot_series(
@@ -299,5 +290,14 @@ mod opt_tests {
 
             ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
+    }
+
+    #[test]
+    fn test_test(){
+        // let t = Tensor::from_slice(&[0.123, 1.123, 2.123]).round_decimals(2);
+
+        let t = Tensor::zeros(&[3, 3], FLOAT_CPU).fill_diagonal_(1, false);
+
+        t.print();
     }
 }
