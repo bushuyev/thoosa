@@ -25,6 +25,7 @@ mod opt_tests {
     use nalgebra::DMatrix;
     use plotters::style::BLUE;
     use plotters::prelude::YELLOW;
+    use plotters::style::full_palette::*;
     use rand::prelude::ThreadRng;
     use crate::utils::from;
     use tch::IndexOp;
@@ -141,9 +142,9 @@ mod opt_tests {
         }
 
         fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f32, sigma_f:f32, sigma_y:f32) -> (Tensor, Tensor){
-            println!("x_s={:?}", from::<Vec<f64>>(&x_s.flatten(0,1)));
-            println!("x_train={:?}", from::<Vec<f64>>(&x_train.flatten(0,1)));
-            println!("y_train={:?}", from::<Vec<f64>>(&y_train.flatten(0,1)));
+            // println!("x_s={:?}", from::<Vec<f64>>(&x_s.flatten(0,1)));
+            // println!("x_train={:?}", from::<Vec<f64>>(&x_train.flatten(0,1)));
+            // println!("y_train={:?}", from::<Vec<f64>>(&y_train.flatten(0,1)));
 
             let k = kernel(&x_train, &x_train, l, sigma_f);
             println!("k={:?}", from::<Vec<f64>>(&k.flatten(0,1)));
@@ -166,7 +167,7 @@ mod opt_tests {
             let mu_s = k_s_T.matmul(&k_inv).matmul(y_train);
             let cov_s = k_ss - k_s_T.matmul(&k_inv).matmul(&k_s);
 
-            (mu_s, cov_s)
+            (mu_s.squeeze().transpose(0,1), cov_s)
         }
 
 
@@ -177,11 +178,15 @@ mod opt_tests {
         let X = Tensor::from_slice((0..20).map(|i|-5. +i as f32 * 0.5).into_iter().collect::<Vec<f32>>().as_slice()).totype(Float).view((-1, 1));
 
 
-        let y_train_full = X.sin().multiply_scalar(10).view((-1, 1)).totype(Float);
+        let y_train_full = Tensor::stack(&[
+            X.sin().multiply_scalar(1).view((-1, 1)).totype(Float),
+            X.sin().multiply_scalar(5).view((-1, 1)).totype(Float),
+            X.sin().multiply_scalar(10).view((-1, 1)).totype(Float)
+        ], 0);
         let train_indexes = (0..20).step_by(2).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
-        let y_train = y_train_full.i(train_indexes);
+        let y_train = y_train_full.i((.., train_indexes));
 
         println!("train_indexes={:?} y_train={:?}", train_indexes, y_train.size());
         // Y_train.print();
@@ -194,9 +199,9 @@ mod opt_tests {
         let cov_s = cov_s.round_decimals(3);
         cov_s.print();
 
-        let mu_v = from::<Vec<f64>>(&mu_s.flatten(0,1));
-        println!("mu_v={:?}", mu_v);
-        let mu_t = Tensor::from_slice(mu_v.as_slice()).view((20));
+        // let mu_v = from::<Vec<f64>>(&mu_s.flatten(0,1));
+        // println!("mu_v={:?}", mu_v);
+        // let mu_t = Tensor::from_slice(mu_v.as_slice()).view((20));
         // println!("cov_s={:?}", cov_s.size());
         // let cov_v = from::<Vec<f64>>(&cov_s.flatten(0,1));
         // for chunk in cov_v.chunks(4) {
@@ -208,46 +213,69 @@ mod opt_tests {
         let mut norm = Normal::new(0., 1.).unwrap();
         let mut rng = thread_rng();
         let n = 20;
-        let sig_t = sig_3_norm(norm, rng, n);
+        let sig_t = sig_3_norm(norm, rng, n).transpose(0,1);
+        println!("sig_t.size={:?}", sig_t.size());
 
         let chol = cov_s.totype(Float).cholesky(false);
         // let sig_t_chol = chol.matmul(&sig_t);
 
         let x = (0..n).map(|x| x as f32).collect::<Vec<f32>>();
-        let sig_0_conv = cov_s.matmul(&sig_t.i((0, ..)));
-        let sig_1_conv = chol.matmul(&sig_t.i((1, ..)));
+        let sig_conv = &mu_s + cov_s.matmul(&sig_t);
+        println!("sig_conv.size={:?}", sig_conv.size());
+        let chol = chol.matmul(&sig_t);
+        println!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), chol.size());
 
-        println!("mu_t.={:?} sig_0_conv={:?} sig_t.i={:?}", mu_t.size(), sig_0_conv.size(), sig_t.i((0, ..)).size());
+        let sig_chol = (&mu_s + chol).transpose(0,1);
+        println!("sig_chol.size={:?}", sig_chol.size());
+        // let sig_0_conv = cov_s.matmul(&sig_t.i((0, ..)));
+        // let sig_1_conv = chol.matmul(&sig_t.i((1, ..)));
+
+        // println!("mu_t.={:?} sig_0_conv={:?} sig_t.i={:?}", mu_t.size(), sig_0_conv.size(), sig_t.i((0, ..)).size());
         plot_series(
             vec![
 
                 (format!("train"), ShapeStyle {
-                    color: BLACK.into(),
-                    filled: true,
-                    stroke_width: 2,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.view(20))).collect::<Vec<(f32, f32)>>()),
-
-                (format!("Sig0"), ShapeStyle {
-                    color: RED.into(),
+                    color: GREEN_800.into(),
                     filled: true,
                     stroke_width: 1,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&(mu_t.shallow_clone() + sig_0_conv))).collect::<Vec<(f32, f32)>>()),
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(20))).collect::<Vec<(f32, f32)>>()),
+                (format!("train"), ShapeStyle {
+                    color: BLUE_800.into(),
+                    filled: true,
+                    stroke_width: 1,
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((1, ..)).view(20))).collect::<Vec<(f32, f32)>>()),
+                (format!("train"), ShapeStyle {
+                    color: RED_800.into(),
+                    filled: true,
+                    stroke_width: 1,
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((2, ..)).view(20))).collect::<Vec<(f32, f32)>>()),
+
+                (format!("Sig0"), ShapeStyle {
+                    color: GREEN.into(),
+                    filled: true,
+                    stroke_width: 1,
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&(sig_chol.i((0, ..))))).collect::<Vec<(f32, f32)>>()),
+                (format!("Sig0Chol"), ShapeStyle {
+                    color: BLUE.into(),
+                    filled: true,
+                    stroke_width: 1,
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol.i(((1, ..))))).collect::<Vec<(f32, f32)>>()),
                 (format!("Sig0Chol"), ShapeStyle {
                     color: RED.into(),
                     filled: true,
-                    stroke_width: 2,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_t.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
-
-                (format!("Sig1"), ShapeStyle {
-                    color: GREEN.into(),
-                    filled: true,
                     stroke_width: 1,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&(mu_t.shallow_clone() + sig_1_conv))).collect::<Vec<(f32, f32)>>()),
-                (format!("Sig1Chol"), ShapeStyle {
-                    color: GREEN.into(),
-                    filled: true,
-                    stroke_width: 2,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_t.i((1, ..)))).collect::<Vec<(f32, f32)>>()),
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol.i(((2, ..))))).collect::<Vec<(f32, f32)>>()),
+                //
+                // (format!("Sig1"), ShapeStyle {
+                //     color: GREEN.into(),
+                //     filled: true,
+                //     stroke_width: 1,
+                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&(mu_t.shallow_clone() + sig_1_conv))).collect::<Vec<(f32, f32)>>()),
+                // (format!("Sig1Chol"), ShapeStyle {
+                //     color: GREEN.into(),
+                //     filled: true,
+                //     stroke_width: 2,
+                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_t.i((1, ..)))).collect::<Vec<(f32, f32)>>()),
 
                 //
                 // (format!("Sig2"), ShapeStyle {
