@@ -58,3 +58,5 @@ pyplot.plot(x_1, [objective(x, noise=0) for x in x_1], 'g')
 pyplot.plot(x_1, pred_y, 'r')
 # pyplot.plot(x_1, model.predict())
 pyplot.show()
+
+

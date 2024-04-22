@@ -42,7 +42,7 @@ def posterior(X_s, X_train, Y_train, l=1.0, sigma_f=1.0, sigma_y=1e-8):
     print(f"X_train={X_train}")
     print(f"Y_train={Y_train}")
 
-    K = kernel(X_train, X_train, l, sigma_f) # + sigma_y**2 * np.eye(len(X_train))
+    K = kernel(X_train, X_train, l, sigma_f) + sigma_y**2 * np.eye(len(X_train))
     print(f"K={K}")
     K_s = kernel(X_train, X_s, l, sigma_f)
     print(f"K_s={K_s}")
