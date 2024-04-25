@@ -5,6 +5,7 @@ from sklearn.gaussian_process.kernels import RBF, Kernel
 from sklearn.gaussian_process.kernels import ConstantKernel as C
 from scipy.linalg import cho_solve, cholesky, solve_triangular
 from scipy.optimize import minimize
+from torch.optim.lbfgs import LBFGS
 
 model = GaussianProcessRegressor()
 

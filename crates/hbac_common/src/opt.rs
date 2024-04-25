@@ -5,11 +5,11 @@ use tch::Tensor;
 use log::{warn, debug};
 use hbac_shared::HbacError;
 
-fn kernel(t_0:&Tensor, t_1:&Tensor, l:f32, sigma_f:f32) -> Tensor {
-    Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5).exp()
+fn kernel(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f32) -> Tensor {
+    Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5 * l.powi(2)).exp()
 }
 
-fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f32, sigma_f:f32, sigma_y:f32) -> (Tensor, Tensor){
+fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f32, sigma_y:f32) -> (Tensor, Tensor){
     println!("x_s={:?}", x_s.size());
     // println!("x_s={:?}", from::<Vec<f64>>(&x_s.flatten(0,1)));
     // println!("x_train={:?}", from::<Vec<f64>>(&x_train.flatten(0,1)));
@@ -40,7 +40,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f32, sigma_f:f32, 
     (mu_s.squeeze().transpose(0,1), cov_s)
 }
 
-fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f32, sigma_f:f32, sigma_y:f32) -> Result<(Tensor, Tensor), HbacError>{
+fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f32, sigma_y:f32) -> Result<(Tensor, Tensor), HbacError>{
     let k = kernel(&x_train, &x_train, l, sigma_f);
 
     let k_size = k.size();
@@ -369,7 +369,8 @@ mod opt_tests {
            )
         }).collect::<Vec<(f32, f32)>>();
 
-        let y = x_01.iter().map(|x_01| x_01.0.sin() + x_01.1.cos()).collect::<Vec<f32>>();
+        let y = x_01.iter().map(|x_01| (x_01.0 *  x_01.1).cos()).collect::<Vec<f32>>();
+
         let x_0 = x_01.iter().map(|x_01| x_01.0).collect::<Vec<f32>>();
         let x_1 = x_01.iter().map(|x_01| x_01.1).collect::<Vec<f32>>();
 
@@ -381,7 +382,7 @@ mod opt_tests {
         print!("y_train_full={:?}", y_train_full.size());
         y_train_full.print();
 
-        let train_indexes = (0..N).step_by(5).collect::<Vec<i64>>();
+        let train_indexes = (0..N).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
@@ -402,19 +403,10 @@ mod opt_tests {
         let sig_t = sig_3_norm(norm, rng, N).transpose(0,1);
         println!("sig_t.size={:?}", sig_t.size());
 
-        // let chol_or_cov = match cov_s.shallow_clone().totype(Float).f_cholesky(false) {
-        //     Ok(r)=>r,
-        //     Err(e)=>{
-        //         println!("XXXXXXXXXXXXXXXXXXXXXXXXXXXe={:?}", e);
-        //         cov_s.shallow_clone()
-        //     }
-        // };
-        // let chol_or_cov = cov_s.totype(Float).f_cholesky(false).unwrap();
-        // println!("1. chol_or_cov={:?}", chol_or_cov.size());
+
         let chol_or_cov = super::cholesky_with_jitter(&cov_s).unwrap();
         println!("2. chol_or_cov={:?}", chol_or_cov.size());
 
-        // let x = X; // (0..N).map(|x| x as f32).collect::<Vec<f32>>();
 
         let sig_t_with_cov = chol_or_cov.matmul(&sig_t);
         println!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), sig_t_with_cov.size());
@@ -427,24 +419,14 @@ mod opt_tests {
 
                 (format!("train 0"), ShapeStyle {
                     color: GREEN_800.into(),
-                    filled: true,
+                    filled: false,
                     stroke_width: 1,
                 }, x_0.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
                 (format!("train 1"), ShapeStyle {
                     color: ORANGE_800.into(),
-                    filled: true,
+                    filled: false,
                     stroke_width: 1,
                 }, x_1.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
-                // (format!("train"), ShapeStyle {
-                //     color: BLUE_800.into(),
-                //     filled: true,
-                //     stroke_width: 1,
-                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((1, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
-                // (format!("train"), ShapeStyle {
-                //     color: RED_800.into(),
-                //     filled: true,
-                //     stroke_width: 1,
-                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((2, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
 
                 (format!("Sig0"), ShapeStyle {
                     color: GREEN.into(),
@@ -456,17 +438,7 @@ mod opt_tests {
                     filled: true,
                     stroke_width: 2,
                 }, x_1.clone().into_iter().zip(from::<Vec<f32>>(&(sig_chol.i((0, ..))))).collect::<Vec<(f32, f32)>>()),
-                // (format!("Sig0Chol"), ShapeStyle {
-                //     color: BLUE.into(),
-                //     filled: true,
-                //     stroke_width: 2,
-                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol.i(((1, ..))))).collect::<Vec<(f32, f32)>>()),
-                // (format!("Sig0Chol"), ShapeStyle {
-                //     color: RED.into(),
-                //     filled: true,
-                //     stroke_width: 2,
-                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol.i(((2, ..))))).collect::<Vec<(f32, f32)>>()),
-                //
+
 
             ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
