@@ -5,13 +5,13 @@ use std::cmp::min;
 use log::debug;
 
 struct BFGS {
-    func:fn(x:&Tensor)->Tensor
+    func:fn(x:&mut Tensor)->Tensor
 }
 
 
 
 impl BFGS {
-    pub fn new(func: fn(&Tensor) -> Tensor) -> Self {
+    pub fn new(func: fn(&mut Tensor) -> Tensor) -> Self {
         Self {
             func        }
     }
@@ -35,7 +35,7 @@ impl BFGS {
         let mut x = Tensor::zeros([1], FLOAT_CPU).set_requires_grad(true);
 
         let orig_loss = tch::with_grad(|| {
-            let orig_loss = (self.func)(&x);
+            let orig_loss = (self.func)(&mut x);
             orig_loss.backward();
             orig_loss
         });
@@ -188,7 +188,17 @@ impl BFGS {
             } else {
                 //# no line search, simply move with fixed-step
                 Self::_add_grad(&mut x, t, &d);
-                let orig_loss = (self.func)(&x);
+                debug!("x for new flat_grad print n_iter={}", n_iter);
+                x.print();
+
+                // let orig_loss = (self.func)(&x);
+
+
+                let orig_loss = tch::with_grad(|| {
+                    let orig_loss = (self.func)(&mut x);
+                    orig_loss.backward();
+                    orig_loss
+                });
                 flat_grad = x.grad();
 
                 debug!("new flat_grad print n_iter={}", n_iter);
@@ -206,17 +216,18 @@ impl BFGS {
                 break
             }
             //TODO
+            debug!("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+            x.print();
         }
 
-        debug!("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
-        x.print();
+
     }
 
     fn _add_grad(x:&mut Tensor, t:f64, d:&Tensor) {//TODO x - make 2 dim, 1 dim for all params
         debug!("end _add_grad t={}", t);
         x.print();
 
-        // tch::no_grad(|| {
+        // tch::with_grad(|| {
             x.f_add_(&d.multiply_scalar(t)).unwrap();
         // });
 
@@ -256,15 +267,25 @@ mod opt_tests {
 
     #[test]
     fn test_bfgs() -> Result<(), HbacError>{
-        let func = |x: &Tensor| x.f_add_scalar(-20.).unwrap().pow_tensor_scalar(2) + x.sin();
+        let func = |x: &mut Tensor| {
+            debug!("func: x=");
+            x.print();
+            x.zero_grad();
+
+            let v = x.f_add_scalar(-20.).unwrap().pow_tensor_scalar(2) + x.sin();
+            debug!("func: v=");
+            v.print();
+            v
+        };
 
         let mut bfgs = BFGS::new(func);
 
-        let x = (0..100).map(|x|-50. + x as f32).collect::<Vec<f32>>();
-        let y = x.iter().map(|x|func(&Tensor::from_slice(vec![*x].as_slice())).double_value(&[]) as f32).collect::<Vec<f32>>();
-
 
         bfgs.opt();
+
+      /*  let x = (0..100).map(|x|-50. + x as f32).collect::<Vec<f32>>();
+        let y = x.iter().map(|x|func(&Tensor::from_slice(vec![*x].as_slice())).double_value(&[]) as f32).collect::<Vec<f32>>();
+
 
         plot_series(
             vec![
@@ -277,7 +298,7 @@ mod opt_tests {
 
 
             ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        )?;
+        )?;*/
 
         Ok(())
     }

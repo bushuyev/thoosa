@@ -4,7 +4,9 @@ from matplotlib import pyplot
 
 # Define the parabola function
 def func(x:torch.Tensor):
-    return (x - 20) ** 2 + (x).sin()
+    v = (x - 20) ** 2 + (x).sin()
+    print(f"func: x={x} v={v}")
+    return v
     # x_0 = (x-50)/10
     # return  x_0 ** 2 + 100 * x_0.sin()
 
@@ -32,5 +34,5 @@ optimizer.step(closure)  # Take one optimization step
 print("Optimization finished.")
 print(f"Minimum found at x = {x.item()}, f(x) = {func(x).item()}")
 
-pyplot.plot(range(-100,100), [func(torch.tensor(x)) for x in range(-100, 100)], 'r')
-pyplot.show()
+# pyplot.plot(range(-100,100), [func(torch.tensor(x)) for x in range(-100, 100)], 'r')
+# pyplot.show()
