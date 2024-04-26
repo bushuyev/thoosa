@@ -20,6 +20,7 @@ use crate::my_tch::{Fp, LossFp};
 use tch::nn::Optimizer;
 use tch::IndexOp;
 use tch::Kind::Float;
+use tch::kind::FLOAT_CPU;
 use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
 
@@ -210,8 +211,15 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
 
 pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, HbacError> {
     Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id)))
-        .map(|t|t.to_device(device)).map_err(|e|HbacError::new(e.to_string()))}
+        .map(|t|t.to_device(device)).map_err(|e|HbacError::new(e.to_string()))
+}
 
+pub fn clone(from:&Tensor) -> Tensor {
+    let mut to = Tensor::zeros(from.size(), FLOAT_CPU);//TODO clone
+    from.clone(&to);
+
+    to
+}
 
 #[cfg(test)]
 pub mod tests {

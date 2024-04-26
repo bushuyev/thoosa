@@ -14,7 +14,7 @@ def func(x:torch.Tensor):
 x = torch.tensor([0.0], requires_grad=True)
 
 # Define the LBFGS optimizer
-optimizer = optim.LBFGS([x])#, lr=0.01, max_iter=1000, line_search_fn='strong_wolfe')
+optimizer = optim.LBFGS([x], line_search_fn="strong_wolfe")#, lr=0.01, max_iter=1000, line_search_fn='strong_wolfe')
 
 # Closure to evaluate the function and its gradient
 def closure():
