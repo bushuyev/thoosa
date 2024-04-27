@@ -13,15 +13,42 @@ struct BFGS {
 
 struct BFGSParams {
     max_iter: i32,
-    with_wolf_line_search:bool
+    with_wolf_line_search:bool,
+    lr: f64,
+
+    //tolerance_grad (float): termination tolerance on first order optimality
+    //             (default: 1e-7).
+    tolerance_grad:f64,
+
+    //  tolerance_change (float): termination tolerance on function
+    //             value/parameter changes (default: 1e-9).
+    tolerance_change:f64
 }
 
 impl BFGSParams {
-    pub fn new(max_iter: i32, with_wolf_line_search:bool) -> Self {
-        Self {
-            max_iter,
-            with_wolf_line_search,
-        }
+    pub fn lr(mut self, lr: f64) -> Self {
+        self.lr = lr;
+        self
+    }
+
+    pub fn with_max_iter(mut self, max_iter: i32) -> Self {
+        self.max_iter = max_iter;
+        self
+    }
+
+    pub fn with_with_wolf_line_search(mut self, with_wolf_line_search: bool) -> Self {
+        self.with_wolf_line_search = with_wolf_line_search;
+        self
+    }
+
+    pub fn with_tolerance_grad(mut self, tolerance_grad: f64) -> Self {
+        self.tolerance_grad = tolerance_grad;
+        self
+    }
+
+    pub fn with_tolerance_change(mut self, tolerance_change: f64) -> Self {
+        self.tolerance_change = tolerance_change;
+        self
     }
 }
 
@@ -29,8 +56,11 @@ impl Default for BFGSParams {
 
     fn default() -> Self {
         Self {
+            lr: 1.0,
             max_iter:10,
-            with_wolf_line_search: false
+            with_wolf_line_search: false,
+            tolerance_grad: 1e-7,
+            tolerance_change: 1e-9
         }
     }
 }
@@ -52,16 +82,6 @@ impl BFGS {
     }
 
     fn _opt(&mut self, mut x: Tensor, params:BFGSParams){
-        let lr = 1.0;
-
-        //tolerance_grad (float): termination tolerance on first order optimality
-        //             (default: 1e-7).
-        let tolerance_grad = 1e-7;
-
-        //  tolerance_change (float): termination tolerance on function
-        //             value/parameter changes (default: 1e-9).
-        let mut tolerance_change = 1e-9;
-
 
         let orig_loss = tch::with_grad(|| {
             let orig_loss = (self.func)(&mut x);
@@ -73,7 +93,7 @@ impl BFGS {
         let mut flat_grad  = Self::_gather_flat_grad(&x);
         flat_grad.print();
 
-        let mut opt_cond = flat_grad.abs().max().double_value(&[]) <= tolerance_grad;
+        let mut opt_cond = flat_grad.abs().max().double_value(&[]) <= params.tolerance_grad;
 
         // # optimal condition
         if opt_cond {
@@ -86,7 +106,7 @@ impl BFGS {
 
 
 
-        let mut t = lr;
+        let mut t = params.lr;
         let mut H_diag = 1f64;
 
         let history_size = 10;
@@ -197,16 +217,16 @@ impl BFGS {
             # reset initial guess for step size
              */
             if n_iter == 1 {
-                t = 1_f64.min(1. / flat_grad.abs().sum(Float).double_value(&[])) * lr;
+                t = 1_f64.min(1. / flat_grad.abs().sum(Float).double_value(&[])) * params.lr;
             } else {
-                t = lr;
+                t = params.lr;
             }
 
             // directional derivative
             let gtd = flat_grad.matmul(&d).double_value(&[]); //  # g * d
 
             // # directional derivative is below tolerance
-            if gtd > -tolerance_change {
+            if gtd > - params.tolerance_change {
                 break
             }
 
@@ -243,7 +263,7 @@ impl BFGS {
                 debug!("new flat_grad print n_iter={}", n_iter);
                 flat_grad.print();
 
-                opt_cond = flat_grad.abs().max().double_value(&[]) <= tolerance_grad
+                opt_cond = flat_grad.abs().max().double_value(&[]) <= params.tolerance_grad
             }
 
             debug!("end iter {}", n_iter);
@@ -274,7 +294,10 @@ impl BFGS {
     }
 
     fn _gather_flat_grad(v: &Tensor) -> Tensor {//TODO x - make 2 dim, 1 dim for all params
-        v.grad()
+        let grad = v.grad();
+        debug!("_gather_flat_grad: grad.size()={:?}", grad.size());
+        grad.print();
+        grad
     }
 
     fn _directional_evaluate(closure:subj_f, x:&mut Tensor, t:f64, d:&Tensor) -> (f64, Tensor) {
@@ -539,11 +562,12 @@ mod opt_tests {
     use plotters::prelude::full_palette::{GREEN_800, ORANGE, ORANGE_800};
     use plotters::prelude::{GREEN, ShapeStyle};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use tch::Tensor;
+    use tch::{IndexOp, Tensor};
     use hbac_shared::HbacError;
     use crate::bfgs::{BFGS, BFGSParams};
     use crate::utils::{from, plot_series};
     use tch::kind::FLOAT_CPU;
+    use plotters::prelude::*;
 
     #[ctor::ctor]
     fn init() {
@@ -558,6 +582,74 @@ mod opt_tests {
 
         std::env::set_var("POLARS_FMT_MAX_COLS", "100");
         std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    }
+
+
+
+    #[test]
+    fn test_bfgs_one_dim_no_line_search_3d() -> Result<(), HbacError>{
+        let func = |x: &mut Tensor| {
+            debug!("func: x=");
+            x.print();
+            x.zero_grad();
+
+            let v =
+                x.i(0).f_add_scalar(-11.).unwrap().pow_tensor_scalar(2) +
+                x.i(1).f_add_scalar(-22.).unwrap().pow_tensor_scalar(2);
+            debug!("func: v=");
+            v.print();
+            v
+        };
+
+        let mut bfgs = BFGS::new(func);
+
+
+        let x = Tensor::zeros([2], FLOAT_CPU).set_requires_grad(true);
+        debug!("init: x={:?}", x.size());
+        x.print();
+
+        bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6)));
+
+        debug!("opt: {:?} {:?}", x.double_value(&[0]), x.double_value(&[1]));
+        assert_eq!("11.0", format!("{:.1}", x.double_value(&[0])));
+        assert_eq!("22.0", format!("{:.1}", x.double_value(&[1])));
+
+        Ok(())
+    }
+
+
+    #[test]
+    fn test_bfgs_one_dim_no_line_search_4d() -> Result<(), HbacError>{
+        let func = |x: &mut Tensor| {
+            debug!("func: x=");
+            x.print();
+            x.zero_grad();
+
+            let v =
+                x.i(0).f_add_scalar(-1.).unwrap().pow_tensor_scalar(2) +
+                x.i(1).f_add_scalar(-2.).unwrap().pow_tensor_scalar(2) +
+                x.i(2).f_add_scalar(-3.).unwrap().pow_tensor_scalar(2);
+            debug!("func: v=");
+            v.print();
+            v
+        };
+
+        let mut bfgs = BFGS::new(func);
+
+
+        let x = Tensor::zeros([3], FLOAT_CPU).set_requires_grad(true);
+        debug!("init: x={:?}", x.size());
+        x.print();
+
+        bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6)));
+
+        let x = x.round_decimals(2);
+        debug!("opt: {:?} {:?} {:?}", x.double_value(&[0]), x.double_value(&[1]), x.double_value(&[2]));
+        assert_eq!("1.00", format!("{:.2}", x.double_value(&[0])));
+        assert_eq!("2.00", format!("{:.2}", x.double_value(&[1])));
+        assert_eq!("3.00", format!("{:.2}", x.double_value(&[2])));
+
+        Ok(())
     }
 
     #[test]
@@ -577,7 +669,7 @@ mod opt_tests {
 
 
         let x = Tensor::zeros([1], FLOAT_CPU).set_requires_grad(true);
-        bfgs.opt(x.shallow_clone(), Some(BFGSParams::new(6, false)));
+        bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6)));
 
         assert_eq!("19.6520", format!("{:.4}", x.double_value(&[])));
 
@@ -619,7 +711,7 @@ mod opt_tests {
 
 
         let x = Tensor::zeros([1], FLOAT_CPU).set_requires_grad(true);
-        bfgs.opt(x.shallow_clone(), Some(BFGSParams::new(6, true)));
+        bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6).with_with_wolf_line_search(true)));
 
         assert_eq!("19.6245", format!("{:.4}", x.double_value(&[])));
 

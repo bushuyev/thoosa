@@ -149,6 +149,46 @@ pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: 
     Ok(())
 }
 
+
+
+pub fn plot_3d(){//TODO
+    // let root = BitMapBackend::gif(crate::bfgs::opt_tests::OUT_FILE_NAME, (600, 400), 100)?.into_drawing_area();
+    //
+    // for pitch in 9..10 {
+    //     root.fill(&WHITE)?;
+    //
+    //     let mut chart = ChartBuilder::on(&root)
+    //         .caption("2D Gaussian PDF", ("sans-serif", 20))
+    //         .build_cartesian_3d(-100.0..100.0, -100.0..100.0, -100.0..100.0)?;
+    //     chart.with_projection(|mut p| {
+    //         p.pitch = 1.57 - (1.57 - pitch as f64 / 50.0).abs();
+    //         p.scale = 0.7;
+    //         p.into_matrix() // build the projection matrix
+    //     });
+    //
+    //     chart
+    //         .configure_axes()
+    //         .light_grid_style(BLACK.mix(0.15))
+    //         .max_light_lines(3)
+    //         .draw()?;
+    //
+    //     chart.draw_series(
+    //         SurfaceSeries::xoz(
+    //             (-100..=100).map(|x| x as f64 /5.),
+    //             (-100..=100).map(|x| x as f64 /5.),
+    //             crate::bfgs::opt_tests::pdf,
+    //         )
+    //             .style_func(&|&v| (VulcanoHSL::get_color(v / 5.0)).into()),
+    //     )?;
+    //
+    //     root.present()?;
+    // }
+    //
+    // // To avoid the IO failure being ignored silently, we manually call the present function
+    // root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
+    // println!("Result has been saved to {}", crate::bfgs::opt_tests::OUT_FILE_NAME);
+}
+
 //from tch-0.14.0/tests/test_utils.rs
 pub fn from<'a, T>(t: &'a Tensor) -> T
     where
