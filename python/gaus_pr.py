@@ -5,7 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from numpy.linalg import inv
 from python.gaussian_processes_util import plot_gp
-
+from numpy.linalg import cholesky, det
+from scipy.linalg import solve_triangular
+from scipy.optimize import minimize
 
 def kernel(X1, X2, l=1.0, sigma_f=1.0):
     """
@@ -62,6 +64,54 @@ def posterior(X_s, X_train, Y_train, l=1.0, sigma_f=1.0, sigma_y=1e-8):
 
     return mu_s, cov_s
 
+
+
+
+def nll_fn(X_train, Y_train, noise, naive=True):
+    Y_train = Y_train.ravel()
+
+    def nll_stable(theta):
+        # Numerically more stable implementation of Eq. (11) as described
+        # in http://www.gaussianprocess.org/gpml/chapters/RW2.pdf, Section
+        # 2.2, Algorithm 2.1.
+        noise = 0.1
+        print(f"theta={theta}")
+
+        K = kernel(X_train, X_train, l=theta[0], sigma_f=theta[1]) + noise**2 * np.eye(len(X_train))
+
+        print(f"K={K}")
+
+        L = cholesky(K)
+
+        print(f"L={L}")
+        print(f"L.T={L.T}")
+
+        S1 = solve_triangular(L, Y_train, lower=True)
+        S2 = solve_triangular(L.T, S1, lower=False)
+
+        print(f"S1={S1}")
+        print(f"S2={S2}")
+
+        diagonal = np.diagonal(L)
+        print("diagonal={:?}", diagonal)
+
+        log = np.log(diagonal)
+        print("log={:?}", log)
+
+        np_sum = np.sum(log)
+        print(f"np_sum={np_sum}")
+
+        dot = Y_train.dot(S2)
+
+        print(f"dot={dot}")
+
+        v = np_sum + 0.5 * dot + 0.5 * len(X_train) * np.log(2 * np.pi)
+
+        print(f"v={v}")
+        return v
+
+    return nll_stable
+
 X = np.arange(-5, 5, 0.5).reshape(-1, 1)
 
 
@@ -77,7 +127,8 @@ X = np.arange(-5, 5, 0.5).reshape(-1, 1)
 # plt.show()
 
 
-X_train = np.array([-4, -3, -2, -1, 1]).reshape(-1, 1)
+# X_train = np.array([-4, -3, -2, -1, 1]).reshape(-1, 1)
+X_train = np.arange(-4, 1, 1.0).reshape(-1, 1)
 Y_train = np.sin(X_train)
 
 # print(f"Y_train={X_train**2}")
@@ -86,25 +137,44 @@ Y_train = np.sin(X_train)
 # print(f"kernel={kernel(X_train, Y_train, 1.0, 1.0)}")
 
 # Compute mean and covariance of the posterior distribution
-mu_s, cov_s = posterior(X, X_train, Y_train)
+# mu_s, cov_s = posterior(X, X_train, Y_train, sigma_f=2.0)
 
-con_t = torch.tensor(cov_s).float()
-chol = con_t.float().cholesky()
-print(f"choltype={chol.type()} chol={chol}")
+# con_t = torch.tensor(cov_s).float()
+# chol = con_t.float().cholesky()
 
-print(f"mu_s={mu_s.shape} cov_s={cov_s.shape}")
-print(f"mu_s={mu_s}")
-print(f"cov_s={cov_s.flatten()}")
+# print(f"choltype={chol.type()} chol={chol}")
+#
+# print(f"mu_s={mu_s.shape} cov_s={cov_s.shape}")
+# print(f"mu_s={mu_s}")
+# print(f"cov_s={cov_s.flatten()}")
 
 # samples = np.random.multivariate_normal(mu_s.ravel(), cov_s, 3)
-random = [np.random.normal() for x in range(20)]
-mu_t = torch.tensor(mu_s).float()
-random_t = torch.tensor(random).float()
-samples = [
-    random,
-    (mu_t.view(20, 1) + torch.matmul(chol, random_t).view(20, 1)).numpy(),
-    (mu_t.view(20, 1) + torch.matmul(con_t, random_t).view(20, 1)).numpy()
-]
 
-plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train, samples=samples)
-plt.show()
+#---
+# random = [np.random.normal() for x in range(20)]
+# mu_t = torch.tensor(mu_s).float()
+# random_t = torch.tensor(random).float()
+# samples = [
+#     random,
+#     (mu_t.view(20, 1) + torch.matmul(chol, random_t).view(20, 1)).numpy(),
+#     (mu_t.view(20, 1) + torch.matmul(con_t, random_t).view(20, 1)).numpy()
+# ]
+#
+# plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train, samples=samples)
+#---
+
+print(f"X_train={X_train} Y_train={Y_train}")
+
+res = minimize(nll_fn(X_train, Y_train, 0.1), np.array([20, 20]),
+               # bounds=((1e-5, None), (1e-5, None)),
+               method='BFGS')
+
+l_opt, sigma_f_opt = res.x
+
+print(f"l_opt={l_opt} sigma_f_opt={sigma_f_opt}")
+
+# Compute posterior mean and covariance with optimized kernel parameters and plot the results
+# mu_s, cov_s = posterior(X, X_train, Y_train, l=l_opt, sigma_f=sigma_f_opt, sigma_y=0.1)
+# plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train)
+#
+# plt.show()

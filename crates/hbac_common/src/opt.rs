@@ -1,15 +1,20 @@
 use std::any::Any;
 use nalgebra::{DMatrix, DVector};
 use tch::kind::FLOAT_CPU;
-use tch::Tensor;
+use tch::{IndexOp, Tensor};
 use log::{warn, debug};
+use tch::Kind::Float;
 use hbac_shared::HbacError;
 
-fn kernel(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f32) -> Tensor {
-    Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5 * l.powi(2)).exp()
+fn kernel(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
+    Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5 * l.powi(2)).exp().multiply_scalar(sigma.powi(2))
 }
 
-fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f32, sigma_y:f32) -> (Tensor, Tensor){
+fn kernel_t(t_0:&Tensor, t_1:&Tensor, l:Tensor, sigma:Tensor) -> Tensor {
+    Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply(&(-0.5 * l.pow_tensor_scalar(2))).exp().multiply(&sigma.pow_tensor_scalar(2))
+}
+
+fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f64, sigma_y:f64) -> (Tensor, Tensor){
     println!("x_s={:?}", x_s.size());
     // println!("x_s={:?}", from::<Vec<f64>>(&x_s.flatten(0,1)));
     // println!("x_train={:?}", from::<Vec<f64>>(&x_train.flatten(0,1)));
@@ -40,7 +45,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f32, 
     (mu_s.squeeze().transpose(0,1), cov_s)
 }
 
-fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f32, sigma_y:f32) -> Result<(Tensor, Tensor), HbacError>{
+fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f64, sigma_y:f64) -> Result<(Tensor, Tensor), HbacError>{
     let k = kernel(&x_train, &x_train, l, sigma_f);
 
     let k_size = k.size();
@@ -70,6 +75,50 @@ fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f3
     println!("y_mean={:?}", y_mean.size());
 
     Ok((y_mean.view((-1, y_cov.size()[1])).transpose(0,1), y_cov))
+}
+
+fn nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor) -> Result<Tensor, HbacError> {
+    let noise = 0.1_f64.powi(2);
+    // let l = theta.double_value(&[0]);
+    // let sigma_f = theta.double_value(&[1]);
+    let k = kernel_t(x_train, x_train, theta.i(0), theta.i(1)) + Tensor::zeros(&x_train.size(), FLOAT_CPU).fill_diagonal_(noise, false);
+
+    let l = cholesky_with_jitter(&k)?;
+    // debug!("l");
+    // l.print();
+
+    let (s_1, _) = y_train.triangular_solve(&l, false, false, false);
+    let l_t = l.transpose(0, 1);
+    // debug!("l_t");
+    // l_t.print();
+    let (s_2, _) = s_1.triangular_solve(&l_t, true, false, false);
+
+    // debug!("s_1s_1s_1s_1");
+    // s_1.print();
+
+    // debug!("s_2s_2s_2s_2");
+    // s_2.print();
+
+    let diag = l.diag(0);
+    // debug!("diag");
+    // diag.print();
+    let log = diag.log();
+    // debug!("log");
+    // log.print();
+
+    let np_sum = log.sum(Float); //.double_value(&[]);
+    // debug!("v={:?}", np_sum);
+
+    let dot = y_train.transpose(0, 1).matmul(&s_2);//.double_value(&[]);
+    // debug!("dot={:?}", dot);
+
+    let v = np_sum + 0.5 * dot + 0.5 * x_train.size()[0] as f64 * (std::f64::consts::PI * 2.).ln();
+
+    // debug!("v={:?}", v);
+
+    // v = np.sum(np.log(np.diagonal(L))) + 0.5 * Y_train.dot(S2) + 0.5 * len(X_train) * np.log(2 * np.pi)
+
+    Ok(v)
 }
 
 fn cholesky_rec(t:&Tensor, tries:usize, jitter:f64, e:i32, e_step:i32) -> Result<Tensor, HbacError>{
@@ -129,6 +178,8 @@ mod opt_tests {
     use tch::IndexOp;
     use tch::kind::{DOUBLE_CPU, FLOAT_CPU};
     use std::iter::once;
+    use tch::Device::Cpu;
+    use crate::opt::kernel;
 
     #[ctor::ctor]
     fn init() {
@@ -249,6 +300,76 @@ mod opt_tests {
             cov_s.totype(Float)
         );
 
+
+        Ok(())
+    }
+
+
+    #[test]
+    fn test_nll() -> Result<(), HbacError> {
+        let x_train = Tensor::from_slice(&[
+            -4., -3., -2., -1., 0.
+        ]).view((-1, 1));
+
+        let y_train = Tensor::from_slice(&[
+            0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.
+        ]).view((-1, 1));
+
+        let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[1., 1.])).expect("nll");
+
+        println!("v={:.2}", v);
+
+        assert_eq!("4.4", format!("{:.1}", v.double_value(&[])));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nll_opt() -> Result<(), HbacError> {
+        // X_train=[[-4.]
+        //     [-3.]
+        //     [-2.]
+        //     [-1.]
+        //     [ 0.]]
+
+        let x_train = Tensor::from_slice(&[
+            -4., -3., -2., -1., 0.
+        ]).view((-1, 1));
+
+        let y_train = Tensor::from_slice(&[
+            0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.
+        ]).view((-1, 1));
+
+        debug!("x_train={:?}", x_train.size());
+        y_train.print();
+
+        // let theta = Tensor::ones([2], FLOAT_CPU);
+
+        // Y_train=[[ 0.7568025 ]
+        //     [-0.14112001]
+        //     [-0.90929743]
+        //     [-0.84147098]
+        //     [ 0.        ]]
+
+        let mut bfgs = crate::bfgs::BFGS::new(|theta: &mut Tensor| {
+            theta.zero_grad();
+            super::nll(&x_train, &y_train, &theta).expect("nll").to_device(Cpu).set_requires_grad(true)
+            // let k = kernel(&x_train, &x_train, 1.0, 0.0) + Tensor::zeros(&x_train.size(), FLOAT_CPU).fill_diagonal_(0.1, false);
+
+            // let v =
+            //     theta.i(0).f_add_scalar(-11.).unwrap().pow_tensor_scalar(2) +
+            //     theta.i(1).f_add_scalar(-22.).unwrap().pow_tensor_scalar(2);
+            // debug!("func: v=");
+            // v.print();
+            // v
+            // k.sum(Float).view((-1)) //+ theta.sum(Float).view((-1))
+        });
+
+        let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
+
+        bfgs.opt(theta.shallow_clone(), Some(crate::bfgs::BFGSParams::default().with_max_iter(6)));
+
+        debug!("opt: {:?} {:?}", theta.double_value(&[0]), theta.double_value(&[1]));
 
         Ok(())
     }

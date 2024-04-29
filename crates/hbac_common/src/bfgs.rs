@@ -6,12 +6,12 @@ use std::cmp::{min, max};
 use statrs::statistics::Statistics;
 use tch::Device::Cpu;
 
-struct BFGS {
-    func:fn(x:&mut Tensor)->Tensor
+pub struct BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
+    func:Box<F>
 }
 
 
-struct BFGSParams {
+pub struct BFGSParams {
     max_iter: i32,
     with_wolf_line_search:bool,
     lr: f64,
@@ -65,13 +65,12 @@ impl Default for BFGSParams {
     }
 }
 
-type subj_f = fn(&mut Tensor) -> Tensor;
 
-impl BFGS {
+impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
-    pub fn new(func: subj_f) -> Self {
+    pub fn new(func: F) -> Self {
         Self {
-            func
+            func:Box::new(func)
         }
     }
 
@@ -82,6 +81,7 @@ impl BFGS {
     }
 
     fn _opt(&mut self, mut x: Tensor, params:BFGSParams){
+        debug!("opt: x={:?}", crate::utils::from::<Vec<f64>>(&x));
 
         let orig_loss = tch::with_grad(|| {
             let orig_loss = (self.func)(&mut x);
@@ -92,6 +92,8 @@ impl BFGS {
 
         let mut flat_grad  = Self::_gather_flat_grad(&x);
         flat_grad.print();
+        debug!("flat_grad: {:?}", crate::utils::from::<Vec<f64>>(&flat_grad));
+
 
         let mut opt_cond = flat_grad.abs().max().double_value(&[]) <= params.tolerance_grad;
 
@@ -238,7 +240,7 @@ impl BFGS {
                 x.clone(&x_init);
 
                 (loss, flat_grad, t, ls_func_evals)  = Self::_strong_wolfe(
-                    |x:&mut Tensor, t:f64, d:&Tensor| Self::_directional_evaluate(self.func, x, t, d),
+                    |x:&mut Tensor, t:f64, d:&Tensor| Self::_directional_evaluate(self.func.as_mut(), x, t, d),
                     x_init, t, &d, loss, &flat_grad, gtd
                 );
                 Self::_add_grad(&mut x, t, &d);
@@ -300,7 +302,7 @@ impl BFGS {
         grad
     }
 
-    fn _directional_evaluate(closure:subj_f, x:&mut Tensor, t:f64, d:&Tensor) -> (f64, Tensor) {
+    fn _directional_evaluate(closure:&mut F, x:&mut Tensor, t:f64, d:&Tensor) -> (f64, Tensor) {
         Self::_add_grad(x, t, d);
         debug!("_directional_evaluate: x={:?}", crate::utils::from::<Vec<f64>>(&x));
 
@@ -357,10 +359,10 @@ impl BFGS {
         }
     }
 
-    fn _strong_wolfe<F>(
-        obj_func:F,
+    fn _strong_wolfe<WF>(
+        mut obj_func:WF,
         mut x:Tensor, mut t:f64, d:&Tensor, f:f64, g:&Tensor, gtd:f64
-    ) -> (f64, Tensor, f64, i32) where F:Fn(&mut Tensor, f64, &Tensor)->(f64, Tensor){
+    ) -> (f64, Tensor, f64, i32) where WF:FnMut(&mut Tensor, f64, &Tensor)->(f64, Tensor){
         let c1=1e-4;
         let c2=0.9;
         let tolerance_change=1e-9;
@@ -568,6 +570,8 @@ mod opt_tests {
     use crate::utils::{from, plot_series};
     use tch::kind::FLOAT_CPU;
     use plotters::prelude::*;
+    use tch::Device::Cpu;
+    use tch::Kind::Float;
 
     #[ctor::ctor]
     fn init() {
@@ -636,7 +640,6 @@ mod opt_tests {
 
         let mut bfgs = BFGS::new(func);
 
-
         let x = Tensor::zeros([3], FLOAT_CPU).set_requires_grad(true);
         debug!("init: x={:?}", x.size());
         x.print();
@@ -654,6 +657,8 @@ mod opt_tests {
 
     #[test]
     fn test_bfgs_one_dim_no_line_search() -> Result<(), HbacError>{
+
+
         let func = |x: &mut Tensor| {
             debug!("func: x=");
             x.print();
@@ -669,6 +674,7 @@ mod opt_tests {
 
 
         let x = Tensor::zeros([1], FLOAT_CPU).set_requires_grad(true);
+        // let x = Tensor::from_slice(&[0.]).totype(Float).set_requires_grad(true);
         bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6)));
 
         assert_eq!("19.6520", format!("{:.4}", x.double_value(&[])));
@@ -736,5 +742,33 @@ mod opt_tests {
         Ok(())
     }
 
+
+    // #[test]
+    // fn test_bfgs_one_dim_no_grad() -> Result<(), HbacError>{
+    //
+    //
+    //     let func = |x: &mut Tensor| {
+    //         debug!("func: x=");
+    //         x.print();
+    //         x.zero_grad();
+    //
+    //         let v = x.f_add_scalar(-20.).unwrap().pow_tensor_scalar(2) + x.sin();
+    //         debug!("func: v=");
+    //         v.print();
+    //         Tensor::from_slice(&[v.double_value(&[])]).to_device(Cpu).set_requires_grad(true)
+    //     };
+    //
+    //     let mut bfgs = BFGS::new(func);
+    //
+    //
+    //     let x = Tensor::zeros([1], FLOAT_CPU).set_requires_grad(true);
+    //     // let x = Tensor::from_slice(&[0.]).totype(Float).set_requires_grad(true);
+    //     bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6)));
+    //
+    //     assert_eq!("19.6520", format!("{:.4}", x.double_value(&[])));
+    //
+    //
+    //     Ok(())
+    // }
 
 }
