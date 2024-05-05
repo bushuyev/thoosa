@@ -26,7 +26,7 @@ pub struct BFGSParams {
 }
 
 impl BFGSParams {
-    pub fn lr(mut self, lr: f64) -> Self {
+    pub fn with_lr(mut self, lr: f64) -> Self {
         self.lr = lr;
         self
     }
@@ -234,6 +234,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
             // # optional line search: user function
             let mut ls_func_evals = 0;
+            debug!("params.with_wolf_line_search={}", params.with_wolf_line_search);
             if params.with_wolf_line_search {
                 let mut x_init = Tensor::zeros(x.size(), FLOAT_CPU);//TODO clone
                 x_init.set_requires_grad(true);
@@ -312,7 +313,9 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
             loss
         });
 
-        debug!("_directional_evaluate: loss={:?} device={:?} grad.size={:?}", crate::utils::from::<Vec<f64>>(&loss), loss.device(), loss.grad().size());
+        debug!("_directional_evaluate: loss.size()={:?} device={:?} grad.size={:?}", loss.size(), loss.device(), loss.grad().size());
+        loss.print();
+        // debug!("_directional_evaluate: loss={:?} device={:?} grad.size={:?}", crate::utils::from::<Vec<f64>>(&loss), loss.device(), loss.grad().size());
 
         let flat_grad = Self::_gather_flat_grad(&x); //.to_device(Cpu);
 
@@ -368,7 +371,9 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
         let tolerance_change=1e-9;
         let max_ls = 25;
 
-        debug!("_strong_wolfe: ");
+        debug!(
+            "_strong_wolfe: x={:?} t={:?} d={:?} f={:?} g={:?} gtd={:?}",
+            crate::utils::from::<Vec<f32>>(&x), t, crate::utils::from::<Vec<f32>>(&d), f, crate::utils::from::<Vec<f32>>(&g), gtd);
         //d_norm = d.abs().max()
         let d_norm = d.abs().max();
 
@@ -516,31 +521,31 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                gtd_new = g_new.matmul(&d).double_value(&[]);
                ls_iter += 1;
 
-                           if f_new > (f + c1 * t * gtd) || f_new >= bracket_f[low_pos] {
-                               // # Armijo condition not satisfied or not lower than lowest point
-                               bracket[high_pos] = t;
-                               bracket_f[high_pos] = f_new;
-                               bracket_g[high_pos] = g_new.shallow_clone();
-                               bracket_gtd[high_pos] = gtd_new;
-                                (low_pos, high_pos) =  if bracket_f[0] <= bracket_f[1] {(0, 1)} else {(1, 0)};
-                           } else {
-                               if gtd_new.abs() <= -c2 * gtd {
-                                   // # Wolfe conditions satisfied
-                                   done = true;
-                               } else if gtd_new * (bracket[high_pos] - bracket[low_pos]) >= 0. {
-                                   // # old high becomes new low
-                                   bracket[high_pos] = bracket[low_pos];
-                                   bracket_f[high_pos] = bracket_f[low_pos];
-                                   bracket_g[high_pos] = bracket_g[low_pos].shallow_clone();
-                                   bracket_gtd[high_pos] = bracket_gtd[low_pos];
-                               }
+               if f_new > (f + c1 * t * gtd) || f_new >= bracket_f[low_pos] {
+                   // # Armijo condition not satisfied or not lower than lowest point
+                   bracket[high_pos] = t;
+                   bracket_f[high_pos] = f_new;
+                   bracket_g[high_pos] = g_new.shallow_clone();
+                   bracket_gtd[high_pos] = gtd_new;
+                    (low_pos, high_pos) =  if bracket_f[0] <= bracket_f[1] {(0, 1)} else {(1, 0)};
+               } else {
+                   if gtd_new.abs() <= -c2 * gtd {
+                       // # Wolfe conditions satisfied
+                       done = true;
+                   } else if gtd_new * (bracket[high_pos] - bracket[low_pos]) >= 0. {
+                       // # old high becomes new low
+                       bracket[high_pos] = bracket[low_pos];
+                       bracket_f[high_pos] = bracket_f[low_pos];
+                       bracket_g[high_pos] = bracket_g[low_pos].shallow_clone();
+                       bracket_gtd[high_pos] = bracket_gtd[low_pos];
+                   }
 
-                               // # new point becomes new low
-                               bracket[low_pos] = t;
-                               bracket_f[low_pos] = f_new;
-                               bracket_g[low_pos] = g_new.shallow_clone();
-                               bracket_gtd[low_pos] = gtd_new;
-                           }
+                   // # new point becomes new low
+                   bracket[low_pos] = t;
+                   bracket_f[low_pos] = f_new;
+                   bracket_g[low_pos] = g_new.shallow_clone();
+                   bracket_gtd[low_pos] = gtd_new;
+               }
 
        }
 

@@ -21,7 +21,7 @@ def kernel(X1, X2, l=1.0, sigma_f=1.0):
         (m x n) matrix.
     """
     sqdist = np.sum(X1**2, 1).reshape(-1, 1) + np.sum(X2**2, 1) - 2 * np.dot(X1, X2.T)
-    return sigma_f**2 * np.exp(-0.5 / l**2 * sqdist)
+    return sigma_f**2 * np.exp(-0.5 / (l+1e-5)**2 * sqdist)
 
 
 def posterior(X_s, X_train, Y_train, l=1.0, sigma_f=1.0, sigma_y=1e-8):
@@ -74,10 +74,18 @@ def nll_fn(X_train, Y_train, noise, naive=True):
         # Numerically more stable implementation of Eq. (11) as described
         # in http://www.gaussianprocess.org/gpml/chapters/RW2.pdf, Section
         # 2.2, Algorithm 2.1.
-        noise = 0.1
-        print(f"theta={theta}")
+        # noise = 0.1
+        # print(f"theta={theta}")
 
-        K = kernel(X_train, X_train, l=theta[0], sigma_f=theta[1]) + noise**2 * np.eye(len(X_train))
+        # K = kernel(X_train, X_train, l=theta[0], sigma_f=theta[1]) + noise**2 * np.eye(len(X_train))
+        l = theta[0]
+        sigma_f = 1.0
+        print(f"l={l} sigma_f={sigma_f}")
+
+        noise_t = noise ** 2 * np.eye(len(X_train))
+        print(f"noise_t={noise_t}")
+
+        K = kernel(X_train, X_train, l=l, sigma_f=sigma_f) + noise_t
 
         print(f"K={K}")
 
@@ -127,9 +135,10 @@ X = np.arange(-5, 5, 0.5).reshape(-1, 1)
 # plt.show()
 
 
-# X_train = np.array([-4, -3, -2, -1, 1]).reshape(-1, 1)
-X_train = np.arange(-4, 1, 1.0).reshape(-1, 1)
-Y_train = np.sin(X_train)
+X_train = np.array([-4, -3, -2, -1, 1]).reshape(-1, 1)
+# X_train = np.arange(-4, 1, 1.0).reshape(-1, 1)
+# Y_train = np.sin(X_train)
+Y_train = np.array([0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).reshape(-1, 1)
 
 # print(f"Y_train={X_train**2}")
 # print(f"X_train={X_train}")
@@ -163,18 +172,24 @@ Y_train = np.sin(X_train)
 # plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train, samples=samples)
 #---
 
+#---
 print(f"X_train={X_train} Y_train={Y_train}")
 
-res = minimize(nll_fn(X_train, Y_train, 0.1), np.array([20, 20]),
+res = minimize(nll_fn(X_train, Y_train, 0.1), np.array([10.0]),
                # bounds=((1e-5, None), (1e-5, None)),
                method='BFGS')
 
-l_opt, sigma_f_opt = res.x
+# l_opt, sigma_f_opt = res.x
+l_opt = res.x
+sigma_f_opt = 1.0
 
 print(f"l_opt={l_opt} sigma_f_opt={sigma_f_opt}")
+#---
 
 # Compute posterior mean and covariance with optimized kernel parameters and plot the results
 # mu_s, cov_s = posterior(X, X_train, Y_train, l=l_opt, sigma_f=sigma_f_opt, sigma_y=0.1)
 # plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train)
 #
+# x = list(map(lambda x: x / 10., range(-100, 100)))
+# plt.plot(x, [nll_fn(X_train, Y_train, 0.1)([x]) for x in x], label='Mean')
 # plt.show()

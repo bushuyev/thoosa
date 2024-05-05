@@ -11,18 +11,24 @@ fn kernel(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
 }
 
 fn kernel_t(t_0:&Tensor, t_1:&Tensor, l:Tensor, sigma:Tensor) -> Tensor {
-    Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply(&(-0.5 * l.pow_tensor_scalar(2))).exp().multiply(&sigma.pow_tensor_scalar(2))
+    let sqdist = Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2);
+
+    let l_pow = (l + 1e-5).pow_tensor_scalar(2);
+
+    let e_sqdist = sqdist.multiply(&(-0.5 / (l_pow)));
+
+    e_sqdist.exp().multiply(&sigma.pow_tensor_scalar(2))
 }
 
 fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f64, sigma_y:f64) -> (Tensor, Tensor){
-    println!("x_s={:?}", x_s.size());
+    // println!("x_s={:?}", x_s.size());
     // println!("x_s={:?}", from::<Vec<f64>>(&x_s.flatten(0,1)));
     // println!("x_train={:?}", from::<Vec<f64>>(&x_train.flatten(0,1)));
     // println!("y_train={:?}", from::<Vec<f64>>(&y_train.flatten(0,1)));
 
     let k = kernel(&x_train, &x_train, l, sigma_f);
     let k_size = k.size();
-    println!("k={:?}", k_size);
+    // println!("k={:?}", k_size);
     // let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(sigma_y.powi(2) as f64, false);
 
     let k_s = kernel(&x_train, x_s, l, sigma_f);
@@ -81,36 +87,45 @@ fn nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor) -> Result<Tensor, HbacEr
     let noise = 0.1_f64.powi(2);
     // let l = theta.double_value(&[0]);
     // let sigma_f = theta.double_value(&[1]);
-    let k = kernel_t(x_train, x_train, theta.i(0), theta.i(1)) + Tensor::zeros(&x_train.size(), FLOAT_CPU).fill_diagonal_(noise, false);
+    let l = theta.i(0);
+    let sigma_f = Tensor::from_slice(&[1.0]);//theta.i(1);
+    debug!("l={} sigma_f={}", l.double_value(&[]), sigma_f.double_value(&[]));
+
+    let noise_t = Tensor::zeros(&[x_train.size()[0], x_train.size()[0]], FLOAT_CPU).fill_diagonal_(noise, false);
+    debug!("noise_t");
+    noise_t.print();
+    let k = kernel_t(x_train, x_train, l, sigma_f) + noise_t;
+    debug!("K");
+    k.print();
 
     let l = cholesky_with_jitter(&k)?;
-    // debug!("l");
-    // l.print();
+    debug!("L");
+    l.print();
 
     let (s_1, _) = y_train.triangular_solve(&l, false, false, false);
     let l_t = l.transpose(0, 1);
-    // debug!("l_t");
-    // l_t.print();
+    debug!("L_T");
+    l_t.print();
     let (s_2, _) = s_1.triangular_solve(&l_t, true, false, false);
 
-    // debug!("s_1s_1s_1s_1");
-    // s_1.print();
+    debug!("S_1");
+    s_1.print();
 
-    // debug!("s_2s_2s_2s_2");
-    // s_2.print();
+    debug!("S_2");
+    s_2.print();
 
     let diag = l.diag(0);
-    // debug!("diag");
-    // diag.print();
+    debug!("DIAG");
+    diag.print();
     let log = diag.log();
-    // debug!("log");
-    // log.print();
+    debug!("LOG");
+    log.print();
 
     let np_sum = log.sum(Float); //.double_value(&[]);
-    // debug!("v={:?}", np_sum);
+    debug!("NP_SUM={:?}", np_sum);
 
     let dot = y_train.transpose(0, 1).matmul(&s_2);//.double_value(&[]);
-    // debug!("dot={:?}", dot);
+    debug!("DOT={:?}", dot);
 
     let v = np_sum + 0.5 * dot + 0.5 * x_train.size()[0] as f64 * (std::f64::consts::PI * 2.).ln();
 
@@ -157,7 +172,7 @@ mod opt_tests {
     use std::sync::{Arc, Mutex};
     use chrono::Utc;
     use log::{debug, LevelFilter};
-    use plotters::prelude::{BLACK, GREEN, RED};
+    use plotters::prelude::{BLACK, GREEN, IntoLinspace, RED};
     use plotters::style::Color;
     use plotters::prelude::ShapeStyle;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
@@ -209,7 +224,8 @@ mod opt_tests {
     #[test]
     fn test_rbf()  -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[1., 2., 3., 4.]).view((-1, 1));
-        let k = super::kernel(&x_train, &x_train, 0.0, 0.0);
+        // let k = super::kernel(&x_train, &x_train, 1.0, 1.0);
+        let k = super::kernel_t(&x_train, &x_train, Tensor::from_slice(&[1.0]), Tensor::from_slice(&[1.0]));
 
         let samp_k = Tensor::from_slice(&[
             1.,         0.60653066, 0.13533528, 0.011109,
@@ -223,12 +239,35 @@ mod opt_tests {
             k.round_decimals(4)
         );
 
-        let chol_t = super::cholesky_with_jitter(&k)?;
-
-        chol_t.print();
+        // let chol_t = super::cholesky_with_jitter(&k)?;
+        //
+        // chol_t.print();
 
         Ok(())
     }
+
+    #[test]
+    fn test_rbf_10()  -> Result<(), HbacError> {
+        let x_train = Tensor::from_slice(&[-4., -3., -2., -1., 0.]).view((-1, 1));
+
+        let k = super::kernel_t(&x_train, &x_train, Tensor::from_slice(&[-10.0]), Tensor::from_slice(&[1.0]));
+
+        let samp_k = Tensor::from_slice(&[
+            1.        , 0.99501247, 0.98019863, 0.9559974 , 0.9231162,
+            0.99501247, 1.        , 0.99501247, 0.98019863, 0.9559974,
+            0.98019863, 0.99501247, 1.        , 0.99501247, 0.98019863,
+            0.9559974 , 0.98019863, 0.99501247, 1.        , 0.99501247,
+            0.9231162 , 0.9559974 , 0.98019863, 0.99501247, 1.,
+        ]).view((5, 5));
+
+        assert_eq!(
+            samp_k.round_decimals(4),
+            k.round_decimals(4)
+        );
+
+        Ok(())
+    }
+
 
 
     #[test]
@@ -308,18 +347,38 @@ mod opt_tests {
     #[test]
     fn test_nll() -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[
-            -4., -3., -2., -1., 0.
+            -4., -3., -2., -1., 1.
         ]).view((-1, 1));
 
         let y_train = Tensor::from_slice(&[
             0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.
         ]).view((-1, 1));
 
-        let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[1., 1.])).expect("nll");
+        // let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[1., 1.])).expect("nll");
+        //
+        // println!("v={:.2}", v);
+        //
+        // assert_eq!("4.4", format!("{:.1}", v.double_value(&[])));
+
+
+        let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[-10., 1.])).expect("nll");
 
         println!("v={:.2}", v);
 
-        assert_eq!("4.4", format!("{:.1}", v.double_value(&[])));
+        let x = (-100..100).map(|x|x as f32/10.).collect::<Vec<f32>>();
+        plot_series(
+            vec![
+
+                (format!("train"), ShapeStyle {
+                    color: GREEN.into(),
+                    filled: true,
+                    stroke_width: 1,
+                }, x.clone().into_iter().zip(x.into_iter().map(|x|super::nll(&x_train, &y_train, &Tensor::from_slice(&[x])).expect("nll").double_value(&[]) as f32)).collect::<Vec<(f32, f32)>>()),
+
+
+
+            ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        )?;
 
         Ok(())
     }
@@ -333,7 +392,7 @@ mod opt_tests {
         //     [ 0.]]
 
         let x_train = Tensor::from_slice(&[
-            -4., -3., -2., -1., 0.
+            -4., -3., -2., -1., 1.
         ]).view((-1, 1));
 
         let y_train = Tensor::from_slice(&[
@@ -365,11 +424,13 @@ mod opt_tests {
             // k.sum(Float).view((-1)) //+ theta.sum(Float).view((-1))
         });
 
-        let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
+        // let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
+        let theta = Tensor::from_slice(&[10.0]).totype(Float).set_requires_grad(true);
 
-        bfgs.opt(theta.shallow_clone(), Some(crate::bfgs::BFGSParams::default().with_max_iter(6)));
+        bfgs.opt(theta.shallow_clone(), Some(crate::bfgs::BFGSParams::default().with_lr(1.0).with_max_iter(20).with_with_wolf_line_search(true)));
 
-        debug!("opt: {:?} {:?}", theta.double_value(&[0]), theta.double_value(&[1]));
+        // debug!("opt: {:?} {:?}", theta.double_value(&[0]), theta.double_value(&[1]));
+        debug!("opt: {:?}", theta.double_value(&[0]));
 
         Ok(())
     }
