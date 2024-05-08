@@ -6,6 +6,7 @@ use std::cmp::{min, max};
 use statrs::statistics::Statistics;
 use tch::Device::Cpu;
 
+//https://github.com/pytorch/pytorch/pull/8824
 pub struct BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
     func:Box<F>
 }
@@ -746,6 +747,51 @@ mod opt_tests {
 
         Ok(())
     }
+
+
+    #[test]
+    fn test_bfgs_one_dim_with_strong_wolfe_2() -> Result<(), HbacError> {
+        let func = |x: &mut Tensor| {
+            debug!("func: x=");
+            x.print();
+            x.zero_grad();
+
+            let x_10 = x.f_add_scalar(-5.).unwrap().pow_tensor_scalar(2);
+            let v = x_10.shallow_clone() + x_10.sin().multiply_scalar(2.);
+            debug!("func: v=");
+            v.print();
+            v
+        };
+
+        let mut bfgs = BFGS::new(func);
+
+
+        // let x_0 = Tensor::zeros([1], FLOAT_CPU).set_requires_grad(true);
+        let x_0 = Tensor::from_slice(&[-10.]).totype(Float).set_requires_grad(true);
+        bfgs.opt(x_0.shallow_clone(), Some(BFGSParams::default().with_max_iter(6).with_with_wolf_line_search(true)));
+
+        // assert_eq!("19.6245", format!("{:.4}", x.double_value(&[])));
+
+
+        /*let x_v = (0..200).map(|x| 0. + x as f32).collect::<Vec<f32>>();
+        let y = x_v.iter().map(|x_1| func(&mut Tensor::from_slice(vec![*x_1/10.].as_slice())).double_value(&[]) as f32).collect::<Vec<f32>>();
+
+
+        plot_series(
+            vec![
+                (format!("train 0"), ShapeStyle {
+                    color: GREEN_800.into(),
+                    filled: false,
+                    stroke_width: 1,
+                }, x_v.into_iter().zip(y.into_iter()).collect::<Vec<(f32, f32)>>()),
+            ], "EEG", (500, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str(),
+        )?;*/
+
+        debug!("x: {:?}", x_0.double_value(&[]));
+
+        Ok(())
+    }
+
 
 
     // #[test]

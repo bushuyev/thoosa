@@ -83,7 +83,7 @@ fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f6
     Ok((y_mean.view((-1, y_cov.size()[1])).transpose(0,1), y_cov))
 }
 
-fn nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor) -> Result<Tensor, HbacError> {
+pub fn nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor) -> Result<Tensor, HbacError> {
     let noise = 0.1_f64.powi(2);
     // let l = theta.double_value(&[0]);
     // let sigma_f = theta.double_value(&[1]);
@@ -163,9 +163,6 @@ pub fn cholesky_with_jitter(t:&Tensor) -> Result<Tensor, HbacError> {
 }
 
 
-fn opt(){
-    println!("")
-}
 
 #[cfg(test)]
 mod opt_tests {
@@ -193,8 +190,11 @@ mod opt_tests {
     use tch::IndexOp;
     use tch::kind::{DOUBLE_CPU, FLOAT_CPU};
     use std::iter::once;
+    use argmin::core::{CostFunction, Error, Executor};
+    use argmin::solver::brent::BrentOpt;
     use tch::Device::Cpu;
     use crate::opt::kernel;
+    use argmin::core::State;
 
     #[ctor::ctor]
     fn init() {
@@ -384,7 +384,94 @@ mod opt_tests {
     }
 
     #[test]
-    fn test_nll_opt() -> Result<(), HbacError> {
+    fn test_nll_brent() -> Result<(), HbacError> {
+        // X_train=[[-4.]
+        //     [-3.]
+        //     [-2.]
+        //     [-1.]
+        //     [ 0.]]
+
+        let x_train = Tensor::from_slice(&[
+            -4., -3., -2., -1., 1.
+        ]).view((-1, 1));
+
+        let y_train = Tensor::from_slice(&[
+            0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.
+        ]).view((-1, 1));
+
+        debug!("x_train={:?}", x_train.size());
+        y_train.print();
+
+        // let theta = Tensor::ones([2], FLOAT_CPU);
+
+        // Y_train=[[ 0.7568025 ]
+        //     [-0.14112001]
+        //     [-0.90929743]
+        //     [-0.84147098]
+        //     [ 0.        ]]
+
+       /* let mut bfgs = crate::bfgs::BFGS::new(|theta: &mut Tensor| {
+            theta.zero_grad();
+            super::nll(&x_train, &y_train, &theta).expect("nll").to_device(Cpu).set_requires_grad(true)
+            // let k = kernel(&x_train, &x_train, 1.0, 0.0) + Tensor::zeros(&x_train.size(), FLOAT_CPU).fill_diagonal_(0.1, false);
+
+            // let v =
+            //     theta.i(0).f_add_scalar(-11.).unwrap().pow_tensor_scalar(2) +
+            //     theta.i(1).f_add_scalar(-22.).unwrap().pow_tensor_scalar(2);
+            // debug!("func: v=");
+            // v.print();
+            // v
+            // k.sum(Float).view((-1)) //+ theta.sum(Float).view((-1))
+        });
+
+        // let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
+        let theta = Tensor::from_slice(&[10.0]).totype(Float).set_requires_grad(true);
+
+        bfgs.opt(theta.shallow_clone(), Some(crate::bfgs::BFGSParams::default().with_lr(1.0).with_max_iter(20).with_with_wolf_line_search(true)));*/
+
+        // debug!("opt: {:?} {:?}", theta.double_value(&[0]), theta.double_value(&[1]));
+        // debug!("opt: {:?}", theta.double_value(&[0]));
+
+
+        struct MyProblem {
+            x_train:Tensor,
+            y_train:Tensor
+        }
+
+        impl CostFunction for MyProblem {
+            type Param = f64;
+            type Output = f64;
+
+            fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
+               Ok(super::nll(&self.x_train, &self.y_train, &Tensor::from_slice(&[*p])).expect("nll").double_value(&[]))
+            }
+        }
+
+        let cost = MyProblem {
+            x_train,
+            y_train
+        };
+
+
+        let solver = BrentOpt::new(-100., 100.);
+
+        let res = Executor::new(cost, solver)
+            .configure(|state|
+            state
+            .param(-100.)
+            .max_iters(10)
+            .target_cost(0.0)
+            )
+            .run()?;
+
+        debug!("res={:?}", res.state().get_best_param().unwrap());
+
+        Ok(())
+    }
+
+
+    #[test]
+    fn test_nll_bfgs() -> Result<(), HbacError> {
         // X_train=[[-4.]
         //     [-3.]
         //     [-2.]
@@ -624,6 +711,12 @@ mod opt_tests {
 
             ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
+    }
+
+
+    #[test]
+    fn test_argmin(){
+        println!("ok");
     }
 
 

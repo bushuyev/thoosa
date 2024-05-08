@@ -78,8 +78,9 @@ def nll_fn(X_train:torch.Tensor, Y_train:torch.Tensor):
 
 # Define the parabola function
 def func(x:torch.Tensor):
-    v = (x - 20) ** 2 + (x).sin()
-    print(f"func: x={x} v={v}")
+    x_2 = (x - 10) ** 2
+    v = x_2 + (x_2).sin() * 2
+    # print(f"func: x={x} v={v}")
     return v
     # x_0 = (x-50)/10
     # return  x_0 ** 2 + 100 * x_0.sin()
@@ -91,16 +92,16 @@ if __name__ == "__main__":
 
 
     # Initialize the variable to optimize (parameter)
-    x = torch.tensor([10.0], requires_grad=True)
+    x = torch.tensor([-5.0], requires_grad=True)
 
     # Define the LBFGS optimizer
-    optimizer = optim.LBFGS([x], line_search_fn='strong_wolfe')
+    optimizer = optim.LBFGS([x], tolerance_change=-1, max_eval=1000, line_search_fn='strong_wolfe')
 
     # Closure to evaluate the function and its gradient
     def closure():
         optimizer.zero_grad()  # Zero the gradients
-        # output = func(x)   # Evaluate the function
-        output = nll_fn(X_train, Y_train)(x)   # Evaluate the function
+        output = func(x)   # Evaluate the function
+        # output = nll_fn(X_train, Y_train)(x)   # Evaluate the function
         output.backward()      # Compute gradients
         return output
 
@@ -114,10 +115,10 @@ if __name__ == "__main__":
 
     print("Optimization finished.")
     print(f"Minimum found at x = {x.item()}, f(x) = {func(x).item()}")
+    # plt.plot(range(0,200), [func(torch.tensor(x/10)) for x in range(0, 200)], 'r')
 
-    # pyplot.plot(range(-100,100), [func(torch.tensor(x)) for x in range(-100, 100)], 'r')
     # x = list(map(lambda x: x / 10., range(-100, 100)))
     # _nll_fn = nll_fn(X_train, Y_train)
     # plt.plot(x, [_nll_fn(torch.tensor([x_0], requires_grad=True)).detach().numpy()[0] for x_0 in x], label='Mean')
-    # plt.show()
+    plt.show()
 
