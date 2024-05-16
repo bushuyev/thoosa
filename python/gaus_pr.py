@@ -79,7 +79,7 @@ def nll_fn(X_train, Y_train, noise, naive=True):
 
         # K = kernel(X_train, X_train, l=theta[0], sigma_f=theta[1]) + noise**2 * np.eye(len(X_train))
         l = theta[0]
-        sigma_f = 1.0
+        sigma_f = theta[1] #1.0
         print(f"l={l} sigma_f={sigma_f}")
 
         noise_t = noise ** 2 * np.eye(len(X_train))
@@ -172,24 +172,29 @@ Y_train = np.array([0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).resha
 # plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train, samples=samples)
 #---
 
+# for theta in [[0.1, 0.1], [0.1, 1], [1, 0.1], [1, 1]]:
+#     v = nll_fn(X_train, Y_train, 0.1)(theta)
+#     print(f"theta={theta} v={v}")
+
 #---
-print(f"X_train={X_train} Y_train={Y_train}")
+# print(f"X_train={X_train} Y_train={Y_train}")
 
-res = minimize(nll_fn(X_train, Y_train, 0.1), np.array([10.0]),
-               # bounds=((1e-5, None), (1e-5, None)),
-               method='BFGS')
+nll = nll_fn(X_train, Y_train, 0.1)
+res = minimize(nll, np.array([1, 1]),
+               bounds=((1e-5, None), (1e-5, None)),
+               method='L-BFGS-B')
 
-# l_opt, sigma_f_opt = res.x
-l_opt = res.x
-sigma_f_opt = 1.0
-
+l_opt, sigma_f_opt = res.x
+# # l_opt = res.x
+# # sigma_f_opt = 1.0
+#
 print(f"l_opt={l_opt} sigma_f_opt={sigma_f_opt}")
 #---
 
 # Compute posterior mean and covariance with optimized kernel parameters and plot the results
-# mu_s, cov_s = posterior(X, X_train, Y_train, l=l_opt, sigma_f=sigma_f_opt, sigma_y=0.1)
-# plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train)
-#
+mu_s, cov_s = posterior(X, X_train, Y_train, l=l_opt, sigma_f=sigma_f_opt, sigma_y=0.1)
+plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train)
+
 # x = list(map(lambda x: x / 10., range(-100, 100)))
-# plt.plot(x, [nll_fn(X_train, Y_train, 0.1)([x]) for x in x], label='Mean')
-# plt.show()
+# plt.plot(x, [nll([x]) for x in x], label='Mean')
+plt.show()

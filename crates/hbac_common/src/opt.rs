@@ -83,53 +83,56 @@ fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f6
     Ok((y_mean.view((-1, y_cov.size()[1])).transpose(0,1), y_cov))
 }
 
-pub fn nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor) -> Result<Tensor, HbacError> {
-    let noise = 0.1_f64.powi(2);
+pub fn rbf_nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor, noise: f64) -> Result<Tensor, HbacError> {
+    debug!("rbf_nll: theta.device={:?} theta.requires_grad={:?}", theta.device(), theta.requires_grad());
+    let noise = noise.powi(2);
     // let l = theta.double_value(&[0]);
     // let sigma_f = theta.double_value(&[1]);
     let l = theta.i(0);
-    let sigma_f = Tensor::from_slice(&[1.0]);//theta.i(1);
-    debug!("l={} sigma_f={}", l.double_value(&[]), sigma_f.double_value(&[]));
+    let sigma_f = theta.i(1); //Tensor::from_slice(&[1.0]);//theta.i(1);
+    debug!("rbf_nll: l={} sigma_f={}", l.double_value(&[]), sigma_f.double_value(&[]));
 
     let noise_t = Tensor::zeros(&[x_train.size()[0], x_train.size()[0]], FLOAT_CPU).fill_diagonal_(noise, false);
-    debug!("noise_t");
-    noise_t.print();
+    // debug!("noise_t");
+    // noise_t.print();
+
     let k = kernel_t(x_train, x_train, l, sigma_f) + noise_t;
-    debug!("K");
-    k.print();
+    // debug!("K");
+    // k.print();
 
     let l = cholesky_with_jitter(&k)?;
-    debug!("L");
-    l.print();
+    // debug!("L");
+    // l.print();
 
     let (s_1, _) = y_train.triangular_solve(&l, false, false, false);
     let l_t = l.transpose(0, 1);
-    debug!("L_T");
-    l_t.print();
+    // debug!("L_T");
+    // l_t.print();
     let (s_2, _) = s_1.triangular_solve(&l_t, true, false, false);
 
-    debug!("S_1");
-    s_1.print();
+    // debug!("S_1");
+    // s_1.print();
 
-    debug!("S_2");
-    s_2.print();
+    // debug!("S_2");
+    // s_2.print();
 
     let diag = l.diag(0);
-    debug!("DIAG");
-    diag.print();
+    // debug!("DIAG");
+    // diag.print();
+
     let log = diag.log();
-    debug!("LOG");
-    log.print();
+    // debug!("LOG");
+    // log.print();
 
     let np_sum = log.sum(Float); //.double_value(&[]);
-    debug!("NP_SUM={:?}", np_sum);
+    // debug!("NP_SUM={:?}", np_sum);
 
     let dot = y_train.transpose(0, 1).matmul(&s_2);//.double_value(&[]);
-    debug!("DOT={:?}", dot);
+    // debug!("DOT={:?}", dot);
 
-    let v = np_sum + 0.5 * dot + 0.5 * x_train.size()[0] as f64 * (std::f64::consts::PI * 2.).ln();
+    let v:Tensor = np_sum + 0.5 * dot + 0.5 * x_train.size()[0] as f64 * (std::f64::consts::PI * 2.).ln();
 
-    // debug!("v={:?}", v);
+    debug!("rbf_nll: v={:?} device={:?} grad={:?}", v, v.device(), v.requires_grad());
 
     // v = np.sum(np.log(np.diagonal(L))) + 0.5 * Y_train.dot(S2) + 0.5 * len(X_train) * np.log(2 * np.pi)
 
@@ -345,7 +348,7 @@ mod opt_tests {
 
 
     #[test]
-    fn test_nll() -> Result<(), HbacError> {
+    fn test_rbf_nll() -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[
             -4., -3., -2., -1., 1.
         ]).view((-1, 1));
@@ -354,42 +357,37 @@ mod opt_tests {
             0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.
         ]).view((-1, 1));
 
-        // let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[1., 1.])).expect("nll");
+        for theta in [[0.1, 0.1, 48.0], [0.1, 1., 5.67], [1., 0.1, 41.00], [1., 1., 4.64]] {
+            let v = super::rbf_nll(&x_train, &y_train, &Tensor::from_slice(&theta), 0.1_f64).expect("nll");
+
+            assert_eq!(format!("{:.1}", theta[2]), format!("{:.1}", v.double_value(&[])));
+        }
+
+
+        // let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[-10., 1.])).expect("nll");
         //
         // println!("v={:.2}", v);
         //
-        // assert_eq!("4.4", format!("{:.1}", v.double_value(&[])));
-
-
-        let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[-10., 1.])).expect("nll");
-
-        println!("v={:.2}", v);
-
-        let x = (-100..100).map(|x|x as f32/10.).collect::<Vec<f32>>();
-        plot_series(
-            vec![
-
-                (format!("train"), ShapeStyle {
-                    color: GREEN.into(),
-                    filled: true,
-                    stroke_width: 1,
-                }, x.clone().into_iter().zip(x.into_iter().map(|x|super::nll(&x_train, &y_train, &Tensor::from_slice(&[x])).expect("nll").double_value(&[]) as f32)).collect::<Vec<(f32, f32)>>()),
-
-
-
-            ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        )?;
+        // let x = (-100..100).map(|x|x as f32/10.).collect::<Vec<f32>>();
+        // plot_series(
+        //     vec![
+        //
+        //         (format!("train"), ShapeStyle {
+        //             color: GREEN.into(),
+        //             filled: true,
+        //             stroke_width: 1,
+        //         }, x.clone().into_iter().zip(x.into_iter().map(|x|super::nll(&x_train, &y_train, &Tensor::from_slice(&[x])).expect("nll").double_value(&[]) as f32)).collect::<Vec<(f32, f32)>>()),
+        //
+        //
+        //
+        //     ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        // )?;
 
         Ok(())
     }
 
     #[test]
     fn test_nll_brent() -> Result<(), HbacError> {
-        // X_train=[[-4.]
-        //     [-3.]
-        //     [-2.]
-        //     [-1.]
-        //     [ 0.]]
 
         let x_train = Tensor::from_slice(&[
             -4., -3., -2., -1., 1.
@@ -402,37 +400,6 @@ mod opt_tests {
         debug!("x_train={:?}", x_train.size());
         y_train.print();
 
-        // let theta = Tensor::ones([2], FLOAT_CPU);
-
-        // Y_train=[[ 0.7568025 ]
-        //     [-0.14112001]
-        //     [-0.90929743]
-        //     [-0.84147098]
-        //     [ 0.        ]]
-
-       /* let mut bfgs = crate::bfgs::BFGS::new(|theta: &mut Tensor| {
-            theta.zero_grad();
-            super::nll(&x_train, &y_train, &theta).expect("nll").to_device(Cpu).set_requires_grad(true)
-            // let k = kernel(&x_train, &x_train, 1.0, 0.0) + Tensor::zeros(&x_train.size(), FLOAT_CPU).fill_diagonal_(0.1, false);
-
-            // let v =
-            //     theta.i(0).f_add_scalar(-11.).unwrap().pow_tensor_scalar(2) +
-            //     theta.i(1).f_add_scalar(-22.).unwrap().pow_tensor_scalar(2);
-            // debug!("func: v=");
-            // v.print();
-            // v
-            // k.sum(Float).view((-1)) //+ theta.sum(Float).view((-1))
-        });
-
-        // let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
-        let theta = Tensor::from_slice(&[10.0]).totype(Float).set_requires_grad(true);
-
-        bfgs.opt(theta.shallow_clone(), Some(crate::bfgs::BFGSParams::default().with_lr(1.0).with_max_iter(20).with_with_wolf_line_search(true)));*/
-
-        // debug!("opt: {:?} {:?}", theta.double_value(&[0]), theta.double_value(&[1]));
-        // debug!("opt: {:?}", theta.double_value(&[0]));
-
-
         struct MyProblem {
             x_train:Tensor,
             y_train:Tensor
@@ -443,7 +410,7 @@ mod opt_tests {
             type Output = f64;
 
             fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
-               Ok(super::nll(&self.x_train, &self.y_train, &Tensor::from_slice(&[*p])).expect("nll").double_value(&[]))
+               Ok(super::rbf_nll(&self.x_train, &self.y_train, &Tensor::from_slice(&[*p, 0.74]), 0.1_f64).expect("nll").double_value(&[]))
             }
         }
 
@@ -499,7 +466,7 @@ mod opt_tests {
 
         let mut bfgs = crate::bfgs::BFGS::new(|theta: &mut Tensor| {
             theta.zero_grad();
-            super::nll(&x_train, &y_train, &theta).expect("nll").to_device(Cpu).set_requires_grad(true)
+            super::rbf_nll(&x_train, &y_train, &theta, 0.1_f64).expect("nll").to_device(Cpu).set_requires_grad(true)
             // let k = kernel(&x_train, &x_train, 1.0, 0.0) + Tensor::zeros(&x_train.size(), FLOAT_CPU).fill_diagonal_(0.1, false);
 
             // let v =
@@ -512,7 +479,7 @@ mod opt_tests {
         });
 
         // let theta = Tensor::from_slice(&[20., 20.]).totype(Float).set_requires_grad(true);
-        let theta = Tensor::from_slice(&[10.0]).totype(Float).set_requires_grad(true);
+        let theta = Tensor::from_slice(&[0.0, 0.74]).totype(Float).set_requires_grad(true);
 
         bfgs.opt(theta.shallow_clone(), Some(crate::bfgs::BFGSParams::default().with_lr(1.0).with_max_iter(20).with_with_wolf_line_search(true)));
 
@@ -627,8 +594,8 @@ mod opt_tests {
     #[test]
     fn test_opt_2(){
 
-        let N = 100i64;
-        let min_max = std::f32::consts::PI;
+        let N = 1000i64;
+        let min_max = 100.; // std::f32::consts::PI;
         // let sig =  comp_sin_k_v(N, vec![6., 3., 2.], 0.5);
         // let sig =  comp_sin(N).collect::<Vec<f32>>();
         let x_01 = (0..N).map(|i| {
@@ -638,7 +605,8 @@ mod opt_tests {
            )
         }).collect::<Vec<(f32, f32)>>();
 
-        let y = x_01.iter().map(|x_01| (x_01.0 *  x_01.1).cos()).collect::<Vec<f32>>();
+        // let y = x_01.iter().map(|x_01| (x_01.0 *  x_01.1).cos()).collect::<Vec<f32>>();
+        let y = x_01.iter().map(|x_01| x_01.0.powi(2) +  x_01.1.powi(2)).collect::<Vec<f32>>();
 
         let x_0 = x_01.iter().map(|x_01| x_01.0).collect::<Vec<f32>>();
         let x_1 = x_01.iter().map(|x_01| x_01.1).collect::<Vec<f32>>();
@@ -657,9 +625,12 @@ mod opt_tests {
         let y_train = y_train_full.i((.., train_indexes));
 
 
+
+
+
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, 1., 1., 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, 0.1, 1., 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
@@ -702,7 +673,7 @@ mod opt_tests {
                     filled: true,
                     stroke_width: 2,
                 }, x_0.clone().into_iter().zip(from::<Vec<f32>>(&(sig_chol.i((0, ..))))).collect::<Vec<(f32, f32)>>()),
-                (format!("Sig0"), ShapeStyle {
+                (format!("Sig1"), ShapeStyle {
                     color: ORANGE.into(),
                     filled: true,
                     stroke_width: 2,
@@ -712,13 +683,6 @@ mod opt_tests {
             ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
     }
-
-
-    #[test]
-    fn test_argmin(){
-        println!("ok");
-    }
-
 
 
     #[test]

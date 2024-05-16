@@ -272,8 +272,6 @@ mod tests {
                 Some(Box::new(|params: &HashMap<String, Val>| {
                     println!("new apply 1, params={:?}", params);
 
-
-
                     let mut vs = VarStore::new(Cpu);
                     let out_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
                     Box::new(super::ApplyNet::new(build_net(params, &mut vs, 100, out_features)))

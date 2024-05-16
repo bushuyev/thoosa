@@ -15,6 +15,10 @@ def plot_gp(mu, cov, X, X_train=None, Y_train=None, samples=[]):
     mu = mu.ravel()
     uncertainty = 1.96 * np.sqrt(np.diag(cov))
 
+    print(f"X={X} shape={X.shape}")
+    print(f"mu={mu} shape={mu.shape}")
+    print(f"uncertainty={uncertainty} shape={uncertainty.shape}")
+
     plt.fill_between(X, mu + uncertainty, mu - uncertainty, alpha=0.1)
     plt.plot(X, mu, label='Mean')
     for i, sample in enumerate(samples):

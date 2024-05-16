@@ -961,7 +961,11 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     let (resource_id_motif_slices, motifs_avg_distances, params) = {
         let mut store_guard = store.lock()?;
 
-        (store_guard.list_motifs_slices(run_id)?, store_guard.list_motifs_distances(run_id)?, FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id, None)?))
+        (
+            store_guard.list_motifs_slices(run_id)?,
+            store_guard.list_motifs_distances(run_id)?,
+            FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id, None)?)
+        )
     };
 
 

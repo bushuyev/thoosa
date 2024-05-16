@@ -1993,7 +1993,7 @@ mod motif_find_tests {
         let sig_1=  join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
         let sig_2=  join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
-       /*
+
        let x = lin_t(N);
 
        plot_series(
@@ -2004,7 +2004,7 @@ mod motif_find_tests {
 
             ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
-        */
+
 
         let run_ids = super::find_motifs_euc(
             move |key:&String| {
