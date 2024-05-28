@@ -211,7 +211,7 @@ mod opt_tests {
     use argmin::core::{CostFunction, Error, Executor};
     use argmin::solver::brent::BrentOpt;
     use tch::Device::Cpu;
-    use crate::opt::kernel;
+    use crate::opt::{kernel, rbf_nll};
     use argmin::core::State;
     use crate::argmin::run_lbfgs;
 
@@ -525,7 +525,7 @@ mod opt_tests {
 
         println!("y_train_full={:?}", y_train_full.size());
 
-        let train_indexes = (0..N).step_by(25).collect::<Vec<i64>>();
+        let train_indexes = (0..N).step_by(20).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
@@ -545,11 +545,11 @@ mod opt_tests {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-
-        let l_sigma = run_lbfgs(crate::argmin::RbfNllProblem::new(
-            x_train.view((-1, 1)),
-            y_train.view((-1, 1))
-        ))?;
+        let x_moved = x_train.view((-1, 1));
+        let y_moved = y_train.view((-1, 1));
+        let l_sigma = run_lbfgs(crate::argmin::RbfNllProblem::new(move|theta| {
+            rbf_nll(&x_moved, &y_moved, theta, 1e-8).expect("nll")
+        }))?;
 
         let l_sigma = l_sigma.state().get_best_param().expect("best_param");
 

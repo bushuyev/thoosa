@@ -145,15 +145,17 @@ impl ArgminRandom for ArgmTensor {
 }
 
 
-//TODO rbf_nll to param, remove x/y_train
+
 pub(crate) struct RbfNllProblem {
-    x_train:Tensor,
-    y_train:Tensor
+    loss_fn:Box<dyn Fn(&<RbfNllProblem as CostFunction>::Param)->Tensor + 'static>
 }
 
 impl RbfNllProblem {
-    pub fn new(x_train: Tensor, y_train: Tensor) -> Self {
-        Self { x_train, y_train }
+
+    pub fn new(loss_fn:impl Fn(&<RbfNllProblem as CostFunction>::Param)->Tensor + 'static) -> Self {
+        Self {
+            loss_fn:Box::new(loss_fn)
+        }
     }
 }
 
@@ -167,7 +169,7 @@ impl CostFunction for RbfNllProblem {
         Ok(tch::with_grad(|| {
             theta.force_requires_grad();
 
-            let loss = crate::opt::rbf_nll(&self.x_train, &self.y_train, theta, 1e-8).expect("nll");
+            let loss = (self.loss_fn)(theta);
 
             loss.backward();
 
@@ -234,6 +236,7 @@ mod tests {
     use argmin_math::ArgminScaledAdd;
     use rand::Rng;
     use crate::argmin::{ArgmTensor, RbfNllProblem, run_lbfgs};
+    use crate::opt::rbf_nll;
 
 
     #[test]
@@ -311,10 +314,7 @@ mod tests {
     #[test]
     fn test_min_rbf() -> Result<(), HbacError>{
 
-        let res = run_lbfgs(RbfNllProblem {
-            x_train: Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)),
-            y_train: Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1))
-        })?;
+        let res = run_lbfgs(RbfNllProblem::new(|theta| rbf_nll(&Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)), &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)), theta, 1e-8).expect("nll")))?;
 
         debug!("res={:?}", res.state().get_best_param());
 
