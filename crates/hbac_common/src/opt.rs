@@ -5,12 +5,13 @@ use tch::{IndexOp, Tensor};
 use log::{warn, debug};
 use tch::Kind::Float;
 use hbac_shared::HbacError;
+use crate::utils::vec_f32_from;
 
 fn kernel(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
     Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5 * l.powi(2)).exp().multiply_scalar(sigma.powi(2))
 }
 
-fn kernel_t(t_0:&Tensor, t_1:&Tensor, l:Tensor, sigma:Tensor) -> Tensor {
+fn kernel_t(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor {
     let sqdist = Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2);
 
     let l_pow = (l + 1e-5).pow_tensor_scalar(2);
@@ -51,8 +52,17 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f64, 
     (mu_s.squeeze().transpose(0,1), cov_s)
 }
 
-fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f64, sigma_y:f64) -> Result<(Tensor, Tensor), HbacError>{
-    let k = kernel(&x_train, &x_train, l, sigma_f);
+fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&Tensor, sigma_y:f64) -> Result<(Tensor, Tensor), HbacError>{
+    // let k = kernel(&x_train, &x_train, l, sigma_f);
+    // let l = Tensor::from_slice(&[l]).totype(Float);
+    // let sigma_f = Tensor::from_slice(&[sigma_f]).totype(Float);
+
+    let k = kernel_t(&x_train, &x_train, l, sigma_f);
+    let k_size = k.size();
+    println!("posterior_ch: k.size()={:?}", k.size());
+    let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(sigma_y.powi(2) as f64, false);
+
+    println!("posterior_ch: k={:?}", vec_f32_from(&k));
 
     let k_size = k.size();
 
@@ -62,19 +72,24 @@ fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f6
 
     let alpha = y_train.view((y_train.size()[0], chol_t.size()[0], 1)).cholesky_solve(&chol_t, false);
 
-    let k_trans = kernel(x_s, x_train, l, sigma_f);
+    // let k_trans = kernel(x_s, x_train, l, sigma_f);
+    let k_trans = kernel_t(x_s, x_train, l, sigma_f);
     let y_mean = k_trans.matmul(&alpha);
 
     let k_trans_T = k_trans.transpose(0, 1);
 
+    println!("k_trans_T:");
     // k_trans_T.print();
 
     let v = k_trans_T.triangular_solve(&chol_t, false, false, false);
+    println!("v.0:");
     // v.0.print();
 
+    println!("v.v:");
     // v.1.print();
 
-    let y_cov = kernel(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
+    // let y_cov = kernel(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
+    let y_cov = kernel_t(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
 
     // y_cov.print();
 
@@ -96,7 +111,7 @@ pub fn rbf_nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor, noise: f64) -> R
     // debug!("noise_t");
     // noise_t.print();
 
-    let k = kernel_t(x_train, x_train, l, sigma_f) + noise_t;
+    let k = kernel_t(x_train, x_train, &l, &sigma_f) + noise_t;
     // debug!("K");
     // k.print();
 
@@ -179,7 +194,7 @@ mod opt_tests {
     use tch::Kind::Float;
     use tch::Tensor;
     use hbac_shared::{comp_sin_k_v, join_with_offset, pulse_v, random_saw};
-    use crate::utils::{cdt_for_dir, plot_series, vec_f32_from};
+    use crate::utils::{cdt_for_dir, plot_series, plot_series_with_points, vec_f32_from};
     use crate::utils::lin_t;
     use hbac_shared::*;
     use statrs::distribution::{Uniform, Normal, MultivariateNormal};
@@ -198,6 +213,7 @@ mod opt_tests {
     use tch::Device::Cpu;
     use crate::opt::kernel;
     use argmin::core::State;
+    use crate::argmin::run_lbfgs;
 
     #[ctor::ctor]
     fn init() {
@@ -228,7 +244,7 @@ mod opt_tests {
     fn test_rbf()  -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[1., 2., 3., 4.]).view((-1, 1));
         // let k = super::kernel(&x_train, &x_train, 1.0, 1.0);
-        let k = super::kernel_t(&x_train, &x_train, Tensor::from_slice(&[1.0]), Tensor::from_slice(&[1.0]));
+        let k = super::kernel_t(&x_train, &x_train, &Tensor::from_slice(&[1.0]), &Tensor::from_slice(&[1.0]));
 
         let samp_k = Tensor::from_slice(&[
             1.,         0.60653066, 0.13533528, 0.011109,
@@ -253,7 +269,7 @@ mod opt_tests {
     fn test_rbf_10()  -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[-4., -3., -2., -1., 0.]).view((-1, 1));
 
-        let k = super::kernel_t(&x_train, &x_train, Tensor::from_slice(&[-10.0]), Tensor::from_slice(&[1.0]));
+        let k = super::kernel_t(&x_train, &x_train, &Tensor::from_slice(&[-10.0]), &Tensor::from_slice(&[1.0]));
 
         let samp_k = Tensor::from_slice(&[
             1.        , 0.99501247, 0.98019863, 0.9559974 , 0.9231162,
@@ -303,7 +319,7 @@ mod opt_tests {
 
         x_pred.print();
 
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&x_pred, &x_train, &y_train, 1., 1., 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior_ch(&x_pred, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
 
@@ -320,7 +336,7 @@ mod opt_tests {
 
         let x_pred = Tensor::from_slice(&[1., 3.]).view((-1, 1));
 
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&x_pred, &x_train, &y_train, 1., 1., 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior_ch(&x_pred, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
 
@@ -491,7 +507,7 @@ mod opt_tests {
 
 
     #[test]
-    fn test_opt_1(){
+    fn test_opt_1d() -> Result<(), HbacError>{
 
         let N = 100i64;
 
@@ -503,55 +519,59 @@ mod opt_tests {
 
         let y_train_full = Tensor::stack(&[
             X.sin().multiply_scalar(10).view((-1, 1)).totype(Float),
-            X.f_add_scalar(std::f64::consts::PI/4.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float),
-            X.f_add_scalar(std::f64::consts::PI/2.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float)
-        ], 0).view((3, -1)); //.transpose(0,1);
+            // X.f_add_scalar(std::f64::consts::PI/4.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float),
+            // X.f_add_scalar(std::f64::consts::PI/2.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float)
+        ], 0).view((1, -1)); //.transpose(0,1);
 
         println!("y_train_full={:?}", y_train_full.size());
 
-        let train_indexes = (0..N).step_by(20).collect::<Vec<i64>>();
+        let train_indexes = (0..N).step_by(25).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
-        println!("y_train={:?}", y_train.size());
+        println!("x_train={:?} y_train={:?}", x_train.size(), y_train.size());
 
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, 1., 1., 1e-8) else {
+
+        println!("X={:?}", from::<Vec<f32>>(&X.view(-1)));
+        println!("x_train={:?}", from::<Vec<f32>>(&x_train.view(-1)));
+        y_train.print();
+        println!("y_train={:?}", from::<Vec<f32>>(&y_train.view(-1)));
+
+
+        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-        // let cov_s = cov_s.round_decimals(2);
-        cov_s.print();
+
+        let l_sigma = run_lbfgs(crate::argmin::RbfNllProblem::new(
+            x_train.view((-1, 1)),
+            y_train.view((-1, 1))
+        ))?;
+
+        let l_sigma = l_sigma.state().get_best_param().expect("best_param");
+
+        println!("l_sigma={:?} - {} / {} ", l_sigma, l_sigma.i(0).double_value(&[]), l_sigma.i(1).double_value(&[]));
+
+        // let Ok((mu_s_opt, cov_s_opt)) = super::posterior_ch(&X, &x_train, &y_train, 1.6409202082368064, 8.504394038804222, 1e-8) else {
+        let Ok((mu_s_opt, cov_s_opt)) = super::posterior_ch(&X, &x_train, &y_train, &l_sigma.i(0), &l_sigma.i(1), 1e-8) else {
+            panic!()
+        };
+        println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
 
 
-        let mut norm = Normal::new(0., 1.).unwrap();
-        let mut rng = thread_rng();
+        let norm = Normal::new(0., 1.).unwrap();
+        let rng = thread_rng();
         let sig_t = sig_3_norm(norm, rng, N).transpose(0,1);
         println!("sig_t.size={:?}", sig_t.size());
 
-        // let chol_or_cov = match cov_s.shallow_clone().totype(Float).f_cholesky(false) {
-        //     Ok(r)=>r,
-        //     Err(e)=>{
-        //         println!("XXXXXXXXXXXXXXXXXXXXXXXXXXXe={:?}", e);
-        //         cov_s.shallow_clone()
-        //     }
-        // };
-        // let chol_or_cov = cov_s.totype(Float).f_cholesky(false).unwrap();
-        // println!("1. chol_or_cov={:?}", chol_or_cov.size());
-        let chol_or_cov = super::cholesky_with_jitter(&cov_s).unwrap();
-        println!("2. chol_or_cov={:?}", chol_or_cov.size());
 
-        // let x = X; // (0..N).map(|x| x as f32).collect::<Vec<f32>>();
+        let sig_chol = apply_post(&mu_s, &cov_s, &sig_t);
+        let sig_chol_opt = apply_post(&mu_s_opt, &cov_s_opt, &sig_t);
 
-        let sig_t_with_cov = chol_or_cov.matmul(&sig_t);
-        println!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), sig_t_with_cov.size());
-
-        let sig_chol = (&mu_s + sig_t_with_cov).transpose(0, 1);
-        println!("sig_chol.size={:?}", sig_chol.size());
-
-        plot_series(
+        plot_series_with_points(
             vec![
 
                 (format!("train"), ShapeStyle {
@@ -559,40 +579,56 @@ mod opt_tests {
                     filled: true,
                     stroke_width: 1,
                 }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
-                (format!("train"), ShapeStyle {
-                    color: BLUE_800.into(),
-                    filled: true,
-                    stroke_width: 1,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((1, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
-                (format!("train"), ShapeStyle {
-                    color: RED_800.into(),
-                    filled: true,
-                    stroke_width: 1,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((2, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
+                // (format!("train"), ShapeStyle {
+                //     color: BLUE_800.into(),
+                //     filled: true,
+                //     stroke_width: 1,
+                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((1, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
+                // (format!("train"), ShapeStyle {
+                //     color: RED_800.into(),
+                //     filled: true,
+                //     stroke_width: 1,
+                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((2, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
 
                 (format!("Sig0"), ShapeStyle {
                     color: GREEN.into(),
                     filled: true,
                     stroke_width: 2,
                 }, x.clone().into_iter().zip(from::<Vec<f32>>(&(sig_chol.i((0, ..))))).collect::<Vec<(f32, f32)>>()),
-                (format!("Sig0Chol"), ShapeStyle {
-                    color: BLUE.into(),
-                    filled: true,
-                    stroke_width: 2,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol.i(((1, ..))))).collect::<Vec<(f32, f32)>>()),
+                // (format!("Sig0Chol"), ShapeStyle {
+                //     color: BLUE.into(),
+                //     filled: true,
+                //     stroke_width: 2,
+                // }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol.i(((1, ..))))).collect::<Vec<(f32, f32)>>()),
                 (format!("Sig0Chol"), ShapeStyle {
                     color: RED.into(),
                     filled: true,
                     stroke_width: 2,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol.i(((2, ..))))).collect::<Vec<(f32, f32)>>()),
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol_opt.i(((0, ..))))).collect::<Vec<(f32, f32)>>()),
 
 
-            ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str(),
+            Some(&from::<Vec<f32>>(&x_train.view(-1)).into_iter().zip(from::<Vec<f32>>(&y_train.view(-1)).into_iter()).collect::<Vec<(f32, f32)>>())
         ).unwrap();
+
+        Ok(())
+    }
+
+    fn apply_post(mu_s: &Tensor, cov_s: &Tensor, sig_t: &Tensor) -> Tensor {
+        let chol_or_cov = super::cholesky_with_jitter(&cov_s).unwrap();
+        println!("2. chol_or_cov={:?}", chol_or_cov.size());
+
+
+        let sig_t_with_cov = chol_or_cov.matmul(&sig_t);
+        println!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), sig_t_with_cov.size());
+
+        let sig_chol = (mu_s + sig_t_with_cov).transpose(0, 1);
+        println!("sig_chol.size={:?}", sig_chol.size());
+        sig_chol
     }
 
     #[test]
-    fn test_opt_2(){
+    fn test_opt_2d(){
 
         let N = 1000i64;
         let min_max = 100.; // std::f32::consts::PI;
@@ -613,29 +649,28 @@ mod opt_tests {
 
         let X = Tensor::from_slice(x_01.into_iter().flat_map(|x_01|once(x_01.0).chain(once(x_01.1))).collect::<Vec<f32>>().as_slice()).view((-1, 2));
         print!("X={:?}", X.size());
-        X.print();
+        // X.print();
 
         let y_train_full = Tensor::from_slice(y.as_slice()).view((1, -1));
         print!("y_train_full={:?}", y_train_full.size());
-        y_train_full.print();
+        // y_train_full.print();
 
         let train_indexes = (0..N).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
-
-
+        println!("x_train.size()={:?}, y_train.size()={:?}", x_train.size(), y_train.size());
 
 
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, 0.1, 1., 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, &Tensor::from_slice(&[0.1]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
         // let cov_s = cov_s.round_decimals(2);
-        cov_s.print();
+        // cov_s.print();
 
 
         let mut norm = Normal::new(0., 1.).unwrap();

@@ -120,9 +120,9 @@ def nll_fn(X_train, Y_train, noise, naive=True):
 
     return nll_stable
 
-X = np.arange(-5, 5, 0.5).reshape(-1, 1)
-
-
+# X = np.arange(-5, 5, 0.5)
+X = np.array([-3.1415927, -2.5132742, -1.8849556, -1.256637, -0.62831855, 0.0, 0.6283188, 1.2566369, 1.8849556, 2.513274])
+X = X.reshape(-1, 1)
 # Mean and covariance of the prior
 # mu = np.zeros(X.shape)
 # cov = kernel(X, X)
@@ -134,11 +134,14 @@ X = np.arange(-5, 5, 0.5).reshape(-1, 1)
 #
 # plt.show()
 
-
-X_train = np.array([-4, -3, -2, -1, 1]).reshape(-1, 1)
 # X_train = np.arange(-4, 1, 1.0).reshape(-1, 1)
 # Y_train = np.sin(X_train)
-Y_train = np.array([0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).reshape(-1, 1)
+
+# X_train = np.array([-4, -3, -2, -1, 1]).reshape(-1, 1)
+# Y_train = np.array([0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).reshape(-1, 1)
+
+X_train = np.array([-3.1415927, -1.8849556, -0.62831855, 0.6283188, 1.8849556]).reshape(-1, 1)
+Y_train = np.array([8.742278e-7, -9.510565, -5.8778524, 5.877855, 9.510565]).reshape(-1, 1)
 
 # print(f"Y_train={X_train**2}")
 # print(f"X_train={X_train}")
@@ -179,7 +182,7 @@ Y_train = np.array([0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).resha
 #---
 # print(f"X_train={X_train} Y_train={Y_train}")
 
-nll = nll_fn(X_train, Y_train, 0.1)
+nll = nll_fn(X_train, Y_train, 1e-8)
 res = minimize(nll, np.array([1, 1]),
                bounds=((1e-5, None), (1e-5, None)),
                method='L-BFGS-B')
@@ -192,7 +195,7 @@ print(f"l_opt={l_opt} sigma_f_opt={sigma_f_opt}")
 #---
 
 # Compute posterior mean and covariance with optimized kernel parameters and plot the results
-mu_s, cov_s = posterior(X, X_train, Y_train, l=l_opt, sigma_f=sigma_f_opt, sigma_y=0.1)
+mu_s, cov_s = posterior(X, X_train, Y_train, l=l_opt, sigma_f=sigma_f_opt, sigma_y=1e-8)
 plot_gp(mu_s, cov_s, X, X_train=X_train, Y_train=Y_train)
 
 # x = list(map(lambda x: x / 10., range(-100, 100)))

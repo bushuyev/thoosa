@@ -1,3 +1,213 @@
+use std::ops::{Deref, DerefMut};
+use argmin::core::{CostFunction, Error, Executor, Gradient, IterState, OptimizationResult};
+use argmin::solver::linesearch::MoreThuenteLineSearch;
+use argmin::solver::quasinewton::LBFGS;
+use argmin_math::{ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminRandom, ArgminSignum, ArgminSub, ArgminZeroLike};
+use log::debug;
+use rand::Rng;
+use tch::Device::Cpu;
+use tch::Tensor;
+use hbac_shared::HbacError;
+
+#[derive(Debug)]
+pub struct ArgmTensor(Tensor);
+
+impl ArgmTensor {
+    pub fn force_requires_grad(&self) {
+        unsafe  {
+            let const_ptr = self as *const Self;
+            let mut_ptr = const_ptr as *mut Self;
+            (*mut_ptr).0 = self.0.shallow_clone().set_requires_grad(true);
+        }
+    }
+}
+
+impl Clone for ArgmTensor {
+    fn clone(&self) -> Self{
+        // debug!("clone: self device={:?} requires_grad={:?} grad={:?}", self.device(), self.requires_grad(), self.grad());
+        // let tensor = crate::utils::clone(&self.0); // self.shallow_clone();
+        let tensor = self.shallow_clone();
+
+        // debug!("clone: tensor device={:?} requires_grad={:?} grad={:?}", tensor.device(), tensor.requires_grad(), tensor.grad());
+        ArgmTensor(tensor)
+    }
+}
+
+impl Deref for ArgmTensor {
+    type Target = Tensor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ArgmTensor {
+
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl ArgminSub<ArgmTensor, ArgmTensor> for ArgmTensor {
+    fn sub(&self, other: &ArgmTensor) -> ArgmTensor {
+        (&self.0 - &other.0).into()
+    }
+}
+
+impl ArgminSub<f64, ArgmTensor> for ArgmTensor {
+    fn sub(&self, other: &f64) -> ArgmTensor {
+        (self.0.subtract_scalar(*other)).into()
+    }
+}
+
+impl ArgminAdd<ArgmTensor, ArgmTensor> for ArgmTensor {
+    fn add(&self, other: &ArgmTensor) -> ArgmTensor {
+        (&self.0 + &other.0).into()
+    }
+}
+
+impl ArgminAdd<f64, ArgmTensor> for ArgmTensor {
+    fn add(&self, other: &f64) -> ArgmTensor {
+        (self.0.f_add_scalar(*other)).unwrap().into()
+    }
+}
+
+impl ArgminDot<ArgmTensor, f64> for ArgmTensor {
+    fn dot(&self, other: &ArgmTensor) ->f64  {
+        self.0.dot(&other.0).double_value(&[])
+    }
+}
+
+impl ArgminMul<f64, ArgmTensor> for ArgmTensor {
+    fn mul(&self, other: &f64) -> ArgmTensor {
+        self.0.multiply_scalar(*other).into()
+    }
+}
+
+impl ArgminMul<ArgmTensor, ArgmTensor> for ArgmTensor {
+    fn mul(&self, other: &ArgmTensor) -> ArgmTensor {
+        self.0.multiply(other).into()
+    }
+}
+
+impl ArgminL1Norm<f64> for ArgmTensor {
+    fn l1_norm(&self) -> f64 {
+        self.0.linalg_norm(0, (0), true, None).double_value(&[])
+    }
+}
+
+impl ArgminSignum for ArgmTensor {
+    fn signum(self) -> Self {
+        self.0.sign().into()
+    }
+}
+
+impl ArgminZeroLike for ArgmTensor {
+    fn zero_like(&self) -> Self {
+        Tensor::zeros(self.0.size(), (self.0.kind(), self.0.device())).into()
+    }
+}
+
+//TODO test
+impl ArgminMinMax for ArgmTensor {
+    fn min(x: &Self, y: &Self) -> Self {
+        Tensor::stack(&[&x.0, &y.0], 0).amin(1, false).into()
+    }
+    fn max(x: &Self, y: &Self) -> Self {
+        Tensor::stack(&[&x.0, &y.0], 0).amax(1, false).into()
+    }
+}
+
+impl ArgminL2Norm<f64> for ArgmTensor {
+    fn l2_norm(&self) -> f64 {
+        self.0.linalg_norm(2, (0), true, None).double_value(&[])
+    }
+}
+
+
+impl From<Tensor> for ArgmTensor {
+    fn from(value: Tensor) -> Self {
+        // debug!("new: {:?} device={:?} requires_grad={}", crate::utils::from::<Vec<f32>>(&value), value.device(), value.requires_grad());
+        ArgmTensor(value)
+    }
+}
+
+impl ArgminMul<ArgmTensor, ArgmTensor> for f64 {
+    fn mul(&self, other: &ArgmTensor) -> ArgmTensor {
+        other.0.multiply_scalar(*self).into()
+    }
+}
+
+impl ArgminRandom for ArgmTensor {
+    fn rand_from_range<R: Rng>(min: &Self, max: &Self, rng: &mut R) -> Self {
+        ((&max.0 - &min.0).multiply(&Tensor::randn(min.size(), (min.kind(), min.device()))) + &max.0).into()
+    }
+}
+
+
+//TODO rbf_nll to param, remove x/y_train
+pub(crate) struct RbfNllProblem {
+    x_train:Tensor,
+    y_train:Tensor
+}
+
+impl RbfNllProblem {
+    pub fn new(x_train: Tensor, y_train: Tensor) -> Self {
+        Self { x_train, y_train }
+    }
+}
+
+impl CostFunction for RbfNllProblem {
+    type Param = ArgmTensor;
+    type Output = f64;
+
+    fn cost(&self, theta: &Self::Param) -> Result<Self::Output, Error> {
+        // debug!("cost: theta={:?} device={:?} requires_grad={:?}", theta, theta.device(), theta.requires_grad());
+
+        Ok(tch::with_grad(|| {
+            theta.force_requires_grad();
+
+            let loss = crate::opt::rbf_nll(&self.x_train, &self.y_train, theta, 1e-8).expect("nll");
+
+            loss.backward();
+
+            // debug!("cost:  theta.grad={:?} loss={:?}",  theta.grad(), loss);
+
+            loss.double_value(&[])
+        }))
+    }
+}
+
+impl Gradient for RbfNllProblem {
+    type Param = ArgmTensor;
+    type Gradient = ArgmTensor;
+
+    fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
+        debug!("gradient: p={:?} device={:?} requires_grad={:?}", p, p.device(), p.requires_grad());
+        let grad = p.grad(); //.to_device(Cpu);
+        debug!("gradient: grad={:?}", grad);
+        Ok(grad.into())
+
+    }
+}
+
+pub fn run_lbfgs(cost: RbfNllProblem) -> Result<OptimizationResult<RbfNllProblem, LBFGS<MoreThuenteLineSearch<ArgmTensor, ArgmTensor, f64>, ArgmTensor, ArgmTensor, f64>, IterState<ArgmTensor, ArgmTensor, (), (), (), f64>>, HbacError> {
+    let solver = LBFGS::new(
+        MoreThuenteLineSearch::new().with_c(1e-4, 0.9)?,
+        10
+    );
+
+    let executor = Executor::new(cost, solver)
+        .configure(|state|
+            state
+                .param(Tensor::from_slice(&[1., 1.]).to_device(Cpu).set_requires_grad(true).into())
+                .max_iters(100)
+                .target_cost(0.0)
+        );
+
+    Ok(tch::no_grad(|| { executor.run().unwrap() }))
+}
+
 
 
 #[cfg(test)]
@@ -23,141 +233,7 @@ mod tests {
     use tch::Device::Cpu;
     use argmin_math::ArgminScaledAdd;
     use rand::Rng;
-
-    #[derive(Debug)]
-    struct ArgmTensor(Tensor);
-
-    impl ArgmTensor {
-        pub fn force_requires_grad(&self) {
-            unsafe  {
-                let const_ptr = self as *const Self;
-                let mut_ptr = const_ptr as *mut Self;
-                (*mut_ptr).0 = self.0.shallow_clone().set_requires_grad(true);
-            }
-        }
-    }
-
-    impl Clone for ArgmTensor {
-        fn clone(&self) -> Self{
-            debug!("clone: self device={:?} requires_grad={:?} grad={:?}", self.device(), self.requires_grad(), self.grad());
-            // let tensor = crate::utils::clone(&self.0); // self.shallow_clone();
-            let tensor = self.shallow_clone();
-
-            debug!("clone: tensor device={:?} requires_grad={:?} grad={:?}", tensor.device(), tensor.requires_grad(), tensor.grad());
-            ArgmTensor(tensor)
-        }
-    }
-
-    impl Deref for ArgmTensor {
-        type Target = Tensor;
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl DerefMut for ArgmTensor {
-
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
-        }
-    }
-
-    impl ArgminSub<ArgmTensor, ArgmTensor> for ArgmTensor {
-        fn sub(&self, other: &ArgmTensor) -> ArgmTensor {
-            (&self.0 - &other.0).into()
-        }
-    }
-
-    impl ArgminSub<f64, ArgmTensor> for ArgmTensor {
-        fn sub(&self, other: &f64) -> ArgmTensor {
-            (self.0.subtract_scalar(*other)).into()
-        }
-    }
-
-    impl ArgminAdd<ArgmTensor, ArgmTensor> for ArgmTensor {
-        fn add(&self, other: &ArgmTensor) -> ArgmTensor {
-            (&self.0 + &other.0).into()
-        }
-    }
-
-    impl ArgminAdd<f64, ArgmTensor> for ArgmTensor {
-        fn add(&self, other: &f64) -> ArgmTensor {
-            (self.0.f_add_scalar(*other)).unwrap().into()
-        }
-    }
-
-    impl ArgminDot<ArgmTensor, f64> for ArgmTensor {
-        fn dot(&self, other: &ArgmTensor) ->f64  {
-            self.0.dot(&other.0).double_value(&[])
-        }
-    }
-
-    impl ArgminMul<f64, ArgmTensor> for ArgmTensor {
-        fn mul(&self, other: &f64) -> ArgmTensor {
-            self.0.multiply_scalar(*other).into()
-        }
-    }
-
-    impl ArgminMul<ArgmTensor, ArgmTensor> for ArgmTensor {
-        fn mul(&self, other: &ArgmTensor) -> ArgmTensor {
-            self.0.multiply(other).into()
-        }
-    }
-
-    impl ArgminL1Norm<f64> for ArgmTensor {
-        fn l1_norm(&self) -> f64 {
-            self.0.linalg_norm(0, (0), true, None).double_value(&[])
-        }
-    }
-
-    impl ArgminSignum for ArgmTensor {
-        fn signum(self) -> Self {
-            self.0.sign().into()
-        }
-    }
-
-    impl ArgminZeroLike for ArgmTensor {
-        fn zero_like(&self) -> Self {
-            Tensor::zeros(self.0.size(), (self.0.kind(), self.0.device())).into()
-        }
-    }
-
-    //TODO test
-    impl ArgminMinMax for ArgmTensor {
-        fn min(x: &Self, y: &Self) -> Self {
-            Tensor::stack(&[&x.0, &y.0], 0).amin(1, false).into()
-        }
-        fn max(x: &Self, y: &Self) -> Self {
-            Tensor::stack(&[&x.0, &y.0], 0).amax(1, false).into()
-        }
-    }
-
-    impl ArgminL2Norm<f64> for ArgmTensor {
-        fn l2_norm(&self) -> f64 {
-            self.0.linalg_norm(2, (0), true, None).double_value(&[])
-        }
-    }
-
-
-    impl From<Tensor> for ArgmTensor {
-        fn from(value: Tensor) -> Self {
-            debug!("new: {:?} device={:?} requires_grad={}", crate::utils::from::<Vec<f32>>(&value), value.device(), value.requires_grad());
-            ArgmTensor(value)
-        }
-    }
-
-    impl ArgminMul<ArgmTensor, ArgmTensor> for f64 {
-        fn mul(&self, other: &ArgmTensor) -> ArgmTensor {
-            other.0.multiply_scalar(*self).into()
-        }
-    }
-
-    impl ArgminRandom for ArgmTensor {
-        fn rand_from_range<R: Rng>(min: &Self, max: &Self, rng: &mut R) -> Self {
-            ((&max.0 - &min.0).multiply(&Tensor::randn(min.size(), (min.kind(), min.device()))) + &max.0).into()
-        }
-    }
+    use crate::argmin::{ArgmTensor, RbfNllProblem, run_lbfgs};
 
 
     #[test]
@@ -234,69 +310,11 @@ mod tests {
 
     #[test]
     fn test_min_rbf() -> Result<(), HbacError>{
-        struct RbfNllProblem {
-            x_train:Tensor,
-            y_train:Tensor
-        }
 
-        impl CostFunction for RbfNllProblem {
-            type Param = ArgmTensor;
-            type Output = f64;
-
-            fn cost(&self, theta: &Self::Param) -> Result<Self::Output, Error> {
-                debug!("cost: theta={:?} device={:?} requires_grad={:?}", theta, theta.device(), theta.requires_grad());
-
-                Ok(tch::with_grad(|| {
-                    theta.force_requires_grad();
-
-                    let loss = crate::opt::rbf_nll(&self.x_train, &self.y_train, theta, 0.1_f64).expect("nll");
-
-                    loss.backward();
-
-                    debug!("cost:  theta.grad={:?} loss={:?}",  theta.grad(), loss);
-
-                    loss.double_value(&[])
-                }))
-            }
-        }
-
-        impl Gradient for RbfNllProblem {
-            type Param = ArgmTensor;
-            type Gradient = ArgmTensor;
-
-            fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
-                debug!("gradient: p={:?} device={:?} requires_grad={:?}", p, p.device(), p.requires_grad());
-                let grad = p.grad(); //.to_device(Cpu);
-                debug!("gradient: grad={:?}", grad);
-                Ok(grad.into())
-
-            }
-        }
-
-        let cost = RbfNllProblem {
-            x_train: Tensor::from_slice(&[
-                -4., -3., -2., -1., 1.
-            ]).view((-1, 1)),
-            y_train: Tensor::from_slice(&[
-                0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.
-            ]).view((-1, 1))
-        };
-
-
-
-        let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9)?;
-        let solver = LBFGS::new(linesearch, 10);
-
-
-        let executor = Executor::new(cost, solver)
-            .configure(|state|
-                state
-                    .param(Tensor::from_slice(&[10., 10.]).to_device(Cpu).set_requires_grad(true).into())
-                    .max_iters(10)
-                    .target_cost(0.0)
-            );
-
-        let res = tch::no_grad(|| {executor.run().unwrap()});
+        let res = run_lbfgs(RbfNllProblem {
+            x_train: Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)),
+            y_train: Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1))
+        })?;
 
         debug!("res={:?}", res.state().get_best_param());
 
@@ -304,6 +322,7 @@ mod tests {
 
         Ok(())
     }
+
 
 
     #[test]

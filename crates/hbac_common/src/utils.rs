@@ -76,6 +76,10 @@ pub fn list_devices() ->Vec<Device> {
 }
 
 pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), HbacError> where S:Into<ShapeStyle> + Clone{
+    plot_series_with_points(name_x_y_vec, caption, w_h, path, None)
+}
+
+pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points:Option<&Vec<(f32, f32)>>) -> Result<(), HbacError> where S:Into<ShapeStyle> + Clone{
     if let Some(parent) = path.as_ref().parent() {
         fs::create_dir_all(parent)?;
     }
@@ -123,6 +127,7 @@ pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: 
     }
 
 
+
     chart
         .configure_series_labels()
         .background_style(&WHITE.mix(0.8))
@@ -143,6 +148,18 @@ pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: 
     //
     //
     // chart.plotting_area().draw(&motif_area(100, 100)).expect("Drawing Failure");
+
+    if let Some(points) = points{
+        for point in points {
+            root.draw(&Circle::new(chart.backend_coord(point), 10, ShapeStyle {
+                color: BLUE. mix(0.6),
+                filled: false,
+                stroke_width: 2,
+            }))?;
+        }
+    }
+
+
 
     root.present()?;
 
