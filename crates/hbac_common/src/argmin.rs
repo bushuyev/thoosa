@@ -146,20 +146,20 @@ impl ArgminRandom for ArgmTensor {
 
 
 
-pub(crate) struct RbfNllProblem {
-    loss_fn:Box<dyn Fn(&<RbfNllProblem as CostFunction>::Param)->Tensor + 'static>
+pub(crate) struct TensorProblem {
+    loss_fn:Box<dyn Fn(&<TensorProblem as CostFunction>::Param)->Tensor + 'static>
 }
 
-impl RbfNllProblem {
+impl TensorProblem {
 
-    pub fn new(loss_fn:impl Fn(&<RbfNllProblem as CostFunction>::Param)->Tensor + 'static) -> Self {
+    pub fn new(loss_fn:impl Fn(&<TensorProblem as CostFunction>::Param)->Tensor + 'static) -> Self {
         Self {
             loss_fn:Box::new(loss_fn)
         }
     }
 }
 
-impl CostFunction for RbfNllProblem {
+impl CostFunction for TensorProblem {
     type Param = ArgmTensor;
     type Output = f64;
 
@@ -180,7 +180,7 @@ impl CostFunction for RbfNllProblem {
     }
 }
 
-impl Gradient for RbfNllProblem {
+impl Gradient for TensorProblem {
     type Param = ArgmTensor;
     type Gradient = ArgmTensor;
 
@@ -193,7 +193,7 @@ impl Gradient for RbfNllProblem {
     }
 }
 
-pub fn run_lbfgs(cost: RbfNllProblem) -> Result<OptimizationResult<RbfNllProblem, LBFGS<MoreThuenteLineSearch<ArgmTensor, ArgmTensor, f64>, ArgmTensor, ArgmTensor, f64>, IterState<ArgmTensor, ArgmTensor, (), (), (), f64>>, HbacError> {
+pub fn run_lbfgs(cost: TensorProblem) -> Result<OptimizationResult<TensorProblem, LBFGS<MoreThuenteLineSearch<ArgmTensor, ArgmTensor, f64>, ArgmTensor, ArgmTensor, f64>, IterState<ArgmTensor, ArgmTensor, (), (), (), f64>>, HbacError> {
     let solver = LBFGS::new(
         MoreThuenteLineSearch::new().with_c(1e-4, 0.9)?,
         10
@@ -235,7 +235,7 @@ mod tests {
     use tch::Device::Cpu;
     use argmin_math::ArgminScaledAdd;
     use rand::Rng;
-    use crate::argmin::{ArgmTensor, RbfNllProblem, run_lbfgs};
+    use crate::argmin::{ArgmTensor, TensorProblem, run_lbfgs};
     use crate::opt::rbf_nll;
 
 
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn test_min_rbf() -> Result<(), HbacError>{
 
-        let res = run_lbfgs(RbfNllProblem::new(|theta| rbf_nll(&Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)), &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)), theta, 1e-8).expect("nll")))?;
+        let res = run_lbfgs(TensorProblem::new(|theta| rbf_nll(&Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)), &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)), theta, 1e-8).expect("nll")))?;
 
         debug!("res={:?}", res.state().get_best_param());
 

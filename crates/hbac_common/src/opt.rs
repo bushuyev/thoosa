@@ -21,36 +21,6 @@ fn kernel_t(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor {
     e_sqdist.exp().multiply(&sigma.pow_tensor_scalar(2))
 }
 
-fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:f64, sigma_f:f64, sigma_y:f64) -> (Tensor, Tensor){
-    // println!("x_s={:?}", x_s.size());
-    // println!("x_s={:?}", from::<Vec<f64>>(&x_s.flatten(0,1)));
-    // println!("x_train={:?}", from::<Vec<f64>>(&x_train.flatten(0,1)));
-    // println!("y_train={:?}", from::<Vec<f64>>(&y_train.flatten(0,1)));
-
-    let k = kernel(&x_train, &x_train, l, sigma_f);
-    let k_size = k.size();
-    // println!("k={:?}", k_size);
-    // let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(sigma_y.powi(2) as f64, false);
-
-    let k_s = kernel(&x_train, x_s, l, sigma_f);
-
-
-    let k_s_T = k_s.transpose(0, 1);
-
-    let k_ss = kernel(x_s, x_s, l, sigma_f);
-    let k_ss_size = k_ss.size();
-    let k_ss = k_ss  + Tensor::zeros(k_ss_size, FLOAT_CPU).fill_diagonal_(1, false); //TODO + 1e-8 * np.eye(len(X_s));
-
-    let k_inv = k.inverse();
-
-
-    let mu_s = k_s_T.matmul(&k_inv).matmul(y_train);
-    let cov_s = (k_ss - k_s_T.matmul(&k_inv).matmul(&k_s)); //.fill_diagonal_(0, false);
-
-    // let cov_s = cov_s.matmul(&cov_s.transpose(0, 1));
-
-    (mu_s.squeeze().transpose(0,1), cov_s)
-}
 
 fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&Tensor, sigma_y:f64) -> Result<(Tensor, Tensor), HbacError>{
     // let k = kernel(&x_train, &x_train, l, sigma_f);
@@ -213,7 +183,7 @@ mod opt_tests {
     use tch::Device::Cpu;
     use crate::opt::{kernel, rbf_nll};
     use argmin::core::State;
-    use crate::argmin::run_lbfgs;
+    use crate::argmin::{run_lbfgs, TensorProblem};
 
     #[ctor::ctor]
     fn init() {
@@ -505,6 +475,20 @@ mod opt_tests {
         Ok(())
     }
 
+    #[test]
+    fn test_opt_1d_with_ei() -> Result<(), HbacError> {
+        let n = 100i64;
+        let x = (0..n).map(|i| -1. + (i as f32 / n as f32)  * 2. ).into_iter().collect::<Vec<f32>>();
+
+        let y_train_full = Tensor::stack(&[
+            X.sin().multiply_scalar(10).view((-1, 1)).totype(Float),
+            // X.f_add_scalar(std::f64::consts::PI/4.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float),
+            // X.f_add_scalar(std::f64::consts::PI/2.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float)
+        ], 0).view((1, -1)); //.transpose(0,1);
+
+        Ok(())
+    }
+
 
     #[test]
     fn test_opt_1d() -> Result<(), HbacError>{
@@ -525,7 +509,7 @@ mod opt_tests {
 
         println!("y_train_full={:?}", y_train_full.size());
 
-        let train_indexes = (0..N).step_by(20).collect::<Vec<i64>>();
+        let train_indexes = (0..N).step_by(50).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
@@ -547,7 +531,7 @@ mod opt_tests {
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
         let x_moved = x_train.view((-1, 1));
         let y_moved = y_train.view((-1, 1));
-        let l_sigma = run_lbfgs(crate::argmin::RbfNllProblem::new(move|theta| {
+        let l_sigma = run_lbfgs(TensorProblem::new(move|theta| {
             rbf_nll(&x_moved, &y_moved, theta, 1e-8).expect("nll")
         }))?;
 
