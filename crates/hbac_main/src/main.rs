@@ -693,12 +693,12 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
     let mut run_ids = Arc::new(Mutex::new(vec![]));
     let mut run_ids_for_threads = Arc::clone(&run_ids);
 
-    devices_resource_sets.into_par_iter().for_each(move |(device_i, chunk_resource_sets)| {
+    devices_resource_sets.into_par_iter().for_each(move |(device, chunk_resource_sets)| {
 
         for resource_set in chunk_resource_sets {
             let find_motifs_params = &run_all_params.find_motifs_params(resource_set.1.clone());
 
-            match run_find_motifs_on_set(cli, &store, device_i, find_motifs_params, Arc::clone(&loader)) {
+            match run_find_motifs_on_set(cli, &store, device, find_motifs_params, Arc::clone(&loader)) {
                 Ok(run_id) => {
                     run_ids_for_threads.lock().expect("run_ids lock").push(run_id);
                 }

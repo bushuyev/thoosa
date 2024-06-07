@@ -159,8 +159,6 @@ pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)
         }
     }
 
-
-
     root.present()?;
 
     Ok(())
@@ -225,7 +223,7 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
 }
 
 pub fn cdt() -> String {
-    chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+    chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub fn cdt_for_dir() ->String {//TODO move to shared

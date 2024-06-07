@@ -18,6 +18,9 @@ def plot_approximation(gpr, X, Y, X_sample, Y_sample, X_next=None, show_legend=F
         plt.legend()
 
 def plot_acquisition(X, Y, X_next, show_legend=False):
+    print("plot_acquisition: ")
+    print(f"{X.shape}")
+    print(f"{Y.shape}")
     plt.plot(X, Y, 'r-', lw=1, label='Acquisition function')
     plt.axvline(x=X_next, ls='--', c='k', lw=1, label='Next sampling location')
     if show_legend:

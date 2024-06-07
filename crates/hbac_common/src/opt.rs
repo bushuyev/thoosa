@@ -22,7 +22,7 @@ fn kernel_t(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor {
 }
 
 
-fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&Tensor, sigma_y:f64) -> Result<(Tensor, Tensor), HbacError>{
+fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&Tensor, sigma_y:f64) -> Result<(Tensor, Tensor), HbacError>{
     // let k = kernel(&x_train, &x_train, l, sigma_f);
     // let l = Tensor::from_slice(&[l]).totype(Float);
     // let sigma_f = Tensor::from_slice(&[sigma_f]).totype(Float);
@@ -46,16 +46,16 @@ fn posterior_ch(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_
     let k_trans = kernel_t(x_s, x_train, l, sigma_f);
     let y_mean = k_trans.matmul(&alpha);
 
-    let k_trans_T = k_trans.transpose(0, 1);
+    let k_trans_t = k_trans.transpose(0, 1);
 
-    println!("k_trans_T:");
+    // println!("k_trans_T:");
     // k_trans_T.print();
 
-    let v = k_trans_T.triangular_solve(&chol_t, false, false, false);
-    println!("v.0:");
+    let v = k_trans_t.triangular_solve(&chol_t, false, false, false);
+    // println!("v.0:");
     // v.0.print();
 
-    println!("v.v:");
+    // println!("v.v:");
     // v.1.print();
 
     // let y_cov = kernel(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
@@ -183,6 +183,7 @@ mod opt_tests {
     use tch::Device::Cpu;
     use crate::opt::{kernel, rbf_nll};
     use argmin::core::State;
+    use crate::acquisitions::expected_improvement;
     use crate::argmin::{run_lbfgs, TensorProblem};
 
     #[ctor::ctor]
@@ -200,8 +201,13 @@ mod opt_tests {
         std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
     }
 
+    fn sig_1_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
 
-    fn sig_3_norm(mut norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
+        Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1,-1))
+    }
+
+
+    fn sig_3_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
         let sig_t_0 = Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
         let sig_t_1 = Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
         let sig_t_2 = Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
@@ -284,30 +290,53 @@ mod opt_tests {
 
         x_train.print();
 
-        let y_train = Tensor::from_slice(&[2., 20., 2., 20.]).view((-1, 1));
+        let y_train = Tensor::from_slice(&[2., 20., 2., 20.]).view((1, -1));
         let x_pred = x_train.i((vec![1i64, 3i64], ..));
 
         x_pred.print();
 
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&x_pred, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior(&x_pred, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
 
-        mu_s.print();
-        cov_s.print();
+        println!("mu_s={mu_s}");
+        println!("cov_s={cov_s}");
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                20.,
+                20.
+            ]).view((2, 1)).totype(Float),
+            mu_s.totype(Float)
+        );
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                0.0,         0.0,
+                0.0,         0.0,
+            ]).view((2, 2)).totype(Float),
+            cov_s.totype(Float)
+        );
 
         Ok(())
     }
 
     #[test]
-    fn test_posterior_ch() -> Result<(), HbacError> {
+    fn test_posterior() -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[1., 2., 3., 4.]).view((-1, 1));
-        let y_train = Tensor::from_slice(&[2., 20., 2., 20.]).view((-1, 1));
+        let y_train = Tensor::from_slice(&[2., 20., 2., 20.]).view((1, -1));
 
         let x_pred = Tensor::from_slice(&[1., 3.]).view((-1, 1));
 
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&x_pred, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
-            panic!()
+        let Ok((mu_s, cov_s)) = super::posterior(
+            &x_pred,
+            &x_train,
+            &y_train,
+            &Tensor::from_slice(&[1.0]).totype(Float),
+            &Tensor::from_slice(&[1.0]).totype(Float),
+            1e-8
+        ) else {
+            panic!("posterior")
         };
 
         mu_s.print();
@@ -478,14 +507,60 @@ mod opt_tests {
     #[test]
     fn test_opt_1d_with_ei() -> Result<(), HbacError> {
         let n = 100i64;
-        let x = (0..n).map(|i| -1. + (i as f32 / n as f32)  * 2. ).into_iter().collect::<Vec<f32>>();
+        let mut rng = rand::thread_rng();
 
-        let y_train_full = Tensor::stack(&[
-            X.sin().multiply_scalar(10).view((-1, 1)).totype(Float),
-            // X.f_add_scalar(std::f64::consts::PI/4.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float),
-            // X.f_add_scalar(std::f64::consts::PI/2.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float)
-        ], 0).view((1, -1)); //.transpose(0,1);
+        let x = (0..n).map(|i| -1. + (i as f32 / n as f32)  * 3. ).into_iter().collect::<Vec<f32>>();
 
+
+        let y_train_full = Tensor::from_slice(x.iter().map(|x| (-(3. * *x).sin() - x.powi(2) + 0.7 * *x + 0.2 * rng.gen::<f32>()) as f64).collect::<Vec<f64>>().as_slice()).view((1, -1)).totype(Float); //.transpose(0,1);
+
+        let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
+
+        let train_indexes = (0..n).step_by(20).collect::<Vec<i64>>();//vec![0, n-1]; //
+        let train_indexes = train_indexes.as_slice();
+
+        let x_train = x_t.i(train_indexes);
+        let y_train = y_train_full.i((.., train_indexes));
+
+
+        let Ok((mu_s, cov_s)) = super::posterior(&x_t, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
+            panic!()
+        };
+
+
+        let next = run_lbfgs(
+
+            TensorProblem::new(|theta|
+
+                expected_improvement(
+                    &Tensor::from_slice(&[-0.8003969]).totype(Float),
+                    &Tensor::from_slice(&[0.13932637]).totype(Float),
+                    &Tensor::from_slice(&[-0.80039698, -0.80039693]).totype(Float),
+                    0.01
+                )
+            )
+        )?;
+
+
+        let surrogate = apply_post(&mu_s, &cov_s, &sig_1_norm(Normal::new(0., 1.).unwrap(), thread_rng(), n).transpose(0, 1));
+
+        plot_series_with_points(
+            vec![
+                (format!("train"), ShapeStyle {
+                    color: GREEN_800.into(),
+                    filled: true,
+                    stroke_width: 1,
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(n))).collect::<Vec<(f32, f32)>>()),
+
+                (format!("surrogate"), ShapeStyle {
+                    color: GREEN.into(),
+                    filled: true,
+                    stroke_width: 2,
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&(surrogate.i((0, ..))))).collect::<Vec<(f32, f32)>>()),
+            ],
+            "EEG", (2000, 500), &format!("/tmp/plots/1_{:?}.png", Utc::now().to_rfc3339()).as_str(),
+            Some(&from::<Vec<f32>>(&x_train.view(-1)).into_iter().zip(from::<Vec<f32>>(&y_train.view(-1)).into_iter()).collect::<Vec<(f32, f32)>>())
+        );
         Ok(())
     }
 
@@ -525,7 +600,7 @@ mod opt_tests {
         println!("y_train={:?}", from::<Vec<f32>>(&y_train.view(-1)));
 
 
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior(&X, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
@@ -540,7 +615,7 @@ mod opt_tests {
         println!("l_sigma={:?} - {} / {} ", l_sigma, l_sigma.i(0).double_value(&[]), l_sigma.i(1).double_value(&[]));
 
         // let Ok((mu_s_opt, cov_s_opt)) = super::posterior_ch(&X, &x_train, &y_train, 1.6409202082368064, 8.504394038804222, 1e-8) else {
-        let Ok((mu_s_opt, cov_s_opt)) = super::posterior_ch(&X, &x_train, &y_train, &l_sigma.i(0), &l_sigma.i(1), 1e-8) else {
+        let Ok((mu_s_opt, cov_s_opt)) = super::posterior(&X, &x_train, &y_train, &l_sigma.i(0), &l_sigma.i(1), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
@@ -649,7 +724,7 @@ mod opt_tests {
 
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-        let Ok((mu_s, cov_s)) = super::posterior_ch(&X, &x_train, &y_train, &Tensor::from_slice(&[0.1]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior(&X, &x_train, &y_train, &Tensor::from_slice(&[0.1]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());

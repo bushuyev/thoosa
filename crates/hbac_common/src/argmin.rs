@@ -314,7 +314,13 @@ mod tests {
     #[test]
     fn test_min_rbf() -> Result<(), HbacError>{
 
-        let res = run_lbfgs(TensorProblem::new(|theta| rbf_nll(&Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)), &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)), theta, 1e-8).expect("nll")))?;
+        let res = run_lbfgs(
+            TensorProblem::new(|theta| rbf_nll(
+                &Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)),
+                &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)),
+                theta, 1e-8
+            ).expect("nll"))
+        )?;
 
         debug!("res={:?}", res.state().get_best_param());
 

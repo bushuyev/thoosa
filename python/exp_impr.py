@@ -29,23 +29,26 @@ def expected_improvement(X, X_sample, Y_sample, gpr, xi=0.01):
     mu, sigma = gpr.predict(X, return_std=True)
     mu_sample = gpr.predict(X_sample)
 
-    sigma = sigma.reshape(-1, 1)
+    # sigma = sigma.reshape(-1, 1)
 
     # Needed for noise-based model,
     # otherwise use np.max(Y_sample).
     # See also section 2.4 in [1]
     mu_sample_opt = np.max(mu_sample)
 
+
     with np.errstate(divide='warn'):
         imp = mu - mu_sample_opt - xi
         Z = imp / sigma
         ei = imp * norm.cdf(Z) + sigma * norm.pdf(Z)
-        # ei[sigma == 0.0] = 0.0
+        ei[sigma == 0.0] = 0.0
+
+    print(f"expected_improvement: mu={mu}, sigma={sigma} mu_sample={mu_sample} ei={ei}")
 
     return ei
 
 
-def propose_location(acquisition, X_sample, Y_sample, gpr, bounds, n_restarts=25):
+def propose_location(acquisition, X_sample, Y_sample, gpr, bounds, n_restarts=1):
     '''
     Proposes the next sampling point by optimizing the acquisition function.
 
@@ -63,12 +66,15 @@ def propose_location(acquisition, X_sample, Y_sample, gpr, bounds, n_restarts=25
     min_x = None
 
     def min_obj(X):
+        print(f"X={X}")
         # Minimization objective is the negative acquisition function
         return -acquisition(X.reshape(-1, dim), X_sample, Y_sample, gpr)
 
     # Find the best optimum by starting from n_restart different random points.
     for x0 in np.random.uniform(bounds[:, 0], bounds[:, 1], size=(n_restarts, dim)):
         res = minimize(min_obj, x0=x0, bounds=bounds, method='L-BFGS-B')
+        print(f"res={res}")
+
         if res.fun < min_val:
             min_val = res.fun
             min_x = res.x
