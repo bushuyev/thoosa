@@ -27,14 +27,15 @@ def expected_improvement(X, X_sample, Y_sample, gpr, xi=0.01):
         Expected improvements at points X.
     '''
     mu, sigma = gpr.predict(X, return_std=True)
-    mu_sample = gpr.predict(X_sample)
+    # mu_sample = gpr.predict(X_sample)
 
     # sigma = sigma.reshape(-1, 1)
 
     # Needed for noise-based model,
     # otherwise use np.max(Y_sample).
     # See also section 2.4 in [1]
-    mu_sample_opt = np.max(mu_sample)
+    # mu_sample_opt = np.max(mu_sample)
+    mu_sample_opt = np.max(Y_sample)
 
 
     with np.errstate(divide='warn'):
@@ -43,7 +44,7 @@ def expected_improvement(X, X_sample, Y_sample, gpr, xi=0.01):
         ei = imp * norm.cdf(Z) + sigma * norm.pdf(Z)
         ei[sigma == 0.0] = 0.0
 
-    print(f"expected_improvement: mu={mu}, sigma={sigma} mu_sample={mu_sample} ei={ei}")
+    print(f"expected_improvement: mu={mu}, sigma={sigma} mu_sample_opt={mu_sample_opt} ei={ei}")
 
     return ei
 
@@ -101,7 +102,7 @@ X_sample = X_init
 Y_sample = Y_init
 
 # Number of iterations
-n_iter = 10
+n_iter = 20
 
 plt.figure(figsize=(12, n_iter * 3))
 plt.subplots_adjust(hspace=0.4)

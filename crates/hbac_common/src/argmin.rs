@@ -147,7 +147,7 @@ impl ArgminRandom for ArgmTensor {
 
 
 pub(crate) struct TensorProblem {
-    loss_fn:Box<dyn Fn(&<TensorProblem as CostFunction>::Param)->Tensor + 'static>
+    loss_fn:Box<dyn Fn(&<TensorProblem as CostFunction>::Param)->Tensor>
 }
 
 impl TensorProblem {

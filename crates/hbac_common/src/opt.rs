@@ -6,6 +6,7 @@ use log::{warn, debug};
 use tch::Kind::Float;
 use hbac_shared::HbacError;
 use crate::utils::vec_f32_from;
+use std::ops::Deref;
 
 fn kernel(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
     Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5 * l.powi(2)).exp().multiply_scalar(sigma.powi(2))
@@ -29,17 +30,18 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
 
     let k = kernel_t(&x_train, &x_train, l, sigma_f);
     let k_size = k.size();
-    println!("posterior_ch: k.size()={:?}", k.size());
+    // println!("posterior_ch: k.size()={:?}", k.size());
     let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(sigma_y.powi(2) as f64, false);
 
-    println!("posterior_ch: k={:?}", vec_f32_from(&k));
+    // println!("posterior_ch: k={:?}", vec_f32_from(&k));
 
-    let k_size = k.size();
+    // let k_size = k.size();
 
     let chol_t = cholesky_with_jitter(&k)?;
 
-    println!("y_train.size()={:?}, chol_t={:?}", y_train.size(), chol_t.size());
+    // println!("y_train.size()={:?}, chol_t={:?}", y_train.size(), chol_t.size());
 
+    //from sklearn's GaussianProcessRegressor
     let alpha = y_train.view((y_train.size()[0], chol_t.size()[0], 1)).cholesky_solve(&chol_t, false);
 
     // let k_trans = kernel(x_s, x_train, l, sigma_f);
@@ -63,7 +65,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
 
     // y_cov.print();
 
-    println!("y_mean={:?}", y_mean.size());
+    // println!("y_mean={:?}", y_mean.size());
 
     Ok((y_mean.view((-1, y_cov.size()[1])).transpose(0,1), y_cov))
 }
@@ -178,13 +180,15 @@ mod opt_tests {
     use tch::IndexOp;
     use tch::kind::{DOUBLE_CPU, FLOAT_CPU};
     use std::iter::once;
+    use std::ops::Deref;
     use argmin::core::{CostFunction, Error, Executor};
     use argmin::solver::brent::BrentOpt;
     use tch::Device::Cpu;
-    use crate::opt::{kernel, rbf_nll};
+    use crate::opt::{kernel, kernel_t, rbf_nll};
     use argmin::core::State;
     use crate::acquisitions::expected_improvement;
     use crate::argmin::{run_lbfgs, TensorProblem};
+    use crate::gaussian::GaussianProcess;
 
     #[ctor::ctor]
     fn init() {
@@ -507,7 +511,7 @@ mod opt_tests {
     #[test]
     fn test_opt_1d_with_ei() -> Result<(), HbacError> {
         let n = 100i64;
-        let mut rng = rand::thread_rng();
+        let mut rng = thread_rng();
 
         let x = (0..n).map(|i| -1. + (i as f32 / n as f32)  * 3. ).into_iter().collect::<Vec<f32>>();
 
@@ -523,40 +527,49 @@ mod opt_tests {
         let y_train = y_train_full.i((.., train_indexes));
 
 
-        let Ok((mu_s, cov_s)) = super::posterior(&x_t, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
-            panic!()
-        };
+        let l = Tensor::from_slice(&[1.0]).totype(Float);
+        let sigma_f = Tensor::from_slice(&[1.0]).totype(Float);
+
+        let mut gp = GaussianProcess::new(
+            move|t1,t2| kernel_t(&t1, &t2, &l, &sigma_f),
+            1e-8
+        );
+
+        let gpf = gp.fit(&x_train, &y_train)?;
 
 
+        // println!("gpf")
+        let gpf_ref = &gpf;
+        let y_train_max = y_train.max();
         let next = run_lbfgs(
 
-            TensorProblem::new(|theta|
+            TensorProblem::new(move |theta|
 
                 expected_improvement(
-                    &Tensor::from_slice(&[-0.8003969]).totype(Float),
-                    &Tensor::from_slice(&[0.13932637]).totype(Float),
-                    &Tensor::from_slice(&[-0.80039698, -0.80039693]).totype(Float),
+                    &theta.deref(),
+                    &y_train_max,
+                    gpf_ref,
                     0.01
                 )
             )
         )?;
 
+        let pred_y = gpf.predict(&x_t)?;
 
-        let surrogate = apply_post(&mu_s, &cov_s, &sig_1_norm(Normal::new(0., 1.).unwrap(), thread_rng(), n).transpose(0, 1));
 
         plot_series_with_points(
             vec![
                 (format!("train"), ShapeStyle {
-                    color: GREEN_800.into(),
+                    color: BLACK.into(),
                     filled: true,
                     stroke_width: 1,
                 }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(n))).collect::<Vec<(f32, f32)>>()),
 
-                (format!("surrogate"), ShapeStyle {
-                    color: GREEN.into(),
+                (format!("pred_y"), ShapeStyle {
+                    color: ORANGE.into(),
                     filled: true,
-                    stroke_width: 2,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&(surrogate.i((0, ..))))).collect::<Vec<(f32, f32)>>()),
+                    stroke_width: 1,
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&(pred_y.i((0, ..))))).collect::<Vec<(f32, f32)>>()),
             ],
             "EEG", (2000, 500), &format!("/tmp/plots/1_{:?}.png", Utc::now().to_rfc3339()).as_str(),
             Some(&from::<Vec<f32>>(&x_train.view(-1)).into_iter().zip(from::<Vec<f32>>(&y_train.view(-1)).into_iter()).collect::<Vec<(f32, f32)>>())
@@ -584,7 +597,7 @@ mod opt_tests {
 
         println!("y_train_full={:?}", y_train_full.size());
 
-        let train_indexes = (0..N).step_by(50).collect::<Vec<i64>>();
+        let train_indexes = (0..N).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = X.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
