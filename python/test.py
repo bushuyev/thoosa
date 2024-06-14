@@ -1,27 +1,24 @@
-def is_palindrome(s):
-    print(f"s={s} s[::-1]={s[::-1]}")
-    return s == s[::-1]
+import numpy as np
+import torch
 
-def palindrome_pairs(words):
-    word_dict = {word: i for i, word in enumerate(words)}
-    result = []
-
-    for i, word in enumerate(words):
-        for j in range(len(word) + 1):
-            prefix, suffix = word[:j], word[j:]
-
-            if is_palindrome(prefix):
-                reversed_suffix = suffix[::-1]
-                if reversed_suffix in word_dict and word_dict[reversed_suffix] != i:
-                    result.append([word_dict[reversed_suffix], i])
-
-            if j != len(word) and is_palindrome(suffix):
-                reversed_prefix = prefix[::-1]
-                if reversed_prefix in word_dict and word_dict[reversed_prefix] != i:
-                    result.append([i, word_dict[reversed_prefix]])
-
-    return result
-
-# Example usage:
-words = ["abcd", "dcba", "lls", "s", "sssll"]
-print(palindrome_pairs(words))
+# def kernel(X1, X2, l=1.0, sigma_f=1.0):
+#     """
+#     Isotropic squared exponential kernel.
+#
+#     Args:
+#         X1: Array of m points (m x d).
+#         X2: Array of n points (n x d).
+#
+#     Returns:
+#         (m x n) matrix.
+#     """
+#     sqdist = np.sum(X1**2, 1).reshape(-1, 1) + np.sum(X2**2, 1) - 2 * np.dot(X1, X2.T)
+#     print(f"sqdist={sqdist}")
+#     return sigma_f**2 * np.exp(-0.5 / l**2 * sqdist)
+#
+#
+# x = np.array([1, 2, 3, 4, 5]).reshape(-1, 1)
+#
+# print(kernel(x, x, sigma_f=1.0))
+dist = torch.cdist(torch.Tensor([1,2,3,4,5]).view(-1,1), torch.Tensor([1,2,3,4,5]).view(-1,1), 2)
+print(f"dist={dist}")

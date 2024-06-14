@@ -8,12 +8,15 @@ use hbac_shared::HbacError;
 use crate::utils::vec_f32_from;
 use std::ops::Deref;
 
-fn kernel(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
+fn kernel_cdist(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
     Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5 * l.powi(2)).exp().multiply_scalar(sigma.powi(2))
 }
 
-fn kernel_t(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor {
+pub fn kernel_rbf(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor {
     let sqdist = Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2);
+    debug!("sqdist={}", sqdist);
+    // debug!("sqdist={:?}", vec_f32_from(&sqdist));
+    // debug!("sqdist={:?} t_0.size={:?} t_0={:?} t_1.size={:?} t_1={:?}", vec_f32_from(&sqdist), t_0.size(), vec_f32_from(&t_0), t_1.size(), vec_f32_from(&t_1));
 
     let l_pow = (l + 1e-5).pow_tensor_scalar(2);
 
@@ -28,7 +31,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
     // let l = Tensor::from_slice(&[l]).totype(Float);
     // let sigma_f = Tensor::from_slice(&[sigma_f]).totype(Float);
 
-    let k = kernel_t(&x_train, &x_train, l, sigma_f);
+    let k = kernel_rbf(&x_train, &x_train, l, sigma_f);
     let k_size = k.size();
     // println!("posterior_ch: k.size()={:?}", k.size());
     let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(sigma_y.powi(2) as f64, false);
@@ -45,7 +48,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
     let alpha = y_train.view((y_train.size()[0], chol_t.size()[0], 1)).cholesky_solve(&chol_t, false);
 
     // let k_trans = kernel(x_s, x_train, l, sigma_f);
-    let k_trans = kernel_t(x_s, x_train, l, sigma_f);
+    let k_trans = kernel_rbf(x_s, x_train, l, sigma_f);
     let y_mean = k_trans.matmul(&alpha);
 
     let k_trans_t = k_trans.transpose(0, 1);
@@ -61,7 +64,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
     // v.1.print();
 
     // let y_cov = kernel(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
-    let y_cov = kernel_t(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
+    let y_cov = kernel_rbf(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
 
     // y_cov.print();
 
@@ -83,7 +86,7 @@ pub fn rbf_nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor, noise: f64) -> R
     // debug!("noise_t");
     // noise_t.print();
 
-    let k = kernel_t(x_train, x_train, &l, &sigma_f) + noise_t;
+    let k = kernel_rbf(x_train, x_train, &l, &sigma_f) + noise_t;
     // debug!("K");
     // k.print();
 
@@ -119,7 +122,7 @@ pub fn rbf_nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor, noise: f64) -> R
 
     let v:Tensor = np_sum + 0.5 * dot + 0.5 * x_train.size()[0] as f64 * (std::f64::consts::PI * 2.).ln();
 
-    debug!("rbf_nll: v={:?} device={:?} grad={:?}", v, v.device(), v.requires_grad());
+    debug!("rbf_nll: v={:?} device={:?} v.requires_grad={}", v, v.device(), v.requires_grad());
 
     // v = np.sum(np.log(np.diagonal(L))) + 0.5 * Y_train.dot(S2) + 0.5 * len(X_train) * np.log(2 * np.pi)
 
@@ -184,26 +187,26 @@ mod opt_tests {
     use argmin::core::{CostFunction, Error, Executor};
     use argmin::solver::brent::BrentOpt;
     use tch::Device::Cpu;
-    use crate::opt::{kernel, kernel_t, rbf_nll};
+    use crate::opt::{kernel_cdist, kernel_rbf, rbf_nll};
     use argmin::core::State;
     use crate::acquisitions::expected_improvement;
     use crate::argmin::{run_lbfgs, TensorProblem};
     use crate::gaussian::GaussianProcess;
 
-    #[ctor::ctor]
-    fn init() {
-        CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ).unwrap_or_else(|e|{
-            println!("CombinedLogger::init failed: {:?}", e);
-        });
-
-
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    }
+    // #[ctor::ctor]
+    // fn init() {
+    //     CombinedLogger::init(
+    //         vec![
+    //             TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+    //         ]
+    //     ).unwrap_or_else(|e|{
+    //         println!("CombinedLogger::init failed: {:?}", e);
+    //     });
+    //
+    //
+    //     std::env::set_var("POLARS_FMT_MAX_COLS", "100");
+    //     std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    // }
 
     fn sig_1_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
 
@@ -223,8 +226,8 @@ mod opt_tests {
     #[test]
     fn test_rbf()  -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[1., 2., 3., 4.]).view((-1, 1));
-        // let k = super::kernel(&x_train, &x_train, 1.0, 1.0);
-        let k = super::kernel_t(&x_train, &x_train, &Tensor::from_slice(&[1.0]), &Tensor::from_slice(&[1.0]));
+
+        let k = kernel_rbf(&x_train, &x_train, &Tensor::from_slice(&[1.0]), &Tensor::from_slice(&[1.0]));
 
         let samp_k = Tensor::from_slice(&[
             1.,         0.60653066, 0.13533528, 0.011109,
@@ -238,18 +241,46 @@ mod opt_tests {
             k.round_decimals(4)
         );
 
-        // let chol_t = super::cholesky_with_jitter(&k)?;
-        //
-        // chol_t.print();
 
         Ok(())
     }
+
+    //FROM sklearn.gaussian_process kernels.RBF()
+
+    #[test]
+    fn test_rbf_sim()  -> Result<(), HbacError> {
+        let x_train = Tensor::from_slice(&[-1.11111111, 1.11111111]).view((-1, 1));
+        let k = kernel_rbf(&x_train, &x_train, &Tensor::from_slice(&[1.0]), &Tensor::from_slice(&[1.0]));
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                1.,         0.08465799,
+                0.08465799, 1.
+            ]).view((2, 2)).round_decimals(4),
+            k.round_decimals(4)
+        );
+
+        let x_train = Tensor::from_slice(&[-2., 2.]).view((-1, 1));
+        let k = kernel_rbf(&x_train, &x_train, &Tensor::from_slice(&[1.0]), &Tensor::from_slice(&[1.0]));
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                1.00000000e+00, 3.35462628e-04,
+                3.35462628e-04, 1.00000000e+00
+            ]).view((2, 2)).round_decimals(4),
+            k.round_decimals(4)
+        );
+
+
+        Ok(())
+    }
+
 
     #[test]
     fn test_rbf_10()  -> Result<(), HbacError> {
         let x_train = Tensor::from_slice(&[-4., -3., -2., -1., 0.]).view((-1, 1));
 
-        let k = super::kernel_t(&x_train, &x_train, &Tensor::from_slice(&[-10.0]), &Tensor::from_slice(&[1.0]));
+        let k = super::kernel_rbf(&x_train, &x_train, &Tensor::from_slice(&[-10.0]), &Tensor::from_slice(&[1.0]));
 
         let samp_k = Tensor::from_slice(&[
             1.        , 0.99501247, 0.98019863, 0.9559974 , 0.9231162,
@@ -274,7 +305,7 @@ mod opt_tests {
 
         let N = 1000;
         let x_train = Tensor::rand([N, 1], (FLOAT_CPU));
-        let k = super::kernel(&x_train, &x_train, 0.0, 0.0);
+        let k = super::kernel_cdist(&x_train, &x_train, 0.0, 0.0);
 
         let chol_t = super::cholesky_with_jitter(&k)?;
 
@@ -520,7 +551,7 @@ mod opt_tests {
 
         let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
 
-        let train_indexes = (0..n).step_by(20).collect::<Vec<i64>>();//vec![0, n-1]; //
+        let train_indexes = vec![0, 80, 99]; //(0..n).step_by(20).collect::<Vec<i64>>();//vec![0, n-1]; //
         let train_indexes = train_indexes.as_slice();
 
         let x_train = x_t.i(train_indexes);
@@ -531,7 +562,7 @@ mod opt_tests {
         let sigma_f = Tensor::from_slice(&[1.0]).totype(Float);
 
         let mut gp = GaussianProcess::new(
-            move|t1,t2| kernel_t(&t1, &t2, &l, &sigma_f),
+            move|t1,t2| kernel_rbf(&t1, &t2, &l, &sigma_f),
             1e-8
         );
 
@@ -543,16 +574,28 @@ mod opt_tests {
         let y_train_max = y_train.max();
         let next = run_lbfgs(
 
-            TensorProblem::new(move |theta|
+            TensorProblem::new(move |theta| {
 
-                expected_improvement(
-                    &theta.deref(),
-                    &y_train_max,
-                    gpf_ref,
-                    0.01
-                )
-            )
+                    expected_improvement(
+                        &theta,
+                        &y_train_max,
+                        gpf_ref,
+                        0.01
+                    ).negative()
+                    // rbf_nll(
+                    //     &Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)),
+                    //     &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)),
+                    //     theta, 1e-8
+                    // ).expect("nll")
+                }
+            ),
+            Tensor::from_slice(&[0.]).totype(Float).to_device(Cpu).view(1),
+            // Tensor::from_slice(&[1., 1.]).totype(Float).to_device(Cpu),
+            f64::NEG_INFINITY,//0.,//
+            100
         )?;
+
+        debug!("next={}", next.state().get_best_param().unwrap().deref());
 
         let pred_y = gpf.predict(&x_t)?;
 
@@ -619,9 +662,13 @@ mod opt_tests {
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
         let x_moved = x_train.view((-1, 1));
         let y_moved = y_train.view((-1, 1));
-        let l_sigma = run_lbfgs(TensorProblem::new(move|theta| {
-            rbf_nll(&x_moved, &y_moved, theta, 1e-8).expect("nll")
-        }))?;
+        let l_sigma = run_lbfgs(
+            TensorProblem::new(move|theta| {
+                rbf_nll(&x_moved, &y_moved, theta, 1e-8).expect("nll")
+            }),
+            Tensor::from_slice(&[1., 1.]).to_device(Cpu),0.0,
+            100
+        )?;
 
         let l_sigma = l_sigma.state().get_best_param().expect("best_param");
 

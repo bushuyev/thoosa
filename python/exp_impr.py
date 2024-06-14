@@ -41,7 +41,12 @@ def expected_improvement(X, X_sample, Y_sample, gpr, xi=0.01):
     with np.errstate(divide='warn'):
         imp = mu - mu_sample_opt - xi
         Z = imp / sigma
-        ei = imp * norm.cdf(Z) + sigma * norm.pdf(Z)
+        pdf = norm.pdf(Z)
+        cdf = norm.cdf(Z)
+
+        print("expected_improvement: x={x} µ={mu} σ={sigma} z={Z} cdf={cdf} pdf={pdf}")
+
+        ei = imp * cdf + sigma * pdf
         ei[sigma == 0.0] = 0.0
 
     print(f"expected_improvement: mu={mu}, sigma={sigma} mu_sample_opt={mu_sample_opt} ei={ei}")

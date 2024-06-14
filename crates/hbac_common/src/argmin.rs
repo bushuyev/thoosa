@@ -6,6 +6,7 @@ use argmin_math::{ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax
 use log::debug;
 use rand::Rng;
 use tch::Device::Cpu;
+use tch::Kind::Float;
 use tch::Tensor;
 use hbac_shared::HbacError;
 
@@ -74,7 +75,11 @@ impl ArgminAdd<f64, ArgmTensor> for ArgmTensor {
 
 impl ArgminDot<ArgmTensor, f64> for ArgmTensor {
     fn dot(&self, other: &ArgmTensor) ->f64  {
-        self.0.dot(&other.0).double_value(&[])
+        debug!("ArgminDot::dot: size={:?} self.0={}", self.0.size(), self.0);
+        debug!("ArgminDot::dot: size={:?} other.0={}", other.0.size(), other.0);
+        let v = self.0.dot(&other.0).double_value(&[]);
+        debug!("ArgminDot::dot: v={}", v);
+        v
     }
 }
 
@@ -146,24 +151,24 @@ impl ArgminRandom for ArgmTensor {
 
 
 
-pub(crate) struct TensorProblem {
-    loss_fn:Box<dyn Fn(&<TensorProblem as CostFunction>::Param)->Tensor>
+pub(crate) struct TensorProblem<F> where F:Fn(&ArgmTensor)->Tensor{
+    loss_fn:F
 }
 
-impl TensorProblem {
+impl <F> TensorProblem<F> where F:Fn(&ArgmTensor)->Tensor {
 
-    pub fn new(loss_fn:impl Fn(&<TensorProblem as CostFunction>::Param)->Tensor + 'static) -> Self {
+    pub fn new(loss_fn:F) -> Self {
         Self {
-            loss_fn:Box::new(loss_fn)
+            loss_fn
         }
     }
 }
 
-impl CostFunction for TensorProblem {
+impl <F> CostFunction for TensorProblem<F> where F:Fn(&ArgmTensor)->Tensor {
     type Param = ArgmTensor;
     type Output = f64;
 
-    fn cost(&self, theta: &Self::Param) -> Result<Self::Output, Error> {
+    fn cost(&self, theta: &ArgmTensor) -> Result<Self::Output, Error> {
         // debug!("cost: theta={:?} device={:?} requires_grad={:?}", theta, theta.device(), theta.requires_grad());
 
         Ok(tch::with_grad(|| {
@@ -173,38 +178,40 @@ impl CostFunction for TensorProblem {
 
             loss.backward();
 
-            // debug!("cost:  theta.grad={:?} loss={:?}",  theta.grad(), loss);
+            debug!("cost:  theta.grad={:?} loss={} loss dv={}",  theta.grad(), loss, loss.double_value(&[]));
 
             loss.double_value(&[])
         }))
     }
 }
 
-impl Gradient for TensorProblem {
+impl <F> Gradient for TensorProblem<F> where F:Fn(&ArgmTensor)->Tensor {
     type Param = ArgmTensor;
     type Gradient = ArgmTensor;
 
-    fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
+    fn gradient(&self, p: &ArgmTensor) -> Result<Self::Gradient, Error> {
         debug!("gradient: p={:?} device={:?} requires_grad={:?}", p, p.device(), p.requires_grad());
         let grad = p.grad(); //.to_device(Cpu);
-        debug!("gradient: grad={:?}", grad);
+        debug!("gradient: grad={}", grad);
         Ok(grad.into())
 
     }
 }
 
-pub fn run_lbfgs(cost: TensorProblem) -> Result<OptimizationResult<TensorProblem, LBFGS<MoreThuenteLineSearch<ArgmTensor, ArgmTensor, f64>, ArgmTensor, ArgmTensor, f64>, IterState<ArgmTensor, ArgmTensor, (), (), (), f64>>, HbacError> {
+pub fn run_lbfgs<F>(cost: TensorProblem<F>, init: Tensor, target_cost: f64, max_iters: u64) -> Result<OptimizationResult<TensorProblem<F>, LBFGS<MoreThuenteLineSearch<ArgmTensor, ArgmTensor, f64>, ArgmTensor, ArgmTensor, f64>, IterState<ArgmTensor, ArgmTensor, (), (), (), f64>>, HbacError>
+    where F:Fn(&ArgmTensor)->Tensor{
     let solver = LBFGS::new(
-        MoreThuenteLineSearch::new().with_c(1e-4, 0.9)?,
+        MoreThuenteLineSearch::new(), //.with_c(1e-4, 0.9)?, //.with_bounds(1., 10.)?,
+
         10
-    );
+    );//.with_l1_regularization(1.0)?;
 
     let executor = Executor::new(cost, solver)
         .configure(|state|
             state
-                .param(Tensor::from_slice(&[1., 1.]).to_device(Cpu).set_requires_grad(true).into())
-                .max_iters(100)
-                .target_cost(0.0)
+                .param(init.set_requires_grad(true).into())
+                .max_iters(max_iters)
+                .target_cost(target_cost)
         );
 
     Ok(tch::no_grad(|| { executor.run().unwrap() }))
@@ -319,7 +326,10 @@ mod tests {
                 &Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)),
                 &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)),
                 theta, 1e-8
-            ).expect("nll"))
+            ).expect("nll")),
+            Tensor::from_slice(&[1., 1.]).to_device(Cpu),
+            0.0,
+            100
         )?;
 
         debug!("res={:?}", res.state().get_best_param());

@@ -16,6 +16,7 @@ use std::{fs, mem};
 use std::ops::Deref;
 use std::time::Instant;
 use log::{debug, info, trace, warn};
+use rand::thread_rng;
 use crate::my_tch::{Fp, LossFp};
 use tch::nn::Optimizer;
 use tch::IndexOp;
@@ -23,7 +24,7 @@ use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
-
+use rand::Rng;
 pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
 
@@ -286,7 +287,7 @@ pub mod tests {
     use hbac_shared::HbacError;
     use clap::{arg, command, value_parser, ArgAction, Command, Parser, Subcommand, Args};
     use log::debug;
-
+    use rand::Rng;
 
     #[test]
     fn test_cdt_for_dir(){
@@ -606,6 +607,22 @@ pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
         pulse_in_rand(n, &[], 10., 0.001, 0.1).as_slice()
     );
     (sig_1, sig_2)
+}
+
+pub fn sin3_pow2(n:i64, min: f32, max: f32, with_noise: bool) -> (Tensor, Tensor) {
+
+    let mut rng = thread_rng();
+    let x = (0..n).map(|i| min + (i as f32 / (n-1) as f32) * (max-min)).into_iter().collect::<Vec<f32>>();
+
+    let y_train_full = Tensor::from_slice(x.iter().map(|x|{
+        (-(3. * *x).sin() - x.powi(2) + 0.7 * *x + if with_noise  {0.2 * rng.gen::<f32>()} else {0.}) as f64
+
+    } ).collect::<Vec<f64>>().as_slice()).view((1, -1)).totype(Float); //.transpose(0,1);
+
+    let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
+
+
+    (y_train_full, x_t)
 }
 
 

@@ -87,4 +87,56 @@ mod tests {
         assert_eq!(vec![1, 2, 3, 3], flr);
     }
 
+    #[test]
+    fn test_0(){
+        use std::fmt;
+
+        // Dummy Tensor struct for illustration
+        #[derive(Debug)]
+        struct Tensor;
+
+        #[derive(Copy, Clone)]
+        pub struct GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
+            kernel: F,
+            sigma_y: f64,
+        }
+
+        impl<F> fmt::Debug for GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("GaussianProcess")
+                    .field("kernel", &"<function>")
+                    .field("sigma_y", &self.sigma_y)
+                    .finish()
+            }
+        }
+
+        pub struct GaussianProcessFit<'g, F> where F: Fn(&Tensor, &Tensor) -> Tensor {
+            gp: &'g GaussianProcess<F>,
+        }
+
+        impl<'g, F> fmt::Debug for GaussianProcessFit<'g, F> where F: Fn(&Tensor, &Tensor) -> Tensor {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("GaussianProcessFit")
+                    .field("gp", &self.gp)
+                    .finish()
+            }
+        }
+
+        // fn main() {
+            let kernel_fn = |x: &Tensor, y: &Tensor| Tensor;
+            let gp = GaussianProcess {
+                kernel: kernel_fn,
+                sigma_y: 1.0,
+            };
+
+            let gpf = GaussianProcessFit {
+                gp: &gp,
+            };
+
+            println!("{:?}", gpf);
+        // }
+
+
+    }
+
 }

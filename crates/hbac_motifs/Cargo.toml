@@ -10,8 +10,8 @@ path = "src/lib.rs"
 hbac_common = {path = "../hbac_common"}
 hbac_store = {path = "../hbac_store"}
 hbac_shared = {path = "../hbac_shared"}
-tch = { version = "0.14.0" }
-torch-sys = "0.14.0"
+tch = { version = "0.16.0" }
+torch-sys = "0.16.0"
 sci-rs = "0.3.8"
 plotters = { version = "0.3.5"}
 rand = "0.8.5"
