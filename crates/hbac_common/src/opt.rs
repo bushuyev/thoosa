@@ -14,7 +14,7 @@ fn kernel_cdist(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
 
 pub fn kernel_rbf(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor {
     let sqdist = Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2);
-    debug!("sqdist={}", sqdist);
+    // debug!("sqdist={}", sqdist);
     // debug!("sqdist={:?}", vec_f32_from(&sqdist));
     // debug!("sqdist={:?} t_0.size={:?} t_0={:?} t_1.size={:?} t_1={:?}", vec_f32_from(&sqdist), t_0.size(), vec_f32_from(&t_0), t_1.size(), vec_f32_from(&t_1));
 
@@ -169,7 +169,7 @@ mod opt_tests {
     use tch::Kind::Float;
     use tch::Tensor;
     use hbac_shared::{comp_sin_k_v, join_with_offset, pulse_v, random_saw};
-    use crate::utils::{cdt_for_dir, plot_series, plot_series_with_points, vec_f32_from};
+    use crate::utils::{cdt_for_dir, plot_series, plot_series_with_points, sin3_pow2, vec_f32_from};
     use crate::utils::lin_t;
     use hbac_shared::*;
     use statrs::distribution::{Uniform, Normal, MultivariateNormal};
@@ -539,30 +539,22 @@ mod opt_tests {
         Ok(())
     }
 
+    //stack if first point is min
     #[test]
-    fn test_opt_1d_with_ei() -> Result<(), HbacError> {
+    fn  test_opt_1d_with_ei() -> Result<(), HbacError> {
         let n = 100i64;
-        let mut rng = thread_rng();
 
-        let x = (0..n).map(|i| -1. + (i as f32 / n as f32)  * 3. ).into_iter().collect::<Vec<f32>>();
+        let (y_train_full, x_t, x) = sin3_pow2(n, -2., 2., Some(0.02));
 
-
-        let y_train_full = Tensor::from_slice(x.iter().map(|x| (-(3. * *x).sin() - x.powi(2) + 0.7 * *x + 0.2 * rng.gen::<f32>()) as f64).collect::<Vec<f64>>().as_slice()).view((1, -1)).totype(Float); //.transpose(0,1);
-
-        let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
-
-        let train_indexes = vec![0, 80, 99]; //(0..n).step_by(20).collect::<Vec<i64>>();//vec![0, n-1]; //
+        let train_indexes = vec![0, 50, 70, 90]; //(0..n).step_by(20).collect::<Vec<i64>>();//vec![0, n-1]; //
         let train_indexes = train_indexes.as_slice();
 
         let x_train = x_t.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
 
-        let l = Tensor::from_slice(&[1.0]).totype(Float);
-        let sigma_f = Tensor::from_slice(&[1.0]).totype(Float);
-
         let mut gp = GaussianProcess::new(
-            move|t1,t2| kernel_rbf(&t1, &t2, &l, &sigma_f),
+            move|t1,t2| kernel_rbf(&t1, &t2, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float)),
             1e-8
         );
 
@@ -571,31 +563,32 @@ mod opt_tests {
 
         // println!("gpf")
         let gpf_ref = &gpf;
-        let y_train_max = y_train.max();
+        let y_train_min = y_train.min();
         let next = run_lbfgs(
 
             TensorProblem::new(move |theta| {
 
                     expected_improvement(
                         &theta,
-                        &y_train_max,
+                        &y_train_min,
                         gpf_ref,
                         0.01
                     ).negative()
-                    // rbf_nll(
-                    //     &Tensor::from_slice(&[-4., -3., -2., -1., 1.]).view((-1, 1)),
-                    //     &Tensor::from_slice(&[0.7568025, -0.14112001, -0.90929743, -0.84147098, 0.]).view((-1, 1)),
-                    //     theta, 1e-8
-                    // ).expect("nll")
+
                 }
             ),
             Tensor::from_slice(&[0.]).totype(Float).to_device(Cpu).view(1),
             // Tensor::from_slice(&[1., 1.]).totype(Float).to_device(Cpu),
             f64::NEG_INFINITY,//0.,//
-            100
+            10
         )?;
 
         debug!("next={}", next.state().get_best_param().unwrap().deref());
+        debug!("x_t={}", x_t);
+        // assert_eq!(
+        //     Tensor::from_slice(&[0.1]).round_decimals(1),
+        //     next.state().get_best_param().unwrap().deref().round_decimals(1)
+        // );
 
         let pred_y = gpf.predict(&x_t)?;
 

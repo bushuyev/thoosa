@@ -1,6 +1,7 @@
 use std::f64::consts::PI;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use log::debug;
 use rand::thread_rng;
 use statrs::distribution::Normal;
 use tch::kind::FLOAT_CPU;
@@ -33,9 +34,10 @@ impl Gaussian {
     }
 
     pub fn norm(n:i64) -> Tensor{
-         let mut rng = thread_rng();
+        let mut rng = thread_rng();
+        let normal = Normal::new(0., 1.).unwrap();
 
-        Tensor::from_slice((0..n).map(|x| rng.sample(Normal::new(0., 1.).unwrap()) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1,-1))
+        Tensor::from_slice((0..n).map(|x| rng.sample(normal) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1, -1))
     }
 
 }
@@ -83,9 +85,11 @@ impl <'g, F> GaussianProcessFit<'g, F> where F: Fn(&Tensor, &Tensor) -> Tensor{
     pub fn predict(&self, x_s: &Tensor) -> Result<Tensor, HbacError> {
         let (mu_s, cov_s) = self.mean_and_cov(x_s);
 
-        let chol_or_cov = cholesky_with_jitter(&cov_s).unwrap();
+        println!("cov_s={}", cov_s);
 
-        let sig_t_with_cov = chol_or_cov.matmul(&Gaussian::norm(x_s.size()[0]).transpose(0, 1));
+        let chol = cholesky_with_jitter(&cov_s.nan_to_num(0., None, None)).unwrap();
+
+        let sig_t_with_cov = chol.matmul(&Gaussian::norm(x_s.size()[0]).transpose(0, 1));
 
         let sig_chol = (mu_s + sig_t_with_cov).transpose(0, 1);
 
@@ -106,7 +110,7 @@ impl <'g, F> GaussianProcessFit<'g, F> where F: Fn(&Tensor, &Tensor) -> Tensor{
 
         let cov_size = y_var.size();
         let mu_s = y_mean.view((cov_size[1], 1));
-        let std = y_var.sqrt();//+   Tensor::zeros(&[cov_size[1], cov_size[1]], FLOAT_CPU).fill_diagonal_(1e-8, false);;
+        let std = y_var.sqrt(); // +  Tensor::zeros(&[cov_size[1], cov_size[1]], FLOAT_CPU).fill_diagonal_(1e-8, false);;
         (mu_s, std)
     }
 }
@@ -121,18 +125,19 @@ impl <F> GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
 
     //Gaussian_Processes_for_ML.pdf
     pub fn fit(&self, x_train:&Tensor, y_train:&Tensor) -> Result<GaussianProcessFit<F>, HbacError>{
-        println!("fit: x_train={}", x_train);
+        debug!("fit: x_train={}", x_train);
+        debug!("fit: y_train={}", y_train);
         let k = (self.kernel)(&x_train, &x_train);
         let k_size = k.size();
         // println!("posterior_ch: k.size()={:?}", k.size());
-        println!("fit: k={}", k);
+        debug!("fit: k={}", k);
         let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(self.sigma_y.powi(2) as f64, false);
 
-        println!("fit: with sigma k={}", k);
+        debug!("fit: with sigma k={}", k);
 
         let chol_t = cholesky_with_jitter(&k)?;
 
-        println!("fit: chol_t k={}", chol_t);
+        debug!("fit: chol_t k={}", chol_t);
 
 
         //from sklearn's GaussianProcessRegressor
@@ -182,7 +187,7 @@ mod tests {
             1e-8,
         );
 
-        let (y_train_full, x_t) = sin3_pow2(10, -2., 2., false);
+        let (y_train_full, x_t, _) = sin3_pow2(10, -2., 2., None);
 
         // println!("x_t={x_t}");
         // println!("y_t={y_train_full}");
@@ -202,9 +207,9 @@ mod tests {
         let x_test = x_t.i(test_indexes.as_slice());
         // println!("x_test={x_test}");
         let (m, s) = gpf.mean_and_cov(&x_test);
-        // println!("alpha {}", gpf.alpha);
-        // println!("m {}", m);
-        // println!("s {}", s);
+        println!("alpha {}", gpf.alpha);
+        println!("m {}", m);
+        println!("s {}", s);
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -223,6 +228,8 @@ mod tests {
             Tensor::from_slice(&[0.73902109, 0.73902109]).totype(Float).round_decimals(4),
             s.diagonal(0, 0, 1).round_decimals(4)
         );
+
+        gpf.predict(&x_test);
 
         /*
         import numpy as np

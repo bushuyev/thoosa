@@ -609,20 +609,21 @@ pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
     (sig_1, sig_2)
 }
 
-pub fn sin3_pow2(n:i64, min: f32, max: f32, with_noise: bool) -> (Tensor, Tensor) {
+//f(x)=-sin(3x)+x^2+0.7 *x
+pub fn sin3_pow2(n:i64, min: f32, max: f32, with_noise: Option<f32>) -> (Tensor, Tensor, Vec<f32>) {
 
     let mut rng = thread_rng();
     let x = (0..n).map(|i| min + (i as f32 / (n-1) as f32) * (max-min)).into_iter().collect::<Vec<f32>>();
 
     let y_train_full = Tensor::from_slice(x.iter().map(|x|{
-        (-(3. * *x).sin() - x.powi(2) + 0.7 * *x + if with_noise  {0.2 * rng.gen::<f32>()} else {0.}) as f64
+        (-(3. * *x).sin() + x.powi(2) + 0.7 * *x + with_noise.map(|v| v * rng.gen::<f32>()).unwrap_or(0.)) as f64
 
     } ).collect::<Vec<f64>>().as_slice()).view((1, -1)).totype(Float); //.transpose(0,1);
 
     let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
 
 
-    (y_train_full, x_t)
+    (y_train_full, x_t, x)
 }
 
 

@@ -204,7 +204,7 @@ pub fn run_lbfgs<F>(cost: TensorProblem<F>, init: Tensor, target_cost: f64, max_
         MoreThuenteLineSearch::new(), //.with_c(1e-4, 0.9)?, //.with_bounds(1., 10.)?,
 
         10
-    );//.with_l1_regularization(1.0)?;
+    ).with_tolerance_cost(1e-6)?;//.with_l1_regularization(1.0)?;
 
     let executor = Executor::new(cost, solver)
         .configure(|state|
