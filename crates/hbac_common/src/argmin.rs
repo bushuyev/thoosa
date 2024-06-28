@@ -11,7 +11,7 @@ use tch::Tensor;
 use hbac_shared::HbacError;
 
 #[derive(Debug)]
-pub struct ArgmTensor(Tensor);
+pub struct ArgmTensor(pub Tensor);//TODO rename, move into own file
 
 impl ArgmTensor {
     pub fn force_requires_grad(&self) {
@@ -31,6 +31,12 @@ impl Clone for ArgmTensor {
 
         // debug!("clone: tensor device={:?} requires_grad={:?} grad={:?}", tensor.device(), tensor.requires_grad(), tensor.grad());
         ArgmTensor(tensor)
+    }
+}
+
+impl Into<Tensor> for ArgmTensor {
+    fn into(self) -> Tensor {
+        self.0
     }
 }
 

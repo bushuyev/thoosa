@@ -1,24 +1,50 @@
-import numpy as np
-import torch
+from functools import cache
+from typing import List
 
-# def kernel(X1, X2, l=1.0, sigma_f=1.0):
-#     """
-#     Isotropic squared exponential kernel.
-#
-#     Args:
-#         X1: Array of m points (m x d).
-#         X2: Array of n points (n x d).
-#
-#     Returns:
-#         (m x n) matrix.
-#     """
-#     sqdist = np.sum(X1**2, 1).reshape(-1, 1) + np.sum(X2**2, 1) - 2 * np.dot(X1, X2.T)
-#     print(f"sqdist={sqdist}")
-#     return sigma_f**2 * np.exp(-0.5 / l**2 * sqdist)
-#
-#
-# x = np.array([1, 2, 3, 4, 5]).reshape(-1, 1)
-#
-# print(kernel(x, x, sigma_f=1.0))
-dist = torch.cdist(torch.Tensor([1,2,3,4,5]).view(-1,1), torch.Tensor([1,2,3,4,5]).view(-1,1), 2)
-print(f"dist={dist}")
+
+class Solution:
+    def removeBoxes(self, boxes: List[int]) -> int:
+
+        @cache
+        def dfs(i, j, k):
+            print(f"0 i: {i}, j: {j}, k: {k}")
+            if i > j:
+                return 0
+
+            while i < j and boxes[j] == boxes[j - 1]:
+                j = j - 1
+                k = k + 1
+
+            print(f"1 i: {i}, j: {j}, k: {k}")
+
+            if i + 1 < j:
+                ans = dfs(i, j - 1, 0)
+            else:
+                ans = 0
+
+            v = (k + 1) * (k + 1)
+            print(f"i={i} j={j} k={k} v: {v}  ans={ans}")
+            ans = ans + v
+
+            for h in range(i, j):
+                if boxes[h] == boxes[j]:
+                    print(f"h={h}, j={j}")
+
+                    ans_1 = dfs(h + 1, j - 1, 0)
+                    ans_2 = dfs(i, h, k + 1)
+
+                    print(f"ans={ans}, ans_1={ans_1}, ans_2={ans_2}")
+
+                    ans = max(ans, ans_1 + ans_2)
+            return ans
+
+
+        n = len(boxes)
+        ans = dfs(0, n - 1, 0)
+        dfs.cache_clear()
+        return ans
+
+
+# s = Solution().removeBoxes([1,3,2,2,2,3,4,3,1])
+s = Solution().removeBoxes([1,2,1])
+print(f"s={s}")

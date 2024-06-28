@@ -1,10 +1,12 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
+use log::debug;
 use rand::{Rng, thread_rng};
 use rand::distributions::Uniform;
 use tch::Tensor;
+use crate::argmin::ArgmTensor;
 use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
-
+use super::opt_rng::{opt_rnd};
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
 
 #[derive(Debug, Copy, Clone)]
@@ -13,6 +15,12 @@ pub enum Primitives {
     Long(i64),
     Float(f32),
     Double(f64)
+}
+
+impl From<f64> for Primitives {
+    fn from(value: f64) -> Self {
+        Primitives::Double(value)
+    }
 }
 
 impl From<Primitives> for f32 {
@@ -34,11 +42,57 @@ impl From<Primitives> for f32 {
     }
 }
 
-impl From<&Primitives> for f32 {
-    fn from(value: &Primitives) -> Self {
-        2.2
+impl From<Primitives> for f64 {
+    fn from(value: Primitives) -> Self {
+        match value {
+            Primitives::Integer(v) => {
+                v as f64
+            }
+            Primitives::Long(v) => {
+                v as f64
+            }
+            Primitives::Float(v) => {
+                v as f64
+            }
+            Primitives::Double(v) => {
+                v as f64
+            }
+        }
     }
 }
+
+
+impl From<&Primitives> for f32 {
+    fn from(value: &Primitives) -> Self {
+        match value {
+            Primitives::Integer(v) => {
+                *v as f32
+            }
+            Primitives::Long(v) => {
+                *v as f32
+            }
+            Primitives::Float(v) => {
+                *v as f32
+            }
+            Primitives::Double(v) => {
+                *v as f32
+            }
+        }
+    }
+}
+
+impl From<Vec<Primitives>> for ArgmTensor {
+    fn from(vals: Vec<Primitives>) -> Self {
+        ArgmTensor(Tensor::from_slice(vals.into_iter().map(|v|v.into()).collect::<Vec<f64>>().as_slice()))
+    }
+}
+
+// impl From<&Vec<Primitives>> for &ArgmTensor {
+//     fn from(vals: &Vec<Primitives>) -> Self {
+//         &ArgmTensor(Tensor::from_slice(vals.into_iter().map(|v|(*v).into()).collect::<Vec<f64>>().as_slice()))
+//     }
+// }
+
 
 #[derive(Debug)]
 struct RunResult{
@@ -75,7 +129,8 @@ impl Ord for RunResult {
 struct TreeStructuredParzenEstimator {
     observations:BinaryHeap<Reverse<RunResult>>,
     mvpe_lower:Option<MultiVariateParzenEstimator>, //TODO move out
-    mvpe_upper:Option<MultiVariateParzenEstimator> //TODO move out
+    mvpe_upper:Option<MultiVariateParzenEstimator>, //TODO move out
+    percentile:f32 //TODO move out
 }
 
 impl TreeStructuredParzenEstimator {
@@ -84,17 +139,33 @@ impl TreeStructuredParzenEstimator {
         Self {
             observations:BinaryHeap::new(),
             mvpe_lower:None,
-            mvpe_upper:None
+            mvpe_upper:None,
+            percentile: 0.
         }
     }
 
     pub fn update_observations(&mut self, loss:f32, eval_config:&Vec<Primitives>, cs:&ConfigurationSpace) {
+
+
         self.observations.push(Reverse(RunResult::new(loss, eval_config.clone())));
 
         let n_lower = Self::percentile(self.observations.len()) as usize;
 
-        let lower_vals = self.observations.iter().take(n_lower).map(|r|r.0.eval_config.clone()).collect::<Vec<Vec<Primitives>>>();
-        let upper_vals = self.observations.iter().skip(n_lower).map(|r|r.0.eval_config.clone()).collect::<Vec<Vec<Primitives>>>();
+        self.percentile = n_lower as f32 / self.observations.len() as f32; //[self._metric_name].size
+
+        debug!("loss={loss} eval_config={eval_config:?} n_lower={n_lower} self.percentile={} self.observations.len()={}", self.percentile, self.observations.len());
+
+
+        let (lower_vals, upper_vals) = self.observations.iter().enumerate().fold((vec![], vec![]), |mut a, (i, v)|{
+            if i < n_lower {
+                a.0.push(v.0.eval_config.clone().clone());
+            } else {
+                a.1.push(v.0.eval_config.clone().clone());
+            }
+            a
+        });
+        debug!("lower_vals={lower_vals:?}");
+        debug!("upper_vals={upper_vals:?}");
 
         let (lower_esitmators, upper_esitmators) = cs
             .into_iter()
@@ -130,14 +201,44 @@ impl TreeStructuredParzenEstimator {
         self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators));
     }
 
+
     fn percentile(size:usize) -> f32 {
-        (0.25 * (size as f32).sqrt()).ceil() / (size as f32)
+        (0.25 * (size as f32).sqrt()).ceil()
+    }
+
+    /// variables/samples
+    fn get_config_candidates(&self, n_samples: usize) -> Vec<Vec<Primitives>> {
+        self.mvpe_lower.as_ref().map(|mvpe_lower|mvpe_lower.sample(true, n_samples)).unwrap_or(vec![])
+    }
+
+    fn compute_config_loglikelihoods(&self, config_cands:&Vec<Vec<Primitives>>) -> (Tensor, Tensor) {
+        let config_ll_lower = self.mvpe_lower.as_ref().expect("mvpe_lower").log_pdf(config_cands);
+        let config_ll_upper = self.mvpe_upper.as_ref().expect("mvpe_upper").log_pdf(config_cands);
+        (config_ll_lower, config_ll_upper)
+    }
+
+    fn compute_probability_improvement(&self, config_cands:&Vec<Vec<Primitives>> ) -> Tensor{
+
+        let eps = 1e-12;
+        let (cll_lower, cll_upper) = self.compute_config_loglikelihoods(config_cands);
+        let first_term = (self.percentile + eps).ln();
+        let second_term = (1.0 - self.percentile + eps).ln() + cll_upper - cll_lower;
+        second_term.logaddexp(&first_term.into())
+
     }
 }
 
 #[cfg(test)]
 mod tree_structured_parzen_estimator_tests {
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, TreeStructuredParzenEstimator};
+
+    #[test]
+    fn test_percentile(){
+        assert_eq!(1., TreeStructuredParzenEstimator::percentile(1));
+        assert_eq!(1., TreeStructuredParzenEstimator::percentile(10));
+        assert_eq!(3., TreeStructuredParzenEstimator::percentile(100));
+    }
+
 
     #[test]
     fn test_0(){
@@ -154,7 +255,7 @@ mod tree_structured_parzen_estimator_tests {
         tree_structured_parzen_estimator.update_observations(0.3, &vec![Primitives::Float(0.3), Primitives::Float(1.3)], &cs);
         tree_structured_parzen_estimator.update_observations(0.2, &vec![Primitives::Float(0.2), Primitives::Float(1.2)], &cs);
 
-        // println!("{:?}", tree_structured_parzen_estimator.observations);
+        // debug!("{:?}", tree_structured_parzen_estimator.observations);
         
         assert_eq!(0.1, tree_structured_parzen_estimator.observations.pop().expect("0.1").0.loss);
         assert_eq!(0.2, tree_structured_parzen_estimator.observations.pop().expect("0.2").0.loss);
@@ -164,6 +265,14 @@ mod tree_structured_parzen_estimator_tests {
         assert_eq!(2, tree_structured_parzen_estimator.mvpe_lower.expect("tree_structured_parzen_estimator").len())
 
     }
+
+    #[test]
+    fn test_compute_probability_improvement(){
+        let mut tree_structured_parzen_estimator = TreeStructuredParzenEstimator::new();
+        // let pi = tree_structured_parzen_estimator.compute_probability_improvement(
+        //
+        // );
+    }
 }
 
 struct TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32 {
@@ -171,17 +280,17 @@ struct TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32 {
     cs:ConfigurationSpace,
     n_init:usize,
     max_evals:usize,
-    tpe_samplers:HashMap<String, TreeStructuredParzenEstimator>
+    tpe_samplers:HashMap<String, TreeStructuredParzenEstimator>,
 }
 
 impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
 
-    pub fn new(obj_func:F, cs:ConfigurationSpace) -> Self {
+    pub fn new(obj_func:F, cs:ConfigurationSpace, max_evals: usize, n_init: usize) -> Self {
         Self {
             obj_func,
             cs,
-            n_init:3,
-            max_evals:10,
+            n_init,
+            max_evals,
             tpe_samplers: HashMap::from([
                 ("loss".into(), TreeStructuredParzenEstimator::new())
             ])
@@ -190,17 +299,159 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
 
     pub fn optimize(&mut self) {
 
-        (0..self.n_init).for_each(|i|{
-            let eval_config = self.cs.random_sample();
+        (0..self.max_evals).for_each(|i|{
+
+            let eval_config = if  i < self.n_init {
+                debug!("i={i} random sample");
+                self.cs.random_sample()
+
+            } else {
+                debug!("i={i} sample");
+                self.sample()
+            };
 
             let loss = (self.obj_func)(
                 &eval_config
             );
+            debug!("i={i} loss={loss}");
 
-            for mut key_tpe in &mut self.tpe_samplers {
-                key_tpe.1.update_observations(loss, &eval_config, &self.cs)
+            for (_key, mut tpe) in &mut self.tpe_samplers {
+                tpe.update_observations(loss, &eval_config, &self.cs)
             }
         });
+    }
+
+    fn sample(&self)->Vec<Primitives> {
+
+
+        let config_cands = stack_params(
+            self.tpe_samplers.values().map(|tpe| {
+                tpe.get_config_candidates(21)
+            }).collect::<Vec<Vec<Vec<Primitives>>>>() //tpe(only loss)/params/candidates
+        );
+
+
+
+        let res = Tensor::stack(
+            self.tpe_samplers.values().map(|tpe| tpe.compute_probability_improvement(&config_cands)).collect::<Vec<Tensor>>().as_slice(),
+            0,
+        );
+
+        // self.compute_config_loglikelihoods(stack_params(&config_cands, &self.parzen_estimators, 0))
+
+        vec![]
+        // return weights @ pi_config_array
+    }
+}
+
+fn stack_params<T:Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
+    let num_rows = input[0].len();
+    let mut result = vec![vec![]; num_rows];
+
+    for params in input {
+        for (i, sub_vec) in params.into_iter().enumerate() {
+            result[i].extend(sub_vec);
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tpe_optimizer_tests {
+    use log::debug;
+    use rand::distributions::Uniform;
+    use rand::prelude::StdRng;
+    use rand::{Rng, SeedableRng};
+    use rand_mt::{Mt19937GenRand32, Mt19937GenRand64};
+
+    use tch::Tensor;
+    use crate::argmin::ArgmTensor;
+    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, stack_params, TPEOptimizer};
+    use crate::utils::sin3_pow2_f;
+
+    #[test]
+    fn test_params_stack(){
+        let params_0 = vec![
+            vec![1., 2., 3.],
+            vec![10., 20., 30.],
+        ];
+
+        let params_1 = vec![
+            vec![4., 5.,],
+            vec![40., 50.],
+        ];
+        let r = stack_params(vec![params_0, params_1]);
+
+        assert_eq!(
+            vec![
+                vec![1., 2., 3., 4., 5.],
+                vec![10., 20., 30., 40., 50.],
+            ],
+            r
+        );
+        // debug!("r={r:?}");
+    }
+
+    #[test]
+    fn test_sphere(){
+        let sphere = sphere()(&vec![
+            Primitives::Float(0.1),
+            Primitives::Float(0.2),
+            Primitives::Float(0.3),
+            Primitives::Float(0.4),
+            Primitives::Float(0.5),
+        ]);
+
+        assert_eq!(0.55, sphere);
+
+    }
+
+    #[test]
+    fn test_sample(){
+
+        let cs = ConfigurationSpace::new(
+
+            (0..10).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -5.0, upper: 5.0}).collect()
+        );
+
+        let mut opt = TPEOptimizer::new(
+            sphere(),
+            cs,
+            5,
+            5
+        );
+
+        opt.sample();
+
+
+    }
+
+    #[test]
+    fn test_compute_probability_improvement(){
+        let max_evals = 5;
+
+        let cs = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {name:format!("x_{}", 0), lower: -2.0, upper: 2.0}]);
+
+
+        let mut opt = TPEOptimizer::new(
+            sphere(),
+            cs, 10, 5
+        );
+
+        opt.optimize();
+    }
+
+    fn sphere() -> fn(&Vec<Primitives>) -> f32 {
+        |params| {
+            debug!("params={params:?}");
+            let t: Tensor = <Vec<Primitives> as Into<ArgmTensor>>::into(params.clone()).into();
+            let loss = t.pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
+
+            debug!("loss={loss:?}");
+
+            loss
+        }
     }
 }
 
@@ -219,10 +470,12 @@ impl Hyperparameter {
     }
 
     pub fn random_sample(&self) -> Primitives {
-        let mut rng = thread_rng();
         match self {
             Hyperparameter::UniformFloat { name, lower, upper } => {
-                Primitives::Double(rng.sample(Uniform::new(lower, upper)))
+                let uniform = opt_rnd().sample(Uniform::new(0., 1.));
+                let sample = lower + uniform * (upper - lower) ;
+                // debug!("uniform={uniform:?} lb={lower} ub={upper} sample={sample} ");
+                Primitives::Double(sample)
             }
         }
     }
@@ -297,6 +550,9 @@ impl<'a> IntoIterator for &'a ConfigurationSpace {
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
+    use rand::prelude::StdRng;
+    use rand::SeedableRng;
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, TPEOptimizer};
     use crate::utils::{sin3_pow2_f};
 
@@ -308,10 +564,10 @@ mod tests {
 
         let mut opt = TPEOptimizer::new(
             |x| {
-                println!("x={x:?}");
+                debug!("x={x:?}");
                 sin3_pow2_f(x.get(0).expect("x_0").into())
             },
-            cs
+            cs, 10, 5
         );
 
         opt.optimize();
