@@ -223,14 +223,17 @@ impl TreeStructuredParzenEstimator {
         let (cll_lower, cll_upper) = self.compute_config_loglikelihoods(config_cands);
         let first_term = (self.percentile + eps).ln();
         let second_term = (1.0 - self.percentile + eps).ln() + cll_upper - cll_lower;
-        second_term.logaddexp(&first_term.into())
+        second_term.logaddexp(&first_term.into()).negative()
 
     }
 }
 
 #[cfg(test)]
 mod tree_structured_parzen_estimator_tests {
+    use tch::Tensor;
+    use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, TreeStructuredParzenEstimator};
+    use crate::parzen::optimizer::Primitives::Float;
 
     #[test]
     fn test_percentile(){
@@ -268,7 +271,35 @@ mod tree_structured_parzen_estimator_tests {
 
     #[test]
     fn test_compute_probability_improvement(){
-        let mut tree_structured_parzen_estimator = TreeStructuredParzenEstimator::new();
+        let mut tsp = TreeStructuredParzenEstimator::new(
+
+        );
+
+        let samples = [-1.0, 0.0, 1.0];
+
+
+        tsp.mvpe_lower = Some(MultiVariateParzenEstimator::new(vec![
+            NumericalParzenEstimator::new(Tensor::from_slice(&samples), -3.0f64, 3.0f64, None, BandwidthFactor::default(), true),
+            NumericalParzenEstimator::new(Tensor::from_slice(&samples), -3.0f64, 3.0f64, None, BandwidthFactor::default(), true),
+            NumericalParzenEstimator::new(Tensor::from_slice(&samples), -3.0f64, 3.0f64, None, BandwidthFactor::default(), true)
+
+        ]));
+        let samples = [-2.0, 0.0, 2.0];
+
+        tsp.mvpe_upper = Some(MultiVariateParzenEstimator::new(vec![
+            NumericalParzenEstimator::new(Tensor::from_slice(&samples), -3.0f64, 3.0f64, None, BandwidthFactor::default(), true),
+            NumericalParzenEstimator::new(Tensor::from_slice(&samples), -3.0f64, 3.0f64, None, BandwidthFactor::default(), true),
+            NumericalParzenEstimator::new(Tensor::from_slice(&samples), -3.0f64, 3.0f64, None, BandwidthFactor::default(), true)
+
+        ]));
+
+
+        let pi = tsp.compute_probability_improvement(&vec![
+            vec![Float(0.0), Float(0.1), Float(0.2)]
+        ]);
+
+        println!("pi={pi}");
+        assert_eq!(18545, (pi.round_decimals(4).double_value(&[]) * 10000.0) as usize);
         // let pi = tree_structured_parzen_estimator.compute_probability_improvement(
         //
         // );
