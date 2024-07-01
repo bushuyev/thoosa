@@ -354,25 +354,22 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
 
     fn sample(&self)->Vec<Primitives> {
 
-
         let config_cands = stack_params(
             self.tpe_samplers.values().map(|tpe| {
                 tpe.get_config_candidates(21)
             }).collect::<Vec<Vec<Vec<Primitives>>>>() //tpe(only loss)/params/candidates
         );
 
-
-
-        let res = Tensor::stack(
+        //TODO weights? loss only
+        let pi_config = Tensor::stack(
             self.tpe_samplers.values().map(|tpe| tpe.compute_probability_improvement(&config_cands)).collect::<Vec<Tensor>>().as_slice(),
             0,
         );
 
-        // self.compute_config_loglikelihoods(stack_params(&config_cands, &self.parzen_estimators, 0))
-
-        vec![]
+        config_cands[pi_config.argmax(0, false).double_value(&[]) as usize].clone()
         // return weights @ pi_config_array
     }
+
 }
 
 fn stack_params<T:Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
@@ -438,36 +435,20 @@ mod tpe_optimizer_tests {
 
     }
 
-    #[test]
-    fn test_sample(){
-
-        let cs = ConfigurationSpace::new(
-
-            (0..10).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -5.0, upper: 5.0}).collect()
-        );
-
-        let mut opt = TPEOptimizer::new(
-            sphere(),
-            cs,
-            5,
-            5
-        );
-
-        opt.sample();
-
-
-    }
 
     #[test]
-    fn test_compute_probability_improvement(){
+    fn test_optimize(){
         let max_evals = 5;
 
-        let cs = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {name:format!("x_{}", 0), lower: -2.0, upper: 2.0}]);
+        // let cs = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {name:format!("x_{}", 0), lower: -2.0, upper: 2.0}]);
+        let cs = ConfigurationSpace::new(
+            (0..10).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -50.0, upper: 50.0}).collect()
+        );
 
 
         let mut opt = TPEOptimizer::new(
             sphere(),
-            cs, 10, 5
+            cs, 1000, 10
         );
 
         opt.optimize();
@@ -477,7 +458,7 @@ mod tpe_optimizer_tests {
         |params| {
             debug!("params={params:?}");
             let t: Tensor = <Vec<Primitives> as Into<ArgmTensor>>::into(params.clone()).into();
-            let loss = t.pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
+            let loss = t.subtract_scalar(10).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
 
             debug!("loss={loss:?}");
 
