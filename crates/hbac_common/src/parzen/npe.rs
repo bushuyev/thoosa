@@ -1,5 +1,6 @@
 use std::cmp::{max, max_by};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::ops::Div;
 use log::debug;
 use num_traits::*;
@@ -80,6 +81,7 @@ impl <N> Default for BandwidthFactor<N> where N: Float, f64: Into<N>  {
     }
 }
 
+
 pub struct NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N> {
     samples: Tensor,
     lb: N,
@@ -89,6 +91,19 @@ pub struct NumericalParzenEstimator<N> where N: Float + tch::kind::Element + Par
     weights:Tensor,
     prior:bool,
     pe:Option<PEGaussian>//TODO move out
+}
+
+impl <N> Debug for NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Test")
+            .field("samples", &self.samples)
+            // .field("lb", &self.lb)
+            // .field("ub", &self.ub)
+            .field("weights", &self.weights)
+            .field("prior", &self.prior)
+            .field("pe", &self.pe)
+            .finish()
+    }
 }
 
 const SQR2PI:f64 = 2.5066282746310002;
@@ -144,14 +159,14 @@ impl<N> NumericalParzenEstimator<N> where N: Float + tch::kind::Element + Partia
         let min_bandwidth = self.bandwidth_clip.value(size) * domain_range;
 
         let clipped_bandwidth = badwidth.clip( min_bandwidth, 0.5.into() * domain_range).view(1).repeat(size);
-        debug!("clipped_bandwidth={}", clipped_bandwidth);
+        // debug!("clipped_bandwidth={}", clipped_bandwidth);
         if self.prior{
             clipped_bandwidth.i(size-1).copy_(&Tensor::from(<f64>::into(domain_range.into())));
         }
-        debug!("means={} clipped_bandwidth={}", means, clipped_bandwidth);
+        // debug!("means={} clipped_bandwidth={}", means, clipped_bandwidth);
         let (norm_consts,  logpdf_consts) = Self::calculate_norm_consts(&self.lb, &self.ub, &means, &clipped_bandwidth);
 
-        debug!("norm_consts={} logpdf_consts={}", norm_consts, logpdf_consts);
+        // debug!("norm_consts={} logpdf_consts={}", norm_consts, logpdf_consts);
 
         PEGaussian::new(means, clipped_bandwidth, norm_consts, logpdf_consts, self.weights.shallow_clone(), self.lb.into(), self.ub.into())
     }
@@ -190,15 +205,25 @@ impl PEGaussian {
 
     pub fn basis_loglikelihood(&self, x:&Tensor) -> Tensor {
         let mahalanobis = ((x - self.means.view((-1,1))) / self.stds.view((-1,1))).pow_tensor_scalar(2);
-        self.logpdf_consts.view((-1,1)) - 0.5 * mahalanobis
+
+        // debug!("basis_loglikelihood: mahalanobis.size()={:?} x.size()={:?}", mahalanobis.size(), x.size());
+
+        let tensor:Tensor = self.logpdf_consts.view((-1, 1)) - 0.5 * mahalanobis;
+        // debug!("basis_loglikelihood: self.logpdf_consts.size={:?} tensor.size={:?}", self.logpdf_consts.size(), tensor.size());
+        tensor
     }
 
     pub fn sample(&self, n_samples:usize) -> Vec<f64> {
-
-        self.means.iter::<f64>().unwrap().zip(self.stds.iter::<f64>().unwrap()).map(|(mean, std)|{
+        debug!("self.means={:?} self.stds={:?}", self.means, self.stds);
+        let normal_dists = self.means.iter::<f64>().unwrap().zip(self.stds.iter::<f64>().unwrap()).map(|(mean, std)| {
             Normal::new(mean, std).unwrap()
-        }).choose_multiple(opt_rnd(), n_samples).into_iter().map(|distr|{
+        }).collect::<Vec<_>>();
 
+        // cycle().take(n_samples) - replacement
+        // let sample = normal_dists.into_iter().cycle().take(n_samples).choose_multiple(opt_rnd(), n_samples).into_iter().map(|distr| {
+        let sample = (0..n_samples).map(|i| {
+            let distr = normal_dists.choose(&mut opt_rnd()).expect("distr");
+            // debug!("sample i={i} distr={distr:?}");
             loop {
                 let mut val = opt_rnd().sample(distr);
 
@@ -211,12 +236,16 @@ impl PEGaussian {
                     return val;
                 }
             }
-        }).collect()
+        }).collect();
+
+        // debug!("sample={sample:?}");
+        sample
 
     }
 }
 
 
+#[derive(Debug)]
 pub struct MultiVariateParzenEstimator {
     parzen_estimators:Vec<NumericalParzenEstimator<f64>>
 }
@@ -242,14 +271,16 @@ impl MultiVariateParzenEstimator {
     }
 
     pub fn log_pdf(&self, configs:&Vec<Vec<Primitives>>) -> Tensor {
+        let tensor = Tensor::stack(
+            (&self.parzen_estimators).iter()
+                .zip(configs.into_iter())
+                .map(|(pe, config)| pe.gaussian().expect("gaussian").basis_loglikelihood(&<Vec<Primitives> as Into<ArgmTensor>>::into(config.clone())))
+                .collect::<Vec<Tensor>>().as_slice(),
+            0
+        );
+        // debug!("log_pdf: tensor.size={:?}", tensor.size());
         compute_config_loglikelihoods(
-            &Tensor::stack(
-                (&self.parzen_estimators).iter()
-                    .zip(configs.into_iter())
-                    .map(|(pe, config)|pe.gaussian().expect("gaussian").basis_loglikelihood(&<Vec<Primitives> as Into<ArgmTensor>>::into(config.clone())))
-                    .collect::<Vec<Tensor>>().as_slice(),
-                0
-            ).view((self.parzen_estimators.len() as i64, -1, configs.len() as i64)),
+            &tensor, //.view((self.parzen_estimators.len() as i64, -1, configs.len() as i64)),
             Some(self.parzen_estimators[0].weights.as_ref())
         )
     }
@@ -294,7 +325,11 @@ mod multi_variate_parzen_estimator_tests {
         ]);
 
         let v = mvpe.log_pdf(
-        &vec![vec![Float(0.0), Float(0.1), Float(0.2)]]
+        &vec![
+            vec![Float(0.0)],//x0
+            vec![Float(0.1)],//x1
+            vec![Float(0.2)]//x2
+        ]
         );
 
         // println!("v={v}");
@@ -306,13 +341,13 @@ mod multi_variate_parzen_estimator_tests {
 
 ///basis_loglikelihoods - params x samples.size + prior x candidates
 pub fn compute_config_loglikelihoods(basis_loglikelihoods: &Tensor, weights:Option<&Tensor>)->Tensor {
-    debug!("basis_loglikelihoods={basis_loglikelihoods} size={:?}", basis_loglikelihoods.size());
-    debug!("weights={weights:?}");
+    // debug!("basis_loglikelihoods={basis_loglikelihoods} size={:?}", basis_loglikelihoods.size());
+    // debug!("weights={weights:?}");
 
-    let config_basis_loglikelihoods = basis_loglikelihoods.sum_dim_intlist(2, false, Kind::Float);//TODO kind view((-1, 1))
+    let config_basis_loglikelihoods = basis_loglikelihoods.sum_dim_intlist(0, false, Kind::Float);//.view((-1, 1));//TODO kind
 
-    debug!("config_basis_loglikelihoods={config_basis_loglikelihoods}");
-    debug!("config_basis_loglikelihoods.size={:?} weights.size()={:?}", config_basis_loglikelihoods.size(), weights.expect("weights").size());
+    // debug!("config_basis_loglikelihoods={config_basis_loglikelihoods}");
+    // debug!("config_basis_loglikelihoods.size={:?} weights.size()={:?}", config_basis_loglikelihoods.size(), weights.expect("weights").size());
 
     let config_basis_loglikelihoods = if let Some(weights)= weights {
         config_basis_loglikelihoods + weights.view((-1,1)).log()
@@ -414,7 +449,7 @@ mod tests {
             basis_loglikelihood.round_decimals(3)
         );
 
-        let samples = gaussian.sample(3);
+        let samples = gaussian.sample(11);
 
         debug!("samples={samples:?}");
     }

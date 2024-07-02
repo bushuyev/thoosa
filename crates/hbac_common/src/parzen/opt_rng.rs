@@ -25,3 +25,10 @@ pub fn opt_rnd<'a>() -> &'a mut Mt19937GenRand32 {
     unsafe { &mut *FOO.with(|foo| foo.clone()).get() }
 }
 
+
+pub fn sample_with_replacement<T: Clone>(vec: &Vec<T>, num_samples: usize) -> Vec<T> {
+    let mut rng = thread_rng();
+    (0..num_samples)
+        .map(|_| vec[rng.gen_range(0..vec.len())].clone())
+        .collect()
+}

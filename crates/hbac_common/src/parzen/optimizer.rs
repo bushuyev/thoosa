@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap};
 use log::debug;
 use rand::{Rng, thread_rng};
 use rand::distributions::Uniform;
-use tch::Tensor;
+use tch::{IndexOp, Tensor};
 use crate::argmin::ArgmTensor;
 use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
 use super::opt_rng::{opt_rnd};
@@ -94,7 +94,7 @@ impl From<Vec<Primitives>> for ArgmTensor {
 // }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RunResult{
     loss:f32,
     eval_config:Vec<Primitives>
@@ -125,6 +125,37 @@ impl Ord for RunResult {
     }
 }
 
+#[cfg(test)]
+mod run_result_tests {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    use crate::parzen::optimizer::RunResult;
+
+    #[test]
+    fn test_0(){
+        let mut observations = BinaryHeap::new();
+
+        observations.push(Reverse(RunResult::new(10., vec![])));
+        observations.push(Reverse(RunResult::new(1., vec![])));
+        observations.push(Reverse(RunResult::new(20., vec![])));
+        observations.push(Reverse(RunResult::new(2., vec![])));
+
+
+        let mut observations_c = observations.clone();
+        let mut observations_vec = vec![];
+        while let Some(o) = observations_c.pop() {
+
+            observations_vec.push(o);
+        }
+
+        // println!("observations_vec={observations_vec:?}");
+        assert_eq!(1., observations_vec[0].0.loss);
+        assert_eq!(2., observations_vec[1].0.loss);
+        assert_eq!(10., observations_vec[2].0.loss);
+        assert_eq!(20., observations_vec[3].0.loss);
+    }
+}
+
 
 struct TreeStructuredParzenEstimator {
     observations:BinaryHeap<Reverse<RunResult>>,
@@ -151,21 +182,29 @@ impl TreeStructuredParzenEstimator {
 
         let n_lower = Self::percentile(self.observations.len()) as usize;
 
+        // debug!("n_lower={n_lower} self.observations={:?}", self.observations);
+
         self.percentile = n_lower as f32 / self.observations.len() as f32; //[self._metric_name].size
 
-        debug!("loss={loss} eval_config={eval_config:?} n_lower={n_lower} self.percentile={} self.observations.len()={}", self.percentile, self.observations.len());
+        // debug!("loss={loss} eval_config={eval_config:?} n_lower={n_lower} self.percentile={} self.observations.len()={}", self.percentile, self.observations.len());
 
 
-        let (lower_vals, upper_vals) = self.observations.iter().enumerate().fold((vec![], vec![]), |mut a, (i, v)|{
-            if i < n_lower {
-                a.0.push(v.0.eval_config.clone().clone());
+        let mut observations_c = self.observations.clone();
+        let mut lower_vals = vec![];
+        let mut upper_vals = vec![];
+
+        while let Some(o) = observations_c.pop() {
+            // debug!(">>>v.0.eval_config={:?}", o);
+            if lower_vals.len() < n_lower {
+                lower_vals.push(o.0.eval_config);
             } else {
-                a.1.push(v.0.eval_config.clone().clone());
+                upper_vals.push(o.0.eval_config);
             }
-            a
-        });
-        debug!("lower_vals={lower_vals:?}");
-        debug!("upper_vals={upper_vals:?}");
+        }
+
+
+        // debug!("lower_vals={lower_vals:?}");
+        // debug!("upper_vals={upper_vals:?}");
 
         let (lower_esitmators, upper_esitmators) = cs
             .into_iter()
@@ -199,6 +238,9 @@ impl TreeStructuredParzenEstimator {
 
         self.mvpe_lower.replace(MultiVariateParzenEstimator::new(lower_esitmators));
         self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators));
+
+        debug!("self.mvpe_lower={:?}", self.mvpe_lower);
+        debug!("self.self.mvpe_upper={:?}", self.mvpe_upper);
     }
 
 
@@ -230,7 +272,7 @@ impl TreeStructuredParzenEstimator {
 
 #[cfg(test)]
 mod tree_structured_parzen_estimator_tests {
-    use tch::Tensor;
+    use tch::{Kind, Tensor};
     use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, TreeStructuredParzenEstimator};
     use crate::parzen::optimizer::Primitives::Float;
@@ -295,14 +337,16 @@ mod tree_structured_parzen_estimator_tests {
 
 
         let pi = tsp.compute_probability_improvement(&vec![
-            vec![Float(0.0), Float(0.1), Float(0.2)]
+            vec![Float(0.0), Float(1.0), Float(2.0)], //x0
+            vec![Float(0.1), Float(1.1), Float(2.1)], //x1
+            vec![Float(0.2), Float(1.2), Float(2.2)]  //x2
         ]);
 
         println!("pi={pi}");
-        assert_eq!(18545, (pi.round_decimals(4).double_value(&[]) * 10000.0) as usize);
-        // let pi = tree_structured_parzen_estimator.compute_probability_improvement(
-        //
-        // );
+        assert!(
+            Tensor::from_slice(&[ 1.85448311,  4.59934198, -4.30722048]).totype(Kind::Float).allclose(&pi,  1e-02, 1e-02, false)
+        );
+
     }
 }
 
@@ -328,8 +372,9 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
         }
     }
 
-    pub fn optimize(&mut self) {
-
+    pub fn optimize(&mut self) -> Vec<Primitives>{
+        let mut best_loss = f32::MAX;
+        let mut best_config:Vec<Primitives> = vec![];
         (0..self.max_evals).for_each(|i|{
 
             let eval_config = if  i < self.n_init {
@@ -337,26 +382,32 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
                 self.cs.random_sample()
 
             } else {
-                debug!("i={i} sample");
+                debug!("---------------------------------------i={i} sample");
                 self.sample()
             };
 
             let loss = (self.obj_func)(
                 &eval_config
             );
-            debug!("i={i} loss={loss}");
+            if loss < best_loss {
+                best_loss = loss;
+                best_config = eval_config.clone();
+            }
+            debug!("i={i} eval_config={:?} loss={loss}", eval_config);
 
             for (_key, mut tpe) in &mut self.tpe_samplers {
                 tpe.update_observations(loss, &eval_config, &self.cs)
             }
         });
+
+        best_config
     }
 
     fn sample(&self)->Vec<Primitives> {
 
         let config_cands = stack_params(
             self.tpe_samplers.values().map(|tpe| {
-                tpe.get_config_candidates(21)
+                tpe.get_config_candidates(24)
             }).collect::<Vec<Vec<Vec<Primitives>>>>() //tpe(only loss)/params/candidates
         );
 
@@ -366,8 +417,16 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
             0,
         );
 
-        config_cands[pi_config.argmax(0, false).double_value(&[]) as usize].clone()
+        debug!("sample: config_cands={config_cands:?}");
+        debug!("sample: pi_config={pi_config}");
+
+        let max = pi_config.max(); //pi_config.argmax(0, false);
+        debug!("sample: argmax={max}");
+        let i = pi_config.argmax(1, true).i(0).double_value(&[]); //max.double_value(&[]) as usize;
+        debug!("sample: i={i}");
+        config_cands.into_iter().map(|p|p[i as usize]).collect()
         // return weights @ pi_config_array
+
     }
 
 }
@@ -393,7 +452,7 @@ mod tpe_optimizer_tests {
     use rand::{Rng, SeedableRng};
     use rand_mt::{Mt19937GenRand32, Mt19937GenRand64};
 
-    use tch::Tensor;
+    use tch::{IndexOp, Tensor};
     use crate::argmin::ArgmTensor;
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, stack_params, TPEOptimizer};
     use crate::utils::sin3_pow2_f;
@@ -441,8 +500,9 @@ mod tpe_optimizer_tests {
         let max_evals = 5;
 
         // let cs = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {name:format!("x_{}", 0), lower: -2.0, upper: 2.0}]);
+        let dim = 10; //0;
         let cs = ConfigurationSpace::new(
-            (0..10).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -50.0, upper: 50.0}).collect()
+            (0..dim).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -50.0, upper: 50.0}).collect()
         );
 
 
@@ -451,7 +511,8 @@ mod tpe_optimizer_tests {
             cs, 1000, 10
         );
 
-        opt.optimize();
+        let best_config = opt.optimize();
+        println!("best_config={best_config:?}");
     }
 
     fn sphere() -> fn(&Vec<Primitives>) -> f32 {
@@ -464,6 +525,18 @@ mod tpe_optimizer_tests {
 
             loss
         }
+    }
+
+    #[test]
+    fn test_0(){
+        let t = Tensor::stack(&[
+                Tensor::from_slice(&[0.1, 1.1, 20.1, 3.1, 4.1]),
+                // Tensor::from_slice(&[0.2, 1.2, 20.2, 3.2, 4.2])
+            ], 0,
+        );
+
+        println!("t={t} argmax={}", t.argmax(1, true).i(0).double_value(&[]));
+
     }
 }
 
