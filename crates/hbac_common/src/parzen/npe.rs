@@ -12,7 +12,8 @@ use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Kind, Tensor};
 use crate::argmin::ArgmTensor;
 use crate::parzen::opt_rng::opt_rnd;
-use crate::parzen::optimizer::Primitives;
+use crate::parzen::optimizer::{Distr, ParzenEstimator, Primitives};
+use crate::parzen::util::uniform_weight;
 
 pub enum BandwidthFactor<N> where N: Float, f64: Into<N>  {
     Min(N),
@@ -104,11 +105,17 @@ impl <N> Debug for NumericalParzenEstimator<N> where N: Float + tch::kind::Eleme
     }
 }
 
+impl <N> ParzenEstimator for NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N>{
+    fn clc_dist(&self, samples: Tensor) -> Box<dyn Distr> {
+        Box::new(self._clc_dist(samples))
+    }
+}
+
 const SQR2PI:f64 = 2.5066282746310002;
 
 impl<N> NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N>{
 
-    pub fn new(lb: N, ub: N, weights:Option<Tensor>, bandwidth_factor: BandwidthFactor<N>, prior:bool) -> Self {
+    pub fn new(lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior:bool) -> Self {
 
         let mut i = Self {
             lb,
@@ -122,13 +129,8 @@ impl<N> NumericalParzenEstimator<N> where N: Float + tch::kind::Element + Partia
         i
     }
 
-    fn uniform_weight(size: i64) -> Tensor {
-        Tensor::ones(&[size], FLOAT_CPU) / size
-    }
 
-
-
-    pub fn clc_dist(&self, samples:Tensor) -> PEGaussian {
+    fn _clc_dist(&self, samples:Tensor) -> PEGaussian {
         let samples = if self.prior {//prior adds midpoint to 'stabilize the density estimation process' (gpt)
             Tensor::cat(&[
                 samples,
@@ -156,7 +158,7 @@ impl<N> NumericalParzenEstimator<N> where N: Float + tch::kind::Element + Partia
         trace!("means={} clipped_bandwidth={}", means, clipped_bandwidth);
         let (norm_consts,  logpdf_consts) = Self::calculate_norm_consts(&self.lb, &self.ub, &means, &clipped_bandwidth);
 
-        let weights = Self::uniform_weight(size);//TODO
+        let weights = uniform_weight(size);//TODO
 
         PEGaussian::new(means, clipped_bandwidth, norm_consts, logpdf_consts, weights, self.lb.into(), self.ub.into())
     }
@@ -202,13 +204,13 @@ impl PEGaussian {
         self.weights.multiply(&norm_consts).multiply(&mahalanobis.multiply_scalar(-0.5).exp()).sum_dim_intlist(1, false, None)
     }
 
-    pub fn basis_loglikelihood(&self, x:&Tensor) -> Tensor {
+    fn _basis_loglikelihood(&self, x:&Tensor) -> Tensor {
         let mahalanobis = ((x - self.means.view((-1,1))) / self.stds.view((-1,1))).pow_tensor_scalar(2);
 
         self.logpdf_consts.view((-1, 1)) - 0.5 * mahalanobis
     }
 
-    pub fn sample(&self, n_samples:usize) -> Vec<f64> {
+    fn _sample(&self, n_samples:usize) -> Vec<f64> {
         trace!("self.means={:?} self.stds={:?}", self.means, self.stds);
 
 
@@ -232,15 +234,29 @@ impl PEGaussian {
     }
 }
 
+impl Distr for PEGaussian {
+    fn sample(&self, n_samples: usize) -> Vec<f64> {
+        self._sample(n_samples)
+    }
+
+    fn basis_loglikelihood(&self, x:&Tensor) -> Tensor {
+        self._basis_loglikelihood(x)
+    }
+
+    fn weights(&self) -> &Tensor {
+        &self.weights
+    }
+}
+
 
 #[derive(Debug)]
 pub struct MultiVariateParzenEstimator {
-    parzen_estimators:Vec<PEGaussian>
+    parzen_estimators:Vec<Box<dyn Distr>>
 }
 
 
 impl MultiVariateParzenEstimator {
-    pub fn new(parzen_estimators:Vec<PEGaussian>) -> Self {
+    pub fn new(parzen_estimators:Vec<Box<dyn Distr>>) -> Self {
         Self { parzen_estimators }
     }
 
@@ -268,7 +284,8 @@ impl MultiVariateParzenEstimator {
         // debug!("log_pdf: tensor.size={:?}", tensor.size());
         compute_config_loglikelihoods(
             &tensor, //.view((self.parzen_estimators.len() as i64, -1, configs.len() as i64)),
-            Some(self.parzen_estimators[0].weights.as_ref())
+            // Some(self.parzen_estimators[0].weights.as_ref())
+            Some(self.parzen_estimators[0].weights())
         )
     }
 
@@ -284,30 +301,27 @@ mod multi_variate_parzen_estimator_tests {
         let samples = [-1.0, 0.0, 1.0];
 
         let mvpe = MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(
+            Box::new(NumericalParzenEstimator::new(
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
-                None,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist( Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(
+            )._clc_dist( Tensor::from_slice(&samples))),
+            Box::new(NumericalParzenEstimator::new(
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
-                None,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist( Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(
+            )._clc_dist( Tensor::from_slice(&samples))),
+            Box::new(NumericalParzenEstimator::new(
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
-                None,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist( Tensor::from_slice(&samples))
+            )._clc_dist( Tensor::from_slice(&samples)))
 
         ]);
 
@@ -336,7 +350,7 @@ pub fn compute_config_loglikelihoods(basis_loglikelihoods: &Tensor, weights:Opti
     // debug!("config_basis_loglikelihoods={config_basis_loglikelihoods}");
     // debug!("config_basis_loglikelihoods.size={:?} weights.size()={:?}", config_basis_loglikelihoods.size(), weights.expect("weights").size());
 
-    let config_basis_loglikelihoods = if let Some(weights)= weights {
+    let config_basis_loglikelihoods = if let Some(weights) = weights {
         config_basis_loglikelihoods + weights.view((-1,1)).log()
     } else {
         config_basis_loglikelihoods
@@ -363,7 +377,6 @@ mod tests {
             // Tensor::from_slice(&[-1.0, 0.0, 1.0]),
             -3.0f64,
             3.0f64,
-            None,
             BandwidthFactor::default(),
             true
         );
@@ -375,7 +388,7 @@ mod tests {
         //     npe.weights.round_decimals(4)
         // );
 
-        let gaussian = npe.clc_dist(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
+        let gaussian = npe._clc_dist(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
         debug!("x={:?}", gaussian.means);
         assert_eq!(
             Tensor::from_slice(&[-1.,  0.,  1.,  0.]).round_decimals(4),
@@ -424,7 +437,7 @@ mod tests {
             pdf.round_decimals(4)
         );
 
-        let basis_loglikelihood = gaussian.basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU));
+        let basis_loglikelihood = gaussian._basis_loglikelihood(&Tensor::linspace(0., 10., 10, FLOAT_CPU));
         debug!("basis_loglikelihood={basis_loglikelihood}");
         assert_eq!(
             Tensor::from_slice(&[
@@ -436,7 +449,7 @@ mod tests {
             basis_loglikelihood.round_decimals(3)
         );
 
-        let samples = gaussian.sample(11);
+        let samples = gaussian._sample(11);
 
         debug!("samples={samples:?}");
     }

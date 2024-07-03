@@ -1,11 +1,13 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
+use std::fmt::Debug;
 use log::{debug, trace};
 use rand::{Rng, thread_rng};
 use rand::distributions::Uniform;
 use tch::{IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use crate::argmin::ArgmTensor;
+use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
 use super::opt_rng::{opt_rnd};
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
@@ -157,13 +159,22 @@ mod run_result_tests {
     }
 }
 
+pub trait ParzenEstimator {
+    fn clc_dist(&self, samples:Tensor) -> Box<dyn Distr>;
+}
+
+pub trait Distr:Debug {
+    fn sample(&self, n_samples:usize) -> Vec<f64>;
+    fn basis_loglikelihood(&self, x:&Tensor) -> Tensor;
+    fn weights(&self)->&Tensor;
+}
 
 struct TreeStructuredParzenEstimator {
     observations:BinaryHeap<Reverse<RunResult>>,
     mvpe_lower:Option<MultiVariateParzenEstimator>, //TODO move out
     mvpe_upper:Option<MultiVariateParzenEstimator>, //TODO move out
     percentile:f32, //TODO move out
-    esitmators:Vec<NumericalParzenEstimator<f64>>
+    esitmators:Vec<Box<dyn ParzenEstimator>>
 }
 
 impl TreeStructuredParzenEstimator {
@@ -175,14 +186,22 @@ impl TreeStructuredParzenEstimator {
             mvpe_upper:None,
             percentile: 0.,
             esitmators: cs.iter().map(|hp|
-                NumericalParzenEstimator::new(
-                    // Tensor::zeros(1, FLOAT_CPU),
-                    hp.lower(),
-                    hp.upper(),
-                    None,
-                    BandwidthFactor::default(),
-                    true
-                )
+                match hp {
+                    Hyperparameter::UniformFloat { name, lower, upper } => {
+                        Box::new(NumericalParzenEstimator::new(
+                            // Tensor::zeros(1, FLOAT_CPU),
+                            *lower,
+                            *upper,
+                            BandwidthFactor::default(),
+                            true
+                        )) as Box<dyn ParzenEstimator>
+
+                    }
+                    Hyperparameter::Categorical { .. } => {
+                        Box::new(CategoricalParzenEstimator::new()) as Box<dyn ParzenEstimator>
+                    }
+
+                }
             ).collect()
         }
     }
@@ -260,7 +279,7 @@ impl TreeStructuredParzenEstimator {
 mod tree_structured_parzen_estimator_tests {
     use tch::{Kind, Tensor};
     use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
-    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, TreeStructuredParzenEstimator};
+    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, ParzenEstimator, Primitives, TreeStructuredParzenEstimator};
     use crate::parzen::optimizer::Primitives::Float;
 
     #[test]
@@ -310,17 +329,17 @@ mod tree_structured_parzen_estimator_tests {
 
 
         tsp.mvpe_lower = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new( -3.0f64, 3.0f64, None, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new( -3.0f64, 3.0f64, None, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new( -3.0f64, 3.0f64, None, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples))
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples))
 
         ]));
         let samples = [-2.0, 0.0, 2.0];
 
         tsp.mvpe_upper = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, None, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, None, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, None, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples))
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples))
 
         ]));
 
@@ -534,13 +553,17 @@ mod tpe_optimizer_tests {
 
 
 enum Hyperparameter {
-    UniformFloat{name:String, lower:f64, upper:f64}
+    UniformFloat{name:String, lower:f64, upper:f64},
+    Categorical{name:String, values:Vec<String>}
 }
 
 impl Hyperparameter {
     fn name(&self)->String {
         match self {
             Hyperparameter::UniformFloat { name, .. } => {
+                name.clone()
+            }
+            Hyperparameter::Categorical { name,.. } => {
                 name.clone()
             }
         }
@@ -554,24 +577,13 @@ impl Hyperparameter {
                 // debug!("uniform={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Primitives::Double(sample)
             }
-        }
-    }
-
-    fn upper(&self) -> f64{
-        match self {
-            Hyperparameter::UniformFloat { name, lower, upper } => {
-                *upper
+            Hyperparameter::Categorical { name, values } => {
+                todo!()
             }
         }
     }
 
-    fn lower(&self)-> f64 {
-        match self {
-            Hyperparameter::UniformFloat { name, lower, upper } => {
-                *lower
-            }
-        }
-    }
+
 }
 
 struct ConfigurationSpace {
