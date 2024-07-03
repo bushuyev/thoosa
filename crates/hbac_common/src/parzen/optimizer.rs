@@ -8,8 +8,9 @@ use tch::{IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
-use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
-use super::opt_rng::{opt_rnd};
+use crate::parzen::mvpe::MultiVariateParzenEstimator;
+use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
+use super::opt_rng::opt_rnd;
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
 
 #[derive(Debug, Copy, Clone)]
@@ -278,7 +279,8 @@ impl TreeStructuredParzenEstimator {
 #[cfg(test)]
 mod tree_structured_parzen_estimator_tests {
     use tch::{Kind, Tensor};
-    use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
+    use crate::parzen::mvpe::MultiVariateParzenEstimator;
+    use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, ParzenEstimator, Primitives, TreeStructuredParzenEstimator};
     use crate::parzen::optimizer::Primitives::Float;
 
@@ -643,7 +645,7 @@ mod tests {
     use rand::prelude::StdRng;
     use rand::SeedableRng;
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, TPEOptimizer};
-    use crate::utils::{sin3_pow2_f};
+    use crate::utils::sin3_pow2_f;
 
     #[test]
     fn test_0(){

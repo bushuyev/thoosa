@@ -84,22 +84,18 @@ impl <N> Default for BandwidthFactor<N> where N: Float, f64: Into<N>  {
 
 
 pub struct NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N> {
-    // samples: Tensor,
     lb: N,
     ub: N,
     bandwidth_clip: BandwidthFactor<N>,
     bandwidth:BandwidthFn,
-    // weights:Tensor,
     prior:bool,
-    // pe:Option<PEGaussian>//TODO move out
 }
 
 impl <N> Debug for NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Test")
-            // .field("lb", &self.lb)
-            // .field("ub", &self.ub)
-            // .field("weights", &self.weights)
+            .field("lb", &<N as Into<f64>>::into(self.lb))
+            .field("ub", &<N as Into<f64>>::into(self.ub))
             .field("prior", &self.prior)
             .finish()
     }
@@ -249,96 +245,6 @@ impl Distr for PEGaussian {
 }
 
 
-#[derive(Debug)]
-pub struct MultiVariateParzenEstimator {
-    parzen_estimators:Vec<Box<dyn Distr>>
-}
-
-
-impl MultiVariateParzenEstimator {
-    pub fn new(parzen_estimators:Vec<Box<dyn Distr>>) -> Self {
-        Self { parzen_estimators }
-    }
-
-    pub fn len(&self)->usize {
-        self.parzen_estimators.len()
-    }
-
-    pub fn sample(&self, dim_independent:bool, n_samples: usize) -> Vec<Vec<Primitives>>{
-        if dim_independent {
-            self.parzen_estimators.iter().map(|pe|pe.sample(n_samples).into_iter().map(|v|v.into()).collect()).collect()//TODO collect/collect
-
-        } else {
-            todo!()
-        }
-    }
-
-    pub fn log_pdf(&self, configs:&Vec<Vec<Primitives>>) -> Tensor {
-        let tensor = Tensor::stack(
-            (&self.parzen_estimators).iter()
-                .zip(configs.into_iter())
-                .map(|(pe, config)| pe.basis_loglikelihood(&<Vec<Primitives> as Into<ArgmTensor>>::into(config.clone())))
-                .collect::<Vec<Tensor>>().as_slice(),
-            0
-        );
-        // debug!("log_pdf: tensor.size={:?}", tensor.size());
-        compute_config_loglikelihoods(
-            &tensor, //.view((self.parzen_estimators.len() as i64, -1, configs.len() as i64)),
-            // Some(self.parzen_estimators[0].weights.as_ref())
-            Some(self.parzen_estimators[0].weights())
-        )
-    }
-
-}
-
-mod multi_variate_parzen_estimator_tests {
-    use tch::Tensor;
-    use crate::parzen::npe::{BandwidthFactor, MultiVariateParzenEstimator, NumericalParzenEstimator};
-    use crate::parzen::optimizer::Primitives::Float;
-
-    #[test]
-    fn test_log_pdf(){
-        let samples = [-1.0, 0.0, 1.0];
-
-        let mvpe = MultiVariateParzenEstimator::new(vec![
-            Box::new(NumericalParzenEstimator::new(
-                // Tensor::from_slice(&samples),
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true
-            )._clc_dist( Tensor::from_slice(&samples))),
-            Box::new(NumericalParzenEstimator::new(
-                // Tensor::from_slice(&samples),
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true
-            )._clc_dist( Tensor::from_slice(&samples))),
-            Box::new(NumericalParzenEstimator::new(
-                // Tensor::from_slice(&samples),
-                -3.0f64,
-                3.0f64,
-                BandwidthFactor::default(),
-                true
-            )._clc_dist( Tensor::from_slice(&samples)))
-
-        ]);
-
-        let v = mvpe.log_pdf(
-        &vec![
-            vec![Float(0.0)],//x0
-            vec![Float(0.1)],//x1
-            vec![Float(0.2)]//x2
-        ]
-        );
-
-        // println!("v={v}");
-        assert_eq!(-8017,  (v.double_value(&[])*10000.0) as isize);
-
-
-    }
-}
 
 ///basis_loglikelihoods - params x samples.size + prior x candidates
 pub fn compute_config_loglikelihoods(basis_loglikelihoods: &Tensor, weights:Option<&Tensor>)->Tensor {
