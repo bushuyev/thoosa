@@ -265,8 +265,7 @@ impl MultiVariateParzenEstimator {
             self.parzen_estimators.iter().map(|pe|pe.gaussian().expect("gaussian").sample(n_samples).into_iter().map(|v|v.into()).collect()).collect()//TODO collect/collect
 
         } else {
-
-            vec![]
+            todo!()
         }
     }
 

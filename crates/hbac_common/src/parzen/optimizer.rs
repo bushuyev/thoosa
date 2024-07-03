@@ -1,6 +1,6 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
-use log::debug;
+use log::{debug, trace};
 use rand::{Rng, thread_rng};
 use rand::distributions::Uniform;
 use tch::{IndexOp, Tensor};
@@ -176,8 +176,6 @@ impl TreeStructuredParzenEstimator {
     }
 
     pub fn update_observations(&mut self, loss:f32, eval_config:&Vec<Primitives>, cs:&ConfigurationSpace) {
-
-
         self.observations.push(Reverse(RunResult::new(loss, eval_config.clone())));
 
         let n_lower = Self::percentile(self.observations.len()) as usize;
@@ -189,18 +187,7 @@ impl TreeStructuredParzenEstimator {
         // debug!("loss={loss} eval_config={eval_config:?} n_lower={n_lower} self.percentile={} self.observations.len()={}", self.percentile, self.observations.len());
 
 
-        let mut observations_c = self.observations.clone();
-        let mut lower_vals = vec![];
-        let mut upper_vals = vec![];
-
-        while let Some(o) = observations_c.pop() {
-            // debug!(">>>v.0.eval_config={:?}", o);
-            if lower_vals.len() < n_lower {
-                lower_vals.push(o.0.eval_config);
-            } else {
-                upper_vals.push(o.0.eval_config);
-            }
-        }
+        let (lower_vals, upper_vals) = self.pop_observations(n_lower);
 
 
         // debug!("lower_vals={lower_vals:?}");
@@ -239,10 +226,25 @@ impl TreeStructuredParzenEstimator {
         self.mvpe_lower.replace(MultiVariateParzenEstimator::new(lower_esitmators));
         self.mvpe_upper.replace(MultiVariateParzenEstimator::new(upper_esitmators));
 
-        debug!("self.mvpe_lower={:?}", self.mvpe_lower);
-        debug!("self.self.mvpe_upper={:?}", self.mvpe_upper);
+        trace!("self.mvpe_lower={:?}", self.mvpe_lower);
+        trace!("self.self.mvpe_upper={:?}", self.mvpe_upper);
     }
 
+    fn pop_observations(&mut self, n_lower: usize) -> (Vec<Vec<Primitives>>, Vec<Vec<Primitives>>) {
+        let mut observations_c = self.observations.clone();
+        let mut lower_vals = Vec::with_capacity(n_lower);
+        let mut upper_vals = Vec::with_capacity(observations_c.len() - n_lower);
+
+        while let Some(o) = observations_c.pop() {
+            // debug!(">>>v.0.eval_config={:?}", o);
+            if lower_vals.len() < n_lower {
+                lower_vals.push(o.0.eval_config);
+            } else {
+                upper_vals.push(o.0.eval_config);
+            }
+        }
+        (lower_vals, upper_vals)
+    }
 
     fn percentile(size:usize) -> f32 {
         (0.25 * (size as f32).sqrt()).ceil()
@@ -374,7 +376,8 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
 
     pub fn optimize(&mut self) -> Vec<Primitives>{
         let mut best_loss = f32::MAX;
-        let mut best_config:Vec<Primitives> = vec![];
+        let mut best_config:Option<Vec<Primitives>> = None;
+
         (0..self.max_evals).for_each(|i|{
 
             let eval_config = if  i < self.n_init {
@@ -391,7 +394,7 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
             );
             if loss < best_loss {
                 best_loss = loss;
-                best_config = eval_config.clone();
+                best_config.replace(eval_config.clone());
             }
             debug!("i={i} eval_config={:?} loss={loss}", eval_config);
 
@@ -400,11 +403,11 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
             }
         });
 
-        best_config
+        best_config.expect("best_config")
     }
 
     fn sample(&self)->Vec<Primitives> {
-
+        //TODO if always loss only - merge get_config_candidates & compute_probability_improvement
         let config_cands = stack_params(
             self.tpe_samplers.values().map(|tpe| {
                 tpe.get_config_candidates(24)
@@ -482,7 +485,7 @@ mod tpe_optimizer_tests {
 
     #[test]
     fn test_sphere(){
-        let sphere = sphere()(&vec![
+        let sphere = sphere(300)(&vec![
             Primitives::Float(0.1),
             Primitives::Float(0.2),
             Primitives::Float(0.3),
@@ -494,32 +497,32 @@ mod tpe_optimizer_tests {
 
     }
 
-
     #[test]
-    fn test_optimize(){
-        let max_evals = 5;
-
-        // let cs = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {name:format!("x_{}", 0), lower: -2.0, upper: 2.0}]);
-        let dim = 10; //0;
-        let cs = ConfigurationSpace::new(
-            (0..dim).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -50.0, upper: 50.0}).collect()
-        );
-
+    fn test_optimize_numeric(){
 
         let mut opt = TPEOptimizer::new(
-            sphere(),
-            cs, 1000, 10
+            sphere(300),
+
+            ConfigurationSpace::new(
+                (0..3).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -500.0, upper: 500.0}).collect()
+            ),
+            500,
+            10
         );
 
         let best_config = opt.optimize();
+
         println!("best_config={best_config:?}");
+        assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
+        assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
+        assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
     }
 
-    fn sphere() -> fn(&Vec<Primitives>) -> f32 {
-        |params| {
+    fn sphere(d_x: i64) -> impl Fn(&Vec<Primitives>) -> f32 {
+        move |params| {
             debug!("params={params:?}");
             let t: Tensor = <Vec<Primitives> as Into<ArgmTensor>>::into(params.clone()).into();
-            let loss = t.subtract_scalar(10).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
+            let loss = t.subtract_scalar(d_x).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
 
             debug!("loss={loss:?}");
 
