@@ -2,7 +2,7 @@ use std::cmp::{max, max_by};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::ops::Div;
-use log::debug;
+use log::{debug, trace};
 use num_traits::*;
 use rand::prelude::ThreadRng;
 use rand::{Rng, thread_rng};
@@ -83,25 +83,23 @@ impl <N> Default for BandwidthFactor<N> where N: Float, f64: Into<N>  {
 
 
 pub struct NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N> {
-    samples: Tensor,
+    // samples: Tensor,
     lb: N,
     ub: N,
     bandwidth_clip: BandwidthFactor<N>,
     bandwidth:BandwidthFn,
-    weights:Tensor,
+    // weights:Tensor,
     prior:bool,
-    pe:Option<PEGaussian>//TODO move out
+    // pe:Option<PEGaussian>//TODO move out
 }
 
 impl <N> Debug for NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Test")
-            .field("samples", &self.samples)
             // .field("lb", &self.lb)
             // .field("ub", &self.ub)
-            .field("weights", &self.weights)
+            // .field("weights", &self.weights)
             .field("prior", &self.prior)
-            .field("pe", &self.pe)
             .finish()
     }
 }
@@ -110,35 +108,16 @@ const SQR2PI:f64 = 2.5066282746310002;
 
 impl<N> NumericalParzenEstimator<N> where N: Float + tch::kind::Element + PartialOrd, f64: Into<N>, f64: From<N>, tch::Scalar: From<N>{
 
-    pub fn new(samples: Tensor, lb: N, ub: N, weights:Option<Tensor>, bandwidth_factor: BandwidthFactor<N>, prior:bool) -> Self {
-        assert_eq!(1, samples.size().len());
+    pub fn new(lb: N, ub: N, weights:Option<Tensor>, bandwidth_factor: BandwidthFactor<N>, prior:bool) -> Self {
 
-        let hard_lb = lb;
-        let hard_ub = ub;
-
-        let samples = if prior {//prior adds midpoint to 'stabilize the density estimation process' (gpt)
-            Tensor::cat(&[
-                samples,
-                Tensor::from(0.5.into() * (hard_lb + hard_ub)).view(1)
-            ], 0)
-        } else {
-            samples
-        };
-
-        let size = samples.size()[0];
         let mut i = Self {
-            samples,
             lb,
             ub,
             bandwidth_clip: bandwidth_factor,
             bandwidth: BandwidthFn::Simp,
-            weights: weights.unwrap_or(Self::uniform_weight(size)),
             prior,
-            pe:None
         };
 
-        let pe = i.calculate();
-        i.pe = Some(pe);
 
         i
     }
@@ -147,29 +126,41 @@ impl<N> NumericalParzenEstimator<N> where N: Float + tch::kind::Element + Partia
         Tensor::ones(&[size], FLOAT_CPU) / size
     }
 
-    pub fn gaussian(&self) -> Option<&PEGaussian> {
-        self.pe.as_ref()
-    }
 
-    fn calculate(&self) -> PEGaussian {
-        let (means, badwidth) = self.bandwidth.clc(self.samples.shallow_clone());
+
+    pub fn clc_dist(&self, samples:Tensor) -> PEGaussian {
+        let samples = if self.prior {//prior adds midpoint to 'stabilize the density estimation process' (gpt)
+            Tensor::cat(&[
+                samples,
+                Tensor::from(0.5.into() * (self.lb + self.ub)).view(1)
+            ], 0)
+        } else {
+            samples
+        };
+
+
+        let size = samples.size()[0];
+
+        let (means, badwidth) = self.bandwidth.clc(samples);
         let domain_range = self.ub - self.lb;
 
-        let size = self.samples.size()[0];
+
         let min_bandwidth = self.bandwidth_clip.value(size) * domain_range;
 
         let clipped_bandwidth = badwidth.clip( min_bandwidth, 0.5.into() * domain_range).view(1).repeat(size);
-        // debug!("clipped_bandwidth={}", clipped_bandwidth);
+
+        trace!("clipped_bandwidth={}", clipped_bandwidth);
         if self.prior{
             clipped_bandwidth.i(size-1).copy_(&Tensor::from(<f64>::into(domain_range.into())));
         }
-        // debug!("means={} clipped_bandwidth={}", means, clipped_bandwidth);
+        trace!("means={} clipped_bandwidth={}", means, clipped_bandwidth);
         let (norm_consts,  logpdf_consts) = Self::calculate_norm_consts(&self.lb, &self.ub, &means, &clipped_bandwidth);
 
-        // debug!("norm_consts={} logpdf_consts={}", norm_consts, logpdf_consts);
+        let weights = Self::uniform_weight(size);//TODO
 
-        PEGaussian::new(means, clipped_bandwidth, norm_consts, logpdf_consts, self.weights.shallow_clone(), self.lb.into(), self.ub.into())
+        PEGaussian::new(means, clipped_bandwidth, norm_consts, logpdf_consts, weights, self.lb.into(), self.ub.into())
     }
+
 
     fn calculate_norm_consts(lb: &N, ub: &N, means: &Tensor, stds: &Tensor) -> (Tensor, Tensor){
         let std_sqrt_2 = std::f64::consts::SQRT_2 * stds;
@@ -182,7 +173,7 @@ impl<N> NumericalParzenEstimator<N> where N: Float + tch::kind::Element + Partia
 }
 
 #[derive(Debug)]
-struct PEGaussian {
+pub struct PEGaussian {
     means:Tensor,
     stds:Tensor,
     norm_consts:Tensor,
@@ -190,11 +181,19 @@ struct PEGaussian {
     weights:Tensor,
     lb: f64,
     ub: f64,
+    normal_dists:Vec<Normal>
 }
 
 impl PEGaussian {
+
     pub fn new(means: Tensor, stds: Tensor, norm_consts: Tensor, logpdf_consts: Tensor, weights:Tensor, lb:f64, ub:f64) -> Self {
-        Self { means, stds, norm_consts, logpdf_consts,weights, lb, ub }
+        Self {
+            normal_dists: means.iter::<f64>().unwrap().zip(stds.iter::<f64>().unwrap()).map(|(mean, std)| {
+                Normal::new(mean, std).unwrap()
+            }).collect::<Vec<_>>(),
+
+            means, stds, norm_consts, logpdf_consts,weights, lb, ub
+        }
     }
 
     pub fn pdf(&self, x:&Tensor) -> Tensor {
@@ -206,24 +205,16 @@ impl PEGaussian {
     pub fn basis_loglikelihood(&self, x:&Tensor) -> Tensor {
         let mahalanobis = ((x - self.means.view((-1,1))) / self.stds.view((-1,1))).pow_tensor_scalar(2);
 
-        // debug!("basis_loglikelihood: mahalanobis.size()={:?} x.size()={:?}", mahalanobis.size(), x.size());
-
-        let tensor:Tensor = self.logpdf_consts.view((-1, 1)) - 0.5 * mahalanobis;
-        // debug!("basis_loglikelihood: self.logpdf_consts.size={:?} tensor.size={:?}", self.logpdf_consts.size(), tensor.size());
-        tensor
+        self.logpdf_consts.view((-1, 1)) - 0.5 * mahalanobis
     }
 
     pub fn sample(&self, n_samples:usize) -> Vec<f64> {
-        debug!("self.means={:?} self.stds={:?}", self.means, self.stds);
-        let normal_dists = self.means.iter::<f64>().unwrap().zip(self.stds.iter::<f64>().unwrap()).map(|(mean, std)| {
-            Normal::new(mean, std).unwrap()
-        }).collect::<Vec<_>>();
+        trace!("self.means={:?} self.stds={:?}", self.means, self.stds);
 
-        // cycle().take(n_samples) - replacement
-        // let sample = normal_dists.into_iter().cycle().take(n_samples).choose_multiple(opt_rnd(), n_samples).into_iter().map(|distr| {
-        let sample = (0..n_samples).map(|i| {
-            let distr = normal_dists.choose(&mut opt_rnd()).expect("distr");
-            // debug!("sample i={i} distr={distr:?}");
+
+        (0..n_samples).map(|i| {
+            let distr = self.normal_dists.choose(&mut opt_rnd()).expect("distr");
+
             loop {
                 let mut val = opt_rnd().sample(distr);
 
@@ -236,10 +227,7 @@ impl PEGaussian {
                     return val;
                 }
             }
-        }).collect();
-
-        // debug!("sample={sample:?}");
-        sample
+        }).collect()
 
     }
 }
@@ -247,12 +235,12 @@ impl PEGaussian {
 
 #[derive(Debug)]
 pub struct MultiVariateParzenEstimator {
-    parzen_estimators:Vec<NumericalParzenEstimator<f64>>
+    parzen_estimators:Vec<PEGaussian>
 }
 
 
 impl MultiVariateParzenEstimator {
-    pub fn new(parzen_estimators:Vec<NumericalParzenEstimator<f64>>) -> Self {
+    pub fn new(parzen_estimators:Vec<PEGaussian>) -> Self {
         Self { parzen_estimators }
     }
 
@@ -262,7 +250,7 @@ impl MultiVariateParzenEstimator {
 
     pub fn sample(&self, dim_independent:bool, n_samples: usize) -> Vec<Vec<Primitives>>{
         if dim_independent {
-            self.parzen_estimators.iter().map(|pe|pe.gaussian().expect("gaussian").sample(n_samples).into_iter().map(|v|v.into()).collect()).collect()//TODO collect/collect
+            self.parzen_estimators.iter().map(|pe|pe.sample(n_samples).into_iter().map(|v|v.into()).collect()).collect()//TODO collect/collect
 
         } else {
             todo!()
@@ -273,7 +261,7 @@ impl MultiVariateParzenEstimator {
         let tensor = Tensor::stack(
             (&self.parzen_estimators).iter()
                 .zip(configs.into_iter())
-                .map(|(pe, config)| pe.gaussian().expect("gaussian").basis_loglikelihood(&<Vec<Primitives> as Into<ArgmTensor>>::into(config.clone())))
+                .map(|(pe, config)| pe.basis_loglikelihood(&<Vec<Primitives> as Into<ArgmTensor>>::into(config.clone())))
                 .collect::<Vec<Tensor>>().as_slice(),
             0
         );
@@ -297,29 +285,29 @@ mod multi_variate_parzen_estimator_tests {
 
         let mvpe = MultiVariateParzenEstimator::new(vec![
             NumericalParzenEstimator::new(
-                Tensor::from_slice(&samples),
+                // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 None,
                 BandwidthFactor::default(),
                 true
-            ),
+            ).clc_dist( Tensor::from_slice(&samples)),
             NumericalParzenEstimator::new(
-                Tensor::from_slice(&samples),
+                // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 None,
                 BandwidthFactor::default(),
                 true
-            ),
+            ).clc_dist( Tensor::from_slice(&samples)),
             NumericalParzenEstimator::new(
-                Tensor::from_slice(&samples),
+                // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 None,
                 BandwidthFactor::default(),
                 true
-            )
+            ).clc_dist( Tensor::from_slice(&samples))
 
         ]);
 
@@ -372,7 +360,7 @@ mod tests {
         StdRng::seed_from_u64(42);
 
         let npe = NumericalParzenEstimator::new(
-            Tensor::from_slice(&[-1.0, 0.0, 1.0]),
+            // Tensor::from_slice(&[-1.0, 0.0, 1.0]),
             -3.0f64,
             3.0f64,
             None,
@@ -380,14 +368,14 @@ mod tests {
             true
         );
 
-        debug!("npe.weights={}", npe.weights);
+        // debug!("npe.weights={}", npe.weights);
 
-        assert_eq!(
-            Tensor::from_slice(&[0.2500, 0.2500, 0.2500, 0.2500]).round_decimals(4),
-            npe.weights.round_decimals(4)
-        );
+        // assert_eq!(
+        //     Tensor::from_slice(&[0.2500, 0.2500, 0.2500, 0.2500]).round_decimals(4),
+        //     npe.weights.round_decimals(4)
+        // );
 
-        let gaussian = npe.calculate();
+        let gaussian = npe.clc_dist(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
         debug!("x={:?}", gaussian.means);
         assert_eq!(
             Tensor::from_slice(&[-1.,  0.,  1.,  0.]).round_decimals(4),
