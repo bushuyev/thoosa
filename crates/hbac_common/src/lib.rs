@@ -1,4 +1,4 @@
-#![feature(iter_array_chunks)]
+// #![feature(iter_array_chunks)]
 extern crate core;
 
 use std::fmt::Display;

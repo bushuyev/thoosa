@@ -161,11 +161,11 @@ mod run_result_tests {
 }
 
 pub trait ParzenEstimator {
-    fn clc_dist(&self, samples:Tensor) -> Box<dyn Distr>;
+    fn clc_dist(&self, samples:Tensor) -> Box<dyn Distribution>;
 }
 
-pub trait Distr:Debug {
-    fn sample(&self, n_samples:usize) -> Vec<f64>;
+pub trait Distribution:Debug {
+    fn sample(&self, n_samples:usize) -> Vec<Primitives>;
     fn basis_loglikelihood(&self, x:&Tensor) -> Tensor;
     fn weights(&self)->&Tensor;
 }
@@ -383,7 +383,7 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
         }
     }
 
-    pub fn optimize(&mut self) -> Vec<Primitives>{
+    pub fn optimize(&mut self) -> Vec<Primitives> {
         let mut best_loss = f32::MAX;
         let mut best_config:Option<Vec<Primitives>> = None;
 
@@ -527,6 +527,46 @@ mod tpe_optimizer_tests {
         assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
         assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
     }
+
+    #[test]
+    fn test_optimize_caegoric(){
+
+        let mut opt = TPEOptimizer::new(
+            move |params| {
+                debug!("params={params:?}");
+                let t: Tensor = Tensor::from_slice(
+                    &[
+                        0.0
+                    ]
+                );
+                let loss = t.subtract_scalar(30.).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
+
+                debug!("loss={loss:?}");
+
+                loss
+            }
+            ,
+
+            ConfigurationSpace::new(
+                // (0..3).map(|i|Hyperparameter::UniformFloat {name:format!("x_{}", i), lower: -500.0, upper: 500.0}).collect()
+                vec![
+                    Hyperparameter::UniformFloat {name:"x_0".into(), lower: -50.0, upper: 50.0},
+                    Hyperparameter::UniformFloat {name:"x_1".into(), lower: -50.0, upper: 50.0},
+                    Hyperparameter::Categorical { name: "".to_string(), values: vec!["a".into(), "b".into(), "c".into()] }
+                ]
+            ),
+            500,
+            10
+        );
+
+        let best_config = opt.optimize();
+
+        println!("best_config={best_config:?}");
+        assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
+        assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
+        assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
+    }
+
 
     fn sphere(d_x: i64) -> impl Fn(&Vec<Primitives>) -> f32 {
         move |params| {

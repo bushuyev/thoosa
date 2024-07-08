@@ -1,4 +1,4 @@
-#![feature(backtrace_frames)]
+// #![feature(backtrace_frames)]
 
 pub mod repeat_iter;
 pub mod val;
@@ -117,9 +117,10 @@ impl Debug for HbacError {
         let mut x=  debug_struct
             .field("msg", &self.msg);
 
-        for (i, frame) in self.backtrace.frames().iter().enumerate() {
-            x = x.field(format!("frame_{}\n", i).as_str(), frame);
-        }
+        //// #![feature(backtrace_frames)]
+        // for (i, frame) in self.backtrace.frames().iter().enumerate() {
+        //     x = x.field(format!("frame_{}\n", i).as_str(), frame);
+        // }
 
         x.finish()
 

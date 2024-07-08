@@ -1,15 +1,15 @@
 use tch::Tensor;
 use crate::argmin::ArgmTensor;
 use crate::parzen::npe;
-use crate::parzen::optimizer::{Distr, Primitives};
+use crate::parzen::optimizer::{Distribution, Primitives};
 
 #[derive(Debug)]
 pub struct MultiVariateParzenEstimator {
-    parzen_estimators:Vec<Box<dyn Distr>>
+    parzen_estimators:Vec<Box<dyn Distribution>>
 }
 
 impl MultiVariateParzenEstimator {
-    pub fn new(parzen_estimators:Vec<Box<dyn Distr>>) -> Self {
+    pub fn new(parzen_estimators:Vec<Box<dyn Distribution>>) -> Self {
         Self { parzen_estimators }
     }
 
@@ -19,7 +19,7 @@ impl MultiVariateParzenEstimator {
 
     pub fn sample(&self, dim_independent:bool, n_samples: usize) -> Vec<Vec<Primitives>>{
         if dim_independent {
-            self.parzen_estimators.iter().map(|pe|pe.sample(n_samples).into_iter().map(|v|v.into()).collect()).collect()//TODO collect/collect
+            self.parzen_estimators.iter().map(|pe|pe.sample(n_samples)).collect()//TODO collect/collect
 
         } else {
             todo!()
