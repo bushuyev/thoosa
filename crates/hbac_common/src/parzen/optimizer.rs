@@ -161,7 +161,7 @@ mod run_result_tests {
 }
 
 pub trait ParzenEstimator {
-    fn clc_dist(&self, samples:Tensor) -> Box<dyn Distribution>;
+    fn clc_dist(&self, samples:Tensor, weights: Option<Tensor>) -> Box<dyn Distribution>;
 }
 
 pub trait Distribution:Debug {
@@ -198,8 +198,8 @@ impl TreeStructuredParzenEstimator {
                         )) as Box<dyn ParzenEstimator>
 
                     }
-                    Hyperparameter::Categorical { .. } => {
-                        Box::new(CategoricalParzenEstimator::new()) as Box<dyn ParzenEstimator>
+                    Hyperparameter::Categorical { name, values } => {
+                        Box::new(CategoricalParzenEstimator::new(values.len(), true)) as Box<dyn ParzenEstimator>
                     }
 
                 }
@@ -221,8 +221,8 @@ impl TreeStructuredParzenEstimator {
         let (lower_vals, upper_vals) = self.pop_observations(n_lower);
 
         let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold((vec![], vec![]), |mut lower_upper_esitmators, (param_i, e)|{
-            lower_upper_esitmators.0.push(e.clc_dist(Tensor::from_slice(lower_vals.iter().map(|v|v[param_i].into()).collect::<Vec<f32>>().as_slice())));
-            lower_upper_esitmators.1.push(e.clc_dist(Tensor::from_slice(upper_vals.iter().map(|v|v[param_i].into()).collect::<Vec<f32>>().as_slice())));
+            lower_upper_esitmators.0.push(e.clc_dist(Tensor::from_slice(lower_vals.iter().map(|v|v[param_i].into()).collect::<Vec<f32>>().as_slice()), None));
+            lower_upper_esitmators.1.push(e.clc_dist(Tensor::from_slice(upper_vals.iter().map(|v|v[param_i].into()).collect::<Vec<f32>>().as_slice()), None));
 
             lower_upper_esitmators
         });
@@ -331,17 +331,17 @@ mod tree_structured_parzen_estimator_tests {
 
 
         tsp.mvpe_lower = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples))
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples), None)
 
         ]));
         let samples = [-2.0, 0.0, 2.0];
 
         tsp.mvpe_upper = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples)),
-            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples))
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(-3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_dist(Tensor::from_slice(&samples), None)
 
         ]));
 
@@ -616,11 +616,14 @@ impl Hyperparameter {
             Hyperparameter::UniformFloat { name, lower, upper } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = lower + uniform * (upper - lower) ;
-                // debug!("uniform={uniform:?} lb={lower} ub={upper} sample={sample} ");
+                // debug!("UniformFloat={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Primitives::Double(sample)
             }
             Hyperparameter::Categorical { name, values } => {
-                todo!()
+                let uniform = opt_rnd().sample(Uniform::new(0., 1.));
+                let sample = uniform * values.len() as f32;
+                debug!("Categorical={sample:?} values={values:?} ");
+                Primitives::Integer(sample as i32)
             }
         }
     }

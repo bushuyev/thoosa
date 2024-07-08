@@ -135,7 +135,7 @@ where
     f64: From<N>,
     tch::Scalar: From<N>,
 {
-    fn clc_dist(&self, samples: Tensor) -> Box<dyn Distribution> {
+    fn clc_dist(&self, samples: Tensor, weights: Option<Tensor>) -> Box<dyn Distribution> {
         Box::new(self._clc_dist(samples))
     }
 }

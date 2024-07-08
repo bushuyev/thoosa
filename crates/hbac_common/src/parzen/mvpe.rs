@@ -62,21 +62,21 @@ mod multi_variate_parzen_estimator_tests {
                 3.0f64,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist( Tensor::from_slice(&samples)),
+            ).clc_dist(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist( Tensor::from_slice(&samples)),
+            ).clc_dist(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist( Tensor::from_slice(&samples))
+            ).clc_dist(Tensor::from_slice(&samples), None)
 
         ]);
 
