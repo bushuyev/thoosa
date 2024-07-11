@@ -13,7 +13,7 @@ use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use super::opt_rng::opt_rnd;
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialOrd, PartialEq)]
 pub enum Primitives {
     Integer(i32),
     Long(i64),
@@ -26,6 +26,19 @@ impl From<f64> for Primitives {
         Primitives::Double(value)
     }
 }
+
+impl From<i32> for Primitives {
+    fn from(value: i32) -> Self {
+        Primitives::Integer(value)
+    }
+}
+
+impl From<i64> for Primitives {
+    fn from(value: i64) -> Self {
+        Primitives::Long(value)
+    }
+}
+
 
 impl From<Primitives> for f32 {
     fn from(value: Primitives) -> Self {
@@ -85,6 +98,26 @@ impl From<&Primitives> for f32 {
     }
 }
 
+impl From<Primitives> for i64 {
+    fn from(value: Primitives) -> Self {
+        match value {
+            Primitives::Integer(v) => {
+                v as i64
+            }
+            Primitives::Long(v) => {
+                v as i64
+            }
+            Primitives::Float(v) => {
+                v as i64
+            }
+            Primitives::Double(v) => {
+                v as i64
+            }
+        }
+    }
+}
+
+//TODO remove
 impl From<Vec<Primitives>> for ArgmTensor {
     fn from(vals: Vec<Primitives>) -> Self {
         ArgmTensor(Tensor::from_slice(vals.into_iter().map(|v|v.into()).collect::<Vec<f64>>().as_slice()))
@@ -152,7 +185,7 @@ mod run_result_tests {
             observations_vec.push(o);
         }
 
-        // println!("observations_vec={observations_vec:?}");
+        // debug!("observations_vec={observations_vec:?}");
         assert_eq!(1., observations_vec[0].0.loss);
         assert_eq!(2., observations_vec[1].0.loss);
         assert_eq!(10., observations_vec[2].0.loss);
@@ -162,11 +195,12 @@ mod run_result_tests {
 
 pub trait ParzenEstimator {
     fn clc_dist(&self, samples:Tensor, weights: Option<Tensor>) -> Box<dyn Distribution>;
+    fn clc_dist_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, weights: Option<Tensor>) -> Box<dyn Distribution>;
 }
 
 pub trait Distribution:Debug {
     fn sample(&self, n_samples:usize) -> Vec<Primitives>;
-    fn basis_loglikelihood(&self, x:&Tensor) -> Tensor;
+    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Primitives>) -> Tensor;
     fn weights(&self)->&Tensor;
 }
 
@@ -208,7 +242,7 @@ impl TreeStructuredParzenEstimator {
     }
 
     pub fn update_observations(&mut self, loss:f32, eval_config:&Vec<Primitives>) {
-        self.observations.push(Reverse(RunResult::new(loss, eval_config.clone())));
+        self.observations.push(Reverse(RunResult::new(loss, eval_config.clone())));//TODO clone
 
         let n_lower = Self::percentile(self.observations.len()) as usize;
 
@@ -221,8 +255,8 @@ impl TreeStructuredParzenEstimator {
         let (lower_vals, upper_vals) = self.pop_observations(n_lower);
 
         let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold((vec![], vec![]), |mut lower_upper_esitmators, (param_i, e)|{
-            lower_upper_esitmators.0.push(e.clc_dist(Tensor::from_slice(lower_vals.iter().map(|v|v[param_i].into()).collect::<Vec<f32>>().as_slice()), None));
-            lower_upper_esitmators.1.push(e.clc_dist(Tensor::from_slice(upper_vals.iter().map(|v|v[param_i].into()).collect::<Vec<f32>>().as_slice()), None));
+            lower_upper_esitmators.0.push(e.clc_dist_from_vec(&mut lower_vals.iter().map(|v|v[param_i]), None));
+            lower_upper_esitmators.1.push(e.clc_dist_from_vec(&mut lower_vals.iter().map(|v|v[param_i]), None));
 
             lower_upper_esitmators
         });
@@ -278,6 +312,7 @@ impl TreeStructuredParzenEstimator {
 
 #[cfg(test)]
 mod tree_structured_parzen_estimator_tests {
+    use log::debug;
     use tch::{Kind, Tensor};
     use crate::parzen::mvpe::MultiVariateParzenEstimator;
     use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
@@ -352,7 +387,7 @@ mod tree_structured_parzen_estimator_tests {
             vec![Float(0.2), Float(1.2), Float(2.2)]  //x2
         ]);
 
-        println!("pi={pi}");
+        debug!("pi={pi}");
         assert!(
             Tensor::from_slice(&[ 1.85448311,  4.59934198, -4.30722048]).totype(Kind::Float).allclose(&pi,  1e-02, 1e-02, false)
         );
@@ -468,6 +503,7 @@ mod tpe_optimizer_tests {
     use tch::{IndexOp, Tensor};
     use crate::argmin::ArgmTensor;
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, stack_params, TPEOptimizer};
+    use crate::parzen::optimizer::Primitives::Integer;
     use crate::utils::sin3_pow2_f;
 
     #[test]
@@ -522,7 +558,7 @@ mod tpe_optimizer_tests {
 
         let best_config = opt.optimize();
 
-        println!("best_config={best_config:?}");
+        debug!("best_config={best_config:?}");
         assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
         assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
         assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
@@ -534,12 +570,23 @@ mod tpe_optimizer_tests {
         let mut opt = TPEOptimizer::new(
             move |params| {
                 debug!("params={params:?}");
-                let t: Tensor = Tensor::from_slice(
-                    &[
-                        0.0
-                    ]
-                );
-                let loss = t.subtract_scalar(30.).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
+
+
+                let x_0 = <Primitives as Into<f32>>::into(params[0]);
+                let x_1 = <Primitives as Into<f32>>::into(params[1]);
+                let x_2 = <Primitives as Into<i64>>::into(params[2]) as u32;
+
+                let loss = (x_0 -30.).powi(2) + (x_1-30.).powi(2);
+                let loss = match x_2 {
+                    0 => loss * 1.5,
+                    1 => loss * 1.,
+                    2 => loss * 2.,
+                    _ => {
+                        panic!("unexpected catgory {x_2}")
+                    }
+                };
+
+                // let loss = * 10_i32.pow(x_2) as f32;
 
                 debug!("loss={loss:?}");
 
@@ -561,10 +608,10 @@ mod tpe_optimizer_tests {
 
         let best_config = opt.optimize();
 
-        println!("best_config={best_config:?}");
-        assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
-        assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
-        assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
+        debug!("best_config={best_config:?}");
+        assert!((30. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
+        assert!((30. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
+        assert_eq!(Integer(1), best_config[2]);
     }
 
 
@@ -588,7 +635,7 @@ mod tpe_optimizer_tests {
             ], 0,
         );
 
-        println!("t={t} argmax={}", t.argmax(1, true).i(0).double_value(&[]));
+        debug!("t={t} argmax={}", t.argmax(1, true).i(0).double_value(&[]));
 
     }
 }

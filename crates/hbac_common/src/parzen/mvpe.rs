@@ -30,7 +30,7 @@ impl MultiVariateParzenEstimator {
         let tensor = Tensor::stack(
             (&self.parzen_estimators).iter()
                 .zip(configs.into_iter())
-                .map(|(pe, config)| pe.basis_loglikelihood(&<Vec<Primitives> as Into<ArgmTensor>>::into(config.clone())))
+                .map(|(pe, config)| pe.basis_loglikelihood(&mut config.into_iter()))
                 .collect::<Vec<Tensor>>().as_slice(),
             0
         );
@@ -88,7 +88,7 @@ mod multi_variate_parzen_estimator_tests {
             ]
         );
 
-        // println!("v={v}");
+        // debug!("v={v}");
         assert_eq!(-8017,  (v.double_value(&[])*10000.0) as isize);
 
 

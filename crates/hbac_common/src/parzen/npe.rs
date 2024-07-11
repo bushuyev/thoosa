@@ -138,6 +138,11 @@ where
     fn clc_dist(&self, samples: Tensor, weights: Option<Tensor>) -> Box<dyn Distribution> {
         Box::new(self._clc_dist(samples))
     }
+    fn clc_dist_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, weights: Option<Tensor>) -> Box<dyn Distribution>{
+        Box::new(self._clc_dist(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<f32>>().as_slice())))
+        // todo!()
+    }
+
 }
 
 const SQR2PI: f64 = 2.5066282746310002;
@@ -308,8 +313,8 @@ impl Distribution for NumericalGaussian {
         self._sample(n_samples).into_iter().map(|v|v.into()).collect()
     }
 
-    fn basis_loglikelihood(&self, x: &Tensor) -> Tensor {
-        self._basis_loglikelihood(x)
+    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Primitives>) -> Tensor {
+        self._basis_loglikelihood(&Tensor::from_slice(x.map(|v|(*v).into()).collect::<Vec<f64>>().as_slice()))
     }
 
     fn weights(&self) -> &Tensor {

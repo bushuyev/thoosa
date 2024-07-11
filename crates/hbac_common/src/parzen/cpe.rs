@@ -1,6 +1,9 @@
+use log::debug;
+use rand::prelude::SliceRandom;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, Tensor};
 use tch::Kind::Float;
+use crate::parzen::opt_rng::opt_rnd;
 use crate::parzen::optimizer::{Distribution, ParzenEstimator, Primitives};
 use crate::parzen::util::uniform_weight;
 use crate::utils::from;
@@ -28,7 +31,8 @@ impl CategoricalParzenEstimator {
 
     fn _clc_dist(&self, samples: Tensor, weights: Option<Tensor>)-> CategoricalGaussian {
         let weights = weights.unwrap_or(uniform_weight(samples.size()[0] + if self.prior {1} else {0}));
-        println!("weights={weights} self.uniform={}", self.uniform);
+        debug!("samples={samples}");
+        debug!("weights={weights} self.uniform={}", self.uniform);
 
         let mut probs = if self.prior {
             Tensor::full(self.n_choices as i64, self.uniform as f64 * weights.i(weights.size()[0]-1).double_value(&[]), FLOAT_CPU)//TODO last weight?
@@ -37,13 +41,13 @@ impl CategoricalParzenEstimator {
         }.view(-1); //from::<Vec<f64>>(&);
 
         let weights = if self.prior {weights.i(0..weights.size()[0]-1)} else {weights};
-        println!("weights={weights}");
+        debug!("weights={weights}");
 
-        println!("probs={probs} dim={:?}", probs.dim());
+        debug!("probs={probs} dim={:?}", probs.dim());
 
         let masks = Tensor::arange(self.n_choices as i64, INT64_CPU).view((-1,1)).eq_tensor(&samples);
 
-        println!("masks={masks}");
+        debug!("masks={masks}");
 
         let slicer = Tensor::arange(self.n_choices as i64, INT64_CPU); //0..self.n_choices; //
 
@@ -54,25 +58,39 @@ impl CategoricalParzenEstimator {
             let c_t = Tensor::from_slice(&[c as i64]);
             let mask_not_c = slicer.ne_tensor(&c_t);
             let mask_is_c = slicer.eq_tensor(&c_t);
-            println!("mask_not_c={mask_not_c} mask_is_c={mask_is_c}");
-            println!("mask_not_c={} mask_is_c={}", mask_not_c.nonzero().view(-1).dim(), mask_is_c.nonzero().view(-1).dim());
+            // debug!("mask_not_c={mask_not_c} mask_is_c={mask_is_c}");
+            // debug!("mask_not_c={} mask_is_c={}", mask_not_c.nonzero().view(-1).dim(), mask_is_c.nonzero().view(-1).dim());
             // Use the masks to index and update the probs tensor
             probs = probs + mask_not_c.to_kind(Float) * &weight.multiply_scalar(self.bottom as f64);
             probs = probs + mask_is_c.to_kind(Float) * &weight.multiply_scalar(self.top as f64);
-            println!("probs={probs}");
-            // for s in 0..self.n_choices {
-            //     if s == c {
-            //
-            //     } else {
-            //
-            //     }
-            // }
+            // debug!("probs={probs}");
 
-            println!("c={c} mask={mask} weight={weight}");
+            // debug!("c={c} mask={mask} weight={weight}");
         }
-        println!("probs={probs}");
+        // debug!("probs={probs}");
 
-        CategoricalGaussian::new(probs)
+        let likelihood_choices = Tensor::full([self.n_choices as i64, self.n_choices as i64], self.bottom as f64, FLOAT_CPU)
+            .fill_diagonal_(self.top as f64, false);
+
+        debug!("likelihood_choices={likelihood_choices}");
+        // debug!("likelihood_choices samples={}", likelihood_choices.index(&[Some(samples)]));
+
+        let blls= if self.prior {
+            Tensor::vstack(&[
+                likelihood_choices.index(&[Some(samples)]),
+                Tensor::full(self.n_choices as i64, self.uniform as f64, FLOAT_CPU)
+            ])
+        } else {
+            likelihood_choices.index(&[Some(samples)])
+        };
+        debug!("blls={blls}");
+        let blls = blls.clamp_min(1e-12);
+        debug!("blls={blls}");
+        // let blls = blls.log();
+        // debug!("log blls={blls}");
+
+
+        CategoricalGaussian::new(probs, blls.log(), weights)
 
     }
 }
@@ -82,18 +100,34 @@ impl ParzenEstimator for CategoricalParzenEstimator {
     fn clc_dist(&self, samples: Tensor, weights: Option<Tensor>) -> Box<dyn Distribution> {
         Box::new(self._clc_dist(samples, weights))
     }
+
+    fn clc_dist_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, weights: Option<Tensor>) -> Box<dyn Distribution>{
+        Box::new(self._clc_dist(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<i64>>().as_slice()).totype(tch::Kind::Int64), weights))
+
+    }
 }
 
 #[derive(Debug)]
 struct CategoricalGaussian {
-    probs:Tensor
+    probs:Tensor,
+    log_blls:Tensor,
+    probs_vec:Vec<f32>,
+    indexes:Vec<usize>,
+    weights:Tensor
+
 }
 
 impl CategoricalGaussian {
 
-    pub fn new(probs:Tensor) -> Self {
+    pub fn new(probs:Tensor, log_blls:Tensor, weights:Tensor) -> Self {
+        let probs_vec = from::<Vec<f32>>(&probs);
+        let probs_len = probs_vec.len();
         Self {
-            probs
+            probs_vec,
+            probs, //TODO use it?
+            indexes: (0..probs_len).collect(),
+            log_blls,
+            weights
         }
     }
 }
@@ -101,23 +135,31 @@ impl CategoricalGaussian {
 impl Distribution for CategoricalGaussian {
 
     fn sample(&self, n_samples: usize) -> Vec<Primitives> {
-        vec![Primitives::Integer(0)]
+
+        (0..n_samples).map(|_|{
+            self.indexes.choose_weighted(opt_rnd(), |i|self.probs_vec[*i]).expect("choose_weighted")
+        })
+        .map(|v|(*v as i32).into())
+        .collect()
     }
 
-    fn basis_loglikelihood(&self, x: &Tensor) -> Tensor {
-        Tensor::rand(x.size(), FLOAT_CPU)
+    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Primitives>) -> Tensor {
+        // debug!("basis_loglikelihood: x={x}");
+        self.log_blls.index_select(1, &Tensor::from_slice(x.map(|v|(*v).into()).collect::<Vec<i64>>().as_slice()))
+
     }
 
     fn weights(&self) -> &Tensor {
-        todo!()
+        &self.weights
     }
 }
 
 mod categorical_parzen_estimator_tests {
     use tch::Kind::Float;
     use tch::Tensor;
+    use crate::argmin::ArgmTensor;
     use crate::parzen::cpe::{CategoricalGaussian, CategoricalParzenEstimator};
-    use crate::parzen::optimizer::ParzenEstimator;
+    use crate::parzen::optimizer::{Distribution, ParzenEstimator, Primitives};
 
     #[test]
     fn test_0(){
@@ -126,11 +168,13 @@ mod categorical_parzen_estimator_tests {
             true
         );
 
+        let distr = cpe._clc_dist(Tensor::from_slice(&[0, 1, 2]), Some(Tensor::from_slice(&[0.3, 0.3, 0.3, 0.1])));
         assert!(
             Tensor::from_slice(&[0.3333, 0.3333, 0.3333]).totype(Float).allclose(
-                &cpe._clc_dist(Tensor::from_slice(&[0,1,2]), Some(Tensor::from_slice(&[0.3, 0.3, 0.3, 0.1]))).probs, 0.01, 0.01, false
+                &distr.probs, 0.01, 0.01, false
             )
         );
+        // let samples = distr.sample(3);
 
         assert!(
             Tensor::from_slice(&[0.66666667, 0.16666667, 0.16666667]).totype(Float).allclose(
@@ -138,11 +182,38 @@ mod categorical_parzen_estimator_tests {
             )
         );
 
+        let distr = cpe._clc_dist(Tensor::from_slice(&[0, 0, 0, 0]), Some(Tensor::from_slice(&[0.2, 0.2, 0.2, 0.2, 0.2])));
         assert!(
             Tensor::from_slice(&[0.86666667, 0.06666667, 0.06666667]).totype(Float).allclose(
-                &cpe._clc_dist(Tensor::from_slice(&[0,0,0,0]), Some(Tensor::from_slice(&[0.2, 0.2, 0.2, 0.2, 0.2]))).probs, 0.01, 0.01, false
+                &distr.probs, 0.01, 0.01, false
             )
         );
+        let samples = distr.sample(1000);
+        let p_0 = samples.iter().filter(|i|*i == &Primitives::Integer(0)).count() as f32/1000.;
+        let p_1 = samples.iter().filter(|i|*i == &Primitives::Integer(1)).count() as f32/1000.;
+        let p_2 = samples.iter().filter(|i|*i == &Primitives::Integer(2)).count() as f32/1000.;
+
+
+        assert!((0.86666667 - p_0).abs() < 0.1);
+        assert!((0.06666667 - p_1).abs() < 0.1);
+        assert!((0.06666667 - p_2).abs() < 0.1);
+
+
+        // let bll = distr.basis_loglikelihood(&Tensor::from_slice(samples.into_iter().map(|v|v.into()).collect::<Vec<i64>>().as_slice()));
+
+        let bll = distr.basis_loglikelihood(&mut vec![&Primitives::Integer(0), &Primitives::Integer(1), &Primitives::Integer(2), &Primitives::Integer(0)].into_iter());
+        assert_eq!(
+            Tensor::from_slice(
+                &[
+                    0., -27.63102112, -27.63102112, 0.,
+                    0., -27.63102112, -27.63102112, 0.,
+                    0., -27.63102112, -27.63102112, 0.,
+                    0., -27.63102112, -27.63102112, 0.,
+                    -1.09861229, -1.09861229, -1.09861229, -1.09861229
+                ]).totype(Float).view((5, 4)).round_decimals(3),
+            bll.round_decimals(3)
+        );
+        // debug!("bll={bll}");
 
     }
 }
