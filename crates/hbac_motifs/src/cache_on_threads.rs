@@ -1,19 +1,15 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::thread;
-use std::time::Duration;
+
 use futures::executor::block_on;
-use log::{debug, warn};
-use tch::Tensor;
-use std::rc::Rc;
+use log::debug;
 
 // struct LoaderFuture <K, V> where K:Hash + Eq{
 struct LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
@@ -99,7 +95,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
     fn load_blocking(&mut self, key:K) ->bool {
         debug!("load_blocking: blocking on {:?}", key);
 
-        self.on_blocking_listener.as_mut().map(|mut c|(c)());
+        self.on_blocking_listener.as_mut().map(|c|(c)());
 
         self.data_loaded.insert(
             key.clone(),
@@ -121,7 +117,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
             if let Some(key_to_remove) = keys_fifo.pop_front() {
                 debug!("removing {:?} ", key_to_remove);
                 let entry_mutex = data_being_loaded_guard.entry(key_to_remove.clone()).or_insert_with(|| Arc::new(Mutex::new(None)));
-                entry_mutex.lock().expect("entry_mutex for key_to_remove");
+                entry_mutex.lock().expect("entry_mutex for key_to_remove");//TODO
 
                 data_loaded.remove(&key_to_remove);
                 data_being_loaded_guard.remove(&key_to_remove);
@@ -190,7 +186,7 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
         } else {
             debug!("blocking_get: taking from loaded {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
-            if let Some((i, e)) = self.keys_fifo.iter().enumerate().find(|(i, e)| e == &k) {
+            if let Some((i, _e)) = self.keys_fifo.iter().enumerate().find(|(_i, e)| e == &k) {
                 self.keys_fifo.remove(i);
             }
             self.keys_fifo.push_back(k.clone());
@@ -256,11 +252,12 @@ mod tests {
     use std::task::{Context, Poll};
     use std::thread;
     use std::time::Duration;
-    use futures::executor::block_on;
-    use log::debug;
-    use rayon::prelude::*;
-    use crate::cache_on_threads::{CacheOnThreads};
 
+
+    use log::debug;
+
+
+    use crate::cache_on_threads::CacheOnThreads;
 
     #[derive(Debug)]
     struct TestEntity {
@@ -308,7 +305,7 @@ mod tests {
 
         }
     }
-
+    #[allow(dead_code)]
     async fn load_it(i:i32) -> i32 {
         TestFuture::new(i).await
     }

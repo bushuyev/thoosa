@@ -1,53 +1,48 @@
-
-use std::backtrace::Backtrace;
-use std::{env, fs};
 use std::cmp::max;
-use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::str::FromStr;
-use log::{debug, error, info, LevelFilter, warn};
-use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
-use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, iter_all_in_dir, select_motifs_by_corr, select_motifs_by_ratio, SelectMotifsParams};
-use crate::data::{clc_records, EEGs, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor, read_eeg_index, read_motif_to_iter};
-use crate::version::VERSION;
-use clap::{Args, Parser, Subcommand};
-use polars::export::rayon;
-use polars::prelude::{LazyCsvReader, Series};
-use hbac_common::utils::{cdt, DataBatch, dot_norm, from, list_devices, load_tensor, norm_2, plot_series};
-use hbac_shared::HbacError;
-use hbac_motifs::{find, fragments};
-use hbac_motifs::fragments::{check_slices, list_motifs, load_motif_slices, motifs_to_tensor, MotifsToFragmentsParams, MotifsToTensorParams, PlotMotifSlicesParams, write_motifs_slices};
 use std::collections::HashMap;
+use std::fs;
+use std::fs::File;
+use std::io::Write;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use plotters::prelude::BLACK;
-use polars::export::rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
-use tch::Device::Cpu;
-use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 
-use hbac_common::builder::{Node, SeqBuilder};
-use hbac_common::train_nets::{ClassTensorsDataBatch, infer, InferParams, LabelNodeParams, load_motif_models, train_final, train_on_label, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
-use hbac_common::simp::DummyDs;
-use hbac_common::{ResourceLoader, train_nets};
-use hbac_store::{SqlStore, Store};
-use hbac_shared::*;
-use hbac_shared::TensorSliceIdx;
-use crate::Commands::*;
+use clap::{Args, Parser, Subcommand};
+use log::{debug, error, info, LevelFilter, warn};
+use plotters::prelude::BLACK;
+use polars::export::rayon;
+use polars::export::rayon::iter::IntoParallelIterator;
 use polars::export::rayon::iter::ParallelIterator;
+use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
+use tch::{Device, Tensor};
+use tch::nn::Module;
+
+use hbac_common::{ResourceLoader, train_nets};
+use hbac_common::train_nets::{infer, InferParams, LabelNodeParams, load_motif_models, train_final, train_on_label, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use hbac_common::train_nets::MotifNodeParams;
-use hbac_shared::val::{prefix_properties, unprefix_properties, Val};
+use hbac_common::utils::{list_devices, load_tensor, plot_series};
+use hbac_motifs::find;
+use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, SelectMotifsParams};
+use hbac_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
+use hbac_shared::*;
+use hbac_shared::HbacError;
+use hbac_shared::val::{prefix_properties, unprefix_properties};
+use hbac_store::{SqlStore, Store};
+
+use crate::Commands::*;
+use crate::data::{clc_records, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor};
+use crate::version::VERSION;
 
 mod data;
-mod utils;
+
 
 mod version;
 
 
 #[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
-struct Cli {
+pub struct Cli {
     #[arg(long, default_value="../../data")]
     base_path: String,
 
@@ -143,7 +138,7 @@ impl RunAllParams {
     fn find_motifs_params(&self, resource_set: String) -> FindMotifsParams {
         FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
     }
-
+    #[cfg(test)]
     fn dummy()-> Self {
         Self {
             train_resource_group: "".to_string(),
@@ -552,7 +547,7 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
             let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
 
-            let (label_node_params_vec, run_ids) = {
+            let (label_node_params_vec, _run_ids) = {
                 let mut store_guard = store.lock().expect("store");
 
                 (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand
@@ -622,8 +617,8 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
     let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, usize, String)])>>();//corrs_run(id, label)
 
     let cli_clone = cli.clone();
-    let mut run_ids = Arc::new(Mutex::new(vec![]));
-    let mut run_ids_for_threads = Arc::clone(&run_ids);
+    let run_ids = Arc::new(Mutex::new(vec![]));
+    let run_ids_for_threads = Arc::clone(&run_ids);
 
     devices_corr_run.into_par_iter().for_each( |(device_i, corrs_run)| {
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?}", corrs_run, device_i);
@@ -690,8 +685,8 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
     let chunk_len = resource_sets.len()/devices.len();
     let devices_resource_sets = devices.into_iter().cycle().zip(resource_sets.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, String)])>>();
 
-    let mut run_ids = Arc::new(Mutex::new(vec![]));
-    let mut run_ids_for_threads = Arc::clone(&run_ids);
+    let run_ids = Arc::new(Mutex::new(vec![]));
+    let run_ids_for_threads = Arc::clone(&run_ids);
 
     devices_resource_sets.into_par_iter().for_each(move |(device, chunk_resource_sets)| {
 
@@ -735,8 +730,8 @@ fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Devic
 
 fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, choose_fragments_params: &MotifsToTensorParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), HbacError> {
     let mut store_guard = store.lock()?;
-    let base_path_1 = cli.base_path.clone();
-    let tensors_path = cli.tensors_path.clone();
+    let _base_path_1 = cli.base_path.clone();
+    let _tensors_path = cli.tensors_path.clone();
     let t = motifs_to_tensor(
         store_guard.list_motifs_slices(choose_fragments_params.run_id())?,
         move |key: &String| {
@@ -750,31 +745,31 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
 
 
     let out = Path::new(&cli.ws_path).join("out");
-    fs::create_dir_all(&out);
-    t.0.save(out.join(format!("motifs_in_{}", choose_fragments_params.run_id())));
+    fs::create_dir_all(&out)?;
+    t.0.save(out.join(format!("motifs_in_{}", choose_fragments_params.run_id())))?;
 
     Ok(())
 }
 
-fn init_resources(cli:&Cli, params:Option<&InitResourcesParams>, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError> {
+fn init_resources(cli:&Cli, _params:Option<&InitResourcesParams>, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError> {
     let mut store_guard = store.lock()?;
 
-    store_guard.save_label("seizure");
-    store_guard.save_label("lpd");
-    store_guard.save_label("gpd");
-    store_guard.save_label("lrda");
-    store_guard.save_label("grda");
-    store_guard.save_label("other");
+    store_guard.save_label("seizure")?;
+    store_guard.save_label("lpd")?;
+    store_guard.save_label("gpd")?;
+    store_guard.save_label("lrda")?;
+    store_guard.save_label("grda")?;
+    store_guard.save_label("other")?;
 
 
     store_guard.save_resources_labels(data::labeled_resourses(Path::new(&cli.base_path).join("train.csv"))?)?;
 
-    store_guard.save_pure_sets(1000, true);
-    store_guard.save_pure_sets(100, true);
-    store_guard.save_pure_sets(10, true);
-    store_guard.save_pure_sets(3, true);
+    store_guard.save_pure_sets(1000, true)?;
+    store_guard.save_pure_sets(100, true)?;
+    store_guard.save_pure_sets(10, true)?;
+    store_guard.save_pure_sets(3, true)?;
 
-    store_guard.save_groups_by_label_cnt(100);
+    store_guard.save_groups_by_label_cnt(100)?;
     /*
     sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
     2227|seizure
@@ -792,8 +787,8 @@ fn init_resources(cli:&Cli, params:Option<&InitResourcesParams>, store:Arc<Mutex
 fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, plot_motif_slices_params: &&PlotMotifSlicesParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), HbacError> {
     let mut store_guard = store.lock()?;
 
-    let (channel, run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
-    let base_path = cli.base_path.as_str();
+    let (channel, _run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
+    let _base_path = cli.base_path.as_str();
 
     let slices = load_motif_slices(
         cli.base_path.as_str(), channel, 1000, slices,
@@ -803,13 +798,13 @@ fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, pl
         device
     );
 
-    let all_sices = slices.iter().flat_map(|(eeg_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+    let all_sices = slices.iter().flat_map(|(_eeg_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
     check_slices(&all_sices, 0.9);
 
     let plots_dir = Path::new(cli.ws_path.as_str()).join("plots");
 
-    fs::create_dir_all(&plots_dir);
+    fs::create_dir_all(&plots_dir)?;
 
     plot_series(
         all_sices.into_iter().map(|t| {
@@ -834,8 +829,8 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
             store_guard.list_corr_motifs(corr_run)?//TODO param
                 .into_iter()
                 .flat_map(|channel_motifs| channel_motifs.into_iter())
-                .filter(|(motif_id, corr)| *corr > train_on_motif_params.min_corr())
-                .map(|(motif_id, corr)| motif_id).collect::<Vec<usize>>(),
+                .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr())
+                .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>(),
 
             FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(input_run_id, None)?)
         )
@@ -844,7 +839,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
 
     let output_dir = Path::new(&cli.ws_path).join("motifs").join(input_run_id.to_string()).join(label);//TODO corr_run
 
-    fs::create_dir_all(&output_dir);
+    fs::create_dir_all(&output_dir)?;
 
 
     let filter_and_slice:FilterAndSlicer = params.into();
@@ -930,7 +925,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
 
 
         for node_params in &node_params_vec {
-            let (loss, mut vs) = train_nets::train_on_motif(
+            let (loss,  vs) = train_nets::train_on_motif(
                 all_sices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(),//TODO change ClassTensorsDataBatch to accept refs
                 all_sices_1.iter().map(|v|Box::new(v.shallow_clone())).collect(),
                 train_on_motif_params,
@@ -945,7 +940,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
                 info!("train_on_motif: saving motif_id={} loss={}", motif_id, loss);
 
                 let channel_models = output_dir.join(channel.to_string());
-                fs::create_dir_all(&channel_models);
+                fs::create_dir_all(&channel_models)?;
 
                 vs.save(channel_models.join(format!("{}_{}_{:3}.safetensors", corr_run, motif_id, loss)))?;
             }
@@ -975,7 +970,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     let filter_and_slice:FilterAndSlicer = params.into();
     let filter_op = filter_and_slice.filter();
 
-    let (motifs, channel_motif_ids, motifs_slices_map) = motifs_to_tensor(
+    let (motifs, channel_motif_ids, _motifs_slices_map) = motifs_to_tensor(
         resource_id_motif_slices,
 
         move |key: &String| {
@@ -997,7 +992,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
     let labels_channels_good_motif_idxs = select_motifs_by_ratio(
         motifs,
-        select_motifs_params.labels_datasets().into_iter().map(|(label_dataset)|{
+        select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
             let loader_m = Arc::clone(&loader);
             (
                 label_dataset.0.clone(),
@@ -1038,17 +1033,20 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 mod main_tests {
     use std::fs;
     use std::sync::{Arc, Mutex};
+
+    use log::debug;
     use log::LevelFilter;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use tch::Device;
     use tch::Device::Cpu;
+
     use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
-    use hbac_store::{SqlStore, Store};
-    use crate::{Cli, Commands, EEGLoader, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
+    use hbac_store::SqlStore;
+
+    use crate::{Cli, EEGLoader, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
     use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
-    use log::debug;
+
     // use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
 
     #[ctor::ctor]

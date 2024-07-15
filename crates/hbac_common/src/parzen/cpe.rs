@@ -1,8 +1,9 @@
 use log::debug;
 use rand::prelude::SliceRandom;
-use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, Tensor};
+use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Float;
+
 use crate::parzen::opt_rng::opt_rnd;
 use crate::parzen::optimizer::{Distribution, ParzenEstimator, Primitives};
 use crate::parzen::util::uniform_weight;
@@ -108,6 +109,7 @@ impl ParzenEstimator for CategoricalParzenEstimator {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct CategoricalGaussian {
     probs:Tensor,
     log_blls:Tensor,
@@ -154,12 +156,13 @@ impl Distribution for CategoricalGaussian {
     }
 }
 
+#[cfg(test)]
 mod categorical_parzen_estimator_tests {
     use tch::Kind::Float;
     use tch::Tensor;
-    use crate::argmin::ArgmTensor;
-    use crate::parzen::cpe::{CategoricalGaussian, CategoricalParzenEstimator};
-    use crate::parzen::optimizer::{Distribution, ParzenEstimator, Primitives};
+
+    use crate::parzen::cpe::CategoricalParzenEstimator;
+    use crate::parzen::optimizer::{Distribution, Primitives};
 
     #[test]
     fn test_0(){

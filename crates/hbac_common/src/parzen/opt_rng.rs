@@ -1,12 +1,11 @@
-use std::cell::{Ref, RefMut, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::rc::Rc;
-use rand::rngs::adapter::ReseedingRng;
-use rand::rngs::OsRng;
-use rand::{Rng, RngCore, SeedableRng, thread_rng};
-use rand_mt::Mt19937GenRand32;
 
-use std::cell::RefCell;
-use rand::prelude::ThreadRng;
+use rand::rngs::ThreadRng;
+#[cfg(not(test))]
+use rand::thread_rng;
+#[cfg(test)]
+use rand_mt::Mt19937GenRand32;
 
 #[cfg(not(test))]
 thread_local! {
@@ -27,12 +26,4 @@ pub fn opt_rnd<'a>() -> &'a mut ThreadRng {
 #[cfg(test)]
 pub fn opt_rnd<'a>() -> &'a mut Mt19937GenRand32 {
     unsafe { &mut *FOO.with(|foo| foo.clone()).get() }
-}
-
-
-pub fn sample_with_replacement<T: Clone>(vec: &Vec<T>, num_samples: usize) -> Vec<T> {
-    let mut rng = thread_rng();
-    (0..num_samples)
-        .map(|_| vec[rng.gen_range(0..vec.len())].clone())
-        .collect()
 }

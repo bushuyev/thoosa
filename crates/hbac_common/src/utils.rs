@@ -1,32 +1,30 @@
-use std::any::Any;
-use std::collections::VecDeque;
-use std::io::Write;
-use chrono::SecondsFormat;
-use plotters::prelude::*;
-use plotters::backend::BitMapBackend;
-use plotters::style::*;
-use plotters::chart::ChartBuilder;
-use plotters::element::PathElement;
-use tch::{Device, Kind, nn, Tensor};
-use tch::nn::{Module, OptimizerConfig, VarStore};
-use plotters::drawing::IntoDrawingArea;
-use hbac_shared::{gauss_i, HbacError, pulse_v, pulses_in_const, pulse_in_rand};
-use std::error::Error;
 use std::{fs, mem};
-use std::ops::Deref;
+use std::io::Write;
 use std::time::Instant;
-use log::{debug, info, trace, warn};
+
+use chrono::SecondsFormat;
+use log::{debug, info};
+use plotters::backend::BitMapBackend;
+use plotters::chart::ChartBuilder;
+use plotters::drawing::IntoDrawingArea;
+use plotters::element::PathElement;
+use plotters::prelude::*;
 use rand::prelude::ThreadRng;
+use rand::Rng;
 use rand::thread_rng;
-use crate::my_tch::{Fp, LossFp};
-use tch::nn::Optimizer;
-use tch::IndexOp;
+use tch::{Device, Kind, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
+use tch::nn::Module;
+use tch::nn::Optimizer;
 use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
-use rand::Rng;
-pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
+
+use hbac_shared::{gauss_i, HbacError, pulse_in_rand, pulse_v, pulses_in_const};
+
+use crate::my_tch::LossFp;
+
+pub fn plot_heatmap(path:&str, _t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
 
     root.fill(&WHITE)?;
@@ -47,8 +45,8 @@ pub fn plot_heatmap(path:&str, t:&Tensor)  -> Result<(), Box<dyn std::error::Err
 
     let range = plotting_area.get_pixel_range();
 
-    let (pw, ph) = (range.0.end - range.0.start, range.1.end - range.1.start);
-    let (xr, yr) = (chart.x_range(), chart.y_range());
+    let (_pw, _ph) = (range.0.end - range.0.start, range.1.end - range.1.start);
+    let (_xr, _yr) = (chart.x_range(), chart.y_range());
 
 
 
@@ -249,7 +247,6 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, HbacError>{
         .flat_map(|(i, (from, to))| {
             if from > to {
                 panic!("from {} > to {} at {}", from, to, i);
-                [0, 0]
             } else {
                 [0, to - from]
             }
@@ -272,8 +269,8 @@ pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tens
 }
 
 pub fn clone(from:&Tensor) -> Tensor {
-    let mut to = Tensor::zeros(from.size(), FLOAT_CPU);//TODO clone
-    from.clone(&to);
+    let to = Tensor::zeros(from.size(), FLOAT_CPU);//TODO clone
+    let _ = from.clone(&to);
 
     to
 }
@@ -282,13 +279,14 @@ pub fn clone(from:&Tensor) -> Tensor {
 pub mod tests {
     use std::collections::HashSet;
     use std::fs;
+
+    use clap::{arg, Args, command, Parser, Subcommand};
+    use log::debug;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Device, Tensor};
+    use tch::Tensor;
+
     use hbac_shared::HbacError;
-    use clap::{arg, command, value_parser, ArgAction, Command, Parser, Subcommand, Args};
-    use log::debug;
-    use rand::Rng;
 
     #[test]
     fn test_cdt_for_dir(){
@@ -373,7 +371,7 @@ pub mod tests {
 
         let sample = Tensor::rand(&[3, 3], (Float, Cpu));
 
-        sample.save(format!("{}/{}.pt", base_path.as_str(), id));
+        sample.save(format!("{}/{}.pt", base_path.as_str(), id))?;
 
         let loaded = super::load_tensor(base_path.as_str(), id, Cpu)?;
 
@@ -476,10 +474,10 @@ pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
     z_t
 }
 
-pub fn z_norm_2(t_0:&Tensor, dim:i64) -> Result<Tensor, HbacError>{
+pub fn z_norm_2(t_0:&Tensor, _dim:i64) -> Result<Tensor, HbacError>{
     let std = t_0.std_dim(1, true, true);
     //TODO std - 0
-    Ok(((t_0 -t_0.mean_dim(1, true, Kind::Float))/ std))
+    Ok((t_0 -t_0.mean_dim(1, true, Kind::Float))/ std)
 }
 
 
@@ -626,7 +624,7 @@ pub fn sin3_pow2(n:i64, min: f32, max: f32, with_noise: Option<f32>) -> (Tensor,
     (y_train_full, x_t, x)
 }
 
-fn sin3_pow2_with_noise_f(with_noise: Option<f32>, mut rng: &mut ThreadRng, x: f32) -> f32 {
+fn sin3_pow2_with_noise_f(with_noise: Option<f32>, rng: &mut ThreadRng, x: f32) -> f32 {
     sin3_pow2_f(x) + with_noise.map(|v| v * rng.gen::<f32>()).unwrap_or(0.)
 }
 

@@ -1,8 +1,6 @@
-use std::f32::consts::PI;
 use tch::Tensor;
+
 use crate::utils::DataBatch;
-
-
 
 pub struct DummyDs {
     y_0:Tensor,

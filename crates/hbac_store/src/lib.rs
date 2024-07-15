@@ -1,24 +1,21 @@
 #![feature(iter_array_chunks)]
 
 use std::array::IntoIter;
-use std::backtrace::Backtrace;
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display};
-use std::path::Path;
-use rusqlite::{Connection, Error, params, Rows, Statement, ToSql, Transaction};
-use log::{debug, error, trace};
-use rusqlite::types::{ToSqlOutput, Value};
-use rusqlite::types::ValueRef::Real;
-use std::fmt;
-use std::sync::MutexGuard;
-use std::sync::{Arc, Mutex, PoisonError};
-use hbac_shared::*;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use rand::{Rng, thread_rng};
-use rand::prelude::SliceRandom;
 use std::cmp::{max, min};
-use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use log::{debug, trace};
+use rand::prelude::SliceRandom;
+use rand::thread_rng;
+use rusqlite::{Connection, Error, params, Transaction};
+use rusqlite::types::Value;
+
+use hbac_shared::*;
 use hbac_shared::val::Val;
 
 pub struct StoreDumper {
@@ -67,13 +64,13 @@ pub enum SetCond {
 impl SetCond {
     fn p(&self) -> &'static str {
         match self {
-            SetCond::Eq(v)=>{
+            SetCond::Eq(_v)=>{
                 "p="
             }
-            SetCond::Gt(v)=>{
+            SetCond::Gt(_v)=>{
                 "p>"
             }
-            SetCond::Lt(v)=>{
+            SetCond::Lt(_v)=>{
                "p<"
             }
         }
@@ -143,9 +140,9 @@ pub struct SqlStore {
 
 impl Store for SqlStore {
 
-    fn save_tree_run(&mut self, input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError> {
+    fn save_tree_run(&mut self, _input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, HbacError> {
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
         t.execute("INSERT INTO tree_run (descr) VALUES (?)", params![descr])?;
 
@@ -169,7 +166,7 @@ impl Store for SqlStore {
 
         if properties_vals.len() > 0 {
             for property_val in properties_vals.into_iter() {
-                Self::save_param_value(&t, run_id, &property_val.0, property_val.1, None);
+                Self::save_param_value(&t, run_id, &property_val.0, property_val.1, None)?;
             }
         }
 
@@ -180,13 +177,13 @@ impl Store for SqlStore {
 
     fn save_params_value(&mut self, params:HashMap<String, Val>, run_id:usize, label:Option<&str>) -> Result<(), HbacError> {
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
 
         let label_id = t.query_row("SELECT id FROM labels WHERE label=?", [label], |row| row.get(0)).ok();
 
         for property_val in params.into_iter() {
-            Self::save_param_value(&t, run_id, &property_val.0, property_val.1, label_id);
+            Self::save_param_value(&t, run_id, &property_val.0, property_val.1, label_id)?;
         }
 
         t.commit()?;
@@ -196,7 +193,7 @@ impl Store for SqlStore {
 
     fn save_resources(&mut self, resources:Vec<String>) -> Result<(), HbacError>{
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
         for resources_chunk in resources.chunks(500) {
             let (mut q, params) = resources_chunk.into_iter().fold(
@@ -220,7 +217,7 @@ impl Store for SqlStore {
 
     fn save_label(&mut self, label:&str) -> Result<usize, HbacError>{
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let  t = conn_guard.transaction()?;
 
         t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
 
@@ -249,7 +246,7 @@ impl Store for SqlStore {
 
     fn list_labels(&mut self) -> Result<Vec<String>, HbacError> {
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
         let labels = Self::list_labels(&t)?.into_iter().map(|id_label|id_label.1).collect();
 
@@ -343,7 +340,7 @@ impl Store for SqlStore {
 
 
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
 
 
@@ -351,12 +348,12 @@ impl Store for SqlStore {
 
 
         while let Some(resource_keys) =  resource_labels_iter.next() {
-            _do_insert(resource_keys.into_iter(), &t);
+            _do_insert(resource_keys.into_iter(), &t)?;
         }
 
         if let Some(reminder) = resource_labels_iter.into_remainder() {
             if reminder.len() > 0 {
-                _do_insert(reminder, &t);
+                _do_insert(reminder, &t)?;
             }
         }
 
@@ -368,7 +365,7 @@ impl Store for SqlStore {
     fn save_resources_set(&mut self, descr:String, resource_keys:Vec<String>, group_id: Option<usize>) -> Result<usize, HbacError>{
 
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
         match group_id{
             Some(group_id)=>{
@@ -431,8 +428,8 @@ impl Store for SqlStore {
                     let labels = label_row.get::<usize, String>(1)?;
                     let labels_cnt = label_row.get::<usize, usize>(2)?;
 
-                    let mut cnt_labels = labels_cnt_labels_resources.entry(labels_cnt).or_insert_with(|| HashMap::new());
-                    let mut labels_resources = cnt_labels.entry(labels).or_insert_with(|| vec![]);
+                    let cnt_labels = labels_cnt_labels_resources.entry(labels_cnt).or_insert_with(|| HashMap::new());
+                    let  labels_resources = cnt_labels.entry(labels).or_insert_with(|| vec![]);
 
                     labels_resources.push(resource_id);
                 }
@@ -456,7 +453,7 @@ impl Store for SqlStore {
                     labels_cnt, max_labels_resources, max_resources_in_set, max_labels_resources/max_resources_in_set
                 );
 
-                let num_groups = max(1, (max_labels_resources/max_resources_in_set)).ilog2();
+                let num_groups = max(1, max_labels_resources/max_resources_in_set).ilog2();
                 let groups_max_resources = (0..num_groups).map(|i|max_resources_in_set * 2usize.pow(i as u32) as usize).collect::<Vec<usize>>();
 
                 let groups_max_ids = groups_max_resources.iter().map(
@@ -482,7 +479,7 @@ impl Store for SqlStore {
 
                     if resources.len() > 10 {//TODO min resources
 
-                        for (group_id, max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
+                        for (group_id, _max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
                             for (resources_0, resources_1, group_id) in group_id {
                                 if *resources_0 < resources.len() - 1 {
                                     Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels),  label_id, &resources[*resources_0..min(resources.len() - 1, *resources_1)])?;
@@ -594,7 +591,7 @@ impl Store for SqlStore {
 
         };
 
-        t.commit();
+        t.commit()?;
 
         Ok(group_sets)
     }
@@ -618,7 +615,7 @@ impl Store for SqlStore {
 
         };
 
-        t.commit();
+        t.commit()?;
 
         Ok(labeled_resources_sets)
     }
@@ -629,7 +626,7 @@ impl Store for SqlStore {
 
         let r = Self::list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
 
-        t.commit();
+        t.commit()?;
 
         Ok(r)
     }
@@ -646,7 +643,7 @@ impl Store for SqlStore {
             )
         })?.map(|v| v.unwrap()).collect();
 
-        t.commit();
+        t.commit()?;
 
         Ok(r)
     }
@@ -688,11 +685,11 @@ impl Store for SqlStore {
             trace!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
 
             Ok(
-                (key, labels.iter().map(|(label_id, label)|*labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>())
+                (key, labels.iter().map(|(_label_id, label)|*labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>())
             )
         })?.map(|v| v.unwrap()).collect();
 
-        t.commit();
+        t.commit()?;
 
         debug!("list_resource_random_in_group: r.len={:?}", r.len());
 
@@ -705,14 +702,14 @@ impl Store for SqlStore {
 
         let set_resources = Self::list_resource_set_resources(set_id, &t)?;
 
-        t.commit();
+        t.commit()?;
 
         Ok(set_resources)
     }
 
-    fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, only_unused:bool, limit:usize) -> Result<(), HbacError> {
+    fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, _only_unused:bool, limit:usize) -> Result<(), HbacError> {
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
         {
             t.execute("INSERT INTO resource_set (descr) VALUES (?)", params!["save_set_by_labels"])?;
@@ -747,7 +744,7 @@ impl Store for SqlStore {
 
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), HbacError>{
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let  t = conn_guard.transaction()?;
 
         assert!(slices.len() > 0);
 
@@ -785,7 +782,7 @@ impl Store for SqlStore {
         {
             let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=? AND channel_id=?")?;
 
-            let mut groups = group_slices(
+            let groups = group_slices(
                 stmt.query_map([run_id, channel as usize], |row| {//TODO move group_slices out, not for store
                     Ok(
                         (
@@ -942,7 +939,7 @@ impl Store for SqlStore {
         result
     }
 
-    fn list_run_params(&mut self, run_id:usize, label: Option<&str>) -> Result<HashMap<String, Val>, HbacError> {
+    fn list_run_params(&mut self, run_id:usize, _label: Option<&str>) -> Result<HashMap<String, Val>, HbacError> {
 
         let mut guard = self.conn.lock()?;
         let t = guard.transaction()?;
@@ -1099,7 +1096,7 @@ impl Store for SqlStore {
             ].join(""))?;
 
             let params = match all_but_in_run_id {
-                Some((run_id, channel_id))=>[motif_id, channel_id],
+                Some((_run_id, channel_id))=>[motif_id, channel_id],
                 None =>[motif_id, 0],
             };
 
@@ -1145,7 +1142,7 @@ impl Store for SqlStore {
 
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, HbacError> {
         let mut conn_guard = self.conn.lock()?;
-        let mut t = conn_guard.transaction()?;
+        let t = conn_guard.transaction()?;
 
         let descr:String = t.query_row("SELECT descr FROM corrs_run WHERE id=?", [corr_run_id], |row| row.get(0))?;
 
@@ -1163,7 +1160,7 @@ impl SqlStore {
         let mut conn = Connection::open(path)?;
 
         {
-            let mut t = conn.transaction()?;
+            let  t = conn.transaction()?;
 
             t.execute(//TODO UNIQUE(key) doesn't work - no error
                 "CREATE TABLE IF NOT EXISTS resources (
@@ -1318,9 +1315,9 @@ impl SqlStore {
 
 
             let vec = stmt.query_map([set_id], |row| {
-                Ok((
+                Ok(
                     row.get::<usize, String>(0).expect("row 1 in list_resource_set_group_sets")
-                ))
+                )
             })?.map(|v| v.unwrap()).collect();
 
             vec
@@ -1377,7 +1374,7 @@ impl SqlStore {
     /**
     * label_id - for pure sets
     */
-    fn insert_resource_set_resources(t: &mut Transaction, labels_cnt: usize, group_id: usize, descr:String, label_id:Option<&usize>, resources: &[usize]) -> Result<(), HbacError> {
+    fn insert_resource_set_resources(t: &mut Transaction, _labels_cnt: usize, group_id: usize, descr:String, label_id:Option<&usize>, resources: &[usize]) -> Result<(), HbacError> {
 
          t.execute(
             "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
@@ -1418,19 +1415,18 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
 
 #[cfg(test)]
 mod store_tests{
-    use std::cmp::Ordering;
     use std::collections::HashMap;
-    use std::error::Error;
     use std::fs;
     use std::time::Instant;
-    use log::LevelFilter;
-    use rusqlite::Connection;
-    use rusqlite::types::Value;
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use crate::{HbacError, SetCond, SqlStore, Store};
-    use hbac_shared::TensorSliceIdx;
+
     use log::debug;
+    use log::LevelFilter;
+    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+
+    use hbac_shared::TensorSliceIdx;
     use hbac_shared::val::Val;
+
+    use crate::{HbacError, SetCond, SqlStore, Store};
 
     #[ctor::ctor]
     fn init() {
@@ -1451,52 +1447,52 @@ mod store_tests{
         fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
 
-        let aaa_id = store.save_label("aaa");
-        let bbb_id = store.save_label("bbb");
-        let ccc_id = store.save_label("ccc");
+        let _aaa_id = store.save_label("aaa");
+        let _bbb_id = store.save_label("bbb");
+        let _ccc_id = store.save_label("ccc");
 
         //pure resources
-        let N = 100;
-        store.save_resources_labels((0..N).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
+        let n = 100;
+        store.save_resources_labels((0..n).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
             a.insert(format!("{:3}_aaa", i), vec![("aaa".into(), 1.0)]);
             a
-        }));
+        }))?;
 
-        store.save_resources_labels((0..N).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
+        store.save_resources_labels((0..n).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
             a.insert(format!("{:3}_bbb", i), vec![("bbb".into(), 1.0)]);
             a
-        }));
+        }))?;
 
-        store.save_resources_labels((0..N).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
+        store.save_resources_labels((0..n).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
             a.insert(format!("{:3}_ccc", i), vec![("ccc".into(), 1.0)]);
             a
-        }));
+        }))?;
 
 
         //two labels resources
-        store.save_resources_labels((0..N).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
+        store.save_resources_labels((0..n).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
             a.insert(format!("{:3}_ab", i), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]);
             a
-        }));
+        }))?;
 
-        store.save_resources_labels((0..N).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
+        store.save_resources_labels((0..n).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
             a.insert(format!("{:3}_bc", i), vec![("bbb".into(), 0.5), ("ccc".into(), 0.5)]);
             a
-        }));
+        }))?;
 
-        store.save_resources_labels((0..N).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
+        store.save_resources_labels((0..n).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
             a.insert(format!("{:3}_ca", i), vec![("ccc".into(), 0.5), ("aaa".into(), 0.5)]);
             a
-        }));
+        }))?;
 
         //three labels resources
-        store.save_resources_labels((0..N).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
+        store.save_resources_labels((0..n).fold(HashMap::new(), |mut a:HashMap<String, Vec<(String, f32)>>, i|{
             a.insert(format!("{:3}_abc", i), vec![("aaa".into(), 0.3), ("bbb".into(), 0.3), ("ccc".into(), 0.4)]);
             a
-        }));
+        }))?;
 
         let t1 = Instant::now();
-        store.save_groups_by_label_cnt(10);
+        store.save_groups_by_label_cnt(10)?;
 
         debug!("done in {}", t1.elapsed().as_millis());
 
@@ -1509,24 +1505,24 @@ mod store_tests{
         let mut store = SqlStore::new("/tmp/test_db.db3")?;
 
 
-        let aaa_id = store.save_label("aaa")?;
-        let bbb_id = store.save_label("bbb")?;
-        let ccc_id = store.save_label("ccc")?;
+        let _aaa_id = store.save_label("aaa")?;
+        let _bbb_id = store.save_label("bbb")?;
+        let _ccc_id = store.save_label("ccc")?;
 
         store.save_resources_labels(HashMap::from([
             ("1111".into(), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]),
             ("2222".into(), vec![("aaa".into(), 1.0)]),
             ("3333".into(), vec![("ccc".into(), 1.0)]),
-        ]));
+        ]))?;
 
-        let set_1_id = store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()], None)?;
-        let set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()], None)?;
+        let _set_1_id = store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()], None)?;
+        let _set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()], None)?;
 
-        store.save_pure_sets(10, false);
-        store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10);
+        store.save_pure_sets(10, false)?;
+        store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10)?;
 
         let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into())?;
-        let set_all_id = store.save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
+        let _set_all_id = store.save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
 
 
 
@@ -1569,19 +1565,19 @@ mod store_tests{
             HashMap::from([("label.prop1".into(), Val::Int(10)), ("label.prop2".into(), Val::Real(20.0)), ("label.prop3".into(), Val::Str("3330".to_string()))]),
             run_id,
             Some("aaa")
-        );
+        )?;
 
         store.save_params_value(
             HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
             run_id,
             Some("bbb")
-        );
+        )?;
 
         store.save_params_value(
             HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
             run_id,
             None
-        );
+        )?;
 
         let loaded_params = store.list_run_params(run_id, None)?;
 
@@ -1605,7 +1601,7 @@ mod store_tests{
             let t2 = guard.transaction()?;
             let mut stmt = t2.prepare("SELECT run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, motif_id FROM slice_matches")?;
 
-            let mut rows = stmt.query_map([], |row| {
+            let rows = stmt.query_map([], |row| {
                 Ok((
                     row.get(0)?,//run_id
                     row.get(1)?,//channel_id
@@ -1639,7 +1635,7 @@ mod store_tests{
 
             let mut stmt = t2.prepare("SELECT run_id, ord_id, key FROM run_resources")?;
 
-            let mut rows = stmt.query_map([], |row| {
+            let rows = stmt.query_map([], |row| {
                 Ok((row.get(0)?, row.get(1)?,  row.get(2)?))
             })?.map(|v|v.unwrap()).collect::<Vec<(usize, usize, String)>>();
 
@@ -1693,7 +1689,7 @@ mod store_tests{
         assert_eq!(7, channel);
         assert_eq!(run_id, run_id_);
 
-        let (channel, run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id as usize, channel as usize)))?;
+        let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id as usize, channel as usize)))?;
 
         slices.sort();
 

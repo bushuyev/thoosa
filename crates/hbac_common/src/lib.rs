@@ -1,7 +1,8 @@
+#![allow(uncommon_codepoints)]
 // #![feature(iter_array_chunks)]
 extern crate core;
 
-use std::fmt::Display;
+
 use tch::Device;
 
 pub mod utils;

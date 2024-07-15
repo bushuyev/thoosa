@@ -1,22 +1,16 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::marker::PhantomData;
-use std::ops::Index;
-use std::rc::Rc;
 use std::sync::Arc;
-use std::slice::SliceIndex;
-use std::sync::atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering};
-use std::thread;
-use std::time::Duration;
-use futures::lock::Mutex;
-use log::{warn, debug};
-use tch::{Device, Kind, TchError, Tensor};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use log::{debug, warn};
+use tch::Tensor;
+
 use hbac_shared::HbacError;
-use rayon::prelude::*;
-use crate::cache_on_threads::CacheOnThreads;
 use hbac_shared::TensorSliceIdx;
 
-trait TensorsStore {
+use crate::cache_on_threads::CacheOnThreads;
+
+pub trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError>;
 
     fn get_tensors(&mut self, indexes: &[usize]) -> Result<Vec<Tensor>, HbacError> {
@@ -122,7 +116,7 @@ fn preload(loaded:&mut HashMap<String, Box<Tensor>>, tensor_loader: &Box<dyn Ten
 }
 
 
-pub(crate) struct TensorsIter {//TODO SliceIndex?
+pub struct TensorsIter {//TODO SliceIndex?
     tensors_store: Box<dyn TensorsStore + Send>,
     tensor_index_0:usize,
     tensor_index_1:usize,
@@ -159,7 +153,7 @@ impl TensorsIter {
         }
     }
 }
-pub type TensorSlice = ((TensorSliceIdx<String>), Tensor); //tensor idx, slice, tensor
+pub type TensorSlice = (TensorSliceIdx<String>, Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorsIter {
     type Item = Result<(TensorSlice, TensorSlice, usize), HbacError>;
@@ -300,14 +294,17 @@ mod tests {
     use std::collections::HashMap;
     use std::io::Write;
     use std::time::Instant;
-    use log::{debug, LevelFilter, SetLoggerError};
+
+    use log::{debug, LevelFilter};
+    use rayon::iter::ParallelIterator;
     use rayon::prelude::ParallelBridge;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
-    use hbac_shared::*;
-    use crate::tensor_iter::{LazyTensorsStore, TensorsIter, HashTensorLoader, VecTensorsStore, CacheOnThreadsStore};
+
     use hbac_common::utils::*;
-    use rayon::iter::ParallelIterator;
+
+
+    use crate::tensor_iter::{CacheOnThreadsStore, HashTensorLoader, LazyTensorsStore, TensorsIter, VecTensorsStore};
 
     #[ctor::ctor]
     fn init() {
@@ -554,22 +551,22 @@ mod tests {
         });
     }
 
-    fn load_rand_tensor(key:&String) ->Box<Tensor>{
+    fn load_rand_tensor(_key:&String) ->Box<Tensor>{
         Box::new(Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu)))
     }
 
     #[test]
     fn test_cache_on_threads() {
-        let vec_8:Vec<String> = vec![
-            "key1".into(),
-            "key2".into(),
-            "key3".into(),
-            "key4".into(),
-            "key5".into(),
-            "key6".into(),
-            "key7".into(),
-            "key8".into()
-        ];
+        // let vec_8:Vec<String> = vec![
+        //     "key1".into(),
+        //     "key2".into(),
+        //     "key3".into(),
+        //     "key4".into(),
+        //     "key5".into(),
+        //     "key6".into(),
+        //     "key7".into(),
+        //     "key8".into()
+        // ];
 
         let vec_100 = (0..20).map(|i|format!("key_{}", i)).collect::<Vec<String>>();
 
@@ -594,6 +591,7 @@ mod tests {
     }
 
     // #[test]
+    #[allow(dead_code)]
     fn test_time(){
 
         let all_t = (0..4_000).map(|_|Tensor::rand(&[20, 100_000], (Kind::Float, Device::Cpu))).collect::<Vec<Tensor>>();

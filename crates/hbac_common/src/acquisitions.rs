@@ -1,34 +1,34 @@
 use log::debug;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
+
 use crate::gaussian::{Gaussian, GaussianProcessFit};
-use crate::utils::{from, vec_f32_from};
-
-
+use crate::utils::vec_f32_from;
 
 //http://arxiv.org/abs/1012.2599, (4)
+#[allow(dead_code)]
 pub fn expected_improvement<'a, F>(x:&Tensor, y_best:&Tensor, gpf:&GaussianProcessFit<'a, F>, ξ:f64 ) -> Tensor where F: Fn(&Tensor, &Tensor) -> Tensor {//y_best - f (x+)
     // let xxx = x.subtract_scalar(13.).pow_tensor_scalar(2).view(1);
     let x = x.view((-1,1));
-    let (µ, σ) = gpf.mean_and_cov(&x);
+    let (μ, σ) = gpf.mean_and_cov(&x);
 
 
     // let impr = µ.subtract(&y_best.f_add_scalar(ξ).expect("y_best.f_add_scalar")); //max
-    let impr = y_best.subtract(&µ).subtract_scalar(ξ); //min
+    let impr = y_best.subtract(&μ).subtract_scalar(ξ); //min
     debug!("expected_improvement: ξ={} x={:?} y_best={:?} impr={:?}", ξ, vec_f32_from(&x),  vec_f32_from(&y_best), vec_f32_from(&impr));
 
     let z = impr.divide(&σ);
 
 
     let g = Gaussian::new(
-        Tensor::zeros(µ.size(), FLOAT_CPU),
-        Tensor::ones(µ.size(), FLOAT_CPU)
+        Tensor::zeros(μ.size(), FLOAT_CPU),
+        Tensor::ones(μ.size(), FLOAT_CPU)
     );//TODO
 
 
     let cdf = g.cdf(&z);
     let pdf = g.pdf(&z);
-    debug!("expected_improvement: x={:?} µ={:?} σ={:?} z={:?} cdf={:?} pdf={:?}", vec_f32_from(&x), vec_f32_from(&µ), vec_f32_from(&σ), vec_f32_from(&z), vec_f32_from(&cdf), vec_f32_from(&pdf));
+    debug!("expected_improvement: x={:?} µ={:?} σ={:?} z={:?} cdf={:?} pdf={:?}", vec_f32_from(&x), vec_f32_from(&μ), vec_f32_from(&σ), vec_f32_from(&z), vec_f32_from(&cdf), vec_f32_from(&pdf));
 
     let ei = impr * cdf + σ * pdf;
 
@@ -42,22 +42,23 @@ pub fn expected_improvement<'a, F>(x:&Tensor, y_best:&Tensor, gpf:&GaussianProce
 #[cfg(test)]
 mod tests {
     use std::ops::Deref;
+
     use argmin::core::State;
     use chrono::Utc;
     use log::debug;
     use plotters::prelude::{BLACK, ShapeStyle};
     use plotters::prelude::full_palette::ORANGE;
     use plotters::style::RED;
-    use rand::thread_rng;
-    use rand::Rng;
+    use tch::{IndexOp, Tensor};
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{IndexOp, Tensor};
+
     use hbac_shared::HbacError;
-    use crate::acquisitions::{expected_improvement};
+
+    use crate::acquisitions::expected_improvement;
     use crate::argmin::{run_lbfgs, TensorProblem};
     use crate::gaussian::GaussianProcess;
-    use crate::opt::{kernel_rbf, rbf_nll};
+    use crate::opt::kernel_rbf;
     use crate::utils::{from, plot_series_with_points, sin3_pow2, vec_f32_from};
 
     #[test]
@@ -65,7 +66,7 @@ mod tests {
 
         let n = 100i64;
 
-        let (y_train_full, x_t, x) = sin3_pow2(n, -1., 2., Some(0.002));
+        let (y_train_full, x_t, _x) = sin3_pow2(n, -1., 2., Some(0.002));
 
         let train_indexes = vec![0, 70, 90]; //(0..n).step_by(20).collect::<Vec<i64>>();//vec![0, n-1]; //
         let train_indexes = train_indexes.as_slice();
@@ -74,7 +75,7 @@ mod tests {
         let y_train = y_train_full.i((.., train_indexes));
 
 
-        let mut gp = GaussianProcess::new(
+        let gp = GaussianProcess::new(
             move|t1,t2| kernel_rbf(&t1, &t2, &0.5.into(), &1.0.into()),
             1e-8
         );
@@ -139,7 +140,7 @@ mod tests {
             ],
             "EEG", (2000, 500), &format!("/tmp/plots/1_{:?}.png", Utc::now().to_rfc3339()).as_str(),
             Some(&from::<Vec<f32>>(&x_train.view(-1)).into_iter().zip(vec_f32_from(&y_train)).collect::<Vec<(f32, f32)>>())
-        );
+        )?;
 
     Ok(())
     }

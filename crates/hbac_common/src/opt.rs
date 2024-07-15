@@ -1,17 +1,16 @@
-use std::any::Any;
-use nalgebra::{DMatrix, DVector};
-use tch::kind::FLOAT_CPU;
+use log::{debug, warn};
 use tch::{IndexOp, Tensor};
-use log::{warn, debug};
 use tch::Kind::Float;
-use hbac_shared::HbacError;
-use crate::utils::vec_f32_from;
-use std::ops::Deref;
+use tch::kind::FLOAT_CPU;
 
+use hbac_shared::HbacError;
+
+#[allow(dead_code)]
 fn kernel_cdist(t_0:&Tensor, t_1:&Tensor, l:f64, sigma:f64) -> Tensor {
     Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2).multiply_scalar(-0.5 * l.powi(2)).exp().multiply_scalar(sigma.powi(2))
 }
 
+#[allow(dead_code)]
 pub fn kernel_rbf(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor {
     let sqdist = Tensor::cdist(t_0, t_1, 2.0, 0).pow_tensor_scalar(2);
     // debug!("sqdist={}", sqdist);
@@ -25,7 +24,7 @@ pub fn kernel_rbf(t_0:&Tensor, t_1:&Tensor, l:&Tensor, sigma:&Tensor) -> Tensor 
     e_sqdist.exp().multiply(&sigma.pow_tensor_scalar(2))
 }
 
-
+#[allow(dead_code)]
 fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&Tensor, sigma_y:f64) -> Result<(Tensor, Tensor), HbacError>{
     // let k = kernel(&x_train, &x_train, l, sigma_f);
     // let l = Tensor::from_slice(&[l]).totype(Float);
@@ -73,6 +72,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
     Ok((y_mean.view((-1, y_cov.size()[1])).transpose(0,1), y_cov))
 }
 
+#[allow(dead_code)]
 pub fn rbf_nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor, noise: f64) -> Result<Tensor, HbacError> {
     debug!("rbf_nll: theta.device={:?} theta.requires_grad={:?}", theta.device(), theta.requires_grad());
     let noise = noise.powi(2);
@@ -129,6 +129,7 @@ pub fn rbf_nll(x_train:&Tensor, y_train:&Tensor, theta:&Tensor, noise: f64) -> R
     Ok(v)
 }
 
+#[allow(dead_code)]
 fn cholesky_rec(t:&Tensor, tries:usize, jitter:f64, e:i32, e_step:i32) -> Result<Tensor, HbacError>{
 
     match t.f_linalg_cholesky(false) {
@@ -159,39 +160,36 @@ pub fn cholesky_with_jitter(t:&Tensor) -> Result<Tensor, HbacError> {
 
 #[cfg(test)]
 mod opt_tests {
-    use std::sync::{Arc, Mutex};
-    use chrono::Utc;
-    use log::{debug, LevelFilter};
-    use plotters::prelude::{BLACK, GREEN, IntoLinspace, RED};
-    use plotters::style::Color;
-    use plotters::prelude::ShapeStyle;
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use tch::Kind::Float;
-    use tch::Tensor;
-    use hbac_shared::{comp_sin_k_v, join_with_offset, pulse_v, random_saw};
-    use crate::utils::{cdt_for_dir, plot_series, plot_series_with_points, sin3_pow2, vec_f32_from};
-    use crate::utils::lin_t;
-    use hbac_shared::*;
-    use statrs::distribution::{Uniform, Normal, MultivariateNormal};
-    use rand::{Rng, thread_rng};
-    use nalgebra::DMatrix;
-    use plotters::style::BLUE;
-    use plotters::prelude::YELLOW;
-    use plotters::style::full_palette::*;
-    use rand::prelude::ThreadRng;
-    use crate::utils::from;
-    use tch::IndexOp;
-    use tch::kind::{DOUBLE_CPU, FLOAT_CPU};
     use std::iter::once;
     use std::ops::Deref;
+
     use argmin::core::{CostFunction, Error, Executor};
-    use argmin::solver::brent::BrentOpt;
-    use tch::Device::Cpu;
-    use crate::opt::{kernel_cdist, kernel_rbf, rbf_nll};
     use argmin::core::State;
+    use argmin::solver::brent::BrentOpt;
+    use chrono::Utc;
+    use log::debug;
+    use plotters::prelude::{BLACK, GREEN, RED};
+    use plotters::prelude::ShapeStyle;
+    use plotters::style::full_palette::*;
+    use rand::{Rng, thread_rng};
+    use rand::prelude::ThreadRng;
+    use statrs::distribution::Normal;
+    use tch::Device::Cpu;
+    use tch::IndexOp;
+    use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
+    use tch::Tensor;
+
+    use hbac_shared::{join_with_offset, pulse_v, random_saw};
+    use hbac_shared::*;
+
     use crate::acquisitions::expected_improvement;
     use crate::argmin::{run_lbfgs, TensorProblem};
     use crate::gaussian::GaussianProcess;
+    use crate::opt::{kernel_rbf, rbf_nll};
+    use crate::utils::{cdt_for_dir, plot_series, plot_series_with_points, sin3_pow2, vec_f32_from};
+    use crate::utils::from;
+    use crate::utils::lin_t;
 
     // #[ctor::ctor]
     // fn init() {
@@ -208,16 +206,17 @@ mod opt_tests {
     //     std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
     // }
 
+    #[allow(dead_code)]
     fn sig_1_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
 
-        Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1,-1))
+        Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1,-1))
     }
 
 
     fn sig_3_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
-        let sig_t_0 = Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
-        let sig_t_1 = Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
-        let sig_t_2 = Tensor::from_slice((0..n).map(|x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
+        let sig_t_0 = Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
+        let sig_t_1 = Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
+        let sig_t_2 = Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
 
         let sig_t = Tensor::stack(&[sig_t_0, sig_t_1, sig_t_2], 0);
         sig_t
@@ -303,8 +302,8 @@ mod opt_tests {
     #[test]
     fn test_rbf_chol_rand() -> Result<(), HbacError>{
 
-        let N = 1000;
-        let x_train = Tensor::rand([N, 1], (FLOAT_CPU));
+        let n = 1000;
+        let x_train = Tensor::rand([n, 1], FLOAT_CPU);
         let k = super::kernel_cdist(&x_train, &x_train, 0.0, 0.0);
 
         let chol_t = super::cholesky_with_jitter(&k)?;
@@ -553,7 +552,7 @@ mod opt_tests {
         let y_train = y_train_full.i((.., train_indexes));
 
 
-        let mut gp = GaussianProcess::new(
+        let gp = GaussianProcess::new(
             move|t1,t2| kernel_rbf(&t1, &t2, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float)),
             1e-8
         );
@@ -609,7 +608,7 @@ mod opt_tests {
             ],
             "EEG", (2000, 500), &format!("/tmp/plots/1_{:?}.png", Utc::now().to_rfc3339()).as_str(),
             Some(&from::<Vec<f32>>(&x_train.view(-1)).into_iter().zip(from::<Vec<f32>>(&y_train.view(-1)).into_iter()).collect::<Vec<(f32, f32)>>())
-        );
+        )?;
         Ok(())
     }
 
@@ -617,25 +616,25 @@ mod opt_tests {
     #[test]
     fn test_opt_1d() -> Result<(), HbacError>{
 
-        let N = 100i64;
+        let n = 100i64;
 
         // let sig =  comp_sin_k_v(N, vec![6., 3., 2.], 0.5);
         // let sig =  comp_sin(N).collect::<Vec<f32>>();
-        let x = (0..N).map(|i| - std::f32::consts::PI + (i as f32 / N as f32)  * 2. * std::f32::consts::PI ).into_iter().collect::<Vec<f32>>();
-        let X = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
+        let x = (0..n).map(|i| - std::f32::consts::PI + (i as f32 / n as f32)  * 2. * std::f32::consts::PI ).into_iter().collect::<Vec<f32>>();
+        let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
 
 
         let y_train_full = Tensor::stack(&[
-            X.sin().multiply_scalar(10).view((-1, 1)).totype(Float),
+            x_t.sin().multiply_scalar(10).view((-1, 1)).totype(Float),
             // X.f_add_scalar(std::f64::consts::PI/4.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float),
             // X.f_add_scalar(std::f64::consts::PI/2.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float)
         ], 0).view((1, -1)); //.transpose(0,1);
 
         println!("y_train_full={:?}", y_train_full.size());
 
-        let train_indexes = (0..N).step_by(10).collect::<Vec<i64>>();
+        let train_indexes = (0..n).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
-        let x_train = X.i(train_indexes);
+        let x_train = x_t.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
         println!("x_train={:?} y_train={:?}", x_train.size(), y_train.size());
@@ -643,13 +642,13 @@ mod opt_tests {
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
 
-        println!("X={:?}", from::<Vec<f32>>(&X.view(-1)));
+        println!("X={:?}", from::<Vec<f32>>(&x_t.view(-1)));
         println!("x_train={:?}", from::<Vec<f32>>(&x_train.view(-1)));
         y_train.print();
         println!("y_train={:?}", from::<Vec<f32>>(&y_train.view(-1)));
 
 
-        let Ok((mu_s, cov_s)) = super::posterior(&X, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior(&x_t, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
@@ -668,7 +667,7 @@ mod opt_tests {
         println!("l_sigma={:?} - {} / {} ", l_sigma, l_sigma.i(0).double_value(&[]), l_sigma.i(1).double_value(&[]));
 
         // let Ok((mu_s_opt, cov_s_opt)) = super::posterior_ch(&X, &x_train, &y_train, 1.6409202082368064, 8.504394038804222, 1e-8) else {
-        let Ok((mu_s_opt, cov_s_opt)) = super::posterior(&X, &x_train, &y_train, &l_sigma.i(0), &l_sigma.i(1), 1e-8) else {
+        let Ok((mu_s_opt, cov_s_opt)) = super::posterior(&x_t, &x_train, &y_train, &l_sigma.i(0), &l_sigma.i(1), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
@@ -676,7 +675,7 @@ mod opt_tests {
 
         let norm = Normal::new(0., 1.).unwrap();
         let rng = thread_rng();
-        let sig_t = sig_3_norm(norm, rng, N).transpose(0,1);
+        let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
         println!("sig_t.size={:?}", sig_t.size());
 
 
@@ -690,7 +689,7 @@ mod opt_tests {
                     color: GREEN_800.into(),
                     filled: true,
                     stroke_width: 1,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(n))).collect::<Vec<(f32, f32)>>()),
                 // (format!("train"), ShapeStyle {
                 //     color: BLUE_800.into(),
                 //     filled: true,
@@ -716,7 +715,7 @@ mod opt_tests {
                     color: RED.into(),
                     filled: true,
                     stroke_width: 2,
-                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol_opt.i(((0, ..))))).collect::<Vec<(f32, f32)>>()),
+                }, x.clone().into_iter().zip(from::<Vec<f32>>(&sig_chol_opt.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
 
 
             ], "EEG", (2000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str(),
@@ -742,14 +741,14 @@ mod opt_tests {
     #[test]
     fn test_opt_2d(){
 
-        let N = 1000i64;
+        let n = 1000i64;
         let min_max = 100.; // std::f32::consts::PI;
         // let sig =  comp_sin_k_v(N, vec![6., 3., 2.], 0.5);
         // let sig =  comp_sin(N).collect::<Vec<f32>>();
-        let x_01 = (0..N).map(|i| {
+        let x_01 = (0..n).map(|i| {
            (
-                -min_max + (i as f32 / N as f32)  * 2. * min_max,
-                min_max - (i as f32 / N as f32)  * 2. * min_max
+               -min_max + (i as f32 / n as f32)  * 2. * min_max,
+               min_max - (i as f32 / n as f32)  * 2. * min_max
            )
         }).collect::<Vec<(f32, f32)>>();
 
@@ -759,17 +758,17 @@ mod opt_tests {
         let x_0 = x_01.iter().map(|x_01| x_01.0).collect::<Vec<f32>>();
         let x_1 = x_01.iter().map(|x_01| x_01.1).collect::<Vec<f32>>();
 
-        let X = Tensor::from_slice(x_01.into_iter().flat_map(|x_01|once(x_01.0).chain(once(x_01.1))).collect::<Vec<f32>>().as_slice()).view((-1, 2));
-        print!("X={:?}", X.size());
+        let x = Tensor::from_slice(x_01.into_iter().flat_map(|x_01|once(x_01.0).chain(once(x_01.1))).collect::<Vec<f32>>().as_slice()).view((-1, 2));
+        print!("X={:?}", x.size());
         // X.print();
 
         let y_train_full = Tensor::from_slice(y.as_slice()).view((1, -1));
         print!("y_train_full={:?}", y_train_full.size());
         // y_train_full.print();
 
-        let train_indexes = (0..N).step_by(10).collect::<Vec<i64>>();
+        let train_indexes = (0..n).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
-        let x_train = X.i(train_indexes);
+        let x_train = x.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
         println!("x_train.size()={:?}, y_train.size()={:?}", x_train.size(), y_train.size());
@@ -777,7 +776,7 @@ mod opt_tests {
 
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
         // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
-        let Ok((mu_s, cov_s)) = super::posterior(&X, &x_train, &y_train, &Tensor::from_slice(&[0.1]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
+        let Ok((mu_s, cov_s)) = super::posterior(&x, &x_train, &y_train, &Tensor::from_slice(&[0.1]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
         println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
@@ -785,9 +784,9 @@ mod opt_tests {
         // cov_s.print();
 
 
-        let mut norm = Normal::new(0., 1.).unwrap();
-        let mut rng = thread_rng();
-        let sig_t = sig_3_norm(norm, rng, N).transpose(0,1);
+        let norm = Normal::new(0., 1.).unwrap();
+        let rng = thread_rng();
+        let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
         println!("sig_t.size={:?}", sig_t.size());
 
 
@@ -808,12 +807,12 @@ mod opt_tests {
                     color: GREEN_800.into(),
                     filled: false,
                     stroke_width: 1,
-                }, x_0.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
+                }, x_0.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(n))).collect::<Vec<(f32, f32)>>()),
                 (format!("train 1"), ShapeStyle {
                     color: ORANGE_800.into(),
                     filled: false,
                     stroke_width: 1,
-                }, x_1.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(N))).collect::<Vec<(f32, f32)>>()),
+                }, x_1.clone().into_iter().zip(from::<Vec<f32>>(&y_train_full.i((0, ..)).view(n))).collect::<Vec<(f32, f32)>>()),
 
                 (format!("Sig0"), ShapeStyle {
                     color: GREEN.into(),
@@ -834,19 +833,19 @@ mod opt_tests {
 
     #[test]
     fn test_opt(){
-        let eeg_id_series:Vec<String> =  vec!["1111".into(), "2222".into(), "3333".into()];
+        let _eeg_id_series:Vec<String> =  vec!["1111".into(), "2222".into(), "3333".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
 
         let pulse = pulse_v(50., 10., 100, 20.);
-        let N = 1000i64;
+        let n = 1000i64;
 
         let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
         let sig_1=  join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
         let sig_2=  join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
 
-        let x = lin_t(N);
+        let x = lin_t(n);
 
         plot_series(
             vec![

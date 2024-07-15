@@ -1,20 +1,17 @@
-use crate::argmin::ArgmTensor;
+use std::fmt::{Debug, Formatter};
+
+use log::trace;
+use num_traits::*;
+use rand::Rng;
+use rand::seq::SliceRandom;
+use statrs::distribution::Normal;
+use tch::{IndexOp, Kind, Tensor};
+
 use crate::parzen::opt_rng::opt_rnd;
 use crate::parzen::optimizer::{Distribution, ParzenEstimator, Primitives};
 use crate::parzen::util::uniform_weight;
-use log::{debug, trace};
-use num_traits::*;
-use rand::prelude::ThreadRng;
-use rand::seq::{IteratorRandom, SliceRandom};
-use rand::{thread_rng, Rng};
-use statrs::distribution::Normal;
-use std::cmp::{max, max_by};
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::ops::Div;
-use tch::kind::FLOAT_CPU;
-use tch::{IndexOp, Kind, Tensor};
 
+#[allow(dead_code)]
 pub enum BandwidthFactor<N>
 where
     N: Float,
@@ -25,6 +22,7 @@ where
 }
 
 //TODO Sheather and Jones method sheather91_kernel_density.pdf
+#[allow(dead_code)]
 pub enum BandwidthFn {
     Optuna,
     Hyperopt,
@@ -97,7 +95,7 @@ where
         BandwidthFactor::Min(1e-2.into())
     }
 }
-
+#[allow(dead_code)]
 pub struct NumericalParzenEstimator<N>
 where
     N: Float + tch::kind::Element + PartialOrd,
@@ -135,10 +133,10 @@ where
     f64: From<N>,
     tch::Scalar: From<N>,
 {
-    fn clc_dist(&self, samples: Tensor, weights: Option<Tensor>) -> Box<dyn Distribution> {
+    fn clc_dist(&self, samples: Tensor, _weights: Option<Tensor>) -> Box<dyn Distribution> {
         Box::new(self._clc_dist(samples))
     }
-    fn clc_dist_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, weights: Option<Tensor>) -> Box<dyn Distribution>{
+    fn clc_dist_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, _weights: Option<Tensor>) -> Box<dyn Distribution>{
         Box::new(self._clc_dist(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<f32>>().as_slice())))
         // todo!()
     }
@@ -155,7 +153,7 @@ where
     tch::Scalar: From<N>,
 {
     pub fn new(lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior: bool) -> Self {
-        let mut i = Self {
+        let i = Self {
             lb,
             ub,
             bandwidth_clip: bandwidth_factor,
@@ -288,11 +286,11 @@ impl NumericalGaussian {
         trace!("self.means={:?} self.stds={:?}", self.means, self.stds);
 
         (0..n_samples)
-            .map(|i| {
+            .map(|_i| {
                 let distr = self.normal_dists.choose(&mut opt_rnd()).expect("distr");
 
                 loop {
-                    let mut val = opt_rnd().sample(distr);
+                    let val = opt_rnd().sample(distr);
 
                     if self.lb <= val && val <= self.ub {
                         // if let Some(q_val) = q {
@@ -346,13 +344,13 @@ pub fn compute_config_loglikelihoods(
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_config_loglikelihoods, BandwidthFactor, NumericalParzenEstimator};
     use log::debug;
     use rand::rngs::StdRng;
-    use rand::seq::{IteratorRandom, SliceRandom};
     use rand::SeedableRng;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
+
+    use super::{BandwidthFactor, compute_config_loglikelihoods, NumericalParzenEstimator};
 
     #[test]
     fn test_0() {

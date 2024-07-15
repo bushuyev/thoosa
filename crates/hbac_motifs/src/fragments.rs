@@ -1,32 +1,19 @@
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::fs::DirEntry;
-use std::hash::Hash;
-use std::ops::Deref;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use chrono::Utc;
+
 use clap::Args;
-use clap::builder::TypedValueParser;
-use log::{debug, error, info, warn};
-use plotters::prelude::{BLACK, RGBColor};
-use rand::thread_rng;
-use hbac_shared::HbacError;
-use crate::tensor_iter::TensorSlice;
-use hbac_shared::TensorSliceIdx;
+use log::{debug, info, warn};
 use regex::Regex;
-use tch::{Kind, Tensor};
 use tch::Device;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelIterator;
+use tch::IndexOp;
+use tch::Tensor;
+
 use hbac_common::utils::*;
 use hbac_shared::*;
-use rayon::prelude::*;
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelBridge;
-use tch::IndexOp;
-use rand::prelude::*;
+use hbac_shared::HbacError;
+use hbac_shared::TensorSliceIdx;
 
 #[derive(Debug, Args)]
 pub struct MotifsToFragmentsParams {
@@ -151,7 +138,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
             debug!("motifs_to_eeg_slices: group={:?}", group_slices.0);
             //group by tensor(eeg) id to read from eeg files
             for tensor_slice in group_slices.1 {
-                let mut eegs_fragments = tensorid_motifs_sets.entry(tensor_slice.0).or_insert_with(|| HashSet::new());
+                let eegs_fragments = tensorid_motifs_sets.entry(tensor_slice.0).or_insert_with(|| HashSet::new());
 
                 eegs_fragments.insert(MotifSlice::new(group_slices.0 as usize, tensor_slice.1, channel_motifs.0)); //motifs group, slice, channel_idx (column in eeg file)
             }
@@ -196,10 +183,10 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
 
             let motifslice_t = channel_t.f_slice(1, Some(motif_slice.slise_idx), Some(motif_slice.slise_idx + window), 1)?;//TODO save window when finding motifs
 
-            let  mut channels_motifs = channels_motifs_slices.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
-            let  mut motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
+            let  channels_motifs = channels_motifs_slices.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
+            let  motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
 
-            motifslice_t.to_device(device);
+            // let _ = motifslice_t.to_device(device);TODO remove?
 
             motif_slices.push(motifslice_t);
             motifs_slices_map.insert(motif_slice.motif_id(), motif_slice);
@@ -232,7 +219,7 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
 
 
                 if (motifs.len() as i64) < motifs_num {
-                    motifs.extend((0..motifs_num - motifs.len() as i64).map(|_|Tensor::zeros((window), (tch::Kind::Float, device))))
+                    motifs.extend((0..motifs_num - motifs.len() as i64).map(|_|Tensor::zeros(window, (tch::Kind::Float, device))))
                 }
 
                 let t = Tensor::vstack(motifs.as_slice());
@@ -257,7 +244,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
     let total:usize = eeg_id_fragments_map.values().map(|fragments|fragments.len()).sum();
     debug!("write_motifs_slices: total={}", total);
 
-    let mut progress = AtomicU64::new(0);
+    let progress = AtomicU64::new(0);
 
     for (eeg_idx, channels_fragments) in eeg_id_fragments_map {
     // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
@@ -285,7 +272,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
             // println!("fragment_t:");
             // fragment_t.print();
 
-            fragment_t.save(motif_path.join(format!("{}_{}.pt", eeg_id, fragment.slise_idx)));
+            fragment_t.save(motif_path.join(format!("{}_{}.pt", eeg_id, fragment.slise_idx)))?;
 
             progress.fetch_add(1, Ordering::Relaxed);
             info!("progress: {} out of {} total", progress.load(Ordering::Relaxed), total);
@@ -329,7 +316,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices<F>(base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, load_tensor: F, device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
+pub fn load_motif_slices<F>(_base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, load_tensor: F, _device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
     where F: Fn(&str) -> Box<Tensor>  {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
@@ -399,7 +386,7 @@ impl MotifsToTensorParams {
         self.run_id
     }
 }
-pub fn choose_fragments(params:&MotifsToTensorParams) ->Result<(), HbacError> {
+pub fn choose_fragments(_params:&MotifsToTensorParams) ->Result<(), HbacError> {
 
     Ok(())
 }
@@ -430,21 +417,18 @@ pub fn check_fragments(from: &impl AsRef<std::path::Path>,)->Result<(), HbacErro
 
 #[cfg(test)]
 mod motifs_tests {
-    use tch::IndexOp;
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
     use std::time::UNIX_EPOCH;
-    use tch::{Device, Tensor};
-    use hbac_shared::HbacError;
-    use hbac_shared::TensorSliceIdx;
-    use hbac_shared::MotifSlice;
-    use rayon::iter::ParallelIterator;
+
     use rayon::iter::ParallelBridge;
-    use regex::Regex;
-    use hbac_common::train_nets::ClassTensorsDataBatch;
+    use rayon::iter::ParallelIterator;
+    use tch::{Device, Tensor};
+
     use hbac_common::utils::*;
-
-
+    use hbac_shared::HbacError;
+    use hbac_shared::MotifSlice;
+    use hbac_shared::TensorSliceIdx;
 
     #[test]
     fn test_motifs_to_eeg_slices_1() -> Result<(), HbacError>{
@@ -663,7 +647,7 @@ mod motifs_tests {
         let slise_idx = 1;
         map.insert(0usize, vec![MotifSlice::new(motif_group, slise_idx, channel_idx)]);
 
-        fn test_eeg_to_t(base_dir:&str, eeg_id:&str, _:Device) -> Result<Tensor, HbacError> {
+        fn test_eeg_to_t(_base_dir:&str, _eeg_id:&str, _:Device) -> Result<Tensor, HbacError> {
             let t = Tensor::vstack(&[
                 Tensor::from_slice(&[0., 1.,  2.,  3.]),
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])
@@ -680,7 +664,7 @@ mod motifs_tests {
             vec!["568657".into()],
             test_eeg_to_t,
             2
-        );
+        )?;
 
         let loaded_slice = Tensor::load(Path::new(&dir).join(channel_idx.to_string()).join(motif_group.to_string()).join(format!("{}.pt", slise_idx)))?;
 
@@ -696,7 +680,7 @@ mod motifs_tests {
     #[test]
     fn test_load_motif_slices()-> Result<(), HbacError>{
 
-        fn test_eeg_to_t(eeg_id:&str) -> Box<Tensor> {
+        fn test_eeg_to_t(_eeg_id:&str) -> Box<Tensor> {
             let t = Tensor::vstack(&[
                 Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1

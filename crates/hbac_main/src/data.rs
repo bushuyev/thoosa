@@ -1,8 +1,5 @@
-#![feature(vec_into_raw_parts)]
-
-use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::Debug;
 use std::fs;
 use std::fs::DirEntry;
 use std::io::Write;
@@ -10,12 +7,8 @@ use std::marker::PhantomData;
 use std::ops::Add;
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::Instant;
 
-use log::{debug, SetLoggerError};
-use polars::error::PolarsError;
-use polars::export::arrow::compute::filter::filter;
-use polars::export::arrow::io::iterator::StreamingIterator;
+use log::debug;
 use polars::io::SerReader;
 use polars::prelude::*;
 use polars::prelude::{
@@ -23,20 +16,17 @@ use polars::prelude::{
     ScanArgsParquet, Series,
 };
 use rand::{Rng, thread_rng};
-use rand::distributions::WeightedError;
 use rand::prelude::SliceRandom;
 use regex::Regex;
 use tch::{Device, IndexOp, Kind, Tensor};
+
 use hbac_common::ResourceLoader;
+use hbac_common::utils::{DataBatch, from};
 use hbac_shared::HbacError;
-use hbac_shared::MotifSlice;
 use hbac_shared::TensorSliceIdx;
-
-use hbac_common::utils::{DataBatch, from, load_tensor};
 use hbac_store::{SqlStore, Store};
-use crate::data;
 
-
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct EEG{
     egg_map:Vec<Vec<f32>>,
@@ -120,11 +110,11 @@ struct AllTrainSplitter<E> {
 impl <E> Splitter for AllTrainSplitter<E> {
     type Type = E;
 
-    fn split_to(&self, v: &Self::Type) -> Set {
+    fn split_to(&self, _v: &Self::Type) -> Set {
         Set::Train
     }
 }
-
+#[allow(dead_code)]
 pub(crate) struct ByPatientIdSplitter {
     train_frac:f32,
     train_patients:Vec<i64>,
@@ -174,7 +164,7 @@ impl Splitter for ByPatientIdSplitter {
         .select([col("patient_id")])
         .collect()?;
 
-        let df_set = df_sorted.with_column(Series::new("set", (0..df_sorted.shape().0).map(|i| if rand::random::<f32>() > self.train_frac { 1i32 } else { 0i32 }).collect::<Vec<_>>()))?;
+        let df_set = df_sorted.with_column(Series::new("set", (0..df_sorted.shape().0).map(|_i| if rand::random::<f32>() > self.train_frac { 1i32 } else { 0i32 }).collect::<Vec<_>>()))?;
 
         Ok(df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)))
         // Ok(df.clone().with_column(lit(1).alias("set"))) //.collect()?.lazy()
@@ -307,7 +297,7 @@ impl EEGs {
             // debug!("eeg_id ={:?}, fragments_in_mls={:?} seizure_vote={:?}  lpd_vote={:?}, gpd_vote={:?}, lrda_vote={:?}, grda_vote={:?}, other_vote={:?}",
             //                 eeg_id, fragments_in_mls,     seizure_vote,      lpd_vote,      gpd_vote,       lrda_vote,      grda_vote,      other_vote);
 
-            let mut scan_conf = ScanArgsParquet::default();
+            let scan_conf = ScanArgsParquet::default();
             // scan_conf.cache = false;
 
             let eeg_df = LazyFrame::scan_parquet(
@@ -413,7 +403,7 @@ impl EEGs {
         self.train_set.len()
     }
 
-
+    #[allow(dead_code)]
     fn all_set(data: &Vec<EEG>) -> (Tensor, Tensor) {
         let (eegs, votes) = data.iter()
             .fold((vec![], vec![]), |mut a, eeg| {
@@ -508,6 +498,7 @@ fn series_to_tensor(s: &Series) ->  Result<Tensor, HbacError> {
 
 }
 
+#[allow(dead_code)]
 fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
     where
         T: IntoIterator<Item = X>,
@@ -515,7 +506,7 @@ fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
         Expr: From<<X as Add>::Output>,
 {
     iter.into_iter()
-        .fold(None, |mut expr_op: Option<Expr>, v| {
+        .fold(None, |expr_op: Option<Expr>, v| {
             let new_expr = id_expr
                 .clone()
                 .gt_eq(v)
@@ -530,7 +521,7 @@ fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
         .expect("exp")
 }
 
-
+#[allow(dead_code)]
 fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<Vec<DataFrame>> where I: IntoIterator<Item = i64> + Clone {
 
     let shape = df.shape();
@@ -592,7 +583,7 @@ pub fn eegs_to_labels_tensors<'a>(label:&String, resource_set_descr:&String, dev
     ]
 }
 
-pub fn load_to_logits_tensors<'a>(base_path:&'a str, tensors_path:Option<String>, group:&str, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> impl Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync + 'a {
+pub fn load_to_logits_tensors<'a>(_base_path:&'a str, _tensors_path:Option<String>, group:&str, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> impl Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync + 'a {
 
     let mut store_lock = store.lock().expect("store_lock");
 
@@ -639,6 +630,7 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
 }
 
 // pub fn read_motif_to_iter(motif_file:&str) -> Result<impl Iterator<Item = (TensorSliceIdx, TensorSliceIdx)>, HbacError>{ TODO LazyCsvReader ?
+#[allow(dead_code)]
 pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError>{
 
     let motif_df = CsvReader::from_path(motif_file)?.has_header(false).finish()?;
@@ -652,7 +644,7 @@ pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx<String>
         )
 
     ).map(|v|{
-        let (Some(id_0), (Some(sl_0), (Some(id_1), (Some(sl_1))))) = v else {
+        let (Some(id_0), (Some(sl_0), (Some(id_1), Some(sl_1)))) = v else {
             panic!("unexpected entry in motif");
         };
         (TensorSliceIdx(id_0.to_string(), sl_0), TensorSliceIdx(id_1.to_string(), sl_1))
@@ -684,7 +676,7 @@ pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx<String>
 //
 // }
 
-
+#[allow(dead_code)]
 pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), HbacError> {
     // motif_dir
     let files:Vec<DirEntry> = fs::read_dir(motif_dir)?.into_iter().map(|p|p.unwrap()).filter(|p|p.file_name().to_str().unwrap().ends_with("txt")).collect();
@@ -744,7 +736,7 @@ pub fn labeled_resourses(path: impl AsRef<Path>) -> Result<HashMap<String, Vec<(
         .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
         .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
         .map(|
-            (((((((eeg_id),
+            ((((((eeg_id,
                 // eeg_label_offset_seconds),
                 seizure_vote),
                 lpd_vote),
@@ -791,29 +783,23 @@ pub fn labeled_resourses(path: impl AsRef<Path>) -> Result<HashMap<String, Vec<(
 #[cfg(test)]
 mod data_tests {
     use std::fs;
-    use std::fs::{DirEntry, File};
+    use std::fs::OpenOptions;
     use std::io::Write;
-    use std::ops::Div;
-    use std::path::PathBuf;
     use std::time::{Instant, UNIX_EPOCH};
 
-    use log::{debug, LevelFilter};
-    use plotters::prelude::{GREEN, RED};
+    use log::debug;
+    use plotters::prelude::RED;
     use plotters::style::BLACK;
     use polars::prelude::*;
-    use rand::seq::SliceRandom;
-    use rand::thread_rng;
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::Tensor;
-    use hbac_shared::MotifSlice;
+    use tch::{IndexOp, Tensor};
+
     use hbac_common::utils::*;
     use hbac_shared::HbacError;
 
     use crate::*;
-    use crate::data::{arr_to_expr, ByPatientIdSplitter, clc_records, EEG, EEGs, read_motif_to_iter, series_to_tensor, Set, split_frame_by_offsets, Splitter};
-    use hbac_common::utils::DataBatch;
+    use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, EEGs, read_eeg_index, read_motif_to_iter, split_frame_by_offsets};
 
     // #[ctor::ctor]
     // fn init() {
@@ -1116,7 +1102,7 @@ mod data_tests {
 
         let mut count = 0;
 
-        fs::create_dir_all("/media/bu/KINGSTON/all_eegs.pt");
+        fs::create_dir_all("/media/bu/KINGSTON/all_eegs.pt")?;
 
         println!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
 
@@ -1131,7 +1117,7 @@ mod data_tests {
             .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
             .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
             .map(|
-                (((((((eeg_id),
+                ((((((eeg_id,
                     // eeg_label_offset_seconds),
                     seizure_vote),
                     lpd_vote),
@@ -1181,7 +1167,7 @@ mod data_tests {
                      TryInto::<i64>::try_into(other_vote).expect("other_vote")
             );
             debug!("{}", path);
-            t.save(path);
+            t.save(path)?;
 
             count+=1;
         }
@@ -1219,7 +1205,7 @@ mod data_tests {
             .unwrap();
 
         let vec_1:Vec<String> = vec!["1123".into(), "34534".into(), "99877".into()];
-        write!(file, "{:?}", vec_1);
+        write!(file, "{:?}", vec_1)?;
 
         assert_eq!(vec_1, read_eeg_index(dir.as_str())?.1);
         Ok(())
@@ -1234,7 +1220,7 @@ mod data_tests {
 
             let t = data::parquet_to_tensor("../../data/", eeg_file.as_str(), Device::Cpu)?;
 
-            t.save(format!("../../data_local/seizure_vote_eegs_pts/{}.pt", eeg_file));
+            t.save(format!("../../data_local/seizure_vote_eegs_pts/{}.pt", eeg_file))?;
         }
 
         Ok(())
@@ -1492,7 +1478,7 @@ mod data_tests {
 
         Ok(())
     }
-
+    #[allow(dead_code)]
     fn find_max_size() -> Result<(), HbacError> {
         let mut max_0 = 0usize;
         let mut max_1 = 0usize;

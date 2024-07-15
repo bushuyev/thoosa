@@ -1,9 +1,10 @@
-
 use tch::{IndexOp, Tensor};
 use tch::Kind;
-use hbac_shared::HbacError;
-use hbac_common::utils::z_norm_2;
 
+use hbac_common::utils::z_norm_2;
+use hbac_shared::HbacError;
+
+#[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tensor, HbacError>{
     t_0.mean_dim(1, true, Kind::Float).print();
     t_0.std_dim(1, false, true).print();
@@ -18,7 +19,7 @@ pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tenso
     )
 }
 
-pub fn dist_d2(dim: i64, slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, HbacError> {
+pub fn dist_d2(_dim: i64, slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, HbacError> {
     //https://github.com/pytorch/pytorch/blob/96487d0d1f638ae9c665dcd3d4b79e7e2a976f59/aten/src/ATen/native/cuda/DistanceKernel.cu#L188
     //0 -use_mm_for_euclid_dist_if_necessary
     //1 -use_mm_for_euclid_dist
@@ -35,14 +36,12 @@ pub fn slice_t(t_0: &Tensor, step: usize, window: i64) -> Tensor {
 
 #[cfg(test)]
 mod distance_tests {
-    use futures::StreamExt;
-    use log::debug;
-    use tch::Device::Cpu;
-    use tch::Kind::Float;
-    use tch::Tensor;
-    use hbac_shared::HbacError;
-    use crate::distance::z_normalized_euclidean;
     use tch::IndexOp;
+    use tch::Tensor;
+
+    use hbac_shared::HbacError;
+
+    use crate::distance::z_normalized_euclidean;
 
     #[test]
     fn test_z_normalized_euclidean() -> Result<(), HbacError> {

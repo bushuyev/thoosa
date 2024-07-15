@@ -40,6 +40,3 @@ approx = "0.5.1"
 
 [build-dependencies]
 chrono = { version = "0.4.32" }
-
-[profile.test]
-opt-level = 0

@@ -1,21 +1,20 @@
 // #![feature(backtrace_frames)]
 
-pub mod repeat_iter;
-pub mod val;
-
-use std::collections::HashMap;
-use std::hash::Hash;
-use log::{debug, error};
-use std::fmt::{Debug, Display};
 use std::backtrace::Backtrace;
-use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::error::Error;
 use std::f32::consts::PI;
+use std::fmt::{Debug, Display};
+use std::fmt;
+use std::hash::Hash;
 use std::ops::Mul;
+
+use log::{debug, error};
 use rand::Rng;
 use regex::Regex;
-use std::fmt;
-use crate::val::Val;
+
+pub mod repeat_iter;
+pub mod val;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
@@ -68,7 +67,7 @@ pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
     let mut groups: HashMap<u16, Vec<T>> = HashMap::new();
     for (val, group) in pairs_groups {
         let group= separated_groups_map.as_ref().and_then(|m|m.get(&group)).unwrap_or(&group); //replace separted group pairs with one in pair
-        let mut gr_vec = groups.entry(*group).or_insert_with(|| vec![]);
+        let gr_vec = groups.entry(*group).or_insert_with(|| vec![]);
         gr_vec.push(val);
     }
 
@@ -96,6 +95,7 @@ impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug{
 // #[derive(Debug)]
 pub struct HbacError {//TODO enum
     msg:String,
+    #[allow(dead_code)]
     backtrace:Backtrace
 }
 
@@ -114,7 +114,7 @@ impl HbacError {
 impl Debug for HbacError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_struct = f.debug_struct("HbacError");
-        let mut x=  debug_struct
+        let x=  debug_struct
             .field("msg", &self.msg);
 
         //// #![feature(backtrace_frames)]
@@ -171,7 +171,7 @@ pub fn random_saw(n: usize) -> Vec<f32> {
     let step = 25usize;
 
     (0..n/step/2)
-        .map(|i| rng.gen_range(-10. .. 10.))
+        .map(|_| rng.gen_range(-10. .. 10.))
         .flat_map(
             |v| {
                 (0..step).map(move |i| v * i as f32).chain((0..step).map(move |i| step as f32 * v - v * i as f32))
@@ -199,7 +199,7 @@ pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
 
 pub fn pulse_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], random_amplitude: f32, pulse_scale: f32, max_slope: f32) -> Vec<f32> {
     let random = random_v(n, random_amplitude, max_slope);
-    let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset ).sum();
+    let _pulses_len:usize = pulses.iter().map(|(offset, _pulse)| *offset ).sum();
 
     join_with_offset::<f32>(0., pulse_scale, pulses, random)
 }
@@ -271,17 +271,17 @@ pub fn random_v(n: i64, amplitude: f32, max_slope: f32) -> Vec<f32> {
     let mut current_value = 0.0;
     let mut prev_value = 0.0;
 
-    let rnd_vals_0 = (0..n).flat_map(move |i| std::iter::repeat(      rand::thread_rng().gen_range(-max_slope..max_slope)).take(1)).collect::<Vec<f32>>();
-    let rnd_vals_1 = (0..n / 10).flat_map(move |i|std::iter::repeat(   rand::thread_rng().gen_range(-max_slope..max_slope)).take(10)).collect::<Vec<f32>>();
-    let rnd_vals_2 = (0..n / 60).flat_map(move |i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(100)).collect::<Vec<f32>>();
-    let rnd_vals_3 = (0..n / 120).flat_map(move |i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(300)).collect::<Vec<f32>>();
+    let rnd_vals_0 = (0..n).flat_map(move |_i| std::iter::repeat(      rand::thread_rng().gen_range(-max_slope..max_slope)).take(1)).collect::<Vec<f32>>();
+    let rnd_vals_1 = (0..n / 10).flat_map(move |_i|std::iter::repeat(   rand::thread_rng().gen_range(-max_slope..max_slope)).take(10)).collect::<Vec<f32>>();
+    let rnd_vals_2 = (0..n / 60).flat_map(move |_i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(100)).collect::<Vec<f32>>();
+    let rnd_vals_3 = (0..n / 120).flat_map(move |_i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(300)).collect::<Vec<f32>>();
     rnd_vals_0.into_iter().zip(
         rnd_vals_1.into_iter().zip(
             rnd_vals_2.into_iter().zip(
                 rnd_vals_3.into_iter()
             )
         )
-    ).for_each(|(r_0, ((r_1, (r_2, r_3))))| {
+    ).for_each(|(r_0, (r_1, (r_2, r_3)))| {
         debug!("random_v: r_0={:?}, r_1={:?}, r_2={:?}, r_3={:?}", r_0, r_1, r_2, r_3);
 
         current_value = prev_value + 10.* r_0 + r_1 +  r_2 + r_3;
@@ -343,9 +343,10 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use crate::{batch_windows, group_slices, HbacError};
     use log::LevelFilter;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+
+    use crate::{batch_windows, group_slices, HbacError};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -413,7 +414,7 @@ mod shared_tests {
         ];
 
 
-        let mut groups = group_slices(pairs.into_iter());
+        let groups = group_slices(pairs.into_iter());
 
         assert_eq!(groups.len(), 2);
 
@@ -432,31 +433,35 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_slice_windows_1000(){
+    fn test_batch_windows_1000(){
         let input_n = 1000;
         let motif_n = 100;
         let step = 100;
 
-        let folds = batch_windows(input_n, motif_n, step, 10);
+        let batches = batch_windows(input_n, motif_n, step, 10);
 
-        println!("folds: {:?}", folds);
+        assert_eq!(
+            vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
+            batches.0[0]
+        );
+
+        assert_eq!(batches.0.len(), 1);
+        assert!(batches.1.is_empty());
 
     }
 
     #[test]
-    fn test_slice_windows_3500(){
+    fn test_batch_windows_3500(){
         let input_n = 3500;
         let motif_n = 100;
         let step = 100;
 
-        let folds = batch_windows(input_n, motif_n, step, 10);
+        let batches = batch_windows(input_n, motif_n, step, 10);
 
-        println!("folds: {:?}", folds);
-
-        assert_eq!(vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900], folds.0[0]);
-        assert_eq!(vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900], folds.0[1]);
-        assert_eq!(vec![2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900], folds.0[2]);
-        assert_eq!(vec![3000, 3100, 3200, 3300, 3400], folds.1)
+        assert_eq!(vec![0,    100,  200,  300,  400,  500,  600,  700,  800,  900], batches.0[0]);
+        assert_eq!(vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900], batches.0[1]);
+        assert_eq!(vec![2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900], batches.0[2]);
+        assert_eq!(vec![3000, 3100, 3200, 3300, 3400], batches.1)
     }
 
     #[test]

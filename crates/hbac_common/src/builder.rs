@@ -1,11 +1,11 @@
-use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::pin::Pin;
+
 use log::debug;
-use serde::Serialize;
-use tch::nn::{ConvConfig, LinearConfig, Module};
 use tch::{nn, Tensor};
+use tch::nn::{ConvConfig, LinearConfig, Module};
+
 use hbac_shared::HbacError;
+
 use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
@@ -22,14 +22,13 @@ pub fn clc_avgpool1d_out(l_in: i64, kernel: i64, padding:i64, stride:i64) -> i64
     (l_in + 2 * padding - kernel) / stride + 1
 }
 
-type TFN = dyn Fn(&Tensor) -> Tensor;
 
 // #[derive(Serialize)]
 pub enum Node {
     Seq {elts: Vec<Node>},
     Par {elts: Vec<Node>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>},
-    Conv_1d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
-    Conv_2d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
+    Conv1d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
+    Conv2d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     BatchNorm {num_features: i64},
     Linear { in_feats: i64, out_feats: i64, config:Option<LinearConfig>},
     Func { func:Fp},
@@ -45,7 +44,7 @@ impl Debug for Node {
     }
 }
 
-trait NthParams {
+pub trait NthParams {
     type Params;
     fn on_nth_layer(&self, i:usize)->Self::Params;
 }
@@ -64,7 +63,7 @@ impl NthConst {
 impl NthParams for NthConst {
     type Params = i64;
 
-    fn on_nth_layer(&self, i: usize) -> i64 {
+    fn on_nth_layer(&self, _i: usize) -> i64 {
         self.n
     }
 }
@@ -94,11 +93,11 @@ impl Node {
                 Box::new(MyParallel::new(layers, split, join))
             }
 
-            Node::Conv_1d { kernel, in_channels, out_channels, config} => {
+            Node::Conv1d { kernel, in_channels, out_channels, config} => {
                 Box::new(nn::conv1d(vs/ "cnn", in_channels, out_channels, kernel, config))
             }
 
-            Node::Conv_2d { kernel, in_channels, out_channels, config} => {
+            Node::Conv2d { kernel, in_channels, out_channels, config} => {
                 Box::new(nn::conv2d(vs/ "cnn", in_channels, out_channels, kernel, config))
             }
 
@@ -178,7 +177,7 @@ impl SeqBuilder {
     pub fn conv_1d(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
 
         self.elts.push(
-            Node::Conv_1d {kernel, in_channels, out_channels, config },
+            Node::Conv1d {kernel, in_channels, out_channels, config },
         );
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, config);
@@ -190,7 +189,7 @@ impl SeqBuilder {
     pub fn conv_2d(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
 
         self.elts.push(
-            Node::Conv_2d {kernel, in_channels, out_channels, config },
+            Node::Conv2d {kernel, in_channels, out_channels, config },
         );
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, config);//TODO 2d

@@ -1,15 +1,16 @@
 use std::f64::consts::PI;
 use std::fmt;
-use std::fmt::{Debug, Formatter};
+
 use log::debug;
+use rand::Rng;
 use rand::thread_rng;
 use statrs::distribution::Normal;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
+
 use hbac_shared::HbacError;
+
 use crate::opt::cholesky_with_jitter;
-use crate::utils::vec_f32_from;
-use rand::Rng;
 
 pub struct Gaussian {
     μ:Tensor,
@@ -37,7 +38,7 @@ impl Gaussian {
         let mut rng = thread_rng();
         let normal = Normal::new(0., 1.).unwrap();
 
-        Tensor::from_slice((0..n).map(|x| rng.sample(normal) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1, -1))
+        Tensor::from_slice((0..n).map(|_x| rng.sample(normal) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1, -1))
     }
 
 }
@@ -149,11 +150,12 @@ impl <F> GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
 
 #[cfg(test)]
 mod tests {
-    use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
+    use tch::Kind::Float;
+
     use crate::gaussian::{Gaussian, GaussianProcess};
     use crate::opt::kernel_rbf;
-    use crate::utils::{sin3_pow2, vec_f32_from};
+    use crate::utils::sin3_pow2;
 
     #[test]
     fn test_cdf(){
@@ -176,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_pdf() {
-        let g = Gaussian::new(Tensor::from_slice(&[0.]), Tensor::from_slice(&[3.]));
+        let _g = Gaussian::new(Tensor::from_slice(&[0.]), Tensor::from_slice(&[3.]));
     }
 
 
@@ -229,7 +231,7 @@ mod tests {
             s.diagonal(0, 0, 1).round_decimals(4)
         );
 
-        gpf.predict(&x_test);
+        let _ = gpf.predict(&x_test).unwrap();
 
         /*
         import numpy as np

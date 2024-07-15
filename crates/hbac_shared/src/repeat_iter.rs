@@ -96,6 +96,7 @@ mod tests {
         struct Tensor;
 
         #[derive(Copy, Clone)]
+        #[allow(dead_code)]
         pub struct GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
             kernel: F,
             sigma_y: f64,
@@ -123,7 +124,7 @@ mod tests {
         }
 
         // fn main() {
-            let kernel_fn = |x: &Tensor, y: &Tensor| Tensor;
+            let kernel_fn = |_x: &Tensor, _y: &Tensor| Tensor;
             let gp = GaussianProcess {
                 kernel: kernel_fn,
                 sigma_y: 1.0,

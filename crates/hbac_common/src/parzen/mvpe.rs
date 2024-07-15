@@ -1,5 +1,5 @@
 use tch::Tensor;
-use crate::argmin::ArgmTensor;
+
 use crate::parzen::npe;
 use crate::parzen::optimizer::{Distribution, Primitives};
 
@@ -43,9 +43,10 @@ impl MultiVariateParzenEstimator {
     }
 
 }
-
+#[cfg(test)]
 mod multi_variate_parzen_estimator_tests {
     use tch::Tensor;
+
     use crate::parzen::mvpe::MultiVariateParzenEstimator;
     use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
     use crate::parzen::optimizer::ParzenEstimator;

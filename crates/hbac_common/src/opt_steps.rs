@@ -1,15 +1,10 @@
 use std::collections::HashMap;
 use std::ops::Range;
+
+use tch::nn::Module;
 use tch::Tensor;
+
 use hbac_shared::val::Val;
-use tch::nn::{Module, VarStore};
-enum Data {
-    Tensors,
-    TensorsSlice,
-    Model
-}
-
-
 
 struct EnvParams {
 
@@ -31,13 +26,7 @@ impl OptParams {
     }
 }
 
-trait BuildParams {
 
-}
-
-impl BuildParams for Box<dyn BuildParams> {
-
-}
 
 
 trait Apply {
@@ -60,7 +49,7 @@ impl <'a> ApplyComp<'a> {
         }
     }
 }
-
+#[allow(dead_code)]
 impl Apply for ApplyComp<'_> {
     fn apply(&self, t:Box<Tensor>) -> Box<Tensor> {
 
@@ -72,7 +61,7 @@ impl Apply for ApplyComp<'_> {
         t
     }
 }
-
+#[allow(dead_code)]
 struct ApplyNet {
     net: Box<dyn Module>,
 }
@@ -82,7 +71,7 @@ impl ApplyNet {
         Self { net }
     }
 }
-
+#[allow(dead_code)]
 impl Apply for ApplyNet {
 
     fn apply(&self, t: Box<Tensor>) -> Box<Tensor> {
@@ -94,7 +83,7 @@ impl Apply for ApplyNet {
     }
 }
 
-
+#[allow(dead_code)]
 struct OptStep {
     name:String,
     build:Box<dyn Fn(&HashMap<String, Val>, &Vec<String>, &dyn Apply)->usize>,//returns run_ids
@@ -123,7 +112,7 @@ impl RunIdsStack {
         }
     }
 }
-
+#[allow(dead_code)]
 impl OptStep {
 
     fn new(
@@ -144,7 +133,7 @@ impl OptStep {
         }
     }
 
-    fn search(&self, opt_props:&HashMap<String, Range<Val>>, prev_run_ids_op: Option<Vec<RunIdsStack>>, env_params: &EnvParams, applies_map:&mut HashMap<usize, Box<dyn Apply>>, tries: usize) -> Vec<RunIdsStack> {
+    fn search(&self, opt_props:&HashMap<String, Range<Val>>, prev_run_ids_op: Option<Vec<RunIdsStack>>, _env_params: &EnvParams, applies_map:&mut HashMap<usize, Box<dyn Apply>>, tries: usize) -> Vec<RunIdsStack> {
         println!("search: prev_run_ids_op={:?}", prev_run_ids_op);
 
 
@@ -174,86 +163,59 @@ impl OptStep {
         best_run_ids
     }
 
-    fn exec(&self, env_params: EnvParams, opt_params: OptParams) -> Option<f64>{
-        None
-    }
 }
 
-fn xxx(){
-    println!("xxx")
-}
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::ops::Range;
+    use std::rc::Rc;
+
     use tch::Device::Cpu;
-    use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
-    use tch::Tensor;
-    use hbac_shared::val::Val;
-    use crate::builder::SeqBuilder;
-    use crate::opt_steps::{Apply, BuildParams, ApplyComp, EnvParams, OptParams, xxx};
-    use crate::opt_steps::OptStep;
-    use crate::opt_steps::RunIdsStack;
     use tch::nn::{Module, VarStore};
-    use crate::utils::train;
-    use crate::utils::DataBatch;
     use tch::nn::AdamW;
     use tch::nn::OptimizerConfig;
     use tch::Reduction;
-    use std::rc::Rc;
-    use std::cell::RefCell;
+    use tch::Tensor;
+
+    use hbac_shared::val::Val;
+
+    use crate::builder::SeqBuilder;
+    use crate::opt_steps::{Apply, ApplyComp, EnvParams};
+    use crate::opt_steps::OptStep;
+    use crate::opt_steps::RunIdsStack;
+    use crate::utils::DataBatch;
+    use crate::utils::train;
 
     #[test]
     fn test_two_nets(){
 
-        struct TestBulidParams {
-            window:Range<i64>
-        }
-
-        impl BuildParams for TestBulidParams {
-
-        }
-
-        struct TestBulidParams2 {
-
-        }
-
-        impl BuildParams for TestBulidParams2 {
-
-        }
-
-        struct TestBulidParams3 {
-
-        }
-
-        impl BuildParams for TestBulidParams3 {
-
-        }
-
-        let mut props_store:HashMap<usize, String> = HashMap::new();
-
-        let mut run_id = Rc::new(RefCell::new(0usize));
-        let mut run_id_build_1 = Rc::clone(&run_id);
-        let mut run_id_build_2 = Rc::clone(&run_id);
 
 
-        let mut steps: Vec<OptStep> = vec![
+        let _props_store:HashMap<usize, String> = HashMap::new();
+
+        let run_id = Rc::new(RefCell::new(0usize));
+        let run_id_build_1 = Rc::clone(&run_id);
+        let run_id_build_2 = Rc::clone(&run_id);
+
+
+        let steps: Vec<OptStep> = vec![
             OptStep::new(
                 "net1",
-                Box::new(move |params: &HashMap<String, Val>, data_keys: &Vec<String>, apply: &dyn Apply| {
+                Box::new(move |params: &HashMap<String, Val>, data_keys: &Vec<String>, _apply: &dyn Apply| {
                     println!("params={:?} data_keys={:?}", params, data_keys);
                     let mut vs = VarStore::new(Cpu);
                     let out_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
 
                     let node = build_net(params, &mut vs, 100, out_features);
 
-                    let error = train(
+                    let _error = train(
                         &Cpu,
                         &mut crate::simp::DummyDs::new(
-                            Tensor::rand((100), FLOAT_CPU),
-                            Tensor::rand((100), FLOAT_CPU),
+                            Tensor::rand(100, FLOAT_CPU),
+                            Tensor::rand(100, FLOAT_CPU),
                         ) as &mut dyn DataBatch,
                         &node,
                         |pred: &Tensor, target: &Tensor| pred.sigmoid().binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean),
@@ -266,7 +228,7 @@ mod tests {
                     *run_id_build_1.borrow_mut() += 1;
                     *run_id_build_1.borrow()
                 }),
-                |t: &Box<Tensor>, params: &HashMap<String, Val>| {
+                |t: &Box<Tensor>, _params: &HashMap<String, Val>| {
                     Box::new(t.shallow_clone())
                 },
                 Some(Box::new(|params: &HashMap<String, Val>| {
@@ -288,11 +250,11 @@ mod tests {
 
                     let node = build_net(params, &mut vs, in_features, out_features);
 
-                    let error = train(
+                    let _error = train(
                         &Cpu,
                         &mut crate::simp::DummyDs::new(
-                            *apply.apply(Box::new(Tensor::rand((100), FLOAT_CPU))),
-                            Tensor::rand((100), FLOAT_CPU),
+                            *apply.apply(Box::new(Tensor::rand(100, FLOAT_CPU))),
+                            Tensor::rand(100, FLOAT_CPU),
                         ) as &mut dyn DataBatch,
                         &node,
                         |pred: &Tensor, target: &Tensor| pred.sigmoid().binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean),
@@ -305,7 +267,7 @@ mod tests {
                     *run_id_build_2.borrow_mut() += 1;
                     *run_id_build_2.borrow()
                 }),
-                |t: &Box<Tensor>, params: &HashMap<String, Val>| {
+                |t: &Box<Tensor>, _params: &HashMap<String, Val>| {
                     Box::new(t.shallow_clone())
                 },
                 Some(Box::new(|params: &HashMap<String, Val>| {
@@ -341,9 +303,9 @@ mod tests {
 
         println!("test: run_ids={:?}", run_ids);
 
-        let pred_0 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(0)), &mut applies_map).apply(Box::new(Tensor::rand((100), FLOAT_CPU)));
-        let pred_1 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(1)), &mut applies_map).apply(Box::new(Tensor::rand((100), FLOAT_CPU)));
-        let pred_2 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(2)), &mut applies_map).apply(Box::new(Tensor::rand((100), FLOAT_CPU)));
+        let pred_0 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(0)), &mut applies_map).apply(Box::new(Tensor::rand(100, FLOAT_CPU)));
+        let pred_1 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(1)), &mut applies_map).apply(Box::new(Tensor::rand(100, FLOAT_CPU)));
+        let pred_2 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(2)), &mut applies_map).apply(Box::new(Tensor::rand(100, FLOAT_CPU)));
 
         println!("test: pred_0.size()={:?}  pred_1.size()={:?}, pred_2.size()={:?}", pred_0.size(), pred_1.size(), pred_2.size());
 
@@ -352,7 +314,7 @@ mod tests {
         assert_eq!(vec![30], pred_2.size());
     }
 
-    fn build_net(params: &HashMap<String, Val>, vs: &mut VarStore, in_features: i64, out_features: i64) -> Box<dyn Module> {
+    fn build_net(_params: &HashMap<String, Val>, vs: &mut VarStore, in_features: i64, out_features: i64) -> Box<dyn Module> {
 
         println!("build_net_1: in_features={} out_features={}", in_features, out_features);
 

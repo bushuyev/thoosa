@@ -1,5 +1,6 @@
 [build]
 target = "x86_64-unknown-linux-gnu"
+target-dir = "/home/bu/dvl/kaggle/HMS_Harmful_Brain_Activity_Classification/crates/target"
 
 
 [env]

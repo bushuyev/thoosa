@@ -1,10 +1,7 @@
+use log::debug;
+use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
-use tch::Kind::Float;
-use log::debug;
-use std::cmp::{min, max};
-use statrs::statistics::Statistics;
-use tch::Device::Cpu;
 
 //https://github.com/pytorch/pytorch/pull/8824
 pub struct BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
@@ -110,7 +107,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
 
         let mut t = params.lr;
-        let mut H_diag = 1f64;
+        let mut h_diag = 1f64;
 
         let history_size = 10;
         let mut old_dirs_stps_ro:Vec<(Tensor, Tensor, f64, )> = vec![];
@@ -119,7 +116,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
             if n_iter == 1 {
                 d = flat_grad.neg();
-                H_diag = 1.
+                h_diag = 1.
             } else {
 
                 let prev_flat_grad_ref = prev_flat_grad_op.as_ref().unwrap();
@@ -145,12 +142,12 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
                 if ys > 1e-10 {
                     if old_dirs_stps_ro.len() == history_size {
-                        old_dirs_stps_ro.remove(0);
+                        let _ = old_dirs_stps_ro.remove(0);
                     }
                     old_dirs_stps_ro.push((y.shallow_clone(), s, 1./ys));
 
-                    //  H_diag = ys / y.dot(y)  # (y*y)
-                    H_diag = ys / y.matmul(&y).double_value(&[]);
+                    //  h_diag = ys / y.dot(y)  # (y*y)
+                    h_diag = ys / y.matmul(&y).double_value(&[]);
                 }
 
                 //compute the approximate (L-BFGS) inverse Hessian
@@ -164,16 +161,16 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                     debug!("i={} num_old={}", i, num_old);
                     let old_dirs_stps_ro = old_dirs_stps_ro.get(i).expect(format!("{}", i).as_str());
                     //al[i] = old_stps[i].dot(q) * ro[i]
-                    let ai = (old_dirs_stps_ro.1.matmul(&q).double_value(&[]) * old_dirs_stps_ro.2);
+                    let ai = old_dirs_stps_ro.1.matmul(&q).double_value(&[]) * old_dirs_stps_ro.2;
                     al[i] = Some(ai);
                     //q.add_(old_dirs[i], alpha=-al[i])
-                    q.f_add_(&old_dirs_stps_ro.0.multiply_scalar(ai)).unwrap();
+                    let _ = q.f_add_(&old_dirs_stps_ro.0.multiply_scalar(ai)).unwrap();
                 }
 
                 // # multiply by initial Hessian
                 // # r/d is the final direction
-                // d = r = torch.mul(q, H_diag)
-                d = q.multiply_scalar(H_diag);
+                // d = r = torch.mul(q, h_diag)
+                d = q.multiply_scalar(h_diag);
                 // let mut r = d.shallow_clone();
                 // for i in range(num_old):
                 for i in 0..num_old {
@@ -182,7 +179,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                     let be_i = old_dirs_stps_ro.0.matmul(&d).double_value(&[]) * old_dirs_stps_ro.2;
 
                     //r.add_(old_stps[i], alpha=al[i] - be_i)
-                    d.f_add_(&old_dirs_stps_ro.1.multiply_scalar(al[i].expect(format!("al[{}]", i).as_str()) - be_i)).unwrap();
+                    let _ = d.f_add_(&old_dirs_stps_ro.1.multiply_scalar(al[i].expect(format!("al[{}]", i).as_str()) - be_i)).unwrap();
                 }
 
             }
@@ -195,14 +192,14 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
             match prev_flat_grad_op {
                 None => {
 
-                    let mut t = crate::utils::clone(&flat_grad);
+                    let t = crate::utils::clone(&flat_grad);
 
                     debug!("prev_flat_grad_op 1");
                     t.print();
                     prev_flat_grad_op.replace(t);
                 }
 
-                Some(ref prev_flat_grad) => {
+                Some(ref _prev_flat_grad) => {
                     let mut t = Tensor::zeros(flat_grad.size(), FLOAT_CPU);
 
                     t.copy_(&flat_grad);
@@ -234,14 +231,14 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
             }
 
             // # optional line search: user function
-            let mut ls_func_evals = 0;
+            let mut _ls_func_evals = 0;
             debug!("params.with_wolf_line_search={}", params.with_wolf_line_search);
             if params.with_wolf_line_search {
-                let mut x_init = Tensor::zeros(x.size(), FLOAT_CPU);//TODO clone
-                x_init.set_requires_grad(true);
-                x.clone(&x_init);
+                let x_init = Tensor::zeros(x.size(), FLOAT_CPU);//TODO clone
+                let _ = x_init.set_requires_grad(true);
+                let _ = x.clone(&x_init);
 
-                (loss, flat_grad, t, ls_func_evals)  = Self::_strong_wolfe(
+                (loss, flat_grad, t, _ls_func_evals)  = Self::_strong_wolfe(
                     |x:&mut Tensor, t:f64, d:&Tensor| Self::_directional_evaluate(self.func.as_mut(), x, t, d),
                     x_init, t, &d, loss, &flat_grad, gtd
                 );
@@ -261,7 +258,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                     orig_loss.backward();
                     orig_loss
                 });
-                let loss = orig_loss.double_value(&[]);
+                let _loss = orig_loss.double_value(&[]);
                 flat_grad = Self::_gather_flat_grad(&x);
 
                 debug!("new flat_grad print n_iter={}", n_iter);
@@ -288,7 +285,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
         x.print();
 
         // tch::with_grad(|| {
-            x.f_add_(&d.multiply_scalar(t)).unwrap();
+        let _ = x.f_add_(&d.multiply_scalar(t)).unwrap();
         // });
 
         debug!("--------");
@@ -332,7 +329,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
         // # ported from https://github.com/torch/optim/blob/master/polyinterp.lua
         // # Compute bounds of interpolation area
-        let  (mut xmin_bound, mut xmax_bound) = bounds.unwrap_or(
+        let  (xmin_bound, xmax_bound) = bounds.unwrap_or(
             if x1 <= x2 {
                 (x1, x2)
             } else {
@@ -380,7 +377,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
         //g = g.clone(memory_format=torch.contiguous_format)
         let _g = Tensor::zeros(g.size(), FLOAT_CPU);
-        g.clone(&_g);
+        let _ = g.clone(&_g);
         let g = _g;
 
         // evaluate objective and gradient using initial step
@@ -565,19 +562,15 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
 #[cfg(test)]
 mod opt_tests {
-    use chrono::Utc;
     use log::{debug, LevelFilter};
-    use plotters::prelude::full_palette::{GREEN_800, ORANGE, ORANGE_800};
-    use plotters::prelude::{GREEN, ShapeStyle};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{IndexOp, Tensor};
-    use hbac_shared::HbacError;
-    use crate::bfgs::{BFGS, BFGSParams};
-    use crate::utils::{from, plot_series};
-    use tch::kind::FLOAT_CPU;
-    use plotters::prelude::*;
-    use tch::Device::Cpu;
     use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
+
+    use hbac_shared::HbacError;
+
+    use crate::bfgs::{BFGS, BFGSParams};
 
     #[ctor::ctor]
     fn init() {

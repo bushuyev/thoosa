@@ -1,16 +1,19 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt::Debug;
+
 use log::{debug, trace};
-use rand::{Rng, thread_rng};
 use rand::distributions::Uniform;
+use rand::Rng;
 use tch::{IndexOp, Tensor};
-use tch::kind::FLOAT_CPU;
+
 use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
+
 use super::opt_rng::opt_rnd;
+
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
 
 #[derive(Debug, Copy, Clone, PartialOrd, PartialEq)]
@@ -130,7 +133,7 @@ impl From<Vec<Primitives>> for ArgmTensor {
 //     }
 // }
 
-
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct RunResult{
     loss:f32,
@@ -166,6 +169,7 @@ impl Ord for RunResult {
 mod run_result_tests {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
+
     use crate::parzen::optimizer::RunResult;
 
     #[test]
@@ -180,9 +184,9 @@ mod run_result_tests {
 
         let mut observations_c = observations.clone();
         let mut observations_vec = vec![];
-        while let Some(o) = observations_c.pop() {
+        while let Some(e) = observations_c.pop() {
 
-            observations_vec.push(o);
+            observations_vec.push(e);
         }
 
         // debug!("observations_vec={observations_vec:?}");
@@ -192,7 +196,7 @@ mod run_result_tests {
         assert_eq!(20., observations_vec[3].0.loss);
     }
 }
-
+#[allow(dead_code)]
 pub trait ParzenEstimator {
     fn clc_dist(&self, samples:Tensor, weights: Option<Tensor>) -> Box<dyn Distribution>;
     fn clc_dist_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, weights: Option<Tensor>) -> Box<dyn Distribution>;
@@ -203,7 +207,7 @@ pub trait Distribution:Debug {
     fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Primitives>) -> Tensor;
     fn weights(&self)->&Tensor;
 }
-
+#[allow(dead_code)]
 struct TreeStructuredParzenEstimator {
     observations:BinaryHeap<Reverse<RunResult>>,
     mvpe_lower:Option<MultiVariateParzenEstimator>, //TODO move out
@@ -211,7 +215,7 @@ struct TreeStructuredParzenEstimator {
     percentile:f32, //TODO move out
     esitmators:Vec<Box<dyn ParzenEstimator>>
 }
-
+#[allow(dead_code)]
 impl TreeStructuredParzenEstimator {
 
     pub fn new(cs:&ConfigurationSpace) -> Self {
@@ -222,6 +226,7 @@ impl TreeStructuredParzenEstimator {
             percentile: 0.,
             esitmators: cs.iter().map(|hp|
                 match hp {
+                    #[allow(unused)]
                     Hyperparameter::UniformFloat { name, lower, upper } => {
                         Box::new(NumericalParzenEstimator::new(
                             // Tensor::zeros(1, FLOAT_CPU),
@@ -232,6 +237,7 @@ impl TreeStructuredParzenEstimator {
                         )) as Box<dyn ParzenEstimator>
 
                     }
+                    #[allow(unused)]
                     Hyperparameter::Categorical { name, values } => {
                         Box::new(CategoricalParzenEstimator::new(values.len(), true)) as Box<dyn ParzenEstimator>
                     }
@@ -252,7 +258,7 @@ impl TreeStructuredParzenEstimator {
         self.percentile = n_lower as f32 / self.observations.len() as f32; //[self._metric_name].size
 
 
-        let (lower_vals, upper_vals) = self.pop_observations(n_lower);
+        let (lower_vals, _upper_vals) = self.pop_observations(n_lower);
 
         let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold((vec![], vec![]), |mut lower_upper_esitmators, (param_i, e)|{
             lower_upper_esitmators.0.push(e.clc_dist_from_vec(&mut lower_vals.iter().map(|v|v[param_i]), None));
@@ -273,12 +279,12 @@ impl TreeStructuredParzenEstimator {
         let mut lower_vals = Vec::with_capacity(n_lower);
         let mut upper_vals = Vec::with_capacity(observations_c.len() - n_lower);
 
-        while let Some(o) = observations_c.pop() {
+        while let Some(e) = observations_c.pop() {
             // debug!(">>>v.0.eval_config={:?}", o);
             if lower_vals.len() < n_lower {
-                lower_vals.push(o.0.eval_config);
+                lower_vals.push(e.0.eval_config);
             } else {
-                upper_vals.push(o.0.eval_config);
+                upper_vals.push(e.0.eval_config);
             }
         }
         (lower_vals, upper_vals)
@@ -314,6 +320,7 @@ impl TreeStructuredParzenEstimator {
 mod tree_structured_parzen_estimator_tests {
     use log::debug;
     use tch::{Kind, Tensor};
+
     use crate::parzen::mvpe::MultiVariateParzenEstimator;
     use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, ParzenEstimator, Primitives, TreeStructuredParzenEstimator};
@@ -394,7 +401,7 @@ mod tree_structured_parzen_estimator_tests {
 
     }
 }
-
+#[allow(dead_code)]
 struct TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32 {
     obj_func:F,
     cs:ConfigurationSpace,
@@ -417,7 +424,7 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
             ])
         }
     }
-
+    #[allow(dead_code)]
     pub fn optimize(&mut self) -> Vec<Primitives> {
         let mut best_loss = f32::MAX;
         let mut best_config:Option<Vec<Primitives>> = None;
@@ -442,7 +449,7 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
             }
             debug!("i={i} eval_config={:?} loss={loss}", eval_config);
 
-            for (_key, mut tpe) in &mut self.tpe_samplers {
+            for (_key, tpe) in &mut self.tpe_samplers {
                 tpe.update_observations(loss, &eval_config)
             }
         });
@@ -478,7 +485,7 @@ impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
     }
 
 }
-
+#[allow(dead_code)]
 fn stack_params<T:Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
     let num_rows = input[0].len();
     let mut result = vec![vec![]; num_rows];
@@ -495,16 +502,11 @@ fn stack_params<T:Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 #[cfg(test)]
 mod tpe_optimizer_tests {
     use log::debug;
-    use rand::distributions::Uniform;
-    use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
-    use rand_mt::{Mt19937GenRand32, Mt19937GenRand64};
-
     use tch::{IndexOp, Tensor};
+
     use crate::argmin::ArgmTensor;
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, stack_params, TPEOptimizer};
     use crate::parzen::optimizer::Primitives::Integer;
-    use crate::utils::sin3_pow2_f;
 
     #[test]
     fn test_params_stack(){
@@ -640,13 +642,14 @@ mod tpe_optimizer_tests {
     }
 }
 
-
+#[allow(dead_code)]
 enum Hyperparameter {
     UniformFloat{name:String, lower:f64, upper:f64},
     Categorical{name:String, values:Vec<String>}
 }
 
 impl Hyperparameter {
+    #[allow(unused)]
     fn name(&self)->String {
         match self {
             Hyperparameter::UniformFloat { name, .. } => {
@@ -658,6 +661,7 @@ impl Hyperparameter {
         }
     }
 
+    #[allow(unused)]
     pub fn random_sample(&self) -> Primitives {
         match self {
             Hyperparameter::UniformFloat { name, lower, upper } => {
@@ -682,6 +686,7 @@ struct ConfigurationSpace {
     hyperparameters:Vec<Hyperparameter>
 }
 
+#[allow(dead_code)]
 impl ConfigurationSpace {
     pub fn empty() -> Self {
         Self {
@@ -732,8 +737,7 @@ impl<'a> IntoIterator for &'a ConfigurationSpace {
 #[cfg(test)]
 mod tests {
     use log::debug;
-    use rand::prelude::StdRng;
-    use rand::SeedableRng;
+
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, TPEOptimizer};
     use crate::utils::sin3_pow2_f;
 

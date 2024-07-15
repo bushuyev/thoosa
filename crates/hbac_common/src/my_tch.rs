@@ -1,32 +1,21 @@
-use std::borrow::Borrow;
-use std::env;
-use std::fmt::{Debug, Formatter};
-use std::fs::File;
-use std::io::Write;
-use std::sync::Mutex;
-use std::time::Instant;
 use core::fmt;
+use std::borrow::Borrow;
+use std::fmt::{Debug, Formatter};
+use std::sync::Mutex;
 
-use log::{debug, info, warn, error};
-use plotters::prelude::*;
-// use polars::prelude::{col, lit, NamedFrom, Series};
-use simplelog::*;
-use tch::{Device, IndexOp, kind, Kind, nn, no_grad, Reduction, Tensor};
-use tch::Device::Cpu;
+use log::{debug, error, warn};
+use tch::{Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
-use tch::nn::{Init, Linear, LinearConfig, Module, Path, Sequential};
-use tch::nn::{ConvConfig, OptimizerConfig};
+use tch::nn::{Init, LinearConfig, Module, Path};
+use tch::nn::ConvConfig;
 
-// use crate::{data, utils};
-use crate::builder::{NthConst, SeqBuilder};
-use crate::builder::Node;
-// use crate::data::EEGs;
-use hbac_shared::HbacError;
-use crate::utils::*;
 use hbac_shared::*;
-// use linfa::prelude::*;
-use std::sync::Arc;
-use hbac_shared::{gauss_i};
+use hbac_shared::HbacError;
+
+use crate::builder::Node;
+// use crate::{data, utils};
+use crate::builder::SeqBuilder;
+use crate::utils::*;
 
 #[derive(Debug)]
 pub struct MySequential {
@@ -274,7 +263,7 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 
     let dense_block = |b:&mut SeqBuilder| b
         .n_blocks(
-            |b:&mut SeqBuilder, i| b
+            |b:&mut SeqBuilder, _i| b
                 .func(Tensor::elu)
                 .conv_1d(kernel, channels, channels, ConvConfig::default())
                 .func(Tensor::elu)
@@ -288,7 +277,7 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
         .conv_1d(kernel, channels, channels, ConvConfig::default())
         .func(|t|t.elu())
         .max_pool( 3, 2, 1)
-        .n_blocks(|b:&mut SeqBuilder, i| b
+        .n_blocks(|b:&mut SeqBuilder, _i| b
             .block(dense_block)
             .block(|b:&mut SeqBuilder| b
                 .func(Tensor::elu)
@@ -365,6 +354,7 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 //
 // }
 
+#[allow(dead_code)]
 fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
     (
         tch::Tensor::randn([batch_size, 50 * 200, 20], (Kind::Float, device.clone())), //batch, 20 EEG feats, 50 sec * 200 samples per second,
@@ -385,7 +375,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
 
     debug!("nput_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
 
-    let folds_len = folds.0.len();
+
     if nets.len() == 0 {
         //if no 'main' folds build motifs on remainder
         return Tensor::zeros([max_nets as i64, max_motif_batches as i64, motif_batch_size as i64], (Float, *device));
@@ -403,7 +393,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
 
         let batch = batch.view((motif_batch_size, 1, motif_n));
 
-        for ((net_i, net), net_batch) in nets.iter().enumerate().zip(net_batches.iter_mut()) {
+        for ((_net_i, net), net_batch) in nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
             let net_rs = net.lock().unwrap().forward(&batch).squeeze();
             debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
@@ -436,7 +426,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     net_batches.iter().enumerate().for_each(|(i, net)| {
         debug!("apply_channel_motifs: net={:?} sizes={:?}", i, net.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
     });
-    let mut net_tensors = net_batches.into_iter().map(|net_batches| Tensor::stack(net_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
+    let net_tensors = net_batches.into_iter().map(|net_batches| Tensor::stack(net_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
     debug!("apply_channel_motifs: net_tensors.len()={:?} sizes={:?}", net_tensors.len(), net_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
 
     let nets_t = Tensor::stack(
@@ -471,32 +461,27 @@ fn add_net_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Ten
 
 #[cfg(test)]
 mod tch_tests {
-    use log::{debug, trace, LevelFilter};
+    use std::fs;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use chrono::Utc;
+    use log::{debug, LevelFilter};
+    use plotters::prelude::{BLACK, GREEN, RED};
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
+    use serde::{Deserialize, Serialize};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
-    use tch::{Device, IndexOp, kind, Kind, nn, Reduction, Tensor};
-    use tch::nn::{ConvConfig, Module, OptimizerConfig, Sequential, VarStore};
+    use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
+    use tch::Device::Cpu;
+    use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
+
+    use hbac_shared::*;
     use hbac_shared::HbacError;
 
     use crate::builder::clc_conv1d_out;
     use crate::builder::SeqBuilder;
-    use crate::my_tch::{configure_dense};
     use crate::utils;
     use crate::utils::*;
-    use hbac_shared::*;
-    use core::f32::consts::PI;
-    use std::fs;
-    use std::iter::{StepBy};//ArrayChunks
-    use std::ops::RangeInclusive;
-    use chrono::Utc;
-    use plotters::prelude::{BLACK, GREEN, RED};
-    use rayon::prelude::*;
-    use rayon::iter::{IntoParallelIterator, ParallelIterator};
-    use std::sync::Arc;
-    use std::sync::Mutex;
-    use tch::Device::Cpu;
-    use tch::Kind::Float;
-    use serde::{Serialize, Deserialize};
-
 
     #[ctor::ctor]
     fn init() {
@@ -554,7 +539,7 @@ mod tch_tests {
 
             ).end_seq();
 
-        let mut vs = nn::VarStore::new(Device::Cpu);
+        let vs = nn::VarStore::new(Device::Cpu);
 
         let net = main.build_tch_module(&vs.root())?;
 
@@ -646,7 +631,7 @@ mod tch_tests {
         let g_n = 5;
         // let g = gauss_i(2.5, 2.0, g_n);
         let g = gauss_i( (g_n as f32 - 1.0) /2.0, 1.0, g_n);
-        let g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
+        let _g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
 
         let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1221753362", Cpu)?;//2259539799
 
@@ -707,7 +692,7 @@ mod tch_tests {
 
             ], "EEG", (n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
             // ], "EEG", ((g_n*30) as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        );
+        )?;
 
 
 
@@ -756,7 +741,7 @@ mod tch_tests {
 
         debug!("rnd_t.size()={:?}, motif_0_t.size()={:?}, motif_1_t.size()={:?}", rnd_t.size(), motif_0_t.size(), motif_1_t.size());
 
-        let mut vs_0 = nn::VarStore::new(Device::Cpu);
+        let vs_0 = nn::VarStore::new(Device::Cpu);
         let net_0 = test_net(&vs_0, motif_n)?;
 
         utils::train(
@@ -778,7 +763,7 @@ mod tch_tests {
             |t|t
         )?;
 
-        let mut vs_1 = nn::VarStore::new(Device::Cpu);
+        let vs_1 = nn::VarStore::new(Device::Cpu);
         let net_1 = test_net(&vs_1, motif_n)?;
         utils::train(
             &Device::Cpu,
@@ -872,7 +857,7 @@ mod tch_tests {
 
         let net = node.build_tch_module(&vs.root())?;
 
-        net.forward(&full_batch.transpose(1, 2));
+        let _ = net.forward(&full_batch.transpose(1, 2));
 
 
         // for n in net_0_out {
@@ -915,6 +900,7 @@ mod tch_tests {
     }
 
 
+    #[allow(unused)]
     #[test]
     pub fn test_scale_x(){
         let v_5 = (0..5).map(|i| i as f32).collect::<Vec<f32>>();
@@ -940,6 +926,7 @@ mod tch_tests {
         //TODO
     }
 
+    #[allow(dead_code)]
     #[test]
     pub fn test_save_load() -> Result<(), HbacError> {
         let vs_0 = nn::VarStore::new(Device::Cpu);
@@ -951,7 +938,7 @@ mod tch_tests {
             .linear_s(20)
             .func(Tensor::sigmoid)
             .end_seq();
-        let my_mod = node.build_tch_module(&vs_0.root())?;
+        let _my_mod = node.build_tch_module(&vs_0.root())?;
 
         println!("vs_0.variables()={:?}", vs_0.variables());
 
@@ -963,7 +950,7 @@ mod tch_tests {
         vs_0.save("/tmp/test.pt")?;
 
         let mut vs_1 = nn::VarStore::new(Device::Cpu);
-        vs_1.load("/tmp/test.pt");
+        vs_1.load("/tmp/test.pt")?;
 
         println!("vs_1.variables()={:?}", vs_1.variables());
         #[derive(Debug, Serialize, Deserialize)]
@@ -974,7 +961,7 @@ mod tch_tests {
 
         let t = T { i: 1, f: 321.456 };
 
-        fs::write("/tmp/model.json", serde_json::to_string(&t)?);
+        fs::write("/tmp/model.json", serde_json::to_string(&t)?)?;
 
         println!("{:?}", serde_json::from_str::<T>(&fs::read_to_string("/tmp/model.json").unwrap()).unwrap());
         //TODO

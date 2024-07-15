@@ -1,13 +1,13 @@
 use std::ops::{Deref, DerefMut};
+
 use argmin::core::{CostFunction, Error, Executor, Gradient, IterState, OptimizationResult};
 use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
 use argmin_math::{ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminRandom, ArgminSignum, ArgminSub, ArgminZeroLike};
 use log::debug;
 use rand::Rng;
-use tch::Device::Cpu;
-use tch::Kind::Float;
 use tch::Tensor;
+
 use hbac_shared::HbacError;
 
 #[derive(Debug)]
@@ -103,7 +103,7 @@ impl ArgminMul<ArgmTensor, ArgmTensor> for ArgmTensor {
 
 impl ArgminL1Norm<f64> for ArgmTensor {
     fn l1_norm(&self) -> f64 {
-        self.0.linalg_norm(0, (0), true, None).double_value(&[])
+        self.0.linalg_norm(0, 0, true, None).double_value(&[])
     }
 }
 
@@ -131,7 +131,7 @@ impl ArgminMinMax for ArgmTensor {
 
 impl ArgminL2Norm<f64> for ArgmTensor {
     fn l2_norm(&self) -> f64 {
-        self.0.linalg_norm(2, (0), true, None).double_value(&[])
+        self.0.linalg_norm(2, 0, true, None).double_value(&[])
     }
 }
 
@@ -150,7 +150,7 @@ impl ArgminMul<ArgmTensor, ArgmTensor> for f64 {
 }
 
 impl ArgminRandom for ArgmTensor {
-    fn rand_from_range<R: Rng>(min: &Self, max: &Self, rng: &mut R) -> Self {
+    fn rand_from_range<R: Rng>(min: &Self, max: &Self, _rng: &mut R) -> Self {
         ((&max.0 - &min.0).multiply(&Tensor::randn(min.size(), (min.kind(), min.device()))) + &max.0).into()
     }
 }
@@ -203,7 +203,7 @@ impl <F> Gradient for TensorProblem<F> where F:Fn(&ArgmTensor)->Tensor {
 
     }
 }
-
+#[allow(dead_code)]
 pub fn run_lbfgs<F>(cost: TensorProblem<F>, init: Tensor, target_cost: f64, max_iters: u64) -> Result<OptimizationResult<TensorProblem<F>, LBFGS<MoreThuenteLineSearch<ArgmTensor, ArgmTensor, f64>, ArgmTensor, ArgmTensor, f64>, IterState<ArgmTensor, ArgmTensor, (), (), (), f64>>, HbacError>
     where F:Fn(&ArgmTensor)->Tensor{
     let solver = LBFGS::new(
@@ -227,30 +227,22 @@ pub fn run_lbfgs<F>(cost: TensorProblem<F>, init: Tensor, target_cost: f64, max_
 
 #[cfg(test)]
 mod tests {
-    use std::ops::{Deref, DerefMut};
-    use argmin::solver::brent::BrentOpt;
-    use hbac_shared::HbacError;
-    use argmin::core::{Executor, Operator};
+    use argmin::core::*;
     use argmin::core::CostFunction;
     use argmin::core::Error;
-    use argmin::core::Jacobian;
-    use log::debug;
+    use argmin::core::Executor;
     use argmin::core::State;
-    use tch::Kind::Float;
-    use tch::Tensor;
-    use argmin::solver::gaussnewton::GaussNewton;
-    use argmin::solver::landweber::Landweber;
     use argmin::solver::linesearch::MoreThuenteLineSearch;
     use argmin::solver::quasinewton::LBFGS;
-    use argmin::solver::particleswarm::ParticleSwarm;
-    use argmin::core::*;
-    use argmin_math::{ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminRandom, ArgminSignum, ArgminSub, ArgminZeroLike};
+    use argmin_math::ArgminMul;
+    use log::debug;
     use tch::Device::Cpu;
-    use argmin_math::ArgminScaledAdd;
-    use rand::Rng;
-    use crate::argmin::{ArgmTensor, TensorProblem, run_lbfgs};
-    use crate::opt::rbf_nll;
+    use tch::Tensor;
 
+    use hbac_shared::HbacError;
+
+    use crate::argmin::{ArgmTensor, run_lbfgs, TensorProblem};
+    use crate::opt::rbf_nll;
 
     #[test]
     fn test_min_x2() -> Result<(), HbacError>{
@@ -409,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_grad(){
-        let mut p_1 = ArgmTensor(Tensor::from_slice(&[10.]).set_requires_grad(true));
+        let p_1 = ArgmTensor(Tensor::from_slice(&[10.]).set_requires_grad(true));
 
         let t2 = ArgmTensor(p_1.pow_tensor_scalar(2));
 
@@ -425,8 +417,8 @@ mod tests {
 
 
         // let p_2:MyTensor = p_1.mul(&MyTensor(Tensor::from_slice(&[1., 2., 3.,]).set_requires_grad(true)));
-        let mut p_2 = tch::no_grad(|| { p_1.mul(&0.1)});
-        p_2.set_requires_grad(true);
+        let p_2 = tch::no_grad(|| { p_1.mul(&0.1)});
+        let _ = p_2.set_requires_grad(true);
         let t2 = p_2.pow_tensor_scalar(2);
 
         // p_2.zero_grad();
