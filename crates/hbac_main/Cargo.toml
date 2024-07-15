@@ -1,7 +1,7 @@
 [package]
 name = "hbac_main"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 
 [dependencies]
@@ -10,12 +10,13 @@ hbac_motifs = {path = "../hbac_motifs"}
 hbac_store = {path = "../hbac_store"}
 hbac_shared = {path = "../hbac_shared"}
 
+rand.workspace = true
 polars = { version = "0.36.2", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
 tch = { version = "0.16.0" }
 #torch-sys = "0.14.0"
 #sci-rs = "0.3.8"
 plotters = { version = "0.3.5"}
-rand = "0.8.5"
+
 
 log = "0.4.20"
 simplelog = "0.12.1"
@@ -34,7 +35,7 @@ rand_chacha = "0.3.1"
 approx = "0.5.1"
 
 [build-dependencies]
-chrono = { version = "0.4.32" }
+chrono.workspace = true
 
 [profile.test]
 opt-level = 0

@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "hbac_shared",
+    "hbac_common",
+    "hbac_store",
+    "hbac_motifs",
+    "hbac_main",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+rand = "0.8.5"
+log = "0.4.22"
+simplelog = "0.12.2"
+chrono = { version = "0.4.38" }

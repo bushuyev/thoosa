@@ -1,7 +1,7 @@
 [package]
 name = "hbac_motifs"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [lib]
 path = "src/lib.rs"
@@ -10,14 +10,15 @@ path = "src/lib.rs"
 hbac_common = {path = "../hbac_common"}
 hbac_store = {path = "../hbac_store"}
 hbac_shared = {path = "../hbac_shared"}
+rand.workspace = true
+log.workspace = true
+simplelog.workspace = true
+
 tch = { version = "0.16.0" }
 torch-sys = "0.16.0"
 sci-rs = "0.3.8"
 plotters = { version = "0.3.5"}
-rand = "0.8.5"
 
-log = "0.4.20"
-simplelog = "0.12.1"
 
 anyhow = "1.0.79"
 ctor = "0.2.6"

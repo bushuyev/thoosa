@@ -6,3 +6,4 @@
 **/target/
 /datasets/
 /python/shared_util.py
+/data_down/**
