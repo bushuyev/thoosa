@@ -18,7 +18,8 @@ rand = "0.8.5"
 log = "0.4.22"
 simplelog = "0.12.2"
 chrono = { version = "0.4.38" }
-
+tch = { version = "0.16.0" }
+torch-sys = "0.16.0"
 
 [profile.test]
 opt-level = 0

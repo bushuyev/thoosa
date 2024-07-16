@@ -23,7 +23,7 @@ pub fn clc_avgpool1d_out(l_in: i64, kernel: i64, padding:i64, stride:i64) -> i64
 }
 
 
-// #[derive(Serialize)]
+
 pub enum Node {
     Seq {elts: Vec<Node>},
     Par {elts: Vec<Node>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>},

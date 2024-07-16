@@ -473,12 +473,12 @@ mod tch_tests {
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
     use tch::Device::Cpu;
-    use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
+    use tch::nn::{ConvConfig, Init, Module, OptimizerConfig, VarStore};
 
     use hbac_shared::*;
     use hbac_shared::HbacError;
 
-    use crate::builder::clc_conv1d_out;
+    use crate::builder::{clc_conv1d_out, Node};
     use crate::builder::SeqBuilder;
     use crate::utils;
     use crate::utils::*;
@@ -625,80 +625,6 @@ mod tch_tests {
             .end_seq().build_tch_module(&vs.root())
     }
 
-    #[test]
-    pub fn test_plot_eeg() -> Result<(), HbacError>{
-
-        let g_n = 5;
-        // let g = gauss_i(2.5, 2.0, g_n);
-        let g = gauss_i( (g_n as f32 - 1.0) /2.0, 1.0, g_n);
-        let _g_v = g.map(|v|v * 0.3).collect::<Vec<f32>>();
-
-        let t = load_tensor("/media/bu/KINGSTON/all_eegs.pt/all/", "1221753362", Cpu)?;//2259539799
-
-        println!("t={:?}", t.size());
-        let t = t.i((1..3, ..)).view((2, -1));//.view((1, -1));
-
-        println!("t={:?}", t.size());
-
-        let x = lin_t(t.size()[1]);
-
-        // let t_f1 = t.conv1d(&Tensor::from_slice(g_v.as_slice()).totype(Float).view((1, 1, -1)), None::<Tensor>, 1, 0, 1, 1);
-        let t_f1 = t.avg_pool1d(10, 1, 0, false, false);
-        let t_f100 = t.avg_pool1d(20, 1, 0, false, false);
-
-        println!("t_f1={:?}", t_f1.size());
-        let n = t.size()[1] as u32;//11; //
-
-        // let channels_motifs_models = crate::train_nets::load_motif_models(
-        //     "/home/bu/dvl/kaggle/HMS_Harmful_Brain_Activity_Classification/data_down/200_model_08_max_ratio_dist/0_200/models/",
-        //     "gpd".into(),
-        //     20,
-        //     1000,
-        //     &Cpu
-        // )?;
-        // let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
-
-        // println!("nets_in_channel={:?}", motif_nets.iter().map(|nets_in_channel|nets_in_channel.len()).collect::<Vec<usize>>());
-
-        // let motif_batches = batch_windows(684400, 1000, 100, 100);
-        // let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
-
-
-
-        // let motifs_t = super::apply_channel_motifs(
-        //     1000,
-        //     100,
-        //     &motif_nets[0],
-        //     t_f1.i((0,..) ),
-        //     100,
-        //     1,
-        //     max_motif_batches,
-        //     &Cpu
-        // );
-
-        // println!("motifs_t.size()={:?}", motifs_t.squeeze().flatten(0,1).size());
-
-        // let motifs_vec = vec_f32_from(&motifs_t.squeeze());
-
-        // println!("motifs_vec={:?}", motifs_vec);
-        // let motif_len = motifs_vec.len();
-        plot_series(
-            vec![
-                (format!("t"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
-                (format!("t_f1"), RED, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f1.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
-                (format!("t_f1"), GREEN, vec_f32_from(&x).into_iter().zip(vec_f32_from(&t_f100.i((0, ..)).squeeze())).collect::<Vec<(f32, f32)>>()),
-                // (format!("motif"), RED, (0..motif_len).into_iter().map(|i|i as f32).zip(motifs_vec).collect::<Vec<(f32, f32)>>()),
-                // (format!("G"), RED, (0..g_n).map(|i| 10. * i as f32).zip(g_v.into_iter()).collect::<Vec<(f32, f32)>>()),
-
-            ], "EEG", (n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-            // ], "EEG", ((g_n*30) as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        )?;
-
-
-
-
-        Ok(())
-    }
 
     #[test]
     pub fn test_full() -> Result<(), HbacError>{
@@ -829,7 +755,6 @@ mod tch_tests {
         let max_folds = max_folds.0.get(0).map(|v|v.len()).unwrap_or(max_folds.1.len());
 
 
-
         let full_batch_vec = (0..eeg_tensors_len).into_par_iter().map(|i|{
 
             let eeg_t = {
@@ -838,11 +763,11 @@ mod tch_tests {
             };
 
 
-            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, 0, max_folds, &Cpu)
+            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, 2, max_folds, &Cpu)
 
         }).collect::<Vec<Tensor>>();
 
-        let node = SeqBuilder::new(nets_len as i64)
+        let node = SeqBuilder::new(400 as i64)
             .linear_s(1)
             .func(Tensor::sigmoid)
             .end_seq();
@@ -857,20 +782,8 @@ mod tch_tests {
 
         let net = node.build_tch_module(&vs.root())?;
 
-        let _ = net.forward(&full_batch.transpose(1, 2));
-
-
-        // for n in net_0_out {
-        //     debug!("net_0_out={:?}", n);
-        // }
-        //
-        // for n in net_1_out {
-        //     debug!("net_1_out={:?}", n);
-        // }
-
-        // debug!("net_rnd_out={:?}", from::<Vec<f32>>(&net_0.forward(&Tensor::stack((0..10).map(|_| Tensor::from_slice(sig_in_rand(motif_n, &[], 0.05, 1.).as_slice())).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, 1000))).i((.., 0, 0))));
-
-
+        let _ = net.forward(&full_batch.view(( -1)));
+        //TODO
 
         Ok(())
     }
@@ -940,141 +853,43 @@ mod tch_tests {
             .end_seq();
         let _my_mod = node.build_tch_module(&vs_0.root())?;
 
-        println!("vs_0.variables()={:?}", vs_0.variables());
-
-        // let x = tch::jit::CModule::
-        // let x = tch::CModule::save(my_mod);
-
-        // x.save("/tmp/test_mod.pt");
-
-        vs_0.save("/tmp/test.pt")?;
+        vs_0.save("/tmp/test.safetensors")?;
 
         let mut vs_1 = nn::VarStore::new(Device::Cpu);
-        vs_1.load("/tmp/test.pt")?;
-
-        println!("vs_1.variables()={:?}", vs_1.variables());
-        #[derive(Debug, Serialize, Deserialize)]
-        struct T {
-            i: i32,
-            f: f64,
+        for (key, t) in vs_0.variables() {
+            let path = key.split(".").collect::<Vec<&str>>();
+            (vs_1.root() / path[0] ).var(&path[1], &t.size(), Init::Const(0.0));
         }
 
-        let t = T { i: 1, f: 321.456 };
+        vs_1.load("/tmp/test.safetensors")?;
 
-        fs::write("/tmp/model.json", serde_json::to_string(&t)?)?;
+        assert_eq!(
+            vs_0.variables().get("layer1.weight"),
+            vs_1.variables().get("layer1.weight")
+        );
+        assert_eq!(
+            vs_0.variables().get("layer1.weight__7"),
+            vs_1.variables().get("layer1.weight__7")
+        );
 
-        println!("{:?}", serde_json::from_str::<T>(&fs::read_to_string("/tmp/model.json").unwrap()).unwrap());
-        //TODO
-        Ok(())
-    }
+        assert_eq!(
+            vs_0.variables().get("layer1.bias__6"),
+            vs_1.variables().get("layer1.bias__6")
+        );
+        assert_eq!(
+            vs_0.variables().get("layer1.bias"),
+            vs_1.variables().get("layer1.bias")
+        );
 
-    #[test]
-    pub fn test_test() -> Result<(), HbacError> {
+        assert_eq!(
+            vs_0.variables().get("cnn.weight__5"),
+            vs_1.variables().get("cnn.weight__5")
+        );
+        assert_eq!(
+            vs_0.variables().get("cnn.bias__4"),
+            vs_1.variables().get("cnn.bias__4")
+        );
 
-        // SeqBuilder::new(num_features)
-        //     .linear_s(1)
-        //     .func(Tensor::sigmoid)
-        //     .end_seq().build_tch_module(&vs.root());
-
-        // let folds = batch_windows(684400, 1000, 100, 1000);
-        //
-        // println!("folds.0.len={:?} folds.1.len={:?}", folds.0.len(), folds.1.len());
-        // println!("folds={:?}", folds);
-
-        // let t = Tensor::from_slice(&[1., 2., 3., 4.]);
-        //
-        // t.i(2..3).print();
-        // t.i(0..10).print();
-
-        // println!("chunks_for_eeg={:?}", chunks_for_eeg);
-
-        // let t_0_1 = Tensor::stack(&[Tensor::from_slice(&[0.]), Tensor::from_slice(&[0.])], 0);
-        //
-        // println!("t_0_1={:?}", t_0_1.size());
-        //
-        // let t_1_1 = Tensor::stack(&[Tensor::from_slice(&[0., 1., 1., 0.]), Tensor::from_slice(&[0., 1., 2., 0.,])], 0);
-        // let t_1_2 = Tensor::stack(&[Tensor::from_slice(&[0., 2., 1., 0.]), Tensor::from_slice(&[0., 2., 2., 0.,])], 0);
-        // let t_1_3 = Tensor::stack(&[Tensor::from_slice(&[0., 2., 1., 0.]), Tensor::from_slice(&[0., 2., 2., 0.,])], 0);
-        // let t_0_1_2 = Tensor::stack(&[t_1_1, t_1_2, t_1_3], 0);
-        //
-        // println!("t_0_1_2={:?}", t_0_1_2.size());
-        //
-        // let x = t_0_1_2.linear::<Tensor>(&t_0_1, None);
-        //
-        // println!("x.size()={:?}", x.size());
-
-        // let mut fifo = [0.0; 3];
-        // for i in 0..100{
-        //     fifo[i % fifo.len() as usize] = i as f32;
-        //     println!("fifo={:?} i={}", fifo, i % fifo.len(), )
-        // }
-
-        // let t_0 = Tensor::from_slice(&[1., 2., 3.]).view((3, 1, 1));
-        // let t_1 = Tensor::from_slice(&[10., 20., 30.]).view((3, 1, 1));
-        //
-        // println!("t_0={:?}", t_0.size());
-        // println!("t_1={:?}", t_1.size());
-        //
-        // let t_v_1 = Tensor::vstack(&[t_0, t_1]);
-        //
-        // println!("t_v_1.size={:?}", t_v_1.size());
-        //
-        // let t_0 = Tensor::from_slice(&[1., 2., 3.]).view((3, 1, 1));
-        // let t_1 = Tensor::from_slice(&[10., 20., 30.]).view((3, 1, 1));
-        //
-        // // println!("t_0={:?}", t_0.size());
-        // // println!("t_1={:?}", t_1.size());
-        //
-        // let t_v_2 = Tensor::vstack(&[t_0, t_1]);
-        //
-        // println!("t_v_2.size={:?}", t_v_2.size());
-        //
-        // let t = Tensor::stack(&[t_v_1, t_v_2], 0);
-        //
-        // println!("t={:?}", t.size());
-
-        // t.print();
-
-        // let input_n = 10_000usize;
-        // let motif_n = 1_000usize;
-        //
-        // let mut chunks = (0..=input_n - motif_n).step_by(motif_n/2 ).array_chunks::<10>();
-        // while let Some(slice) = chunks.next() {
-        //     println!("slices={:?}", slice);
-        // }
-        //
-        // let rem_option = chunks.into_remainder();
-        // println!("is_some={}", rem_option.is_some());
-        // if let Some(mut reminder) = rem_option {
-        //     println!("reminder={:?}", reminder.len());
-        //
-        // }
-
-        // let vs = nn::VarStore::new(Device::Cpu);
-        //
-        // let mod_0 = SeqBuilder::new(1000).linear_s(1).end_seq().build_tch_module(&vs.root())?;
-
-
-        // debug!("debug: {:?}", (||{println!(">>>debug"); "debug"})());
-        // trace!("trace: {:?}", (||{println!(">>>trace"); "trace"})());
-
-        // let t1 = Tensor::from_slice(&[4., 6.]);
-        // let t2 = Tensor::from_slice(&[15., 5.]);
-        //
-        // let t_stack = Tensor::stack(&[t1.copy(), t2.copy()], 0);
-        // let t_column_stack = Tensor::column_stack(&[t1.copy(), t2.copy()]);
-        // let t_vstack = Tensor::vstack(&[t1.copy(), t2.copy()]);
-        //
-        //
-        // debug!("t1={:?}, t2={:?}, t_stack={:?} t_column_stack={:?} t_vstack={:?}", t1, t2, t_stack, t_column_stack, t_vstack);
-        // t_stack.print();
-        // debug!("t_stack mean={:?}", t_stack.mean_dim(1, false, kind::Kind::Float));
-        //
-        // t_column_stack.print();
-        // debug!("t_column_stack mean={:?}", t_column_stack.mean_dim(1, false, kind::Kind::Float));
-        //
-        // t_vstack.print();
-        // debug!("t_vstack mean={:?}", t_vstack.mean_dim(1, false, kind::Kind::Float));
 
         Ok(())
     }

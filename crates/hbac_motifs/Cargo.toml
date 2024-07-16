@@ -14,8 +14,9 @@ rand.workspace = true
 log.workspace = true
 simplelog.workspace = true
 
-tch = { version = "0.16.0" }
-torch-sys = "0.16.0"
+tch.workspace = true
+torch-sys.workspace = true
+
 sci-rs = "0.3.8"
 plotters = { version = "0.3.5"}
 
