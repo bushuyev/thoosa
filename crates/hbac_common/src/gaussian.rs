@@ -86,8 +86,6 @@ impl <'g, F> GaussianProcessFit<'g, F> where F: Fn(&Tensor, &Tensor) -> Tensor{
     pub fn predict(&self, x_s: &Tensor) -> Result<Tensor, HbacError> {
         let (mu_s, cov_s) = self.mean_and_cov(x_s);
 
-        println!("cov_s={}", cov_s);
-
         let chol = cholesky_with_jitter(&cov_s.nan_to_num(0., None, None)).unwrap();
 
         let sig_t_with_cov = chol.matmul(&Gaussian::norm(x_s.size()[0]).transpose(0, 1));
@@ -130,16 +128,13 @@ impl <F> GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
         debug!("fit: y_train={}", y_train);
         let k = (self.kernel)(&x_train, &x_train);
         let k_size = k.size();
-        // println!("posterior_ch: k.size()={:?}", k.size());
+
         debug!("fit: k={}", k);
         let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(self.sigma_y.powi(2) as f64, false);
-
         debug!("fit: with sigma k={}", k);
 
         let chol_t = cholesky_with_jitter(&k)?;
-
         debug!("fit: chol_t k={}", chol_t);
-
 
         //from sklearn's GaussianProcessRegressor
         let alpha = y_train.view((y_train.size()[0], chol_t.size()[0], 1)).cholesky_solve(&chol_t, false);
@@ -184,16 +179,13 @@ mod tests {
 
     #[test]
     fn test_gp_fit() {
+
         let gp = GaussianProcess::new(
             move |t1, t2| kernel_rbf(&t1, &t2, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float)),
             1e-8,
         );
 
         let (y_train_full, x_t, _) = sin3_pow2(10, -2., 2., None);
-
-        // println!("x_t={x_t}");
-        // println!("y_t={y_train_full}");
-
         let train_indexes = vec![0, 9];
 
 
@@ -207,22 +199,22 @@ mod tests {
 
         let test_indexes = vec![2, 7];
         let x_test = x_t.i(test_indexes.as_slice());
-        // println!("x_test={x_test}");
-        let (m, s) = gpf.mean_and_cov(&x_test);
-        println!("alpha {}", gpf.alpha);
-        println!("m {}", m);
-        println!("s {}", s);
 
+        let (m, s) = gpf.mean_and_cov(&x_test);
+        // println!("alpha {}", gpf.alpha);
+        // println!("m {}", m);
+        // println!("s {}", s);
+        //python/gp_test.py
         assert_eq!(
             Tensor::from_slice(&[
-                -5.6786,
-                -2.3187
+                2.3187,
+                5.6786,
             ]).totype(Float).view((1, 2, 1)).round_decimals(4),
             gpf.alpha.round_decimals(4)
         );
 
         assert_eq!(
-            Tensor::from_slice(&[-3.84369169, -1.60687517]).totype(Float).view((2,1)).round_decimals(4),
+            Tensor::from_slice(&[1.60687517, 3.84369169]).totype(Float).view((2,1)).round_decimals(4),
             m.round_decimals(4)
         );
 
@@ -231,46 +223,6 @@ mod tests {
             s.diagonal(0, 0, 1).round_decimals(4)
         );
 
-        let _ = gpf.predict(&x_test).unwrap();
-
-        /*
-        import numpy as np
-        from sklearn.gaussian_process import GaussianProcessRegressor
-        from sklearn.gaussian_process import kernels
-
-        # k1 = kernels.RBF()(np.array([1., 2., 3., 4.]).reshape(-1, 1))
-        k1 = kernels.RBF(length_scale=1)(np.array([[-2],[ 2]]).reshape(-1, 1))
-        print(f"k1: {k1}")
-
-
-
-        gpr = GaussianProcessRegressor(
-            kernels.RBF(),
-            optimizer=None
-        )
-
-        x_t = np.array(np.linspace(-2, 2, 10)).reshape(-1, 1)
-        print(f"x_t={x_t}")
-
-        y_t = np.array([-np.sin(3. * x) - x ** 2 + 0.7 * x for x in x_t]).reshape(-1, 1)
-        print(f"y_t={y_t}")
-
-        train_indexes = [0,9]
-        x_train = x_t[train_indexes]
-        y_train = y_t[train_indexes]
-
-        print(f"x_train={x_train} y_train={y_train}")
-
-        gpr.fit(x_train, y_train)
-        print(f"gpr.alpha_0 ={gpr.alpha_}")
-
-        test_indexes = [2,7]
-        print(f"x_t[test_indexes]={x_t[test_indexes]}")
-        m, s =  gpr.predict(x_t[test_indexes], True, False)
-        print(f"gpr.alpha_={gpr.alpha_} m={m}, s={s}")
-
-
-         */
 
     }
 

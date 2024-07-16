@@ -16,7 +16,7 @@ gpr = GaussianProcessRegressor(
 x_t = np.array(np.linspace(-2, 2, 10)).reshape(-1, 1)
 print(f"x_t={x_t}")
 
-y_t = np.array([-np.sin(3. * x) - x ** 2 + 0.7 * x for x in x_t]).reshape(-1, 1)
+y_t = np.array([-np.sin(3. * x) + x ** 2 + 0.7 * x for x in x_t]).reshape(-1, 1)
 print(f"y_t={y_t}")
 
 train_indexes = [0,9]

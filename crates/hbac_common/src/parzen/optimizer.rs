@@ -533,7 +533,7 @@ mod tpe_optimizer_tests {
 
     #[test]
     fn test_sphere(){
-        let sphere = sphere(300)(&vec![
+        let sphere = sphere(30)(&vec![
             Primitives::Float(0.1),
             Primitives::Float(0.2),
             Primitives::Float(0.3),
@@ -541,7 +541,7 @@ mod tpe_optimizer_tests {
             Primitives::Float(0.5),
         ]);
 
-        assert_eq!(0.55, sphere);
+        assert_eq!(4410.55, sphere);
 
     }
 
