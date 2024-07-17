@@ -362,13 +362,13 @@ fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
     )
 }
 
-pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
+/// returns Tensor nets x batches x batch size
+pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let input_t_size = eeg_t_channel.size();
-    debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", eeg_t_channel.size(), input_t_size, nets.len());
+    debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", eeg_t_channel.size(), input_t_size, motif_nets.len());
 
     assert!(input_t_size.len() == 1);
-
 
     let input_n = input_t_size[0];
     let folds = batch_windows(input_n as usize, motif_n as usize, step, motif_batch_size as usize);
@@ -376,12 +376,12 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
     debug!("nput_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
 
 
-    if nets.len() == 0 {
+    if motif_nets.len() == 0 {
         //if no 'main' folds build motifs on remainder
         return Tensor::zeros([max_nets as i64, max_motif_batches as i64, motif_batch_size as i64], (Float, *device));
     }
 
-    let nets_len = nets.len();
+    let nets_len = motif_nets.len();
     let mut net_batches = (0..nets_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / step)).collect::<Vec<Vec<Tensor>>>();
 
 
@@ -393,7 +393,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
 
         let batch = batch.view((motif_batch_size, 1, motif_n));
 
-        for ((_net_i, net), net_batch) in nets.iter().enumerate().zip(net_batches.iter_mut()) {
+        for ((_net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
             let net_rs = net.lock().unwrap().forward(&batch).squeeze();
             debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
@@ -409,7 +409,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
 
         let batch = batch.view((-1, 1, motif_n));
 
-        for ((net_i, net), net_batch) in nets.iter().enumerate().zip(net_batches.iter_mut()) {
+        for ((net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
             let net_rs = net.lock().unwrap().forward(&batch).set_requires_grad(false).squeeze();
 
@@ -422,7 +422,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
         };
     }
 
-    //nets x slices in tensor/motif_batch_size x motif_batch_size
+    //nets x batches in tensor/motif_batch_size x motif_batch_size
     net_batches.iter().enumerate().for_each(|(i, net)| {
         debug!("apply_channel_motifs: net={:?} sizes={:?}", i, net.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
     });
@@ -434,16 +434,12 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, nets: &Vec<Mutex<Box<dyn 
         0
     );
     debug!("apply_channel_motifs: 2.2 nets_t.zie={:?}", nets_t.size());
-
-    // let nets_t = nets_t.view((-1, nets_t.size()[2])); //(x, 1, y) -> (x,y)
-
-
     debug!("apply_channel_motifs: 1. nets_t={:?} max_nets={}, max_motif_batches={} motif_batch_size={}", nets_t.size(), max_nets, max_motif_batches, motif_batch_size);
 
     let nets_t = pad_to(&nets_t, &[max_nets as i64, max_motif_batches as i64, motif_batch_size as i64]).unwrap();
 
     debug!("apply_channel_motifs: 2. nets_t={:?}", nets_t.size());
-    nets_t.set_requires_grad(false)
+    nets_t.set_requires_grad(false) //TODO run all with no grad
 }
 
 fn add_net_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Tensor) {
@@ -461,7 +457,7 @@ fn add_net_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Ten
 
 #[cfg(test)]
 mod tch_tests {
-    use std::fs;
+
     use std::sync::Arc;
     use std::sync::Mutex;
 

@@ -176,7 +176,7 @@ impl<I> LabeledTensorsLoaderDataBatch<I> where I: Iterator<Item=Box<Tensor>> + S
         let label_tensors = loaders.iter_mut().enumerate().map(|(label, loaders)| {
             let take = (items_per_label / loaders.len() as f32).ceil() as usize;
 
-            debug!("train_batch: label={:?}, self.batch_size={:?}, loaders.len()={:?}, take={:?}", label, items_per_label, loaders.len(), take);
+            debug!("train_batch: label={:?}, items_per_label={:?}, loaders.len()={:?}, take={:?}", label, items_per_label, loaders.len(), take);
 
             (label as i64, loaders.iter_mut()
                 .flat_map(|loader| loader.take(take))
@@ -191,6 +191,8 @@ impl<I> LabeledTensorsLoaderDataBatch<I> where I: Iterator<Item=Box<Tensor>> + S
 
             a
         });
+
+        debug!("train_batch: x_y.0.len={}  x_y.1.len={} x_y={:?}", x_y.0.len(), x_y.1.len(), x_y);
 
         (
             Tensor::stack(x_y.0.as_slice(), 0).totype(Float),
@@ -242,7 +244,22 @@ impl<I> ClassTensorsLoaderData<I> where I: Iterator<Item=Result<(Tensor, Tensor)
     }
 }
 #[allow(dead_code)]
-pub fn train_on_label<I>(ws_dir: impl AsRef<Path>, motif_node_params:&MotifNodeParams, label_node_params:&LabelNodeParams, params: &TrainOnLabelParams, train_labels_loaders:Vec<(i64, I)>, valid_labels_loaders: Vec<(i64, I)>, items_per_label: usize, _motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, _max_input:usize, device: &Device, label: &String) -> Result<VarStore, HbacError>
+pub fn train_on_label<I>(
+    models_path: impl AsRef<Path>,
+    motif_node_params:&MotifNodeParams,
+    label_node_params:&LabelNodeParams,
+    params: &TrainOnLabelParams,
+    train_labels_loaders:Vec<(i64, I)>,
+    valid_labels_loaders: Vec<(i64, I)>,
+    items_per_label: usize,
+    _motif_n: i64,
+    step: usize,
+    motif_batch_size: i64,
+    channels: i64,
+    _max_input:usize,
+    device: &Device,
+    label: &String
+) -> Result<VarStore, HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     let train_labels_loaders_map = train_labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
@@ -266,30 +283,16 @@ pub fn train_on_label<I>(ws_dir: impl AsRef<Path>, motif_node_params:&MotifNodeP
     debug!("train_on_eeg: keys={:?} labels_loaders={:?}", labels, train_labels_loaders_map.keys());
 
 
-    let channels_motifs_models = load_motif_models(Path::new(ws_dir.as_ref()).join("motifs"), label.clone(), channels as usize, device, &motif_node_params)?;//TODO num channels, motifs to util
-    // // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
-    // debug!("train_on_eeg: models.size={:?}", channels_motifs_models.len());
-    //
-    //
+    let channels_motifs_models = load_motif_models(Path::new(models_path.as_ref()).join("motifs"), label.clone(), channels as usize, device, &motif_node_params)?;//TODO num channels, motifs to util
+
     // //TODO remove mutexes
     let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
-    //
-    // let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
-    // if max_nets <= 0 {
-    //     return Err(HbacError::new("no motif nets found"));
-    // }
-    //
-    // let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
-    // let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+
 
     let vs_0 = nn::VarStore::new(device.clone());
 
-    // debug!("train_on_eeg: channels={:?}  max_nets={:?}  max_motif_batches={:?} motif_batch_size={:?}", channels,  max_nets,  max_motif_batches, motif_batch_size);
-    // debug!("train_on_eeg: [items_per_label as i64* 2={:?}, channels={:?}, max_nets={:?}, max_motif_batches as i64 * motif_batch_size={:?}]", items_per_label as i64* 2, channels, max_nets, max_motif_batches as i64 * motif_batch_size);
 
     let apply_motifs = |t:Box<Tensor>| Box::new(apply_label_motifs(motif_node_params.num_features, step, &t, &motif_nets, label_node_params.motif_batch_size, label_node_params.max_motif_batches as usize, device));
-
-    // let node_params = LabelNodeParams::new(channels, max_nets, label_node_params.motif_batch_size, label_node_params.max_motif_batches);
 
     train(
         device,
@@ -313,6 +316,7 @@ pub fn train_on_label<I>(ws_dir: impl AsRef<Path>, motif_node_params:&MotifNodeP
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
 
         |pred: &Tensor, target: &Tensor| {
+            debug!("train_on_eeg: pred.size={:?}", pred.size());
             let pred_y = pred.squeeze();
             //pred.i((.., 0, 0));
             debug!("train_on_eeg: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
@@ -335,8 +339,10 @@ pub fn train_on_label<I>(ws_dir: impl AsRef<Path>, motif_node_params:&MotifNodeP
     Ok(vs_0)
 }
 
+//t - input tensors batch size x channels x nets x motif batches x motif match size
 fn view_for_label_model(t: Tensor, channels: i64, max_nets: i64, motif_batch_size: i64, max_motif_batches: usize) -> Tensor {
     assert!(t.size().len()==5, "view_for_label_model: t.size()={:?}, should be 5 dims", t.size());
+    debug!("view_for_label_model: t.size()={:?} channels={}, max_nets={}, max_motif_batches as i64 * motif_batch_size={}", t.size(), channels, max_nets, max_motif_batches as i64 * motif_batch_size);
     t.view([-1/*items_per_label as i64 * 2*/, channels, max_nets, max_motif_batches as i64 * motif_batch_size])
 }
 
@@ -646,6 +652,8 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
 
         channels_motifs_models.push(channels_motifs);
     }
+    debug!("load_motif_models: channels_motifs_models sizes={:?}", channels_motifs_models.iter().map(|n|n.len()).collect::<Vec<usize>>());
+
     Ok(channels_motifs_models)
 
 }
@@ -1106,21 +1114,22 @@ impl From<&str> for MotifsBy {
     }
 }
 
+/// returns Tensor channels x nets x batches x batch size
 fn apply_label_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
     let max_nets = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
 
-    debug!("apply_label_motifs: max_motif_nets_in_channel={:?} motif_batch_size={:?} max_motif_batches={:?}, ", max_nets, motif_batch_size, max_motif_batches);
+    debug!("apply_label_motifs: eeg_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", eeg_t.size());
 
     let channels_motifs = Tensor::stack(
         motif_nets
             .iter()
             .enumerate()
             .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches, device))
-            // .map(|t|pad_to(&t, &[max_motif_batches as i64, max_in_fold as i64]).unwrap())
             .collect::<Vec<_>>().as_slice(),
         0
     );
-    // pad_to(&channels_motifs, &[max_motif_nets_in_channel as i64, max_folds as i64, max_in_fold as i64]).unwrap()
+    debug!("apply_label_motifs: channels_motifs.size={:?}", channels_motifs.size());
+    // pad_to(&channels_motifs, &[eeg_t.size()[0], max_nets as i64, max_motif_batches as i64, motif_batch_size as i64]).unwrap()
     channels_motifs
 }
 
@@ -1452,6 +1461,7 @@ mod train_tests {
         Ok(())
     }
 
+    //5 ch
     fn make_test_eeg(input_n: i64) -> Tensor {
         Tensor::vstack(&[
             Tensor::from_slice((0..input_n).map(|i| i as f32).collect::<Vec<_>>().as_slice()),
@@ -1478,7 +1488,7 @@ mod train_tests {
         let params = TrainOnLabelParams {
             corr_run: 0,
             step: 1000,
-            window: 1000,
+            window: 100,
             cycles: 3,
             lr: 1.0e-5,
             train_labels_datasets: vec![],
@@ -1486,16 +1496,17 @@ mod train_tests {
             train_resource_group: None,
             valid_resource_group: None,
             items_per_label: 5,
-            motif_batch_size: 5
+            motif_batch_size: 7
         };
 
-        save_test_motif_model(&models_path, "seizure", "0", "00", 100)?;
-        save_test_motif_model(&models_path, "seizure", "0", "01", 100)?;
-        save_test_motif_model(&models_path, "lpd", "0", "02", 100)?;
-        save_test_motif_model(&models_path, "gpd", "0", "03", 100)?;
-        save_test_motif_model(&models_path, "lrda", "1", "10", 100)?;
-        save_test_motif_model(&models_path, "grda", "1", "11", 100)?;
-        save_test_motif_model(&models_path, "other", "2", "20", 100)?;
+        let motifs_path = models_path.join("motifs");
+        save_test_motif_model(&motifs_path, "seizure", "0", "00", 100)?;
+        save_test_motif_model(&motifs_path, "seizure", "0", "01", 100)?;
+        save_test_motif_model(&motifs_path, "lpd", "0", "02", 100)?;
+        save_test_motif_model(&motifs_path, "gpd", "0", "03", 100)?;
+        save_test_motif_model(&motifs_path, "lrda", "1", "10", 100)?;
+        save_test_motif_model(&motifs_path, "grda", "1", "11", 100)?;
+        save_test_motif_model(&motifs_path, "other", "2", "20", 100)?;
 
         let loader = |(label, kind)| {
             (label, (0..13).map(move |id| {
@@ -1503,9 +1514,9 @@ mod train_tests {
             }))
         };
         super::train_on_label(
-            &"/tmp",
+            &models_path,
             &MotifNodeParams::new(100),
-            &LabelNodeParams::new(13, 100, 100, 7),
+            &LabelNodeParams::new(5, 2, 20, 7),//max motif nets - 2 for seizure
             &params,
             vec![
                 (1, "seizure_vote".to_string()),
