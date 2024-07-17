@@ -465,7 +465,7 @@ mod tch_tests {
     use log::{debug, LevelFilter};
     use plotters::prelude::{BLACK, GREEN, RED};
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
-    use serde::{Deserialize, Serialize};
+
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
     use tch::Device::Cpu;
@@ -474,7 +474,7 @@ mod tch_tests {
     use hbac_shared::*;
     use hbac_shared::HbacError;
 
-    use crate::builder::{clc_conv1d_out, Node};
+    use crate::builder::{clc_conv1d_out};
     use crate::builder::SeqBuilder;
     use crate::utils;
     use crate::utils::*;

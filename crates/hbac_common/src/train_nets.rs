@@ -475,6 +475,7 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
     vs.freeze();
 
     debug!("infer: params.input_data={:?} models={:?}", params.input_data, models);
+    debug!("infer: labels={:?}", labels);
 
     let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|eeg| {
         let eeg = eeg.expect("file: ");
@@ -484,19 +485,20 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
 
         let t = Tensor::stack(labels.iter().map(|label|{
             match models.get(label) {
-                Some(model)=>{
+                Some(model) => {
                     let motif_batches = batch_windows(max_input, model.motif_node_params.num_features as usize, step, motif_batch_size as usize);
                     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
-
+                    let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
                     debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
 
                     let t = apply_label_motifs(model.motif_node_params.num_features, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
-                    let t_x = t.view((1, -1));
+                    let t_x = view_for_label_model(t.reshape([1, channels, max_nets, motif_batch_size, max_motif_batches as i64]), channels, max_nets, motif_batch_size, max_motif_batches);
+                    // debug!("train_final: t_x.size()={:?} max_nets={}", t_x.size(), max_nets);
                     debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
 
                     let t = model.label_model.lock().unwrap().forward(&t_x);
-                    debug!("corr_model out .size()={:?}", t.size());
+                    debug!("infer: label_model out .size()={:?}", t.size());
                     t.view(1)
                 }
                 None => {
@@ -567,18 +569,18 @@ fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: us
         if entry.file_type()?.is_file() {
             let file_name = entry.file_name();
             let file_name = file_name.to_str().expect(format!("to_str {:?}", file_name).as_str());
-            debug!("file_name={:?}", file_name);
+            debug!("load_label_and_motif_models: file_name={:?}", file_name);
 
             let Some(caps) = re.captures(file_name) else {
-                warn!("unexpected file {:?} in models {:?}", file_name, motif_models_path.as_ref());
+                warn!("load_label_and_motif_models: unexpected file {:?} in models {:?}", file_name, motif_models_path.as_ref());
                 continue
             };
 
             let label = caps["label"].parse::<String>()?;
             let corr_run = caps["corr_run"].parse::<String>()?;
-            debug!("label={} corr_run={}", label, corr_run);
+            debug!("load_label_and_motif_models: label={} corr_run={}", label, corr_run);
 
-            let mut vs = nn::VarStore::new(device.clone());
+
 
             let channels_motifs_models = load_motif_models(motif_models_path.as_ref(), label.clone(), channels, &device, &motif_node_params)?;
             assert!(channels_motifs_models.len() > 0);
@@ -588,7 +590,9 @@ fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: us
                 fs::read_to_string(&motif_models_path.as_ref().join(format!("{}_{}.json", label, corr_run)))?.as_str()
             )?;
 
+            let mut vs = nn::VarStore::new(device.clone());
             let corr_model = train_nets::label_node(&label_node_params).build_tch_module(&vs.root())?;
+            debug!("load_label_and_motif_models: entry={:?}", entry);
             vs.load(entry.path())?;
             vs.freeze();
 
@@ -1313,6 +1317,7 @@ mod train_tests {
     use crate::train_nets;
     use crate::utils::{cdt_for_dir, from};
     use crate::utils::DataBatch;
+    use crate::train_nets::FinalNodeParams;
 
     #[test]
     fn test_class_tensors_data_batch()-> Result<(), HbacError>{
@@ -1660,20 +1665,21 @@ mod train_tests {
     fn test_infer() -> Result<(), HbacError> {
         let channels = 5;
         let motif_batch_size = 7;
-        let max_input = 700;
+        let max_input = 684400;//TODO
         let motif_n = 100;
         let step = 100;
 
         let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
-        let max_motif_batches = (motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0}) as i64;
+        let max_motif_batches = 978; //(motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0}) as i64;
 
-        let models_path = Path::new("/tmp/test_train_final").join(cdt_for_dir());
+        let cdt = cdt_for_dir();
+        let models_path = Path::new("/tmp/test_train_final").join(&cdt);
 
 
-        save_test_models(&models_path, channels, max_motif_batches, 100)?;
+        save_test_models(&models_path, channels, max_motif_batches, motif_batch_size)?;
         save_test_final_model(&models_path, 6)?;
 
-        let input_path = Path::new("/tmp/test_train_final_input").join(cdt_for_dir());
+        let input_path = Path::new("/tmp/test_train_final_input").join(&cdt);
         for i in 0..10 {
             save_fake_eeg(&input_path, format!("123123213{}.parquet", i).as_str());
         }
@@ -1699,7 +1705,7 @@ mod train_tests {
             &InferParams {
                 step:100,
                 window:100,
-                motif_batch_size:100,
+                motif_batch_size,
                 models_dir: models_path.as_path().to_str().unwrap().to_string(),
                 final_model: Some(models_path.join("final.safetensors").to_str().unwrap().to_string()),
                 input_data: input_path.to_str().unwrap().to_string(),
@@ -1712,7 +1718,14 @@ mod train_tests {
             channels,
             max_input,
             &Cpu,
-            vec!["label_a".into(), "label_b".into()],
+            vec![
+                "other".into(),
+                "grda".into(),
+                "lrda".into(),
+                "gpd".into(),
+                "lpd".into(),
+                "seizure".into()
+            ],
             MotifNodeParams::new(100)
         )?;
 
@@ -1732,7 +1745,7 @@ mod train_tests {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
-        // let test_final_model = train_nets::final_node(&FinalNodeParams::new(features, features)).build_tch_module(&vs_0.root())?;
+        let _ = train_nets::final_node(&FinalNodeParams::new(features, features)).build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
         debug!("save_test_final_model: features={} vs_0.variables()={:?}", features, vs_0.variables());
@@ -1745,7 +1758,7 @@ mod train_tests {
         let label_node_params = LabelNodeParams::new(channels, max_motif_nets, max_motif_batches, motif_batch_size);
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
-        // let test_corr_model = train_nets::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
+        let _ = train_nets::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
 
 
         fs::write(models_path.join(format!("{}_0.json", label)), serde_json::to_string(&label_node_params)?)?;
