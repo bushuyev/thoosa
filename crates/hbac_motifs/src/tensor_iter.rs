@@ -295,10 +295,9 @@ mod tests {
     use std::io::Write;
     use std::time::Instant;
 
-    use log::{debug, LevelFilter};
+    use log::debug;
     use rayon::iter::ParallelIterator;
     use rayon::prelude::ParallelBridge;
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
 
     use hbac_common::utils::*;
@@ -306,10 +305,6 @@ mod tests {
 
     use crate::tensor_iter::{CacheOnThreadsStore, HashTensorLoader, LazyTensorsStore, TensorsIter, VecTensorsStore};
 
-    #[ctor::ctor]
-    fn init() {
-        hbac_shared::init_test_logging();
-    }
 
     #[test]
     fn test_one_inner(){

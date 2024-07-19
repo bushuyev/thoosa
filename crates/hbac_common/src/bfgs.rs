@@ -548,8 +548,8 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
 #[cfg(test)]
 mod opt_tests {
-    use log::{debug, LevelFilter};
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+    use log::debug;
+
     use tch::{IndexOp, Tensor};
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;

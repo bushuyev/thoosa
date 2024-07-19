@@ -49,7 +49,7 @@ mod distance_tests {
 
     #[test]
     fn test_z_normalized_euclidean() -> Result<(), HbacError> {
-        let d = z_normalized_euclidean(
+        let _d = z_normalized_euclidean(
             &Tensor::vstack(&[
                 Tensor::from_slice(&[1.,  0., 1.,  0.,  1., ]),
                 Tensor::from_slice(&[10., 0., 10., 0., 10., ]),
@@ -61,7 +61,7 @@ mod distance_tests {
             1,
         )?;
 
-
+        // TODO
 
         //mean - 0.6, std -
         //(1-2.2)/0.54772255750517 = −2,19089023

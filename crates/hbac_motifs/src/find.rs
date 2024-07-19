@@ -1212,13 +1212,12 @@ mod motif_find_tests {
     use std::time::Instant;
 
     use chrono::Utc;
-    use log::{debug, LevelFilter};
+    use log::debug;
     use plotters::prelude::*;
 
     use rayon::iter::IntoParallelRefIterator;
     use rayon::iter::ParallelIterator;
 
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
     use tch::{Device, Kind, Tensor};
     use tch::IndexOp;
     use tch::Kind::{Float, Int};

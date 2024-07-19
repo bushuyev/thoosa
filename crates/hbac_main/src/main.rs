@@ -139,6 +139,7 @@ impl RunAllParams {
         FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
     }
     #[cfg(test)]
+    #[allow(dead_code)]
     fn dummy()-> Self {
         Self {
             train_resource_group: "".to_string(),
@@ -1033,10 +1034,10 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 mod main_tests {
     use std::fs;
     use std::sync::{Arc, Mutex};
-    use ctor::ctor;
+
     use log::debug;
-    use log::LevelFilter;
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+
+
     use tch::Device::Cpu;
 
     use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
@@ -1055,6 +1056,7 @@ mod main_tests {
     }
 
     // #[test] TODO
+    #[allow(dead_code)]
     fn test_run_find_motifs() -> Result<(), HbacError>{
         let cli = Cli{
             base_path: "../../data/".to_string(),
@@ -1086,6 +1088,7 @@ mod main_tests {
     }
 
     // #[test] TODO
+    #[allow(dead_code)]
     fn test_run_select_motifs() -> Result<(), HbacError>{
         let cli = Cli{
             base_path: "../../data/".to_string(),
@@ -1119,6 +1122,7 @@ mod main_tests {
 
 
     // #[test] TODO
+    #[allow(dead_code)]
     fn test_run_train_on_label() -> Result<(), HbacError>{
         let train_eeg_params = TrainOnLabelParams::dummy(
             1000,
@@ -1160,6 +1164,7 @@ mod main_tests {
     }
 
     // #[test] TODO
+    #[allow(dead_code)]
     fn test_run_train_final() -> Result<(), HbacError>{
 
         let train_final_params = TrainFinalParams::dummy(

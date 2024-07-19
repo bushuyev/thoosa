@@ -1122,16 +1122,12 @@ impl Store for SqlStore {
 impl SqlStore {
 
     pub fn from_path<P:AsRef<Path>>(path:P) -> Result<Self, HbacError> {
-        let mut conn = Connection::open(path)?;
-
-        Self::new_(conn)?
+        Self::new_(Connection::open(path)?)?
     }
 
     // #[cfg(test)]
     pub fn in_mem() -> Result<Self, HbacError> {
-        let mut conn = Connection::open_in_memory()?;
-
-        Self::new_(conn)?
+        Self::new_(Connection::open_in_memory()?)?
     }
 
 
@@ -1379,16 +1375,6 @@ impl SqlStore {
         Ok(())
     }
 
-    fn shut_down(self)-> Result<(), HbacError> {
-        // let guard = self.conn.lock()?;
-        //
-        // guard.cache_flush()?;
-        //
-        //TODO
-        // guard.close().unwrap();
-        //
-        Ok(())
-    }
 }
 
 fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
@@ -1405,12 +1391,10 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
 #[cfg(test)]
 mod store_tests{
     use std::collections::HashMap;
-    use std::fs;
+
     use std::time::Instant;
 
     use log::debug;
-    use log::LevelFilter;
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
 
     use hbac_shared::TensorSliceIdx;
     use hbac_shared::val::Val;
@@ -1696,8 +1680,7 @@ mod store_tests{
         );
 
         store.delete_slices_without_matches(run_id)?;
-        store.shut_down();
-        // fs::remove_file(db_file)?;
+
         Ok(())
     }
 

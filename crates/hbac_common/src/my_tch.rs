@@ -462,11 +462,11 @@ mod tch_tests {
     use std::sync::Mutex;
 
     use chrono::Utc;
-    use log::{debug, LevelFilter};
+    use log::debug;
     use plotters::prelude::{BLACK, GREEN, RED};
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
     use tch::Device::Cpu;
     use tch::nn::{ConvConfig, Init, Module, OptimizerConfig, VarStore};
@@ -726,7 +726,6 @@ mod tch_tests {
         let eeg_tensors = vec![motif_0_t, motif_1_t];
 
         let eeg_tensors_len = eeg_tensors.len();
-        let nets_len = nets.len();
 
         let eeg_tensors = Arc::new(Mutex::new(eeg_tensors));
 
@@ -763,7 +762,7 @@ mod tch_tests {
 
         let net = node.build_tch_module(&vs.root())?;
 
-        let _ = net.forward(&full_batch.view(( -1)));
+        let _ = net.forward(&full_batch.view(-1));
         //TODO
 
         Ok(())
@@ -839,7 +838,7 @@ mod tch_tests {
         let mut vs_1 = nn::VarStore::new(Device::Cpu);
         for (key, t) in vs_0.variables() {
             let path = key.split(".").collect::<Vec<&str>>();
-            (vs_1.root() / path[0] ).var(&path[1], &t.size(), Init::Const(0.0));
+            let _ = (vs_1.root() / path[0] ).var(&path[1], &t.size(), Init::Const(0.0));
         }
 
         vs_1.load("/tmp/test.safetensors")?;

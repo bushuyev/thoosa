@@ -806,6 +806,7 @@ mod data_tests {
         hbac_shared::init_test_logging();
     }
 
+    #[allow(dead_code)]
     // #[test] TODO to utils
     pub fn test_load_eegs() -> Result<(), HbacError> {
         debug!("test_load_eegs");
@@ -842,6 +843,7 @@ mod data_tests {
     }
 
     // #[test]// to util
+    #[allow(dead_code)]
     pub fn test_plot_eeg_tensor() -> Result<(), HbacError> {
         // debug!("tensor={:?}", tensor.size());
 
@@ -1037,6 +1039,7 @@ mod data_tests {
     }
 
     // #[test] TODO
+    #[allow(dead_code)]
     pub fn eegs_to_tensors() -> Result<(), HbacError> {
         // for f in fs::read_dir("/media/bu/KINGSTON/gpd_fragments/3/1")? {
         //     let entry = f?;
@@ -1203,6 +1206,7 @@ mod data_tests {
     }
 
     // #[test] TODO to util
+    #[allow(dead_code)]
     fn index_eegs_to_pt() -> Result<(), HbacError> {
 
         for eeg_file in read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?.1{

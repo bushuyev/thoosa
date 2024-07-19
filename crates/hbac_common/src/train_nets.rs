@@ -1672,7 +1672,7 @@ mod train_tests {
         let motif_n = 100;
         let step = 100;
 
-        let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
+        // let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
         let max_motif_batches = 978; //(motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0}) as i64;
 
         let cdt = cdt_for_dir();

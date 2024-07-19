@@ -8,7 +8,7 @@ use std::fmt::{Debug, Display};
 use std::fmt;
 use std::hash::Hash;
 use std::ops::Mul;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::SecondsFormat;
 use log::{debug, error, LevelFilter};
 use rand::Rng;
@@ -348,11 +348,18 @@ pub fn init_test_logging() {
     if !LOG_INIT.load(Ordering::Relaxed) {
 
         LOG_INIT.store(true, Ordering::Relaxed);
-        let level = env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|v| VarError::NotPresent)).unwrap_or(LevelFilter::Debug);
 
         CombinedLogger::init(
             vec![
-                TermLogger::new(level, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+                TermLogger::new(
+                    env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|e| {
+                        println!("{}", e);
+                        VarError::NotPresent
+                    })).unwrap_or(LevelFilter::Debug),
+                    Config::default(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto
+                )
             ]
         ).unwrap_or_else(|e| {
             debug!("CombinedLogger::init failed: {:?}", e);
@@ -381,8 +388,7 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use log::{debug, LevelFilter};
-    use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+
 
     use crate::{batch_windows, group_slices, HbacError};
     use crate::pulse_v;
