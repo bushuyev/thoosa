@@ -252,12 +252,13 @@ mod tests {
     use std::task::{Context, Poll};
     use std::thread;
     use std::time::Duration;
-
-
     use log::debug;
-
-
     use crate::cache_on_threads::CacheOnThreads;
+
+    #[ctor::ctor]
+    fn init() {
+        hbac_shared::init_test_logging();
+    }
 
     #[derive(Debug)]
     struct TestEntity {

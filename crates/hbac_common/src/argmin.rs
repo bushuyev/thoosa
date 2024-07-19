@@ -365,7 +365,7 @@ mod tests {
 
             fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
                 let grad = vec![2. * p[0] - 20., 0.];
-                println!("p={:?} grad={:?}", p, grad);
+                debug!("p={:?} grad={:?}", p, grad);
                 Ok(grad)
             }
         }

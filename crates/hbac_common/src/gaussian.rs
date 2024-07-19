@@ -145,6 +145,7 @@ impl <F> GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use tch::{IndexOp, Tensor};
     use tch::Kind::Float;
 
@@ -201,9 +202,9 @@ mod tests {
         let x_test = x_t.i(test_indexes.as_slice());
 
         let (m, s) = gpf.mean_and_cov(&x_test);
-        // println!("alpha {}", gpf.alpha);
-        // println!("m {}", m);
-        // println!("s {}", s);
+        // debug!("alpha {}", gpf.alpha);
+        // debug!("m {}", m);
+        // debug!("s {}", s);
         //python/gp_test.py
         assert_eq!(
             Tensor::from_slice(&[
@@ -237,6 +238,6 @@ mod tests {
 
         q.backward();
 
-        println!("x.grad={} a.grad={} b.grad={}", x.grad(), a.grad(), b.grad());
+        debug!("x.grad={} a.grad={} b.grad={}", x.grad(), a.grad(), b.grad());
     }
 }

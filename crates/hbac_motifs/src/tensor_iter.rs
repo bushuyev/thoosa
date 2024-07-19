@@ -308,16 +308,8 @@ mod tests {
 
     #[ctor::ctor]
     fn init() {
-        match CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ){
-            Ok(_) => {}
-            Err(_) => {}
-        };
+        hbac_shared::init_test_logging();
     }
-
 
     #[test]
     fn test_one_inner(){
@@ -336,7 +328,7 @@ mod tests {
         //       x x
         //         x
         for r in r.clone() {
-            println!("r={:?}", r);
+            debug!("r={:?}", r);
         }
         assert_eq!(vec![
             "i=0 0: [0.0, 1.0] 1: [2.0, 3.0]",
@@ -368,7 +360,7 @@ mod tests {
         let r = ts_to_vec(ts);
         //
         // for r in r.clone() {
-        //     println!("r={:?}", r);
+        //     debug!("r={:?}", r);
         // }
         assert_eq!(vec![
             "i=0 0: [0.0, 1.0, 2.0] 1: [2.0, 3.0, 4.0]",
@@ -396,7 +388,7 @@ mod tests {
         let r = ts_to_vec(ts);
 
         // for r in r.clone() {
-        //     println!("r={:?}", r);
+        //     debug!("r={:?}", r);
         // }
         assert_eq!(vec![
             "i=0 0: [0.0, 1.0, 2.0] 1: [2.0, 3.0, 4.0]",
@@ -439,7 +431,7 @@ mod tests {
         let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
         let r = ts_to_vec(ts);
         // for r in r.clone() {
-        //     println!("r={:?}", r);
+        //     debug!("r={:?}", r);
         // }
         // assert_eq!(r.len(), 15);
         assert_eq!(vec![
@@ -474,7 +466,7 @@ mod tests {
         let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0, t_1]), 1, 2, 2);
         let r = ts_to_vec(ts);
         // for r in r.clone() {
-        //     println!("r={:?}", r);
+        //     debug!("r={:?}", r);
         // }
         assert_eq!(vec![
              "i=0 0: [0.0, 1.0] 1: [2.0, 3.0]",
@@ -547,7 +539,7 @@ mod tests {
         // let r = ts_to_vec(ts);
         //TODO
         ts.par_bridge().for_each(|v|{
-            println!("v={:?}", v);
+            debug!("v={:?}", v);
         });
     }
 
@@ -586,7 +578,7 @@ mod tests {
                 }
             }
         }).collect::<Vec<Tensor>>();
-        // println!("dots {}", dots.len());
+        // debug!("dots {}", dots.len());
         assert_eq!(4000, dots.len())
     }
 

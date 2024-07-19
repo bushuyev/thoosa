@@ -60,7 +60,7 @@ pub fn plot_heatmap(path:&str, _t:&Tensor)  -> Result<(), Box<dyn std::error::Er
 
     // To avoid the IO failure being ignored silently, we manually call the present function
     root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
-    println!("Result has been saved to {}", path);
+    debug!("Result has been saved to {}", path);
 
 
     Ok(())
@@ -201,7 +201,7 @@ pub fn plot_3d(){//TODO
     //
     // // To avoid the IO failure being ignored silently, we manually call the present function
     // root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
-    // println!("Result has been saved to {}", crate::bfgs::opt_tests::OUT_FILE_NAME);
+    // debug!("Result has been saved to {}", crate::bfgs::opt_tests::OUT_FILE_NAME);
 }
 
 //from tch-0.14.0/tests/test_utils.rs
@@ -291,7 +291,7 @@ pub mod tests {
 
     #[test]
     fn test_cdt_for_dir(){
-        println!("{}", super::cdt_for_dir() );
+        debug!("{}", super::cdt_for_dir() );
         assert_eq!(false, super::cdt_for_dir().contains(":"))
     }
 
@@ -344,18 +344,17 @@ pub mod tests {
     fn test_pad_to_one_dim() -> Result<(), HbacError>{
         let t = Tensor::ones([1, 3], (Float, Cpu));
 
-
-        t.pad([0, 0, 0, 1], "constant", 0.).print();
         assert_eq!(
             Tensor::vstack(&[
                 Tensor::from_slice(&[1., 1., 1.]),
                 Tensor::from_slice(&[0., 0., 0.]),
             ]),
 
-        super::pad_to(
-            &t,
-            &[2,3]
-        )?);
+            super::pad_to(
+                &t,
+                &[2,3]
+            )?
+        );
 
 
         Ok(())
@@ -391,14 +390,14 @@ pub mod tests {
         let devices_classes = devices.into_iter().cycle().zip(classes.chunks(chunk_len).into_iter()).collect::<Vec<(&str, &[&str])>>();
         let mut processed_classes:HashSet<&str> = HashSet::new();
         devices_classes.into_iter().for_each( |(device, classes_chunk)| {
-            println!("2. device={:?} class={:?}", device, classes_chunk);
+            debug!("2. device={:?} class={:?}", device, classes_chunk);
             processed_classes.extend(classes_chunk)
         });
 
         assert_eq!(processed_classes.len(), 6);
         //TODO devices
 
-        println!("processed_classes={:?}", processed_classes);
+        debug!("processed_classes={:?}", processed_classes);
 
     }
 
@@ -468,10 +467,10 @@ pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
 
     let mean_t = t.mean_dim(dim, false, Kind::Float);
     let std_t = t.std(false);
-    // println!("mean={:?}", vec_f32_from(&mean_t));
-    // println!("std_t={:?}", vec_f32_from(&std_t));
+    // debug!("mean={:?}", vec_f32_from(&mean_t));
+    // debug!("std_t={:?}", vec_f32_from(&std_t));
     let z_t = (t - mean_t) / std_t;
-    // println!("z_t={:?}", vec_f32_from(&z_t));
+    // debug!("z_t={:?}", vec_f32_from(&z_t));
     z_t
 }
 

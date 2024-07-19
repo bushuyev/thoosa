@@ -1033,7 +1033,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 mod main_tests {
     use std::fs;
     use std::sync::{Arc, Mutex};
-
+    use ctor::ctor;
     use log::debug;
     use log::LevelFilter;
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
@@ -1051,19 +1051,8 @@ mod main_tests {
 
     #[ctor::ctor]
     fn init() {
-        CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ).unwrap_or_else(|e|{
-            println!("CombinedLogger::init failed: {:?}", e);
-        });
-
-
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+        hbac_shared::init_test_logging();
     }
-
 
     // #[test] TODO
     fn test_run_find_motifs() -> Result<(), HbacError>{
@@ -1244,9 +1233,10 @@ mod main_tests {
     //
     //             store.set_motifs(run_id, channel);
     //
-    //             println!("desc={}, channel={}, run_id={}, r.len()={}", desc, channel, run_id, r.len());
+    //             debug!("desc={}, channel={}, run_id={}, r.len()={}", desc, channel, run_id, r.len());
     //         }
     //     }
     //     Ok(())
     // }
+
 }

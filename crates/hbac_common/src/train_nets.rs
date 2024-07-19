@@ -1003,7 +1003,7 @@ impl ClassTensorsDataBatch {
 
         let split_i = (x_y.len() as f32 * split) as usize;
 
-        println!("split_i={}", split_i);
+        debug!("split_i={}", split_i);
         let train = &x_y[..split_i];
         let valid = &x_y[split_i..];
         */
@@ -1346,12 +1346,12 @@ mod train_tests {
 
         let train_batch = batch.train_batch();
 
-        println!("train_batch: x={:?}", from::<Vec<f32>>(&train_batch.0.i((.., 0, 0))));
-        println!("train_batch: y={:?}", from::<Vec<f32>>(&train_batch.1));
+        debug!("train_batch: x={:?}", from::<Vec<f32>>(&train_batch.0.i((.., 0, 0))));
+        debug!("train_batch: y={:?}", from::<Vec<f32>>(&train_batch.1));
 
         assert_eq!(from::<Vec<f32>>(&train_batch.0.i((.., 0, 0))), from::<Vec<f32>>(&train_batch.1));
 
-        // println!("train_batch: x={:?}, y={:?}", train_batch.0.size(), train_batch.1.size());
+        // debug!("train_batch: x={:?}, y={:?}", train_batch.0.size(), train_batch.1.size());
 
         assert_eq!(10, train_batch.0.size()[0]);
         assert_eq!(5, train_batch.1.iter::<i64>()?.filter(|v|*v==1).count());
@@ -1409,7 +1409,7 @@ mod train_tests {
 
         let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
-        println!("max_motif_batches={:?}", max_motif_batches);
+        debug!("max_motif_batches={:?}", max_motif_batches);
 
         let channel_1_motifs = Tensor::stack(&[
                 Tensor::from_slice(&[99000., 299000., 499000., 699000., 899000., 1.099e+06, 1.299e+06, 1.499e+06, 1.699e+06, 1.899e+06]),  //ch 1 net 0 (k=1)
@@ -1418,7 +1418,7 @@ mod train_tests {
         ).totype(Float).view((2, 1, 10));
         assert_eq!(channel_1_motifs, channel_1_t);
 
-        println!("channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
+        debug!("channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
         let channels_motifs = super::apply_label_motifs(motif_n, step, &eeg_t, &motif_nets, batch_size as i64, max_motif_batches, &Cpu);
 
@@ -1455,11 +1455,11 @@ mod train_tests {
 
         let channels_motifs_0 = super::apply_label_motifs(motif_n, step, &eeg_t_0, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
 
-        println!("channels_motifs_0.size={:?}", channels_motifs_0.size());
+        debug!("channels_motifs_0.size={:?}", channels_motifs_0.size());
 
         let channels_motifs_1 = super::apply_label_motifs(motif_n, step, &eeg_t_1, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
 
-        println!("channels_motifs_1.size={:?}", channels_motifs_1.size());
+        debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
         assert_eq!(vec![3, 2, 9, 13], channels_motifs_0.size());//channel, motif nets, batches, batch size
         assert_eq!(vec![3, 2, 9, 13], channels_motifs_1.size());
@@ -1698,7 +1698,7 @@ mod train_tests {
                 Tensor::rand(600, (Float, Cpu)),
                 Tensor::rand(600, (Float, Cpu)),
             ]);
-            // println!("test_eeg_to_t:");
+            // debug!("test_eeg_to_t:");
             // t.print();
             Ok(t)
         }
@@ -1809,9 +1809,9 @@ mod train_tests {
         let t_1 = Tensor::stack(&[Tensor::from_slice(&[0., 0., 0.]), Tensor::from_slice(&[0., 0., 0.])], 0);
 
 
-        println!("size={:?} t={}", t_1.size(), super::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
+        debug!("size={:?} t={}", t_1.size(), super::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
 
-        // println!("t={}", t.is_nonzero());
+        // debug!("t={}", t.is_nonzero());
 
         // let mut vs_0 = nn::VarStore::new(Cpu);
         //
@@ -1860,7 +1860,7 @@ mod train_tests {
         // ).collect::<Vec<Tensor>>().as_slice(), 0);
         //
         //
-        // println!("t.size()={:?} elapsed={}", t.size(), t1.elapsed().as_millis());
+        // debug!("t.size()={:?} elapsed={}", t.size(), t1.elapsed().as_millis());
         // let t1 = Instant::now();
         // for c in 0..2 {
         //     for n in 0..10 {
@@ -1870,7 +1870,7 @@ mod train_tests {
         //     }
         // }
 
-        // println!("t.size()={:?} elapsed={}", t.size(), t1.elapsed().as_millis());
+        // debug!("t.size()={:?} elapsed={}", t.size(), t1.elapsed().as_millis());
 
         // t.index_put(&[Some(Tensor::from_slice(&[1])), Some(Tensor::from_slice(&[2]))], &Tensor::ones(&[3], (Double, Cpu)), false).print();
 

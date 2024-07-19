@@ -207,7 +207,7 @@ impl Expander for LinearExpander {
     }
 
 }
-
+//TODO remove Arc<Mutex around store
 pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eeg_ids_str: Vec<String>, store:Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<Vec<usize>, HbacError>
     where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
@@ -1207,12 +1207,6 @@ mod motif_find_tests {
     use std::{fs};
     use std::collections::{HashMap};
 
-
-
-
-
-
-
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -1220,8 +1214,6 @@ mod motif_find_tests {
     use chrono::Utc;
     use log::{debug, LevelFilter};
     use plotters::prelude::*;
-
-
 
     use rayon::iter::IntoParallelRefIterator;
     use rayon::iter::ParallelIterator;
@@ -1248,18 +1240,8 @@ mod motif_find_tests {
 
     #[ctor::ctor]
     fn init() {
-        match CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ){
-            Ok(_) => {}
-            Err(e) => {
-                println!("logger error: {:?}", e);
-            }
-        };
+        hbac_shared::init_test_logging();
     }
-
 
     #[test]
     pub fn test_filt(){
@@ -1342,8 +1324,8 @@ mod motif_find_tests {
         // let dot_0 = norm(&t_1_snippet).dot(&norm(&t_2_snippet));
         // let dot_1 = norm(&t_1_snippet).dot(&norm(&t_2_1_snippet));
         // //
-        // println!("dot_0={:?}", dot_0);
-        println!("sig={:?}", sig.size());
+        // debug!("dot_0={:?}", dot_0);
+        debug!("sig={:?}", sig.size());
 
         plot_series(
             vec![
@@ -1381,8 +1363,8 @@ mod motif_find_tests {
         // let dot_0 = norm(&t_1_snippet).dot(&norm(&t_2_snippet));
         // let dot_1 = norm(&t_1_snippet).dot(&norm(&t_2_1_snippet));
         // //
-        // println!("dot_0={:?}", dot_0);
-        println!("sig={:?}", sig.size());
+        // debug!("dot_0={:?}", dot_0);
+        debug!("sig={:?}", sig.size());
 
         plot_series(
             vec![
@@ -1476,15 +1458,15 @@ mod motif_find_tests {
         let slice_1 = t1.f_slice(2, Some(0), Some(3), 1)?; //1, 2, 3 - normilzed -  (0.267261, 0.534522, 0.801784)
         let slice_2 = t1.f_slice(2, Some(3), Some(6), 1)?; //4, 5, 6 - (0.455842, 0.569803, 0.683763)
 
-        println!("slice_1={:?}", slice_1.size());
-        println!("slice_2={:?}", slice_2.size());
+        debug!("slice_1={:?}", slice_1.size());
+        debug!("slice_2={:?}", slice_2.size());
 
         // let dot_t = slice_1.dot(&slice_2);
         let dot_t = slice_1.tensordot(&slice_2, 2, 2);
 
-        println!("dot_t={:?}", dot_t.size());
+        debug!("dot_t={:?}", dot_t.size());
 
-        dot_t.print();
+
 
         // let d_0 = dot_norm(2, &slice_1, &slice_2)?;
         //
@@ -1550,7 +1532,7 @@ mod motif_find_tests {
             ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
         // find_motifs();
-        println!("ok");
+        debug!("ok");
 
         Ok(())
     }
@@ -1678,7 +1660,7 @@ mod motif_find_tests {
             &channel_motif_ids,
         )?;
 
-        println!("t={:?}", channels_good_motifs);
+        debug!("t={:?}", channels_good_motifs);
 
         assert_eq!(0, channels_good_motifs[0][0].0); //motif 0 is good for channel 0
         assert_eq!(1, channels_good_motifs[1][0].0); //motif 1 is good for channel 1
@@ -1700,7 +1682,7 @@ mod motif_find_tests {
             &channel_motif_ids
         )?;
 
-        println!("2. t={:?}", labels_channels_good_motifs);
+        debug!("2. t={:?}", labels_channels_good_motifs);
         let channels_good_motifs = labels_channels_good_motifs.get(&String::from("xxx")).unwrap();
         assert_eq!(0, channels_good_motifs[0][0].0); //motif 0 is good for channel 0
         assert_eq!(1, channels_good_motifs[1][0].0); //motif 1 is good for channel 1
@@ -1724,18 +1706,18 @@ mod motif_find_tests {
             ], 50., 0.001, 0.1).as_slice()
         );
 
-        println!("sig_0_1.size = {:?}", sig_0_1.size());
-        println!("pulse.size = {:?}", pulse.size());
+        debug!("sig_0_1.size = {:?}", sig_0_1.size());
+        debug!("pulse.size = {:?}", pulse.size());
 
         let sig_1_c = sig_0_1.copy();
 
         let conv_t = sig_1_c.view([1, -1]).conv1d(&pulse.view([1, 1, -1]), None::<Tensor>, 1, 0, 1, 1);
 
-        println!("conv_t.size = {:?}", conv_t.size());
+        debug!("conv_t.size = {:?}", conv_t.size());
 
         let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
 
-        println!("pool.size = {:?}", pool_t.size());
+        debug!("pool.size = {:?}", pool_t.size());
 
         let x = lin_t(n);
 
@@ -1762,7 +1744,7 @@ mod motif_find_tests {
 
 
         let gauss = gauss_t(0., 10., 100).totype(Float);
-        println!("t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size());
+        debug!("t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size());
 
 
         let range = 1000..2000;
@@ -1772,7 +1754,7 @@ mod motif_find_tests {
         let pulse_x_m = pulse_x.median().view([1]).f_double_value(&[0])?;
         let t_0_m = t_0.median().view([1]).f_double_value(&[0])?;
 
-        println!("pulse_x_m={:?} t_0_m={}", pulse_x_m, t_0_m);
+        debug!("pulse_x_m={:?} t_0_m={}", pulse_x_m, t_0_m);
 
         // let pulse_x = z_norm(&pulse_x, 0); //Tensor::from_slice((0..1000).map(|_|t_0_m).collect::<Vec<f64>>().as_slice()).totype(Float).view([1, 1000]);
         let pulse_x = pulse_x.view([1, -1]).conv1d(&gauss.view([1, 1, -1]), None::<Tensor>, 1, 50, 1, 1); //Tensor::from_slice((0..1000).map(|_|t_0_m).collect::<Vec<f64>>().as_slice()).totype(Float).view([1, 1000]);
@@ -1780,10 +1762,10 @@ mod motif_find_tests {
 
         let sig  = t_1;
 
-        println!("pulse.size = {:?} pulse_x.size()={:?}", pulse.size(), pulse_x.size());
+        debug!("pulse.size = {:?} pulse_x.size()={:?}", pulse.size(), pulse_x.size());
 
 
-        println!("sig.size = {:?}", sig.size());
+        debug!("sig.size = {:?}", sig.size());
 
         let _sig_n = z_norm(&sig.copy(), 1);
 
@@ -1800,7 +1782,7 @@ mod motif_find_tests {
         //     Tensor::zeros([1, d_conv + 1], (Kind::Float, Device::Cpu))
         // ]);
         // let deconv_t = conv_t.conv_transpose1d(&)
-        // println!("conv_t.size = {:?} conv_t_p.size={:?}", conv_t.size(), conv_t_p.size());
+        // debug!("conv_t.size = {:?} conv_t_p.size={:?}", conv_t.size(), conv_t_p.size());
 
         let conv_diff_t = conv_t - conv_x_t;
 
@@ -1808,7 +1790,7 @@ mod motif_find_tests {
 
         // let pool_t = conv_t.max_pool1d(10, 1, 0, 1, false);
 
-        // println!("pool.size = {:?}", pool_t.size());
+        // debug!("pool.size = {:?}", pool_t.size());
 
         let x = lin_t(n);
 
@@ -2028,9 +2010,7 @@ mod motif_find_tests {
     #[test]
     pub fn test_find_motifs_euc_with_smooth_kernel() -> Result<(), HbacError> {
         let eeg_id_series =  vec!["1111".into(), "2222".into(), "3333".into()];
-        let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
-        debug!("store_path={}", store_path);
-        let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
+        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -2107,7 +2087,8 @@ mod motif_find_tests {
         let eeg_id_series =  vec!["0000".into(), "1111".into(), "2222".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
-        let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
+        // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
+        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2178,7 +2159,8 @@ mod motif_find_tests {
     pub fn test_find_motifs_euc_wrong_index() -> Result<(), HbacError> {
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
-        let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
+        // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
+        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2242,11 +2224,11 @@ mod motif_find_tests {
         // let sig_2 = gauss_t(600., 100., n); //.flip([0]);
 
         let (sig_0_1, sig_0_2) = two_sigs(1_000);
-        println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_0_1.size(), sig_0_2.size());
+        debug!("sig_1.size()={:?}, sig_2.size()={:?}", sig_0_1.size(), sig_0_2.size());
         let _sig_0_c = sig_0_1.copy();
 
         let t_0 = Tensor::vstack(&[sig_0_1, sig_0_2]);
-        println!("t.size={:?}", t_0.size());
+        debug!("t.size={:?}", t_0.size());
 
         let (sig_1_1, sig_1_2) = two_sigs(1_000);
         let _sig_1_c = sig_1_1.copy();
@@ -2327,8 +2309,8 @@ mod motif_find_tests {
 
         let c = t_0.conv1d(&t_1, None::<Tensor>, 1, 3, 1, 2);
 
-        println!("t_0={:?} t_1={:?} c={:?}", t_0.size(), t_1.size(), c.size());
-        c.print();
+        debug!("t_0={:?} t_1={:?} c={:?}", t_0.size(), t_1.size(), c.size());
+
 
         assert_eq!(
             c,
@@ -2362,12 +2344,12 @@ mod motif_find_tests {
             ])
         ]).view((4, 1, 3));
 
-        println!("t_0={:?} t_1={:?}", t_0.size(), t_1.size());
+        debug!("t_0={:?} t_1={:?}", t_0.size(), t_1.size());
 
         let c = t_0.conv1d(&t_1, None::<Tensor>, 1, 3, 1, 2);
 
-        println!("c={:?}", c.size());
-        c.print();
+        debug!("c={:?}", c.size());
+
 
         assert_eq!(
             c,
@@ -2381,8 +2363,8 @@ mod motif_find_tests {
 
         let c_by_channel = c.view((2, -1, 10));
 
-        println!("c={:?}", c_by_channel.size());
-        c_by_channel.print();
+        debug!("c={:?}", c_by_channel.size());
+
 
         //https://www.rapidtables.com/calc/math/convolution-calculator.html
         //1 1 1 0 0 0 * 1 1 1 = 1  2  3  2  1 0 0 0
@@ -2484,7 +2466,7 @@ mod motif_find_tests {
             vec![10,20,30,40],
         ])?;
 
-        tensor.print();
+
 
         assert_eq!(matches_t, tensor);
 
@@ -2499,7 +2481,7 @@ mod motif_find_tests {
 
         vec![1., 2., 3.].par_iter().for_each(|v|{
             unsafe {
-                println!("v={}", v * Tensor::clone_from_ptr(ptr as *mut C_tensor).double_value(&[1]));
+                debug!("v={}", v * Tensor::clone_from_ptr(ptr as *mut C_tensor).double_value(&[1]));
             }
         });
     }
@@ -2510,7 +2492,7 @@ mod motif_find_tests {
 
         vec![1., 2., 3.].par_iter().for_each(|v|{
             if let Ok(lock) = t.lock() {
-                println!("v={}", v * lock.double_value(&[1]));
+                debug!("v={}", v * lock.double_value(&[1]));
             }
 
         });
@@ -2555,14 +2537,14 @@ mod motif_find_tests {
         // let mut c = 0;
         //
         // for (c_i, chunk) in v_w_0.iter().enumerate(){
-        //     println!("c_i={} chunk={:?}", c_i, chunk);
+        //     debug!("c_i={} chunk={:?}", c_i, chunk);
         // }
         //
         //
         // // let mut vw_0_windows = v_w_0.windows(2); //.collect::<Vec<Windows<'_, &[&[&str]]>>>();
         // // // vw_1_windows.  //push(vw_1_windows.last().unwrap().clone());
         // // for (w_i, window) in vw_0_windows.clone().enumerate(){
-        // //     println!("w_i={} window={:?}", w_i, window);
+        // //     debug!("w_i={} window={:?}", w_i, window);
         // // }
         // //
         // //
@@ -2573,13 +2555,13 @@ mod motif_find_tests {
         //
         // v_w_0_i.enumerate().for_each(|(i_0, vw0_01)|{
         //     // let vw0 = vw0_01[0];
-        //     println!("chunk={:?}", next.replace(vw0_01));
+        //     debug!("chunk={:?}", next.replace(vw0_01));
         //
         //
         //
         //     // FirstLastRepeat::new(vw_1_windows.clone(), Repeat::Last).enumerate().skip(i_0).for_each(|(i_1, vw1_01)| {
         //     //     let vw1 = vw1_01[0];
-        //     //     println!("vw1={:?} vw2={:?}", vw0, vw1);
+        //     //     debug!("vw1={:?} vw2={:?}", vw0, vw1);
         //     //
         //     //     vw0.chunks(2).flat_map(|v|v.into_iter()).for_each(|w1|{
         //     //         w1.chars().collect::<Vec<char>>().chunks(2).for_each(|c1|{
@@ -2587,7 +2569,7 @@ mod motif_find_tests {
         //     //             vw1.chunks(2).flat_map(|v|v.into_iter()).for_each(|w2|{
         //     //
         //     //                 w2.chars().collect::<Vec<char>>().chunks(2).for_each(|c2| {
-        //     //                     println!("c1={:?} c2={:?}", c1.into_iter().collect::<String>(), c2.into_iter().collect::<String>());
+        //     //                     debug!("c1={:?} c2={:?}", c1.into_iter().collect::<String>(), c2.into_iter().collect::<String>());
         //     //                     c+=1;
         //     //                 });
         //     //             })
@@ -2597,9 +2579,9 @@ mod motif_find_tests {
         //     // });
         // });
         //
-        // println!("chunk={:?}", next.take());
+        // debug!("chunk={:?}", next.take());
         //
-        // println!("c={}", c);
+        // debug!("c={}", c);
     }
 
 }

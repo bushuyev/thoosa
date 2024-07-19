@@ -32,16 +32,16 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
 
     let k = kernel_rbf(&x_train, &x_train, l, sigma_f);
     let k_size = k.size();
-    // println!("posterior_ch: k.size()={:?}", k.size());
+    // debug!("posterior_ch: k.size()={:?}", k.size());
     let k = k + Tensor::zeros(k_size, FLOAT_CPU).fill_diagonal_(sigma_y.powi(2) as f64, false);
 
-    // println!("posterior_ch: k={:?}", vec_f32_from(&k));
+    // debug!("posterior_ch: k={:?}", vec_f32_from(&k));
 
     // let k_size = k.size();
 
     let chol_t = cholesky_with_jitter(&k)?;
 
-    // println!("y_train.size()={:?}, chol_t={:?}", y_train.size(), chol_t.size());
+    // debug!("y_train.size()={:?}, chol_t={:?}", y_train.size(), chol_t.size());
 
     //from sklearn's GaussianProcessRegressor
     let alpha = y_train.view((y_train.size()[0], chol_t.size()[0], 1)).cholesky_solve(&chol_t, false);
@@ -52,14 +52,14 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
 
     let k_trans_t = k_trans.transpose(0, 1);
 
-    // println!("k_trans_T:");
+    // debug!("k_trans_T:");
     // k_trans_T.print();
 
     let v = k_trans_t.triangular_solve(&chol_t, false, false, false);
-    // println!("v.0:");
+    // debug!("v.0:");
     // v.0.print();
 
-    // println!("v.v:");
+    // debug!("v.v:");
     // v.1.print();
 
     // let y_cov = kernel(x_s, x_s, l, sigma_f) - v.0.transpose(0, 1).matmul(&v.0);
@@ -67,7 +67,7 @@ fn posterior(x_s:&Tensor, x_train:&Tensor, y_train:&Tensor, l:&Tensor, sigma_f:&
 
     // y_cov.print();
 
-    // println!("y_mean={:?}", y_mean.size());
+    // debug!("y_mean={:?}", y_mean.size());
 
     Ok((y_mean.view((-1, y_cov.size()[1])).transpose(0,1), y_cov))
 }
@@ -191,20 +191,6 @@ mod opt_tests {
     use crate::utils::from;
     use crate::utils::lin_t;
 
-    // #[ctor::ctor]
-    // fn init() {
-    //     CombinedLogger::init(
-    //         vec![
-    //             TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-    //         ]
-    //     ).unwrap_or_else(|e|{
-    //         println!("CombinedLogger::init failed: {:?}", e);
-    //     });
-    //
-    //
-    //     std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-    //     std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    // }
 
     #[allow(dead_code)]
     fn sig_1_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
@@ -322,19 +308,19 @@ mod opt_tests {
             4., 10.
         ]).view((-1, 2));
 
-        x_train.print();
+
 
         let y_train = Tensor::from_slice(&[2., 20., 2., 20.]).view((1, -1));
         let x_pred = x_train.i((vec![1i64, 3i64], ..));
 
-        x_pred.print();
+
 
         let Ok((mu_s, cov_s)) = super::posterior(&x_pred, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
 
-        println!("mu_s={mu_s}");
-        println!("cov_s={cov_s}");
+        debug!("mu_s={mu_s}");
+        debug!("cov_s={cov_s}");
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -373,8 +359,7 @@ mod opt_tests {
             panic!("posterior")
         };
 
-        mu_s.print();
-        cov_s.print();
+
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -415,7 +400,7 @@ mod opt_tests {
 
         // let v = super::nll(&x_train, &y_train, &Tensor::from_slice(&[-10., 1.])).expect("nll");
         //
-        // println!("v={:.2}", v);
+        // debug!("v={:.2}", v);
         //
         // let x = (-100..100).map(|x|x as f32/10.).collect::<Vec<f32>>();
         // plot_series(
@@ -447,7 +432,7 @@ mod opt_tests {
         ]).view((-1, 1));
 
         debug!("x_train={:?}", x_train.size());
-        y_train.print();
+
 
         struct MyProblem {
             x_train:Tensor,
@@ -503,7 +488,7 @@ mod opt_tests {
         ]).view((-1, 1));
 
         debug!("x_train={:?}", x_train.size());
-        y_train.print();
+
 
         // let theta = Tensor::ones([2], FLOAT_CPU);
 
@@ -560,7 +545,7 @@ mod opt_tests {
         let gpf = gp.fit(&x_train, &y_train)?;
 
 
-        // println!("gpf")
+        // debug!("gpf")
         let gpf_ref = &gpf;
         let y_train_min = y_train.min();
         let next = run_lbfgs(
@@ -630,28 +615,28 @@ mod opt_tests {
             // X.f_add_scalar(std::f64::consts::PI/2.).unwrap().sin().multiply_scalar(10).view((-1, 1)).totype(Float)
         ], 0).view((1, -1)); //.transpose(0,1);
 
-        println!("y_train_full={:?}", y_train_full.size());
+        debug!("y_train_full={:?}", y_train_full.size());
 
         let train_indexes = (0..n).step_by(10).collect::<Vec<i64>>();
         let train_indexes = train_indexes.as_slice();
         let x_train = x_t.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
-        println!("x_train={:?} y_train={:?}", x_train.size(), y_train.size());
+        debug!("x_train={:?} y_train={:?}", x_train.size(), y_train.size());
 
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
-        // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
+        // debug!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
 
-        println!("X={:?}", from::<Vec<f32>>(&x_t.view(-1)));
-        println!("x_train={:?}", from::<Vec<f32>>(&x_train.view(-1)));
-        y_train.print();
-        println!("y_train={:?}", from::<Vec<f32>>(&y_train.view(-1)));
+        debug!("X={:?}", from::<Vec<f32>>(&x_t.view(-1)));
+        debug!("x_train={:?}", from::<Vec<f32>>(&x_train.view(-1)));
+
+        debug!("y_train={:?}", from::<Vec<f32>>(&y_train.view(-1)));
 
 
         let Ok((mu_s, cov_s)) = super::posterior(&x_t, &x_train, &y_train, &Tensor::from_slice(&[1.0]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
-        println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
+        debug!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
         let x_moved = x_train.view((-1, 1));
         let y_moved = y_train.view((-1, 1));
         let l_sigma = run_lbfgs(
@@ -664,19 +649,19 @@ mod opt_tests {
 
         let l_sigma = l_sigma.state().get_best_param().expect("best_param");
 
-        println!("l_sigma={:?} - {} / {} ", l_sigma, l_sigma.i(0).double_value(&[]), l_sigma.i(1).double_value(&[]));
+        debug!("l_sigma={:?} - {} / {} ", l_sigma, l_sigma.i(0).double_value(&[]), l_sigma.i(1).double_value(&[]));
 
         // let Ok((mu_s_opt, cov_s_opt)) = super::posterior_ch(&X, &x_train, &y_train, 1.6409202082368064, 8.504394038804222, 1e-8) else {
         let Ok((mu_s_opt, cov_s_opt)) = super::posterior(&x_t, &x_train, &y_train, &l_sigma.i(0), &l_sigma.i(1), 1e-8) else {
             panic!()
         };
-        println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
+        debug!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
 
 
         let norm = Normal::new(0., 1.).unwrap();
         let rng = thread_rng();
         let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
-        println!("sig_t.size={:?}", sig_t.size());
+        debug!("sig_t.size={:?}", sig_t.size());
 
 
         let sig_chol = apply_post(&mu_s, &cov_s, &sig_t);
@@ -727,14 +712,14 @@ mod opt_tests {
 
     fn apply_post(mu_s: &Tensor, cov_s: &Tensor, sig_t: &Tensor) -> Tensor {
         let chol_or_cov = super::cholesky_with_jitter(&cov_s).unwrap();
-        println!("2. chol_or_cov={:?}", chol_or_cov.size());
+        debug!("2. chol_or_cov={:?}", chol_or_cov.size());
 
 
         let sig_t_with_cov = chol_or_cov.matmul(&sig_t);
-        println!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), sig_t_with_cov.size());
+        debug!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), sig_t_with_cov.size());
 
         let sig_chol = (mu_s + sig_t_with_cov).transpose(0, 1);
-        println!("sig_chol.size={:?}", sig_chol.size());
+        debug!("sig_chol.size={:?}", sig_chol.size());
         sig_chol
     }
 
@@ -771,15 +756,15 @@ mod opt_tests {
         let x_train = x.i(train_indexes);
         let y_train = y_train_full.i((.., train_indexes));
 
-        println!("x_train.size()={:?}, y_train.size()={:?}", x_train.size(), y_train.size());
+        debug!("x_train.size()={:?}, y_train.size()={:?}", x_train.size(), y_train.size());
 
 
         // let (mu_s, cov_s) = super::posterior(&X, &x_train, &y_train, 1., 1., 1e-8);
-        // println!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
+        // debug!("1. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
         let Ok((mu_s, cov_s)) = super::posterior(&x, &x_train, &y_train, &Tensor::from_slice(&[0.1]).totype(Float), &Tensor::from_slice(&[1.0]).totype(Float), 1e-8) else {
             panic!()
         };
-        println!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
+        debug!("2. mu_s.size()={:?}, cov_s.size()={:?}", mu_s.size(), cov_s.size());
         // let cov_s = cov_s.round_decimals(2);
         // cov_s.print();
 
@@ -787,18 +772,18 @@ mod opt_tests {
         let norm = Normal::new(0., 1.).unwrap();
         let rng = thread_rng();
         let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
-        println!("sig_t.size={:?}", sig_t.size());
+        debug!("sig_t.size={:?}", sig_t.size());
 
 
         let chol_or_cov = super::cholesky_with_jitter(&cov_s).unwrap();
-        println!("2. chol_or_cov={:?}", chol_or_cov.size());
+        debug!("2. chol_or_cov={:?}", chol_or_cov.size());
 
 
         let sig_t_with_cov = chol_or_cov.matmul(&sig_t);
-        println!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), sig_t_with_cov.size());
+        debug!("mu_s.size()={:?}, chol.size()={:?}", mu_s.size(), sig_t_with_cov.size());
 
         let sig_chol = (&mu_s + sig_t_with_cov).transpose(0, 1);
-        println!("sig_chol.size={:?}", sig_chol.size());
+        debug!("sig_chol.size={:?}", sig_chol.size());
 
         plot_series(
             vec![
@@ -857,12 +842,4 @@ mod opt_tests {
         ).unwrap();
     }
 
-    #[test]
-    fn test_test(){
-        // let t = Tensor::from_slice(&[0.123, 1.123, 2.123]).round_decimals(2);
-
-        let t = Tensor::zeros(&[3, 3], FLOAT_CPU).fill_diagonal_(1, false);
-
-        t.print();
-    }
 }

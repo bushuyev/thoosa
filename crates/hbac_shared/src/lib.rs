@@ -8,10 +8,15 @@ use std::fmt::{Debug, Display};
 use std::fmt;
 use std::hash::Hash;
 use std::ops::Mul;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use chrono::SecondsFormat;
-use log::{debug, error};
+use log::{debug, error, LevelFilter};
 use rand::Rng;
 use regex::Regex;
+use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+use std::env;
+use std::env::VarError;
+use std::str::FromStr;
 
 pub mod repeat_iter;
 pub mod val;
@@ -335,6 +340,31 @@ pub fn cdt_for_dir() ->String {//TODO move to shared
     cdt().replace(':', "_").replace('+', "_")
 }
 
+pub static LOG_INIT: AtomicBool = AtomicBool::new(false);
+
+// #[cfg(test)]
+pub fn init_test_logging() {
+
+    if !LOG_INIT.load(Ordering::Relaxed) {
+
+        LOG_INIT.store(true, Ordering::Relaxed);
+        let level = env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|v| VarError::NotPresent)).unwrap_or(LevelFilter::Debug);
+
+        CombinedLogger::init(
+            vec![
+                TermLogger::new(level, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
+            ]
+        ).unwrap_or_else(|e| {
+            debug!("CombinedLogger::init failed: {:?}", e);
+        });
+
+
+        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
+        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+    }
+}
+
+
 #[cfg(test)]
 mod shared_tests {
     /*
@@ -351,7 +381,7 @@ mod shared_tests {
    group 3: x, y
    */
 
-    use log::LevelFilter;
+    use log::{debug, LevelFilter};
     use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
 
     use crate::{batch_windows, group_slices, HbacError};
@@ -359,17 +389,7 @@ mod shared_tests {
 
     #[ctor::ctor]
     fn init() {
-        CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ).unwrap_or_else(|e|{
-            println!("CombinedLogger::init failed: {:?}", e);
-        });
-
-
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+        super::init_test_logging();
     }
 
     #[test]

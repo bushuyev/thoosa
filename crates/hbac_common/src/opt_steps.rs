@@ -5,6 +5,7 @@ use tch::nn::Module;
 use tch::Tensor;
 
 use hbac_shared::val::Val;
+use log::debug;
 
 struct EnvParams {
 
@@ -77,7 +78,7 @@ impl Apply for ApplyNet {
     fn apply(&self, t: Box<Tensor>) -> Box<Tensor> {
         let out = self.net.forward(&t);
 
-        println!("apply 1 in size={:?}  out size()={:?}", t.size(), out.size());
+        debug!("apply 1 in size={:?}  out size()={:?}", t.size(), out.size());
 
         Box::new(out)
     }
@@ -134,7 +135,7 @@ impl OptStep {
     }
 
     fn search(&self, opt_props:&HashMap<String, Range<Val>>, prev_run_ids_op: Option<Vec<RunIdsStack>>, _env_params: &EnvParams, applies_map:&mut HashMap<usize, Box<dyn Apply>>, tries: usize) -> Vec<RunIdsStack> {
-        println!("search: prev_run_ids_op={:?}", prev_run_ids_op);
+        debug!("search: prev_run_ids_op={:?}", prev_run_ids_op);
 
 
         let mut best_run_ids = vec![];
@@ -153,7 +154,7 @@ impl OptStep {
 
             let best_run_id = (self.build)(&try_props, &self.data_keys, &ApplyComp::from_map(best_prev_run_ids, applies_map) as &dyn Apply);
 
-            println!("applies_map.insert: best_run_id={}  best_prev_run_ids={:?} try_props={:?}", best_run_id, best_prev_run_ids, try_props);
+            debug!("applies_map.insert: best_run_id={}  best_prev_run_ids={:?} try_props={:?}", best_run_id, best_prev_run_ids, try_props);
             applies_map.insert(best_run_id, self.apply_fn.as_ref().map(|a|a(&try_props)).expect("apply_fn"));
 
             best_run_ids.push(RunIdsStack::new(best_run_id, best_prev_run_ids))
@@ -188,6 +189,7 @@ mod tests {
     use crate::opt_steps::RunIdsStack;
     use crate::utils::DataBatch;
     use crate::utils::train;
+    use log::debug;
 
     #[test]
     fn test_two_nets(){
@@ -205,7 +207,7 @@ mod tests {
             OptStep::new(
                 "net1",
                 Box::new(move |params: &HashMap<String, Val>, data_keys: &Vec<String>, _apply: &dyn Apply| {
-                    println!("params={:?} data_keys={:?}", params, data_keys);
+                    debug!("params={:?} data_keys={:?}", params, data_keys);
                     let mut vs = VarStore::new(Cpu);
                     let out_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
 
@@ -232,7 +234,7 @@ mod tests {
                     Box::new(t.shallow_clone())
                 },
                 Some(Box::new(|params: &HashMap<String, Val>| {
-                    println!("new apply 1, params={:?}", params);
+                    debug!("new apply 1, params={:?}", params);
 
                     let mut vs = VarStore::new(Cpu);
                     let out_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
@@ -243,7 +245,7 @@ mod tests {
             OptStep::new(
                 "net2",
                 Box::new(move |params: &HashMap<String, Val>, data_keys: &Vec<String>, apply: &dyn Apply| {
-                    println!("params={:?} data_keys={:?}", params, data_keys);
+                    debug!("params={:?} data_keys={:?}", params, data_keys);
                     let mut vs = VarStore::new(Cpu);
                     let in_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
                     let out_features = params.get("window_2").expect("window_2").as_i64().expect("window_2 as i64");
@@ -271,7 +273,7 @@ mod tests {
                     Box::new(t.shallow_clone())
                 },
                 Some(Box::new(|params: &HashMap<String, Val>| {
-                    println!("new apply2, params={:?}", params);
+                    debug!("new apply2, params={:?}", params);
 
                     let mut vs = VarStore::new(Cpu);
                     let in_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
@@ -295,19 +297,19 @@ mod tests {
         ]);
 
         for (step_i, step) in steps.into_iter().enumerate() {
-            println!("step_i={}", step_i);
+            debug!("step_i={}", step_i);
             let next_run_ids = step.search(&opt_props, run_ids.take(), &env_params, &mut applies_map, 3);
             run_ids.replace(next_run_ids);
 
         }
 
-        println!("test: run_ids={:?}", run_ids);
+        debug!("test: run_ids={:?}", run_ids);
 
         let pred_0 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(0)), &mut applies_map).apply(Box::new(Tensor::rand(100, FLOAT_CPU)));
         let pred_1 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(1)), &mut applies_map).apply(Box::new(Tensor::rand(100, FLOAT_CPU)));
         let pred_2 = ApplyComp::from_map(run_ids.as_ref().and_then(|v|v.get(2)), &mut applies_map).apply(Box::new(Tensor::rand(100, FLOAT_CPU)));
 
-        println!("test: pred_0.size()={:?}  pred_1.size()={:?}, pred_2.size()={:?}", pred_0.size(), pred_1.size(), pred_2.size());
+        debug!("test: pred_0.size()={:?}  pred_1.size()={:?}, pred_2.size()={:?}", pred_0.size(), pred_1.size(), pred_2.size());
 
         assert_eq!(vec![10], pred_0.size());
         assert_eq!(vec![20], pred_1.size());
@@ -316,7 +318,7 @@ mod tests {
 
     fn build_net(_params: &HashMap<String, Val>, vs: &mut VarStore, in_features: i64, out_features: i64) -> Box<dyn Module> {
 
-        println!("build_net_1: in_features={} out_features={}", in_features, out_features);
+        debug!("build_net_1: in_features={} out_features={}", in_features, out_features);
 
         SeqBuilder::new(in_features)
             .linear_s(out_features)

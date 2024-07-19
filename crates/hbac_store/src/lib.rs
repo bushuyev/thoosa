@@ -1111,7 +1111,7 @@ impl Store for SqlStore {
 
         let descr:String = t.query_row("SELECT descr FROM corrs_run WHERE id=?", [corr_run_id], |row| row.get(0))?;
 
-        println!("descr={:?}", descr);
+        debug!("descr={:?}", descr);
 
         parse_corr_labels(descr.as_str())
 
@@ -1127,7 +1127,7 @@ impl SqlStore {
         Self::new_(conn)?
     }
 
-    #[cfg(test)]
+    // #[cfg(test)]
     pub fn in_mem() -> Result<Self, HbacError> {
         let mut conn = Connection::open_in_memory()?;
 
@@ -1420,16 +1420,7 @@ mod store_tests{
 
     #[ctor::ctor]
     fn init() {
-        match CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ){
-            Ok(_) => {}
-            Err(e) => {
-                println!("logger error: {:?}", e);
-            }
-        };
+        hbac_shared::init_test_logging();
     }
 
     #[test]
@@ -1529,7 +1520,7 @@ mod store_tests{
 
         keys_labels_p.sort_by(|a, b|a.0.cmp(&b.0));
 
-        println!("keys_labels_p={:?}", keys_labels_p);
+        debug!("keys_labels_p={:?}", keys_labels_p);
 
         assert_eq!(
             vec![
@@ -1575,7 +1566,7 @@ mod store_tests{
 
         let loaded_params = store.list_run_params(run_id, None)?;
 
-        println!("loaded_params={:?}", loaded_params);
+        debug!("loaded_params={:?}", loaded_params);
 
 
         assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
@@ -1584,7 +1575,7 @@ mod store_tests{
 
         let loaded_params_aaa = store.list_run_params(run_id, Some("aaa"))?;
 
-        println!("loaded_params_aaa={:?}", loaded_params_aaa);
+        debug!("loaded_params_aaa={:?}", loaded_params_aaa);
 
         store.save_slices(run_id,  7, map)?;
 
@@ -1607,7 +1598,7 @@ mod store_tests{
                 ))
             })?.map(|v|v.unwrap()).collect::<Vec<(i64, i64, String, i64, String, i64, i64)>>();
 
-            println!("rows={:?}", rows);
+            debug!("rows={:?}", rows);
 
             let m_1_first = vec![
                 (1, 7, "0".to_string(), 100, "0".to_string(), 200, 1),
@@ -1640,7 +1631,7 @@ mod store_tests{
         };
 
         let map = store.list_motifs_slices(run_id)?;
-        println!("map={:?}", map);
+        debug!("map={:?}", map);
 
         assert_eq!(4, map.len());
         assert_eq!(3, map.get(&"0".to_string()).unwrap().len());
@@ -1662,7 +1653,7 @@ mod store_tests{
 
         let motifs = store.list_corr_motifs(corr_id)?;
 
-        println!("motifs: {:?}", motifs);
+        debug!("motifs: {:?}", motifs);
 
         assert_eq!(1, motifs[7][0].0);
         assert_eq!(2, motifs[7][1].0);
@@ -1697,7 +1688,7 @@ mod store_tests{
             ], slices);
         }
 
-        // println!("corrs_descr={:?}", store.corrs_descr(corr_id)?);
+        // debug!("corrs_descr={:?}", store.corrs_descr(corr_id)?);
 
         assert_eq!(
             vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
@@ -1716,16 +1707,7 @@ mod store_tests{
 
         let conds = super::conds_to_q(&input);
         assert_eq!("(l.label='aaa' and p<?) or (l.label='bbb' and p>?)", conds);
-        println!("conds={:?}", conds);
+
     }
 
-
-    #[test]
-    fn test_test(){
-        //sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
-        // println!("{:?}", (0..10).map(|i|format!("{:0>10}", i)).collect::<Vec<String>>());
-
-        // println!("{}", 16usize.ilog2());
-        println!("{:?}", (0..110).step_by(20).collect::<Vec<usize>>());
-    }
 }

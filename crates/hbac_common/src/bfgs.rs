@@ -89,7 +89,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
         let mut loss = orig_loss.double_value(&[]);
 
         let mut flat_grad  = Self::_gather_flat_grad(&x);
-        flat_grad.print();
+
         debug!("flat_grad: {:?}", crate::utils::from::<Vec<f64>>(&flat_grad));
 
 
@@ -121,20 +121,17 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
                 let prev_flat_grad_ref = prev_flat_grad_op.as_ref().unwrap();
                 debug!("prev_flat_grad_ref print n_iter={}", n_iter);
-                prev_flat_grad_ref.print();
 
                 debug!("flat_grad print n_iter={}", n_iter);
-                flat_grad.print();
+
 
                 //y = flat_grad.sub(prev_flat_grad)
                 let y = flat_grad.subtract(prev_flat_grad_ref);
                 debug!("y print n_iter={}", n_iter);
-                y.print();
 
                 //s = d.mul(t)
                 let s = d.multiply_scalar(t);
                 debug!("s print n_iter={}", n_iter);
-                s.print();
 
                 // ys = y.dot(s)
                 let ys = y.matmul(&s).double_value(&[]);
@@ -195,7 +192,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                     let t = crate::utils::clone(&flat_grad);
 
                     debug!("prev_flat_grad_op 1");
-                    t.print();
+
                     prev_flat_grad_op.replace(t);
                 }
 
@@ -205,7 +202,6 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                     t.copy_(&flat_grad);
 
                     debug!("prev_flat_grad_op 2");
-                    t.print();
                     prev_flat_grad_op.replace(t);
                 }
             }
@@ -248,9 +244,6 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                 //# no line search, simply move with fixed-step
                 Self::_add_grad(&mut x, t, &d);
                 debug!("x for new flat_grad print n_iter={}", n_iter);
-                x.print();
-
-                // let orig_loss = (self.func)(&x);
 
 
                 let orig_loss = tch::with_grad(|| {
@@ -262,7 +255,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
                 flat_grad = Self::_gather_flat_grad(&x);
 
                 debug!("new flat_grad print n_iter={}", n_iter);
-                flat_grad.print();
+
 
                 opt_cond = flat_grad.abs().max().double_value(&[]) <= params.tolerance_grad
             }
@@ -272,9 +265,7 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
             if opt_cond {
                 break
             }
-            //TODO
-            debug!("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
-            x.print();
+
         }
 
 
@@ -282,22 +273,17 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
     fn _add_grad(x:&mut Tensor, t:f64, d:&Tensor) {//TODO x - make 2 dim, 1 dim for all params
         debug!("end _add_grad t={}", t);
-        x.print();
+
 
         // tch::with_grad(|| {
         let _ = x.f_add_(&d.multiply_scalar(t)).unwrap();
         // });
 
-        debug!("--------");
-        d.print();
-        debug!("--------");
-        x.print();
     }
 
     fn _gather_flat_grad(v: &Tensor) -> Tensor {//TODO x - make 2 dim, 1 dim for all params
         let grad = v.grad();
         debug!("_gather_flat_grad: grad.size()={:?}", grad.size());
-        grad.print();
         grad
     }
 
@@ -312,13 +298,13 @@ impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
         });
 
         debug!("_directional_evaluate: loss.size()={:?} device={:?} grad.size={:?}", loss.size(), loss.device(), loss.grad().size());
-        loss.print();
+
         // debug!("_directional_evaluate: loss={:?} device={:?} grad.size={:?}", crate::utils::from::<Vec<f64>>(&loss), loss.device(), loss.grad().size());
 
         let flat_grad = Self::_gather_flat_grad(&x); //.to_device(Cpu);
 
         debug!("_directional_evaluate: flat_grad={:?}", crate::utils::from::<Vec<f64>>(&flat_grad));
-        flat_grad.print();
+
 
         // self._set_param(x)
         // return loss, flat_grad
@@ -572,20 +558,6 @@ mod opt_tests {
 
     use crate::bfgs::{BFGS, BFGSParams};
 
-    #[ctor::ctor]
-    fn init() {
-        CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ).unwrap_or_else(|e|{
-            println!("CombinedLogger::init failed: {:?}", e);
-        });
-
-
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    }
 
 
 
@@ -593,14 +565,14 @@ mod opt_tests {
     fn test_bfgs_one_dim_no_line_search_3d() -> Result<(), HbacError>{
         let func = |x: &mut Tensor| {
             debug!("func: x=");
-            x.print();
+
             x.zero_grad();
 
             let v =
                 x.i(0).f_add_scalar(-11.).unwrap().pow_tensor_scalar(2) +
                 x.i(1).f_add_scalar(-22.).unwrap().pow_tensor_scalar(2);
-            debug!("func: v=");
-            v.print();
+            debug!("func: v={v}");
+
             v
         };
 
@@ -609,7 +581,6 @@ mod opt_tests {
 
         let x = Tensor::zeros([2], FLOAT_CPU).set_requires_grad(true);
         debug!("init: x={:?}", x.size());
-        x.print();
 
         bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6)));
 
@@ -624,8 +595,8 @@ mod opt_tests {
     #[test]
     fn test_bfgs_one_dim_no_line_search_4d() -> Result<(), HbacError>{
         let func = |x: &mut Tensor| {
-            debug!("func: x=");
-            x.print();
+            debug!("func: x={x}");
+
             x.zero_grad();
 
             let v =
@@ -633,7 +604,7 @@ mod opt_tests {
                 x.i(1).f_add_scalar(-2.).unwrap().pow_tensor_scalar(2) +
                 x.i(2).f_add_scalar(-3.).unwrap().pow_tensor_scalar(2);
             debug!("func: v=");
-            v.print();
+
             v
         };
 
@@ -641,7 +612,6 @@ mod opt_tests {
 
         let x = Tensor::zeros([3], FLOAT_CPU).set_requires_grad(true);
         debug!("init: x={:?}", x.size());
-        x.print();
 
         bfgs.opt(x.shallow_clone(), Some(BFGSParams::default().with_max_iter(6)));
 
@@ -660,12 +630,10 @@ mod opt_tests {
 
         let func = |x: &mut Tensor| {
             debug!("func: x=");
-            x.print();
             x.zero_grad();
 
             let v = x.f_add_scalar(-20.).unwrap().pow_tensor_scalar(2) + x.sin();
             debug!("func: v=");
-            v.print();
             v
         };
 
@@ -702,13 +670,13 @@ mod opt_tests {
     #[test]
     fn test_bfgs_one_dim_with_strong_wolfe() -> Result<(), HbacError>{
         let func = |x: &mut Tensor| {
-            debug!("func: x=");
-            x.print();
+            debug!("func: x={x}");
+
             x.zero_grad();
 
             let v = x.f_add_scalar(-20.).unwrap().pow_tensor_scalar(2) + x.sin();
-            debug!("func: v=");
-            v.print();
+            debug!("func: v={v}");
+
             v
         };
 
@@ -745,14 +713,13 @@ mod opt_tests {
     #[test]
     fn test_bfgs_one_dim_with_strong_wolfe_2() -> Result<(), HbacError> {
         let func = |x: &mut Tensor| {
-            debug!("func: x=");
-            x.print();
+            debug!("func: x={x}");
             x.zero_grad();
 
             let x_10 = x.f_add_scalar(-5.).unwrap().pow_tensor_scalar(2);
             let v = x_10.shallow_clone() + x_10.sin().multiply_scalar(2.);
-            debug!("func: v=");
-            v.print();
+            debug!("func: v={v}");
+
             v
         };
 

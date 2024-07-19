@@ -6,9 +6,8 @@ use hbac_shared::HbacError;
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tensor, HbacError>{
-    t_0.mean_dim(1, true, Kind::Float).print();
-    t_0.std_dim(1, false, true).print();
-    // z_norm_2(&t_0.copy(), 1)?.print();
+
+
     Ok(
         (
             z_norm_2(t_0, 1)? - z_norm_2(t_1, 1)?
@@ -36,12 +35,17 @@ pub fn slice_t(t_0: &Tensor, step: usize, window: i64) -> Tensor {
 
 #[cfg(test)]
 mod distance_tests {
+    use log::debug;
     use tch::IndexOp;
     use tch::Tensor;
 
     use hbac_shared::HbacError;
 
     use crate::distance::z_normalized_euclidean;
+    #[ctor::ctor]
+    fn init() {
+        hbac_shared::init_test_logging();
+    }
 
     #[test]
     fn test_z_normalized_euclidean() -> Result<(), HbacError> {
@@ -56,8 +60,8 @@ mod distance_tests {
             ]),
             1,
         )?;
-        //TODO
-        d.print();
+
+
 
         //mean - 0.6, std -
         //(1-2.2)/0.54772255750517 = −2,19089023
@@ -91,11 +95,11 @@ mod distance_tests {
 
         let step = 1;
         let window = 2;
-        println!("t_0.size()={:?}", t_0.size());
+        debug!("t_0.size()={:?}", t_0.size());
         let t_0_sliced = super::slice_t(&t_0, step, window);
 
-        println!("t_0_sliced={:?}", t_0_sliced.size());
-        // t_0_sliced.print();
+        debug!("t_0_sliced={:?}", t_0_sliced.size());
+
 
         let spliced_t = [t_1, t_2, t_3].into_iter().map(|t| super::slice_t(&t, step, window)).collect::<Vec<Tensor>>();
         let sizes = spliced_t.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
@@ -103,23 +107,23 @@ mod distance_tests {
         let tensor_ids = vec!["111", "222", "333"];
 
         let tensor_ids = sizes.iter().zip(tensor_ids.into_iter()).flat_map(|(size, id)| std::iter::repeat(id).take(*size as usize)).collect::<Vec<&str>>();
-        println!("sizes: {:?}", tensor_ids);
+        debug!("sizes: {:?}", tensor_ids);
         let t_1_2_3_sliced = Tensor::vstack(&spliced_t);
         // t_1_2_3_sliced.print();
 
-        println!("t_1_2_3_sliced={:?}", t_1_2_3_sliced.size());
+        debug!("t_1_2_3_sliced={:?}", t_1_2_3_sliced.size());
 
         for c in  0..1 {
             let tensor = t_0_sliced.i((.., c, ..)).squeeze();
             let tensor1 = t_1_2_3_sliced.i((.., c, ..)).squeeze();
-            println!("tensor={:?} tensor1.size()={:?}", tensor.size(), tensor1.size());
+            debug!("tensor={:?} tensor1.size()={:?}", tensor.size(), tensor1.size());
             let t = super::dist_d2(1, &tensor, &tensor1)?;
-            t.print();
+
             
-            println!("t={:?}", t.size());
+            debug!("t={:?}", t.size());
             for i_0 in 0..t.size()[0] {
                  for i_1 in 0..t.size()[1] {
-                     println!("t_1={:?} slice:{} v={}", tensor_ids[i_1 as usize], i_1 * window, t.double_value(&[i_0, i_1]));
+                     debug!("t_1={:?} slice:{} v={}", tensor_ids[i_1 as usize], i_1 * window, t.double_value(&[i_0, i_1]));
                  }
             }
 
@@ -129,11 +133,11 @@ mod distance_tests {
         // let slice_1_b = Tensor::stack((0..3).map(|_|slice_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0);
         //
         // let t = super::dist_d2(1, &slice_0_b, &slice_1_b)?;
-        // println!("slice_0={:?}", slice_0.size());
-        // println!("t={:?}", t.size());
+        // debug!("slice_0={:?}", slice_0.size());
+        // debug!("t={:?}", t.size());
         // t.print();
         //
-        // println!("----------------------------------------");
+        // debug!("----------------------------------------");
 
 
         Ok(())

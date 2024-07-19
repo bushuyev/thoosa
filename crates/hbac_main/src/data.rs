@@ -617,7 +617,7 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
     scan_conf.cache = false;
 
     Ok(resource_ids.iter().map(|resource_id| {
-        // println!("eeg_id={:?}", eeg_id.unwrap_or_default());
+        // debug!("eeg_id={:?}", eeg_id.unwrap_or_default());
         let eeg_df = LazyFrame::scan_parquet(
             format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
             scan_conf.clone(),
@@ -801,20 +801,10 @@ mod data_tests {
     use crate::*;
     use crate::data::{arr_to_expr, ByPatientIdSplitter, EEG, EEGs, read_eeg_index, read_motif_to_iter, split_frame_by_offsets};
 
-    // #[ctor::ctor]
-    // fn init() {
-    //     CombinedLogger::init(
-    //         vec![
-    //             TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-    //         ]
-    //     ).unwrap_or_else(|e|{
-    //         println!("CombinedLogger::init failed: {:?}", e);
-    //     });
-    //
-    //
-    //     std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-    //     std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    // }
+    #[ctor::ctor]
+    fn init() {
+        hbac_shared::init_test_logging();
+    }
 
     // #[test] TODO to utils
     pub fn test_load_eegs() -> Result<(), HbacError> {
@@ -853,12 +843,12 @@ mod data_tests {
 
     // #[test]// to util
     pub fn test_plot_eeg_tensor() -> Result<(), HbacError> {
-        // println!("tensor={:?}", tensor.size());
+        // debug!("tensor={:?}", tensor.size());
 
         let t_0 = data::parquet_to_tensor("../../data", "1628180742", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
         let t_1 = data::parquet_to_tensor("../../data", "1019408895", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
 
-        // println!("tensor={:?}", tensor.size());
+        // debug!("tensor={:?}", tensor.size());
 
         //"1628180742".into(), "1019408895"
         plot_series(
@@ -916,7 +906,7 @@ mod data_tests {
             .agg([count().alias("votes_count")])
             .collect()?;
 
-        println!("df={:?}", df);
+        debug!("df={:?}", df);
 
         Ok(())
     }
@@ -1008,7 +998,7 @@ mod data_tests {
 
         let t_1 = eeg.fragment_to_tensor(5, 10);
 
-        t_1.print();
+
 
         assert_eq!(
             Tensor::stack(
@@ -1038,7 +1028,7 @@ mod data_tests {
 
         debug!("done in {}", t1.elapsed().as_millis());
 
-        println!("t={:?}", t.size());
+        debug!("t={:?}", t.size());
 
         assert_eq!([20, 17600], t.size().as_slice());
 
@@ -1055,7 +1045,7 @@ mod data_tests {
         //
         //     let filname = filename.replace(".pt", "");
         //     let eeg_split = filname.split("_").collect::<Vec<&str>>();
-        //     println!("{:?}", eeg_split);
+        //     debug!("{:?}", eeg_split);
         //
         //     let t = data::eeg_to_tensor("../../data", eeg_split[0], Device::Cpu)?;
         //
@@ -1074,7 +1064,7 @@ mod data_tests {
         // for eeg in eegs {
         for (i, f) in fs::read_dir("../../data/train_eegs")?.enumerate() {
             if i % 1000 == 0 {
-                println!("{} done", i);
+                debug!("{} done", i);
                 std::io::stdout().flush()?;
             }
             let entry = f?;
@@ -1084,7 +1074,7 @@ mod data_tests {
             t.save(format!("{}/{}.pt", save_to, entry.file_name().to_str().map(|v|v.replace(".parquet", ".pt")).unwrap_or(i.to_string())));
         }*/
 
-        // println!("saved to {}", name);
+        // debug!("saved to {}", name);
 
 
         let df = LazyCsvReader::new("../../data/train.csv")
@@ -1092,19 +1082,19 @@ mod data_tests {
             .with_streaming(true);
 
 
-        println!("df={:?}", df.clone().collect()?.head(Some(10)));
+        debug!("df={:?}", df.clone().collect()?.head(Some(10)));
 
 
         let gr_by_eeg_id_df = EEGs::group_by_eeg_id(None, df)?;
 
-        println!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
+        debug!("gr_by_eeg_id_df.shape()[0]={}", gr_by_eeg_id_df.shape().0);
         std::io::stdout().flush()?;
 
         let mut count = 0;
 
         fs::create_dir_all("/media/bu/KINGSTON/all_eegs.pt")?;
 
-        println!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        debug!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
 
         for (eeg_id, seizure_vote, lpd_vote, gpd_vote, lrda_vote, grda_vote, other_vote) in gr_by_eeg_id_df
             .column("eeg_id")?.i64()?.into_iter()
@@ -1140,11 +1130,11 @@ mod data_tests {
         {
 
             if count % 1000 == 0 {
-                println!("{} done", count);
+                debug!("{} done", count);
                 std::io::stdout().flush()?;
             }
 
-            // println!("eeg_id={} {} {} {} {} {} {}",
+            // debug!("eeg_id={} {} {} {} {} {} {}",
             //        eeg_id,
             //        TryInto::<i64>::try_into(seizure_vote).expect("seizure_vote"),
             //        TryInto::<i64>::try_into(lpd_vote).expect("lpd_vote"),
@@ -1216,7 +1206,7 @@ mod data_tests {
     fn index_eegs_to_pt() -> Result<(), HbacError> {
 
         for eeg_file in read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?.1{
-            println!("{:?}", eeg_file);
+            debug!("{:?}", eeg_file);
 
             let t = data::parquet_to_tensor("../../data/", eeg_file.as_str(), Device::Cpu)?;
 
@@ -1294,12 +1284,12 @@ mod data_tests {
         //
         // let good_df = good_eegs.collect()?;
         //
-        // println!("good_df={:?}", good_df.head(Some(100)));
+        // debug!("good_df={:?}", good_df.head(Some(100)));
 
         // find_max_size()?;
         // for class in ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"] {
         //     let eeg_id_series = EEGs::good_eegs_of("../../data", class, None).unwrap();
-        //     println!("class={} len={}", class, eeg_id_series.len());
+        //     debug!("class={} len={}", class, eeg_id_series.len());
         // }
 
         // let resources = super::labeled_resourses("../../data/train.csv")?;
@@ -1329,7 +1319,7 @@ mod data_tests {
         //     )
         //     .collect()?;
         //
-        // println!("{:?}", df.head(Some(100)));
+        // debug!("{:?}", df.head(Some(100)));
 
         // let eeg_id_series = EEGs::good_eegs_of("../../data", "seizure_vote")?;
         //
@@ -1345,13 +1335,13 @@ mod data_tests {
         //         .sort_by_exprs(vec![col("seizure_vote"), col("eeg_id")], vec![true, false], true, true)
         //         .collect()?;
         //
-        // println!("eeg_id_series={:?}", eeg_id);
+        // debug!("eeg_id_series={:?}", eeg_id);
 
         // let eeg_id_series = data::EEGs::good_eegs_of("../../data", "lpd_vote")?;
 
         // let records_num:usize = clc_records(&eeg_id_series, "../../data")?;
 
-        // println!("eeg_id_series={} records_num={:?}", eeg_id_series.len(), records_num);
+        // debug!("eeg_id_series={} records_num={:?}", eeg_id_series.len(), records_num);
 
         // let df = LazyCsvReader::new("../../data/train.csv")
         //     .finish()?
@@ -1478,6 +1468,7 @@ mod data_tests {
 
         Ok(())
     }
+
     #[allow(dead_code)]
     fn find_max_size() -> Result<(), HbacError> {
         let mut max_0 = 0usize;
@@ -1498,7 +1489,7 @@ mod data_tests {
             // std::io::stdout().flush()?;
         }
         //max_0 - 684400
-        println!("max_0={}, max_1={}", max_0, max_1);
+
         Ok(())
     }
 }

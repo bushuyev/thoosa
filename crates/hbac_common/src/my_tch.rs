@@ -479,21 +479,6 @@ mod tch_tests {
     use crate::utils;
     use crate::utils::*;
 
-    #[ctor::ctor]
-    fn init() {
-        CombinedLogger::init(
-            vec![
-                TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto)
-            ]
-        ).unwrap_or_else(|e|{
-            println!("CombinedLogger::init failed: {:?}", e);
-        });
-
-
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    }
-
     #[test]
     pub fn test_conv1_out(){
         let l_out = clc_conv1d_out(50 * 200, 5, ConvConfig::default());
@@ -587,7 +572,7 @@ mod tch_tests {
 
         let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
         let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
-        println!("net t_0={:?}, t_1={:?}",
+        debug!("net t_0={:?}, t_1={:?}",
              from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)),
              from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1))
         );
@@ -600,7 +585,7 @@ mod tch_tests {
         let net_1 = test_net(&vs_1, n)?;
         vs_1.load("/tmp/test_vars.safetensors")?;
 
-        println!("net 1 t_0={:?}, t_1={:?}",
+        debug!("net 1 t_0={:?}, t_1={:?}",
              from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1)),
              from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1))
         );

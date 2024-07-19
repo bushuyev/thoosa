@@ -69,7 +69,14 @@ impl<I, T> Iterator for FirstLastRepeat<I, T>
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
+    use crate::init_test_logging;
     use crate::repeat_iter::{FirstLastRepeat, Repeat};
+
+    #[ctor::ctor]
+    fn init() {
+        init_test_logging();
+    }
 
     #[test]
     fn test_both() {
@@ -134,7 +141,7 @@ mod tests {
                 gp: &gp,
             };
 
-            println!("{:?}", gpf);
+            debug!("{:?}", gpf);
         // }
 
 
