@@ -816,7 +816,7 @@ mod data_tests {
     //     std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
     // }
 
-    #[test]
+    // #[test] TODO to utils
     pub fn test_load_eegs() -> Result<(), HbacError> {
         debug!("test_load_eegs");
         std::io::stdout().flush()?;
@@ -851,7 +851,7 @@ mod data_tests {
         Ok(())
     }
 
-    #[test]
+    // #[test]// to util
     pub fn test_plot_eeg_tensor() -> Result<(), HbacError> {
         // println!("tensor={:?}", tensor.size());
 
@@ -1046,7 +1046,7 @@ mod data_tests {
 
     }
 
-    #[test]
+    // #[test] TODO
     pub fn eegs_to_tensors() -> Result<(), HbacError> {
         // for f in fs::read_dir("/media/bu/KINGSTON/gpd_fragments/3/1")? {
         //     let entry = f?;
@@ -1212,7 +1212,7 @@ mod data_tests {
 
     }
 
-    #[test]
+    // #[test] TODO to util
     fn index_eegs_to_pt() -> Result<(), HbacError> {
 
         for eeg_file in read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?.1{

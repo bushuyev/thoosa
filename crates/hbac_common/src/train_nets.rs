@@ -1552,7 +1552,8 @@ mod train_tests {
 
     #[test]
     fn test_train_final() -> Result<(), HbacError> {
-        let test_base = Path::new("/tmp/test_train_final").join(cdt_for_dir());
+        let dir = "/tmp/test_train_final";
+        let test_base = Path::new(dir).join(cdt_for_dir());
         debug!("test_train_final: test_base: {:?}", test_base);
 
         let models_path_0 = test_base.join("0");
@@ -1601,6 +1602,8 @@ mod train_tests {
             &Cpu,
             vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect(),
         )?;
+
+        fs::remove_dir_all(dir)?;
 
         Ok(())
     }

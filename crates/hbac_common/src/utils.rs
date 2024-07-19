@@ -222,6 +222,7 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
     from::<Vec<f64>>(&t.reshape(-1))
 }
 
+//TODO use same from shared
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }

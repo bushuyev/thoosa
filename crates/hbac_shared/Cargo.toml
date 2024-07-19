@@ -12,3 +12,4 @@ regex = "1.10.3"
 rand = {workspace = true}
 log = {workspace = true}
 simplelog = {workspace = true}
+chrono.workspace = true

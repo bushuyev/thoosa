@@ -8,7 +8,7 @@ use std::fmt::{Debug, Display};
 use std::fmt;
 use std::hash::Hash;
 use std::ops::Mul;
-
+use chrono::SecondsFormat;
 use log::{debug, error};
 use rand::Rng;
 use regex::Regex;
@@ -326,6 +326,14 @@ pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, HbacError> {
 }
 
 
+
+pub fn cdt() -> String {
+    chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+pub fn cdt_for_dir() ->String {//TODO move to shared
+    cdt().replace(':', "_").replace('+', "_")
+}
 
 #[cfg(test)]
 mod shared_tests {

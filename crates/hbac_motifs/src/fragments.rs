@@ -418,6 +418,7 @@ pub fn check_fragments(from: &impl AsRef<std::path::Path>,)->Result<(), HbacErro
 #[cfg(test)]
 mod motifs_tests {
     use std::collections::{HashMap, HashSet};
+    use std::fs;
     use std::path::Path;
     use std::time::UNIX_EPOCH;
 
@@ -637,8 +638,10 @@ mod motifs_tests {
 
     #[test]
     fn test_write_motifs_slices() -> Result<(), HbacError>{
-        let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
-        println!("dir={}", dir);
+
+        let dir = format!("/tmp/test_write_motifs_slices/{}", cdt_for_dir());
+        fs::create_dir_all(&dir)?;
+
 
         let mut map: HashMap<usize, Vec<MotifSlice>> = HashMap::new();
 
@@ -666,7 +669,7 @@ mod motifs_tests {
             2
         )?;
 
-        let loaded_slice = Tensor::load(Path::new(&dir).join(channel_idx.to_string()).join(motif_group.to_string()).join(format!("{}.pt", slise_idx)))?;
+        let loaded_slice = Tensor::load(Path::new(&dir).join(channel_idx.to_string()).join(motif_group.to_string()).join(format!("568657_{}.pt", slise_idx)))?;
 
         // println!("loaded_slice:");
         // loaded_slice.print();

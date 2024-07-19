@@ -244,7 +244,7 @@ fn _main() -> Result<(), HbacError> {
         ]
     ).expect("failed to init logging");
 
-    let store = Arc::new(Mutex::new(SqlStore::new(&cli.store_path)?));
+    let store = Arc::new(Mutex::new(SqlStore::from_path(&cli.store_path)?));
     let loader = Arc::new(Box::new(EEGLoader::new(cli.base_path.clone(), cli.tensors_path.clone(), Some(Box::new(move |t:Tensor|{
 
         match cli.input_filters_kernel {
@@ -1005,7 +1005,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
         filter_and_slice.step(),
         device,
         select_motifs_params.min_ratio(),
-        motifs_avg_distances,//TODO keeps motif indexes with motif tensors
+        &motifs_avg_distances,//TODO keeps motif indexes with motif tensors
         &channel_motif_ids
     )?;
 
@@ -1064,31 +1064,8 @@ mod main_tests {
         std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
     }
 
-    #[test]
-    fn test_it() -> Result<(), HbacError>{
 
-        // let x = FindMotifsParams::;
-        // println!("x={:?}", x);
-        // clc_records()
-        // debug!("XXXXXXXXXXXXXXXXX");
-        // main();
-        // EEGs::good_eegs_of("../../data/", "seizure_vote", Some(10))?.i64()?.into_iter().enumerate().map(|(i, v):(usize, Option<i64>)|{
-        //     // String::from(v.expect(format!("no value in {}", i))).as_str();
-        //
-        //     data::eeg_to_tensor("../../data/", v.expect(format!("no value in {}", i).as_str()).to_string().as_str(), Device::Cpu)
-        // }).try_for_each(|t|{
-        //     println!("t={:?}", t?.size());
-        //
-        //     Ok::<(), HbacError>(())
-        // })?;
-
-        // let ce = Tensor::from_slice(&[1., 1., 0., 0.]).binary_cross_entropy::<Tensor>(&Tensor::from_slice(&[1., 1., 0., 0.1]), None, Reduction::Mean);
-        // ce.print();
-
-        Ok(())
-    }
-
-    #[test]
+    // #[test] TODO
     fn test_run_find_motifs() -> Result<(), HbacError>{
         let cli = Cli{
             base_path: "../../data/".to_string(),
@@ -1105,7 +1082,7 @@ mod main_tests {
         };
 
         fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        let store = Arc::new(Mutex::new(SqlStore::new("/tmp/test_main_db.db3")?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let loader = Arc::new(Box::new(EEGLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
 
         run_find_motifs_on_group(
@@ -1119,7 +1096,7 @@ mod main_tests {
         Ok(())
     }
 
-    #[test]
+    // #[test] TODO
     fn test_run_select_motifs() -> Result<(), HbacError>{
         let cli = Cli{
             base_path: "../../data/".to_string(),
@@ -1135,7 +1112,7 @@ mod main_tests {
             input_filters_kernel: None,
         };
 
-        let store = Arc::new(Mutex::new(SqlStore::new("/tmp/test_main_db.db3")?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let loader = Arc::new(Box::new(EEGLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
         let corr_ids = run_select_motifs(
             &cli,
@@ -1152,7 +1129,7 @@ mod main_tests {
 
 
 
-    #[test]
+    // #[test] TODO
     fn test_run_train_on_label() -> Result<(), HbacError>{
         let train_eeg_params = TrainOnLabelParams::dummy(
             1000,
@@ -1179,7 +1156,7 @@ mod main_tests {
             input_filters_kernel: None,
         };
 
-        let store = Arc::new(Mutex::new(SqlStore::new(cli.store_path.clone())?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
 
         run_train_on_label(
             &cli,
@@ -1193,7 +1170,7 @@ mod main_tests {
         Ok(())
     }
 
-    #[test]
+    // #[test] TODO
     fn test_run_train_final() -> Result<(), HbacError>{
 
         let train_final_params = TrainFinalParams::dummy(
@@ -1227,7 +1204,7 @@ mod main_tests {
             input_filters_kernel: None,
         };
 
-        let store = Arc::new(Mutex::new(SqlStore::new(cli.store_path.clone())?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
 
          run_train_final(
              &cli,

@@ -497,42 +497,7 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    /**
-    TODO
-        for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
 
-        let max_labels_resources = labels_resources.values().map(|r|r.len()).sum::<usize>();
-        debug!("save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}", labels_cnt, max_labels_resources, max_resources_in_set, max_labels_resources/max_resources_in_set);
-
-        let num_groups = max(1, (max_labels_resources/max_resources_in_set)).ilog2();
-        let groups_max_resources = (0..num_groups).map(|i|max_resources_in_set * 2usize.pow(i as u32) as usize).collect::<Vec<usize>>();
-        let groups_max_ids = groups_max_resources.iter().map(|max_r| Self::save_resource_set_group(format!("group {} labels/{}", labels_cnt, max_r), &mut t)).collect::<Result<Vec<usize>, HbacError>>()?;
-        let group_all_id = Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), &mut t)?;
-
-        debug!("save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}", num_groups, groups_max_resources);
-
-        for (labels, mut resources) in labels_resources {
-            debug!("save_groups_by_label_cnt: labels={} resources.len()={}",labels, resources.len());
-
-            resources.shuffle(&mut rng);
-
-
-            if resources.len() > 10 {//TODO min resources
-                // let split = 0.8;
-                // let split_at = (resources.len() * 0.8 as usize);
-                // let mut resources_0 = &resources[..split_at];
-                // let mut resources_1 = &resources[split_at..];
-
-                for (group_id, max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
-                    Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels), &resources[..min(resources.len() - 1, *max_resources)])?;
-                    // Self::insert_resources(&mut t, labels_cnt, groups[group_i], format!("{}/{}/{}_valid", labels_cnt, labels, chunk_i), resources_1)?;
-                }
-            }
-            Self::insert_resource_set_resources(&mut t, labels_cnt, group_all_id, format!("{}/{}", labels_cnt, labels), resources.as_slice())?;
-        }
-    }
-
-     */
 
     fn save_pure_sets(&mut self, max_len: usize, only_unused: bool) -> Result<(), HbacError> {
         let mut conn_guard = self.conn.lock()?;
@@ -1156,18 +1121,30 @@ impl Store for SqlStore {
 
 impl SqlStore {
 
-    pub fn new<P:AsRef<Path>>(path:P) -> Result<Self, HbacError> {
+    pub fn from_path<P:AsRef<Path>>(path:P) -> Result<Self, HbacError> {
         let mut conn = Connection::open(path)?;
 
-        {
-            let  t = conn.transaction()?;
+        Self::new_(conn)?
+    }
 
-            t.execute(//TODO UNIQUE(key) doesn't work - no error
-                "CREATE TABLE IF NOT EXISTS resources (
+    #[cfg(test)]
+    pub fn in_mem() -> Result<Self, HbacError> {
+        let mut conn = Connection::open_in_memory()?;
+
+        Self::new_(conn)?
+    }
+
+
+    fn new_(mut conn: Connection) -> Result<Result<SqlStore, HbacError>, HbacError> {
+        {
+            let t = conn.transaction()?;
+
+            t.execute( //TODO UNIQUE(key) doesn't work - no error
+                       "CREATE TABLE IF NOT EXISTS resources (
                 id          INTEGER PRIMARY KEY,
                 key         VARCHAR(256),
                 UNIQUE(key) )",
-            ())?;
+                       ())?;
 
             t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_key ON resources (key);", ())?;
 
@@ -1183,7 +1160,7 @@ impl SqlStore {
                 group_id    REFERENCES resource_set_group(id) ON DELETE CASCADE,
                 label_id    REFERENCES labels(id) ON DELETE CASCADE,
                 descr       VARCHAR(256))",
-            ())?;
+                ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS resource_resources_set (
@@ -1261,7 +1238,7 @@ impl SqlStore {
             // )?;
 
             t.execute( //group - ordinal as appeared when grouping, not needed
-                "CREATE TABLE IF NOT EXISTS motifs (
+                       "CREATE TABLE IF NOT EXISTS motifs (
                 id              INTEGER PRIMARY KEY,
                 group_ord       INTEGER NOT NULL,
                 run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
@@ -1271,7 +1248,7 @@ impl SqlStore {
             //dot - similarity
             //TODO!! tensor_id_0 - REFERENCES resource_id
             t.execute(
-            "CREATE TABLE IF NOT EXISTS slice_matches (
+                "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
                 run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
@@ -1294,8 +1271,8 @@ impl SqlStore {
             )", ())?;
 
             //labels_motifs on resource_set
-            t.execute(//todo label
-                "CREATE TABLE IF NOT EXISTS motifs_corrs (
+            t.execute( //todo label
+                       "CREATE TABLE IF NOT EXISTS motifs_corrs (
                 motif_id   REFERENCES motifs(id),
                 corr_id    NOT NULL REFERENCES corrs_run(id) ON DELETE CASCADE,
                 corr       FLOAT NOT NULL
@@ -1304,9 +1281,9 @@ impl SqlStore {
             t.execute("commit", ())?;
         }
 
-        Ok(Self {
+        Ok(Ok(Self {
             conn: Mutex::new(conn)
-        })
+        }))
     }
 
     fn list_resource_set_resources(set_id: usize, t: &Transaction) -> Result<Vec<String>, HbacError> {
@@ -1401,7 +1378,19 @@ impl SqlStore {
 
         Ok(())
     }
+
+    fn shut_down(self)-> Result<(), HbacError> {
+        // let guard = self.conn.lock()?;
+        //
+        // guard.cache_flush()?;
+        //
+        //TODO
+        // guard.close().unwrap();
+        //
+        Ok(())
+    }
 }
+
 fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
     assert!(input.len() > 0);
     let inp_len = input.len() * 6 - 1;
@@ -1427,6 +1416,7 @@ mod store_tests{
     use hbac_shared::val::Val;
 
     use crate::{HbacError, SetCond, SqlStore, Store};
+    use hbac_shared::{cdt_for_dir};
 
     #[ctor::ctor]
     fn init() {
@@ -1444,8 +1434,10 @@ mod store_tests{
 
     #[test]
     fn test_group_slices() -> Result<(), HbacError> {
-        fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        let mut store = SqlStore::new("/tmp/test_db.db3")?;
+        // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+        // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
+
+        let mut store = SqlStore::in_mem()?;
 
         let _aaa_id = store.save_label("aaa");
         let _bbb_id = store.save_label("bbb");
@@ -1496,14 +1488,16 @@ mod store_tests{
 
         debug!("done in {}", t1.elapsed().as_millis());
 
+        // fs::remove_file(db_file)?;
         Ok(())
     }
 
     #[test]
     fn test_save_slices() -> Result<(), HbacError> {
-        fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        let mut store = SqlStore::new("/tmp/test_db.db3")?;
 
+        // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+        // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
+        let mut store = SqlStore::in_mem()?;
 
         let _aaa_id = store.save_label("aaa")?;
         let _bbb_id = store.save_label("bbb")?;
@@ -1711,7 +1705,8 @@ mod store_tests{
         );
 
         store.delete_slices_without_matches(run_id)?;
-
+        store.shut_down();
+        // fs::remove_file(db_file)?;
         Ok(())
     }
 

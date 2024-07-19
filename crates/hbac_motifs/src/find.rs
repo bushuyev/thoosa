@@ -917,6 +917,8 @@ fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, motifs_distanc
 
 
         debug!("motif_ids={:?}", motif_ids);
+        debug!("channel_motifs={:?}", channel_motifs);
+        debug!("motifs_distances={:?}", motifs_distances);
         Tensor::from_slice(channel_motifs.into_iter().zip(motif_ids.into_iter()).map(|(motifs_dists, motif_id_op)| {
 
 
@@ -1056,7 +1058,7 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, HbacError>
+pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
     let mut labels_channels_good_motifs = labels_loaders.iter().fold(HashMap::new(), |mut a, v|{
@@ -1110,10 +1112,10 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
 }
 
 
-pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device, min_corr: f64) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
+pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device, min_corr: f64, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
     where I:Iterator<Item=Box<Tensor>> + Send + Sync {
 
-    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, HashMap::new(), &vec![]);
+    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, motifs_distances, channel_motif_ids);
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>();
 
@@ -1154,7 +1156,7 @@ pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, li
 
 }
 
-fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
+fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
     where I:Iterator<Item=Box<Tensor>> + Send + Sync, L:Clone{
     let motifs_size = motifs.size();
 
@@ -1181,7 +1183,7 @@ fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>,
             &unsafe { Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor) },
             &Tensor::zeros(slice_len, (tch::Kind::Float, *device)), //TODO
             Arc::clone(&channels_motifs_classes_lock),
-            loader, label, limit, step, &motifs_distances, channel_motif_ids //TODO step - k * slice_len
+            loader, label, limit, step, motifs_distances, channel_motif_ids //TODO step - k * slice_len
         )
     }).unwrap();
     (channels_num, motifs_num, channels_motifs_classes_lock)
@@ -1641,6 +1643,18 @@ mod motif_find_tests {
 
         t_2_1.save(test_dir.join("2").join("t_2_1.pt"))?;//ZZZ
 
+        let channel_motif_ids = vec![
+            vec![5,7],
+            vec![8,9],
+        ];
+
+
+        let motifs_avg_distances = HashMap::from([
+            (5,0.5),
+            (7,0.5),
+            (8,0.5),
+            (9,0.5)
+        ]);
 
         let channels_good_motifs = select_motifs_by_corr(
             // Tensor::load("../../data_local/motif_tensors/seizure_vote_eegs.pt")?,
@@ -1659,7 +1673,9 @@ mod motif_find_tests {
             Some(3),
             1,
             Device::Cpu,
-            0.1
+            0.1,
+            &motifs_avg_distances,
+            &channel_motif_ids,
         )?;
 
         println!("t={:?}", channels_good_motifs);
@@ -1680,8 +1696,8 @@ mod motif_find_tests {
             1,
             Device::Cpu,
             0.5,
-            HashMap::new(),
-            &vec![]
+            &motifs_avg_distances,
+            &channel_motif_ids
         )?;
 
         println!("2. t={:?}", labels_channels_good_motifs);
@@ -1941,7 +1957,7 @@ mod motif_find_tests {
         let eeg_id_series =  vec!["1111".into(), "2222".into(), "3333".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
-        let store = Arc::new(Mutex::new(SqlStore::new(store_path)?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -2014,7 +2030,7 @@ mod motif_find_tests {
         let eeg_id_series =  vec!["1111".into(), "2222".into(), "3333".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
-        let store = Arc::new(Mutex::new(SqlStore::new(store_path)?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -2091,7 +2107,7 @@ mod motif_find_tests {
         let eeg_id_series =  vec!["0000".into(), "1111".into(), "2222".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
-        let store = Arc::new(Mutex::new(SqlStore::new(store_path)?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2162,7 +2178,7 @@ mod motif_find_tests {
     pub fn test_find_motifs_euc_wrong_index() -> Result<(), HbacError> {
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
-        let store = Arc::new(Mutex::new(SqlStore::new(store_path)?));
+        let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2220,19 +2236,20 @@ mod motif_find_tests {
     #[test]
     pub fn test_simple_motif_tracker() -> Result<(), HbacError>{
         let n = 1_000i64;
-        let _x = lin_t(n);
+
         let _sig_num = 2;
         // let sig_1 = gauss_t(400., 100., n); //f.flip([0]);
         // let sig_2 = gauss_t(600., 100., n); //.flip([0]);
 
         let (sig_0_1, sig_0_2) = two_sigs(1_000);
         println!("sig_1.size()={:?}, sig_2.size()={:?}", sig_0_1.size(), sig_0_2.size());
-        let _sig_1_c = sig_0_1.copy();
-        let _sig_2_c = sig_0_2.copy();
+        let _sig_0_c = sig_0_1.copy();
+
         let t_0 = Tensor::vstack(&[sig_0_1, sig_0_2]);
         println!("t.size={:?}", t_0.size());
 
         let (sig_1_1, sig_1_2) = two_sigs(1_000);
+        let _sig_1_c = sig_1_1.copy();
         let t_1 = Tensor::vstack(&[sig_1_1, sig_1_2]);
 
         let m = 100;
@@ -2271,21 +2288,24 @@ mod motif_find_tests {
 
         // let gauss_1_0 = gauss_1.f_slice(0, Some(300), Some(500), 1)?;
 
-        let motifs = mt.motifs();
+        // let x = lin_t(n);
+        // plot_series(
+        //     vec![
+        //         (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&_sig_0_c)).collect::<Vec<(f32, f32)>>()),
+        //         // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
+        //         (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&_sig_1_c)).collect::<Vec<(f32, f32)>>()),
+        //         // (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
+        //
+        //     ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        // )?;
+
+        let motifs:Vec<&(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)> = mt.motifs().iter().filter(|v|v.2 > 0.9).collect();
+
         assert_eq!((TensorSliceIdx(0.to_string(), 100), TensorSliceIdx(0.to_string(), 600)), (motifs[0].0.clone(), motifs[0].1.clone()));
         assert_eq!((TensorSliceIdx(0.to_string(), 200), TensorSliceIdx(0.to_string(), 700)), (motifs[1].0.clone(), motifs[1].1.clone()));
 
         // mt.dump();
 
-        // plot_series(
-        //     vec![
-        //         (format!("G1"), BLACK, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_1_c)).collect::<Vec<(f32, f32)>>()),
-        //         // (format!("G1"), BLACK, vec_f32_from(&lin_t(200)).into_iter().zip(vec_f32_from(&gauss_1_0)).collect::<Vec<(f32, f32)>>()),
-        //         // (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&sig_2_c)).collect::<Vec<(f32, f32)>>()),
-        //         // (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
-        //
-        //     ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        // )?;
         // find_motifs();
 
         Ok(())
