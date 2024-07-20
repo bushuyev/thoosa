@@ -1737,8 +1737,8 @@ mod motif_find_tests {
     #[test]
     pub fn test_check_with_conv_eeg() -> Result<(), HbacError> {
         let channel = 0;
-        let t_0 = Tensor::load("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/2088807520.pt")?.i(channel).view((1, -1));
-        let t_1 = Tensor::load("/media/bu/KINGSTON/eegs.pt/seizure_vote_eegs.txt/2088807520.pt")?.i(channel).view((1, -1));
+        let t_0 = Tensor::load("../../test_data/2088807520.pt")?.i(channel).view((1, -1));
+        let t_1 = Tensor::load("../../test_data/2088807520.pt")?.i(channel).view((1, -1));
         // let t_1 = Tensor::load("/media/bu/KINGSTON/eegs.pt/other_vote_eegs.txt/155224651.pt")?.i((channel)).view((1, -1));
 
 
