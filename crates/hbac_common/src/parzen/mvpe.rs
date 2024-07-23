@@ -52,6 +52,11 @@ mod multi_variate_parzen_estimator_tests {
     use crate::parzen::optimizer::ParzenEstimator;
     use crate::parzen::optimizer::Primitives::Float;
 
+    #[ctor::ctor]
+    fn init() {
+        hbac_shared::init_test_logging();
+    }
+
     #[test]
     fn test_log_pdf(){
         let samples = [-1.0, 0.0, 1.0];

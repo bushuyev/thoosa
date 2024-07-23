@@ -352,6 +352,11 @@ mod tests {
 
     use super::{BandwidthFactor, compute_config_loglikelihoods, NumericalParzenEstimator};
 
+    #[ctor::ctor]
+    fn init() {
+        hbac_shared::init_test_logging();
+    }
+
     #[test]
     fn test_0() {
         StdRng::seed_from_u64(42);

@@ -410,7 +410,7 @@ mod shared_tests {
     }
 
     #[test]
-    fn test_group_motifs(){
+    fn test_group_slices(){
         let pairs:Vec<(String, String)> = vec![
             ("a".into(), "b".into()),
             ("a".into(), "c".into()),

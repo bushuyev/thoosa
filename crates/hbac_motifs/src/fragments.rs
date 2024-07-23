@@ -42,61 +42,6 @@ impl MotifsToFragmentsParams {
     }
 }
 
-// pub fn group_motifs<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
-//     let mut pairs_groups: HashMap<T, u16> = HashMap::new();
-//     let mut last_group = 0u16;
-//
-//     let mut separated_groups:  Vec<(u16, u16)> = vec![];
-//
-//     for (ln, pair) in pairs.enumerate() {
-//         let g_0 = pairs_groups.get(&pair.0);
-//         let g_1 = pairs_groups.get(&pair.1);
-//         if let Some(g_0_val) = g_0 {
-//             if g_1.is_some() {
-//                 debug!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}", g_0, g_1, ln, pair);
-//                 if g_0.ne(&g_1) {
-//                     separated_groups.push((*g_0_val, *g_1.unwrap()));
-//                 }
-//             } else {
-//                 pairs_groups.insert(pair.1, *g_0_val);
-//             }
-//         } else {
-//             if let Some(g_1_val) = g_1 {
-//                 pairs_groups.insert(pair.0, *g_1_val);
-//             } else {
-//                 pairs_groups.insert(pair.0, last_group);
-//                 pairs_groups.insert(pair.1, last_group);
-//
-//                 last_group += 1;
-//             }
-//         }
-//     }
-//
-//     debug!("separated_groups={:?}", separated_groups);
-//     let separated_groups_map = if !separated_groups.is_empty() {
-//         let map = group_motifs(separated_groups.into_iter()).values().fold(HashMap::new(), |mut h, v| {
-//             for i in v.iter().skip(1) {
-//                 h.insert(v[0], *i);
-//             }
-//             h
-//         });
-//         debug!("separated_groups group_motifs={:?}", map);
-//         Some(map)
-//     } else {
-//         None
-//     };
-//
-//     let mut groups: HashMap<u16, Vec<T>> = HashMap::new();
-//     for (val, group) in pairs_groups {
-//         let group= separated_groups_map.as_ref().and_then(|m|m.get(&group)).unwrap_or(&group);
-//         let mut gr_vec = groups.entry(*group).or_insert_with(|| vec![]);
-//         gr_vec.push(val);
-//     }
-//
-//     debug!("group_motifs groups={:?}", groups);
-//     groups
-// }
-
 /**
 * returns Vec<(channel_id, chanel's motifs file)>
 */
@@ -171,7 +116,6 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
     let mut motifs_slices_map:HashMap<usize, MotifSlice> = HashMap::new();
 
     for (resource_id, motif_slices) in resource_id_motif_slices {
-        // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
         let t = (load_tensor)(&resource_id);
         debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
@@ -186,7 +130,6 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
             let  channels_motifs = channels_motifs_slices.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
             let  motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
 
-            // let _ = motifslice_t.to_device(device);TODO remove?
 
             motif_slices.push(motifslice_t);
             motifs_slices_map.insert(motif_slice.motif_id(), motif_slice);
@@ -247,7 +190,6 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
     let progress = AtomicU64::new(0);
 
     for (eeg_idx, channels_fragments) in eeg_id_fragments_map {
-    // eeg_id__fragments_map.par_iter().try_for_each(|(eeg_idx, channels_fragments)|{  //thread '<unknown>' has overflowed its stack
 
         let eeg_id = eegs[eeg_idx].clone();
         let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), Device::Cpu)?;
@@ -257,20 +199,11 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
             let motif_path = channel_path.join(fragment.motif_id.to_string());
             fs::create_dir_all(motif_path.clone())?;
 
-
-            // eeg_t.print();
-
             let channel_t = eeg_t.get(fragment.channel_idx as i64);
             let channel_t = channel_t.view([1, -1]);
 
-            // debug!("channel_t: {}", fragment.channel_idx);
-            // channel_t.print();
 
             let fragment_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx+ window), 1)?;
-
-
-            // debug!("fragment_t:");
-            // fragment_t.print();
 
             fragment_t.save(motif_path.join(format!("{}_{}.pt", eeg_id, fragment.slise_idx)))?;
 
@@ -279,7 +212,6 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 
         }
 
-        // Ok::<(), HbacError>(())
     }
 
     Ok(())
@@ -354,6 +286,7 @@ pub fn load_motif_slices<F>(_base_path: &str, channel: i64, widow: i64, slices: 
 
                 slice_ok
             }).map(|slice_idx| Box::new(t.i((channel, *slice_idx..*slice_idx + widow)))).collect::<Vec<Box<Tensor>>>())
+
         }).collect::<Vec<(String, Vec<Box<Tensor>>)>>();
 
 
@@ -385,32 +318,6 @@ impl MotifsToTensorParams {
     pub fn run_id(&self) -> usize {
         self.run_id
     }
-}
-pub fn choose_fragments(_params:&MotifsToTensorParams) ->Result<(), HbacError> {
-
-    Ok(())
-}
-
-pub fn check_fragments(from: &impl AsRef<std::path::Path>,)->Result<(), HbacError> {
-    let tensors:Vec<Tensor> = fs::read_dir(from)?
-        .into_iter()
-        .filter(|e|e.as_ref().is_ok_and(|e|e.file_type().is_ok_and(|f|f.is_file())))
-        .map(|e|Tensor::load(e.unwrap().path()).unwrap()).collect();
-
-    debug!("tensors={:?}", tensors.len());
-
-    tensors.iter().enumerate().for_each(|(i_0, t_0)|{
-        tensors.iter().enumerate().skip(i_0).for_each(|(i_1, t_1)|{
-
-
-            let dp = dot_norm(1, &t_0, &t_1).unwrap();
-
-            debug!("i_0={:?} i_1={:?} dp={:?}", i_0, i_1, dp.double_value(&[0]));
-
-        });
-    });
-
-    Ok(())
 }
 
 
@@ -662,8 +569,6 @@ mod motifs_tests {
                 Tensor::from_slice(&[0., 1.,  2.,  3.]),
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])
             ]);
-            // debug!("test_eeg_to_t:");
-            // t.print();
             Ok(t)
         }
 
@@ -677,9 +582,6 @@ mod motifs_tests {
         )?;
 
         let loaded_slice = Tensor::load(Path::new(&dir).join(channel_idx.to_string()).join(motif_group.to_string()).join(format!("568657_{}.pt", slise_idx)))?;
-
-        // debug!("loaded_slice:");
-        // loaded_slice.print();
 
         assert!(Tensor::from_slice(&[10.1, 20.1]).view([1, -1]).equal(&loaded_slice));
 
@@ -715,32 +617,32 @@ mod motifs_tests {
         Ok(())
     }
 
-    // #[test]
-    // fn test_load_motif_slices_5000()-> Result<(), HbacError>{
-    //     fn test_eeg_to_t(eeg_id:&str) -> Box<Tensor> {
-    //
-    //         let t = Tensor::vstack(&[
-    //             Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
-    //         ]);
-    //
-    //         Box::new(t)
-    //     }
-    //
-    //     let motif_slices = super::load_motif_slices(
-    //         "base",
-    //         0,
-    //         5000,
-    //         vec![TensorSliceIdx(123.to_string(), 2)],
-    //         test_eeg_to_t,
-    //         Device::Cpu
-    //     );
-    //
-    //     assert_eq!(vec![("123".to_string(), vec![Box::new(Tensor::from_slice(&[2.0, 3.0]))])], motif_slices);
-    //
-    //     debug!("motif_slices={:?}", motif_slices);
-    //
-    //     Ok(())
-    // }
+    #[test]
+    fn test_load_motif_slices_5000()-> Result<(), HbacError>{
+        fn test_eeg_to_t(eeg_id:&str) -> Box<Tensor> {
+
+            let t = Tensor::vstack(&[
+                Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
+            ]);
+
+            Box::new(t)
+        }
+
+        let motif_slices = super::load_motif_slices(
+            "base",
+            0,
+            5000,
+            vec![TensorSliceIdx(123.to_string(), 2)],
+            test_eeg_to_t,
+            Device::Cpu
+        );
+
+
+        assert_eq!("123", motif_slices[0].0);
+        assert_eq!(5000, motif_slices[0].1[0].size()[0]);
+
+        Ok(())
+    }
 
 
     #[test]
@@ -757,57 +659,6 @@ mod motifs_tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_test() -> Result<(), HbacError>{
-
-        let map = HashMap::from([
-            (0, "a"),
-            (1, "b"),
-            (2, "c"),
-            (3, "d"),
-        ]);
-
-        debug!("map={:?}", map);
-
-        map.keys().collect::<Vec<_>>().chunks(10).par_bridge().for_each(|c|{
-            debug!("c={:?} v={:?}", c, map.get(c[0]));
-        });
-
-        // map.into_iter().chunks(5).into_iter().for_each(|v| {
-        //     debug!("{:?}", v);
-        // });
-
-        // let i = map.into_iter().array_chunks::<3>();
-        // i.for_each(|c|{
-        //     debug!("{:?}", c);
-        // });
-        //
-        // if let Some(reminder) = i.into_remainder() {
-        //     debug!("reminder={:?}", reminder);
-        // }
-
-        // let map = (0..100).fold(HashMap::new(), |mut h, v|{
-        //     h.insert(v, (0..100).collect::<Vec<usize>>());
-        //     h
-        // });
-        //
-        // map.par_iter().try_for_each(|v|{
-        //
-        //     if *v.0 == 50 {
-        //         Err::<(), HbacError>(HbacError::new("XXX".to_string()))
-        //     } else {
-        //         Ok::<(), HbacError>(())
-        //     }
-        //
-        //
-        //
-        // })?;
-
-        Ok(())
-    }
-
-
 
 }
 
