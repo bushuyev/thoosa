@@ -37,6 +37,7 @@ pub fn slice_t(t_0: &Tensor, step: usize, window: i64) -> Tensor {
 mod distance_tests {
     use log::debug;
     use tch::IndexOp;
+    use tch::Kind::Float;
     use tch::Tensor;
 
     use hbac_shared::HbacError;
@@ -49,7 +50,7 @@ mod distance_tests {
 
     #[test]
     fn test_z_normalized_euclidean() -> Result<(), HbacError> {
-        let _d = z_normalized_euclidean(
+        let d = z_normalized_euclidean(
             &Tensor::vstack(&[
                 Tensor::from_slice(&[1.,  0., 1.,  0.,  1., ]),
                 Tensor::from_slice(&[10., 0., 10., 0., 10., ]),
@@ -61,12 +62,10 @@ mod distance_tests {
             1,
         )?;
 
-        // TODO
-
-        //mean - 0.6, std -
-        //(1-2.2)/0.54772255750517 = −2,19089023
-
-
+        //TODO?
+        assert!(
+            Tensor::from_slice(&[4., 4.,]).totype(Float).allclose(&d, 0.01, 0.01, false)
+        );
 
         Ok(())
     }
@@ -75,22 +74,18 @@ mod distance_tests {
     fn test_dist_d2() -> Result<(), HbacError>{
         let t_0 = Tensor::vstack(&[
             Tensor::from_slice(&[0.00, 0.01, 0.02, 0.02, 0.02]),
-            // Tensor::from_slice(&[0.10, 0.10, 0.20, 0.20]),
         ]);
 
         let t_1 = Tensor::vstack(&[
             Tensor::from_slice(&[1.00, 1.01, 1.02]),
-            // Tensor::from_slice(&[1.10, 1.10, 1.20]),
         ]);
 
         let t_2 = Tensor::vstack(&[
             Tensor::from_slice(&[2.00, 2.01, 2.02, 2.02]),
-            // Tensor::from_slice(&[2.10, 2.10, 2.20]),
         ]);
 
         let t_3 = Tensor::vstack(&[
             Tensor::from_slice(&[3.00, 0.00, 0.01]),//[0,7] should be 0.0
-            // Tensor::from_slice(&[3.10, 3.10, 3.20]),
         ]);
 
         let step = 1;
@@ -98,7 +93,8 @@ mod distance_tests {
         debug!("t_0.size()={:?}", t_0.size());
         let t_0_sliced = super::slice_t(&t_0, step, window);
 
-        debug!("t_0_sliced={:?}", t_0_sliced.size());
+        debug!("t_0_sliced.size()={:?}", t_0_sliced.size());
+        debug!("t_0_sliced=\n{}", t_0_sliced);
 
 
         let spliced_t = [t_1, t_2, t_3].into_iter().map(|t| super::slice_t(&t, step, window)).collect::<Vec<Tensor>>();
@@ -109,35 +105,28 @@ mod distance_tests {
         let tensor_ids = sizes.iter().zip(tensor_ids.into_iter()).flat_map(|(size, id)| std::iter::repeat(id).take(*size as usize)).collect::<Vec<&str>>();
         debug!("sizes: {:?}", tensor_ids);
         let t_1_2_3_sliced = Tensor::vstack(&spliced_t);
-        // t_1_2_3_sliced.print();
 
         debug!("t_1_2_3_sliced={:?}", t_1_2_3_sliced.size());
 
         for c in  0..1 {
             let tensor = t_0_sliced.i((.., c, ..)).squeeze();
             let tensor1 = t_1_2_3_sliced.i((.., c, ..)).squeeze();
-            debug!("tensor={:?} tensor1.size()={:?}", tensor.size(), tensor1.size());
+            debug!("tensor.size()={:?} tensor1.size()={:?}", tensor.size(), tensor1.size());
+            debug!("tensor=\n{} tensor1=\n{}", tensor, tensor1);
             let t = super::dist_d2(1, &tensor, &tensor1)?;
 
+
+            //first slice in t_0  & last slice in t_3 - 0.00, 0.01
+            assert_eq!(0.0, t.double_value(&[0, 6]));
             
             debug!("t={:?}", t.size());
+            debug!("t=\n{}", t);
             for i_0 in 0..t.size()[0] {
                  for i_1 in 0..t.size()[1] {
-                     debug!("t_1={:?} slice:{} v={}", tensor_ids[i_1 as usize], i_1 * window, t.double_value(&[i_0, i_1]));
+                     debug!("t_0={}/{} t_1={}/{} v={}", i_0, i_0 * window, tensor_ids[i_1 as usize], i_1 * window, t.double_value(&[i_0, i_1]));
                  }
             }
-
         }
-
-        // let slice_0_b = Tensor::stack((0..3).map(|_|slice_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0);
-        // let slice_1_b = Tensor::stack((0..3).map(|_|slice_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0);
-        //
-        // let t = super::dist_d2(1, &slice_0_b, &slice_1_b)?;
-        // debug!("slice_0={:?}", slice_0.size());
-        // debug!("t={:?}", t.size());
-        // t.print();
-        //
-        // debug!("----------------------------------------");
 
 
         Ok(())

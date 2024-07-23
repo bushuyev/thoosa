@@ -164,6 +164,11 @@ mod categorical_parzen_estimator_tests {
     use crate::parzen::cpe::CategoricalParzenEstimator;
     use crate::parzen::optimizer::{Distribution, Primitives};
 
+    #[ctor::ctor]
+    fn init() {
+        hbac_shared::init_test_logging();
+    }
+
     #[test]
     fn test_0(){
         let cpe = CategoricalParzenEstimator::new(

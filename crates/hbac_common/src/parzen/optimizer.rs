@@ -567,7 +567,7 @@ mod tpe_optimizer_tests {
     }
 
     #[test]
-    fn test_optimize_caegoric(){
+    fn test_optimize_ctaegoric(){
 
         let mut opt = TPEOptimizer::new(
             move |params| {
@@ -731,30 +731,5 @@ impl<'a> IntoIterator for &'a ConfigurationSpace {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use log::debug;
-
-    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, TPEOptimizer};
-    use crate::utils::sin3_pow2_f;
-
-    #[test]
-    fn test_0(){
-
-        let cs = ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {name:format!("x_{}", 0), lower: -2.0, upper: 2.0}]);
-
-
-        let mut opt = TPEOptimizer::new(
-            |x| {
-                debug!("x={x:?}");
-                sin3_pow2_f(x.get(0).expect("x_0").into())
-            },
-            cs, 10, 5
-        );
-
-        opt.optimize();
     }
 }

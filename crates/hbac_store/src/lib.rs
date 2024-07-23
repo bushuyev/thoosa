@@ -260,7 +260,26 @@ impl Store for SqlStore {
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), HbacError>{
         debug!("save_resources_labels: resource_labels_probs.len()={}", resource_labels_probs.len());
 
-        fn _do_insert(resource_keys_iter: IntoIter<(String, Vec<(String, f32)>), 500>, t:&Transaction) -> Result<(), HbacError>{
+        let mut conn_guard = self.conn.lock()?;
+        let t = conn_guard.transaction()?;
+
+
+        let mut resource_labels_iter = resource_labels_probs.into_iter().array_chunks::<500>();
+
+
+        while let Some(resource_keys) =  resource_labels_iter.next() {
+            do_insert(resource_keys.into_iter(), &t)?;
+        }
+
+        if let Some(reminder) = resource_labels_iter.into_remainder() {
+            if reminder.len() > 0 {
+                do_insert(reminder, &t)?;
+            }
+        }
+
+        t.commit()?;
+
+        fn do_insert(resource_keys_iter: IntoIter<(String, Vec<(String, f32)>), 500>, t:&Transaction) -> Result<(), HbacError>{
 
             let (mut insert_resources_q, insert_resources_params, insert_labeled_resources_params) = resource_keys_iter.fold(
                 (
@@ -279,16 +298,16 @@ impl Store for SqlStore {
 
 
                     let labels_ids = labels.into_iter().map(|(label, p)|
-                        (
-                            t.query_row("SELECT id FROM labels WHERE label=?", [&label], |row| row.get(0)).expect(format!("label {} not found", label).as_str()),
-                            p
-                        )
+                    (
+                        t.query_row("SELECT id FROM labels WHERE label=?", [&label], |row| row.get(0)).expect(format!("label {} not found", label).as_str()),
+                        p
+                    )
                     ).collect::<Vec<(i64, f32)>>();
                     insert_labeled_resources_params.push(labels_ids);
 
 
                     (insert_resources_q, insert_resources_params, insert_labeled_resources_params)
-            });
+                });
 
             insert_resources_q.pop();
             insert_resources_q.push(" RETURNING id");
@@ -302,62 +321,45 @@ impl Store for SqlStore {
             while let Some(row) = rows.next()? {
                 resource_ids.push(row.get_unwrap(0));
             }
+
             let mut labels_iter = resource_ids.into_iter().zip(insert_labeled_resources_params).flat_map(move |(id, labels)|labels.into_iter().map(move |(l, p)|(id, l, p))).array_chunks::<500>();
 
-            fn _insert_labels(resource_labels: IntoIter<(i64, i64, f32), 500>, t: &Transaction){
-
-                let (mut q, params) = resource_labels.fold((vec!["INSERT INTO labeled_resources (resource_id, label_id, p) VALUES"], vec![]), |(mut q, mut params):(Vec<&str>, Vec<Value>), v|{
-                    q.push("(?, ?, ?)");
-                    q.push(",");
-
-                    params.push(Value::Integer(v.0));//resource id
-                    params.push(Value::Integer(v.1));//label id
-                    params.push(Value::Real(v.2 as f64));//p
-                    //
-                    (q, params)
-                });
-
-                if params.len()>0 {
-                    q.pop();
-
-                    let q_str = q.into_iter().collect::<String>();
-
-                    t.execute(&q_str, rusqlite::params_from_iter(params.into_iter())).unwrap();
-                }
-            }
 
             while let Some(resource_labels) =  labels_iter.next() {
-                _insert_labels(resource_labels.into_iter(), t);
+                insert_labels(resource_labels.into_iter(), t);
             }
 
             if let Some(reminder) = labels_iter.into_remainder() {
-                _insert_labels(reminder, t);
+                insert_labels(reminder, t);
             }
 
 
             Ok(())
         }
 
+        fn insert_labels(resource_labels: IntoIter<(i64, i64, f32), 500>, t: &Transaction){
 
-        let mut conn_guard = self.conn.lock()?;
-        let t = conn_guard.transaction()?;
+            let (mut q, params) = resource_labels.fold((vec!["INSERT INTO labeled_resources (resource_id, label_id, p) VALUES"], vec![]), |(mut q, mut params):(Vec<&str>, Vec<Value>), v|{
+                q.push("(?, ?, ?)");
+                q.push(",");
 
+                params.push(Value::Integer(v.0));//resource id
+                params.push(Value::Integer(v.1));//label id
+                params.push(Value::Real(v.2 as f64));//p
+                //
+                (q, params)
+            });
 
+            if params.len()>0 {
+                q.pop();
 
-        let mut resource_labels_iter = resource_labels_probs.into_iter().array_chunks::<500>();
+                let q_str = q.into_iter().collect::<String>();
 
-
-        while let Some(resource_keys) =  resource_labels_iter.next() {
-            _do_insert(resource_keys.into_iter(), &t)?;
-        }
-
-        if let Some(reminder) = resource_labels_iter.into_remainder() {
-            if reminder.len() > 0 {
-                _do_insert(reminder, &t)?;
+                t.execute(&q_str, rusqlite::params_from_iter(params.into_iter())).unwrap();
             }
         }
 
-        t.commit()?;
+
 
         Ok(())
     }
@@ -590,6 +592,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         let r = Self::list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
+        debug!("list_resource_set_resources_by_descr: descr={descr} r={r:?}");
 
         t.commit()?;
 

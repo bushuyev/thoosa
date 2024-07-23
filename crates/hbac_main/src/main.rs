@@ -139,11 +139,10 @@ impl RunAllParams {
         FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
     }
     #[cfg(test)]
-    #[allow(dead_code)]
-    fn dummy()-> Self {
+    fn dummy(train_resource_group: &str, valid_resource_group: &str) -> Self {
         Self {
-            train_resource_group: "".to_string(),
-            valid_resource_group: "".to_string(),
+            train_resource_group: train_resource_group.to_string(),
+            valid_resource_group: valid_resource_group.to_string(),
             init: false,
             step: 1000,
             window: 1000,
@@ -279,7 +278,8 @@ fn _main() -> Result<(), HbacError> {
             init_resources(
                 &cli,
                 Some(init_resources_params),
-                Arc::clone(&store)
+                Arc::clone(&store),
+                "train.csv"
             )?;
         }
 
@@ -342,7 +342,8 @@ fn _main() -> Result<(), HbacError> {
                 init_resources(
                     &cli,
                     None,
-                    Arc::clone(&store)
+                    Arc::clone(&store),
+                    "train.csv"
                 )?;
             }
 
@@ -714,7 +715,7 @@ fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Devic
     let eeg_id_series = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 
     let records_num = clc_records(&eeg_id_series, cli.base_path.as_str()).unwrap();
-    debug!("records_num={}", records_num);
+    debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} eeg_id_series={eeg_id_series:?}", find_motifs_params.resource_set());
 
     find::find_motifs_euc(
         move |key: &String| {
@@ -752,7 +753,7 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
     Ok(())
 }
 
-fn init_resources(cli:&Cli, _params:Option<&InitResourcesParams>, store:Arc<Mutex<impl Store + 'static>>) -> Result<(), HbacError> {
+fn init_resources(cli:&Cli, _params:Option<&InitResourcesParams>, store:Arc<Mutex<impl Store + 'static>>, train_csv: &str) -> Result<(), HbacError> {
     let mut store_guard = store.lock()?;
 
     store_guard.save_label("seizure")?;
@@ -763,7 +764,7 @@ fn init_resources(cli:&Cli, _params:Option<&InitResourcesParams>, store:Arc<Mute
     store_guard.save_label("other")?;
 
 
-    store_guard.save_resources_labels(data::labeled_resourses(Path::new(&cli.base_path).join("train.csv"))?)?;
+    store_guard.save_resources_labels(data::labeled_resourses(Path::new(&cli.base_path).join(train_csv))?)?;
 
     store_guard.save_pure_sets(1000, true)?;
     store_guard.save_pure_sets(100, true)?;
@@ -1045,21 +1046,19 @@ mod main_tests {
     use hbac_shared::HbacError;
     use hbac_store::SqlStore;
 
-    use crate::{Cli, EEGLoader, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
+    use crate::{Cli, EEGLoader, init_resources, InitResourcesParams, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
     use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
 
-    // use crate::data::{clc_records, read_eeg_index, read_motif_to_iter_imp};
 
     #[ctor::ctor]
     fn init() {
         hbac_shared::init_test_logging();
     }
 
-    // #[test] TODO
-    #[allow(dead_code)]
+    #[test]
     fn test_run_find_motifs() -> Result<(), HbacError>{
         let cli = Cli{
-            base_path: "../../data/".to_string(),
+            base_path: "../../test_data/eeg/".to_string(),
             ws_path: "/tmp".to_string(),
             tensors_path: None,
             store_path: "".to_string(),
@@ -1072,17 +1071,30 @@ mod main_tests {
             input_filters_kernel: None,
         };
 
-        fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let loader = Arc::new(Box::new(EEGLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
 
-        run_find_motifs_on_group(
+        // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
+        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+
+        let loader = Arc::new(Box::new(EEGLoader::new("../../test_data/eeg".into(), Some("../../test_data/eeg".into()), None)));
+
+        init_resources(
+            &cli,
+            None,
+            Arc::clone(&store),
+            "train_10.csv"
+        )?;
+
+        let motifs = run_find_motifs_on_group(
             &cli,
             &store,
             vec![Cpu],
-            &RunAllParams::dummy(),
+            &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
             Arc::clone(&loader)
         )?;
+
+        debug!("motifs={motifs:?}");
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], motifs);
 
         Ok(())
     }

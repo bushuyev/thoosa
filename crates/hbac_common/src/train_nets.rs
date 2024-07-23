@@ -1307,7 +1307,6 @@ mod train_tests {
     use tch::IndexOp;
     use tch::Kind::Float;
     use tch::nn::{LinearConfig, Module};
-    use tch::nn::init;
 
     use hbac_shared::{batch_windows, HbacError};
 
@@ -1318,6 +1317,12 @@ mod train_tests {
     use crate::utils::{cdt_for_dir, from};
     use crate::utils::DataBatch;
     use crate::train_nets::FinalNodeParams;
+
+
+    #[ctor::ctor]
+    fn init() {
+        hbac_shared::init_test_logging();
+    }
 
     #[test]
     fn test_class_tensors_data_batch()-> Result<(), HbacError>{
@@ -1371,7 +1376,7 @@ mod train_tests {
 
         SeqBuilder::new(num_features)
             .linear_s_with_conf(1, LinearConfig {
-                ws_init: init::Init::Const(k),
+                ws_init: tch::nn::init::Init::Const(k),//conflicts with ctor's init
                 bs_init: None,
                 bias: false
             })
