@@ -1403,7 +1403,6 @@ mod store_tests{
     use hbac_shared::val::Val;
 
     use crate::{HbacError, SetCond, SqlStore, Store};
-    use hbac_shared::{cdt_for_dir};
 
     #[ctor::ctor]
     fn init() {

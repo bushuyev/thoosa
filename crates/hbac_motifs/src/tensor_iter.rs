@@ -14,109 +14,14 @@ pub trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError>;
 
     fn get_tensors(&mut self, indexes: &[usize]) -> Result<Vec<Tensor>, HbacError> {
-        // let mut tensors = vec![];
         indexes.into_iter().map(|i|*i).map( |i| self.get_tensor(i).map(|t|t.shallow_clone())).collect()
-        // for i in indexes {
-        //     tensors.push(self.get_tensor(*i)?)
-        // }
-        //
-        // Ok(tensors)
     }
 
     fn tensors_len(&self) -> usize;
 }
-struct VecTensorsStore {
-    tensors:Vec<Box<Tensor>>
-}
-
-impl VecTensorsStore {
-    pub fn new(tensors: Vec<Tensor>) -> Box<Self> {
-        Box::new(Self { tensors:tensors.into_iter().map(|t|Box::new(t)).collect() })
-    }
-}
-impl TensorsStore for VecTensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
-        Ok(&self.tensors[index])
-    }
-
-    fn tensors_len(&self) -> usize {
-        self.tensors.len()
-    }
-}
-
-//TODO remove
-struct LazyTensorsStore {
-    tensor_refs:Vec<String>,
-    loaded:HashMap<String, Box<Tensor>>,
-    tensor_loader: Box<dyn TensorLoader + Send>
-}
-
-trait TensorLoader {
-    fn load(&self, tensor_ref:&String)->Tensor;
-}
-
-struct HashTensorLoader {
-    tensors:HashMap<String, Tensor>
-}
-
-impl HashTensorLoader {
-    pub fn new(tensors: HashMap<String, Tensor>) -> Box<Self> {
-        Box::new(Self { tensors })
-    }
-}
-
-impl TensorLoader for HashTensorLoader {
-    fn load(&self, tensor_ref: &String) -> Tensor {
-        debug!("tensor_ref={:?} self.tensors={:?}", tensor_ref, self.tensors);
-        self.tensors.get(tensor_ref).unwrap().copy()
-    }
-}
-
-impl LazyTensorsStore {
-
-    pub fn new(tensor_refs: Vec<String>, tensor_loader: Box<dyn TensorLoader + Send>) -> Box<Self> {
-        let mut loaded = HashMap::new();
-
-        preload(&mut loaded, &tensor_loader, &tensor_refs[0]);
-
-        Box::new(Self {
-            tensor_refs,
-            loaded: loaded,
-            tensor_loader
-        })
-    }
-}
-
-impl TensorsStore for LazyTensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
-
-        if index < self.tensor_refs.len() -1 {
-            preload(&mut self.loaded, &self.tensor_loader, &self.tensor_refs[index + 1]);
-        }
-
-        let loaded_tensor = self.loaded.get(&self.tensor_refs[index]);
-
-        match loaded_tensor {
-            None => {
-                Err(HbacError::new("not tensor"))
-            }
-            Some(tensor) => {
-                Ok(tensor)
-            }
-        }
-    }
-
-    fn tensors_len(&self) -> usize {
-        self.tensor_refs.len()
-    }
-}
-
-fn preload(loaded:&mut HashMap<String, Box<Tensor>>, tensor_loader: &Box<dyn TensorLoader + Send>, tensor_ref: &String) {
-    loaded.insert(tensor_ref.clone(), Box::new(tensor_loader.load(tensor_ref)));
-}
 
 
-pub struct TensorsIter {//TODO SliceIndex?
+pub struct TensorSliceIter {//TODO SliceIndex?
     tensors_store: Box<dyn TensorsStore + Send>,
     tensor_index_0:usize,
     tensor_index_1:usize,
@@ -130,7 +35,7 @@ pub struct TensorsIter {//TODO SliceIndex?
     iteration_n:AtomicUsize,
 }
 
-impl TensorsIter {
+impl TensorSliceIter {
 
     pub fn new(tensors_store: Box<impl TensorsStore + Send +'static>, dim:usize, m:usize, step:usize) -> Self {
 
@@ -155,7 +60,7 @@ impl TensorsIter {
 }
 pub type TensorSlice = (TensorSliceIdx<String>, Tensor); //tensor idx, slice, tensor
 
-impl Iterator for TensorsIter {
+impl Iterator for TensorSliceIter {
     type Item = Result<(TensorSlice, TensorSlice, usize), HbacError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -182,7 +87,6 @@ impl Iterator for TensorsIter {
             if self.slice_index_1 + self.step + self.m <= t_1.size()[self.dim] {
                 self.slice_index_1 += self.step;
 
-                debug!("1");
 
             } else {
 
@@ -190,16 +94,11 @@ impl Iterator for TensorsIter {
                     self.tensor_index_1 += 1;
                     self.slice_index_1 = 0;
 
-                    debug!("2.1");
-
                 } else {
                     if self.slice_index_0 + self.step + self.m <= t_0.size()[self.dim] {
                         self.slice_index_0 += self.step;
 
-                        debug!("2.2.1");
                     } else {
-                        debug!("2.2.2");
-
                         self.slice_index_0 = 0;
                         self.tensor_index_0 += 1;
                     }
@@ -230,7 +129,7 @@ impl Iterator for TensorsIter {
 pub(crate) struct CacheOnThreadsStore {
     cache:CacheOnThreads<String, Box<Tensor>>,
     keys:Vec<String>,
-    preload_d:Arc<AtomicUsize>,
+    preload_d:usize,//readonly
 }
 
 impl CacheOnThreadsStore {
@@ -238,17 +137,13 @@ impl CacheOnThreadsStore {
     pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize, max_keys_fifo: usize) -> Self
         where F: Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
 
-        let preload_d_rc = Arc::new(AtomicUsize::new(preload_d));
 
-        let preload_d_rc_in_cache = Arc::clone(&preload_d_rc);
         Self {
             cache: CacheOnThreads::new(loader, max_keys_fifo, Some(Box::new(move ||{
-                let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
-
                 warn!("on blocking: {:?}", preload_d)
             }))),
             keys,
-            preload_d: preload_d_rc,
+            preload_d,
         }
     }
 
@@ -260,21 +155,20 @@ impl CacheOnThreadsStore {
 impl TensorsStore for CacheOnThreadsStore {
 
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
-        let preload_d = self.preload_d.load(Ordering::Relaxed);
 
-        if self.cache.is_empty() || (index + preload_d < self.keys.len() && index % preload_d == 0){
-            debug!("1. get_tensor: index={}", index);
+        if self.cache.is_empty() || (index + self.preload_d < self.keys.len() && index % self.preload_d == 0){
+            debug!("get_tensor 1: index={}", index);
 
             let key = self.index_to_key(index).clone();
             self.cache.preload_and_blocking_get(
 
                 &key,
-                (index..index + preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
+                (index..index + self.preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
 
             ).ok_or_else(||HbacError::new(format!("no tensor at {:?}/{:?} on preload_and_blocking_get", index, key)))
 
         } else {
-            debug!("2. get_tensor: index={}", index);
+            debug!("get_tensor 2: index={}", index);
 
             let key = self.index_to_key(index).clone();
             self.cache.blocking_get(
@@ -284,6 +178,7 @@ impl TensorsStore for CacheOnThreadsStore {
         }
     }
 
+    #[inline]
     fn tensors_len(&self) -> usize {
         self.keys.len()
     }
@@ -298,10 +193,28 @@ mod tests {
     use tch::{Device, Kind, Tensor};
 
     use hbac_common::utils::*;
+    use hbac_shared::HbacError;
+    use crate::tensor_iter::{CacheOnThreadsStore, TensorSliceIter, TensorsStore};
 
 
-    use crate::tensor_iter::{CacheOnThreadsStore, HashTensorLoader, LazyTensorsStore, TensorsIter, VecTensorsStore};
+    struct VecTensorsStore {
+        tensors:Vec<Box<Tensor>>
+    }
 
+    impl VecTensorsStore {
+        pub fn new(tensors: Vec<Tensor>) -> Box<Self> {
+            Box::new(Self { tensors:tensors.into_iter().map(|t|Box::new(t)).collect() })
+        }
+    }
+    impl TensorsStore for VecTensorsStore {
+        fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
+            Ok(&self.tensors[index])
+        }
+
+        fn tensors_len(&self) -> usize {
+            self.tensors.len()
+        }
+    }
 
     #[test]
     fn test_one_inner(){
@@ -312,7 +225,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
+        let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
         let r = ts_to_vec(ts);
         // x x x x x
         //   x x x x
@@ -347,7 +260,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
+        let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
         let r = ts_to_vec(ts);
 
         assert_eq!(
@@ -373,7 +286,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
+        let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
         let r = ts_to_vec(ts);
 
 
@@ -392,7 +305,7 @@ mod tests {
 
     }
 
-    fn ts_to_vec(ts: TensorsIter) -> Vec<String> {
+    fn ts_to_vec(ts: TensorSliceIter) -> Vec<String> {
         ts.enumerate().map(|(i, v)| {
             match v {
                 Ok(ref x) => {
@@ -413,7 +326,7 @@ mod tests {
         ]);
 
 
-        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
+        let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
         let r = ts_to_vec(ts);
 
         assert_eq!(
@@ -446,7 +359,7 @@ mod tests {
             Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice())
         ]);
 
-        let ts = TensorsIter::new(VecTensorsStore::new(vec![t_0, t_1]), 1, 2, 2);
+        let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0, t_1]), 1, 2, 2);
         let r = ts_to_vec(ts);
 
         assert_eq!(
@@ -496,77 +409,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_two_inner_lazy() {
-        let t_0 = Tensor::vstack(&[
-            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice())
-        ]);
-
-        let t_1 = Tensor::vstack(&[
-            Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice())
-        ]);
-
-        let mut tensors_map = HashMap::new();
-        tensors_map.insert("t_0".into(), t_0);
-        tensors_map.insert("t_1".into(), t_1);
-
-
-        let ts = TensorsIter::new(
-            LazyTensorsStore::new(vec!["t_0".into(), "t_1".into()], HashTensorLoader::new(tensors_map)),
-            1, 2, 2
-        );
-
-
-        assert_eq!(
-            vec![
-                "i=0 0: [0.0, 1.0] 1: [2.0, 3.0]",
-                "i=1 0: [0.0, 1.0] 1: [4.0, 5.0]",
-                "i=2 0: [0.0, 1.0] 1: [6.0, 7.0]",
-                "i=3 0: [0.0, 1.0] 1: [8.0, 9.0]",
-                "i=4 0: [0.0, 1.0] 1: [0.0, 10.0]",
-                "i=5 0: [0.0, 1.0] 1: [20.0, 30.0]",
-                "i=6 0: [0.0, 1.0] 1: [40.0, 50.0]",
-                "i=7 0: [0.0, 1.0] 1: [60.0, 70.0]",
-                "i=8 0: [0.0, 1.0] 1: [80.0, 90.0]",
-                "i=9 0: [2.0, 3.0] 1: [4.0, 5.0]",
-                "i=10 0: [2.0, 3.0] 1: [6.0, 7.0]",
-                "i=11 0: [2.0, 3.0] 1: [8.0, 9.0]",
-                "i=12 0: [2.0, 3.0] 1: [0.0, 10.0]",
-                "i=13 0: [2.0, 3.0] 1: [20.0, 30.0]",
-                "i=14 0: [2.0, 3.0] 1: [40.0, 50.0]",
-                "i=15 0: [2.0, 3.0] 1: [60.0, 70.0]",
-                "i=16 0: [2.0, 3.0] 1: [80.0, 90.0]",
-                "i=17 0: [4.0, 5.0] 1: [6.0, 7.0]",
-                "i=18 0: [4.0, 5.0] 1: [8.0, 9.0]",
-                "i=19 0: [4.0, 5.0] 1: [0.0, 10.0]",
-                "i=20 0: [4.0, 5.0] 1: [20.0, 30.0]",
-                "i=21 0: [4.0, 5.0] 1: [40.0, 50.0]",
-                "i=22 0: [4.0, 5.0] 1: [60.0, 70.0]",
-                "i=23 0: [4.0, 5.0] 1: [80.0, 90.0]",
-                "i=24 0: [6.0, 7.0] 1: [8.0, 9.0]",
-                "i=25 0: [6.0, 7.0] 1: [0.0, 10.0]",
-                "i=26 0: [6.0, 7.0] 1: [20.0, 30.0]",
-                "i=27 0: [6.0, 7.0] 1: [40.0, 50.0]",
-                "i=28 0: [6.0, 7.0] 1: [60.0, 70.0]",
-                "i=29 0: [6.0, 7.0] 1: [80.0, 90.0]",
-                "i=30 0: [0.0, 10.0] 1: [20.0, 30.0]",
-                "i=31 0: [0.0, 10.0] 1: [40.0, 50.0]",
-                "i=32 0: [0.0, 10.0] 1: [60.0, 70.0]",
-                "i=33 0: [0.0, 10.0] 1: [80.0, 90.0]",
-                "i=34 0: [20.0, 30.0] 1: [40.0, 50.0]",
-                "i=35 0: [20.0, 30.0] 1: [60.0, 70.0]",
-                "i=36 0: [20.0, 30.0] 1: [80.0, 90.0]",
-                "i=37 0: [40.0, 50.0] 1: [60.0, 70.0]",
-                "i=38 0: [40.0, 50.0] 1: [80.0, 90.0]",
-                "i=39 0: [60.0, 70.0] 1: [80.0, 90.0]",
-            ],
-            ts_to_vec(ts)
-        )
-
-    }
-
     fn load_rand_tensor(_key:&String) ->Box<Tensor>{
         Box::new(Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu)))
     }
@@ -576,7 +418,7 @@ mod tests {
 
         let vec_100 = (0..20).map(|i|format!("key_{}", i)).collect::<Vec<String>>();
 
-        let ts = TensorsIter::new(
+        let ts = TensorSliceIter::new(
             Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100, 2, 3)),
             1, 2, 2
         );

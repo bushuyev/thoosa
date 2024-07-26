@@ -52,7 +52,7 @@ pub struct FindMotifsParams {
     max_dist_k: f32,
 
     #[command(subcommand)]
-    input_filter: Option<InputFilter>
+    input_filter: Option<InputFilter>,
 }
 
 #[derive(Debug, Subcommand, PartialEq, Clone)]
@@ -60,23 +60,23 @@ pub enum InputFilter {
     Conv1(Conv1Params)
 }
 
-#[derive(Debug, Args, PartialEq, Clone)]//PartialEq - for tests
+#[derive(Debug, Args, PartialEq, Clone)] //PartialEq - for tests
 pub struct Conv1Params {
     #[arg(long)]
-    kernel:i64,
+    kernel: i64,
 
     #[arg(long, default_value_t = 1)]
-    stride:i64,
+    stride: i64,
 
     #[arg(long, default_value_t = 0)]
-    padding:i64
+    padding: i64,
 }
 
 impl InputFilter {
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
         match self {
             Self::Conv1(conv1_params) => {
-                conv1_params.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v|{
+                conv1_params.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v| {
                     a.insert(format!("conv_1.{}", v.0), v.1);
                     a
                 })
@@ -84,8 +84,7 @@ impl InputFilter {
         }
     }
 
-    pub fn from_properties_map(properties:&HashMap<String, Val>) -> Result<Self, HbacError> {
-
+    pub fn from_properties_map(properties: &HashMap<String, Val>) -> Result<Self, HbacError> {
         let conv_1_props = hbac_shared::val::unprefix_properties("conv_1", &properties);
         if conv_1_props.len() > 0 {
             assert!(conv_1_props.len() == 3);
@@ -103,13 +102,13 @@ impl Conv1Params {
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
         HashMap::from([
-            ("Conv1Params.kernel".into(),  self.kernel.into()),
-            ("Conv1Params.stride".into(),  self.stride.into()),
+            ("Conv1Params.kernel".into(), self.kernel.into()),
+            ("Conv1Params.stride".into(), self.stride.into()),
             ("Conv1Params.padding".into(), self.padding.into()),
         ])
     }
 
-    pub fn from_properties_map(properties:HashMap<String, Val>) -> Result<Self, HbacError> {
+    pub fn from_properties_map(properties: HashMap<String, Val>) -> Result<Self, HbacError> {
         let properties = hbac_shared::val::unprefix_properties("Conv1Params", &properties);
 
         Ok(Conv1Params {
@@ -122,10 +121,8 @@ impl Conv1Params {
 
 
 impl FindMotifsParams {
-
-
     // #[cfg(test)]
-    pub fn dummy(step: usize, window: usize, resource_set:String, chunk_size: usize, max_dist_k: f32, input_filter: Option<&InputFilter>) ->Self {
+    pub fn dummy(step: usize, window: usize, resource_set: String, chunk_size: usize, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
         FindMotifsParams {
             step,
 
@@ -143,7 +140,7 @@ impl FindMotifsParams {
 
             max_dist_k,
 
-            input_filter: input_filter.cloned()
+            input_filter: input_filter.cloned(),
         }
     }
 
@@ -172,18 +169,18 @@ impl FindMotifsParams {
         self.max_dist_k
     }
 
-    pub fn to_filter_and_slice_params(&self, expander:&dyn Expander<T=FilterAndSlicerParams>) -> Vec<FilterAndSlicerParams>{
-        expander.expand(FilterAndSlicerParams::new(self.step, self.window as i64, "no filter", self.input_filter.clone() ))
+    pub fn to_filter_and_slice_params(&self, expander: &dyn Expander<T=FilterAndSlicerParams>) -> Vec<FilterAndSlicerParams> {
+        expander.expand(FilterAndSlicerParams::new(self.step, self.window as i64, "no filter", self.input_filter.clone()))
     }
 }
 
 pub trait Expander {
-    type T:Clone;
-    fn expand(&self, t:Self::T)->Vec<Self::T>;
+    type T: Clone;
+    fn expand(&self, t: Self::T) -> Vec<Self::T>;
 }
 
-pub struct  LinearExpander {
-    n:usize
+pub struct LinearExpander {
+    n: usize,
 }
 
 impl LinearExpander {
@@ -193,26 +190,26 @@ impl LinearExpander {
 }
 
 impl Expander for LinearExpander {
-    type T= FilterAndSlicerParams;
+    type T = FilterAndSlicerParams;
 
-    fn expand(&self, t: FilterAndSlicerParams) ->Vec<FilterAndSlicerParams> {
-        (0..self.n as i64).map(|i|{
+    fn expand(&self, t: FilterAndSlicerParams) -> Vec<FilterAndSlicerParams> {
+        (0..self.n as i64).map(|i| {
             let mut t = t.clone();
             // t.window * i;
-            t.filter = Some(InputFilter::Conv1(t.filter.map(|InputFilter::Conv1(f)|  {
+            t.filter = Some(InputFilter::Conv1(t.filter.map(|InputFilter::Conv1(f)| {
                 Conv1Params::new(f.kernel + f.kernel * i, f.stride, f.padding)
             }).unwrap_or(Conv1Params::new(10, 10, 10))));
             t
         }).collect()
     }
-
 }
 //TODO remove Arc<Mutex around store
-pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eeg_ids_str: Vec<String>, store:Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<Vec<usize>, HbacError>
-    where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
-
+pub fn find_motifs_euc<F>(loader: F, find_motifs_params: &FindMotifsParams, records_num: usize, resource_ids: Vec<String>, store: Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<Vec<usize>, HbacError>
+where
+    F: Fn(&String) -> Box<Tensor> + Sync + Send + 'static,
+{
     if records_num < find_motifs_params.window {
-        return Err(HbacError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)))
+        return Err(HbacError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
     }
 
     let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
@@ -220,7 +217,6 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
 
-    // let _descr = find_motifs_params.resource_set.clone();
 
     let t1 = Instant::now();
     let mut slots_processed = 0;
@@ -228,21 +224,20 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
     let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(2));
 
-    let  (run_ids, mut trackers) :(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]),|mut a:(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
-
+    let (run_ids, mut trackers): (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]), |mut a: (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
         let run_id = {
             store.lock()?.save_tree_run(
                 None,
                 format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
-                &eeg_ids_str,
-                params.to_properties_map()
+                &resource_ids,
+                params.to_properties_map(),
             )
         }?;
 
         let all_motif_trackers = min_dot
             .iter()
             .enumerate()
-            .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(*min_dot, StoreDumper::new(Arc::clone(&store), run_id, i)))//TODO name
+            .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(*min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))) //TODO name
             .collect::<Vec<SimpMotifTracker<_>>>();
 
         a.0.push(run_id);
@@ -260,12 +255,11 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
     })));
 
     chunk_and_slice(
-        eeg_ids_str,
+        resource_ids,
         find_motifs_params.max_keys_fifo,
         find_motifs_params.chunk_size,
-        param_set.into_iter().map(|v|v.into()).collect(),
-        move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors, params_idx:usize| {
-
+        param_set.into_iter().map(|v| v.into()).collect(),
+        move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors, params_idx: usize| {
             debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
 
             let all_motif_trackers = &mut trackers[params_idx];
@@ -275,16 +269,16 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                 let tensor_1 = chunk_1.t.i((.., c as i64, ..)).squeeze();
                 debug!("find_motifs_euc: tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
 
-                let t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}", c, ).as_str());
-                let t_size = t.size();
-                let max_dist = find_motifs_params.max_dist_k * t.mean(None).double_value(&[]) as f32;
-                debug!("find_motifs_euc: find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", t.size(), tensor_0.size(), tensor_1.size(), max_dist);
+                let euc_dist_t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}", c, ).as_str());
+                let t_size = euc_dist_t.size();
+                let max_dist = find_motifs_params.max_dist_k * euc_dist_t.mean(None).double_value(&[]) as f32;
+                debug!("find_motifs_euc: find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", euc_dist_t.size(), tensor_0.size(), tensor_1.size(), max_dist);
 
                 let mut i_0 = 0;
                 let mut i_1 = 0;
 
 
-                for (t_idx_0, t_size_0) in chunk_0.sizes.iter().enumerate() {//t_size_0 - num slices in t_idx_0 tensors
+                for (t_idx_0, t_size_0) in chunk_0.sizes.iter().enumerate() { //t_size_0 - num slices in t_idx_0 tensors
 
                     'tl0: for (s_0_idx, s_0) in (0..*t_size_0).enumerate() {
                         for (t_idx_1, t_size_1) in chunk_1.sizes.iter().enumerate() { //.skip(t_idx_0)
@@ -300,7 +294,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                         warn!(
                                             "find_motifs_euc: wrong index 0 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
                                             c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
-                                        );//TODO
+                                        ); //TODO
 
                                         break 'tl0;
                                     }
@@ -309,7 +303,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                         warn!(
                                             "find_motifs_euc: wrong index 1 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
                                             c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
-                                        );//TODO
+                                        ); //TODO
 
                                         break;
                                     }
@@ -317,7 +311,7 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                                     //skipping all under diagonal
                                     trace!("find_motifs_euc skipping: t_idx_0={}, s_0={}, t_idx_1={}, s_1={} ", t_idx_0, s_0, t_idx_1, s_1);
                                 } else {
-                                    let dist = t.double_value(&[i_0, i_1]);
+                                    let dist = euc_dist_t.double_value(&[i_0, i_1]);
 
                                     // debug!(
                                     //     "find_motifs_euc:  t_idx_0={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}",
@@ -351,8 +345,8 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
                 mt.dump();
             }
 
-                Ok(())
-            }, &mut cache
+            Ok(())
+        }, &mut cache,
     )?;
 
 
@@ -372,9 +366,9 @@ pub fn find_motifs_euc<F>(loader:F, find_motifs_params: &FindMotifsParams, recor
 
 #[derive(Debug)]
 struct ChunkOfSicedTensors {
-    keys:Vec<String>,
-    sizes:Vec<i64>,
-    t:Tensor
+    keys: Vec<String>,
+    sizes: Vec<i64>,
+    t: Tensor,
 }
 
 impl ChunkOfSicedTensors {
@@ -387,18 +381,17 @@ impl ChunkOfSicedTensors {
 pub struct FilterAndSlicerParams {
     step: usize,
     window: i64,
-    filter:Option<InputFilter>,
-    descr:String
+    filter: Option<InputFilter>,
+    descr: String,
 }
 
 pub struct FilterAndSlicer {
     step: usize,
     window: i64,
-    filter:Option<Box<dyn Fn(&Box<Tensor>)->Tensor>>,
+    filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor>>,
 }
 
 impl From<FilterAndSlicerParams> for FilterAndSlicer {
-
     fn from(params: FilterAndSlicerParams) -> Self {
         Self {
             step: params.step,
@@ -424,64 +417,61 @@ impl FilterAndSlicerParams {
         step: usize,
         window: i64,
         descr: impl Into<String>,
-        filter: Option<InputFilter>
+        filter: Option<InputFilter>,
     ) -> Self {
         Self {
             step,
             window,
             filter,
-            descr: descr.into()
+            descr: descr.into(),
         }
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
         let mut map = HashMap::from([
-            ("FilterAndSlicerParams.step".into(),  self.step.into()),
-            ("FilterAndSlicerParams.window".into(),  self.window.into()),
-            ("FilterAndSlicerParams.descr".into(),  self.descr.as_str().into()),
+            ("FilterAndSlicerParams.step".into(), self.step.into()),
+            ("FilterAndSlicerParams.window".into(), self.window.into()),
+            ("FilterAndSlicerParams.descr".into(), self.descr.as_str().into()),
         ]);
 
         if let Some(filter) = self.filter.as_ref() {
             map.extend(hbac_shared::val::prefix_properties("FilterAndSlicerParams.filter", filter.to_properties_map()).into_iter());
-
         }
 
         map
-
     }
 
-    pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
+    pub fn from_properties_map(properties: HashMap<String, Val>) -> Self {
         let properties = hbac_shared::val::unprefix_properties("FilterAndSlicerParams", &properties);
         FilterAndSlicerParams::new(
             properties.get("step").expect("step").as_usize().expect("step as_usize"),
             properties.get("window").expect("window").as_i64().expect("window as_i64"),
             properties.get("descr").expect("descr").as_str().expect("descr as_str"),
-            crate::find::InputFilter::from_properties_map(&hbac_shared::val::unprefix_properties("filter", &properties)).ok()
+            crate::find::InputFilter::from_properties_map(&hbac_shared::val::unprefix_properties("filter", &properties)).ok(),
         )
     }
 }
 
 impl FilterAndSlicer {
+    fn slice_tensors_chunk(&self, tensors_chunk: Vec<&Box<Tensor>>, keys: &[String]) -> ChunkOfSicedTensors {
+        let tensors_sliced = tensors_chunk.into_iter().map(|t| {
+            let sliced = slice_t(
+                &self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone())),
+                self.step,
+                self.window,
+            );
 
-    fn slice_tensors_chunk(&self, tensors_chunk_1: Vec<&Box<Tensor>>, keys: & [String]) -> ChunkOfSicedTensors {
-        // let vw_1 = vw_1_01[0];
-        // let tensors_chunk_1 = cache.blocking_get_1(vw_1);
-
-        let t_1_tensors = tensors_chunk_1.into_iter().map(|t| {
-            // debug!("find_motifs_euc: vw_1={:?} t_1 size={:?}", vw_1, t.size());
-
-            let x = self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone()));
-            let sliced = slice_t(&x, self.step, self.window);
-
-            // debug!("find_motifs_euc: t_1 sliced size={:?}", sliced.size());
+            debug!("slice_tensors_chunk: sliced size={:?}", sliced.size());
 
             sliced
         }).collect::<Vec<Tensor>>();
 
 
-        let sizes_1 = t_1_tensors.iter().map(|t| t.size()[0]).collect::<Vec<_>>();//num slices in each tensor
-
-        ChunkOfSicedTensors::new(keys.to_vec(), sizes_1, Tensor::vstack(&t_1_tensors))
+        ChunkOfSicedTensors::new(
+            keys.to_vec(),
+            tensors_sliced.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
+            Tensor::vstack(&tensors_sliced),
+        )
     }
 
 
@@ -495,45 +485,49 @@ impl FilterAndSlicer {
     pub fn filter(&self) -> Option<&Box<dyn Fn(&Box<Tensor>) -> Tensor>> {
         self.filter.as_ref()
     }
+
+    pub fn new(step: usize, window: i64, filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor>>) -> Self {
+        Self { step, window, filter }
+    }
 }
 
 fn chunk_and_slice<G>(
-    resources_ids_str: Vec<String>,
+    resources_ids: Vec<String>,
     _max_keys_fifo: usize,
     chunk_size: usize,
-    filter_and_slicer:Vec<FilterAndSlicer>,
-    mut callback:G,
-    cache: &mut CacheOnThreads<String, Box<Tensor>>
+    filter_and_slicer: Vec<FilterAndSlicer>,
+    mut callback: G,
+    cache: &mut CacheOnThreads<String, Box<Tensor>>,
 ) -> Result<(), HbacError>
-    where G: FnMut(ChunkOfSicedTensors, ChunkOfSicedTensors, usize)-> Result<(), HbacError>
+where
+    G: FnMut(ChunkOfSicedTensors, ChunkOfSicedTensors, usize) -> Result<(), HbacError>,
 {
-    let mut v_w_0 = resources_ids_str.chunks(chunk_size).collect::<Vec<&[String]>>();
-    v_w_0.push(&[]);//to get last window processed
+    let mut resources_ids_0 = resources_ids.chunks(chunk_size).collect::<Vec<&[String]>>();
+    resources_ids_0.push(&[]); //to get last window processed
 
-    let mut v_w_1 = resources_ids_str.chunks(chunk_size).collect::<Vec<&[String]>>();
-    v_w_1.push(&[]);
+    let mut resources_ids_1 = resources_ids.chunks(chunk_size).collect::<Vec<&[String]>>();
+    resources_ids_1.push(&[]);
 
-    let _t1 = Instant::now();
-    // let mut slots_processed = 0;
 
-    v_w_0.windows(2).enumerate().for_each(|(chunk_i_0, vw_0_01)| {//vw_0_01 - current,preload windows
-        if vw_0_01[1].len() > 0 {
-            debug!("find_motifs_euc: preload={:?}", vw_0_01[1]);
-            cache.preload(vw_0_01[1]);
+    resources_ids_0.windows(2).enumerate().for_each(|(chunk_i_0, window_0)| { //window_0 - current,preload windows
+        debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={:?}", window_0);
+
+        if window_0[1].len() > 0 {
+            cache.preload(window_0[1]);
         }
 
-        v_w_1.windows(2).into_iter().skip(chunk_i_0).enumerate().for_each(|(_chunk_i_1, vw_1_01)| {
-            if vw_1_01[1].len() > 0 {
-                debug!("find_motifs_euc: preload={:?}", vw_1_01[1]);
+        resources_ids_1.windows(2).into_iter().skip(chunk_i_0).enumerate().for_each(|(chunk_i_1, window_1)| {
+            debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={:?}", window_1);
 
-                cache.preload(vw_1_01[1]);
+            if window_1[1].len() > 0 {
+                cache.preload(window_1[1]);
             }
 
             for (params_idx, filter_slicer) in filter_and_slicer.iter().enumerate() {
                 callback(
-                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(vw_0_01[0]), vw_0_01[0]),
-                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(vw_1_01[0]), vw_1_01[0]),
-                    params_idx
+                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(window_0[0]), window_0[0]),
+                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(window_1[0]), window_1[0]),
+                    params_idx,
                 ).expect("cb");
             }
         })
@@ -542,106 +536,14 @@ fn chunk_and_slice<G>(
     Ok(())
 }
 
-// fn slice_tensors_chunk(step: usize, window: i64, tensors_chunk_1: Vec<&Box<Tensor>>, vw_1_01: & [& [String]]) -> ChunkOfSicedTensors {
-//     let vw_1 = vw_1_01[0];
-//     // let tensors_chunk_1 = cache.blocking_get_1(vw_1);
-//
-//     let t_1_tensors = tensors_chunk_1.into_iter().map(|t| {
-//         debug!("find_motifs_euc: vw_1={:?} t_1 size={:?}", vw_1, t.size());
-//
-//         let sliced = slice_t(&t, step, window);
-//
-//         debug!("find_motifs_euc: t_1 sliced size={:?}", sliced.size());
-//
-//         sliced
-//     }).collect::<Vec<Tensor>>();
-//
-//
-//
-//     let sizes_1 = t_1_tensors.iter().map(|t| t.size()[0]).collect::<Vec<_>>();//num slices in each tensor
-//
-//
-//
-//     ChunkOfSicedTensors::new(vw_1.to_vec(), sizes_1, Tensor::vstack(&t_1_tensors))
-// }
-
-
-/*pub fn find_motifs<F>(loader:F, find_motifs_params: &FindMotifsParams, records_num:usize, eegs: impl Iterator<Item=Option<i64>>, store:Arc<Mutex<impl Store + 'static>>, channels: i32) -> Result<(), HbacError>
-    where F:Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
-
-    let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
-    let slots_to_process = slots_to_process.pow(2) / 2 - slots_to_process; // n x n - diagonale
-
-
-    let eeg_ids_str = eegs.map(|v| v.unwrap().to_string()).collect::<Vec<String>>();//TODO check if all eeg exist
-
-
-    let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
-    let run_id = { store.lock()?.save_tree_run(format!("find motifs in {} with min dots: {:?}", find_motifs_params.resource_set, min_dot).as_str(), &eeg_ids_str)}?;
-
-    let all_motif_trackers = min_dot
-        .into_iter()
-        .enumerate()
-        .map(|(i, min_dot)|Mutex::new(SimpMotifTracker::<StoreDumper>::new(min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))))//TODO name
-        .collect::<Vec<Mutex<SimpMotifTracker<_>>>>();
-
-    let ts_iter = crate::tensor_iter::TensorsIter::new(
-        Box::new(crate::tensor_iter::CacheOnThreadsStore::new(loader, eeg_ids_str, find_motifs_params.preload_d, find_motifs_params.max_keys_fifo)),
-        1, find_motifs_params.window, find_motifs_params.step
-    );
-
-    let t1 = Instant::now();
-
-    ts_iter.array_chunks::<3>().par_bridge().for_each(|rr| {
-        debug!("find_motifs: in array_chunks, rr.len()={}", rr.len());
-        for r in rr {
-            match r {
-                Ok((t_s_0, t_s_1, slots_processed)) => {
-                    let dp = dot_norm(1, &t_s_0.1, &t_s_1.1).unwrap();
-
-                    debug!("find_motifs: t_s_0.1.size()={:?}, t_s_0.1.device()={:?}, t_s_1.1.size()={:?}, t_s_1.1.device()={:?} dp.size()={:?}, dp.device()={:?}", t_s_0.1.size(), t_s_0.1.device(), t_s_1.1.size(), t_s_1.1.device(), dp.size(), dp.device());
-
-                    for (channel, mt) in all_motif_trackers.iter().enumerate() {
-                        mt.lock().expect("mt").track(t_s_0.0.clone(), t_s_1.0.clone(), dp.double_value(&[channel as i64]) as f32);
-                    }
-
-                    if slots_processed > 0 && slots_processed % 10_000 == 0 {
-                        for (i, mt) in all_motif_trackers.iter().enumerate() {
-                            mt.lock().expect("mt").dump();
-                        }
-
-                        let slots_per_sec = (slots_processed as u64 / t1.elapsed().as_secs()) as usize;
-                        info!("pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min", slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, ((slots_to_process-slots_processed)/(slots_per_sec+1))/60)
-                    }
-                }
-                Err(e) => {
-                    panic!("v={:?}", e);
-                }
-            };
-        }
-    });
-
-    for (i, mt) in all_motif_trackers.iter().enumerate() {
-        mt.lock().expect("mt").dump();
-    }
-
-    for i in 0..channels { //TODO channels len
-        { store.lock()?.set_motifs(run_id, i as i64)}?;
-    }
-
-    { store.lock()?.delete_slices_without_matches(run_id) }?;
-
-    Ok(())
-}
-*/
 
 pub trait MotifDumper {
-    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), HbacError>;
+    fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), HbacError>;
 }
 
 #[derive(Debug)]
 pub struct FileDumper {
-    file:File,
+    file: File,
 }
 
 impl FileDumper {
@@ -666,55 +568,50 @@ impl FileDumper {
 }
 
 impl MotifDumper for FileDumper {
-    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), HbacError> {
+    fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), HbacError> {
         for motif in motifs.iter() {
             writeln!(self.file, "{}, {},  {:.3}", motif.0, motif.1, motif.2)?;
         }
         self.file.flush()?;
 
         Ok(())
-
     }
 }
 
 
 impl MotifDumper for StoreDumper {
-
-    fn dump(&mut self, motifs:&mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), HbacError>{
-
+    fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), HbacError> {
         debug!("MotifDumper::dump: motifs.len()={:?}, self.run_id={:?}", motifs.len(), self.run_id);
 
-        self.store.lock()?.save_slices(self.run_id, self.channel as i64,  motifs.into_iter().map(|v|((v.0.0.clone(), v.0.1), (v.1.0.clone(), v.1.1), v.2)).collect::<Vec<_>>())?;//TODO move TensorSliceIdx to shared
+        self.store.lock()?.save_slices(self.run_id, self.channel as i64, motifs.into_iter().map(|v| ((v.0.0.clone(), v.0.1), (v.1.0.clone(), v.1.1), v.2)).collect::<Vec<_>>())?; //TODO move TensorSliceIdx to shared
 
         Ok(())
-
     }
 }
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub(crate) struct SimpMotifTracker<D:MotifDumper+Debug> {
-    motifs:Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>,//i_0, match_0, match_1, dot
+pub(crate) struct SimpMotifTracker<D: MotifDumper + Debug> {
+    motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>, //i_0, match_0, match_1, dot
     min_dot: f32,
-    dumper:D
+    dumper: D,
 }
 
-impl <D:MotifDumper+Debug> SimpMotifTracker<D> {
-
-    pub fn new(min_dot:f32, dumper:D) -> SimpMotifTracker<D> {
+impl<D: MotifDumper + Debug> SimpMotifTracker<D> {
+    pub fn new(min_dot: f32, dumper: D) -> SimpMotifTracker<D> {
         Self {
             min_dot,
             motifs: vec![],
-            dumper
+            dumper,
         }
     }
 
-    pub fn track(&mut self, i_0: TensorSliceIdx<String>, i_1: TensorSliceIdx<String>, dot:f32) {
+    pub fn track(&mut self, i_0: TensorSliceIdx<String>, i_1: TensorSliceIdx<String>, dot: f32) {
 
         // if dot > self.min_dot {
         //     debug!("SimpMotifTracker::track: i_0={:?}, i_1={:?}, dot={:?}", i_0, i_1, dot);
 
-            self.motifs.push((i_0, i_1, dot));
+        self.motifs.push((i_0, i_1, dot));
         // }
     }
 
@@ -734,17 +631,17 @@ impl <D:MotifDumper+Debug> SimpMotifTracker<D> {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct MotifTracker {
-    motifs:Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>,//i_0, match_0, match_1, dot
-    motif_start_op:Option<TensorSliceIdx<String>>,//tensor, slice
+    motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>, //i_0, match_0, match_1, dot
+    motif_start_op: Option<TensorSliceIdx<String>>, //tensor, slice
     min_dot: f32,
     i_0: TensorSliceIdx<String>,
-    file:File,
-    last_dot: f32
+    file: File,
+    last_dot: f32,
 }
 #[allow(dead_code)]
 impl MotifTracker {
-    pub fn new(min_dot:f32, path: &str) -> Self {
-        match std::fs::remove_file(path){
+    pub fn new(min_dot: f32, path: &str) -> Self {
+        match std::fs::remove_file(path) {
             Ok(_) => {}
             Err(_) => {}
         }
@@ -762,11 +659,11 @@ impl MotifTracker {
             motifs: vec![],
             i_0: TensorSliceIdx("".to_string(), 0),
             file,
-            last_dot: 0.
+            last_dot: 0.,
         }
     }
 
-    pub fn track(&mut self, i_0: TensorSliceIdx<String>, i: TensorSliceIdx<String>, dot:f32) {
+    pub fn track(&mut self, i_0: TensorSliceIdx<String>, i: TensorSliceIdx<String>, dot: f32) {
         match &self.motif_start_op {
             None => {
                 if dot > self.min_dot {
@@ -786,9 +683,7 @@ impl MotifTracker {
         if self.i_0 != i_0 {
             self.i_0 = i_0;
             self.dump();
-
         }
-
     }
 
     pub fn next(&mut self) {
@@ -802,7 +697,6 @@ impl MotifTracker {
         }
         self.file.flush().unwrap();
         self.motifs.clear();
-
     }
 
     pub fn motifs(&self) -> &Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, TensorSliceIdx<String>, f32)> {
@@ -815,15 +709,14 @@ impl MotifTracker {
  * motifs = [channel x motif x data slice]
  */
 #[allow(dead_code)]
-fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32) -> Result<Tensor, HbacError> {
-
+fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step: usize, threshold: f32) -> Result<Tensor, HbacError> {
     let channels_num = series.size()[0];
     let series_len = series.size()[1];
     let motifs_num = motifs.size()[1];
     let motif_len = motifs.size()[2];
 
     //channels, motif, motif x series dots
-    let mut matches:Vec<Vec<Vec<f32>>> = (0..channels_num).fold(Vec::new(), |mut a, _v|{
+    let mut matches: Vec<Vec<Vec<f32>>> = (0..channels_num).fold(Vec::new(), |mut a, _v| {
         a.push((0..motifs_num).fold(Vec::new(), |mut a, _| {
             a.push(Vec::new());
             a
@@ -831,13 +724,12 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
         a
     });
 
-    for i in (0..=series_len-motif_len).step_by(step) {
+    for i in (0..=series_len - motif_len).step_by(step) {
         for m in 0..motifs_num {
-
             let dp = dot_norm(
                 1,
                 &series.i((.., i..i + motif_len)),
-                &motifs.i((.., m, ..))
+                &motifs.i((.., m, ..)),
             )?;
 
             for (channel, dot) in from::<Vec<f32>>(&dp).into_iter().enumerate() {
@@ -847,13 +739,9 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
     }
 
     let matches = Tensor::vstack(matches.into_iter().map(|channel_motifs| {
-
         Tensor::from_slice(channel_motifs.into_iter().map(|motifs_dots| {
-
-            motifs_dots.into_iter().map(|v| if v> threshold { 1 } else {0}).sum()
-
+            motifs_dots.into_iter().map(|v| if v > threshold { 1 } else { 0 }).sum()
         }).collect::<Vec<i32>>().as_slice())
-
     }).collect::<Vec<Tensor>>().as_slice());
 
     Ok(matches)
@@ -864,17 +752,15 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step:usize, threshold: f32)
  * series - [channel x data]
  * motifs = [channel x motif x data slice]
  */
-fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<Tensor, HbacError> {
-
+fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step: usize, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<Tensor, HbacError> {
     let channels_num = series.size()[0];
 
     let motifs_num = motifs.size()[1];
     let motif_len = motifs.size()[2];
 
 
-
     //channels, motif, motif x series dots
-    let mut channels_matches:Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_|Vec::new()).collect();
+    let mut channels_matches: Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_| Vec::new()).collect();
 
     let slices = slice_t(&series, step, motif_len);
 
@@ -894,14 +780,14 @@ fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, motifs_distanc
         }
     }
 
-    let channels_matches_lens = channels_matches.iter().map(|c|c.len()).collect::<Vec<usize>>();
-    let channel_motif_ids_lens = channel_motif_ids.iter().map(|c|c.len()).collect::<Vec<usize>>();
+    let channels_matches_lens = channels_matches.iter().map(|c| c.len()).collect::<Vec<usize>>();
+    let channel_motif_ids_lens = channel_motif_ids.iter().map(|c| c.len()).collect::<Vec<usize>>();
 
     debug!("clc_dist_matches: channels_matches_lens={:?}", channels_matches_lens);
     debug!("clc_dist_matches: channel_motif_ids_lens={:?}", channel_motif_ids_lens);
 
-    let channel_motif_ids:Vec<Vec<Option<usize>>>  = channel_motif_ids.iter().map(|ids_in_c|{
-        let mut x:Vec<Option<usize>> = ids_in_c.iter().map(|v|Some(*v)).collect();
+    let channel_motif_ids: Vec<Vec<Option<usize>>> = channel_motif_ids.iter().map(|ids_in_c| {
+        let mut x: Vec<Option<usize>> = ids_in_c.iter().map(|v| Some(*v)).collect();
 
         for _ in x.len()..motifs_num as usize {
             x.push(None)
@@ -914,30 +800,23 @@ fn clc_dist_matches(series: &Tensor, motifs: &Tensor, step:usize, motifs_distanc
 
 
     let matches = Tensor::vstack(channels_matches.into_iter().zip(channel_motif_ids.iter()).map(|(channel_motifs, motif_ids)| {
-
-
         debug!("motif_ids={:?}", motif_ids);
         debug!("channel_motifs={:?}", channel_motifs);
         debug!("motifs_distances={:?}", motifs_distances);
         Tensor::from_slice(channel_motifs.into_iter().zip(motif_ids.into_iter()).map(|(motifs_dists, motif_id_op)| {
-
-
             debug!("motifs_dists={:?}", motifs_dists);
 
-            motifs_dists.into_iter().map(|motif_dist|{
+            motifs_dists.into_iter().map(|motif_dist| {
 
                 // debug!("motif_id={:?} motif_dist={}", motif_id, motif_dist);
 
-                if motif_id_op.as_ref().map(|motif_id|motifs_distances.get(motif_id).expect(format!("no motif with motif_id={}", motif_id).as_str()) > &motif_dist).unwrap_or(false) {
+                if motif_id_op.as_ref().map(|motif_id| motifs_distances.get(motif_id).expect(format!("no motif with motif_id={}", motif_id).as_str()) > &motif_dist).unwrap_or(false) {
                     1
                 } else {
                     0
                 }
-
             }).sum()
-
         }).collect::<Vec<i32>>().as_slice())
-
     }).collect::<Vec<Tensor>>().as_slice());
 
     Ok(matches)
@@ -953,10 +832,13 @@ fn clc_motifs_matches_for_label<I, L>(
     limit: Option<usize>,
     step: usize,
     motifs_distances: &HashMap<usize, f32>,
-    channel_motif_ids: &Vec<Vec<usize>>
+    channel_motif_ids: &Vec<Vec<usize>>,
 ) -> Result<(), HbacError>
-    where I:Iterator<Item=Box<Tensor>>, I: std::marker::Send, L:Clone {
-
+where
+    I: Iterator<Item=Box<Tensor>>,
+    I: std::marker::Send,
+    L: Clone,
+{
     let count = AtomicU64::new(0);
 
     let channels_num = motifs.size()[0] as usize;
@@ -970,7 +852,6 @@ fn clc_motifs_matches_for_label<I, L>(
         let matches = clc_dist_matches(&eeg, &motifs, step, motifs_distances, channel_motif_ids)?;
 
         for motif_i in 0..motifs_num {
-
             for channel_i in 0..channels_num {
                 let motif_t = motifs.i((channel_i as i64, motif_i as i64));
 
@@ -980,10 +861,10 @@ fn clc_motifs_matches_for_label<I, L>(
                     let v = matches.i((channel_i as i64, motif_i as i64));
                     let num_matches = v.double_value(&[]);
 
-                     (num_matches, class_label.clone())
+                    (num_matches, class_label.clone())
                 };
 
-                if let Ok(mut channels_motifs_classes_guard) =  channels_motifs_classes.lock(){
+                if let Ok(mut channels_motifs_classes_guard) = channels_motifs_classes.lock() {
                     channels_motifs_classes_guard[channel_i][motif_i].0.push(num_matches_label.0);
                     channels_motifs_classes_guard[channel_i][motif_i].1.push(num_matches_label.1);
                 }
@@ -992,7 +873,7 @@ fn clc_motifs_matches_for_label<I, L>(
 
         //TODO remove
         if limit.map(|limit| count.load(Ordering::Relaxed) > limit as u64).unwrap_or(false) {
-            return Ok(())
+            return Ok(());
         }
 
         let count_ = count.fetch_add(1, Ordering::Relaxed);
@@ -1006,34 +887,30 @@ fn clc_motifs_matches_for_label<I, L>(
 
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
-
     #[arg(long)]
     run_ids: Vec<usize>,
 
-    #[arg(long, value_parser=parse_key_val::<String, String>, default_value="xxx=yyy")]
+    #[arg(long, value_parser = parse_key_val::< String, String >, default_value = "xxx=yyy")]
     labels_datasets: Vec<(String, String)>,
 
     #[arg(long)]
     train_resource_group: Option<String>, //TODO enum with labels_datasets?
 
-    #[arg(long,  default_value_t = 0.5)]
-    min_ratio:f32
-
+    #[arg(long, default_value_t = 0.5)]
+    min_ratio: f32,
 }
 
 impl SelectMotifsParams {
-
     pub fn run_ids(&self) -> &Vec<usize> {
         &self.run_ids
     }
 
-    pub fn dummy(run_ids:Vec<usize>, labels_datasets:Vec<(String, String)>, min_ratio: f32) -> Self{
-
-        SelectMotifsParams{
+    pub fn dummy(run_ids: Vec<usize>, labels_datasets: Vec<(String, String)>, min_ratio: f32) -> Self {
+        SelectMotifsParams {
             run_ids,
-            train_resource_group:None,
+            train_resource_group: None,
             labels_datasets,
-            min_ratio
+            min_ratio,
         }
     }
     pub fn labels_datasets(&self) -> &Vec<(String, String)> {
@@ -1058,11 +935,12 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, HbacError>
-    where I:Iterator<Item=Box<Tensor>> + Send + Sync {
-
-    let mut labels_channels_good_motifs = labels_loaders.iter().fold(HashMap::new(), |mut a, v|{
-        a.insert(v.0.clone(), (0..motifs.size()[0]).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>());//motifs.size()[0] - channels_num
+pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders: Vec<(String, I)>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, HbacError>
+where
+    I: Iterator<Item=Box<Tensor>> + Send + Sync,
+{
+    let mut labels_channels_good_motifs = labels_loaders.iter().fold(HashMap::new(), |mut a, v| {
+        a.insert(v.0.clone(), (0..motifs.size()[0]).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>()); //motifs.size()[0] - channels_num
         a
     });
 
@@ -1075,21 +953,18 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
     debug!("select_motifs_by_ratio: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard);
 
     for motif_i in 0..motifs_num {
-
         for channel_i in 0..channels_num {
-
             debug!("select_motifs_by_ratio: channels_motifs_classes_guard[channel_i={}][motif_i={}]={:?}", channel_i, motif_i, channels_motifs_classes_guard[channel_i as usize][motif_i as usize]);
 
             let counts_labels = &channels_motifs_classes_guard[channel_i as usize][motif_i as usize];
-            let labels_counts:HashMap<String, usize> = counts_labels.0.iter().zip(counts_labels.1.iter()).fold(HashMap::new(), |mut a, v|{
-                *a.entry(v.1.clone()).or_insert_with(||0) += *v.0 as usize;
+            let labels_counts: HashMap<String, usize> = counts_labels.0.iter().zip(counts_labels.1.iter()).fold(HashMap::new(), |mut a, v| {
+                *a.entry(v.1.clone()).or_insert_with(|| 0) += *v.0 as usize;
                 a
             });
 
             debug!("select_motifs_by_ratio: labels_counts={:?}", labels_counts);
-            let sum:f32 = labels_counts.values().map(|v|*v as f32).sum::<f32>();
+            let sum: f32 = labels_counts.values().map(|v| *v as f32).sum::<f32>();
             if sum > 0. {
-
                 for (label, counts) in labels_counts {
                     let ratio = counts as f32 / sum;
                     if ratio > min_ratio {
@@ -1099,7 +974,6 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
             }
 
             debug!("select_motifs_by_ratio: labels_channels_good_motifs={:?}", labels_channels_good_motifs);
-
         }
     }
 
@@ -1108,13 +982,13 @@ pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders:Vec<(String, I)>
     // };
 
     Ok(labels_channels_good_motifs)
-
 }
 
 
-pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device, min_corr: f64, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
-    where I:Iterator<Item=Box<Tensor>> + Send + Sync {
-
+pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders: Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device, min_corr: f64, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<Vec<Vec<(i64, f64)>>, HbacError>
+where
+    I: Iterator<Item=Box<Tensor>> + Send + Sync,
+{
     let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, motifs_distances, channel_motif_ids);
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>();
@@ -1126,9 +1000,7 @@ pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, li
     debug!("select_motifs: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard.len());
 
     for motif_i in 0..motifs_num {
-
         for channel_i in 0..channels_num {
-
             debug!("select_motifs: channels_motifs_classes_guard[channel_i={}][motif_i={}]={:?}", channel_i, motif_i, channels_motifs_classes_guard[channel_i as usize][motif_i as usize]);
 
             let vals_labels_t = Tensor::vstack(&[
@@ -1153,11 +1025,13 @@ pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders:Vec<(i64, I)>, li
     };
 
     Ok(channels_good_motifs)
-
 }
 
 fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
-    where I:Iterator<Item=Box<Tensor>> + Send + Sync, L:Clone{
+where
+    I: Iterator<Item=Box<Tensor>> + Send + Sync,
+    L: Clone,
+{
     let motifs_size = motifs.size();
 
     debug!("select_motifs: find_good_motifs: motifs={:?}", motifs_size);
@@ -1170,7 +1044,7 @@ fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>,
     for _i in 0..channels_num {
         let mut motifs_classes = Vec::with_capacity(motifs_num as usize);
         for _i in 0..motifs_num {
-            motifs_classes.push((Vec::with_capacity(400 * labels_loaders.len()), Vec::with_capacity(400 * labels_loaders.len())));//num of eegs of all classes
+            motifs_classes.push((Vec::with_capacity(400 * labels_loaders.len()), Vec::with_capacity(400 * labels_loaders.len()))); //num of eegs of all classes
         }
         channels_motifs_classes.push(motifs_classes);
     }
@@ -1183,27 +1057,25 @@ fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>,
             &unsafe { Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor) },
             &Tensor::zeros(slice_len, (tch::Kind::Float, *device)), //TODO
             Arc::clone(&channels_motifs_classes_lock),
-            loader, label, limit, step, motifs_distances, channel_motif_ids //TODO step - k * slice_len
+            loader, label, limit, step, motifs_distances, channel_motif_ids, //TODO step - k * slice_len
         )
     }).unwrap();
     (channels_num, motifs_num, channels_motifs_classes_lock)
 }
 
 //TODO for tests only?
-pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path:P) -> impl Iterator<Item=Box<Tensor>> {
-
+pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item=Box<Tensor>> {
     fs::read_dir(path.as_ref()).map(|r|
-        r.map(|e_r| e_r.and_then(|e| {
-                debug!("select_motifs: load_all_in_dir");
-                Ok(Box::new(Tensor::load(e.path()).expect(format!("can't load {:?}", e.path()).as_str())))
-            }).expect("")
-        )
+    r.map(|e_r| e_r.and_then(|e| {
+        debug!("select_motifs: load_all_in_dir");
+        Ok(Box::new(Tensor::load(e.path()).expect(format!("can't load {:?}", e.path()).as_str())))
+    }).expect("")
+    )
     ).expect("iter_all_in_dir")
 }
 
 #[cfg(test)]
 mod motif_find_tests {
-
     use std::{fs};
     use std::collections::{HashMap};
 
@@ -1211,18 +1083,17 @@ mod motif_find_tests {
     use std::sync::{Arc, Mutex};
     use log::debug;
 
-    use tch::{Device, Tensor};
-    use tch::Kind::{Int};
-
+    use tch::{Device, IndexOp, Tensor};
+    use tch::Kind::{Float, Int};
+    use tch::kind::FLOAT_CPU;
     use hbac_common::utils::*;
     use hbac_common::utils::cdt_for_dir;
     use hbac_shared::*;
 
     use hbac_shared::val::Val;
     use hbac_store::{SqlStore, Store};
-
-
-    use crate::find::{Conv1Params, FileDumper, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
+    use crate::cache_on_threads::CacheOnThreads;
+    use crate::find::{ChunkOfSicedTensors, Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
     use crate::find::iter_all_in_dir;
     use crate::find::select_motifs_by_corr;
 
@@ -1233,14 +1104,14 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_filt(){
+    fn test_filt() {
         //20 x 200_000 in files 5000 files 20_000_000_000
         // let dots = [1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1];
         let dots = [0.5, 0.9, 0.9, 0.5, 0.5, 0.9, 0.9, 0.9, 0.5, 0.5, 0.5, 0.5];
 
         let mut mt = super::MotifTracker::new(0.8, "/tmp/test_motifs.csv");
 
-        for (i, dot) in dots.into_iter().enumerate(){
+        for (i, dot) in dots.into_iter().enumerate() {
             mt.track(TensorSliceIdx(0.to_string(), 0), TensorSliceIdx(0.to_string(), i as i64), dot as f32);
         }
         assert_eq!(
@@ -1253,12 +1124,12 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn   test_z_norm() {
+    fn test_z_norm() {
         assert_eq!(vec![-1.2247449, 0.0, 1.2247449], vec_f32_from(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)));
     }
 
     #[test]
-    pub fn test_norm() -> Result<(), HbacError>{
+    fn test_norm() -> Result<(), HbacError> {
         let t = Tensor::from_slice(&[1., 2., 3.]);
         let norm = norm(&t, &[-1]);
 
@@ -1272,16 +1143,16 @@ mod motif_find_tests {
 
         let norm = norm_2(&t, 1);
 
-        assert_eq!(Tensor::from_slice(&[1., 1.]),norm.tensordot(&norm, 1, 1).diag(0));
+        assert_eq!(Tensor::from_slice(&[1., 1.]), norm.tensordot(&norm, 1, 1).diag(0));
 
         Ok(())
     }
 
 
     #[test]
-    fn test_self_dot() -> Result<(), HbacError>{
+    fn test_self_dot() -> Result<(), HbacError> {
         let t1 = Tensor::from_slice2(&[
-            &[1.,  2.,  3.,  4.,  5.,  6.,  7.,  8.,  9.],
+            &[1., 2., 3., 4., 5., 6., 7., 8., 9.],
             &[10., 20., 30., 40., 50., 60., 70., 80., 90.],
             &[100., 200., 300., 400., 500., 600., 700., 800., 900.]
         ]);
@@ -1334,7 +1205,7 @@ mod motif_find_tests {
 
 
     pub struct TensorsSource {
-        tensors:Vec<Tensor>
+        tensors: Vec<Tensor>,
     }
 
     impl TensorsSource {
@@ -1342,7 +1213,7 @@ mod motif_find_tests {
             Self { tensors }
         }
 
-        fn get_slices(&self,  i_0: i64, i_1: i64, m: i64, dim: i64) -> Result<(Tensor, Tensor), HbacError> {
+        fn get_slices(&self, i_0: i64, i_1: i64, m: i64, dim: i64) -> Result<(Tensor, Tensor), HbacError> {
             Ok((
                 self.tensors[0].f_slice(dim, Some(i_0), Some(i_0 + m), 1)?,
                 self.tensors[0].f_slice(dim, Some(i_1), Some(i_1 + m), 1)?
@@ -1351,7 +1222,7 @@ mod motif_find_tests {
     }
 
     #[test]
-    pub fn test_select_motifs() -> Result<(), HbacError> {//TODO dummy tensors
+    fn test_select_motifs() -> Result<(), HbacError> { //TODO dummy tensors
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
@@ -1363,74 +1234,74 @@ mod motif_find_tests {
         //as built in motifs_to_tensor - channels x  motif  x slice
         //for label xxx:
         let motifs_tensor = //Tensor::vstack(&[
-            Tensor::vstack(&[//channel 0
-                Tensor::vstack( &[ //
-                    Tensor::from_slice(&[1., 0., 1.]),//motif 0 first slice - good motif, matches tensors in "0" and does not matches tensors in 1
+            Tensor::vstack(&[ //channel 0
+                Tensor::vstack(&[ //
+                    Tensor::from_slice(&[1., 0., 1.]), //motif 0 first slice - good motif, matches tensors in "0" and does not matches tensors in 1
                     Tensor::from_slice(&[1., 2., 3.]) //motif 1 first slice - bad motif, matches tensors in "1" and does not matches tensors in 0
                 ]).view((2, 3)),
-                Tensor::vstack( &[//channel 1
-                    Tensor::from_slice(&[4., 5., 6.]),//motif 0 first slice - bad motif,
+                Tensor::vstack(&[ //channel 1
+                    Tensor::from_slice(&[4., 5., 6.]), //motif 0 first slice - bad motif,
                     Tensor::from_slice(&[2., 2., 0.]) //motif 1 first slice - good motif,
                 ]).view((2, 3)),
             ]).view((2, 2, 3));
 
 
         // tensors with matches
-        let t_0_0 = Tensor::vstack( &[
-            Tensor::from_slice(&[0., 0., 1., 0., 1., 0.]),//channel 0
+        let t_0_0 = Tensor::vstack(&[
+            Tensor::from_slice(&[0., 0., 1., 0., 1., 0.]), //channel 0
             Tensor::from_slice(&[1., 1., 0., 1., 0., 0.]) //channel 1
         ]).view((2, 6));
 
         t_0_0.save(test_dir.join("0").join("t_0_0.pt"))?;
 
-        let t_0_1 = Tensor::vstack( &[
-            Tensor::from_slice(&[0., 0., 1., 0., 1., 0.]),//channel 0
+        let t_0_1 = Tensor::vstack(&[
+            Tensor::from_slice(&[0., 0., 1., 0., 1., 0.]), //channel 0
             Tensor::from_slice(&[0., 2., 2., 0., 0., 0.]) //channel 1
         ]).view((2, 6));
 
-        t_0_1.save(test_dir.join("0").join("t_0_1.pt"))?;//XXX
+        t_0_1.save(test_dir.join("0").join("t_0_1.pt"))?; //XXX
 
 
         // tensors without matches
-        let t_1_0 = Tensor::vstack( &[
-            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]),//channel 0
+        let t_1_0 = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]), //channel 0
             Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]) //channel 1
         ]).view((2, 6));
 
         t_1_0.save(test_dir.join("1").join("t_1_0.pt"))?;
 
-        let t_1_1 = Tensor::vstack( &[
-            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]),//channel 0
+        let t_1_1 = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]), //channel 0
             Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]) //channel 1
         ]).view((2, 6));
 
-        t_1_1.save(test_dir.join("1").join("t_1_1.pt"))?;//YYY
+        t_1_1.save(test_dir.join("1").join("t_1_1.pt"))?; //YYY
 
 
-        let t_2_0 = Tensor::vstack( &[
-            Tensor::from_slice(&[2., 2., 2., 2., 2., 2.]),//channel 0
+        let t_2_0 = Tensor::vstack(&[
+            Tensor::from_slice(&[2., 2., 2., 2., 2., 2.]), //channel 0
             Tensor::from_slice(&[0., 2., 2., 1., 1., 1.]) //channel 1
         ]).view((2, 6));
 
         t_2_0.save(test_dir.join("2").join("t_2_0.pt"))?;
-        let t_2_1 = Tensor::vstack( &[
-            Tensor::from_slice(&[2., 2., 2., 2., 2., 2.]),//channel 0
+        let t_2_1 = Tensor::vstack(&[
+            Tensor::from_slice(&[2., 2., 2., 2., 2., 2.]), //channel 0
             Tensor::from_slice(&[1., 2., 2., 1., 0., 0.]) //channel 1
         ]).view((2, 6));
 
-        t_2_1.save(test_dir.join("2").join("t_2_1.pt"))?;//ZZZ
+        t_2_1.save(test_dir.join("2").join("t_2_1.pt"))?; //ZZZ
 
         let channel_motif_ids = vec![
-            vec![5,7],
-            vec![8,9],
+            vec![5, 7],
+            vec![8, 9],
         ];
 
 
         let motifs_avg_distances = HashMap::from([
-            (5,0.5),
-            (7,0.5),
-            (8,0.5),
-            (9,0.5)
+            (5, 0.5),
+            (7, 0.5),
+            (8, 0.5),
+            (9, 0.5)
         ]);
 
         let channels_good_motifs = select_motifs_by_corr(
@@ -1459,7 +1330,7 @@ mod motif_find_tests {
         assert_eq!(1, channels_good_motifs[1][0].0); //motif 1 is good for channel 1
 
 
-        let labels_channels_good_motifs = select_motifs_by_ratio (
+        let labels_channels_good_motifs = select_motifs_by_ratio(
             motifs_tensor,
             vec![
                 ("xxx".into(), iter_all_in_dir(test_dir.join("0"))),
@@ -1471,7 +1342,7 @@ mod motif_find_tests {
             Device::Cpu,
             0.5,
             &motifs_avg_distances,
-            &channel_motif_ids
+            &channel_motif_ids,
         )?;
 
         debug!("2. t={:?}", labels_channels_good_motifs);
@@ -1484,10 +1355,9 @@ mod motif_find_tests {
     }
 
 
-
     #[test]
-    pub fn test_find_motifs_euc() -> Result<(), HbacError> {
-        let eeg_id_series =  vec!["1111".into(), "2222".into(), "3333".into()];
+    fn test_find_motifs_euc() -> Result<(), HbacError> {
+        let eeg_id_series = vec!["1111".into(), "2222".into(), "3333".into()];
         // let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -1495,33 +1365,31 @@ mod motif_find_tests {
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
 
-        let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
-        let sig_1=  join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
-        let sig_2=  join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
+        let sig_0 = join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
+        let sig_1 = join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
+        let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
 
+        /*
+        let x = lin_t(n);
+        plot_series(
+             vec![
+                 (format!("Sig0"), RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig1"), GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig2"), BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
-
-       /*
-       let x = lin_t(n);
-       plot_series(
-            vec![
-                (format!("Sig0"), RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
-                (format!("Sig1"), GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
-                (format!("Sig2"), BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
-
-            ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-       ).unwrap();
-       */
+             ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        ).unwrap();
+        */
 
 
         let run_ids = super::find_motifs_euc(
-            move |key:&String| {
+            move |key: &String| {
                 let sig = match key.as_str() {
                     "1111" => &sig_0,
                     "2222" => &sig_1,
                     "3333" => &sig_2,
-                    _=> panic!("no")
+                    _ => panic!("no")
                 };
 
                 Box::new(Tensor::vstack(&[
@@ -1539,39 +1407,38 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                input_filter: None
+                input_filter: None,
             },
             3 * n as usize,
             eeg_id_series,
             Arc::clone(&store),
             1,
-
         )?;
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.list_motifs_slices(run_ids[0])?;
+        let eeg_slices = store.lock()?.list_motifs_slices(run_ids[0])?;
         debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
 
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&"3333".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v| v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v| v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&"3333".to_string()).and_then(|v| v.get(0)).unwrap());
 
         Ok(())
     }
 
     #[test]
-    pub fn test_find_motifs_euc_with_smooth_kernel() -> Result<(), HbacError> {
-        let eeg_id_series =  vec!["1111".into(), "2222".into(), "3333".into()];
+    fn test_find_motifs_euc_with_smooth_kernel() -> Result<(), HbacError> {
+        let eeg_id_series = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
 
-        let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
-        let sig_1=  join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
-        let sig_2=  join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
+        let sig_0 = join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
+        let sig_1 = join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
+        let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
         /*
         let x = lin_t(N);
@@ -1587,12 +1454,12 @@ mod motif_find_tests {
          */
 
         let run_ids = super::find_motifs_euc(
-            move |key:&String| {
+            move |key: &String| {
                 let sig = match key.as_str() {
                     "1111" => &sig_0,
                     "2222" => &sig_1,
                     "3333" => &sig_2,
-                    _=> panic!("no")
+                    _ => panic!("no")
                 };
 
                 Box::new(Tensor::vstack(&[
@@ -1610,44 +1477,42 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1)))
+                input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
             },
             3 * n as usize,
             eeg_id_series,
             Arc::clone(&store),
             1,
-
         )?;
 
         debug!("run_ids={:?}", run_ids);
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.list_motifs_slices(run_ids[0])?;
+        let eeg_slices = store.lock()?.list_motifs_slices(run_ids[0])?;
         debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
 
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&"3333".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v| v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v| v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&"3333".to_string()).and_then(|v| v.get(0)).unwrap());
 
         Ok(())
     }
 
 
-
     #[test]
-    pub fn test_find_motifs_euc_diff_sizes() -> Result<(), HbacError> {
-        let eeg_id_series =  vec!["0000".into(), "1111".into(), "2222".into()];
+    fn test_find_motifs_euc_diff_sizes() -> Result<(), HbacError> {
+        let eeg_id_series = vec!["0000".into(), "1111".into(), "2222".into()];
         // let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
-        let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(550));
-        let sig_1=  join_with_offset::<f32>(0., 10.0, &[(600, pulse.clone())], random_saw(1100));
-        let sig_2=  join_with_offset::<f32>(0., 10.0, &[(1000, pulse.clone())], random_saw(1950));
+        let sig_0 = join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(550));
+        let sig_1 = join_with_offset::<f32>(0., 10.0, &[(600, pulse.clone())], random_saw(1100));
+        let sig_2 = join_with_offset::<f32>(0., 10.0, &[(1000, pulse.clone())], random_saw(1950));
 
         let n = 3000i64;
         /*
@@ -1662,12 +1527,12 @@ mod motif_find_tests {
         */
 
         super::find_motifs_euc(
-            move |key:&String| {
+            move |key: &String| {
                 let sig = match key.as_str() {
                     "0000" => &sig_0,
                     "1111" => &sig_1,
                     "2222" => &sig_2,
-                    _=> panic!("no")
+                    _ => panic!("no")
                 };
 
 
@@ -1686,25 +1551,24 @@ mod motif_find_tests {
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist_k: 0.0001,
-                input_filter: None
+                input_filter: None,
             },
             3 * n as usize,
             eeg_id_series,
             Arc::clone(&store),
             1,
-
         )?;
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.list_motifs_slices(1)?;
+        let eeg_slices = store.lock()?.list_motifs_slices(1)?;
         debug!("0: {:?}", eeg_slices.get(&"0000".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"2222".to_string()));
 
         //TODO
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"0000".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v|v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v|v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&"0000".to_string()).and_then(|v| v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&"1111".to_string()).and_then(|v| v.get(0)).unwrap());
+        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&"2222".to_string()).and_then(|v| v.get(0)).unwrap());
 
         Ok(())
     }
@@ -1721,7 +1585,7 @@ mod motif_find_tests {
 
         let tensor_sizes = [
             1000, 1000, 1000,
-            500,  500,  500,
+            500, 500, 500,
         ];
 
         let tensors = tensor_sizes.into_iter().map(|s| join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(s as usize))).collect::<Vec<Vec<f32>>>();
@@ -1731,7 +1595,7 @@ mod motif_find_tests {
 
         let tensors_len = tensors.len();
         super::find_motifs_euc(
-            move |key:&String| {
+            move |key: &String| {
                 let sig = tensors.get(key.parse::<usize>().expect(format!("parse {}", key).as_str())).expect(format!("tensor {}", key).as_str());
 
                 Box::new(Tensor::vstack(&[
@@ -1740,7 +1604,6 @@ mod motif_find_tests {
                     ), //ch 0
                 ]))
             },
-
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1750,17 +1613,16 @@ mod motif_find_tests {
                 max_keys_fifo: 1000,
                 chunk_size: 3,
                 max_dist_k: 0.001,
-                input_filter: None
+                input_filter: None,
             },
             3 * n as usize,
-            (0..tensors_len).map(|v|format!("{}", v)).collect(),
+            (0..tensors_len).map(|v| format!("{}", v)).collect(),
             Arc::clone(&store),
             1,
-
         )?;
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices= store.lock()?.list_motifs_slices(1)?;
+        let eeg_slices = store.lock()?.list_motifs_slices(1)?;
 
 
         assert_eq!(6, eeg_slices.len());
@@ -1770,7 +1632,7 @@ mod motif_find_tests {
 
 
     #[test]
-    pub fn test_simple_motif_tracker() -> Result<(), HbacError>{
+    pub fn test_simple_motif_tracker() -> Result<(), HbacError> {
         let n = 1_000i64;
 
 
@@ -1789,16 +1651,14 @@ mod motif_find_tests {
         let step = 100;
 
 
-
         let mut mt = super::SimpMotifTracker::new(0.9, FileDumper::new("/tmp/test_motifs.csv"));
 
         let dim = 1;
 
 
         let ts = TensorsSource::new(vec![t_0, t_1]);
-        for i_0 in (0..n-m).step_by(step) {
-
-            for i_1 in (i_0..n-m).step_by(step).skip(1) {
+        for i_0 in (0..n - m).step_by(step) {
+            for i_1 in (i_0..n - m).step_by(step).skip(1) {
                 debug!("i_0={:?}, i_1={:?} m={}", i_0, i_1, m);
 
                 let (slice_01, slice_02) = ts.get_slices(i_0, i_1, m, dim)?;
@@ -1806,7 +1666,6 @@ mod motif_find_tests {
                 let dp = dot_norm(dim, &slice_01, &slice_02)?;
 
                 mt.track(TensorSliceIdx(0.to_string(), i_0), TensorSliceIdx(0.to_string(), i_1), dp.double_value(&[0]) as f32);
-
             }
         }
 
@@ -1823,7 +1682,7 @@ mod motif_find_tests {
         )?;
         */
 
-        let motifs:Vec<&(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)> = mt.motifs().iter().filter(|v|v.2 > 0.9).collect();
+        let motifs: Vec<&(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)> = mt.motifs().iter().filter(|v| v.2 > 0.9).collect();
 
         assert_eq!((TensorSliceIdx(0.to_string(), 100), TensorSliceIdx(0.to_string(), 600)), (motifs[0].0.clone(), motifs[0].1.clone()));
         assert_eq!((TensorSliceIdx(0.to_string(), 200), TensorSliceIdx(0.to_string(), 700)), (motifs[1].0.clone(), motifs[1].1.clone()));
@@ -1833,17 +1692,15 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_conv(){
-
-        let t_0 =Tensor::vstack(&[
-            Tensor::from_slice(&[1.,  1.,  1.,  0.,  0.,  0. ]),
-            Tensor::from_slice(&[2.,  2.,  2.,  0.,  0.,  0. ])
+    fn test_conv() {
+        let t_0 = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 1., 1., 0., 0., 0.]),
+            Tensor::from_slice(&[2., 2., 2., 0., 0., 0.])
         ]); //view((2, 1, 6))
         let t_1 = Tensor::vstack(&[
-            Tensor::from_slice(&[1.,  1.,  1.]),
-            Tensor::from_slice(&[2.,  2.,  2.])
+            Tensor::from_slice(&[1., 1., 1.]),
+            Tensor::from_slice(&[2., 2., 2.])
         ]).view((2, 1, 3)); //view((2, 1, 3))
-
 
 
         let c = t_0.conv1d(&t_1, None::<Tensor>, 1, 3, 1, 2);
@@ -1854,8 +1711,8 @@ mod motif_find_tests {
         assert_eq!(
             c,
             Tensor::vstack(&[
-                Tensor::from_slice(&[ 0.,   1.,   2.,   3.,   2.,   1.,   0.,   0.,   0.,   0.,]),
-                Tensor::from_slice(&[ 0.,   4.,   8.,  12.,   8.,   4.,   0.,   0.,   0.,   0.,])
+                Tensor::from_slice(&[0., 1., 2., 3., 2., 1., 0., 0., 0., 0., ]),
+                Tensor::from_slice(&[0., 4., 8., 12., 8., 4., 0., 0., 0., 0., ])
             ])
         )
 
@@ -1865,21 +1722,20 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_conv_2(){
-
-        let t_0 =Tensor::vstack(&[
-            Tensor::from_slice(&[1.,  1.,  1.,  0.,  0.,  0. ]),// first channel
-            Tensor::from_slice(&[2.,  2.,  2.,  0.,  0.,  0. ]) // second channel
+    fn test_conv_2() {
+        let t_0 = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 1., 1., 0., 0., 0.]), // first channel
+            Tensor::from_slice(&[2., 2., 2., 0., 0., 0.]) // second channel
         ]); //view((2, 1, 6))
 
         let t_1 = Tensor::vstack(&[
             Tensor::vstack(&[
-                Tensor::from_slice(&[1.,  1.,  1.]),// 1 first channel kernel
-                Tensor::from_slice(&[3.,  3.,  3.]) // 2 first channel kenrel
+                Tensor::from_slice(&[1., 1., 1.]), // 1 first channel kernel
+                Tensor::from_slice(&[3., 3., 3.]) // 2 first channel kenrel
             ]),
             Tensor::vstack(&[
-                Tensor::from_slice(&[2.,  2.,  2.]),// 1 second channel kernel
-                Tensor::from_slice(&[4.,  4.,  4.]) // 2 second channel kernel
+                Tensor::from_slice(&[2., 2., 2.]), // 1 second channel kernel
+                Tensor::from_slice(&[4., 4., 4.]) // 2 second channel kernel
             ])
         ]).view((4, 1, 3));
 
@@ -1893,10 +1749,10 @@ mod motif_find_tests {
         assert_eq!(
             c,
             Tensor::vstack(&[
-                Tensor::from_slice(&[ 0.,   1.,   2.,   3.,   2.,   1.,   0.,   0.,   0.,   0.,]), // first channel * 1 kernel
-                Tensor::from_slice(&[ 0.,   3.,   6.,   9.,   6.,   3.,   0.,   0.,   0.,   0.,]), // first channel * 2 kernel
-                Tensor::from_slice(&[ 0.,   4.,   8.,  12.,   8.,   4.,   0.,   0.,   0.,   0.,]), // second channel * 1 kernel
-                Tensor::from_slice(&[ 0.,   8.,  16.,  24.,  16.,   8.,   0.,   0.,   0.,   0.,])  // second channel * 2 kernel
+                Tensor::from_slice(&[0., 1., 2., 3., 2., 1., 0., 0., 0., 0., ]), // first channel * 1 kernel
+                Tensor::from_slice(&[0., 3., 6., 9., 6., 3., 0., 0., 0., 0., ]), // first channel * 2 kernel
+                Tensor::from_slice(&[0., 4., 8., 12., 8., 4., 0., 0., 0., 0., ]), // second channel * 1 kernel
+                Tensor::from_slice(&[0., 8., 16., 24., 16., 8., 0., 0., 0., 0., ])  // second channel * 2 kernel
             ])
         );
 
@@ -1911,39 +1767,39 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_clc_dot_matches() -> Result<(), HbacError>{
+    fn test_clc_dot_matches() -> Result<(), HbacError> {
         let t_0 = Tensor::vstack(&[
-            Tensor::from_slice(&[1.,  1.,  1.,  2.,  2.,  2.,  3.,  3.,  1.]),//channel 0
-            Tensor::from_slice(&[10., 10., 10., 20., 20., 20., 30., 30., 10.])//channel 1
+            Tensor::from_slice(&[1., 1., 1., 2., 2., 2., 3., 3., 1.]), //channel 0
+            Tensor::from_slice(&[10., 10., 10., 20., 20., 20., 30., 30., 10.]) //channel 1
         ]);
 
         let motifs_t = Tensor::vstack(&[
             Tensor::vstack(&[ //channel 0
-                Tensor::from_slice(&[1.,  1.,  1.]),//motif 0  - matches 1.,  1.,  1. and  2.,  2.,  2.,
-                Tensor::from_slice(&[1.,  2.,  2.]),//motif 1  - matches  1.,  2.,  2. and  2.,  3.,  3.,
-                Tensor::from_slice(&[3.,  3.,  1.]),//motif 2  - matches 3.,  3.,  1.
-                Tensor::from_slice(&[1.,  7.,  1.]),//motif 3  - no matches
+                Tensor::from_slice(&[1., 1., 1.]), //motif 0  - matches 1.,  1.,  1. and  2.,  2.,  2.,
+                Tensor::from_slice(&[1., 2., 2.]), //motif 1  - matches  1.,  2.,  2. and  2.,  3.,  3.,
+                Tensor::from_slice(&[3., 3., 1.]), //motif 2  - matches 3.,  3.,  1.
+                Tensor::from_slice(&[1., 7., 1.]), //motif 3  - no matches
             ]),
-            Tensor::vstack(&[//channel 1
-                Tensor::from_slice(&[10.,  70.,  10.]),//motif 3
-                Tensor::from_slice(&[30.,  30.,  10.]),//motif 2
-                Tensor::from_slice(&[10.,  20.,  20.]),//motif 1
-                Tensor::from_slice(&[10.,  10.,  10.]),//motif 0
+            Tensor::vstack(&[ //channel 1
+                Tensor::from_slice(&[10., 70., 10.]), //motif 3
+                Tensor::from_slice(&[30., 30., 10.]), //motif 2
+                Tensor::from_slice(&[10., 20., 20.]), //motif 1
+                Tensor::from_slice(&[10., 10., 10.]), //motif 0
             ])
         ]).view((2, 4, -1));
 
         let matches_t = Tensor::vstack(&[
             Tensor::from_slice(&[ //channel 0
-                2,//motif 0
-                2,//motif 1
-                1,//motif 2
-                0,//motif 3
+                2, //motif 0
+                2, //motif 1
+                1, //motif 2
+                0, //motif 3
             ]),
-            Tensor::from_slice(&[//channel 1
-                0,//motif 3
-                1,//motif 2
-                2,//motif 1
-                2,//motif 0
+            Tensor::from_slice(&[ //channel 1
+                0, //motif 3
+                1, //motif 2
+                2, //motif 1
+                2, //motif 0
             ])
         ]).totype(Int);
 
@@ -1953,39 +1809,39 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_clc_dist_matches() -> Result<(), HbacError>{
+    fn test_clc_dist_matches() -> Result<(), HbacError> {
         let t_0 = Tensor::vstack(&[
-            Tensor::from_slice(&[1.,  1.,  1.,  1.,  2.,  2.,  3.,  3.,  1.]),//channel 0
-            Tensor::from_slice(&[10., 10., 10., 20., 20., 20., 30., 30., 10.])//channel 1
+            Tensor::from_slice(&[1., 1., 1., 1., 2., 2., 3., 3., 1.]), //channel 0
+            Tensor::from_slice(&[10., 10., 10., 20., 20., 20., 30., 30., 10.]) //channel 1
         ]);
 
         let motifs_t = Tensor::vstack(&[
             Tensor::vstack(&[ //channel 0
-                Tensor::from_slice(&[1.,  1.,  1.]),//motif 0  - matches twice
-                Tensor::from_slice(&[1.,  2.,  2.]),//motif 1  - matches once
-                Tensor::from_slice(&[3.,  3.,  1.]),//motif 2  - matches once
-                Tensor::from_slice(&[1.,  7.,  1.]),//motif 3  - no matches
+                Tensor::from_slice(&[1., 1., 1.]), //motif 0  - matches twice
+                Tensor::from_slice(&[1., 2., 2.]), //motif 1  - matches once
+                Tensor::from_slice(&[3., 3., 1.]), //motif 2  - matches once
+                Tensor::from_slice(&[1., 7., 1.]), //motif 3  - no matches
             ]),
-            Tensor::vstack(&[//channel 1
-                Tensor::from_slice(&[10.,  70.,  10.]),//no matches
-                Tensor::from_slice(&[30.,  30.,  10.]),//matches once
-                Tensor::from_slice(&[10.,  20.,  20.]),//matches once
-                Tensor::from_slice(&[10.,  10.,  10.]),//matches once
+            Tensor::vstack(&[ //channel 1
+                Tensor::from_slice(&[10., 70., 10.]), //no matches
+                Tensor::from_slice(&[30., 30., 10.]), //matches once
+                Tensor::from_slice(&[10., 20., 20.]), //matches once
+                Tensor::from_slice(&[10., 10., 10.]), //matches once
             ])
         ]).view((2, 4, -1));
 
         let matches_t = Tensor::vstack(&[
             Tensor::from_slice(&[ //channel 0
-                2,//motif 0
-                1,//motif 1
-                1,//motif 2
-                0,//motif 3
+                2, //motif 0
+                1, //motif 1
+                1, //motif 2
+                0, //motif 3
             ]),
-            Tensor::from_slice(&[//channel 1
-                0,//motif 3
-                1,//motif 2
-                1,//motif 1
-                1,//motif 0
+            Tensor::from_slice(&[ //channel 1
+                0, //motif 3
+                1, //motif 2
+                1, //motif 1
+                1, //motif 0
             ])
         ]).totype(Int);
 
@@ -1995,33 +1851,30 @@ mod motif_find_tests {
             (2, 0.01),
             (3, 0.01),
             (4, 0.01),
-
             (10, 0.01),
             (20, 0.01),
             (30, 0.01),
             (40, 0.01),
         ]), &vec![
             vec![1, 2, 3, 4],
-            vec![10,20,30,40],
+            vec![10, 20, 30, 40],
         ])?;
-
 
 
         assert_eq!(matches_t, tensor);
 
         Ok(())
-
     }
 
     #[test]
-    fn test_filter_and_slicer_params(){
+    fn test_filter_and_slicer_params() {
         let params = FilterAndSlicerParams::new(10, 10, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
 
-        let properties:HashMap<String, Val> = params.to_properties_map();
+        let properties: HashMap<String, Val> = params.to_properties_map();
 
         debug!("properties={:?}", properties);
 
-        let sample_properties:HashMap<String, Val> = HashMap::from([
+        let sample_properties: HashMap<String, Val> = HashMap::from([
             ("FilterAndSlicerParams.window".into(), 10.into()),
             ("FilterAndSlicerParams.step".into(), 10.into()),
             ("FilterAndSlicerParams.descr".into(), "test".into()),
@@ -2038,7 +1891,122 @@ mod motif_find_tests {
         debug!("loaded_params={:?}", loaded_params);
 
         assert_eq!(params, loaded_params);
-
     }
 
+    #[test]
+    fn test_chunk_and_slice() -> Result<(), HbacError> {
+        let resources: Vec<String> = vec!["111", "222", "333", "444", "555"].into_iter().map(|v| v.into()).collect();
+
+        let mut chunks_0_test = vec![];
+        let mut chunks_1_test = vec![];
+
+        crate::find::chunk_and_slice(
+            resources.clone(),
+            0,
+            2,
+            vec![FilterAndSlicer::new(3, 5, None)],
+            |chunk_0, chunk_1, size| {
+                debug!("callback: chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
+
+                debug!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
+                debug!("callback: chunk_1.t=\n{}", chunk_1.t.i((.., 0, ..)).squeeze());
+
+                chunks_0_test.push(chunk_0.t.i((.., 0, ..)).squeeze());
+                chunks_1_test.push(chunk_1.t.i((.., 0, ..)).squeeze());
+                Ok(())
+            },
+            &mut CacheOnThreads::new(move |key| {
+                let i = resources.iter().position(|v| v.eq(key)).expect(format!("no {key}").as_str()) + 1;
+                let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
+                debug!("TTTT: key={key:?} i={i} v={v:?}");
+                Box::new(Tensor::from_slice(v.as_slice()).view((1, 10)))
+            }, 3, None),
+        )?;
+
+        let mut chunks_0 = vec![];
+        let mut chunks_1 = vec![];
+
+        chunks_0.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+        chunks_1.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+
+        chunks_0.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+        chunks_1.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+
+
+        chunks_0.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+        chunks_1.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+
+
+        //////////////////
+        chunks_0.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+        chunks_1.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+
+        chunks_0.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+        chunks_1.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+        ///////////////////
+
+        chunks_0.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+        chunks_1.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+
+        assert_eq!(chunks_0, chunks_0_test);
+        assert_eq!(chunks_1, chunks_1_test);
+
+        Ok(())
+    }
 }
