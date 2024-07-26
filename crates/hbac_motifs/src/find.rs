@@ -1209,20 +1209,10 @@ mod motif_find_tests {
 
     use std::path::Path;
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
-
-    use chrono::Utc;
     use log::debug;
-    use plotters::prelude::*;
-
-    use rayon::iter::IntoParallelRefIterator;
-    use rayon::iter::ParallelIterator;
 
     use tch::{Device, Tensor};
-
     use tch::Kind::{Int};
-
-    use torch_sys::C_tensor;
 
     use hbac_common::utils::*;
     use hbac_common::utils::cdt_for_dir;

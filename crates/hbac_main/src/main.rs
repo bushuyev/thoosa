@@ -1033,12 +1033,9 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
 #[cfg(test)]
 mod main_tests {
-    use std::fs;
     use std::sync::{Arc, Mutex};
 
     use log::debug;
-
-
     use tch::Device::Cpu;
 
     use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
@@ -1046,7 +1043,7 @@ mod main_tests {
     use hbac_shared::HbacError;
     use hbac_store::SqlStore;
 
-    use crate::{Cli, EEGLoader, init_resources, InitResourcesParams, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
+    use crate::{Cli, EEGLoader, init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
     use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
 
 

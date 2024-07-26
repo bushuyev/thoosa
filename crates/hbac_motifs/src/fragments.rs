@@ -329,8 +329,8 @@ mod motifs_tests {
     use std::path::Path;
     use std::time::UNIX_EPOCH;
 
-    use rayon::iter::ParallelBridge;
-    use rayon::iter::ParallelIterator;
+
+
     use tch::{Device, Tensor};
 
     use hbac_common::utils::*;
@@ -619,7 +619,7 @@ mod motifs_tests {
 
     #[test]
     fn test_load_motif_slices_5000()-> Result<(), HbacError>{
-        fn test_eeg_to_t(eeg_id:&str) -> Box<Tensor> {
+        fn test_eeg_to_t(_eeg_id:&str) -> Box<Tensor> {
 
             let t = Tensor::vstack(&[
                 Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
