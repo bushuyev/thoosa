@@ -187,7 +187,7 @@ enum Commands {
 
 fn main()  {
     let t1 = Instant::now();
-    match _main() {
+    match run_cli() {
 
         Ok(_) => {
             info!("All done in {} mls", t1.elapsed().as_millis());
@@ -200,20 +200,20 @@ fn main()  {
     std::process::exit(0x0000);//for jupyter
 }
 
-struct EEGLoader {
+struct ParquetLoader {
     base_path:String,
     tensors_path:Option<String>,
     dsp_filters:Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync >>
 }
 
-impl EEGLoader {
+impl ParquetLoader {
     pub fn new(base_path: String, tensors_path: Option<String>, dsp_filters: Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync>>) -> Self {
         Self { base_path, tensors_path, dsp_filters }
     }
 
 }
 
-impl ResourceLoader for EEGLoader {
+impl ResourceLoader for ParquetLoader {
     type K = String;
     type V = Tensor;
 
@@ -234,7 +234,7 @@ impl ResourceLoader for EEGLoader {
     }
 }
 
-fn _main() -> Result<(), HbacError> {
+fn run_cli() -> Result<(), HbacError> {
     let cli = Cli::parse();
 
     CombinedLogger::init(
@@ -245,7 +245,7 @@ fn _main() -> Result<(), HbacError> {
     ).expect("failed to init logging");
 
     let store = Arc::new(Mutex::new(SqlStore::from_path(&cli.store_path)?));
-    let loader = Arc::new(Box::new(EEGLoader::new(cli.base_path.clone(), cli.tensors_path.clone(), Some(Box::new(move |t:Tensor|{
+    let loader = Arc::new(Box::new(ParquetLoader::new(cli.base_path.clone(), cli.tensors_path.clone(), Some(Box::new(move |t:Tensor|{
 
         match cli.input_filters_kernel {
             None => {
@@ -264,11 +264,10 @@ fn _main() -> Result<(), HbacError> {
     let cpu_num = std::thread::available_parallelism()?;
     let num_threads = cli.num_threads.unwrap_or_else(||max(2, cpu_num.get()/2));
 
-    info!("VERSION: {} devices={:?}, base_path={:?} cpus={} num_threads={}", VERSION, devices, cli.base_path, cpu_num, num_threads);
-    info!("limit_eeg: {:?}", cli.limit);
+    info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} num_threads={num_threads} limit={:?}",  cli.base_path, cli.limit);
     std::io::stdout().flush()?;
 
-
+    //TODO optional for benchmark
     rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
 
     match &cli.command {
@@ -712,10 +711,11 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
 }
 
 fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, find_motifs_params: &FindMotifsParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'static>>) -> Result<Vec<usize>, HbacError> {
-    let eeg_id_series = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 
-    let records_num = clc_records(&eeg_id_series, cli.base_path.as_str()).unwrap();
-    debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} eeg_id_series={eeg_id_series:?}", find_motifs_params.resource_set());
+    let resource_ids = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
+
+    let records_num = clc_records(&resource_ids, cli.base_path.as_str()).unwrap();
+    debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} resource_ids={resource_ids:?}", find_motifs_params.resource_set());
 
     find::find_motifs_euc(
         move |key: &String| {
@@ -723,7 +723,7 @@ fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Devic
         },
         find_motifs_params,
         records_num,
-        eeg_id_series,
+        resource_ids,
         Arc::clone(&store),
         20,
     )
@@ -1043,7 +1043,7 @@ mod main_tests {
     use hbac_shared::HbacError;
     use hbac_store::SqlStore;
 
-    use crate::{Cli, EEGLoader, init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
+    use crate::{Cli, ParquetLoader, init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
     use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
 
 
@@ -1073,7 +1073,7 @@ mod main_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
-        let loader = Arc::new(Box::new(EEGLoader::new("../../test_data/eeg".into(), Some("../../test_data/eeg".into()), None)));
+        let loader = Arc::new(Box::new(ParquetLoader::new("../../test_data/eeg".into(), Some("../../test_data/eeg".into()), None)));
 
         init_resources(
             &cli,
@@ -1114,7 +1114,7 @@ mod main_tests {
         };
 
         let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let loader = Arc::new(Box::new(EEGLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
+        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
         let corr_ids = run_select_motifs(
             &cli,
             &store,
@@ -1142,7 +1142,7 @@ mod main_tests {
             vec![("grda".into(), "grda/3".into())], 100, 2, 2, 1.0e-5,
         );
 
-        let loader = Arc::new(Box::new(EEGLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
+        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
 
         let cli = Cli{
             base_path: "../../data/".into(),
@@ -1191,7 +1191,7 @@ mod main_tests {
             5
         );
 
-        let loader = Arc::new(Box::new(EEGLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
+        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
 
         let cli = Cli{
             base_path: "../../data/".into(),

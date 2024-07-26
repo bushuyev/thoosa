@@ -617,7 +617,8 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
     scan_conf.cache = false;
 
     Ok(resource_ids.iter().map(|resource_id| {
-        // debug!("eeg_id={:?}", eeg_id.unwrap_or_default());
+
+        //TODO config path
         let eeg_df = LazyFrame::scan_parquet(
             format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
             scan_conf.clone(),
@@ -629,7 +630,6 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
     }).sum())
 }
 
-// pub fn read_motif_to_iter(motif_file:&str) -> Result<impl Iterator<Item = (TensorSliceIdx, TensorSliceIdx)>, HbacError>{ TODO LazyCsvReader ?
 #[allow(dead_code)]
 pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, HbacError>{
 

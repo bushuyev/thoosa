@@ -1,6 +1,7 @@
 use std::cell::UnsafeCell;
 use std::rc::Rc;
 
+#[cfg(not(test))]
 use rand::rngs::ThreadRng;
 #[cfg(not(test))]
 use rand::thread_rng;
