@@ -292,10 +292,7 @@ impl TensorsStore for CacheOnThreadsStore {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::io::Write;
-    use std::time::Instant;
 
-    use log::debug;
     use rayon::iter::ParallelIterator;
     use rayon::prelude::ParallelBridge;
     use tch::{Device, Kind, Tensor};

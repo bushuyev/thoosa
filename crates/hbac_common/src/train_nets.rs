@@ -1681,13 +1681,13 @@ mod train_tests {
         let max_motif_batches = 978; //(motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0}) as i64;
 
         let cdt = cdt_for_dir();
-        let models_path = Path::new("/tmp/test_train_final").join(&cdt);
+        let models_path = Path::new("/tmp/test_infer").join(&cdt);
 
 
         save_test_models(&models_path, channels, max_motif_batches, motif_batch_size)?;
         save_test_final_model(&models_path, 6)?;
 
-        let input_path = Path::new("/tmp/test_train_final_input").join(&cdt);
+        let input_path = Path::new("/tmp/test_infer_input").join(&cdt);
         for i in 0..10 {
             save_fake_eeg(&input_path, format!("123123213{}.parquet", i).as_str());
         }
