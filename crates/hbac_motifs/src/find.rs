@@ -525,8 +525,8 @@ where
 
             for (params_idx, filter_slicer) in filter_and_slicer.iter().enumerate() {
                 callback(
-                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(window_0[0]), window_0[0]),
-                    filter_slicer.slice_tensors_chunk(cache.blocking_get_1(window_1[0]), window_1[0]),
+                    filter_slicer.slice_tensors_chunk(cache.blocking_get_vec(window_0[0]), window_0[0]),
+                    filter_slicer.slice_tensors_chunk(cache.blocking_get_vec(window_1[0]), window_1[0]),
                     params_idx,
                 ).expect("cb");
             }
@@ -1085,7 +1085,7 @@ mod motif_find_tests {
 
     use tch::{Device, IndexOp, Tensor};
     use tch::Kind::{Float, Int};
-    use tch::kind::FLOAT_CPU;
+
     use hbac_common::utils::*;
     use hbac_common::utils::cdt_for_dir;
     use hbac_shared::*;
@@ -1093,7 +1093,7 @@ mod motif_find_tests {
     use hbac_shared::val::Val;
     use hbac_store::{SqlStore, Store};
     use crate::cache_on_threads::CacheOnThreads;
-    use crate::find::{ChunkOfSicedTensors, Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
+    use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
     use crate::find::iter_all_in_dir;
     use crate::find::select_motifs_by_corr;
 
@@ -1905,7 +1905,7 @@ mod motif_find_tests {
             0,
             2,
             vec![FilterAndSlicer::new(3, 5, None)],
-            |chunk_0, chunk_1, size| {
+            |chunk_0, chunk_1, _size| {
                 debug!("callback: chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
                 debug!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
