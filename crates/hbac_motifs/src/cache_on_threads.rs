@@ -7,11 +7,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::thread;
+use std::sync::MutexGuard;
 
 use futures::executor::block_on;
 use log::debug;
 
-// struct LoaderFuture <K, V> where K:Hash + Eq{
 struct LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
     waker: Arc<Mutex<Option<Waker>>>,
     data: Arc<Mutex<Option<V>>>,
@@ -48,7 +48,6 @@ impl<K, V> LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Sen
     }
 }
 
-// impl <K, V> Future for LoaderFuture <K, V> where K:Hash + Eq{
 impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'static, V: Send + 'static {
     type Output = V;
 
@@ -65,7 +64,6 @@ impl<K, V> Future for LoaderFuture<K, V> where K: Hash + Eq + Send + Sync + 'sta
          }
     }
 }
-
 
 pub struct CacheOnThreads<K, V> where K:Hash + Eq + Send + Sync+ 'static + Debug, V:Send+'static{
     data_loaded:HashMap<K, V>,
@@ -106,7 +104,6 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         return true;
     }
 
-    // #[cfg(test)]
     pub fn get_loaded(&self, key:&K) -> Option<&V> {
         self.data_loaded.get(key)
     }
@@ -116,10 +113,12 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         if keys_fifo.len() > max_keys_fifo {
             if let Some(key_to_remove) = keys_fifo.pop_front() {
                 debug!("removing {:?} ", key_to_remove);
-                let entry_mutex = data_being_loaded_guard.entry(key_to_remove.clone()).or_insert_with(|| Arc::new(Mutex::new(None)));
-                entry_mutex.lock().expect("entry_mutex for key_to_remove");//TODO
+                {
+                    let entry_mutex = data_being_loaded_guard.entry(key_to_remove.clone()).or_insert_with(|| Arc::new(Mutex::new(None)));
+                    let _lock = entry_mutex.lock().expect("entry_mutex for key_to_remove"); //TODO
 
-                data_loaded.remove(&key_to_remove);
+                    data_loaded.remove(&key_to_remove);
+                }
                 data_being_loaded_guard.remove(&key_to_remove);
             }
         }
@@ -129,7 +128,6 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
 
         Self::purge_fifo(&mut self.keys_fifo, self.max_keys_fifo, &mut data_being_loaded_guard, &mut self.data_loaded);
-        
 
         for (key, entry_mutex) in data_being_loaded_guard.iter() {
             let mut entry_mutex_guard = entry_mutex.lock().expect("");
@@ -142,30 +140,34 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         }
     }
 
-    pub fn blocking_get_1<'a>(&mut self, keys:&[K]) -> Vec<&V> {
+    pub fn blocking_get_vec(&mut self, keys:&[K]) -> Vec<&V> {
 
         assert!(keys.len() <= self.max_keys_fifo);
 
-        //TODO self.data_being_loaded here
+        let data_being_loaded_clone = Arc::clone(&self.data_being_loaded);
+        let mut data_being_loaded_guard = data_being_loaded_clone.lock().expect("data_being_loaded");
+
         for k in keys.into_iter() {
-            self.blocking_get(k).expect(format!("no {:?}", k).as_str());
+            self.blocking_get_guard(k, &mut data_being_loaded_guard).expect(format!("no {:?}", k).as_str());
         }
 
         keys.into_iter().map(|k|{
             self.get_loaded(k).expect(format!("no {:?}", k).as_str())
         }).collect()
-
-
     }
 
     pub fn blocking_get(&mut self, k:&K) -> Option<&V> {
+        let data_being_loaded_clone = Arc::clone(&self.data_being_loaded);
+        let mut data_being_loaded_guard = data_being_loaded_clone.lock().expect("data_being_loaded");
+        self.blocking_get_guard(k, &mut data_being_loaded_guard)
+    }
 
-        let mut data_being_loaded_guard = self.data_being_loaded.lock().expect("data_being_loaded");
+    fn blocking_get_guard(&mut self, k:&K, data_being_loaded_guard:&mut MutexGuard<HashMap<K, Arc<Mutex<Option<V>>>>>) -> Option<&V> {
 
         if !self.data_loaded.contains_key(k) {
             debug!("blocking_get: loading {:?} self.keys_fifo()={:?}", k, self.keys_fifo);
 
-            Self::purge_fifo(&mut self.keys_fifo, self.max_keys_fifo, &mut data_being_loaded_guard, &mut self.data_loaded);
+            Self::purge_fifo(&mut self.keys_fifo, self.max_keys_fifo, data_being_loaded_guard, &mut self.data_loaded);
            
             self.keys_fifo.push_back(k.clone());
 
@@ -178,7 +180,6 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
                 self.data_loaded.insert(k.clone(), data);
 
             } else {
-                drop(data_being_loaded_guard);
 
                 self.load_blocking(k.clone());
             };
@@ -358,4 +359,5 @@ mod tests {
         assert_eq!(e_2.unwrap().key, "Key2");
 
     }
+
 }
