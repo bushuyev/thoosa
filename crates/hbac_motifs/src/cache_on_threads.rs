@@ -130,12 +130,15 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
         Self::purge_fifo(&mut self.keys_fifo, self.max_keys_fifo, &mut data_being_loaded_guard, &mut self.data_loaded);
 
         for (key, entry_mutex) in data_being_loaded_guard.iter() {
-            let mut entry_mutex_guard = entry_mutex.lock().expect("");
 
-            if let Some(data) = entry_mutex_guard.take(){
-                debug!("update_loaded: {:?} was taken from preloaded", key);
-                self.data_loaded.insert(key.clone(), data);
+            if let Ok(ref mut entry_mutex_guard) = entry_mutex.try_lock() {
+                if let Some(data) = entry_mutex_guard.take(){
+                    debug!("update_loaded: {:?} was taken from preloaded", key);
+                    self.data_loaded.insert(key.clone(), data);
 
+                } else {
+                    debug!("update_loaded: {:?} is locked");
+                }
             }
         }
     }
