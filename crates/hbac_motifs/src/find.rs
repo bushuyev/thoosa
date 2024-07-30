@@ -248,12 +248,6 @@ where
 
     debug!("find_motifs_euc: run_ids={:?}, param_set.len()={:?}, trackers.len()={:?}", run_ids, param_set.len(), trackers.len());
 
-    let mut cache = CacheOnThreads::new(loader, find_motifs_params.max_keys_fifo, Some(Box::new(move || {
-        // let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
-
-        warn!("blocking");
-    })));
-
     chunk_and_slice(
         resource_ids,
         find_motifs_params.max_keys_fifo,
@@ -346,7 +340,13 @@ where
             }
 
             Ok(())
-        }, &mut cache,
+        },
+
+        &mut CacheOnThreads::new(loader, find_motifs_params.max_keys_fifo, Some(Box::new(move || {
+            // let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
+
+            warn!("blocking");
+        })))
     )?;
 
 
