@@ -262,7 +262,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::{Arc, RwLock};
     use std::sync::mpsc::Receiver;
-    use std::task::{Context, Poll};
+    use std::task::{Context, Poll, Waker};
     use std::thread;
     use std::time::Duration;
     use futures::AsyncWriteExt;
@@ -391,7 +391,7 @@ mod tests {
 
         struct Loader<K, V>
         where
-            K: Hash + Eq + Send + Sync + 'static + Debug,
+            K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
             V: Send + Debug + 'static,
         {
             loader_pool:ThreadPool,
@@ -399,27 +399,32 @@ mod tests {
             sender:Arc<Sender<(K, V)>>,
 
             data_loaded:Arc<RwLock<HashMap<K, Mutex<V>>>>,
+            // data_being_loaded:Arc<RwLock<HashMap<K, Mutex<Waker>>>>,
+            data:HashMap<K, V>,
             loader:Arc<Box<dyn Fn(&K)->V + Sync + Send>>,
         }
 
         impl<K, V> Loader<K, V>
         where
-            K: Hash + Eq + Send + Sync + 'static + Debug,
+            K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
             V: Send + Debug + 'static,
         {
             fn preload(&mut self, keys: Vec<K>) -> Result<(), HbacError> {
                 for key in keys {
-
+                    //todo check if loaded
 
                     let loader = Arc::clone(&self.loader);
                     let data_loaded = Arc::clone(&self.data_loaded);
+                    // let data_being_loaded = Arc::clone(&self.data_being_loaded);
                     let sender_down = Arc::clone(&self.sender);
 
                     self.loader_pool.spawn(move ||{
+                        // data_being_loaded.write().expect("data_being_loaded").insert(key.clone(), Waker::)
+
                         let v = loader(&key);
                         println!("pool 0: current_thread={:?}", thread::current().id());
                         println!("v={v:?}");
-                        // sender_down.send((key, r));//Tensors can't sync
+                        // sender_down.send((key, v));//Tensors can't sync
                         data_loaded.write().expect("data_loaded write").insert(key, Mutex::new(v));
 
                     });
@@ -453,21 +458,61 @@ mod tests {
 
                         Ok(())
                     }).build()?,
+                    data:HashMap::new(),
                     data_loaded:Arc::new(RwLock::new(HashMap::new()))
                 })
             }
+
+            pub fn get(&mut self, key:K)->Result<&V, HbacError> {
+
+
+                Ok(self.data.entry(key).or_insert_with_key(|key|{
+                    while !self.data_loaded.read().expect("data_loaded.write").contains_key(&key) {
+                        println!("waiting in {:?}", thread::current().name());
+                        rayon::yield_local();
+                    }
+
+                    match self.data_loaded.write().expect("data_loaded.write").remove(key){
+                        Some(m)=>{
+                            m.into_inner().expect("into_inner")
+                        }
+                        None => {
+                            todo!()
+                        }
+                    }
+                }))
+            }
         }
 
-        let mut loader = Loader::new(load_test_entity)?;
+        let main_pool = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
 
-        loader.preload((0..10).map(|i|format!("aaa_{i}")).collect());
-        println!("xxxxxxxxxxxxxxx");
-        loader.preload((0..10).map(|i|format!("bbb_{i}")).collect());
-        println!("zzzzzzzzzzzzzzz");
+            let mut b = std::thread::Builder::new();
+            b.name(format!("{}/{:?}", "main_pool", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build()?;
+
+        main_pool.install(||{
+            let mut loader = Loader::new(load_test_entity).expect("loader");
+
+            loader.preload((0..10).map(|i|format!("aaa_{i}")).collect());
+            println!("xxxxxxxxxxxxxxx");
+            loader.preload((0..10).map(|i|format!("bbb_{i}")).collect());
+            println!("zzzzzzzzzzzzzzz");
+
+            let v =loader.get("aaa_9".to_string());
+            println!("v.1={v:?}");
 
 
 
-        thread::sleep(Duration::new(3, 0));
+            thread::sleep(Duration::new(3, 0));
+
+            let v =loader.get("aaa_9".to_string());
+            println!("v.2={v:?}");
+        });
+
+
 
        /*
         let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
