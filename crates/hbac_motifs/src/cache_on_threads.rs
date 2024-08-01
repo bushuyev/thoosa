@@ -238,11 +238,10 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
                 debug!("load_no_blocking: key_in_thread={:?} loaded", key_in_thread);
 
-                guard.replace(loader_in_thread(&key_in_thread))
+                guard.replace(loader_in_thread(&key_in_thread));
 
             });
         }
-
     }
 
     pub fn is_empty(&self) -> bool {
@@ -254,11 +253,13 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::{HashMap, VecDeque};
     use std::fmt::Debug;
     use std::future::Future;
     use std::hash::Hash;
     use std::io::Write;
+    use std::ops::Deref;
     use std::pin::Pin;
     use std::sync::{Arc, RwLock};
     use std::sync::mpsc::Receiver;
@@ -270,6 +271,7 @@ mod tests {
     use log::debug;
     use rayon::ThreadPool;
     use hbac_shared::HbacError;
+    use serde::Deserialize;
     use crate::cache_on_threads::CacheOnThreads;
 
     #[ctor::ctor]
@@ -380,13 +382,47 @@ mod tests {
     fn test_0() -> Result<(), HbacError>{
         use rayon::iter::ParallelIterator;
         use rayon::iter::IntoParallelIterator;
-        use std::sync::mpsc;
-        use std::sync::mpsc::{Sender, Receiver};
+        // use std::sync::mpsc;
+        // use std::sync::mpsc::{Sender, Receiver};
         use std::rc::Rc;
-        use std::sync::Mutex;
+        // use std::sync::Mutex;
+        use parking_lot::{Mutex, RwLock, MutexGuard, MappedMutexGuard, RwLockReadGuard, MappedRwLockReadGuard};
+
+        use rayon::iter::ParallelBridge;
+        use rayon::prelude::*;
+
+        fn load_test_entity_sv(key:&String)->SyncWrapper<TestEntity>{
+            thread::sleep(Duration::new(0, 1000));
+            SyncWrapper::new(TestEntity {key:key.clone()})
+        }
+
+
 
         let num_threads = std::thread::available_parallelism()?;
         println!("num_threads={num_threads:?}");
+
+        #[derive(Debug)]
+        struct SyncWrapper<V>
+            where  V: Send + Debug {
+            v:V
+        }
+
+        impl <V> SyncWrapper<V>
+            where  V: Send + Debug {
+            pub fn new(v:V) -> Self {
+                Self {
+                    v
+                }
+            }
+        }
+        unsafe impl <V> Sync for SyncWrapper<V> where  V: Send + Debug {}
+
+        impl <V> Deref for SyncWrapper<V>  where  V: Send + Debug {
+            type Target = V;
+            fn deref(&self) -> &Self::Target {
+                &self.v
+            }
+        }
 
 
         struct Loader<K, V>
@@ -395,13 +431,16 @@ mod tests {
             V: Send + Debug + 'static,
         {
             loader_pool:ThreadPool,
-            sender_receiver_up:(Sender<K>, Receiver<K>),
-            sender:Arc<Sender<(K, V)>>,
+            // sender_receiver_up:(Sender<K>, Receiver<K>),
+            // sender:Arc<Sender<(K, V)>>,
 
-            data_loaded:Arc<RwLock<HashMap<K, Mutex<V>>>>,
+            // data_loaded:Arc<RwLock<HashMap<K, Mutex<V>>>>,
+            // data_loaded:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
+            data_loaded:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
+            data_loaded_read_write:Mutex<bool>,
             // data_being_loaded:Arc<RwLock<HashMap<K, Mutex<Waker>>>>,
-            data:HashMap<K, V>,
-            loader:Arc<Box<dyn Fn(&K)->V + Sync + Send>>,
+            // data:HashMap<K, V>,
+            loader:Arc<Box<dyn Fn(&K)->SyncWrapper<V> + Sync + Send>>,
         }
 
         impl<K, V> Loader<K, V>
@@ -411,21 +450,27 @@ mod tests {
         {
             fn preload(&mut self, keys: Vec<K>) -> Result<(), HbacError> {
                 for key in keys {
-                    //todo check if loaded
+                    // if self.data.contains_key(&key) || self.data_loaded.read().unwrap().contains_key(&key){
+                    //     println!("skipping key={key:?}");
+                    //     continue;
+                    // }
+                    println!("loading key={key:?}");
 
                     let loader = Arc::clone(&self.loader);
                     let data_loaded = Arc::clone(&self.data_loaded);
                     // let data_being_loaded = Arc::clone(&self.data_being_loaded);
-                    let sender_down = Arc::clone(&self.sender);
+                    // let sender_down = Arc::clone(&self.sender);
 
                     self.loader_pool.spawn(move ||{
                         // data_being_loaded.write().expect("data_being_loaded").insert(key.clone(), Waker::)
 
                         let v = loader(&key);
                         println!("pool 0: current_thread={:?}", thread::current().id());
-                        println!("v={v:?}");
+                        println!("v={:?}", *v);
                         // sender_down.send((key, v));//Tensors can't sync
-                        data_loaded.write().expect("data_loaded write").insert(key, Mutex::new(v));
+                        // data_loaded.write().expect("data_loaded write").insert(key, Mutex::new(v));
+                        data_loaded.write().insert(key, v);
+                        // data_loaded.insert(key, v);
 
                     });
                 };
@@ -434,8 +479,8 @@ mod tests {
             }
 
             pub fn new<F>(loader:F) -> Result<Self, HbacError>
-                where F:Fn(&K) -> V + Sync + Send + 'static {
-                let (sender, receiver) = mpsc::channel();
+                where F:Fn(&K) -> SyncWrapper<V> + Sync + Send + 'static {
+                // let (sender, receiver) = mpsc::channel();
 
                 // let mut data_loaded = Arc::new(RwLock::new(HashMap::new()));
                 // let data_loaded_arc = Arc::clone(&data_loaded);
@@ -448,8 +493,8 @@ mod tests {
 
                 Ok(Self {
                     loader:Arc::new(Box::new(loader)),
-                    sender_receiver_up: mpsc::channel(),
-                    sender: Arc::new(sender),
+                    // sender_receiver_up: mpsc::channel(),
+                    // sender: Arc::new(sender),
                     loader_pool:rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
 
                         let mut b = std::thread::Builder::new();
@@ -458,33 +503,78 @@ mod tests {
 
                         Ok(())
                     }).build()?,
-                    data:HashMap::new(),
-                    data_loaded:Arc::new(RwLock::new(HashMap::new()))
+                    // data:HashMap::new(),
+                    // data_loaded:Arc::new(RwLock::new(HashMap::new())),
+                    data_loaded:Arc::new(RwLock::new(HashMap::new())),
+                    data_loaded_read_write:Mutex::new(false),
                 })
             }
 
-            pub fn get(&mut self, key:K)->Result<&V, HbacError> {
-
-
-                Ok(self.data.entry(key).or_insert_with_key(|key|{
-                    while !self.data_loaded.read().expect("data_loaded.write").contains_key(&key) {
-                        println!("waiting in {:?}", thread::current().name());
-                        rayon::yield_local();
-                    }
-
-                    match self.data_loaded.write().expect("data_loaded.write").remove(key){
-                        Some(m)=>{
-                            m.into_inner().expect("into_inner")
-                        }
-                        None => {
-                            todo!()
-                        }
-                    }
-                }))
+            pub fn test(&mut self, key:K) -> Option<&V> {
+                // self.data_loaded.write().expect("write").remove(&key).expect("key").into_inner()
+                None
             }
+
+            pub fn get(&self, key: K) -> MappedRwLockReadGuard<SyncWrapper<V>> {
+                // loop {
+                //     if let Ok(lock) = self.data_loaded.try_read() {
+                //         return lock.get(&key).expect("v");
+                //     }
+                // }
+                // self.data_loaded.get(&key).expect("zzz")
+                RwLockReadGuard::map(self.data_loaded.read(), |d:&HashMap<K, SyncWrapper<V>>| d.get(&key).unwrap())
+
+                // loop {
+                //     match self.data_loaded.read().get(&key) {
+                //         Some(v)=> {
+                //             return v;
+                //         },
+                //         None => {
+                //             rayon::yield_local();
+                //         }
+                //     };
+                // }
+            }
+
+            // pub fn get_(&mut self, key: K) -> &V {
+            //
+            //     self.data.entry(key.clone()).or_insert_with_key(|key_ref|{
+            //         let mut count = 0;
+            //         loop {
+            //             // if count > 10 {
+            //             //     panic!("panic get key_ref={key_ref:?}");
+            //             //     break;
+            //             // }
+            //             // count+=1;
+            //
+            //             if let Ok(mut read_lock) = self.data_loaded.try_write() {
+            //                 match read_lock.get(key_ref) {
+            //                     Some(mx) => {
+            //                         println!("get key_ref={key_ref:?} got mx");
+            //                         // if let Ok(data_loaded_read_write_lock) = self.data_loaded_read_write.try_lock() {
+            //                         //     drop(read_lock);
+            //                             println!("get key_ref={key_ref:?} drop  read_guard");
+            //
+            //                             // if let Ok(mut write_guard) = self.data_loaded.try_write() {
+            //                                 println!("get key_ref={key_ref:?} got write_guard");
+            //
+            //                                 return read_lock.remove(key_ref).expect("remove").into_inner().expect("into_inner");
+            //                             // };
+            //                         // }
+            //                     }
+            //                     None => {
+            //                         rayon::yield_local();
+            //                     }
+            //                 }
+            //             }
+            //
+            //         }
+            //         (self.loader)(&key)
+            //     })
+            // }
         }
 
-        let main_pool = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
+        let main_pool = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
 
             let mut b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "main_pool", thread_builder.index()))
@@ -494,24 +584,42 @@ mod tests {
         }).build()?;
 
         main_pool.install(||{
-            let mut loader = Loader::new(load_test_entity).expect("loader");
+            let mut loader = Loader::new(load_test_entity_sv).expect("loader");
 
-            loader.preload((0..10).map(|i|format!("aaa_{i}")).collect());
+            loader.preload((0..10).map(|i| format!("aaa_{i}")).collect());
             println!("xxxxxxxxxxxxxxx");
-            loader.preload((0..10).map(|i|format!("bbb_{i}")).collect());
+            loader.preload((0..10).map(|i| format!("bbb_{i}")).collect());
             println!("zzzzzzzzzzzzzzz");
 
-            let v =loader.get("aaa_9".to_string());
-            println!("v.1={v:?}");
+            // let loader_rc = Arc::new(Mutex::new(loader));
+            let loader_rc = Arc::new(RwLock::new(loader));
+            // let loader_rc_1 = Arc::clone(&loader_rc);
+            (0..10).into_par_iter().for_each(|i|{
+                let key = format!("aaa_{i}");
+                // let mut guard = loader_rc.lock().expect("loader lock");
 
+                let mut read_guard = loader_rc.read();
+                let v = read_guard.get(key.clone());
 
+                // let v = guard.test(key.clone());
+                println!("key={key} v.1={v:?}");
+                // drop(guard);
+            });
 
-            thread::sleep(Duration::new(3, 0));
+            // (0..10).for_each(|i|{
+            //     let v = loader.get(format!("aaa_{i}"));
+            //     println!("v.1={v:?}");
+            // });
 
-            let v =loader.get("aaa_9".to_string());
-            println!("v.2={v:?}");
+            // let v = loader.get(format!("bbb_9"));
+            // println!("v.2={v:?}");
+
+            // thread::sleep(Duration::new(3, 0));
+            //
+            // let mut mutex_guard = loader_rc_1.lock().expect("mutex lock");
+            // let v = mutex_guard.get("aaa_9".to_string());
+            // println!("v.2={v:?}");
         });
-
 
 
        /*
