@@ -256,7 +256,7 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::{HashMap, VecDeque};
     use std::fmt::Debug;
-    use std::future::Future;
+    use std::future::{Future};
     use std::hash::Hash;
     use std::io::Write;
     use std::ops::Deref;
@@ -267,8 +267,10 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use futures::AsyncWriteExt;
+    use futures::executor::block_on;
     use futures::task::SpawnExt;
     use log::debug;
+    use parking_lot::RwLockWriteGuard;
     use rayon::ThreadPool;
     use hbac_shared::HbacError;
     use serde::Deserialize;
@@ -379,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn test_0() -> Result<(), HbacError>{
+    fn test_loader_0() -> Result<(), HbacError>{
         use rayon::iter::ParallelIterator;
         use rayon::iter::IntoParallelIterator;
         // use std::sync::mpsc;
@@ -390,6 +392,8 @@ mod tests {
 
         use rayon::iter::ParallelBridge;
         use rayon::prelude::*;
+        use crossbeam_utils::sync::WaitGroup;
+
 
         fn load_test_entity_sv(key:&String)->SyncWrapper<TestEntity>{
             thread::sleep(Duration::new(0, 1000));
@@ -469,7 +473,16 @@ mod tests {
                         println!("v={:?}", *v);
                         // sender_down.send((key, v));//Tensors can't sync
                         // data_loaded.write().expect("data_loaded write").insert(key, Mutex::new(v));
-                        data_loaded.write().insert(key, v);
+                        // loop {
+                            let mut write_guard = data_loaded.write();
+                            write_guard.insert(key, v);
+                            RwLockWriteGuard::unlock_fair(write_guard);
+
+                            // return
+
+                            // println!("preload: waiting write_guard");
+                            // rayon::yield_now();
+                        // }
                         // data_loaded.insert(key, v);
 
                     });
@@ -515,66 +528,54 @@ mod tests {
                 None
             }
 
-            pub fn get(&self, key: K) -> MappedRwLockReadGuard<SyncWrapper<V>> {
-                // loop {
-                //     if let Ok(lock) = self.data_loaded.try_read() {
-                //         return lock.get(&key).expect("v");
-                //     }
-                // }
-                // self.data_loaded.get(&key).expect("zzz")
-                RwLockReadGuard::map(self.data_loaded.read(), |d:&HashMap<K, SyncWrapper<V>>| d.get(&key).unwrap())
 
+            pub fn get_(&self, key: &K)  {
+                // println!("get_ key={key:?} is_locked{}", self.data_loaded.is_locked());
+                // let mut i = 0;
                 // loop {
-                //     match self.data_loaded.read().get(&key) {
-                //         Some(v)=> {
-                //             return v;
-                //         },
-                //         None => {
-                //             rayon::yield_local();
+                //     let guard = self.data_loaded.read();
+                //
+                // //         // let guard = self.data_loaded.read();
+                //         if guard.contains_key(key) {
+                //             println!("get_ key={key:?} try_read contains_key ok");
+                // //             let m = RwLockReadGuard::map(guard, |d: &HashMap<K, SyncWrapper<V>>| d.get(key).unwrap());
+                // //
+                // //             println!("m={m:?}");
+                // //
                 //         }
-                //     };
+                //     // }
+                // //     i+=1;
+                // //     // if i > 100000 {
+                // //     //     panic!("get: waiting failed");
+                // //     //     // return RwLockReadGuard::map(RwLock::new(SyncWrapper::new((self.loader)(key))).read(), |d: &SyncWrapper<V>| d);
+                // //     // }
+                // //     println!("get: waiting for {key:?}");
+                // //     rayon::yield_local();
                 // }
             }
+            pub fn get(&self, key: &K) -> Result<MappedRwLockReadGuard<SyncWrapper<V>>, HbacError> {
 
-            // pub fn get_(&mut self, key: K) -> &V {
-            //
-            //     self.data.entry(key.clone()).or_insert_with_key(|key_ref|{
-            //         let mut count = 0;
-            //         loop {
-            //             // if count > 10 {
-            //             //     panic!("panic get key_ref={key_ref:?}");
-            //             //     break;
-            //             // }
-            //             // count+=1;
-            //
-            //             if let Ok(mut read_lock) = self.data_loaded.try_write() {
-            //                 match read_lock.get(key_ref) {
-            //                     Some(mx) => {
-            //                         println!("get key_ref={key_ref:?} got mx");
-            //                         // if let Ok(data_loaded_read_write_lock) = self.data_loaded_read_write.try_lock() {
-            //                         //     drop(read_lock);
-            //                             println!("get key_ref={key_ref:?} drop  read_guard");
-            //
-            //                             // if let Ok(mut write_guard) = self.data_loaded.try_write() {
-            //                                 println!("get key_ref={key_ref:?} got write_guard");
-            //
-            //                                 return read_lock.remove(key_ref).expect("remove").into_inner().expect("into_inner");
-            //                             // };
-            //                         // }
-            //                     }
-            //                     None => {
-            //                         rayon::yield_local();
-            //                     }
-            //                 }
-            //             }
-            //
-            //         }
-            //         (self.loader)(&key)
-            //     })
-            // }
+                let mut i = 0;
+                for a in 0..10_000 {
+                    if let Some(guard) = self.data_loaded.try_read() {
+                        // let guard = self.data_loaded.read();
+                        if guard.contains_key(key) {
+                            return Ok(RwLockReadGuard::map(guard, |d: &HashMap<K, SyncWrapper<V>>| d.get(key).unwrap()));
+
+                        }
+                    }
+                    i+=1;
+
+                    println!("get: waiting for {key:?}");
+                    rayon::yield_local();
+                }
+
+                Err(HbacError::new("xxx"))
+            }
+
         }
 
-        let main_pool = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
+        let main_pool = rayon::ThreadPoolBuilder::new().num_threads(8).spawn_handler(|thread_builder| {
 
             let mut b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "main_pool", thread_builder.index()))
@@ -583,43 +584,63 @@ mod tests {
             Ok(())
         }).build()?;
 
-        main_pool.install(||{
-            let mut loader = Loader::new(load_test_entity_sv).expect("loader");
+        let loader_pool = rayon::ThreadPoolBuilder::new().num_threads(8).spawn_handler(|thread_builder| {
 
-            loader.preload((0..10).map(|i| format!("aaa_{i}")).collect());
-            println!("xxxxxxxxxxxxxxx");
-            loader.preload((0..10).map(|i| format!("bbb_{i}")).collect());
-            println!("zzzzzzzzzzzzzzz");
+            let mut b = std::thread::Builder::new();
+            b.name(format!("{}/{:?}", "main_pool", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
 
-            // let loader_rc = Arc::new(Mutex::new(loader));
-            let loader_rc = Arc::new(RwLock::new(loader));
-            // let loader_rc_1 = Arc::clone(&loader_rc);
-            (0..10).into_par_iter().for_each(|i|{
-                let key = format!("aaa_{i}");
-                // let mut guard = loader_rc.lock().expect("loader lock");
+            Ok(())
+        }).build()?;
 
-                let mut read_guard = loader_rc.read();
-                let v = read_guard.get(key.clone());
+        let wg = WaitGroup::new();
 
-                // let v = guard.test(key.clone());
-                println!("key={key} v.1={v:?}");
-                // drop(guard);
+        let mut loader = Box::new(Loader::new(load_test_entity_sv).expect("loader"));
+        let loader_rc = Arc::new(RwLock::new(loader));
+        let main_loader_rc = Arc::clone(&loader_rc);
+
+
+
+        main_pool.install( || {
+            let wg = wg.clone();
+
+
+            rayon::spawn( move || {
+                (0..10).into_par_iter().for_each(|i| {
+                    let key = format!("aaa_{i}");
+
+                    // let read_guard = loader.read_recursive();
+                    // let v = loader_ref.get(&key);
+                    for a in (0..10_000){
+                        if let Some(lock) = main_loader_rc.try_read() {
+                            if let Ok(v) = lock.get(&key) {
+                                println!("got key={key} v.1={v:?} in thread={:?} on a={a}", thread::current().name());
+                                break;
+                            }
+                        }
+                        rayon::yield_now();
+
+                    }
+
+                });
+                wg.wait();
             });
-
-            // (0..10).for_each(|i|{
-            //     let v = loader.get(format!("aaa_{i}"));
-            //     println!("v.1={v:?}");
-            // });
-
-            // let v = loader.get(format!("bbb_9"));
-            // println!("v.2={v:?}");
-
-            // thread::sleep(Duration::new(3, 0));
-            //
-            // let mut mutex_guard = loader_rc_1.lock().expect("mutex lock");
-            // let v = mutex_guard.get("aaa_9".to_string());
-            // println!("v.2={v:?}");
         });
+
+        loader_pool.install( || {
+            for a in (0..10_000) {
+
+                if let Some(mut lock) = loader_rc.try_write() {
+                    println!("got write lock on a={a}");
+                    lock.preload((0..10).map(|i| format!("aaa_{i}")).collect());
+                    break;
+                }
+            }
+
+            println!("xxxxxxxxxxxxxxx");
+        });
+
+        wg.wait();
 
 
        /*
