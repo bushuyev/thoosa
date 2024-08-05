@@ -437,17 +437,8 @@ mod tests {
             V: Send + Debug + 'static,
         {
             loader_pool:ThreadPool,
-            // sender_receiver_up:(Sender<K>, Receiver<K>),
-            // sender:Arc<Sender<(K, V)>>,
-
-            // data_loaded:Arc<RwLock<HashMap<K, Mutex<V>>>>,
-            // data_loaded:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
             data_loaded:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
-            data_pending:Arc<RwLock<HashSet<K>>>,
-            data_loaded_read_write:Mutex<bool>,
-            // data_being_loaded:Arc<RwLock<HashMap<K, Mutex<Waker>>>>,
-            // data:HashMap<K, V>,
-            loader:Arc<Box<dyn Fn(&K)->SyncWrapper<V> + Sync + Send>>,
+            loader_fn:Arc<Box<dyn Fn(&K)->SyncWrapper<V> + Sync + Send>>,
         }
 
         impl<K, V> Loader<K, V>
@@ -457,39 +448,24 @@ mod tests {
         {
             fn preload(&mut self, keys: Vec<K>) -> Result<(), HbacError> {
                 for key in keys {
-                    // if self.data.contains_key(&key) || self.data_loaded.read().unwrap().contains_key(&key){
-                    //     println!("skipping key={key:?}");
-                    //     continue;
-                    // }
+                    if self.data_loaded.read().contains_key(&key){
+                        println!("skipping key={key:?}");
+                        continue;
+                    }
                     println!("loading key={key:?}");
 
-                    let loader = Arc::clone(&self.loader);
+                    let loader = Arc::clone(&self.loader_fn);
                     let data_loaded = Arc::clone(&self.data_loaded);
-                    let data_pending = Arc::clone(&self.data_pending);
-                    // let data_being_loaded = Arc::clone(&self.data_being_loaded);
-                    // let sender_down = Arc::clone(&self.sender);
 
                     self.loader_pool.spawn(move ||{
-                        // data_being_loaded.write().expect("data_being_loaded").insert(key.clone(), Waker::)
 
                         let v = loader(&key);
                         println!("pool 0: current_thread={:?}", thread::current().id());
                         println!("v={:?}", *v);
-                        // sender_down.send((key, v));//Tensors can't sync
-                        // data_loaded.write().expect("data_loaded write").insert(key, Mutex::new(v));
-                        // loop {
 
-                            let mut write_guard = data_loaded.write();
-                            // data_pending.write().remove(&key);
-                            write_guard.insert(key, v);
-                            // RwLockWriteGuard::unlock_fair(write_guard);
 
-                            // return
-
-                            // println!("preload: waiting write_guard");
-                            // rayon::yield_now();
-                        // }
-                        // data_loaded.insert(key, v);
+                        let mut write_guard = data_loaded.write();
+                        write_guard.insert(key, v);
 
                     });
                 };
@@ -499,21 +475,10 @@ mod tests {
 
             pub fn new<F>(loader:F) -> Result<Self, HbacError>
                 where F:Fn(&K) -> SyncWrapper<V> + Sync + Send + 'static {
-                // let (sender, receiver) = mpsc::channel();
 
-                // let mut data_loaded = Arc::new(RwLock::new(HashMap::new()));
-                // let data_loaded_arc = Arc::clone(&data_loaded);
-                // rayon::spawn(move ||{
-                //     while let Ok((k, v)) = receiver.recv() {
-                //         println!("got k={k:?} {v:?}");
-                //         data_loaded_arc.write().expect("data_loaded write").insert(k, Mutex::new(v));
-                //     }
-                // });
 
                 Ok(Self {
-                    loader:Arc::new(Box::new(loader)),
-                    // sender_receiver_up: mpsc::channel(),
-                    // sender: Arc::new(sender),
+                    loader_fn:Arc::new(Box::new(loader)),
                     loader_pool:rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
 
                         let mut b = std::thread::Builder::new();
@@ -522,58 +487,33 @@ mod tests {
 
                         Ok(())
                     }).build()?,
-                    // data:HashMap::new(),
-                    // data_loaded:Arc::new(RwLock::new(HashMap::new())),
                     data_loaded:Arc::new(RwLock::new(HashMap::new())),
-                    data_pending:Arc::new(RwLock::new(HashSet::new())),
-                    data_loaded_read_write:Mutex::new(false),
+
                 })
             }
 
-            pub fn test(&mut self, key:K) -> Option<&V> {
-                // self.data_loaded.write().expect("write").remove(&key).expect("key").into_inner()
-                None
+
+            pub fn try_get(&self, key: &K) -> Result<MappedRwLockReadGuard<SyncWrapper<V>>, HbacError>  {
+                if let Some(guard) = self.data_loaded.try_read() {
+
+                    if guard.contains_key(key) {
+                        return Ok(RwLockReadGuard::map(guard, |d: &HashMap<K, SyncWrapper<V>>| d.get(key).unwrap()));
+                    }
+                }
+
+                Err(HbacError::new("zzz"))
             }
 
-
-            pub fn get_(&self, key: &K)  {
-                // println!("get_ key={key:?} is_locked{}", self.data_loaded.is_locked());
-                // let mut i = 0;
-                // loop {
-                //     let guard = self.data_loaded.read();
-                //
-                // //         // let guard = self.data_loaded.read();
-                //         if guard.contains_key(key) {
-                //             println!("get_ key={key:?} try_read contains_key ok");
-                // //             let m = RwLockReadGuard::map(guard, |d: &HashMap<K, SyncWrapper<V>>| d.get(key).unwrap());
-                // //
-                // //             println!("m={m:?}");
-                // //
-                //         }
-                //     // }
-                // //     i+=1;
-                // //     // if i > 100000 {
-                // //     //     panic!("get: waiting failed");
-                // //     //     // return RwLockReadGuard::map(RwLock::new(SyncWrapper::new((self.loader)(key))).read(), |d: &SyncWrapper<V>| d);
-                // //     // }
-                // //     println!("get: waiting for {key:?}");
-                // //     rayon::yield_local();
-                // }
-            }
             pub fn get(&self, key: &K) -> Result<MappedRwLockReadGuard<SyncWrapper<V>>, HbacError> {
-                // if self.data_pending.read().contains(key){
-                //     return Err(HbacError::new("nnn"));
-                // }
+
                 let mut i = 0;
                 for a in 0..10_000 {
                     if let Some(guard) = self.data_loaded.try_read() {
-                        // let guard = self.data_loaded.read();
+
                         if guard.contains_key(key) {
                             return Ok(RwLockReadGuard::map(guard, |d: &HashMap<K, SyncWrapper<V>>| d.get(key).unwrap()));
 
-                        } /*else {
-                            self.data_pending.write().insert(key.clone());
-                        }*/
+                        }
                     }
                     i+=1;
 
@@ -605,23 +545,28 @@ mod tests {
         }).build()?;
 
         let wg = WaitGroup::new();
+        let wg_aaa = wg.clone();
+        let wg_bbb = wg.clone();
 
         let mut loader = Box::new(Loader::new(load_test_entity_sv).expect("loader"));
         let loader_rc = Arc::new(RwLock::new(loader));
         let main_loader_rc = Arc::clone(&loader_rc);
+        let loader_rc_aaa_main = Arc::clone(&loader_rc);
         let loader_rc_aaa = Arc::clone(&loader_rc);
+        let loader_rc_bbb_main = Arc::clone(&loader_rc);
         let loader_rc_bbb = Arc::clone(&loader_rc);
 
-        let something_loaded = Arc::new(RwLock::new(false));
-        let mut something_loaded_rc_aaa = Arc::clone(&something_loaded);
-        let mut something_loaded_rc_bbb = Arc::clone(&something_loaded);
+        let can_read = Arc::new(RwLock::new(false));
+        let mut can_read_aaa_main = Arc::clone(&can_read);
+        let mut can_read_aaa = Arc::clone(&can_read);
+        let mut can_read_bbb_main = Arc::clone(&can_read);
+        let mut can_read_bbb = Arc::clone(&can_read);
 
         let loaded = Arc::new(RwLock::new(HashSet::new()));
         let loaded_aaa = Arc::clone(&loaded);
         let loaded_bbb = Arc::clone(&loaded);
 
-        main_pool.install( || {
-            let wg = wg.clone();
+        main_pool.install(  || {
 
 
             rayon::spawn( move || {
@@ -630,11 +575,10 @@ mod tests {
                 (0..10).into_par_iter().for_each(|i| {
                     let key = format!("aaa_{i}");
 
-                    for a in (0..10_000){
-                        if *something_loaded.read() {
-
-                            if let Some(lock) = main_loader_rc.try_read() {
-                                if let Ok(v) = lock.get(&key) {
+                    for a in (0..10_000) {
+                        if *can_read_aaa_main.read() {
+                            if let Some(lock) = loader_rc_aaa_main.try_read() {
+                                if let Ok(v) = lock.try_get(&key) {
                                     println!("got key={key} v.1={v:?} in thread={:?} on a={a}", thread::current().name());
                                     loaded_aaa.write().insert(key.clone());
                                     break;
@@ -644,19 +588,21 @@ mod tests {
 
                         rayon::yield_now();
                     }
-
                 });
+                drop(wg_aaa);
+            });
 
+            rayon::spawn( move || {
                 println!("getting bbb");
 
                 (0..10).into_par_iter().for_each(|i| {
                     let key = format!("bbb_{i}");
 
                     for a in (0..10_000){
-                        if *something_loaded.read() {
+                        if *can_read_bbb_main.read() {
 
-                            if let Some(lock) = main_loader_rc.try_read() {
-                                if let Ok(v) = lock.get(&key) {
+                            if let Some(lock) = loader_rc_bbb_main.try_read() {
+                                if let Ok(v) = lock.try_get(&key) {
                                     println!("got key={key} v.1={v:?} in thread={:?} on a={a}", thread::current().name());
                                     loaded_bbb.write().insert(key.clone());
                                     break;
@@ -668,8 +614,9 @@ mod tests {
                     }
 
                 });
-                wg.wait();
+                drop(wg_bbb);
             });
+
         });
 
         println!("aaaaaaaaaaaaaaaaaaaa");
@@ -678,13 +625,13 @@ mod tests {
             rayon::spawn( move || {
                 println!("loading aaa");
 
-                *something_loaded_rc_aaa.write() = false;
+                *can_read_aaa.write() = false;
                 for a in (0..10_000) {
 
                     if let Some(mut lock) = loader_rc_aaa.try_write() {
                         println!("got loader_rc write lock on a={a}");
                         lock.preload((0..10).map(|i| format!("aaa_{i}")).collect());
-                        *something_loaded_rc_aaa.write() = true;
+                        *can_read_aaa.write() = true;
                         break;
                     }
                 }
@@ -693,13 +640,13 @@ mod tests {
             rayon::spawn( move || {
                 println!("loading bbb");
 
-                *something_loaded_rc_bbb.write() = false;
+                *can_read_bbb.write() = false;
                 for a in (0..10_000) {
 
                     if let Some(mut lock) = loader_rc_bbb.try_write() {
                         println!("got loader_rc write lock on a={a}");
                         lock.preload((0..10).map(|i| format!("bbb_{i}")).collect());
-                        *something_loaded_rc_bbb.write() = true;
+                        *can_read_bbb.write() = true;
                         break;
                     }
                 }
@@ -713,51 +660,7 @@ mod tests {
 
         assert!(loaded.read().contains("aaa_9"));
         assert!(loaded.read().contains("bbb_9"));
-       /*
-        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
-            let mut b = std::thread::Builder::new();
-            b.name(format!("{}/{:?}", "pool_0", thread_builder.name())).spawn(|| thread_builder.run())?;
 
-            Ok(())
-        }).build()?;
-
-        pool_0.spawn(||{
-            println!("span_0");
-            thread::sleep(Duration::new(1, 0));
-        });
-        println!("0000000000");
-        pool_0.spawn(||{
-            println!("span_1");
-            thread::sleep(Duration::new(1, 0));
-        });
-        println!("1111111111");
-        thread::sleep(Duration::new(3, 0));
-
-
-        let pool_1 = rayon::ThreadPoolBuilder::new().num_threads(3).spawn_handler(|thread_builder| {
-            let mut b = std::thread::Builder::new();
-            b.name(format!("{}/{:?}", "pool_1", thread_builder.name())).spawn(|| thread_builder.run())?;
-
-            Ok(())
-        }).build()?;
-
-
-        rayon::join(
-            || pool_0.install(|| {
-                (0..10).into_par_iter().for_each(|v| {
-                    thread::sleep(Duration::new(0, 100));
-                    println!("pool 0: current_thread={:?}", thread::current().name());
-                    std::io::stdout().flush().unwrap();
-                });
-            }),
-            || pool_1.install(|| {
-                (0..10).into_par_iter().for_each(|v| {
-                    thread::sleep(Duration::new(0, 100));
-                    println!("pool 1: current_thread={:?}", thread::current().name());
-                    std::io::stdout().flush().unwrap();
-                });
-            }),
-        );*/
 
 
         Ok(())
