@@ -585,8 +585,30 @@ mod tests {
         let loaded_aaa = Arc::clone(&loaded);
         let loaded_bbb = Arc::clone(&loaded);
 
-        main_pool.install(  || {
+        enum TaskState {
+            NEEDS_DATA,
+            RUNNING,
+            DONE
+        }
 
+        trait Task {
+            type R;
+
+            fn resources(&self) -> Vec<Self::R>;
+            fn run(&self, resources:Vec<Self::R>);
+            fn state(&self) -> TaskState;
+        }
+
+        //TODO
+        struct TestTask {
+
+        }
+
+        impl TestTask {
+
+        }
+
+        main_pool.install(  || {
 
             rayon::spawn( move || {
                 println!("getting aaa");
