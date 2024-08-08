@@ -253,8 +253,8 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::collections::{HashMap, HashSet, VecDeque};
+
+    use std::collections::{HashMap, HashSet};
     use std::fmt::Debug;
     use std::future::{Future};
     use std::hash::Hash;
@@ -266,13 +266,17 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::mpsc::Receiver;
     use std::task::{Context, Poll, Waker};
-    use std::thread;
+    use std::{mem, thread};
     use std::time::Duration;
+    use crossbeam_utils::sync::WaitGroup;
     use futures::AsyncWriteExt;
     use futures::executor::block_on;
-    use futures::task::SpawnExt;
+    use futures::sink::Feed;
+    use futures::task::{ArcWake, AtomicWaker, SpawnExt};
     use log::debug;
-    use parking_lot::RwLockWriteGuard;
+    use parking_lot::{Mutex, RwLockWriteGuard};
+    use parking_lot::lock_api::{MutexGuard, RawMutex};
+    use rand::distributions::uniform::SampleBorrow;
     use rayon::ThreadPool;
     use hbac_shared::HbacError;
     use serde::Deserialize;
@@ -384,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn test_loader_0() -> Result<(), HbacError>{
+    fn test_loader_0() -> Result<(), HbacError> {
         use rayon::iter::ParallelIterator;
         use rayon::iter::IntoParallelIterator;
         use std::rc::Rc;
@@ -481,6 +485,7 @@ mod tests {
 
 
             fn preload(&mut self, keys: Vec<K>) -> Result<(), HbacError> {
+                println!("preload keys={keys:?}");
 
                 for key in keys {
                     if self.data_loaded.read().contains_key(&key){
@@ -543,6 +548,10 @@ mod tests {
                 Err(HbacError::new("xxx"))
             }
 
+            pub fn test(&mut self)-> usize {
+                1
+            }
+
         }
 
         let main_pool = rayon::ThreadPoolBuilder::new().num_threads(8).spawn_handler(|thread_builder| {
@@ -576,39 +585,163 @@ mod tests {
         let loader_rc_bbb = Arc::clone(&loader_rc);
 
         let can_read = Arc::new(RwLock::new(false));
+        let mut can_read_cl = Arc::clone(&can_read);
         let mut can_read_aaa_main = Arc::clone(&can_read);
         let mut can_read_aaa = Arc::clone(&can_read);
         let mut can_read_bbb_main = Arc::clone(&can_read);
         let mut can_read_bbb = Arc::clone(&can_read);
 
         let loaded = Arc::new(RwLock::new(HashSet::new()));
+        let loaded_cl = Arc::clone(&loaded);
         let loaded_aaa = Arc::clone(&loaded);
         let loaded_bbb = Arc::clone(&loaded);
 
-        enum TaskState {
-            NEEDS_DATA,
+        #[derive(Debug)]
+        enum TaskState<K:Send> {
+            NEEDS_DATA{keys:Vec<K>},
             RUNNING,
             DONE
         }
 
-        trait Task {
-            type R;
 
-            fn resources(&self) -> Vec<Self::R>;
-            fn run(&self, resources:Vec<Self::R>);
-            fn state(&self) -> TaskState;
+        trait Task:Send {
+            type K: Clone + Hash + Eq + Send + Sync + Debug;
+            type R:Send + Debug;
+
+            fn run(&mut self, loader:Arc<RwLock<Box<Loader<Self::K, Self::R>>>>) -> Box<dyn Future<Output=()> + '_>;
+            fn state_trns(&mut self) -> TaskState<Self::K>;
         }
 
         //TODO
-        struct TestTask {
+        struct TestTask_1 {
+            x:usize,
+            state:TaskState<String>
+        }
+
+        impl TestTask_1 {
+            pub fn new() -> Self {
+                Self {
+                    x: 0,
+                    state:TaskState::NEEDS_DATA{
+                        keys:(0..10).map(|i|i).map(|i|format!("aaa_{i}")).collect()
+                    }
+                }
+            }
+        }
+
+        impl Task for TestTask_1 {
+            type K = String;
+            type R = TestEntity;
+
+            // fn resources(&self) -> Vec<String> {
+            //     (0..10).map(|i|i+self.x).map(|i|format!("aaa_{i}")).collect()
+            // }
+
+            fn run(&mut self, loader:Arc<RwLock<Box<Loader<String, TestEntity>>>>) -> Box<dyn Future<Output=()> + '_>{
+                self.x += 10;
+                todo!()
+            }
+
+            fn state_trns(&mut self) -> TaskState<String> {
+                mem::replace(&mut self.state, TaskState::RUNNING)
+            }
 
         }
 
-        impl TestTask {
+        struct TestTask_2 {
+            x:usize,
+            state:TaskState<String>
+        }
+
+        impl TestTask_2 {
+            pub fn new() -> Self {
+                Self {
+                    x: 0,
+                    state:TaskState::NEEDS_DATA{
+                        keys:(0..10).map(|i|i).map(|i|format!("bbb_{i}")).collect()
+                    }
+                }
+            }
+        }
+
+        impl Task for TestTask_2 {
+            type K = String;
+            type R = TestEntity;
+
+            // fn resources(&self) -> Vec<String> {
+            //     (0..10).map(|i|i+self.x).map(|i|format!("bbb_{i}")).collect()
+            // }
+
+            fn run(&mut self, loader:Arc<RwLock<Box<Loader<String, TestEntity>>>>) -> Box<dyn Future<Output=()> + '_> {
+                Box::new(async move {
+                    loader.write().test();
+                    self.x += 10;
+                })
+            }
+
+            fn state_trns(&mut self) -> TaskState<String> {
+
+                mem::replace(&mut self.state, TaskState::RUNNING)
+            }
 
         }
 
-        main_pool.install(  || {
+        let mut tasks:Vec<Box<dyn Task<K=String, R=TestEntity>>> = vec![
+            Box::new(TestTask_1::new()),
+            Box::new(TestTask_2::new())
+        ];
+
+        for mut task in tasks {
+
+            let can_read_cl = Arc::clone(&can_read_cl);
+            let loader_rc = Arc::clone(&loader_rc);
+            // println!("resources: {:?}", task.state());
+            match task.state_trns() {
+                TaskState::NEEDS_DATA {keys}=> {
+                    let keys = keys.clone();
+                    loader_pool.install( || {
+                        rayon::spawn(move || {
+                            *can_read_cl.write() = false;
+
+                            loader_rc.write().preload(keys);
+                            *can_read_cl.write() = true;
+                        });
+                    });
+
+                },
+                TaskState::RUNNING=> {
+                    main_pool.install( move || {
+                        rayon::spawn(move || {
+                            // let waker = AtomicWaker::new();
+                            // let mut cx = Context::from_waker(&waker);
+                            // let fut = task.run(loader_rc);
+                            // loop {
+                            //     if let Poll::Ready(t) = f(&mut cx) {
+                            //         return t;
+                            //     }
+                            //
+                            //     rayon::yield_now();
+                            //     // // Wait for a wakeup.
+                            //     // while !thread_notify.unparked.swap(false, Ordering::Acquire) {
+                            //     //     // No wakeup occurred. It may occur now, right before parking,
+                            //     //     // but in that case the token made available by `unpark()`
+                            //     //     // is guaranteed to still be available and `park()` is a no-op.
+                            //     //     thread::park();
+                            //     // }
+                            // }
+
+                        })
+                    });
+                },
+                TaskState::DONE => {
+
+                }
+            }
+        }
+
+
+        main_pool.install( move || {
+
 
             rayon::spawn( move || {
                 println!("getting aaa");
@@ -621,7 +754,7 @@ mod tests {
                             if let Some(lock) = loader_rc_aaa_main.try_read() {
                                 if let Ok(v) = lock.try_get(&key) {
                                     println!("got key={key} v.1={v:?} in thread={:?} on a={a}", thread::current().name());
-                                    loaded_aaa.write().insert(key.clone());
+                                    loaded_cl.write().insert(key.clone());
                                     break;
                                 }
                             }
@@ -670,29 +803,29 @@ mod tests {
 
         println!("aaaaaaaaaaaaaaaaaaaa");
 
-        loader_pool.install( || {
-            rayon::spawn( move || {
-                println!("loading aaa");
-
-                *can_read_aaa.write() = false;
-
-                loader_rc_aaa.write().preload((0..10).map(|i| format!("aaa_{i}")).collect());
-                *can_read_aaa.write() = true;
-
-            });
-
-            rayon::spawn( move || {
-                println!("loading bbb");
-
-                *can_read_bbb.write() = false;
-
-                loader_rc_bbb.write().preload((0..10).map(|i| format!("bbb_{i}")).collect());
-                *can_read_bbb.write() = true;
-
-            });
-
-            println!("xxxxxxxxxxxxxxx");
-        });
+        // loader_pool.install( || {
+        //     rayon::spawn( move || {
+        //         println!("loading aaa");
+        //
+        //         *can_read_aaa.write() = false;
+        //
+        //         loader_rc_aaa.write().preload((0..10).map(|i| format!("aaa_{i}")).collect());
+        //         *can_read_aaa.write() = true;
+        //
+        //     });
+        //
+        //     rayon::spawn( move || {
+        //         println!("loading bbb");
+        //
+        //         *can_read_bbb.write() = false;
+        //
+        //         loader_rc_bbb.write().preload((0..10).map(|i| format!("bbb_{i}")).collect());
+        //         *can_read_bbb.write() = true;
+        //
+        //     });
+        //
+        //     println!("xxxxxxxxxxxxxxx");
+        // });
 
         wg.wait();
 
@@ -701,6 +834,229 @@ mod tests {
         assert!(loaded.read().contains("bbb_9"));
 
 
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_0() -> Result<(), HbacError>{
+
+
+        use futures::{
+            future::{BoxFuture, FutureExt},
+            task::{waker_ref, ArcWake},
+        };
+
+        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+            let mut b = std::thread::Builder::new();
+            b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build()?;
+
+        let pool_1 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+            let mut b = std::thread::Builder::new();
+            b.name(format!("{}/{:?}", "pool_1", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build()?;
+
+
+
+
+        // let wg_1 = wg.clone();
+
+
+        struct RayonNotify {}
+
+        impl RayonNotify {
+            pub fn new() -> Self {
+                Self {}
+            }
+        }
+        impl ArcWake for RayonNotify {
+            fn wake_by_ref(arc_self: &Arc<Self>) {}
+        }
+
+        struct Executor {
+            notify: Arc<RayonNotify>,
+            loader_pool:ThreadPool,
+            features:Arc<parking_lot::RwLock<Vec<parking_lot::Mutex<BoxFuture<'static, ()>>>>>,
+            resources:Arc<parking_lot::RwLock<HashMap<String, String>>>,
+            can_read:Arc<parking_lot::RwLock<bool>>
+        }
+
+        impl Executor {
+
+            pub fn new() -> Self {
+                let mut futures:Arc<parking_lot::RwLock<Vec<parking_lot::Mutex<BoxFuture<()>>>>> = Arc::new(parking_lot::RwLock::new(vec![]));
+                let mut features_rc = Arc::clone(&futures);
+                let notify = Arc::new(RayonNotify::new());
+                let can_read = Arc::new(parking_lot::RwLock::new(true));
+                let can_read_rc = Arc::clone(&can_read);
+                let loader_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+                    let mut b = std::thread::Builder::new();
+                    b.name(format!("{}/{:?}", "pool_1", thread_builder.index()))
+                        .spawn(|| thread_builder.run())?;
+
+                    Ok(())
+                }).build().expect("pool_1");
+                let p_notify = Arc::clone(&notify);
+
+                loader_pool.spawn(move ||{
+                    println!("loader_pool spawned");
+                    let waker = waker_ref(&p_notify);
+                    let mut cx = Context::from_waker(&waker);
+
+                    loop {
+                        println!("loop");
+                        // if let Some(can_read) = can_read.try_read() {
+                            let futures_arc = Arc::clone(&futures);
+                        println!("loop 1 is_locked={}", futures_arc.is_locked());
+                            if let Some(mut guard) = futures_arc.try_write() {
+                                println!("1. features={}", futures_arc.read().len());
+                                guard.retain(|fut_mx| {
+                                    if let Poll::Ready(t) = fut_mx.lock().as_mut().poll(&mut cx) {
+                                        println!("Ok");
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
+                                drop(guard);
+                                println!("2. features={}", futures_arc.read().len());
+                            } else {
+                                println!("can't read");
+                            };
+                        // } else {
+                        //     println!("can't lock can_read");
+                        // }
+                        rayon::yield_local();
+                    }
+                });
+                Self {
+                    notify: Arc::clone(&notify),
+                    loader_pool: loader_pool,
+                    features: features_rc,
+                    resources: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+                    can_read:can_read_rc
+                }
+            }
+
+
+            pub fn exec<F>(& mut self, f:F )
+                where F:FnOnce()->BoxFuture<'static, ()>
+            {
+                println!("exec");
+
+                // *self.can_read.write() = false;
+
+                // loop {
+                    if let Some(mut guard) = self.features.try_write() {
+                        guard.push(Mutex::new((f)()));
+                        println!("feature pushed");
+                        // break;
+                    } else {
+                        println!("exec: can't lock features");
+                    }
+                // }
+
+                // *self.can_read.write() = true;
+            }
+
+            pub fn load_future(resources:Arc<parking_lot::RwLock<HashMap<String, String>>>, key:String) -> BoxFuture<'static, String> {
+                ResourceFuture::new(resources,key).boxed()
+            }
+        }
+
+        let mut executor = Executor::new();
+        let mut executor_rc = Arc::new(parking_lot::RwLock::new(executor));
+
+
+        struct ResourceFuture {
+            x:usize,
+            key:String,
+            resources:Arc<parking_lot::RwLock<HashMap<String, String>>>
+        }
+
+        impl ResourceFuture {
+            pub fn new(resources:Arc<parking_lot::RwLock<HashMap<String, String>>>, key: String) -> Self {
+                Self {
+                    x:0,
+                    key,
+                    resources
+                }
+            }
+        }
+
+        impl Future for ResourceFuture {
+            type Output = String;
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                println!("polling x={}", self.x);
+                if self.resources.read().contains_key(&self.key) {
+                    Poll::Ready(format!("{} loaded", self.key))
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+
+
+        let wg = WaitGroup::new();
+
+        (0..1).for_each(|i| {
+        // let i = 0;
+            let wg_0 = wg.clone();
+            let exec_rc = Arc::clone(&executor_rc);
+
+            // loop {
+                if let Some(mut exec_gurad) = executor_rc.try_write() {
+                    let arc = Arc::clone(&exec_gurad.resources);
+
+                    exec_gurad.exec(|| {
+
+                        async move {
+
+                            let out_a = Executor::load_future(Arc::clone(&arc), format!("aaa_{i}")).await;
+                            println!("out_a={out_a}");
+
+                            let out_b = Executor::load_future(Arc::clone(&arc), format!("bbb_{i}")).await;
+
+                            println!("out_b={out_b}");
+                            drop(wg_0);
+                        }.boxed()
+                    });
+                    // break;
+                } else {
+                    println!("can't write add future");
+                }
+            // }
+
+
+        });
+
+
+
+        pool_1.spawn(move ||{
+            (0..1).for_each(|i| {
+                if let Some(exec_guard) = executor_rc.try_write(){
+                    let mut write_guard = exec_guard.resources.write();
+                    write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
+                    write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
+                } else {
+                    println!("executor_rc.try_write for resources insert");
+                }
+
+            });
+             // println!("pool 1");
+             // drop(wg_1);
+         });
+
+
+        wg.wait();
 
         Ok(())
     }
