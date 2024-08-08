@@ -274,8 +274,7 @@ mod tests {
     use futures::sink::Feed;
     use futures::task::{ArcWake, AtomicWaker, SpawnExt};
     use log::debug;
-    use parking_lot::{Mutex, RwLockWriteGuard};
-    use parking_lot::lock_api::{MutexGuard, RawMutex};
+
     use rand::distributions::uniform::SampleBorrow;
     use rayon::ThreadPool;
     use hbac_shared::HbacError;
@@ -840,7 +839,8 @@ mod tests {
 
     #[test]
     fn test_0() -> Result<(), HbacError>{
-
+        use parking_lot::{Mutex, RwLockWriteGuard};
+        use parking_lot::lock_api::{MutexGuard, RawMutex};
 
         use futures::{
             future::{BoxFuture, FutureExt},
@@ -883,18 +883,18 @@ mod tests {
         struct Executor {
             notify: Arc<RayonNotify>,
             loader_pool:ThreadPool,
-            features:Arc<parking_lot::RwLock<Vec<parking_lot::Mutex<BoxFuture<'static, ()>>>>>,
-            resources:Arc<parking_lot::RwLock<HashMap<String, String>>>,
-            can_read:Arc<parking_lot::RwLock<bool>>
+            features:Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
+            resources:Arc<RwLock<HashMap<String, String>>>,
+            can_read:Arc<RwLock<bool>>
         }
 
         impl Executor {
 
             pub fn new() -> Self {
-                let mut futures:Arc<parking_lot::RwLock<Vec<parking_lot::Mutex<BoxFuture<()>>>>> = Arc::new(parking_lot::RwLock::new(vec![]));
+                let mut futures:Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
                 let mut features_rc = Arc::clone(&futures);
                 let notify = Arc::new(RayonNotify::new());
-                let can_read = Arc::new(parking_lot::RwLock::new(true));
+                let can_read = Arc::new(RwLock::new(true));
                 let can_read_rc = Arc::clone(&can_read);
                 let loader_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
                     let mut b = std::thread::Builder::new();
@@ -914,9 +914,9 @@ mod tests {
                         println!("loop");
                         // if let Some(can_read) = can_read.try_read() {
                             let futures_arc = Arc::clone(&futures);
-                        println!("loop 1 is_locked={}", futures_arc.is_locked());
-                            if let Some(mut guard) = futures_arc.try_write() {
-                                println!("1. features={}", futures_arc.read().len());
+                        println!("loop 1 ");
+                            if let Ok(mut guard) = futures_arc.try_write() {
+                                // println!("1. features={}", futures_arc.read().len());
                                 guard.retain(|fut_mx| {
                                     if let Poll::Ready(t) = fut_mx.lock().as_mut().poll(&mut cx) {
                                         println!("Ok");
@@ -926,7 +926,7 @@ mod tests {
                                     }
                                 });
                                 drop(guard);
-                                println!("2. features={}", futures_arc.read().len());
+                                // println!("2. features={}", futures_arc.read().len());
                             } else {
                                 println!("can't read");
                             };
@@ -940,7 +940,7 @@ mod tests {
                     notify: Arc::clone(&notify),
                     loader_pool: loader_pool,
                     features: features_rc,
-                    resources: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+                    resources: Arc::new(RwLock::new(HashMap::new())),
                     can_read:can_read_rc
                 }
             }
@@ -954,7 +954,7 @@ mod tests {
                 // *self.can_read.write() = false;
 
                 // loop {
-                    if let Some(mut guard) = self.features.try_write() {
+                    if let Ok(mut guard) = self.features.try_write() {
                         guard.push(Mutex::new((f)()));
                         println!("feature pushed");
                         // break;
@@ -966,23 +966,23 @@ mod tests {
                 // *self.can_read.write() = true;
             }
 
-            pub fn load_future(resources:Arc<parking_lot::RwLock<HashMap<String, String>>>, key:String) -> BoxFuture<'static, String> {
+            pub fn load_future(resources:Arc<RwLock<HashMap<String, String>>>, key:String) -> BoxFuture<'static, String> {
                 ResourceFuture::new(resources,key).boxed()
             }
         }
 
         let mut executor = Executor::new();
-        let mut executor_rc = Arc::new(parking_lot::RwLock::new(executor));
+        let mut executor_rc = Arc::new(RwLock::new(executor));
 
 
         struct ResourceFuture {
             x:usize,
             key:String,
-            resources:Arc<parking_lot::RwLock<HashMap<String, String>>>
+            resources:Arc<RwLock<HashMap<String, String>>>
         }
 
         impl ResourceFuture {
-            pub fn new(resources:Arc<parking_lot::RwLock<HashMap<String, String>>>, key: String) -> Self {
+            pub fn new(resources:Arc<RwLock<HashMap<String, String>>>, key: String) -> Self {
                 Self {
                     x:0,
                     key,
@@ -996,7 +996,7 @@ mod tests {
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 println!("polling x={}", self.x);
-                if self.resources.read().contains_key(&self.key) {
+                if self.resources.read().unwrap().contains_key(&self.key) {
                     Poll::Ready(format!("{} loaded", self.key))
                 } else {
                     Poll::Pending
@@ -1007,13 +1007,13 @@ mod tests {
 
         let wg = WaitGroup::new();
 
-        (0..1).for_each(|i| {
+        (0..10).for_each(|i| {
         // let i = 0;
             let wg_0 = wg.clone();
             let exec_rc = Arc::clone(&executor_rc);
 
             // loop {
-                if let Some(mut exec_gurad) = executor_rc.try_write() {
+                if let Ok(mut exec_gurad) = executor_rc.try_write() {
                     let arc = Arc::clone(&exec_gurad.resources);
 
                     exec_gurad.exec(|| {
@@ -1041,9 +1041,9 @@ mod tests {
 
 
         pool_1.spawn(move ||{
-            (0..1).for_each(|i| {
-                if let Some(exec_guard) = executor_rc.try_write(){
-                    let mut write_guard = exec_guard.resources.write();
+            (0..10).for_each(|i| {
+                if let Ok(exec_guard) = executor_rc.try_write(){
+                    let mut write_guard = exec_guard.resources.write().unwrap();
                     write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
                     write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
                 } else {
