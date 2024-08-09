@@ -276,6 +276,7 @@ mod tests {
     use log::debug;
 
     use rand::distributions::uniform::SampleBorrow;
+    use rand::Rng;
     use rayon::ThreadPool;
     use hbac_shared::HbacError;
     use serde::Deserialize;
@@ -286,7 +287,7 @@ mod tests {
         hbac_shared::init_test_logging();
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Hash, PartialEq, Eq)]
     struct TestEntity {
         key:String
     }
@@ -386,6 +387,49 @@ mod tests {
 
     }
 
+    fn load_test_entity_sv(key:&String)->SyncWrapper<TestEntity>{
+        thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..1e9 as u64).try_into().unwrap()));
+
+        SyncWrapper::new(
+            TestEntity {
+                key:key.clone()
+            },
+            |e|TestEntity{
+                key:e.key.clone()
+            }
+        )
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct SyncWrapper<V>
+    where  V: Send + Debug {
+        v:V,
+        shallow_clone_fn:fn(&V)->V
+    }
+
+    impl <V> SyncWrapper<V>
+    where  V: Send + Debug {
+        pub fn new(v:V, shallow_clone_fn:fn(&V)->V) -> Self {
+            Self {
+                v,
+                shallow_clone_fn
+            }
+        }
+
+        pub fn shallow_clone(&self) -> V {
+            (self.shallow_clone_fn)(&self.v)
+        }
+    }
+    unsafe impl <V> Sync for SyncWrapper<V> where  V: Send + Debug {}
+
+    impl <V> Deref for SyncWrapper<V>  where  V: Send + Debug {
+        type Target = V;
+        fn deref(&self) -> &Self::Target {
+            &self.v
+        }
+    }
+
+
     #[test]
     fn test_loader_0() -> Result<(), HbacError> {
         use rayon::iter::ParallelIterator;
@@ -398,52 +442,9 @@ mod tests {
         use crossbeam_utils::sync::WaitGroup;
         use std::borrow::BorrowMut;
 
-        fn load_test_entity_sv(key:&String)->SyncWrapper<TestEntity>{
-            thread::sleep(Duration::new(0, 1000));
-
-            SyncWrapper::new(
-                TestEntity {
-                        key:key.clone()
-                },
-                |e|TestEntity{
-                    key:e.key.clone()
-                }
-            )
-        }
-
-
 
         let num_threads = std::thread::available_parallelism()?;
         println!("num_threads={num_threads:?}");
-
-        #[derive(Debug)]
-        struct SyncWrapper<V>
-            where  V: Send + Debug {
-            v:V,
-            shallow_clone_fn:fn(&V)->V
-        }
-
-        impl <V> SyncWrapper<V>
-            where  V: Send + Debug {
-            pub fn new(v:V, shallow_clone_fn:fn(&V)->V) -> Self {
-                Self {
-                    v,
-                    shallow_clone_fn
-                }
-            }
-
-            pub fn shallow_clone(&self) -> V {
-                (self.shallow_clone_fn)(&self.v)
-            }
-        }
-        unsafe impl <V> Sync for SyncWrapper<V> where  V: Send + Debug {}
-
-        impl <V> Deref for SyncWrapper<V>  where  V: Send + Debug {
-            type Target = V;
-            fn deref(&self) -> &Self::Target {
-                &self.v
-            }
-        }
 
 
         struct Loader<K, V>
@@ -844,6 +845,7 @@ mod tests {
         use rayon::iter::ParallelBridge;
         use rayon::iter::IntoParallelIterator;
         use rayon::prelude::*;
+        use log::info;
 
         use futures::{
             future::{BoxFuture, FutureExt},
@@ -883,70 +885,113 @@ mod tests {
             fn wake_by_ref(arc_self: &Arc<Self>) {}
         }
 
-        struct Executor {
+        struct Executor<K, V>
+        where
+            K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+            V: Send + Debug + 'static
+        {
             notify: Arc<RayonNotify>,
+            futures_pool:ThreadPool,
             loader_pool:ThreadPool,
             features:Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
-            resources:Arc<RwLock<HashMap<String, String>>>,
-            can_read:Arc<RwLock<bool>>
+            resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
+            can_read:Arc<RwLock<bool>>,
+            loader_fn:Arc<Box<dyn Fn(&K)->SyncWrapper<V> + Sync + Send>>,
         }
 
-        impl Executor {
+        impl <K, V> Executor<K, V>
+        where
+            K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+            V: Send + Debug + 'static {
 
-            pub fn new() -> Self {
+            pub fn new<F>(loader:F) -> Self
+                where F:Fn(&K) -> SyncWrapper<V> + Sync + Send + 'static {
+
                 let mut futures:Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
                 let mut features_rc = Arc::clone(&futures);
                 let notify = Arc::new(RayonNotify::new());
                 let can_read = Arc::new(RwLock::new(true));
                 let can_read_rc = Arc::clone(&can_read);
-                let loader_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+                let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
                     let mut b = std::thread::Builder::new();
-                    b.name(format!("{}/{:?}", "pool_1", thread_builder.index()))
+                    b.name(format!("{}/{:?}", "futures_pool", thread_builder.index()))
                         .spawn(|| thread_builder.run())?;
 
                     Ok(())
                 }).build().expect("pool_1");
                 let p_notify = Arc::clone(&notify);
 
-                loader_pool.spawn(move ||{
-                    // println!("loader_pool spawned");
+                futures_pool.spawn(move ||{
+                    debug!("loader_pool spawned");
                     let waker = waker_ref(&p_notify);
                     let mut cx = Context::from_waker(&waker);
 
                     loop {
-                        // println!("loop");
                         // if let Some(can_read) = can_read.try_read() {
                             let futures_arc = Arc::clone(&futures);
-                        // println!("loop 1 ");
+                            // println!("futures loop: 0");
                             if let Some(mut guard) = futures_arc.try_write() {
-                                // println!("1. features={}", guard.len());
+                                debug!("futures loop: in guard len={} ", guard.len());
                                 guard.retain(|fut_mx| {
                                     if let Poll::Ready(t) = fut_mx.lock().as_mut().poll(&mut cx) {
-                                        println!("Ok");
                                         false
                                     } else {
                                         true
                                     }
                                 });
-                                // println!("2. features={}", guard.len());
+
                                 drop(guard);
-                            } else {
-                                // println!("can't read");
                             };
-                        // } else {
-                        //     println!("can't lock can_read");
                         // }
                         rayon::yield_local();
                     }
                 });
                 Self {
                     notify: Arc::clone(&notify),
-                    loader_pool: loader_pool,
+                    futures_pool,
+                    loader_pool:rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
+
+                        let mut b = std::thread::Builder::new();
+                        b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
+                            .spawn(|| thread_builder.run())?;
+
+                        Ok(())
+                    }).build().expect("loader_pool"),
                     features: features_rc,
                     resources: Arc::new(RwLock::new(HashMap::new())),
+                    loader_fn:Arc::new(Box::new(loader)),
                     can_read:can_read_rc
                 }
             }
+
+            fn preload(&mut self, keys: Vec<K>) -> Result<(), HbacError> {
+                debug!("preload keys={keys:?}");
+
+                for key in keys {
+                    if self.resources.read().contains_key(&key){
+                        // println!("skipping key={key:?}");
+                        continue;
+                    }
+                    debug!("loading key={key:?}");
+
+                    let loader = Arc::clone(&self.loader_fn);
+                    let data_loaded = Arc::clone(&self.resources);
+
+                    self.loader_pool.spawn(move ||{
+
+                        let v = loader(&key);
+                        debug!("preload 0: current_thread={:?} key={:?}", thread::current().id(), key);
+
+                        data_loaded.write().insert(key.clone(), v);
+                        debug!("preload 1: current_thread={:?} key={:?}", thread::current().id(), key);
+
+                    });
+                };
+
+
+                Ok(())
+            }
+
 
 
             pub fn exec<F>(& mut self, f:F )
@@ -969,23 +1014,27 @@ mod tests {
                 // *self.can_read.write() = true;
             }
 
-            pub fn load_future(resources:Arc<RwLock<HashMap<String, String>>>, key:String) -> BoxFuture<'static, String> {
+            pub fn load_future(resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, key:K) -> BoxFuture<'static, V> {
                 ResourceFuture::new(resources,key).boxed()
             }
         }
 
-        let mut executor = Executor::new();
+        let mut executor = Executor::new(load_test_entity_sv);
         let mut executor_rc = Arc::new(RwLock::new(executor));
 
 
-        struct ResourceFuture {
+        struct ResourceFuture<K, V>  where
+            K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+            V: Send + Debug + 'static {
             x:usize,
-            key:String,
-            resources:Arc<RwLock<HashMap<String, String>>>
+            key:K,
+            resources:Arc<RwLock<HashMap<K, V>>>
         }
 
-        impl ResourceFuture {
-            pub fn new(resources:Arc<RwLock<HashMap<String, String>>>, key: String) -> Self {
+        impl <K, V> ResourceFuture<K, V>  where
+            K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+            V: Send + Debug + 'static {
+            pub fn new(resources:Arc<RwLock<HashMap<K, V>>>, key: K) -> Self {
                 Self {
                     x:0,
                     key,
@@ -994,14 +1043,18 @@ mod tests {
             }
         }
 
-        impl Future for ResourceFuture {
-            type Output = String;
+        impl <K, V>Future for ResourceFuture<K, SyncWrapper<V>>  where
+            K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+            V: Send + Debug + 'static{
+            type Output = V;
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                // println!("polling x={}", self.x);
-                if self.resources.read().contains_key(&self.key) {
-                    Poll::Ready(format!("{} loaded", self.key))
+                debug!("polling key={:?}", self.key);
+                if let Some(resource) = self.resources.read().get(&self.key) {
+                    debug!("polling key={:?} Ready", self.key);
+                    Poll::Ready(resource.shallow_clone())
                 } else {
+                    debug!("polling key={:?} Pending ", self.key);
                     Poll::Pending
                 }
             }
@@ -1016,11 +1069,11 @@ mod tests {
         let data_done = Arc::new(RwLock::new(HashSet::new()));
         let data_done_rc = Arc::clone(&data_done);
         let data_done_rc_1 = Arc::clone(&data_done_rc);
-        let items = 10_000usize;
+        let num_items = 10usize;
         pool_0.install(move || {
 
-            (0..items).into_par_iter().for_each(|i| {
-                // let i = 0;
+            (0..num_items).into_par_iter().for_each(|i| {
+
                 let wg_0_i = wg_0.clone();
                 let exec_rc = Arc::clone(&exec_0);
 
@@ -1032,38 +1085,44 @@ mod tests {
 
                         exec_gurad.exec(move || {
                             async move {
-                                let out_a = Executor::load_future(Arc::clone(&arc), format!("aaa_{i}")).await;
-                                // println!("out_a={out_a}");
+                                let key_aaa = format!("aaa_{i}");
+                                let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_aaa.clone()).await;
 
-                                let out_b = Executor::load_future(Arc::clone(&arc), format!("bbb_{i}")).await;
+                                let key_bbb = format!("bbb_{i}");
+                                let out_b = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_bbb.clone()).await;
 
-                                // println!("out_b={out_b}");
+
                                 let mut rw_lock_write_guard = data_done_rc.write();
                                 rw_lock_write_guard.insert(out_a);
                                 rw_lock_write_guard.insert(out_b);
                                 drop(wg_0_i);
+
+                                info!("key_aaa={key_aaa} key_bbb={key_bbb} done");
                             }.boxed()
                         });
                         break;
                     } else {
-                        // println!("can't write add future");
+                        debug!("executor_rc.try_write for exec");
                     }
                 }
-                // }
             });
             drop(wg_0);
         });
 
         pool_1.spawn(move ||{
-            (0..items).for_each(|i| {
+            (0..num_items).for_each(|i| {
                 loop {
-                    if let Some(exec_guard) = exec_1.try_write() {
-                        let mut write_guard = exec_guard.resources.write();
-                        write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
-                        write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
+                    if let Some(mut exec_guard) = exec_1.try_write() {
+                        // let mut write_guard = exec_guard.resources.write();
+                        // write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
+                        // write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
+                        exec_guard.preload(vec![
+                            format!("aaa_{i}"),
+                            format!("bbb_{i}")
+                        ]);
                         break
                     } else {
-                        // println!("executor_rc.try_write for resources insert");
+                        debug!("executor_rc.try_write for preload failed");
                     }
                 }
 
@@ -1074,7 +1133,7 @@ mod tests {
 
 
         wg.wait();
-        while data_done_rc_1.read().len() != items * 2 {
+        while data_done_rc_1.read().len() != num_items * 2 {
             // println!("data_done={data_done_rc_1:?}");
             thread::sleep(Duration::new(1, 0));
         }
