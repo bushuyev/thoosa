@@ -839,15 +839,18 @@ mod tests {
 
     #[test]
     fn test_0() -> Result<(), HbacError>{
-        use parking_lot::{Mutex, RwLockWriteGuard};
+        use parking_lot::{Mutex, RwLock, RwLockWriteGuard};
         use parking_lot::lock_api::{MutexGuard, RawMutex};
+        use rayon::iter::ParallelBridge;
+        use rayon::iter::IntoParallelIterator;
+        use rayon::prelude::*;
 
         use futures::{
             future::{BoxFuture, FutureExt},
             task::{waker_ref, ArcWake},
         };
 
-        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
             let mut b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
@@ -855,7 +858,7 @@ mod tests {
             Ok(())
         }).build()?;
 
-        let pool_1 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+        let pool_1 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
             let mut b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "pool_1", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
@@ -906,17 +909,17 @@ mod tests {
                 let p_notify = Arc::clone(&notify);
 
                 loader_pool.spawn(move ||{
-                    println!("loader_pool spawned");
+                    // println!("loader_pool spawned");
                     let waker = waker_ref(&p_notify);
                     let mut cx = Context::from_waker(&waker);
 
                     loop {
-                        println!("loop");
+                        // println!("loop");
                         // if let Some(can_read) = can_read.try_read() {
                             let futures_arc = Arc::clone(&futures);
-                        println!("loop 1 ");
-                            if let Ok(mut guard) = futures_arc.try_write() {
-                                // println!("1. features={}", futures_arc.read().len());
+                        // println!("loop 1 ");
+                            if let Some(mut guard) = futures_arc.try_write() {
+                                // println!("1. features={}", guard.len());
                                 guard.retain(|fut_mx| {
                                     if let Poll::Ready(t) = fut_mx.lock().as_mut().poll(&mut cx) {
                                         println!("Ok");
@@ -925,10 +928,10 @@ mod tests {
                                         true
                                     }
                                 });
+                                // println!("2. features={}", guard.len());
                                 drop(guard);
-                                // println!("2. features={}", futures_arc.read().len());
                             } else {
-                                println!("can't read");
+                                // println!("can't read");
                             };
                         // } else {
                         //     println!("can't lock can_read");
@@ -949,19 +952,19 @@ mod tests {
             pub fn exec<F>(& mut self, f:F )
                 where F:FnOnce()->BoxFuture<'static, ()>
             {
-                println!("exec");
+                // println!("exec");
 
                 // *self.can_read.write() = false;
 
-                // loop {
-                    if let Ok(mut guard) = self.features.try_write() {
+                loop {
+                    if let Some(mut guard) = self.features.try_write() {
                         guard.push(Mutex::new((f)()));
-                        println!("feature pushed");
-                        // break;
+                        // println!("feature pushed");
+                        break;
                     } else {
-                        println!("exec: can't lock features");
+                        // println!("exec: can't lock features");
                     }
-                // }
+                }
 
                 // *self.can_read.write() = true;
             }
@@ -995,8 +998,8 @@ mod tests {
             type Output = String;
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                println!("polling x={}", self.x);
-                if self.resources.read().unwrap().contains_key(&self.key) {
+                // println!("polling x={}", self.x);
+                if self.resources.read().contains_key(&self.key) {
                     Poll::Ready(format!("{} loaded", self.key))
                 } else {
                     Poll::Pending
@@ -1004,50 +1007,64 @@ mod tests {
             }
         }
 
+        let exec_0 = Arc::clone(&executor_rc);
+        let exec_1 = Arc::clone(&executor_rc);
 
         let wg = WaitGroup::new();
+        let wg_0 = wg.clone();
 
-        (0..10).for_each(|i| {
-        // let i = 0;
-            let wg_0 = wg.clone();
-            let exec_rc = Arc::clone(&executor_rc);
+        let data_done = Arc::new(RwLock::new(HashSet::new()));
+        let data_done_rc = Arc::clone(&data_done);
+        let data_done_rc_1 = Arc::clone(&data_done_rc);
+        let items = 10_000usize;
+        pool_0.install(move || {
 
-            // loop {
-                if let Ok(mut exec_gurad) = executor_rc.try_write() {
-                    let arc = Arc::clone(&exec_gurad.resources);
+            (0..items).into_par_iter().for_each(|i| {
+                // let i = 0;
+                let wg_0_i = wg_0.clone();
+                let exec_rc = Arc::clone(&exec_0);
 
-                    exec_gurad.exec(|| {
+                let data_done_rc = Arc::clone(&data_done_rc);
 
-                        async move {
+                loop {
+                    if let Some(mut exec_gurad) = executor_rc.try_write() {
+                        let arc = Arc::clone(&exec_gurad.resources);
 
-                            let out_a = Executor::load_future(Arc::clone(&arc), format!("aaa_{i}")).await;
-                            println!("out_a={out_a}");
+                        exec_gurad.exec(move || {
+                            async move {
+                                let out_a = Executor::load_future(Arc::clone(&arc), format!("aaa_{i}")).await;
+                                // println!("out_a={out_a}");
 
-                            let out_b = Executor::load_future(Arc::clone(&arc), format!("bbb_{i}")).await;
+                                let out_b = Executor::load_future(Arc::clone(&arc), format!("bbb_{i}")).await;
 
-                            println!("out_b={out_b}");
-                            drop(wg_0);
-                        }.boxed()
-                    });
-                    // break;
-                } else {
-                    println!("can't write add future");
+                                // println!("out_b={out_b}");
+                                let mut rw_lock_write_guard = data_done_rc.write();
+                                rw_lock_write_guard.insert(out_a);
+                                rw_lock_write_guard.insert(out_b);
+                                drop(wg_0_i);
+                            }.boxed()
+                        });
+                        break;
+                    } else {
+                        // println!("can't write add future");
+                    }
                 }
-            // }
-
-
+                // }
+            });
+            drop(wg_0);
         });
 
-
-
         pool_1.spawn(move ||{
-            (0..10).for_each(|i| {
-                if let Ok(exec_guard) = executor_rc.try_write(){
-                    let mut write_guard = exec_guard.resources.write().unwrap();
-                    write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
-                    write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
-                } else {
-                    println!("executor_rc.try_write for resources insert");
+            (0..items).for_each(|i| {
+                loop {
+                    if let Some(exec_guard) = exec_1.try_write() {
+                        let mut write_guard = exec_guard.resources.write();
+                        write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
+                        write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
+                        break
+                    } else {
+                        // println!("executor_rc.try_write for resources insert");
+                    }
                 }
 
             });
@@ -1057,6 +1074,12 @@ mod tests {
 
 
         wg.wait();
+        while data_done_rc_1.read().len() != items * 2 {
+            // println!("data_done={data_done_rc_1:?}");
+            thread::sleep(Duration::new(1, 0));
+        }
+        println!("data_done={data_done_rc_1:?}");
+        // thread::sleep(Duration::new(3, 0));
 
         Ok(())
     }
