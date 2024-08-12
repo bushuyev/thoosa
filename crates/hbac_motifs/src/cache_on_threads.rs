@@ -267,14 +267,14 @@ mod tests {
     use std::sync::mpsc::Receiver;
     use std::task::{Context, Poll, Waker};
     use std::{mem, thread};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use crossbeam_utils::sync::WaitGroup;
     use futures::AsyncWriteExt;
     use futures::executor::block_on;
     use futures::sink::Feed;
     use futures::task::{ArcWake, AtomicWaker, SpawnExt};
     use log::debug;
-
+    use parking_lot::lock_api::Mutex;
     use rand::distributions::uniform::SampleBorrow;
     use rand::Rng;
     use rayon::ThreadPool;
@@ -852,7 +852,7 @@ mod tests {
             task::{waker_ref, ArcWake},
         };
 
-        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
+        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
             let mut b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
@@ -949,7 +949,7 @@ mod tests {
                 Self {
                     notify: Arc::clone(&notify),
                     futures_pool,
-                    loader_pool:rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
+                    loader_pool:rayon::ThreadPoolBuilder::new().num_threads(8).spawn_handler(|thread_builder| {
 
                         let mut b = std::thread::Builder::new();
                         b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
@@ -1069,46 +1069,84 @@ mod tests {
         let data_done = Arc::new(RwLock::new(HashSet::new()));
         let data_done_rc = Arc::clone(&data_done);
         let data_done_rc_1 = Arc::clone(&data_done_rc);
-        let num_items = 10usize;
+        let num_items = 1000usize;
+
+        let waiting_time = Arc::new(Mutex::new(0u128));
+        let waiting_time_rc = Arc::clone(&waiting_time);
+
+
+        let waiting_time_avg = Arc::new(Mutex::new(0u128));
+        let waiting_time_avg_rc = Arc::clone(&waiting_time_avg);
+
+        (0..num_items).for_each(|i| {
+            loop {
+                if let Some(mut exec_guard) = exec_1.try_write() {
+                    // let mut write_guard = exec_guard.resources.write();
+                    // write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
+                    // write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
+                    exec_guard.preload(vec![
+                        format!("aaa_{i}"),
+                        format!("bbb_{i}")
+                    ]);
+                    break
+                } else {
+                    debug!("executor_rc.try_write for preload failed");
+                }
+            }
+
+        });
+
+
         pool_0.install(move || {
 
             (0..num_items).into_par_iter().for_each(|i| {
 
                 let wg_0_i = wg_0.clone();
                 let exec_rc = Arc::clone(&exec_0);
+                let waiting_time_rc = Arc::clone(&waiting_time_rc);
+                let waiting_time_avg_rc = Arc::clone(&waiting_time_avg_rc);
 
                 let data_done_rc = Arc::clone(&data_done_rc);
 
-                loop {
-                    if let Some(mut exec_gurad) = executor_rc.try_write() {
-                        let arc = Arc::clone(&exec_gurad.resources);
 
-                        exec_gurad.exec(move || {
-                            async move {
-                                let key_aaa = format!("aaa_{i}");
-                                let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_aaa.clone()).await;
+                let mut exec_gurad = executor_rc.write();
+                let arc = Arc::clone(&exec_gurad.resources);
 
-                                let key_bbb = format!("bbb_{i}");
-                                let out_b = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_bbb.clone()).await;
+                exec_gurad.exec(move || {
+                    async move {
+                        let t = Instant::now();
+                        let key_aaa = format!("aaa_{i}");
+                        let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_aaa.clone()).await;
+
+                        let key_bbb = format!("bbb_{i}");
+                        let out_b = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_bbb.clone()).await;
+
+                        let mut waiting_time_guard = waiting_time_rc.lock();
+                        let time = t.elapsed().as_millis();
+                        *waiting_time_guard += time;
 
 
-                                let mut rw_lock_write_guard = data_done_rc.write();
-                                rw_lock_write_guard.insert(out_a);
-                                rw_lock_write_guard.insert(out_b);
-                                drop(wg_0_i);
 
-                                info!("key_aaa={key_aaa} key_bbb={key_bbb} done");
-                            }.boxed()
-                        });
-                        break;
-                    } else {
-                        debug!("executor_rc.try_write for exec");
-                    }
-                }
+                        let mut rw_lock_write_guard = data_done_rc.write();
+                        rw_lock_write_guard.insert(out_a);
+                        rw_lock_write_guard.insert(out_b);
+                        let n = rw_lock_write_guard.len() as u128;
+
+                        let mut waiting_time_avg_guard = waiting_time_avg_rc.lock();
+
+                        *waiting_time_avg_guard = (*waiting_time_avg_guard * (n-1) + time) / n;
+
+                        drop(wg_0_i);
+
+                        info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
+                    }.boxed()
+                });
+
             });
             drop(wg_0);
         });
 
+        /*
         pool_1.spawn(move ||{
             (0..num_items).for_each(|i| {
                 loop {
@@ -1127,9 +1165,9 @@ mod tests {
                 }
 
             });
-             // println!("pool 1");
-             // drop(wg_1);
+
          });
+         */
 
 
         wg.wait();
@@ -1137,7 +1175,7 @@ mod tests {
             // println!("data_done={data_done_rc_1:?}");
             thread::sleep(Duration::new(1, 0));
         }
-        println!("data_done={data_done_rc_1:?}");
+        debug!("data_done={data_done_rc_1:?}");
         // thread::sleep(Duration::new(3, 0));
 
         Ok(())
