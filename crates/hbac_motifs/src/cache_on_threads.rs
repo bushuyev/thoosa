@@ -389,7 +389,8 @@ mod tests {
     }
 
     fn load_test_entity_sv(key:&String)->SyncWrapper<TestEntity>{
-        thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..1e9 as u64).try_into().unwrap()));
+        thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..2e9 as u32)));
+        // thread::sleep(Duration::new(0, 5e8 as u32));
 
         SyncWrapper::new(
             TestEntity {
@@ -903,11 +904,10 @@ mod tests {
             K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
             V: Send + Debug + 'static {
 
-            pub fn new<F>(loader:F) -> Self
+            pub fn new<F>(loader:F, max_keys: usize, loader_threads: usize, futures_channel_bound: usize) -> Self
                 where F:Fn(&K) -> SyncWrapper<V> + Sync + Send + 'static {
 
                 let mut futures:Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
-                let mut features_channel_rc = Arc::clone(&futures);
                 let mut features_rc = Arc::clone(&futures);
 
 
@@ -924,23 +924,8 @@ mod tests {
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_arc = Arc::clone(&stop);
 
-                let (tx, rx) = sync_channel::<Mutex<BoxFuture<()>>>(0);
+                let (tx, rx) = sync_channel::<Mutex<BoxFuture<()>>>(futures_channel_bound);
 
-
-                futures_pool.spawn(move ||{
-                    while let Ok(future) = rx.recv(){
-                        let mut attempts = 0usize;
-                        loop {
-                            attempts+=1;
-                            if let Some(mut guard) = features_channel_rc.try_write() {
-                                guard.push(future);
-                                break;
-                            }
-                        }
-                        debug!("rx.recv: added future after {attempts} attempts");
-                    }
-
-                });
 
                 futures_pool.spawn(move ||{
                     debug!("loader_pool spawned");
@@ -948,7 +933,9 @@ mod tests {
                     let mut cx = Context::from_waker(&waker);
                     let mut cycle = 0usize;
 
+                    // let mut t = Instant::now();
                     loop {
+
                         if stop_arc.load(Ordering::Relaxed) {
                             break
                         }
@@ -957,10 +944,9 @@ mod tests {
                         } else {
                             cycle+=1;
                         }
-                        // if let Some(can_read) = can_read.try_read() {
-                        //     let futures_arc = Arc::clone(&futures);
-                            // println!("futures loop: 0");
-                        if futures.read().len() > 0 {
+
+                        let futures_len = futures.read().len();
+                        if futures_len > 0 {
                             if let Some(mut guard) = futures.try_write() {
                                 if cycle % 10000 == 0 {
                                     debug!("futures loop: in guard len={} ", guard.len());
@@ -974,17 +960,18 @@ mod tests {
                                     }
                                 });
 
-                                drop(guard);
                             };
+                        } else if futures_len <= loader_threads {
+                            if let Ok(future) = rx.try_recv(){
+                                futures.write().push(future);
+                            }
                         }
-                        // }
-                        rayon::yield_now();
                     }
                 });
                 Self {
                     notify: Arc::clone(&notify),
                     futures_pool,
-                    loader_pool:rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
+                    loader_pool:rayon::ThreadPoolBuilder::new().num_threads(loader_threads).spawn_handler(|thread_builder| {
 
                         let mut b = std::thread::Builder::new();
                         b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
@@ -999,7 +986,7 @@ mod tests {
                     resources_being_loaded: Arc::new(RwLock::new(HashSet::new())),
 
                     keys_fifo: VecDeque::new(),
-                    max_keys: 100,
+                    max_keys,
 
                     loader_fn:Arc::new(Box::new(loader)),
 
@@ -1011,17 +998,15 @@ mod tests {
                 self.stop.store(true, Relaxed);
             }
 
-            fn preload_vec(&mut self, keys: Vec<K>)  {
+            fn preload(&mut self, keys: Vec<K>)  {
                 debug!("preload_vec: keys={keys:?}");
                 let mut resources_guard = self.resources.write();
                 let mut resources_being_loaded_guard = self.resources_being_loaded.write();
 
                 for key in keys {
-
                     if resources_guard.contains_key(&key) {
                         return;
                     }
-
 
                     if resources_being_loaded_guard.contains(&key){
                         return;
@@ -1071,8 +1056,8 @@ mod tests {
                 ResourceFuture::new(resources,key).boxed()
             }
         }
-
-        let mut executor = Executor::new(load_test_entity_sv);
+        let num_items = 1000usize;
+        let mut executor = Executor::new(load_test_entity_sv, 100, 4, 10);
         let mut executor_rc = Arc::new(RwLock::new(executor));
 
 
@@ -1123,7 +1108,7 @@ mod tests {
         let data_done = Arc::new(RwLock::new(HashSet::new()));
         let data_done_rc = Arc::clone(&data_done);
         let data_done_rc_1 = Arc::clone(&data_done_rc);
-        let num_items = 10usize;
+
 
         let waiting_time = Arc::new(Mutex::new(0u128));
         let waiting_time_rc = Arc::clone(&waiting_time);
@@ -1131,73 +1116,85 @@ mod tests {
 
         let waiting_time_avg = Arc::new(Mutex::new(0u128));
         let waiting_time_avg_rc = Arc::clone(&waiting_time_avg);
-
-        (0..num_items/10).for_each(|i| {
-            loop {
-                if let Some(mut exec_guard) = exec_1.try_write() {
-                    // let mut write_guard = exec_guard.resources.write();
-                    // write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
-                    // write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
-                    // exec_guard.preload_vec(vec![
-                    //     format!("aaa_{i}"),
-                    //     format!("bbb_{i}")
-                    // ]);
-                    exec_guard.preload_vec((0..10).flat_map(|j|[
-                        format!("aaa_{}", i*10+j),
-                        format!("bbb_{}", i*10+j)
-                    ]).collect::<Vec<String>>());
-                    break
-                } else {
-                    debug!("executor_rc.try_write for preload failed");
-                }
-            }
-
-        });
+        //
+        // (0..num_items/10).for_each(|i| {
+        //     loop {
+        //         if let Some(mut exec_guard) = exec_1.try_write() {
+        //             // let mut write_guard = exec_guard.resources.write();
+        //             // write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
+        //             // write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
+        //             // exec_guard.preload_vec(vec![
+        //             //     format!("aaa_{i}"),
+        //             //     format!("bbb_{i}")
+        //             // ]);
+        //             exec_guard.preload((0..10).flat_map(|j|[
+        //                 format!("aaa_{}", i*10+j),
+        //                 format!("bbb_{}", i*10+j)
+        //             ]).collect::<Vec<String>>());
+        //             break
+        //         } else {
+        //             debug!("executor_rc.try_write for preload failed");
+        //         }
+        //     }
+        //
+        // });
 
 
         pool_0.install(move || {
 
-            (0..num_items).into_par_iter().for_each(|i| {
+            (0..num_items/10).into_par_iter().for_each(|b| {
 
-                let wg_0_i = wg_0.clone();
-                let exec_rc = Arc::clone(&exec_0);
-                let waiting_time_rc = Arc::clone(&waiting_time_rc);
-                let waiting_time_avg_rc = Arc::clone(&waiting_time_avg_rc);
+                exec_0.write().preload((0..10).flat_map(|j|[
+                    format!("aaa_{}", b*10+j),
+                    format!("bbb_{}", b*10+j)
+                ]).collect::<Vec<String>>());
 
-                let data_done_rc = Arc::clone(&data_done_rc);
+                (0..10).for_each(|j|{
+                    let i = b * 10 + j;
 
-                let mut exec_gurad = executor_rc.write();
+                    let wg_0_i = wg_0.clone();
+                    let exec_rc = Arc::clone(&exec_0);
+                    let waiting_time_rc = Arc::clone(&waiting_time_rc);
+                    let waiting_time_avg_rc = Arc::clone(&waiting_time_avg_rc);
 
-                exec_gurad.exec(move |resources_arc| {
-                    async move {
-                        let t = Instant::now();
-                        let key_aaa = format!("aaa_{i}");
-                        let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
+                    let data_done_rc = Arc::clone(&data_done_rc);
 
-                        let key_bbb = format!("bbb_{i}");
-                        let out_b = Executor::<String,TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
+                    let mut exec_gurad = executor_rc.write();
 
-                        let mut waiting_time_guard = waiting_time_rc.lock();
-                        let time = t.elapsed().as_millis();
-                        *waiting_time_guard += time;
+                    exec_gurad.exec(move |resources_arc| {
+                        async move {
+                            let t = Instant::now();
+                            let key_aaa = format!("aaa_{i}");
+                            let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
 
-                        let mut rw_lock_write_guard = data_done_rc.write();
-                        rw_lock_write_guard.insert(out_a);
-                        rw_lock_write_guard.insert(out_b);
-                        let n = rw_lock_write_guard.len() as u128;
+                            let key_bbb = format!("bbb_{i}");
+                            let out_b = Executor::<String,TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
 
-                        let mut waiting_time_avg_guard = waiting_time_avg_rc.lock();
+                            let mut waiting_time_guard = waiting_time_rc.lock();
+                            let time = t.elapsed().as_millis();
+                            *waiting_time_guard += time;
 
-                        *waiting_time_avg_guard = (*waiting_time_avg_guard * (n-1) + time) / n;
+                            let mut rw_lock_write_guard = data_done_rc.write();
+                            rw_lock_write_guard.insert(out_a);
+                            rw_lock_write_guard.insert(out_b);
+                            let n = rw_lock_write_guard.len() as u128;
 
-                        let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
-                        trace!("x={x}");
+                            let mut waiting_time_avg_guard = waiting_time_avg_rc.lock();
 
-                        drop(wg_0_i);
+                            *waiting_time_avg_guard = (*waiting_time_avg_guard * (n-1) + time) / n;
 
-                        info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
-                    }.boxed()
+                            // thread::sleep(Duration::new(0, 1e8 as u32));
+                            let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
+                            trace!("x={x}");
 
+                            drop(wg_0_i);
+
+                            info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
+                        }.boxed()
+
+                    });
+
+                    debug!("item {i} executed");
                 });
 
             });
