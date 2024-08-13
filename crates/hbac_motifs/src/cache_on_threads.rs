@@ -843,6 +843,7 @@ mod tests {
     fn test_0() -> Result<(), HbacError>{
         use parking_lot::{Mutex, RwLock, RwLockWriteGuard};
         use parking_lot::lock_api::{MutexGuard, RawMutex};
+        use parking_lot_mpsc::*;
         use rayon::iter::ParallelBridge;
         use rayon::iter::IntoParallelIterator;
         use rayon::prelude::*;
@@ -887,6 +888,7 @@ mod tests {
             loader_pool:ThreadPool,
 
             features:Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
+            features_sender:SyncSender<Mutex<BoxFuture<'static, ()>>>,
             resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
             resources_being_loaded:Arc<RwLock<HashSet<K>>>,
             keys_fifo: VecDeque<K>,
@@ -905,8 +907,9 @@ mod tests {
                 where F:Fn(&K) -> SyncWrapper<V> + Sync + Send + 'static {
 
                 let mut futures:Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
+                let mut features_channel_rc = Arc::clone(&futures);
                 let mut features_rc = Arc::clone(&futures);
-                let notify = Arc::new(RayonNotify::new());
+
 
                 let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
                     let mut b = std::thread::Builder::new();
@@ -915,15 +918,36 @@ mod tests {
 
                     Ok(())
                 }).build().expect("pool_1");
+
+                let notify = Arc::new(RayonNotify::new());
                 let p_notify = Arc::clone(&notify);
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_arc = Arc::clone(&stop);
+
+                let (tx, rx) = sync_channel::<Mutex<BoxFuture<()>>>(0);
+
+
+                futures_pool.spawn(move ||{
+                    while let Ok(future) = rx.recv(){
+                        let mut attempts = 0usize;
+                        loop {
+                            attempts+=1;
+                            if let Some(mut guard) = features_channel_rc.try_write() {
+                                guard.push(future);
+                                break;
+                            }
+                        }
+                        debug!("rx.recv: added future after {attempts} attempts");
+                    }
+
+                });
 
                 futures_pool.spawn(move ||{
                     debug!("loader_pool spawned");
                     let waker = waker_ref(&p_notify);
                     let mut cx = Context::from_waker(&waker);
                     let mut cycle = 0usize;
+
                     loop {
                         if stop_arc.load(Ordering::Relaxed) {
                             break
@@ -969,6 +993,7 @@ mod tests {
                         Ok(())
                     }).build().expect("loader_pool"),
                     features: features_rc,
+                    features_sender: tx,
 
                     resources: Arc::new(RwLock::new(HashMap::new())),
                     resources_being_loaded: Arc::new(RwLock::new(HashSet::new())),
@@ -1039,19 +1064,7 @@ mod tests {
                 where F:FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>)->BoxFuture<'static, ()>
             {
 
-                let mut attempts = 0usize;
-                loop {
-                    attempts+=1;
-                    if self.features.read().len() < 3 {
-                        if let Some(mut guard) = self.features.try_write() {
-                            guard.push(Mutex::new((f)(Arc::clone(&self.resources))));
-                            break;
-                        }
-                    } else {
-                        rayon::yield_now();
-                    }
-                }
-                debug!("exec: added future after {attempts} attempts");
+                self.features_sender.send(Mutex::new((f)(Arc::clone(&self.resources))));
             }
 
             pub fn load_future(resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, key:K) -> BoxFuture<'static, V> {
