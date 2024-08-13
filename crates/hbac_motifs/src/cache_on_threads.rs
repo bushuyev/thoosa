@@ -254,19 +254,20 @@ impl <K, V> CacheOnThreads<K, V> where K:Hash + Eq + Clone + Send + Sync + 'stat
 #[cfg(test)]
 mod tests {
 
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{HashMap, HashSet, VecDeque};
     use std::fmt::Debug;
     use std::future::{Future};
     use std::hash::Hash;
     use std::io::Write;
     use std::ops::Deref;
     use std::pin::Pin;
-    use std::sync::{Arc, RwLock};
-    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Barrier, RwLock};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::mpsc::Receiver;
     use std::task::{Context, Poll, Waker};
     use std::{mem, thread};
+    use std::thread::spawn;
     use std::time::{Duration, Instant};
     use crossbeam_utils::sync::WaitGroup;
     use futures::AsyncWriteExt;
@@ -277,7 +278,7 @@ mod tests {
     use parking_lot::lock_api::Mutex;
     use rand::distributions::uniform::SampleBorrow;
     use rand::Rng;
-    use rayon::ThreadPool;
+    use rayon::{ThreadPool, yield_now};
     use hbac_shared::HbacError;
     use serde::Deserialize;
     use crate::cache_on_threads::CacheOnThreads;
@@ -845,7 +846,7 @@ mod tests {
         use rayon::iter::ParallelBridge;
         use rayon::iter::IntoParallelIterator;
         use rayon::prelude::*;
-        use log::info;
+        use log::{info, trace};
 
         use futures::{
             future::{BoxFuture, FutureExt},
@@ -859,15 +860,6 @@ mod tests {
 
             Ok(())
         }).build()?;
-
-        let pool_1 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
-            let mut b = std::thread::Builder::new();
-            b.name(format!("{}/{:?}", "pool_1", thread_builder.index()))
-                .spawn(|| thread_builder.run())?;
-
-            Ok(())
-        }).build()?;
-
 
 
 
@@ -893,10 +885,15 @@ mod tests {
             notify: Arc<RayonNotify>,
             futures_pool:ThreadPool,
             loader_pool:ThreadPool,
+
             features:Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
             resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
-            can_read:Arc<RwLock<bool>>,
+            resources_being_loaded:Arc<RwLock<HashSet<K>>>,
+            keys_fifo: VecDeque<K>,
+            max_keys: usize,
+
             loader_fn:Arc<Box<dyn Fn(&K)->SyncWrapper<V> + Sync + Send>>,
+            stop:Arc<AtomicBool>
         }
 
         impl <K, V> Executor<K, V>
@@ -910,9 +907,8 @@ mod tests {
                 let mut futures:Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
                 let mut features_rc = Arc::clone(&futures);
                 let notify = Arc::new(RayonNotify::new());
-                let can_read = Arc::new(RwLock::new(true));
-                let can_read_rc = Arc::clone(&can_read);
-                let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+
+                let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
                     let mut b = std::thread::Builder::new();
                     b.name(format!("{}/{:?}", "futures_pool", thread_builder.index()))
                         .spawn(|| thread_builder.run())?;
@@ -920,20 +916,34 @@ mod tests {
                     Ok(())
                 }).build().expect("pool_1");
                 let p_notify = Arc::clone(&notify);
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop_arc = Arc::clone(&stop);
 
                 futures_pool.spawn(move ||{
                     debug!("loader_pool spawned");
                     let waker = waker_ref(&p_notify);
                     let mut cx = Context::from_waker(&waker);
-
+                    let mut cycle = 0usize;
                     loop {
+                        if stop_arc.load(Ordering::Relaxed) {
+                            break
+                        }
+                        if cycle == usize::MAX {
+                            cycle = 0;
+                        } else {
+                            cycle+=1;
+                        }
                         // if let Some(can_read) = can_read.try_read() {
-                            let futures_arc = Arc::clone(&futures);
+                        //     let futures_arc = Arc::clone(&futures);
                             // println!("futures loop: 0");
-                            if let Some(mut guard) = futures_arc.try_write() {
-                                debug!("futures loop: in guard len={} ", guard.len());
+                        if futures.read().len() > 0 {
+                            if let Some(mut guard) = futures.try_write() {
+                                if cycle % 10000 == 0 {
+                                    debug!("futures loop: in guard len={} ", guard.len());
+                                }
                                 guard.retain(|fut_mx| {
                                     if let Poll::Ready(t) = fut_mx.lock().as_mut().poll(&mut cx) {
+                                        //TODO
                                         false
                                     } else {
                                         true
@@ -942,14 +952,15 @@ mod tests {
 
                                 drop(guard);
                             };
+                        }
                         // }
-                        rayon::yield_local();
+                        rayon::yield_now();
                     }
                 });
                 Self {
                     notify: Arc::clone(&notify),
                     futures_pool,
-                    loader_pool:rayon::ThreadPoolBuilder::new().num_threads(8).spawn_handler(|thread_builder| {
+                    loader_pool:rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
 
                         let mut b = std::thread::Builder::new();
                         b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
@@ -958,60 +969,89 @@ mod tests {
                         Ok(())
                     }).build().expect("loader_pool"),
                     features: features_rc,
+
                     resources: Arc::new(RwLock::new(HashMap::new())),
+                    resources_being_loaded: Arc::new(RwLock::new(HashSet::new())),
+
+                    keys_fifo: VecDeque::new(),
+                    max_keys: 100,
+
                     loader_fn:Arc::new(Box::new(loader)),
-                    can_read:can_read_rc
+
+                    stop: Arc::clone(&stop)
                 }
             }
 
-            fn preload(&mut self, keys: Vec<K>) -> Result<(), HbacError> {
-                debug!("preload keys={keys:?}");
+            fn stop(&mut self) {
+                self.stop.store(true, Relaxed);
+            }
+
+            fn preload_vec(&mut self, keys: Vec<K>)  {
+                debug!("preload_vec: keys={keys:?}");
+                let mut resources_guard = self.resources.write();
+                let mut resources_being_loaded_guard = self.resources_being_loaded.write();
 
                 for key in keys {
-                    if self.resources.read().contains_key(&key){
-                        // println!("skipping key={key:?}");
-                        continue;
+
+                    if resources_guard.contains_key(&key) {
+                        return;
                     }
-                    debug!("loading key={key:?}");
+
+
+                    if resources_being_loaded_guard.contains(&key){
+                        return;
+                    }
+
+                    resources_being_loaded_guard.insert(key.clone());
+                    self.keys_fifo.push_back(key.clone());
+
+                    debug!("preload_vec: key={key:?}");
+
+                    if self.keys_fifo.len() > self.max_keys {
+                        if let Some(key_to_remove) = self.keys_fifo.pop_front() {
+                            debug!("preload_vec: removing {:?} ", key_to_remove);
+                            resources_guard.remove(&key_to_remove);
+                        }
+                    }
 
                     let loader = Arc::clone(&self.loader_fn);
-                    let data_loaded = Arc::clone(&self.resources);
+                    let resources_arc = Arc::clone(&self.resources);
+                    let resources_being_loaded_arc = Arc::clone(&self.resources_being_loaded);
+                    let key = key.clone();
 
-                    self.loader_pool.spawn(move ||{
+                    self.loader_pool.spawn(move || {
 
                         let v = loader(&key);
-                        debug!("preload 0: current_thread={:?} key={:?}", thread::current().id(), key);
+                        debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
 
-                        data_loaded.write().insert(key.clone(), v);
-                        debug!("preload 1: current_thread={:?} key={:?}", thread::current().id(), key);
+                        let mut resources_arc_guard = resources_arc.write();
+                        resources_arc_guard.insert(key.clone(), v);
+
+                        resources_being_loaded_arc.write().remove(&key);
+                        debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
 
                     });
+
                 };
-
-
-                Ok(())
             }
 
-
-
             pub fn exec<F>(& mut self, f:F )
-                where F:FnOnce()->BoxFuture<'static, ()>
+                where F:FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>)->BoxFuture<'static, ()>
             {
-                // println!("exec");
 
-                // *self.can_read.write() = false;
-
+                let mut attempts = 0usize;
                 loop {
-                    if let Some(mut guard) = self.features.try_write() {
-                        guard.push(Mutex::new((f)()));
-                        // println!("feature pushed");
-                        break;
+                    attempts+=1;
+                    if self.features.read().len() < 3 {
+                        if let Some(mut guard) = self.features.try_write() {
+                            guard.push(Mutex::new((f)(Arc::clone(&self.resources))));
+                            break;
+                        }
                     } else {
-                        // println!("exec: can't lock features");
+                        rayon::yield_now();
                     }
                 }
-
-                // *self.can_read.write() = true;
+                debug!("exec: added future after {attempts} attempts");
             }
 
             pub fn load_future(resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, key:K) -> BoxFuture<'static, V> {
@@ -1049,12 +1089,12 @@ mod tests {
             type Output = V;
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                debug!("polling key={:?}", self.key);
+                trace!("polling key={:?}", self.key);
                 if let Some(resource) = self.resources.read().get(&self.key) {
-                    debug!("polling key={:?} Ready", self.key);
+                    trace!("polling key={:?} Ready", self.key);
                     Poll::Ready(resource.shallow_clone())
                 } else {
-                    debug!("polling key={:?} Pending ", self.key);
+                    trace!("polling key={:?} Pending ", self.key);
                     Poll::Pending
                 }
             }
@@ -1062,6 +1102,7 @@ mod tests {
 
         let exec_0 = Arc::clone(&executor_rc);
         let exec_1 = Arc::clone(&executor_rc);
+        let exec_2 = Arc::clone(&executor_rc);
 
         let wg = WaitGroup::new();
         let wg_0 = wg.clone();
@@ -1069,7 +1110,7 @@ mod tests {
         let data_done = Arc::new(RwLock::new(HashSet::new()));
         let data_done_rc = Arc::clone(&data_done);
         let data_done_rc_1 = Arc::clone(&data_done_rc);
-        let num_items = 1000usize;
+        let num_items = 10usize;
 
         let waiting_time = Arc::new(Mutex::new(0u128));
         let waiting_time_rc = Arc::clone(&waiting_time);
@@ -1078,16 +1119,20 @@ mod tests {
         let waiting_time_avg = Arc::new(Mutex::new(0u128));
         let waiting_time_avg_rc = Arc::clone(&waiting_time_avg);
 
-        (0..num_items).for_each(|i| {
+        (0..num_items/10).for_each(|i| {
             loop {
                 if let Some(mut exec_guard) = exec_1.try_write() {
                     // let mut write_guard = exec_guard.resources.write();
                     // write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
                     // write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
-                    exec_guard.preload(vec![
-                        format!("aaa_{i}"),
-                        format!("bbb_{i}")
-                    ]);
+                    // exec_guard.preload_vec(vec![
+                    //     format!("aaa_{i}"),
+                    //     format!("bbb_{i}")
+                    // ]);
+                    exec_guard.preload_vec((0..10).flat_map(|j|[
+                        format!("aaa_{}", i*10+j),
+                        format!("bbb_{}", i*10+j)
+                    ]).collect::<Vec<String>>());
                     break
                 } else {
                     debug!("executor_rc.try_write for preload failed");
@@ -1108,24 +1153,20 @@ mod tests {
 
                 let data_done_rc = Arc::clone(&data_done_rc);
 
-
                 let mut exec_gurad = executor_rc.write();
-                let arc = Arc::clone(&exec_gurad.resources);
 
-                exec_gurad.exec(move || {
+                exec_gurad.exec(move |resources_arc| {
                     async move {
                         let t = Instant::now();
                         let key_aaa = format!("aaa_{i}");
-                        let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_aaa.clone()).await;
+                        let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
 
                         let key_bbb = format!("bbb_{i}");
-                        let out_b = Executor::<String,TestEntity>::load_future(Arc::clone(&arc), key_bbb.clone()).await;
+                        let out_b = Executor::<String,TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
 
                         let mut waiting_time_guard = waiting_time_rc.lock();
                         let time = t.elapsed().as_millis();
                         *waiting_time_guard += time;
-
-
 
                         let mut rw_lock_write_guard = data_done_rc.write();
                         rw_lock_write_guard.insert(out_a);
@@ -1136,10 +1177,14 @@ mod tests {
 
                         *waiting_time_avg_guard = (*waiting_time_avg_guard * (n-1) + time) / n;
 
+                        let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
+                        trace!("x={x}");
+
                         drop(wg_0_i);
 
                         info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
                     }.boxed()
+
                 });
 
             });
@@ -1175,10 +1220,68 @@ mod tests {
             // println!("data_done={data_done_rc_1:?}");
             thread::sleep(Duration::new(1, 0));
         }
-        debug!("data_done={data_done_rc_1:?}");
+        // debug!("data_done={data_done_rc_1:?}");
+        info!("all done, {}", data_done_rc_1.read().len());
+
+        assert_eq!(data_done_rc_1.read().len(), num_items * 2);
+
+        exec_2.write().stop();
+
         // thread::sleep(Duration::new(3, 0));
 
         Ok(())
     }
+
+    #[test]
+    fn test_xxx(){
+        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+
+            let mut b = std::thread::Builder::new();
+            b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build().unwrap();
+
+        let pool_1 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+
+            let mut b = std::thread::Builder::new();
+            b.name(format!("{}/{:?}", "pool_1", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build().unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+        let b_0 = Arc::clone(&barrier);
+        let b_1 = Arc::clone(&barrier);
+
+        let wg = WaitGroup::new();
+        let wg_0 = wg.clone();
+        let wg_1 = wg.clone();
+
+
+
+        pool_1.spawn(move ||{
+            // b_0.wait();
+            for i in 0..10 {
+                println!("pool 0 {i}");
+                yield_now();
+            }
+            drop(wg_0);
+        });
+
+        pool_1.spawn(move ||{
+            // b_1.wait();
+            for i in 0..10 {
+                println!("pool 1 {i}");
+                yield_now();
+            }
+            drop(wg_1);
+        });
+
+        wg.wait();
+    }
+
 
 }
