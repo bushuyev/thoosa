@@ -14,6 +14,7 @@ rand.workspace = true
 log.workspace = true
 simplelog.workspace = true
 parking_lot.workspace = true
+parking_lot_mpsc.workspace = true
 tch.workspace = true
 torch-sys.workspace = true
 
