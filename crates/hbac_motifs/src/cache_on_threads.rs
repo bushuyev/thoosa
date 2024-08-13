@@ -406,7 +406,8 @@ mod tests {
     struct SyncWrapper<V>
     where  V: Send + Debug {
         v:V,
-        shallow_clone_fn:fn(&V)->V
+        shallow_clone_fn:fn(&V)->V,
+        num_used:usize
     }
 
     impl <V> SyncWrapper<V>
@@ -414,7 +415,8 @@ mod tests {
         pub fn new(v:V, shallow_clone_fn:fn(&V)->V) -> Self {
             Self {
                 v,
-                shallow_clone_fn
+                shallow_clone_fn,
+                num_used: 0
             }
         }
 
@@ -855,7 +857,7 @@ mod tests {
             task::{waker_ref, ArcWake},
         };
 
-        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
+        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
             let mut b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
@@ -891,7 +893,10 @@ mod tests {
             features:Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
             features_sender:SyncSender<Mutex<BoxFuture<'static, ()>>>,
             resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
-            resources_being_loaded:Arc<RwLock<HashSet<K>>>,
+
+            resources_being_loaded:Arc<RwLock<HashMap<K, usize>>>,
+            keys_to_purge:Arc<RwLock<HashMap<K, usize>>>,
+
             keys_fifo: VecDeque<K>,
             max_keys: usize,
 
@@ -911,7 +916,7 @@ mod tests {
                 let mut features_rc = Arc::clone(&futures);
 
 
-                let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
+                let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
                     let mut b = std::thread::Builder::new();
                     b.name(format!("{}/{:?}", "futures_pool", thread_builder.index()))
                         .spawn(|| thread_builder.run())?;
@@ -948,9 +953,9 @@ mod tests {
                         let futures_len = futures.read().len();
                         if futures_len > 0 {
                             if let Some(mut guard) = futures.try_write() {
-                                if cycle % 10000 == 0 {
-                                    debug!("futures loop: in guard len={} ", guard.len());
-                                }
+                                // if cycle % 10000 == 0 {
+                                //     debug!("futures loop: in guard len={} ", guard.len());
+                                // }
                                 guard.retain(|fut_mx| {
                                     if let Poll::Ready(t) = fut_mx.lock().as_mut().poll(&mut cx) {
                                         //TODO
@@ -983,7 +988,8 @@ mod tests {
                     features_sender: tx,
 
                     resources: Arc::new(RwLock::new(HashMap::new())),
-                    resources_being_loaded: Arc::new(RwLock::new(HashSet::new())),
+                    resources_being_loaded: Arc::new(RwLock::new(HashMap::new())),
+                    keys_to_purge: Arc::new(RwLock::new(HashMap::new())),
 
                     keys_fifo: VecDeque::new(),
                     max_keys,
@@ -1004,25 +1010,27 @@ mod tests {
                 let mut resources_being_loaded_guard = self.resources_being_loaded.write();
 
                 for key in keys {
-                    if resources_guard.contains_key(&key) {
+                    if let Some(loaded)  = resources_guard.get_mut(&key) {
+                        loaded.num_used+=1;
                         return;
                     }
 
-                    if resources_being_loaded_guard.contains(&key){
+                    if let Some(being_loaded) = resources_being_loaded_guard.get_mut(&key){
+                        *being_loaded+=1;
                         return;
                     }
 
-                    resources_being_loaded_guard.insert(key.clone());
-                    self.keys_fifo.push_back(key.clone());
+                    resources_being_loaded_guard.insert(key.clone(), 1);
+                    // self.keys_fifo.push_back(key.clone());
 
                     debug!("preload_vec: key={key:?}");
 
-                    if self.keys_fifo.len() > self.max_keys {
-                        if let Some(key_to_remove) = self.keys_fifo.pop_front() {
-                            debug!("preload_vec: removing {:?} ", key_to_remove);
-                            resources_guard.remove(&key_to_remove);
-                        }
-                    }
+                    // if self.keys_fifo.len() > self.max_keys {
+                    //     if let Some(key_to_remove) = self.keys_fifo.pop_front() {
+                    //         debug!("preload_vec: removing {:?} ", key_to_remove);
+                    //         resources_guard.remove(&key_to_remove);
+                    //     }
+                    // }
 
                     let loader = Arc::clone(&self.loader_fn);
                     let resources_arc = Arc::clone(&self.resources);
@@ -1031,13 +1039,16 @@ mod tests {
 
                     self.loader_pool.spawn(move || {
 
-                        let v = loader(&key);
+                        let mut v = loader(&key);
                         debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
 
                         let mut resources_arc_guard = resources_arc.write();
+                        let num_used = resources_being_loaded_arc.write().remove(&key).unwrap_or(1);
+                        v.num_used = num_used;
+
                         resources_arc_guard.insert(key.clone(), v);
 
-                        resources_being_loaded_arc.write().remove(&key);
+
                         debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
 
                     });
@@ -1046,18 +1057,36 @@ mod tests {
             }
 
             pub fn exec<F>(& mut self, f:F )
-                where F:FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>)->BoxFuture<'static, ()>
-            {
+                where F:FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, Box<dyn FnOnce(Vec<K>) + Send>)->BoxFuture<'static, ()>,
 
-                self.features_sender.send(Mutex::new((f)(Arc::clone(&self.resources))));
+            {
+                let resources_for_purge = Arc::clone(&self.resources);
+
+                self.features_sender.send(Mutex::new((f)(
+
+                    Arc::clone(&self.resources),
+                    Box::new(move |keys| {
+                        let mut keys_to_purge_guard = resources_for_purge.write();
+                        for key in keys {
+                            if let Some(v) = keys_to_purge_guard.get_mut(&key) {
+                                if v.num_used <= 1 {
+                                    keys_to_purge_guard.remove(&key);
+                                } else {
+                                    v.num_used-=1;
+                                }
+                            }
+                        }
+                        debug!("keys_to_purge={keys_to_purge_guard:?}");
+                    })
+                )));
             }
 
             pub fn load_future(resources:Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, key:K) -> BoxFuture<'static, V> {
                 ResourceFuture::new(resources,key).boxed()
             }
         }
-        let num_items = 1000usize;
-        let mut executor = Executor::new(load_test_entity_sv, 100, 4, 10);
+        let num_items = 100usize;
+        let mut executor = Executor::new(load_test_entity_sv, 10, 4, 5);
         let mut executor_rc = Arc::new(RwLock::new(executor));
 
 
@@ -1104,9 +1133,11 @@ mod tests {
 
         let wg = WaitGroup::new();
         let wg_0 = wg.clone();
+        let wg_1 = wg.clone();
 
         let data_done = Arc::new(RwLock::new(HashSet::new()));
         let data_done_rc = Arc::clone(&data_done);
+        let data_done_rc_0 = Arc::clone(&data_done_rc);
         let data_done_rc_1 = Arc::clone(&data_done_rc);
 
 
@@ -1116,59 +1147,33 @@ mod tests {
 
         let waiting_time_avg = Arc::new(Mutex::new(0u128));
         let waiting_time_avg_rc = Arc::clone(&waiting_time_avg);
-        //
-        // (0..num_items/10).for_each(|i| {
-        //     loop {
-        //         if let Some(mut exec_guard) = exec_1.try_write() {
-        //             // let mut write_guard = exec_guard.resources.write();
-        //             // write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
-        //             // write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
-        //             // exec_guard.preload_vec(vec![
-        //             //     format!("aaa_{i}"),
-        //             //     format!("bbb_{i}")
-        //             // ]);
-        //             exec_guard.preload((0..10).flat_map(|j|[
-        //                 format!("aaa_{}", i*10+j),
-        //                 format!("bbb_{}", i*10+j)
-        //             ]).collect::<Vec<String>>());
-        //             break
-        //         } else {
-        //             debug!("executor_rc.try_write for preload failed");
-        //         }
-        //     }
-        //
-        // });
 
 
-        pool_0.install(move || {
-
-            (0..num_items/10).into_par_iter().for_each(|b| {
-
-                exec_0.write().preload((0..10).flat_map(|j|[
-                    format!("aaa_{}", b*10+j),
-                    format!("bbb_{}", b*10+j)
+        pool_0.spawn(move || {
+            (0..num_items / 10).into_par_iter().for_each(|b| {
+                exec_0.write().preload((0..10).flat_map(|j| [
+                    format!("aaa_{}", b * 10 + j),
+                    format!("bbb_{}", b * 10 + j)
                 ]).collect::<Vec<String>>());
 
-                (0..10).for_each(|j|{
+                (0..10).for_each(|j| {
                     let i = b * 10 + j;
 
                     let wg_0_i = wg_0.clone();
-                    let exec_rc = Arc::clone(&exec_0);
+
                     let waiting_time_rc = Arc::clone(&waiting_time_rc);
                     let waiting_time_avg_rc = Arc::clone(&waiting_time_avg_rc);
 
-                    let data_done_rc = Arc::clone(&data_done_rc);
+                    let data_done_rc = Arc::clone(&data_done_rc_0);
 
-                    let mut exec_gurad = executor_rc.write();
-
-                    exec_gurad.exec(move |resources_arc| {
+                    exec_0.write().exec(move |resources_arc, keys_purge| {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("aaa_{i}");
-                            let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
+                            let out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
 
                             let key_bbb = format!("bbb_{i}");
-                            let out_b = Executor::<String,TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
+                            let out_b = Executor::<String, TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
 
                             let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
@@ -1181,7 +1186,62 @@ mod tests {
 
                             let mut waiting_time_avg_guard = waiting_time_avg_rc.lock();
 
-                            *waiting_time_avg_guard = (*waiting_time_avg_guard * (n-1) + time) / n;
+                            *waiting_time_avg_guard = (*waiting_time_avg_guard * (n - 1) + time) / n;
+
+                            // thread::sleep(Duration::new(0, 1e8 as u32));
+                            let x: usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
+                            trace!("x={x}");
+
+                            drop(wg_0_i);
+
+                            info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
+                            (keys_purge)(vec![key_aaa, key_bbb]);
+                        }.boxed()
+                    });
+
+                    debug!("item {i} executed");
+                });
+
+            });
+            drop(wg_0);
+        });
+
+        pool_0.spawn(move || {
+
+            (0..num_items/10).into_par_iter().for_each(|b| {
+
+                exec_1.write().preload((0..10).flat_map(|j|[
+                    format!("bbb_{}", b*10+j),
+                    format!("ccc_{}", b*10+j)
+                ]).collect::<Vec<String>>());
+
+                (0..10).for_each(|j|{
+                    let i = b * 10 + j;
+
+                    let wg_0_i = wg_1.clone();
+
+
+                    // let data_done_rc = Arc::clone(&data_done_rc_1);
+
+                    exec_1.write().exec(move |resources_arc, keys_purge| {
+                        async move {
+                            let t = Instant::now();
+                            let key_aaa = format!("bbb_{i}");
+                            let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
+
+                            let key_bbb = format!("ccc_{i}");
+                            let out_b = Executor::<String,TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
+
+
+                            let time = t.elapsed().as_millis();
+
+
+                            // let mut rw_lock_write_guard = data_done_rc.write();
+                            // rw_lock_write_guard.insert(out_a);
+                            // rw_lock_write_guard.insert(out_b);
+                            // let n = rw_lock_write_guard.len() as u128;
+
+
 
                             // thread::sleep(Duration::new(0, 1e8 as u32));
                             let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
@@ -1189,7 +1249,8 @@ mod tests {
 
                             drop(wg_0_i);
 
-                            info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
+                            info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}");
+                            (keys_purge)(vec![key_aaa, key_bbb]);
                         }.boxed()
 
                     });
@@ -1198,7 +1259,8 @@ mod tests {
                 });
 
             });
-            drop(wg_0);
+
+            drop(wg_1);
         });
 
         /*
@@ -1226,14 +1288,14 @@ mod tests {
 
 
         wg.wait();
-        while data_done_rc_1.read().len() != num_items * 2 {
+        while data_done_rc.read().len() != num_items * 3 {
             // println!("data_done={data_done_rc_1:?}");
             thread::sleep(Duration::new(1, 0));
         }
         // debug!("data_done={data_done_rc_1:?}");
-        info!("all done, {}", data_done_rc_1.read().len());
+        info!("all done, {}/{}", data_done_rc.read().len(), exec_2.read().resources.read().len());
 
-        assert_eq!(data_done_rc_1.read().len(), num_items * 2);
+        assert_eq!(data_done_rc.read().len(), num_items * 3);
 
         exec_2.write().stop();
 
