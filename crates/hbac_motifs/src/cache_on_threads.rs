@@ -898,7 +898,6 @@ mod tests {
             keys_to_purge:Arc<RwLock<HashMap<K, usize>>>,
 
             keys_fifo: VecDeque<K>,
-            max_keys: usize,
 
             loader_fn:Arc<Box<dyn Fn(&K)->SyncWrapper<V> + Sync + Send>>,
             stop:Arc<AtomicBool>
@@ -909,7 +908,7 @@ mod tests {
             K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
             V: Send + Debug + 'static {
 
-            pub fn new<F>(loader:F, max_keys: usize, loader_threads: usize, futures_channel_bound: usize) -> Self
+            pub fn new<F>(loader:F, loader_threads: usize, futures_channel_bound: usize) -> Self
                 where F:Fn(&K) -> SyncWrapper<V> + Sync + Send + 'static {
 
                 let mut futures:Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
@@ -966,7 +965,7 @@ mod tests {
                                 });
 
                             };
-                        } else if futures_len <= loader_threads {
+                        } else {
                             if let Ok(future) = rx.try_recv(){
                                 futures.write().push(future);
                             }
@@ -992,7 +991,6 @@ mod tests {
                     keys_to_purge: Arc::new(RwLock::new(HashMap::new())),
 
                     keys_fifo: VecDeque::new(),
-                    max_keys,
 
                     loader_fn:Arc::new(Box::new(loader)),
 
@@ -1011,26 +1009,24 @@ mod tests {
 
                 for key in keys {
                     if let Some(loaded)  = resources_guard.get_mut(&key) {
+
                         loaded.num_used+=1;
-                        return;
+                        debug!("preload_vec: adding key={key:?} loaded.num_used={}", loaded.num_used);
+                        continue;
                     }
 
                     if let Some(being_loaded) = resources_being_loaded_guard.get_mut(&key){
                         *being_loaded+=1;
-                        return;
+                        debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.num_used={}", *being_loaded);
+                        continue;
                     }
 
                     resources_being_loaded_guard.insert(key.clone(), 1);
-                    // self.keys_fifo.push_back(key.clone());
 
-                    debug!("preload_vec: key={key:?}");
 
-                    // if self.keys_fifo.len() > self.max_keys {
-                    //     if let Some(key_to_remove) = self.keys_fifo.pop_front() {
-                    //         debug!("preload_vec: removing {:?} ", key_to_remove);
-                    //         resources_guard.remove(&key_to_remove);
-                    //     }
-                    // }
+                    debug!("preload_vec: adding key={key:?}");
+
+
 
                     let loader = Arc::clone(&self.loader_fn);
                     let resources_arc = Arc::clone(&self.resources);
@@ -1066,17 +1062,18 @@ mod tests {
 
                     Arc::clone(&self.resources),
                     Box::new(move |keys| {
-                        let mut keys_to_purge_guard = resources_for_purge.write();
+                        let mut resources_for_purge_guard = resources_for_purge.write();
                         for key in keys {
-                            if let Some(v) = keys_to_purge_guard.get_mut(&key) {
+                            if let Some(v) = resources_for_purge_guard.get_mut(&key) {
                                 if v.num_used <= 1 {
-                                    keys_to_purge_guard.remove(&key);
+                                    resources_for_purge_guard.remove(&key);
+                                    debug!("keys_to_purge: key={key:?} removed");
                                 } else {
                                     v.num_used-=1;
                                 }
                             }
                         }
-                        debug!("keys_to_purge={keys_to_purge_guard:?}");
+
                     })
                 )));
             }
@@ -1085,8 +1082,8 @@ mod tests {
                 ResourceFuture::new(resources,key).boxed()
             }
         }
-        let num_items = 100usize;
-        let mut executor = Executor::new(load_test_entity_sv, 10, 4, 5);
+        let num_items = 1000usize;
+        let mut executor = Executor::new(load_test_entity_sv, 4, 100);
         let mut executor_rc = Arc::new(RwLock::new(executor));
 
 
@@ -1135,7 +1132,7 @@ mod tests {
         let wg_0 = wg.clone();
         let wg_1 = wg.clone();
 
-        let data_done = Arc::new(RwLock::new(HashSet::new()));
+        let data_done = Arc::new(RwLock::new(HashSet::<String>::new()));
         let data_done_rc = Arc::clone(&data_done);
         let data_done_rc_0 = Arc::clone(&data_done_rc);
         let data_done_rc_1 = Arc::clone(&data_done_rc);
@@ -1175,26 +1172,28 @@ mod tests {
                             let key_bbb = format!("bbb_{i}");
                             let out_b = Executor::<String, TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
 
-                            let mut waiting_time_guard = waiting_time_rc.lock();
+                            // let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
-                            *waiting_time_guard += time;
-
+                            // *waiting_time_guard += time;
+                            //
                             let mut rw_lock_write_guard = data_done_rc.write();
-                            rw_lock_write_guard.insert(out_a);
-                            rw_lock_write_guard.insert(out_b);
-                            let n = rw_lock_write_guard.len() as u128;
+                            rw_lock_write_guard.insert(key_aaa.clone());
+                            rw_lock_write_guard.insert(key_bbb.clone());
+                            drop(rw_lock_write_guard);
+                            // let n = rw_lock_write_guard.len() as u128;
+                            //
+                            // let mut waiting_time_avg_guard = waiting_time_avg_rc.lock();
+                            //
+                            // *waiting_time_avg_guard = (*waiting_time_avg_guard * (n - 1) + time) / n;
 
-                            let mut waiting_time_avg_guard = waiting_time_avg_rc.lock();
-
-                            *waiting_time_avg_guard = (*waiting_time_avg_guard * (n - 1) + time) / n;
-
-                            // thread::sleep(Duration::new(0, 1e8 as u32));
-                            let x: usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
-                            trace!("x={x}");
+                            thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..3e9 as u32)));
+                            // let x: usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
+                            // trace!("x={x}");
 
                             drop(wg_0_i);
 
-                            info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
+                            // info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
+                            info!("0: key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}",);
                             (keys_purge)(vec![key_aaa, key_bbb]);
                         }.boxed()
                     });
@@ -1221,7 +1220,7 @@ mod tests {
                     let wg_0_i = wg_1.clone();
 
 
-                    // let data_done_rc = Arc::clone(&data_done_rc_1);
+                    let data_done_rc = Arc::clone(&data_done_rc_1);
 
                     exec_1.write().exec(move |resources_arc, keys_purge| {
                         async move {
@@ -1236,20 +1235,19 @@ mod tests {
                             let time = t.elapsed().as_millis();
 
 
-                            // let mut rw_lock_write_guard = data_done_rc.write();
-                            // rw_lock_write_guard.insert(out_a);
-                            // rw_lock_write_guard.insert(out_b);
+                            let mut rw_lock_write_guard = data_done_rc.write();
+                            rw_lock_write_guard.insert(key_aaa.clone());
+                            rw_lock_write_guard.insert(key_bbb.clone());
                             // let n = rw_lock_write_guard.len() as u128;
 
 
-
-                            // thread::sleep(Duration::new(0, 1e8 as u32));
-                            let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
-                            trace!("x={x}");
+                            thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..3e9 as u32)));
+                            // let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
+                            // trace!("x={x}");
 
                             drop(wg_0_i);
 
-                            info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}");
+                            info!("1: key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}");
                             (keys_purge)(vec![key_aaa, key_bbb]);
                         }.boxed()
 
@@ -1288,16 +1286,18 @@ mod tests {
 
 
         wg.wait();
+        println!("data_done_rc.read().len()={}", data_done_rc.read().len());
         while data_done_rc.read().len() != num_items * 3 {
-            // println!("data_done={data_done_rc_1:?}");
+            // println!("data_done={data_done_rc:?}", data_done_rc);
             thread::sleep(Duration::new(1, 0));
         }
         // debug!("data_done={data_done_rc_1:?}");
+        // thread::sleep(Duration::new(120, 0));
         info!("all done, {}/{}", data_done_rc.read().len(), exec_2.read().resources.read().len());
 
-        assert_eq!(data_done_rc.read().len(), num_items * 3);
+        // assert_eq!(data_done_rc.read().len(), num_items * 3);
 
-        exec_2.write().stop();
+        // exec_2.write().stop();
 
         // thread::sleep(Duration::new(3, 0));
 
