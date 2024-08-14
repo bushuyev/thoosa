@@ -262,7 +262,7 @@ mod tests {
     use std::ops::Deref;
     use std::pin::Pin;
     use std::sync::{Arc, Barrier, RwLock};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::mpsc::Receiver;
     use std::task::{Context, Poll, Waker};
@@ -389,7 +389,7 @@ mod tests {
     }
 
     fn load_test_entity_sv(key:&String)->SyncWrapper<TestEntity>{
-        thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..2e9 as u32)));
+        thread::sleep(Duration::new(0, rand::thread_rng().gen_range(1e7 as u32..3e9 as u32)));
         // thread::sleep(Duration::new(0, 5e8 as u32));
 
         SyncWrapper::new(
@@ -1137,6 +1137,11 @@ mod tests {
         let data_done_rc_0 = Arc::clone(&data_done_rc);
         let data_done_rc_1 = Arc::clone(&data_done_rc);
 
+        let time_exec = Arc::new(AtomicU64::new(0));
+
+        let time_exec_rc_0 = Arc::clone(&time_exec);
+        let time_exec_rc_1 = Arc::clone(&time_exec);
+
 
         let waiting_time = Arc::new(Mutex::new(0u128));
         let waiting_time_rc = Arc::clone(&waiting_time);
@@ -1145,7 +1150,7 @@ mod tests {
         let waiting_time_avg = Arc::new(Mutex::new(0u128));
         let waiting_time_avg_rc = Arc::clone(&waiting_time_avg);
 
-
+        let t_0 = Instant::now();
         pool_0.spawn(move || {
             (0..num_items / 10).into_par_iter().for_each(|b| {
                 exec_0.write().preload((0..10).flat_map(|j| [
@@ -1162,6 +1167,7 @@ mod tests {
                     let waiting_time_avg_rc = Arc::clone(&waiting_time_avg_rc);
 
                     let data_done_rc = Arc::clone(&data_done_rc_0);
+                    let time_exec_rc = Arc::clone(&time_exec_rc_0);
 
                     exec_0.write().exec(move |resources_arc, keys_purge| {
                         async move {
@@ -1186,7 +1192,9 @@ mod tests {
                             //
                             // *waiting_time_avg_guard = (*waiting_time_avg_guard * (n - 1) + time) / n;
 
-                            thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..3e9 as u32)));
+                            let exec_time = rand::thread_rng().gen_range(100..1e9 as u32);
+                            time_exec_rc.fetch_add(exec_time.into(), Relaxed);
+                            thread::sleep(Duration::new(0, exec_time));
                             // let x: usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
                             // trace!("x={x}");
 
@@ -1221,6 +1229,7 @@ mod tests {
 
 
                     let data_done_rc = Arc::clone(&data_done_rc_1);
+                    let time_exec_rc = Arc::clone(&time_exec_rc_1);
 
                     exec_1.write().exec(move |resources_arc, keys_purge| {
                         async move {
@@ -1241,7 +1250,9 @@ mod tests {
                             // let n = rw_lock_write_guard.len() as u128;
 
 
-                            thread::sleep(Duration::new(0, rand::thread_rng().gen_range(100..3e9 as u32)));
+                            let exec_time = rand::thread_rng().gen_range(100..2e9 as u32);
+                            time_exec_rc.fetch_add(exec_time.into(), Relaxed);
+                            thread::sleep(Duration::new(0, exec_time));
                             // let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
                             // trace!("x={x}");
 
@@ -1261,29 +1272,6 @@ mod tests {
             drop(wg_1);
         });
 
-        /*
-        pool_1.spawn(move ||{
-            (0..num_items).for_each(|i| {
-                loop {
-                    if let Some(mut exec_guard) = exec_1.try_write() {
-                        // let mut write_guard = exec_guard.resources.write();
-                        // write_guard.insert(format!("aaa_{i}"), format!("aaa_{i} OK"));
-                        // write_guard.insert(format!("bbb_{i}"), format!("bbb_{i} OK"));
-                        exec_guard.preload(vec![
-                            format!("aaa_{i}"),
-                            format!("bbb_{i}")
-                        ]);
-                        break
-                    } else {
-                        debug!("executor_rc.try_write for preload failed");
-                    }
-                }
-
-            });
-
-         });
-         */
-
 
         wg.wait();
         println!("data_done_rc.read().len()={}", data_done_rc.read().len());
@@ -1293,7 +1281,10 @@ mod tests {
         }
         // debug!("data_done={data_done_rc_1:?}");
         // thread::sleep(Duration::new(120, 0));
-        info!("all done, {}/{}", data_done_rc.read().len(), exec_2.read().resources.read().len());
+        let exec_time_mls = time_exec.load(Relaxed)/1e6 as u64;
+        let elapsed = t_0.elapsed().as_millis();
+        let r = exec_time_mls as f64/elapsed as f64;
+        info!("all done, {}/{} in elapsed={elapsed} mls exec time={exec_time_mls} r={r}", data_done_rc.read().len(), exec_2.read().resources.read().len());
 
         // assert_eq!(data_done_rc.read().len(), num_items * 3);
 
