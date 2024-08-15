@@ -9,7 +9,10 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use clap::clap_derive::{Args, Subcommand};
+use crossbeam_utils::sync::WaitGroup;
+use futures::FutureExt;
 use log::{debug, info, trace, warn};
+use parking_lot::RwLock;
 use tch::{Device, IndexOp, Tensor};
 use torch_sys::C_tensor;
 
@@ -22,6 +25,7 @@ use hbac_store::Store;
 use hbac_store::StoreDumper;
 
 use crate::cache_on_threads::CacheOnThreads;
+use crate::cache_on_threads::exec::Executor;
 use crate::distance::dist_d2;
 use crate::distance::slice_t;
 
@@ -388,7 +392,11 @@ pub struct FilterAndSlicerParams {
 pub struct FilterAndSlicer {
     step: usize,
     window: i64,
-    filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor>>,
+    filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>>,
+}
+
+unsafe impl Send for FilterAndSlicer {
+
 }
 
 impl From<FilterAndSlicerParams> for FilterAndSlicer {
@@ -453,7 +461,9 @@ impl FilterAndSlicerParams {
 }
 
 impl FilterAndSlicer {
+
     fn slice_tensors_chunk(&self, tensors_chunk: Vec<&Box<Tensor>>, keys: &[String]) -> ChunkOfSicedTensors {
+
         let tensors_sliced = tensors_chunk.into_iter().map(|t| {
             let sliced = slice_t(
                 &self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone())),
@@ -482,11 +492,11 @@ impl FilterAndSlicer {
         self.window
     }
 
-    pub fn filter(&self) -> Option<&Box<dyn Fn(&Box<Tensor>) -> Tensor>> {
+    pub fn filter(&self) -> Option<&Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>> {
         self.filter.as_ref()
     }
 
-    pub fn new(step: usize, window: i64, filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor>>) -> Self {
+    pub fn new(step: usize, window: i64, filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>>) -> Self {
         Self { step, window, filter }
     }
 }
@@ -535,6 +545,110 @@ where
 
     Ok(())
 }
+
+fn chunk_and_slice_exec<G>(
+    resources_ids: Vec<String>,
+    chunk_size: usize,
+    filter_and_slicer: Vec<FilterAndSlicer>,
+    mut callback: G,
+    exec: Arc<RwLock<Executor<String, Box<Tensor>>>>,
+) -> Result<(), HbacError>
+where
+    G: FnMut(ChunkOfSicedTensors, ChunkOfSicedTensors, usize) -> Result<(), HbacError> + Send + 'static,
+{
+    let resources_ids = resources_ids.iter().map(|key| key.clone()).collect::<Vec<String>>();
+    let filter_and_slicer = filter_and_slicer.into_iter().map(|fs|Arc::new(parking_lot::Mutex::new(fs))).collect::<Vec<_>>();
+    let callback_arc = Arc::new(parking_lot::Mutex::new(callback));
+
+    let mut resources_ids_0 = resources_ids.chunks(chunk_size).map(|v| v.iter().map(|k| k.clone()).collect::<Vec<String>>()).collect::<Vec<Vec<String>>>();
+    resources_ids_0.push(vec![]); //to get last window processed
+
+    let mut resources_ids_1 = resources_ids.chunks(chunk_size).map(|v| v.iter().map(|k| k.clone()).collect::<Vec<String>>()).collect::<Vec<Vec<String>>>();
+    resources_ids_1.push(vec![]);
+
+
+    exec.write().preload(resources_ids_0[0].clone());
+    exec.write().preload(resources_ids_0[chunk_size].clone());
+
+    let wg = WaitGroup::new();
+
+
+    for (chunk_i_0, window_0) in resources_ids_0.windows(2).map(|v| v.to_vec()).enumerate() {
+        //window_0 - current,preload windows
+        debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={:?}", window_0);
+
+        if window_0[1].len() > 0 {
+            exec.write().preload(window_0[1].to_vec());
+        }
+
+        for (chunk_i_1, window_1) in resources_ids_1.windows(2).into_iter().skip(chunk_i_0).enumerate() {
+            debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={:?}", window_1);
+
+            if window_1[1].len() > 0 {
+                exec.write().preload(window_1[1].to_vec());
+            }
+
+
+            for (params_idx, filter_slicer) in filter_and_slicer.iter().enumerate() {
+
+                let window_0_0 = window_0[0].clone();
+                let window_1_0 = window_1[0].clone();
+                let filter_slicer_arc = Arc::clone(&filter_slicer);
+                let callback_arc = Arc::clone(&callback_arc);
+
+                let wg = wg.clone();
+
+                exec.write().exec(move |resources_arc, keys_purge| {
+                    async move {
+
+
+                        let mut window_0_tensors = vec![];
+                        for key in &window_0_0 {
+                            println!("0. exec:callback_arc: key={key}");
+
+                            window_0_tensors.push(
+                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&resources_arc), key.clone()).await
+                            );
+                        }
+
+                        let mut window_1_tensors = vec![];
+                        for key in &window_1_0 {
+                            println!("1. exec:callback_arc: key={key}");
+                            window_1_tensors.push(
+                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&resources_arc), key.clone()).await
+                            );
+                        }
+
+                        let filter_slicer_guard = filter_slicer_arc.lock();
+                        println!("exec:callback_arc");
+                        callback_arc.lock()(
+                            filter_slicer_guard.slice_tensors_chunk(
+                                window_0_tensors.iter().collect(),
+                                window_0_0.as_slice()
+                            ),
+                            filter_slicer_guard.slice_tensors_chunk(
+                                window_1_tensors.iter().collect(),
+                                window_1_0.as_slice()
+                            ),
+                            params_idx,
+                        ).expect("cb");
+
+                        // (keys_purge)([window_0_0, window_1_0].concat());
+
+                        drop(wg);
+                    }.boxed()
+                });
+            }
+        }
+    }
+
+    // exec.write().
+
+    wg.wait();
+
+    Ok(())
+}
+
 
 
 pub trait MotifDumper {
@@ -1076,13 +1190,16 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item
 
 #[cfg(test)]
 mod motif_find_tests {
-    use std::{fs};
+    use std::{fs, thread};
+    use std::cell::RefCell;
     use std::collections::{HashMap};
 
     use std::path::Path;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use crossbeam_utils::sync::WaitGroup;
     use log::debug;
-
+    use parking_lot::RwLock;
     use tch::{Device, IndexOp, Tensor};
     use tch::Kind::{Float, Int};
 
@@ -1093,6 +1210,7 @@ mod motif_find_tests {
     use hbac_shared::val::Val;
     use hbac_store::{SqlStore, Store};
     use crate::cache_on_threads::CacheOnThreads;
+    use crate::cache_on_threads::exec::{Executor, SyncWrapper};
     use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
     use crate::find::iter_all_in_dir;
     use crate::find::select_motifs_by_corr;
@@ -1895,32 +2013,46 @@ mod motif_find_tests {
 
     #[test]
     fn test_chunk_and_slice() -> Result<(), HbacError> {
+        use std::rc::Rc;
         let resources: Vec<String> = vec!["111", "222", "333", "444", "555"].into_iter().map(|v| v.into()).collect();
+        let resources_to_move = resources.clone();
 
-        let mut chunks_0_test = vec![];
-        let mut chunks_1_test = vec![];
+        let mut chunks_0_test: Arc<parking_lot::Mutex<Vec<Tensor>>> = Arc::new(parking_lot::Mutex::new(vec![]));
+        let mut chunks_0_test_rc = Arc::clone(&chunks_0_test);
 
-        crate::find::chunk_and_slice(
-            resources.clone(),
-            0,
+        let mut chunks_1_test: Arc<parking_lot::Mutex<Vec<Tensor>>> = Arc::new(parking_lot::Mutex::new(vec![]));
+        let mut chunks_1_test_rc = Arc::clone(&chunks_1_test);
+
+        let mut executor = Executor::new(
+            move |key| {
+                let i = resources_to_move.iter().position(|v| v.eq(key)).expect(format!("no {key}").as_str()) + 1;
+                let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
+                debug!("TTTT: key={key:?} i={i} v={v:?}");
+                // thread::sleep(Duration::new(1,0));
+                SyncWrapper::new(
+                    Box::new(Tensor::from_slice(v.as_slice()).view((1, 10))),
+                    |e| Box::new(e.shallow_clone()),
+                )
+            }, 4, 100,
+        );
+        let mut executor_rc = Arc::new(RwLock::new(executor));
+
+
+        crate::find::chunk_and_slice_exec(
+            resources,
             2,
             vec![FilterAndSlicer::new(3, 5, None)],
-            |chunk_0, chunk_1, _size| {
-                debug!("callback: chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
+            move |chunk_0, chunk_1, _size| {
+                debug!("cccc{chunk_0:?} chunk_1={chunk_1:?}");
 
                 debug!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
                 debug!("callback: chunk_1.t=\n{}", chunk_1.t.i((.., 0, ..)).squeeze());
 
-                chunks_0_test.push(chunk_0.t.i((.., 0, ..)).squeeze());
-                chunks_1_test.push(chunk_1.t.i((.., 0, ..)).squeeze());
+                chunks_0_test_rc.lock().push(chunk_0.t.i((.., 0, ..)).squeeze());
+                chunks_1_test_rc.lock().push(chunk_1.t.i((.., 0, ..)).squeeze());
                 Ok(())
             },
-            &mut CacheOnThreads::new(move |key| {
-                let i = resources.iter().position(|v| v.eq(key)).expect(format!("no {key}").as_str()) + 1;
-                let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
-                debug!("TTTT: key={key:?} i={i} v={v:?}");
-                Box::new(Tensor::from_slice(v.as_slice()).view((1, 10)))
-            }, 3, None),
+            Arc::clone(&executor_rc),
         )?;
 
         let mut chunks_0 = vec![];
@@ -2004,8 +2136,9 @@ mod motif_find_tests {
             5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
         ]).view((2, 5)).totype(Float));
 
-        assert_eq!(chunks_0, chunks_0_test);
-        assert_eq!(chunks_1, chunks_1_test);
+
+        assert_eq!(chunks_0, *chunks_0_test.lock());
+        assert_eq!(chunks_1, *chunks_1_test.lock());
 
         Ok(())
     }
