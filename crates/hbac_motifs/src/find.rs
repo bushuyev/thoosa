@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::fs;
+use std::{fs, thread};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::clap_derive::{Args, Subcommand};
 use crossbeam_utils::sync::WaitGroup;
@@ -566,45 +566,52 @@ where
     let mut resources_ids_1 = resources_ids.chunks(chunk_size).map(|v| v.iter().map(|k| k.clone()).collect::<Vec<String>>()).collect::<Vec<Vec<String>>>();
     resources_ids_1.push(vec![]);
 
+    let area_0 = exec.write().get_available_cache_domain();
+    let area_1 = exec.write().get_available_cache_domain();
 
-    exec.write().preload(resources_ids_0[0].clone());
-    exec.write().preload(resources_ids_0[chunk_size].clone());
+    exec.write().preload(resources_ids_0[0].clone(), area_0);
+    exec.write().preload(resources_ids_0[chunk_size].clone(), area_0);
 
-    let wg = WaitGroup::new();
+    let wg_0 = WaitGroup::new();
 
 
     for (chunk_i_0, window_0) in resources_ids_0.windows(2).map(|v| v.to_vec()).enumerate() {
         //window_0 - current,preload windows
         debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={:?}", window_0);
 
+
+        debug!("chunk_and_slice: area_0={area_0:064b}");
+
         if window_0[1].len() > 0 {
-            exec.write().preload(window_0[1].to_vec());
+            exec.write().preload(window_0[1].to_vec(),  area_0);
         }
+
 
         for (chunk_i_1, window_1) in resources_ids_1.windows(2).into_iter().skip(chunk_i_0).enumerate() {
             debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={:?}", window_1);
+            let wg_0 = wg_0.clone();
+            // if area_1 != 0 {
+            //     exec.write().purge_cache(area_1);
+            // }
 
             if window_1[1].len() > 0 {
-                exec.write().preload(window_1[1].to_vec());
+                exec.write().preload(window_1[1].to_vec(), area_1);
             }
+            debug!("chunk_and_slice: area_1={area_1:064b}");
 
-
+            let wg_1 = WaitGroup::new();
             for (params_idx, filter_slicer) in filter_and_slicer.iter().enumerate() {
-
+                let wg_1 = wg_1.clone();
                 let window_0_0 = window_0[0].clone();
                 let window_1_0 = window_1[0].clone();
                 let filter_slicer_arc = Arc::clone(&filter_slicer);
                 let callback_arc = Arc::clone(&callback_arc);
 
-                let wg = wg.clone();
-
                 exec.write().exec(move |resources_arc, keys_purge| {
                     async move {
-
-
                         let mut window_0_tensors = vec![];
                         for key in &window_0_0 {
-                            println!("0. exec:callback_arc: key={key}");
+                            debug!("0. exec:callback_arc: key={key}");
 
                             window_0_tensors.push(
                                 Executor::<String, Box<Tensor>>::load_future(Arc::clone(&resources_arc), key.clone()).await
@@ -613,14 +620,14 @@ where
 
                         let mut window_1_tensors = vec![];
                         for key in &window_1_0 {
-                            println!("1. exec:callback_arc: key={key}");
+                            debug!("1. exec:callback_arc: key={key}");
                             window_1_tensors.push(
                                 Executor::<String, Box<Tensor>>::load_future(Arc::clone(&resources_arc), key.clone()).await
                             );
                         }
 
                         let filter_slicer_guard = filter_slicer_arc.lock();
-                        println!("exec:callback_arc");
+                        debug!("exec:callback_arc");
                         callback_arc.lock()(
                             filter_slicer_guard.slice_tensors_chunk(
                                 window_0_tensors.iter().collect(),
@@ -633,18 +640,33 @@ where
                             params_idx,
                         ).expect("cb");
 
-                        // (keys_purge)([window_0_0, window_1_0].concat());
+                        // (keys_purge)([window_0_0, window_1_0].concat(), area_1 | area_0);
+                        (keys_purge)(window_1_0, area_1);
 
-                        drop(wg);
+                        drop(wg_1);
+
                     }.boxed()
                 });
+
             }
+            wg_1.wait();
+            // println!("{:?}", window_0[1]);
+            exec.write().purge_cache_keys(window_0[1].clone(), area_0);
+            drop(wg_0);
+
         }
+
+        // if area_0 != 0 {
+        //     exec.write().purge_cache(area_0);
+        // }
+
     }
+    // exec.write().purge_cache(area_0);
 
     // exec.write().
 
-    wg.wait();
+    // thread::sleep(Duration::new(3, 0));
+    wg_0.wait();
 
     Ok(())
 }
