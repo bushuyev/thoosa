@@ -308,13 +308,15 @@ pub mod exec {
         features_sender: SyncSender<Mutex<BoxFuture<'static, ()>>>,
         resources: Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
 
-        resources_being_loaded: Arc<RwLock<HashMap<K, usize>>>,
+        resources_being_loaded: Arc<RwLock<HashMap<K, u64>>>,
         keys_to_purge: Arc<RwLock<HashMap<K, usize>>>,
 
         keys_fifo: VecDeque<K>,
 
         loader_fn: Arc<Box<dyn Fn(&K) -> SyncWrapper<V> + Sync + Send>>,
-        stop: Arc<AtomicBool>
+        stop: Arc<AtomicBool>,
+
+        cache_domains:u64
     }
 
     impl<K, V> Executor<K, V>
@@ -406,7 +408,8 @@ pub mod exec {
 
                 loader_fn: Arc::new(Box::new(loader)),
 
-                stop: Arc::clone(&stop)
+                stop: Arc::clone(&stop),
+                cache_domains: 0
             }
         }
 
@@ -414,25 +417,25 @@ pub mod exec {
             self.stop.store(true, Relaxed);
         }
 
-        pub fn preload(&mut self, keys: Vec<K>) {
-            debug!("preload_vec: keys={keys:?}");
+        pub fn preload(&mut self, keys: Vec<K>, cache_area: u64) {
+            debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
             let mut resources_guard = self.resources.write();
             let mut resources_being_loaded_guard = self.resources_being_loaded.write();
 
             for key in keys {
                 if let Some(loaded) = resources_guard.get_mut(&key) {
-                    loaded.num_used += 1;
-                    debug!("preload_vec: adding key={key:?} loaded.num_used={}", loaded.num_used);
+                    loaded.cache_areas |= cache_area;
+                    debug!("preload_vec: adding key={key:?} loaded.cache_areas={:064b}", loaded.cache_areas);
                     continue;
                 }
 
                 if let Some(being_loaded) = resources_being_loaded_guard.get_mut(&key) {
-                    *being_loaded += 1;
-                    debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.num_used={}", *being_loaded);
+                    *being_loaded |= cache_area;
+                    debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.cache_area={:064b}", *being_loaded);
                     continue;
                 }
 
-                resources_being_loaded_guard.insert(key.clone(), 1);
+                resources_being_loaded_guard.insert(key.clone(), cache_area);
 
 
                 debug!("preload_vec: adding key={key:?}");
@@ -448,8 +451,8 @@ pub mod exec {
                     debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
 
                     let mut resources_arc_guard = resources_arc.write();
-                    let num_used = resources_being_loaded_arc.write().remove(&key).unwrap_or(1);
-                    v.num_used = num_used;
+
+                    v.cache_areas = resources_being_loaded_arc.write().remove(&key).unwrap_or(cache_area);
 
                     resources_arc_guard.insert(key.clone(), v);
 
@@ -461,22 +464,26 @@ pub mod exec {
 
         pub fn exec<F>(&mut self, f: F)
         where
-            F: FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, Box<dyn FnOnce(Vec<K>) + Send>) -> BoxFuture<'static, ()>,
+            F: FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
 
         {
             let resources_for_purge = Arc::clone(&self.resources);
 
             self.features_sender.send(Mutex::new((f)(
                 Arc::clone(&self.resources),
-                Box::new(move |keys| {
+
+                Box::new(move |keys, cache_area| {
                     let mut resources_for_purge_guard = resources_for_purge.write();
+
                     for key in keys {
                         if let Some(v) = resources_for_purge_guard.get_mut(&key) {
-                            if v.num_used <= 1 {
+                            debug!("keys_to_purge: cache_area={:064b}", cache_area);
+                            v.cache_areas = remove_mask(v.cache_areas, cache_area);
+                            if v.cache_areas == 0 {
                                 resources_for_purge_guard.remove(&key);
                                 debug!("keys_to_purge: key={key:?} removed");
                             } else {
-                                v.num_used -= 1;
+                                debug!("keys_to_purge: key={key:?} kept, remaining v.cache_areas={:064b}", v.cache_areas);
                             }
                         }
                     }
@@ -491,6 +498,87 @@ pub mod exec {
         pub fn resources_len(&self) -> usize {
             self.resources.read().len()
         }
+
+        pub fn get_available_cache_domain(&mut self) -> u64 {
+            let next = first_free_bit(self.cache_domains);
+            self.cache_domains |= next;
+
+            next
+        }
+
+        pub fn purge_cache_keys(&mut self, keys:Vec<K>, area:u64) {
+
+            let mut resources_guard = self.resources.write();
+            debug!("purge_cache_keys: 0 {area:064b} resources_guard.len()={}", resources_guard.len());
+            let mut keys_to_remove = vec![];
+            for key in keys {
+                if let Some(sw) = resources_guard.get_mut(&key) {
+                    sw.cache_areas = remove_mask(sw.cache_areas, area);
+                    debug!("purge_cache_keys: key={key:?} {:064b}", sw.cache_areas);
+                    if sw.cache_areas == 0 {
+                        debug!("purge_cache_keys: removing key={key:?}");
+                        keys_to_remove.push(key);
+                    }
+                }
+            }
+            for key in keys_to_remove {
+                resources_guard.remove(&key);
+            }
+
+            // resources_guard.retain(|key, sw|{
+            //     debug!("purge_cache: key={key:?} {:064b}", sw.cache_areas);
+            //
+            //     sw.cache_areas = remove_mask(sw.cache_areas, area);
+            //     debug!("purge_cache: key={key:?} {:064b}", sw.cache_areas);
+            //     if sw.cache_areas == 0 {
+            //         debug!("purge_cache: removing key={key:?}");
+            //     }
+            //
+            //     sw.cache_areas != 0
+            // });
+
+            debug!("purge_cache: 1 {area:064b} resources_guard.len()={}", resources_guard.len());
+        }
+
+
+        pub fn purge_cache(&mut self, area:u64) {
+
+            let mut resources_guard = self.resources.write();
+            debug!("purge_cache: 0 {area:064b} resources_guard.len()={}", resources_guard.len());
+
+            resources_guard.retain(|key, sw|{
+                debug!("purge_cache: key={key:?} {:064b}", sw.cache_areas);
+
+                sw.cache_areas = remove_mask(sw.cache_areas, area);
+                debug!("purge_cache: key={key:?} {:064b}", sw.cache_areas);
+                if sw.cache_areas == 0 {
+                    debug!("purge_cache: removing key={key:?}");
+                }
+
+                sw.cache_areas != 0
+            });
+
+            debug!("purge_cache: 1 {area:064b} resources_guard.len()={}", resources_guard.len());
+        }
+
+    }
+
+    pub(crate) fn first_free_bit(c:u64) -> u64 {
+        let mut x_next = 1u64;
+        if c == 0 {
+            return x_next;
+        } else if c == u64::MAX {
+            return 0;
+        }
+
+        while !(c | !x_next) == 0 {
+            x_next = x_next << 1;
+        }
+        x_next
+    }
+
+    pub (crate) fn remove_mask(from:u64, mask:u64) -> u64 {
+        !mask & from
     }
 
 
@@ -542,7 +630,7 @@ pub mod exec {
     where  V: Send + Debug {
         v:V,
         shallow_clone_fn:fn(&V)->V,
-        num_used:usize
+        cache_areas:u64
     }
 
     impl <V> SyncWrapper<V>
@@ -551,7 +639,7 @@ pub mod exec {
             Self {
                 v,
                 shallow_clone_fn,
-                num_used: 0
+                cache_areas: 0
             }
         }
 
@@ -568,11 +656,6 @@ pub mod exec {
         }
     }
 }
-
-
-
-
-
 
 
 #[cfg(test)]
@@ -606,6 +689,7 @@ mod tests {
     use hbac_shared::HbacError;
     use serde::Deserialize;
     use crate::cache_on_threads::CacheOnThreads;
+    use crate::cache_on_threads::exec::Executor;
 
     #[ctor::ctor]
     fn init() {
@@ -791,12 +875,18 @@ mod tests {
 
         let t_0 = Instant::now();
         pool_0.spawn(move || {
+            let cache_area_0 = exec_0.write().get_available_cache_domain();
+            debug!("cache_area_0={cache_area_0:064b}");
+
             (0..num_items / 10).into_par_iter().for_each(|b| {
 
-                exec_0.write().preload((0..10).flat_map(|j| [
-                    format!("aaa_{}", b * 10 + j),
-                    format!("bbb_{}", b * 10 + j)
-                ]).collect::<Vec<String>>());
+                exec_0.write().preload(
+                    (0..10).flat_map(|j| [
+                        format!("aaa_{}", b * 10 + j),
+                        format!("bbb_{}", b * 10 + j)
+                    ]).collect::<Vec<String>>(),
+                   cache_area_0
+                );
 
                 (0..10).for_each(|j| {
                     let i = b * 10 + j;
@@ -842,7 +932,7 @@ mod tests {
 
                             // info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
                             info!("0: key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}",);
-                            (keys_purge)(vec![key_aaa, key_bbb]);
+                            (keys_purge)(vec![key_aaa, key_bbb], cache_area_0);
                         }.boxed()
                     });
 
@@ -854,19 +944,23 @@ mod tests {
         });
 
         pool_0.spawn(move || {
+            let cache_area_1 = exec_1.write().get_available_cache_domain();
+            debug!("cache_area_1={cache_area_1:064b}");
 
             (0..num_items/10).into_par_iter().for_each(|b| {
 
-                exec_1.write().preload((0..10).flat_map(|j|[
-                    format!("bbb_{}", b*10+j),
-                    format!("ccc_{}", b*10+j)
-                ]).collect::<Vec<String>>());
+                exec_1.write().preload(
+                    (0..10).flat_map(|j|[
+                        format!("bbb_{}", b*10+j),
+                        format!("ccc_{}", b*10+j)
+                    ]).collect::<Vec<String>>(),
+                    cache_area_1
+                );
 
                 (0..10).for_each(|j|{
                     let i = b * 10 + j;
 
                     let wg_0_i = wg_1.clone();
-
 
                     let data_done_rc = Arc::clone(&data_done_rc_1);
                     let time_exec_rc = Arc::clone(&time_exec_rc_1);
@@ -899,7 +993,7 @@ mod tests {
                             drop(wg_0_i);
 
                             info!("1: key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}");
-                            (keys_purge)(vec![key_aaa, key_bbb]);
+                            (keys_purge)(vec![key_aaa, key_bbb], cache_area_1);
                         }.boxed()
 
                     });
@@ -936,54 +1030,93 @@ mod tests {
     }
 
     #[test]
-    fn test_xxx(){
-        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+    fn test_first_free_bit(){
+        assert_eq!(
+            0b0000000000000000000000000000000000000000000000000000000000000001,
+            super::exec::first_free_bit(0b0000000000000000000000000000000000000000000000000000000000000000)
+        );
 
-            let mut b = std::thread::Builder::new();
-            b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
-                .spawn(|| thread_builder.run())?;
+        assert_eq!(
+            0b0000000000000000000000000000000000000000000000000000000000000010,
+            super::exec::first_free_bit(0b0000000000000000000000000000000000000000000000000000000000000001)
+        );
 
-            Ok(())
-        }).build().unwrap();
+        assert_eq!(
+            0b0000000000000000000000000000000000000000000000000000000000000100,
+            super::exec::first_free_bit(0b0000000000000000000000000000000000000000000000000000000000000011)
+        );
 
-        let pool_1 = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+        assert_eq!(
+            0b0000000000000000000000000000000000000000000000000000000000000100,
+            super::exec::first_free_bit(0b0000000000000000000000000000000000000000000000000000000000001011)
+        );
 
-            let mut b = std::thread::Builder::new();
-            b.name(format!("{}/{:?}", "pool_1", thread_builder.index()))
-                .spawn(|| thread_builder.run())?;
+        assert_eq!(
+            0b1000000000000000000000000000000000000000000000000000000000000000,
+            super::exec::first_free_bit(0b0111111111111111111111111111111111111111111111111111111111111111)
+        );
 
-            Ok(())
-        }).build().unwrap();
+        assert_eq!(
+            0b0000000000000000000000000000000000000000000000000000000000000000,
+            super::exec::first_free_bit(0b1111111111111111111111111111111111111111111111111111111111111111)
+        );
+    }
 
-        let barrier = Arc::new(Barrier::new(2));
-        let b_0 = Arc::clone(&barrier);
-        let b_1 = Arc::clone(&barrier);
+    #[test]
+    fn test_remove_mask(){
+        assert_eq!(
+            0b00000000,
+            super::exec::remove_mask(0b00000001, 0b000000001)
+        );
+        assert_eq!(
+            0b00000000,
+            super::exec::remove_mask(0b00000000, 0b000000001)
+        );
+        assert_eq!(
+            0b00000010,
+            super::exec::remove_mask(0b00000010, 0b000000001)
+        );
+        assert_eq!(
+            0b11111101,
+            super::exec::remove_mask(0b11111111, 0b000000010)
+        );
+    }
 
-        let wg = WaitGroup::new();
-        let wg_0 = wg.clone();
-        let wg_1 = wg.clone();
+    #[test]
+    fn test_xxx() {
+        // let mut x_0 = 0u64;
+        // let x_1 = 1u64;
+        // let x_2 = x_1 << 1;
+        // let mut x_next = x_1;
+        //
+        // println!("!x_1 {:064b}", !x_1);
+        // println!("!x_1 {:064b}", !(x_1<<1));
+        //
+        //
+        // println!("x_0={x_0:064b}");
+        // println!("x_1={x_1:064b}");
+        // println!("x_2={x_2:064b}");
+        //
+        // x_0 |= x_1;
+        // println!("1. x_0={x_0:064b}");
+        //
+        // x_0 |= x_2;
+        // println!("2. x_0={x_0:064b} next={:064b}", super::exec::first_free_bit(x_0));
+        //
+        // x_0 ^= x_1;
+        // println!("3. x_0={x_0:064b} next={:064b}", super::exec::first_free_bit(x_0));
+        //
+        // x_0 ^= x_2;
+        // println!("4. x_0={x_0:064b}");
+        let x_0 = 0b00010;
+        let x_1 = 0b00001;
 
+        println!("r={:064b}", !x_0 & x_1);
 
+        let x_0 = 0b00010;
+        let x_1 = 0b00011;
 
-        pool_1.spawn(move ||{
-            // b_0.wait();
-            for i in 0..10 {
-                println!("pool 0 {i}");
-                yield_now();
-            }
-            drop(wg_0);
-        });
-
-        pool_1.spawn(move ||{
-            // b_1.wait();
-            for i in 0..10 {
-                println!("pool 1 {i}");
-                yield_now();
-            }
-            drop(wg_1);
-        });
-
-        wg.wait();
+        println!("r={:064b}", !x_0 & x_1);
     }
 
 
