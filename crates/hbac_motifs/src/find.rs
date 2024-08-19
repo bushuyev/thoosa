@@ -618,7 +618,7 @@ where
                             //TODO if let Some(v) = resources_arc.read().get(key) {...
 
                             window_0_tensors.push(
-                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
+                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await
                             );
                         }
 
@@ -627,7 +627,7 @@ where
                             debug!("1. exec:callback_arc: key={key}");
 
                             window_1_tensors.push(
-                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
+                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await
                             );
                         }
 
