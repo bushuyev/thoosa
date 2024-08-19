@@ -570,8 +570,8 @@ where
     let area_0 = exec.write().get_available_cache_domain();
     let area_1 = exec.write().get_available_cache_domain();
 
-    exec.write().loader.write().preload(resources_ids_0[0].clone(), area_0);
-    exec.write().loader.write().preload(resources_ids_0[chunk_size].clone(), area_0);
+    exec.write().preload(resources_ids_0[0].clone(), area_0);
+    exec.write().preload(resources_ids_0[chunk_size].clone(), area_0);
 
     let wg_0 = WaitGroup::new();
 
@@ -584,7 +584,7 @@ where
         debug!("chunk_and_slice: area_0={area_0:064b}");
 
         if window_0[1].len() > 0 {
-            exec.write().loader.write().preload(window_0[1].to_vec(),  area_0);
+            exec.write().preload(window_0[1].to_vec(),  area_0);
         }
 
 
@@ -596,7 +596,7 @@ where
             // }
 
             if window_1[1].len() > 0 {
-                exec.write().loader.write().preload(window_1[1].to_vec(), area_1);
+                exec.write().preload(window_1[1].to_vec(), area_1);
             }
             debug!("chunk_and_slice: area_1={area_1:064b}");
 

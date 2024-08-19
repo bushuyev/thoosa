@@ -301,11 +301,12 @@ pub mod exec {
         K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
         V: Send + Debug + 'static
     {
-        //TODO pub
-        pub loader_fn: Arc<Box<dyn Fn(&K) -> SyncWrapper<V> + Sync + Send>>,
-        pub loader_pool: ThreadPool,
-        pub resources: Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
-        pub resources_being_loaded: Arc<RwLock<HashMap<K, u64>>>,
+
+        loader_fn: Arc<Box<dyn Fn(&K) -> SyncWrapper<V> + Sync + Send>>,
+        loader_pool: ThreadPool,
+        //TODO remove locks around resources?
+        resources: Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
+        resources_being_loaded: Arc<RwLock<HashMap<K, u64>>>,
     }
 
     impl <K, V> Loader <K, V>
@@ -313,10 +314,11 @@ pub mod exec {
         K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
         V: Send + Debug + 'static
     {
-        pub fn preload(&mut self, keys: Vec<K>, cache_area: u64) {
+        pub fn preload(self_arc: Arc<RwLock<Loader<K, V>>>, keys: Vec<K>, cache_area: u64) {
             debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
-            let mut resources_guard = self.resources.write();
-            let mut resources_being_loaded_guard = self.resources_being_loaded.write();
+            let self_write_guard = self_arc.write();
+            let mut resources_guard = self_write_guard.resources.write();
+            let mut resources_being_loaded_guard = self_write_guard.resources_being_loaded.write();
 
             for key in keys {
                 if let Some(loaded) = resources_guard.get_mut(&key) {
@@ -337,24 +339,13 @@ pub mod exec {
                 debug!("preload_vec: adding key={key:?}");
 
 
-                let loader = Arc::clone(&self.loader_fn);
-                let resources_arc = Arc::clone(&self.resources);
-                let resources_being_loaded_arc = Arc::clone(&self.resources_being_loaded);
+                let loader = Arc::clone(&self_write_guard.loader_fn);
+                let self_arc_pool = Arc::clone(&self_arc);
+                let resources_arc = Arc::clone(&self_write_guard.resources);
+                let resources_being_loaded_arc = Arc::clone(&self_write_guard.resources_being_loaded);
                 let key = key.clone();
 
-                self.loader_pool.spawn(move || {
-                    let mut v = loader(&key);
-                    debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
-
-                    let mut resources_arc_guard = resources_arc.write();
-
-                    v.cache_areas = resources_being_loaded_arc.write().remove(&key).unwrap_or(cache_area);
-
-                    resources_arc_guard.insert(key.clone(), v);
-
-
-                    debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
-                });
+                self_write_guard.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
             };
         }
 
@@ -372,25 +363,54 @@ pub mod exec {
 
 
                 let loader = Arc::clone(&self_lock.loader_fn);
+                let self_arc_pool = Arc::clone(&self_arc);
                 let resources_arc = Arc::clone(&self_lock.resources);
                 let resources_being_loaded_arc = Arc::clone(&self_lock.resources_being_loaded);
                 let key = key.clone();
 
-                self_lock.loader_pool.spawn(move || {
-                    let mut v = loader(&key);
-                    debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
-
-                    let mut resources_arc_guard = resources_arc.write();
-
-                    v.cache_areas = resources_being_loaded_arc.write().remove(&key).unwrap_or(cache_area);
-
-                    resources_arc_guard.insert(key.clone(), v);
-
-
-                    debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
-                });
+                self_lock.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
             }
             ResourceFuture::new(Arc::clone(&self_arc), key).boxed()
+        }
+
+        fn loader_task<'a>(
+            cache_area: u64,
+            loader_fn: Arc<Box<dyn Fn(&'a K) -> SyncWrapper<V> + Sync + Send>>,
+            loader_arc: Arc<RwLock<Loader<K,V>>>,
+            key: &'a K
+        ) {
+
+                let mut v = loader_fn(&key);
+                debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
+
+                let loader_guard = loader_arc.write();
+
+                let mut resources_arc_guard = loader_guard.resources.write();
+
+                v.cache_areas = loader_guard.resources_being_loaded.write().remove(&key).unwrap_or(cache_area);
+
+                resources_arc_guard.insert(key.clone(), v);
+
+
+                debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
+
+        }
+
+        pub fn purge_resources(&self, keys:Vec<K>, cache_area:u64) {
+            let mut resources_for_purge_guard = self.resources.write();
+
+            for key in keys {
+                if let Some(v) = resources_for_purge_guard.get_mut(&key) {
+                    debug!("keys_to_purge: cache_area={:064b}", cache_area);
+                    v.cache_areas = remove_mask(v.cache_areas, cache_area);
+                    if v.cache_areas == 0 {
+                        resources_for_purge_guard.remove(&key);
+                        debug!("keys_to_purge: key={key:?} removed");
+                    } else {
+                        debug!("keys_to_purge: key={key:?} kept, remaining v.cache_areas={:064b}", v.cache_areas);
+                    }
+                }
+            }
         }
     }
 
@@ -528,33 +548,25 @@ pub mod exec {
             F: FnOnce(Arc<RwLock<Loader<K,V>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
 
         {
-            let resources_for_purge = Arc::clone(&self.loader.write().resources);
+            let loader_for_purge = Arc::clone(&self.loader);
 
             self.features_sender.send(Mutex::new((f)(
                 Arc::clone(&self.loader),
 
                 Box::new(move |keys, cache_area| {
-                    let mut resources_for_purge_guard = resources_for_purge.write();
+                    loader_for_purge.write().purge_resources(keys, cache_area);
 
-                    for key in keys {
-                        if let Some(v) = resources_for_purge_guard.get_mut(&key) {
-                            debug!("keys_to_purge: cache_area={:064b}", cache_area);
-                            v.cache_areas = remove_mask(v.cache_areas, cache_area);
-                            if v.cache_areas == 0 {
-                                resources_for_purge_guard.remove(&key);
-                                debug!("keys_to_purge: key={key:?} removed");
-                            } else {
-                                debug!("keys_to_purge: key={key:?} kept, remaining v.cache_areas={:064b}", v.cache_areas);
-                            }
-                        }
-                    }
                 })
             )));
         }
 
 
-        pub fn load_future(loader: Arc<RwLock<Loader<K, V>>>, key: K) -> BoxFuture<'static, V> {
-            ResourceFuture::new(loader, key).boxed()
+        pub fn load_future(loader: Arc<RwLock<Loader<K, V>>>, key: K, cache_area: u64) -> BoxFuture<'static, V> {
+            Loader::load_future(loader, key, cache_area)
+        }
+
+        pub fn preload(&mut self, keys: Vec<K>, cache_area: u64) {
+            Loader::preload(Arc::clone(&self.loader), keys, cache_area);
         }
 
         pub fn resources_len(&self) -> usize {
@@ -942,7 +954,7 @@ mod tests {
 
             (0..num_items / 10).into_par_iter().for_each(|b| {
 
-                exec_0.write().loader.write().preload(
+                exec_0.write().preload(
                     (0..10).flat_map(|j| [
                         format!("aaa_{}", b * 10 + j),
                         format!("bbb_{}", b * 10 + j)
@@ -965,10 +977,10 @@ mod tests {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("aaa_{i}");
-                            let out_a = Loader::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
+                            let out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
 
                             let key_bbb = format!("bbb_{i}");
-                            let out_b = Loader::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
+                            let out_b = Executor::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
 
                             // let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
@@ -1011,7 +1023,7 @@ mod tests {
 
             (0..num_items/10).into_par_iter().for_each(|b| {
 
-                exec_1.write().loader.write().preload(
+                exec_1.write().preload(
                     (0..10).flat_map(|j|[
                         format!("bbb_{}", b*10+j),
                         format!("ccc_{}", b*10+j)
