@@ -282,7 +282,8 @@ pub mod exec {
         future::{BoxFuture, FutureExt},
         task::{waker_ref, ArcWake},
     };
-
+    use tch::Tensor;
+    use crate::cache_on_threads::LoaderFuture;
 
     struct RayonNotify {}
 
@@ -357,6 +358,15 @@ pub mod exec {
             };
         }
 
+        pub fn load_future(self_arc: Arc<RwLock<Loader<K, V>>>, key: K) -> BoxFuture<'static, V> {
+            let self_lock = self_arc.write();
+            let mut resources_guard = self_lock.resources.write();
+            let mut resources_being_loaded_guard = self_lock.resources_being_loaded.write();
+            if !resources_guard.contains_key(&key) && !resources_being_loaded_guard.contains_key(&key) {
+
+            }
+            ResourceFuture::new(Arc::clone(&self_arc), key).boxed()
+        }
     }
 
     pub struct Executor<K, V>
@@ -488,7 +498,7 @@ pub mod exec {
         }
 
 
-        pub fn exec_1<F>(&mut self, f: F)
+        pub fn exec<F>(&mut self, f: F)
         where
             F: FnOnce(Arc<RwLock<Loader<K,V>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
 
@@ -517,34 +527,6 @@ pub mod exec {
             )));
         }
 
-        pub fn exec<F>(&mut self, f: F)
-        where
-            F: FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
-
-        {
-            let resources_for_purge = Arc::clone(&self.loader.write().resources);
-
-            self.features_sender.send(Mutex::new((f)(
-                Arc::clone(&self.loader.write().resources),
-
-                Box::new(move |keys, cache_area| {
-                    let mut resources_for_purge_guard = resources_for_purge.write();
-
-                    for key in keys {
-                        if let Some(v) = resources_for_purge_guard.get_mut(&key) {
-                            debug!("keys_to_purge: cache_area={:064b}", cache_area);
-                            v.cache_areas = remove_mask(v.cache_areas, cache_area);
-                            if v.cache_areas == 0 {
-                                resources_for_purge_guard.remove(&key);
-                                debug!("keys_to_purge: key={key:?} removed");
-                            } else {
-                                debug!("keys_to_purge: key={key:?} kept, remaining v.cache_areas={:064b}", v.cache_areas);
-                            }
-                        }
-                    }
-                })
-            )));
-        }
 
         pub fn load_future(loader: Arc<RwLock<Loader<K, V>>>, key: K) -> BoxFuture<'static, V> {
             ResourceFuture::new(loader, key).boxed()
@@ -954,14 +936,14 @@ mod tests {
                     let data_done_rc = Arc::clone(&data_done_rc_0);
                     let time_exec_rc = Arc::clone(&time_exec_rc_0);
 
-                    exec_0.write().exec_1(move |loader_arc, keys_purge| {
+                    exec_0.write().exec(move |loader_arc, keys_purge| {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("aaa_{i}");
-                            let out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone()).await;
+                            let out_a = Loader::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone()).await;
 
                             let key_bbb = format!("bbb_{i}");
-                            let out_b = Executor::<String, TestEntity>::load_future(loader_arc, key_bbb.clone()).await;
+                            let out_b = Loader::<String, TestEntity>::load_future(loader_arc, key_bbb.clone()).await;
 
                             // let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
@@ -1020,14 +1002,14 @@ mod tests {
                     let data_done_rc = Arc::clone(&data_done_rc_1);
                     let time_exec_rc = Arc::clone(&time_exec_rc_1);
 
-                    exec_1.write().exec_1(move |loader, keys_purge| {
+                    exec_1.write().exec(move |loader, keys_purge| {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("bbb_{i}");
-                            let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone()).await;
+                            let out_a = Loader::<String,TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone()).await;
 
                             let key_bbb = format!("ccc_{i}");
-                            let out_b = Executor::<String,TestEntity>::load_future(loader, key_bbb.clone()).await;
+                            let out_b = Loader::<String,TestEntity>::load_future(loader, key_bbb.clone()).await;
 
 
                             let time = t.elapsed().as_millis();

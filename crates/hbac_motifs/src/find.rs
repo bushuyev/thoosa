@@ -26,6 +26,7 @@ use hbac_store::StoreDumper;
 
 use crate::cache_on_threads::CacheOnThreads;
 use crate::cache_on_threads::exec::Executor;
+use crate::cache_on_threads::exec::Loader;
 use crate::distance::dist_d2;
 use crate::distance::slice_t;
 
@@ -607,8 +608,8 @@ where
                 let filter_slicer_arc = Arc::clone(&filter_slicer);
                 let callback_arc = Arc::clone(&callback_arc);
 
-                exec.write().exec_1(move |loader, keys_purge| {
-                    let loader = Arc::clone(&loader);
+                exec.write().exec(move |loader, keys_purge| {
+
                     async move {
                         let mut window_0_tensors = vec![];
                         for key in &window_0_0 {
@@ -617,7 +618,7 @@ where
                             //TODO if let Some(v) = resources_arc.read().get(key) {...
 
                             window_0_tensors.push(
-                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
+                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
                             );
                         }
 
@@ -626,7 +627,7 @@ where
                             debug!("1. exec:callback_arc: key={key}");
 
                             window_1_tensors.push(
-                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
+                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
                             );
                         }
 
