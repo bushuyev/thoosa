@@ -295,6 +295,70 @@ pub mod exec {
         fn wake_by_ref(arc_self: &Arc<Self>) {}
     }
 
+    pub struct Loader<K, V>
+    where
+        K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+        V: Send + Debug + 'static
+    {
+        //TODO pub
+        pub loader_fn: Arc<Box<dyn Fn(&K) -> SyncWrapper<V> + Sync + Send>>,
+        pub loader_pool: ThreadPool,
+        pub resources: Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
+        pub resources_being_loaded: Arc<RwLock<HashMap<K, u64>>>,
+    }
+
+    impl <K, V> Loader <K, V>
+    where
+        K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+        V: Send + Debug + 'static
+    {
+        pub fn preload(&mut self, keys: Vec<K>, cache_area: u64) {
+            debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
+            let mut resources_guard = self.resources.write();
+            let mut resources_being_loaded_guard = self.resources_being_loaded.write();
+
+            for key in keys {
+                if let Some(loaded) = resources_guard.get_mut(&key) {
+                    loaded.cache_areas |= cache_area;
+                    debug!("preload_vec: adding key={key:?} loaded.cache_areas={:064b}", loaded.cache_areas);
+                    continue;
+                }
+
+                if let Some(being_loaded) = resources_being_loaded_guard.get_mut(&key) {
+                    *being_loaded |= cache_area;
+                    debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.cache_area={:064b}", *being_loaded);
+                    continue;
+                }
+
+                resources_being_loaded_guard.insert(key.clone(), cache_area);
+
+
+                debug!("preload_vec: adding key={key:?}");
+
+
+                let loader = Arc::clone(&self.loader_fn);
+                let resources_arc = Arc::clone(&self.resources);
+                let resources_being_loaded_arc = Arc::clone(&self.resources_being_loaded);
+                let key = key.clone();
+
+                self.loader_pool.spawn(move || {
+                    let mut v = loader(&key);
+                    debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
+
+                    let mut resources_arc_guard = resources_arc.write();
+
+                    v.cache_areas = resources_being_loaded_arc.write().remove(&key).unwrap_or(cache_area);
+
+                    resources_arc_guard.insert(key.clone(), v);
+
+
+                    debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
+                });
+            };
+        }
+
+    }
+
     pub struct Executor<K, V>
     where
         K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
@@ -302,21 +366,21 @@ pub mod exec {
     {
         notify: Arc<RayonNotify>,
         futures_pool: ThreadPool,
-        loader_pool: ThreadPool,
+
 
         features: Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
         features_sender: SyncSender<Mutex<BoxFuture<'static, ()>>>,
-        resources: Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
 
-        resources_being_loaded: Arc<RwLock<HashMap<K, u64>>>,
         keys_to_purge: Arc<RwLock<HashMap<K, usize>>>,
 
         keys_fifo: VecDeque<K>,
 
-        loader_fn: Arc<Box<dyn Fn(&K) -> SyncWrapper<V> + Sync + Send>>,
+
         stop: Arc<AtomicBool>,
 
-        cache_domains:u64
+        cache_domains:u64,
+        //TODO pub
+        pub loader:Arc<RwLock<Loader<K,V>>>
     }
 
     impl<K, V> Executor<K, V>
@@ -380,36 +444,42 @@ pub mod exec {
                                 }
                             });
                         };
-                    } else {
-                        if let Ok(future) = rx.try_recv() {
-                            futures.write().push(future);
-                        }
                     }
+                    if let Ok(future) = rx.try_recv() {
+                        futures.write().push(future);
+                    }
+
                 }
             });
             Self {
                 notify: Arc::clone(&notify),
                 futures_pool,
-                loader_pool: rayon::ThreadPoolBuilder::new().num_threads(loader_threads).spawn_handler(|thread_builder| {
-                    let mut b = std::thread::Builder::new();
-                    b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
-                        .spawn(|| thread_builder.run())?;
 
-                    Ok(())
-                }).build().expect("loader_pool"),
                 features: features_rc,
                 features_sender: tx,
 
-                resources: Arc::new(RwLock::new(HashMap::new())),
-                resources_being_loaded: Arc::new(RwLock::new(HashMap::new())),
                 keys_to_purge: Arc::new(RwLock::new(HashMap::new())),
 
                 keys_fifo: VecDeque::new(),
 
-                loader_fn: Arc::new(Box::new(loader)),
+
 
                 stop: Arc::clone(&stop),
-                cache_domains: 0
+                cache_domains: 0,
+
+                loader: Arc::new(RwLock::new(Loader {
+                    loader_pool: rayon::ThreadPoolBuilder::new().num_threads(loader_threads).spawn_handler(|thread_builder| {
+                        let mut b = std::thread::Builder::new();
+                        b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
+                            .spawn(|| thread_builder.run())?;
+
+                        Ok(())
+                    }).build().expect("loader_pool"),
+
+                    resources: Arc::new(RwLock::new(HashMap::new())),
+                    resources_being_loaded: Arc::new(RwLock::new(HashMap::new())),
+                    loader_fn: Arc::new(Box::new(loader)),
+                }))
             }
         }
 
@@ -417,60 +487,16 @@ pub mod exec {
             self.stop.store(true, Relaxed);
         }
 
-        pub fn preload(&mut self, keys: Vec<K>, cache_area: u64) {
-            debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
-            let mut resources_guard = self.resources.write();
-            let mut resources_being_loaded_guard = self.resources_being_loaded.write();
 
-            for key in keys {
-                if let Some(loaded) = resources_guard.get_mut(&key) {
-                    loaded.cache_areas |= cache_area;
-                    debug!("preload_vec: adding key={key:?} loaded.cache_areas={:064b}", loaded.cache_areas);
-                    continue;
-                }
-
-                if let Some(being_loaded) = resources_being_loaded_guard.get_mut(&key) {
-                    *being_loaded |= cache_area;
-                    debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.cache_area={:064b}", *being_loaded);
-                    continue;
-                }
-
-                resources_being_loaded_guard.insert(key.clone(), cache_area);
-
-
-                debug!("preload_vec: adding key={key:?}");
-
-
-                let loader = Arc::clone(&self.loader_fn);
-                let resources_arc = Arc::clone(&self.resources);
-                let resources_being_loaded_arc = Arc::clone(&self.resources_being_loaded);
-                let key = key.clone();
-
-                self.loader_pool.spawn(move || {
-                    let mut v = loader(&key);
-                    debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
-
-                    let mut resources_arc_guard = resources_arc.write();
-
-                    v.cache_areas = resources_being_loaded_arc.write().remove(&key).unwrap_or(cache_area);
-
-                    resources_arc_guard.insert(key.clone(), v);
-
-
-                    debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
-                });
-            };
-        }
-
-        pub fn exec<F>(&mut self, f: F)
+        pub fn exec_1<F>(&mut self, f: F)
         where
-            F: FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
+            F: FnOnce(Arc<RwLock<Loader<K,V>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
 
         {
-            let resources_for_purge = Arc::clone(&self.resources);
+            let resources_for_purge = Arc::clone(&self.loader.write().resources);
 
             self.features_sender.send(Mutex::new((f)(
-                Arc::clone(&self.resources),
+                Arc::clone(&self.loader),
 
                 Box::new(move |keys, cache_area| {
                     let mut resources_for_purge_guard = resources_for_purge.write();
@@ -491,12 +517,41 @@ pub mod exec {
             )));
         }
 
-        pub fn load_future(resources: Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, key: K) -> BoxFuture<'static, V> {
-            ResourceFuture::new(resources, key).boxed()
+        pub fn exec<F>(&mut self, f: F)
+        where
+            F: FnOnce(Arc<RwLock<HashMap<K, SyncWrapper<V>>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
+
+        {
+            let resources_for_purge = Arc::clone(&self.loader.write().resources);
+
+            self.features_sender.send(Mutex::new((f)(
+                Arc::clone(&self.loader.write().resources),
+
+                Box::new(move |keys, cache_area| {
+                    let mut resources_for_purge_guard = resources_for_purge.write();
+
+                    for key in keys {
+                        if let Some(v) = resources_for_purge_guard.get_mut(&key) {
+                            debug!("keys_to_purge: cache_area={:064b}", cache_area);
+                            v.cache_areas = remove_mask(v.cache_areas, cache_area);
+                            if v.cache_areas == 0 {
+                                resources_for_purge_guard.remove(&key);
+                                debug!("keys_to_purge: key={key:?} removed");
+                            } else {
+                                debug!("keys_to_purge: key={key:?} kept, remaining v.cache_areas={:064b}", v.cache_areas);
+                            }
+                        }
+                    }
+                })
+            )));
+        }
+
+        pub fn load_future(loader: Arc<RwLock<Loader<K, V>>>, key: K) -> BoxFuture<'static, V> {
+            ResourceFuture::new(loader, key).boxed()
         }
 
         pub fn resources_len(&self) -> usize {
-            self.resources.read().len()
+            self.loader.read().resources.read().len()
         }
 
         pub fn get_available_cache_domain(&mut self) -> u64 {
@@ -507,8 +562,8 @@ pub mod exec {
         }
 
         pub fn purge_cache_keys(&mut self, keys:Vec<K>, area:u64) {
-
-            let mut resources_guard = self.resources.write();
+            let loader_guard = self.loader.write();
+            let mut resources_guard = loader_guard.resources.write();
             debug!("purge_cache_keys: 0 {area:064b} resources_guard.len()={}", resources_guard.len());
             let mut keys_to_remove = vec![];
             for key in keys {
@@ -542,8 +597,8 @@ pub mod exec {
 
 
         pub fn purge_cache(&mut self, area:u64) {
-
-            let mut resources_guard = self.resources.write();
+            let loader_guard = self.loader.write();
+            let mut resources_guard = loader_guard.resources.write();
             debug!("purge_cache: 0 {area:064b} resources_guard.len()={}", resources_guard.len());
 
             resources_guard.retain(|key, sw|{
@@ -589,7 +644,7 @@ pub mod exec {
     {
         x: usize,
         key: K,
-        resources: Arc<RwLock<HashMap<K, V>>>
+        loader: Arc<RwLock<Loader<K,V>>>
     }
 
     impl<K, V> ResourceFuture<K, V>
@@ -597,16 +652,16 @@ pub mod exec {
         K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
         V: Send + Debug + 'static
     {
-        pub fn new(resources: Arc<RwLock<HashMap<K, V>>>, key: K) -> Self {
+        pub fn new(loader: Arc<RwLock<Loader<K,V>>>, key: K) -> Self {
             Self {
                 x: 0,
                 key,
-                resources
+                loader
             }
         }
     }
 
-    impl<K, V> Future for ResourceFuture<K, SyncWrapper<V>>
+    impl<K, V> Future for ResourceFuture<K, V>
     where
         K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
         V: Send + Debug + 'static
@@ -615,7 +670,7 @@ pub mod exec {
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             trace!("polling key={:?}", self.key);
-            if let Some(resource) = self.resources.read().get(&self.key) {
+            if let Some(resource) = self.loader.read().resources.read().get(&self.key) {
                 trace!("polling key={:?} Ready", self.key);
                 Poll::Ready(resource.shallow_clone())
             } else {
@@ -880,7 +935,7 @@ mod tests {
 
             (0..num_items / 10).into_par_iter().for_each(|b| {
 
-                exec_0.write().preload(
+                exec_0.write().loader.write().preload(
                     (0..10).flat_map(|j| [
                         format!("aaa_{}", b * 10 + j),
                         format!("bbb_{}", b * 10 + j)
@@ -899,14 +954,14 @@ mod tests {
                     let data_done_rc = Arc::clone(&data_done_rc_0);
                     let time_exec_rc = Arc::clone(&time_exec_rc_0);
 
-                    exec_0.write().exec(move |resources_arc, keys_purge| {
+                    exec_0.write().exec_1(move |loader_arc, keys_purge| {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("aaa_{i}");
-                            let out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
+                            let out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone()).await;
 
                             let key_bbb = format!("bbb_{i}");
-                            let out_b = Executor::<String, TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
+                            let out_b = Executor::<String, TestEntity>::load_future(loader_arc, key_bbb.clone()).await;
 
                             // let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
@@ -949,7 +1004,7 @@ mod tests {
 
             (0..num_items/10).into_par_iter().for_each(|b| {
 
-                exec_1.write().preload(
+                exec_1.write().loader.write().preload(
                     (0..10).flat_map(|j|[
                         format!("bbb_{}", b*10+j),
                         format!("ccc_{}", b*10+j)
@@ -965,14 +1020,14 @@ mod tests {
                     let data_done_rc = Arc::clone(&data_done_rc_1);
                     let time_exec_rc = Arc::clone(&time_exec_rc_1);
 
-                    exec_1.write().exec(move |resources_arc, keys_purge| {
+                    exec_1.write().exec_1(move |loader, keys_purge| {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("bbb_{i}");
-                            let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&resources_arc), key_aaa.clone()).await;
+                            let out_a = Executor::<String,TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone()).await;
 
                             let key_bbb = format!("ccc_{i}");
-                            let out_b = Executor::<String,TestEntity>::load_future(resources_arc, key_bbb.clone()).await;
+                            let out_b = Executor::<String,TestEntity>::load_future(loader, key_bbb.clone()).await;
 
 
                             let time = t.elapsed().as_millis();

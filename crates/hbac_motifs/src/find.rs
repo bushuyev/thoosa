@@ -569,8 +569,8 @@ where
     let area_0 = exec.write().get_available_cache_domain();
     let area_1 = exec.write().get_available_cache_domain();
 
-    exec.write().preload(resources_ids_0[0].clone(), area_0);
-    exec.write().preload(resources_ids_0[chunk_size].clone(), area_0);
+    exec.write().loader.write().preload(resources_ids_0[0].clone(), area_0);
+    exec.write().loader.write().preload(resources_ids_0[chunk_size].clone(), area_0);
 
     let wg_0 = WaitGroup::new();
 
@@ -583,7 +583,7 @@ where
         debug!("chunk_and_slice: area_0={area_0:064b}");
 
         if window_0[1].len() > 0 {
-            exec.write().preload(window_0[1].to_vec(),  area_0);
+            exec.write().loader.write().preload(window_0[1].to_vec(),  area_0);
         }
 
 
@@ -595,7 +595,7 @@ where
             // }
 
             if window_1[1].len() > 0 {
-                exec.write().preload(window_1[1].to_vec(), area_1);
+                exec.write().loader.write().preload(window_1[1].to_vec(), area_1);
             }
             debug!("chunk_and_slice: area_1={area_1:064b}");
 
@@ -607,22 +607,26 @@ where
                 let filter_slicer_arc = Arc::clone(&filter_slicer);
                 let callback_arc = Arc::clone(&callback_arc);
 
-                exec.write().exec(move |resources_arc, keys_purge| {
+                exec.write().exec_1(move |loader, keys_purge| {
+                    let loader = Arc::clone(&loader);
                     async move {
                         let mut window_0_tensors = vec![];
                         for key in &window_0_0 {
                             debug!("0. exec:callback_arc: key={key}");
 
+                            //TODO if let Some(v) = resources_arc.read().get(key) {...
+
                             window_0_tensors.push(
-                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&resources_arc), key.clone()).await
+                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
                             );
                         }
 
                         let mut window_1_tensors = vec![];
                         for key in &window_1_0 {
                             debug!("1. exec:callback_arc: key={key}");
+
                             window_1_tensors.push(
-                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&resources_arc), key.clone()).await
+                                Executor::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone()).await
                             );
                         }
 
