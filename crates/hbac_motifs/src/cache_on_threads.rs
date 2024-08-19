@@ -358,12 +358,37 @@ pub mod exec {
             };
         }
 
-        pub fn load_future(self_arc: Arc<RwLock<Loader<K, V>>>, key: K) -> BoxFuture<'static, V> {
+        pub fn load_future(self_arc: Arc<RwLock<Loader<K, V>>>, key: K, cache_area: u64) -> BoxFuture<'static, V> {
+
             let self_lock = self_arc.write();
             let mut resources_guard = self_lock.resources.write();
             let mut resources_being_loaded_guard = self_lock.resources_being_loaded.write();
-            if !resources_guard.contains_key(&key) && !resources_being_loaded_guard.contains_key(&key) {
 
+            if !resources_guard.contains_key(&key) && !resources_being_loaded_guard.contains_key(&key) {
+                resources_being_loaded_guard.insert(key.clone(), cache_area);
+
+
+                debug!("preload_vec: adding key={key:?}");
+
+
+                let loader = Arc::clone(&self_lock.loader_fn);
+                let resources_arc = Arc::clone(&self_lock.resources);
+                let resources_being_loaded_arc = Arc::clone(&self_lock.resources_being_loaded);
+                let key = key.clone();
+
+                self_lock.loader_pool.spawn(move || {
+                    let mut v = loader(&key);
+                    debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
+
+                    let mut resources_arc_guard = resources_arc.write();
+
+                    v.cache_areas = resources_being_loaded_arc.write().remove(&key).unwrap_or(cache_area);
+
+                    resources_arc_guard.insert(key.clone(), v);
+
+
+                    debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
+                });
             }
             ResourceFuture::new(Arc::clone(&self_arc), key).boxed()
         }
@@ -877,7 +902,7 @@ mod tests {
         }).build()?;
 
 
-        let num_items = 10usize;
+        let num_items = 1000usize;
         let mut executor = Executor::new(load_test_entity_sv, 4, 100);
         let mut executor_rc = Arc::new(RwLock::new(executor));
         // let wg_1 = wg.clone();
@@ -940,10 +965,10 @@ mod tests {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("aaa_{i}");
-                            let out_a = Loader::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone()).await;
+                            let out_a = Loader::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
 
                             let key_bbb = format!("bbb_{i}");
-                            let out_b = Loader::<String, TestEntity>::load_future(loader_arc, key_bbb.clone()).await;
+                            let out_b = Loader::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
 
                             // let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
@@ -1006,10 +1031,10 @@ mod tests {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("bbb_{i}");
-                            let out_a = Loader::<String,TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone()).await;
+                            let out_a = Loader::<String,TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone(), cache_area_1).await;
 
                             let key_bbb = format!("ccc_{i}");
-                            let out_b = Loader::<String,TestEntity>::load_future(loader, key_bbb.clone()).await;
+                            let out_b = Loader::<String,TestEntity>::load_future(loader, key_bbb.clone(), cache_area_1).await;
 
 
                             let time = t.elapsed().as_millis();
@@ -1046,10 +1071,10 @@ mod tests {
 
         wg.wait();
         println!("data_done_rc.read().len()={}", data_done_rc.read().len());
-        while data_done_rc.read().len() != num_items * 3 {
-            // println!("data_done={data_done_rc:?}", data_done_rc);
-            thread::sleep(Duration::new(1, 0));
-        }
+        // while data_done_rc.read().len() != num_items * 3 {
+        //     // println!("data_done={data_done_rc:?}", data_done_rc);
+        //     thread::sleep(Duration::new(1, 0));
+        // }
         // debug!("data_done={data_done_rc_1:?}");
         // thread::sleep(Duration::new(120, 0));
         let exec_time_mls = time_exec.load(Relaxed)/1e6 as u64;
@@ -1057,7 +1082,7 @@ mod tests {
         let r = exec_time_mls as f64/elapsed as f64;
         info!("all done, {}/{} in elapsed={elapsed} mls exec time={exec_time_mls} r={r}", data_done_rc.read().len(), exec_2.read().resources_len());
 
-        // assert_eq!(data_done_rc.read().len(), num_items * 3);
+        assert_eq!(data_done_rc.read().len(), num_items * 3);
 
         // exec_2.write().stop();
 
