@@ -304,9 +304,9 @@ pub mod exec {
 
         loader_fn: Arc<Box<dyn Fn(&K) -> SyncWrapper<V> + Sync + Send>>,
         loader_pool: ThreadPool,
-        //TODO remove locks around resources?
-        resources: Arc<RwLock<HashMap<K, SyncWrapper<V>>>>,
-        resources_being_loaded: Arc<RwLock<HashMap<K, u64>>>,
+
+        resources: HashMap<K, SyncWrapper<V>>,
+        resources_being_loaded: HashMap<K, u64>,
     }
 
     impl <K, V> Loader <K, V>
@@ -316,24 +316,22 @@ pub mod exec {
     {
         pub fn preload(self_arc: Arc<RwLock<Loader<K, V>>>, keys: Vec<K>, cache_area: u64) {
             debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
-            let self_write_guard = self_arc.write();
-            let mut resources_guard = self_write_guard.resources.write();
-            let mut resources_being_loaded_guard = self_write_guard.resources_being_loaded.write();
+            let mut self_write_guard = self_arc.write();
 
             for key in keys {
-                if let Some(loaded) = resources_guard.get_mut(&key) {
+                if let Some(loaded) = self_write_guard.resources.get_mut(&key) {
                     loaded.cache_areas |= cache_area;
                     debug!("preload_vec: adding key={key:?} loaded.cache_areas={:064b}", loaded.cache_areas);
                     continue;
                 }
 
-                if let Some(being_loaded) = resources_being_loaded_guard.get_mut(&key) {
+                if let Some(being_loaded) = self_write_guard.resources_being_loaded.get_mut(&key) {
                     *being_loaded |= cache_area;
                     debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.cache_area={:064b}", *being_loaded);
                     continue;
                 }
 
-                resources_being_loaded_guard.insert(key.clone(), cache_area);
+                self_write_guard.resources_being_loaded.insert(key.clone(), cache_area);
 
 
                 debug!("preload_vec: adding key={key:?}");
@@ -341,8 +339,7 @@ pub mod exec {
 
                 let loader = Arc::clone(&self_write_guard.loader_fn);
                 let self_arc_pool = Arc::clone(&self_arc);
-                let resources_arc = Arc::clone(&self_write_guard.resources);
-                let resources_being_loaded_arc = Arc::clone(&self_write_guard.resources_being_loaded);
+
                 let key = key.clone();
 
                 self_write_guard.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
@@ -351,21 +348,18 @@ pub mod exec {
 
         pub fn load_future(self_arc: Arc<RwLock<Loader<K, V>>>, key: K, cache_area: u64) -> BoxFuture<'static, V> {
 
-            let self_lock = self_arc.write();
-            let mut resources_guard = self_lock.resources.write();
-            let mut resources_being_loaded_guard = self_lock.resources_being_loaded.write();
+            let mut self_lock = self_arc.write();
 
-            if !resources_guard.contains_key(&key) && !resources_being_loaded_guard.contains_key(&key) {
-                resources_being_loaded_guard.insert(key.clone(), cache_area);
 
+            if !self_lock.resources.contains_key(&key) && !self_lock.resources_being_loaded.contains_key(&key) {
+                self_lock.resources_being_loaded.insert(key.clone(), cache_area);
 
                 debug!("preload_vec: adding key={key:?}");
 
 
                 let loader = Arc::clone(&self_lock.loader_fn);
                 let self_arc_pool = Arc::clone(&self_arc);
-                let resources_arc = Arc::clone(&self_lock.resources);
-                let resources_being_loaded_arc = Arc::clone(&self_lock.resources_being_loaded);
+
                 let key = key.clone();
 
                 self_lock.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
@@ -383,28 +377,29 @@ pub mod exec {
                 let mut v = loader_fn(&key);
                 debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
 
-                let loader_guard = loader_arc.write();
+                let mut loader_guard = loader_arc.write();
 
-                let mut resources_arc_guard = loader_guard.resources.write();
 
-                v.cache_areas = loader_guard.resources_being_loaded.write().remove(&key).unwrap_or(cache_area);
 
-                resources_arc_guard.insert(key.clone(), v);
+                v.cache_areas = loader_guard.resources_being_loaded.remove(&key).unwrap_or(cache_area);
+
+                loader_guard.resources.insert(key.clone(), v);
 
 
                 debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
 
         }
 
-        pub fn purge_resources(&self, keys:Vec<K>, cache_area:u64) {
-            let mut resources_for_purge_guard = self.resources.write();
+        pub fn purge_resources(loader_arc: Arc<RwLock<Loader<K,V>>>, keys:Vec<K>, cache_area:u64) {
+            let mut loader_guard = loader_arc.write();
+
 
             for key in keys {
-                if let Some(v) = resources_for_purge_guard.get_mut(&key) {
+                if let Some(v) = loader_guard.resources.get_mut(&key) {
                     debug!("keys_to_purge: cache_area={:064b}", cache_area);
                     v.cache_areas = remove_mask(v.cache_areas, cache_area);
                     if v.cache_areas == 0 {
-                        resources_for_purge_guard.remove(&key);
+                        loader_guard.resources.remove(&key);
                         debug!("keys_to_purge: key={key:?} removed");
                     } else {
                         debug!("keys_to_purge: key={key:?} kept, remaining v.cache_areas={:064b}", v.cache_areas);
@@ -531,8 +526,8 @@ pub mod exec {
                         Ok(())
                     }).build().expect("loader_pool"),
 
-                    resources: Arc::new(RwLock::new(HashMap::new())),
-                    resources_being_loaded: Arc::new(RwLock::new(HashMap::new())),
+                    resources: HashMap::new(),
+                    resources_being_loaded: HashMap::new(),
                     loader_fn: Arc::new(Box::new(loader)),
                 }))
             }
@@ -554,7 +549,7 @@ pub mod exec {
                 Arc::clone(&self.loader),
 
                 Box::new(move |keys, cache_area| {
-                    loader_for_purge.write().purge_resources(keys, cache_area);
+                    Loader::purge_resources(loader_for_purge, keys, cache_area);
 
                 })
             )));
@@ -570,7 +565,7 @@ pub mod exec {
         }
 
         pub fn resources_len(&self) -> usize {
-            self.loader.read().resources.read().len()
+            self.loader.read().resources.len()
         }
 
         pub fn get_available_cache_domain(&mut self) -> u64 {
@@ -581,12 +576,12 @@ pub mod exec {
         }
 
         pub fn purge_cache_keys(&mut self, keys:Vec<K>, area:u64) {
-            let loader_guard = self.loader.write();
-            let mut resources_guard = loader_guard.resources.write();
-            debug!("purge_cache_keys: 0 {area:064b} resources_guard.len()={}", resources_guard.len());
+            let mut loader_guard = self.loader.write();
+
+            debug!("purge_cache_keys: 0 {area:064b} resources_guard.len()={}", loader_guard.resources.len());
             let mut keys_to_remove = vec![];
             for key in keys {
-                if let Some(sw) = resources_guard.get_mut(&key) {
+                if let Some(sw) = loader_guard.resources.get_mut(&key) {
                     sw.cache_areas = remove_mask(sw.cache_areas, area);
                     debug!("purge_cache_keys: key={key:?} {:064b}", sw.cache_areas);
                     if sw.cache_areas == 0 {
@@ -596,31 +591,17 @@ pub mod exec {
                 }
             }
             for key in keys_to_remove {
-                resources_guard.remove(&key);
+                loader_guard.resources.remove(&key);
             }
 
-            // resources_guard.retain(|key, sw|{
-            //     debug!("purge_cache: key={key:?} {:064b}", sw.cache_areas);
-            //
-            //     sw.cache_areas = remove_mask(sw.cache_areas, area);
-            //     debug!("purge_cache: key={key:?} {:064b}", sw.cache_areas);
-            //     if sw.cache_areas == 0 {
-            //         debug!("purge_cache: removing key={key:?}");
-            //     }
-            //
-            //     sw.cache_areas != 0
-            // });
-
-            debug!("purge_cache: 1 {area:064b} resources_guard.len()={}", resources_guard.len());
+            debug!("purge_cache: 1 {area:064b} resources_guard.len()={}", loader_guard.resources.len());
         }
 
-
         pub fn purge_cache(&mut self, area:u64) {
-            let loader_guard = self.loader.write();
-            let mut resources_guard = loader_guard.resources.write();
-            debug!("purge_cache: 0 {area:064b} resources_guard.len()={}", resources_guard.len());
+            let mut loader_guard = self.loader.write();
+            debug!("purge_cache: 0 {area:064b} resources_guard.len()={}", loader_guard.resources.len());
 
-            resources_guard.retain(|key, sw|{
+            loader_guard.resources.retain(|key, sw|{
                 debug!("purge_cache: key={key:?} {:064b}", sw.cache_areas);
 
                 sw.cache_areas = remove_mask(sw.cache_areas, area);
@@ -632,7 +613,7 @@ pub mod exec {
                 sw.cache_areas != 0
             });
 
-            debug!("purge_cache: 1 {area:064b} resources_guard.len()={}", resources_guard.len());
+            debug!("purge_cache: 1 {area:064b} resources_guard.len()={}", loader_guard.resources.len());
         }
 
     }
@@ -689,7 +670,7 @@ pub mod exec {
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             trace!("polling key={:?}", self.key);
-            if let Some(resource) = self.loader.read().resources.read().get(&self.key) {
+            if let Some(resource) = self.loader.read().resources.get(&self.key) {
                 trace!("polling key={:?} Ready", self.key);
                 Poll::Ready(resource.shallow_clone())
             } else {
