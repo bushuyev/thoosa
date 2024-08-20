@@ -22,6 +22,10 @@ tch = { version = "0.16.0" }
 torch-sys = "0.16.0"
 parking_lot =  "0.12.3"
 parking_lot_mpsc =  "0.1.5"
+crossbeam-utils = "0.8.19"
+crossbeam = "0.8.4"
+crossbeam-channel = "0.5.11"
+futures = "0.3.30"
 
 [profile.test]
 opt-level = 0

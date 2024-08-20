@@ -24,8 +24,8 @@ use hbac_shared::val::Val;
 use hbac_store::Store;
 use hbac_store::StoreDumper;
 
-use crate::cache_on_threads::exec::Executor;
-use crate::cache_on_threads::exec::Loader;
+use hbac_common::loader::Executor;
+use hbac_common::loader::Loader;
 use crate::distance::dist_d2;
 use crate::distance::slice_t;
 
@@ -1192,7 +1192,7 @@ mod motif_find_tests {
 
     use hbac_shared::val::Val;
     use hbac_store::{SqlStore, Store};
-    use crate::cache_on_threads::exec::{Executor, SyncWrapper};
+    use crate::loader::{Executor, SyncWrapper};
     use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
     use crate::find::iter_all_in_dir;
     use crate::find::select_motifs_by_corr;

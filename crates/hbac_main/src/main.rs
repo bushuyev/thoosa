@@ -23,7 +23,7 @@ use hbac_common::train_nets::{infer, InferParams, LabelNodeParams, load_motif_mo
 use hbac_common::train_nets::MotifNodeParams;
 use hbac_common::utils::{list_devices, load_tensor, plot_series};
 use hbac_motifs::find;
-use hbac_motifs::cache_on_threads::exec::*;
+use hbac_common::loader::*;
 use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, SelectMotifsParams};
 use hbac_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
 use hbac_shared::*;
@@ -1050,7 +1050,7 @@ mod main_tests {
     use tch::Device::Cpu;
     use hbac_common::ResourceLoader;
     use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
-    use hbac_motifs::cache_on_threads::exec::{Executor, SyncWrapper};
+    use hbac_motifs::loader::{Executor, SyncWrapper};
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
     use hbac_store::SqlStore;
