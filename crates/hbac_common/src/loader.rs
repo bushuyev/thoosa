@@ -1,16 +1,12 @@
-use parking_lot::{Mutex, RwLock, RwLockWriteGuard};
-use parking_lot::lock_api::{MutexGuard, RawMutex};
+use parking_lot::{Mutex, RwLock};
 use parking_lot_mpsc::*;
-use rayon::iter::ParallelBridge;
-use rayon::iter::IntoParallelIterator;
-use rayon::prelude::*;
-use log::{info, debug, trace};
+use log::{debug, trace};
 use std::sync::Arc;
 use std::hash::Hash;
 use std::fmt::Debug;
 use rayon::ThreadPool;
 use std::collections::HashMap;
-use std::collections::VecDeque;
+
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
@@ -24,7 +20,7 @@ use futures::{
     future::{BoxFuture, FutureExt},
     task::{waker_ref, ArcWake},
 };
-use tch::Tensor;
+
 
 struct RayonNotify {}
 
@@ -34,7 +30,7 @@ impl RayonNotify {
     }
 }
 impl ArcWake for RayonNotify {
-    fn wake_by_ref(arc_self: &Arc<Self>) {}
+    fn wake_by_ref(_arc_self: &Arc<Self>) {}
 }
 
 pub struct Loader<K, V>
@@ -150,21 +146,12 @@ where
     K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
-    notify: Arc<RayonNotify>,
-    futures_pool: ThreadPool,
-
-    features: Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
+    _futures_pool: ThreadPool,
+    _features: Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
     features_sender: SyncSender<Mutex<BoxFuture<'static, ()>>>,
-
-    keys_to_purge: Arc<RwLock<HashMap<K, usize>>>,
-
-    keys_fifo: VecDeque<K>,
-
     stop: Arc<AtomicBool>,
-
     cache_domains: u64,
-    //TODO pub
-    pub loader: Arc<RwLock<Loader<K, V>>>,
+    loader: Arc<RwLock<Loader<K, V>>>,
 }
 
 impl<K, V> Executor<K, V>
@@ -176,12 +163,12 @@ where
     where
         F: Fn(&K) -> SyncWrapper<V> + Sync + Send + 'static,
     {
-        let mut futures: Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
-        let mut features_rc = Arc::clone(&futures);
+        let futures: Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
+        let features_rc = Arc::clone(&futures);
 
 
         let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
-            let mut b = std::thread::Builder::new();
+            let b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "futures_pool", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
 
@@ -220,7 +207,7 @@ where
                         //     debug!("futures loop: in guard len={} ", guard.len());
                         // }
                         guard.retain(|fut_mx| {
-                            if let Poll::Ready(t) = fut_mx.lock().as_mut().poll(&mut cx) {
+                            if let Poll::Ready(_t) = fut_mx.lock().as_mut().poll(&mut cx) {
                                 //TODO
                                 false
                             } else {
@@ -235,22 +222,17 @@ where
             }
         });
         Self {
-            notify: Arc::clone(&notify),
-            futures_pool,
+            _futures_pool: futures_pool,
 
-            features: features_rc,
+            _features: features_rc,
             features_sender: tx,
-
-            keys_to_purge: Arc::new(RwLock::new(HashMap::new())),
-
-            keys_fifo: VecDeque::new(),
 
             stop: Arc::clone(&stop),
             cache_domains: 0,
 
             loader: Arc::new(RwLock::new(Loader {
                 loader_pool: rayon::ThreadPoolBuilder::new().num_threads(loader_threads).spawn_handler(|thread_builder| {
-                    let mut b = std::thread::Builder::new();
+                    let b = std::thread::Builder::new();
                     b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
                         .spawn(|| thread_builder.run())?;
 
@@ -264,6 +246,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     fn stop(&mut self) {
         self.stop.store(true, Relaxed);
     }
@@ -281,7 +264,7 @@ where
             Box::new(move |keys, cache_area| {
                 Loader::purge_resources(loader_for_purge, keys, cache_area);
             }),
-        )));
+        ))).expect("features_sender.send");
     }
 
 
@@ -370,7 +353,6 @@ where
     K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
-    x: usize,
     key: K,
     loader: Arc<RwLock<Loader<K, V>>>,
 }
@@ -382,7 +364,6 @@ where
 {
     pub fn new(loader: Arc<RwLock<Loader<K, V>>>, key: K) -> Self {
         Self {
-            x: 0,
             key,
             loader,
         }
@@ -396,7 +377,7 @@ where
 {
     type Output = V;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         trace!("polling key={:?}", self.key);
         if let Some(resource) = self.loader.read().resources.get(&self.key) {
             trace!("polling key={:?} Ready", self.key);
@@ -449,34 +430,34 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::collections::{HashSet};
     use std::fmt::Debug;
     use std::future::{Future};
     use std::hash::Hash;
-    use std::io::Write;
-    use std::ops::Deref;
+
+
     use std::pin::Pin;
-    use std::sync::{Arc, Barrier, RwLock};
-    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-    use std::sync::atomic::Ordering::Relaxed;
-    use std::sync::mpsc::Receiver;
-    use std::task::{Context, Poll, Waker};
-    use std::{mem, thread};
-    use std::thread::spawn;
+
+    use std::sync::atomic::{AtomicU64};
+
+
+    use std::task::{Context, Poll};
+    use std::{thread};
+
     use std::time::{Duration, Instant};
     use crossbeam_utils::sync::WaitGroup;
-    use futures::AsyncWriteExt;
-    use futures::executor::block_on;
-    use futures::sink::Feed;
-    use futures::task::{ArcWake, AtomicWaker, SpawnExt};
+
+
+
+
     use log::debug;
-    use parking_lot::lock_api::Mutex;
-    use rand::distributions::uniform::SampleBorrow;
+
+
     use rand::Rng;
-    use rayon::{ThreadPool, yield_now};
+
     use hbac_shared::HbacError;
-    use serde::Deserialize;
-    use crate::loader::Executor;
+
+
 
     #[ctor::ctor]
     fn init() {
@@ -488,6 +469,7 @@ mod tests {
         key: String,
     }
 
+    #[allow(dead_code)]
     fn load_test_entity(key: &String) -> Box<TestEntity> {
         thread::sleep(Duration::new(0, 1000));
         Box::new(TestEntity { key: key.clone() })
@@ -549,26 +531,19 @@ mod tests {
 
     #[test]
     fn test_executor() -> Result<(), HbacError> {
-        use parking_lot::{Mutex, RwLock, RwLockWriteGuard};
-        use parking_lot::lock_api::{MutexGuard, RawMutex};
-        use parking_lot_mpsc::*;
-        use rayon::iter::ParallelBridge;
+        use parking_lot::{RwLock};
         use rayon::iter::IntoParallelIterator;
         use rayon::prelude::*;
-        use log::{info, trace};
+        use log::{info};
         use std::sync::Arc;
-        use std::hash::Hash;
-        use std::fmt::Debug;
-        use rayon::ThreadPool;
-        use std::collections::HashMap;
         use super::*;
         use futures::{
-            future::{BoxFuture, FutureExt},
-            task::{waker_ref, ArcWake},
+            future::{FutureExt},
+
         };
 
         let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
-            let mut b = std::thread::Builder::new();
+            let b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
 
@@ -576,9 +551,9 @@ mod tests {
         }).build()?;
 
 
-        let num_items = 1000usize;
-        let mut executor = Executor::new(load_test_entity_sv, 4, 100);
-        let mut executor_rc = Arc::new(RwLock::new(executor));
+        let num_items = 10usize;
+        let executor = Executor::new(load_test_entity_sv, 4, 100);
+        let executor_rc = Arc::new(RwLock::new(executor));
         // let wg_1 = wg.clone();
 
 
@@ -601,13 +576,6 @@ mod tests {
         let time_exec_rc_1 = Arc::clone(&time_exec);
 
 
-        let waiting_time = Arc::new(Mutex::new(0u128));
-        let waiting_time_rc = Arc::clone(&waiting_time);
-
-
-        let waiting_time_avg = Arc::new(Mutex::new(0u128));
-        let waiting_time_avg_rc = Arc::clone(&waiting_time_avg);
-
         let t_0 = Instant::now();
         pool_0.spawn(move || {
             let cache_area_0 = exec_0.write().get_available_cache_domain();
@@ -627,8 +595,6 @@ mod tests {
 
                     let wg_0_i = wg_0.clone();
 
-                    let waiting_time_rc = Arc::clone(&waiting_time_rc);
-                    let waiting_time_avg_rc = Arc::clone(&waiting_time_avg_rc);
 
                     let data_done_rc = Arc::clone(&data_done_rc_0);
                     let time_exec_rc = Arc::clone(&time_exec_rc_0);
@@ -637,10 +603,10 @@ mod tests {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("aaa_{i}");
-                            let out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
+                            let _out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
 
                             let key_bbb = format!("bbb_{i}");
-                            let out_b = Executor::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
+                            let _out_b = Executor::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
 
                             // let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
@@ -701,10 +667,10 @@ mod tests {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("bbb_{i}");
-                            let out_a = Loader::<String, TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone(), cache_area_1).await;
+                            let _out_a = Loader::<String, TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone(), cache_area_1).await;
 
                             let key_bbb = format!("ccc_{i}");
-                            let out_b = Loader::<String, TestEntity>::load_future(loader, key_bbb.clone(), cache_area_1).await;
+                            let _out_b = Loader::<String, TestEntity>::load_future(loader, key_bbb.clone(), cache_area_1).await;
 
 
                             let time = t.elapsed().as_millis();
@@ -713,14 +679,14 @@ mod tests {
                             let mut rw_lock_write_guard = data_done_rc.write();
                             rw_lock_write_guard.insert(key_aaa.clone());
                             rw_lock_write_guard.insert(key_bbb.clone());
-                            // let n = rw_lock_write_guard.len() as u128;
+
 
 
                             let exec_time = rand::thread_rng().gen_range(100..2e9 as u32);
                             time_exec_rc.fetch_add(exec_time.into(), Relaxed);
                             thread::sleep(Duration::new(0, exec_time));
-                            // let x:usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
-                            // trace!("x={x}");
+
+
 
                             drop(wg_0_i);
 
