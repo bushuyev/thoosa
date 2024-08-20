@@ -24,7 +24,6 @@ use hbac_shared::val::Val;
 use hbac_store::Store;
 use hbac_store::StoreDumper;
 
-use crate::cache_on_threads::CacheOnThreads;
 use crate::cache_on_threads::exec::Executor;
 use crate::cache_on_threads::exec::Loader;
 use crate::distance::dist_d2;
@@ -207,166 +206,6 @@ impl Expander for LinearExpander {
             t
         }).collect()
     }
-}
-//TODO remove Arc<Mutex around store
-pub fn find_motifs_euc<F>(loader: F, find_motifs_params: &FindMotifsParams, records_num: usize, resource_ids: Vec<String>, store: Arc<Mutex<impl Store + 'static>>, channels: i64) -> Result<Vec<usize>, HbacError>
-where
-    F: Fn(&String) -> Box<Tensor> + Sync + Send + 'static,
-{
-    if records_num < find_motifs_params.window {
-        return Err(HbacError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
-    }
-
-    let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
-    let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
-
-    let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
-
-
-    let t1 = Instant::now();
-    let mut slots_processed = 0;
-
-
-    let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(2));
-
-    let (run_ids, mut trackers): (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]), |mut a: (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
-        let run_id = {
-            store.lock()?.save_tree_run(
-                None,
-                format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
-                &resource_ids,
-                params.to_properties_map(),
-            )
-        }?;
-
-        let all_motif_trackers = min_dot
-            .iter()
-            .enumerate()
-            .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(*min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))) //TODO name
-            .collect::<Vec<SimpMotifTracker<_>>>();
-
-        a.0.push(run_id);
-        a.1.push(all_motif_trackers);
-
-        Ok::<(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), HbacError>(a)
-    })?;
-
-    debug!("find_motifs_euc: run_ids={:?}, param_set.len()={:?}, trackers.len()={:?}", run_ids, param_set.len(), trackers.len());
-
-    chunk_and_slice(
-        resource_ids,
-        find_motifs_params.max_keys_fifo,
-        find_motifs_params.chunk_size,
-        param_set.into_iter().map(|v| v.into()).collect(),
-        move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors, params_idx: usize| {
-            debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
-
-            let all_motif_trackers = &mut trackers[params_idx];
-
-            for (c, mt) in all_motif_trackers.iter_mut().enumerate() {
-                let tensor_0 = chunk_0.t.i((.., c as i64, ..)).squeeze();
-                let tensor_1 = chunk_1.t.i((.., c as i64, ..)).squeeze();
-                debug!("find_motifs_euc: tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
-
-                let euc_dist_t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}", c, ).as_str());
-                let t_size = euc_dist_t.size();
-                let max_dist = find_motifs_params.max_dist_k * euc_dist_t.mean(None).double_value(&[]) as f32;
-                debug!("find_motifs_euc: find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", euc_dist_t.size(), tensor_0.size(), tensor_1.size(), max_dist);
-
-                let mut i_0 = 0;
-                let mut i_1 = 0;
-
-
-                for (t_idx_0, t_size_0) in chunk_0.sizes.iter().enumerate() { //t_size_0 - num slices in t_idx_0 tensors
-
-                    'tl0: for (s_0_idx, s_0) in (0..*t_size_0).enumerate() {
-                        for (t_idx_1, t_size_1) in chunk_1.sizes.iter().enumerate() { //.skip(t_idx_0)
-
-                            debug!("find_motifs_euc: i_1 in {}  s_0_idx={}, *t_size_1={}", i_1,  s_0_idx, *t_size_1);
-
-                            for s_1 in 0 as i64..*t_size_1 {
-
-                                // debug!("-------------{} {} {} {}", chunk_0.keys[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64, chunk_1.keys[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64);
-
-                                if i_0 >= t_size[0] || i_1 >= t_size[1] {
-                                    if i_0 >= t_size[0] {
-                                        warn!(
-                                            "find_motifs_euc: wrong index 0 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
-                                            c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
-                                        ); //TODO
-
-                                        break 'tl0;
-                                    }
-
-                                    if i_1 >= t_size[1] {
-                                        warn!(
-                                            "find_motifs_euc: wrong index 1 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
-                                            c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
-                                        ); //TODO
-
-                                        break;
-                                    }
-                                } else if t_idx_0 < t_idx_1 || (t_idx_0 == t_idx_1 && s_0 < s_1) {
-                                    //skipping all under diagonal
-                                    trace!("find_motifs_euc skipping: t_idx_0={}, s_0={}, t_idx_1={}, s_1={} ", t_idx_0, s_0, t_idx_1, s_1);
-                                } else {
-                                    let dist = euc_dist_t.double_value(&[i_0, i_1]);
-
-                                    // debug!(
-                                    //     "find_motifs_euc:  t_idx_0={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}",
-                                    //     t_idx_0, chunk_0.keys[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, chunk_1.keys[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist
-                                    // );
-
-                                    if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < max_dist {
-                                        mt.track((chunk_0.keys[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64).into(), (chunk_1.keys[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)
-                                    }
-
-                                    if c == 0 {
-                                        slots_processed += 1;
-                                        if slots_processed % 100_000 == 0 {
-                                            let slots_per_sec = (slots_processed as u64 / (t1.elapsed().as_secs() + 1)) as usize;
-                                            let (remaining, overflow) = if slots_to_process > slots_processed {
-                                                ((slots_to_process - slots_processed) / (slots_per_sec + 1), false)
-                                            } else {
-                                                ((slots_processed - slots_to_process) / (slots_per_sec + 1), true)
-                                            };
-                                            info!("class: {} pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min {}", find_motifs_params.resource_set, slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, remaining/60, if overflow {"overflow"} else {""} )
-                                        }
-                                    }
-                                }
-                                i_1 += 1;
-                            }
-                        }
-                        i_1 = 0;
-                        i_0 += 1;
-                    }
-                }
-                mt.dump();
-            }
-
-            Ok(())
-        },
-
-        &mut CacheOnThreads::new(loader, find_motifs_params.max_keys_fifo, Some(Box::new(move || {
-            // let preload_d = preload_d_rc_in_cache.fetch_add(1, Ordering::Relaxed);
-
-            warn!("blocking");
-        })))
-    )?;
-
-
-    for run_id in &run_ids {
-        for i in 0..channels {
-            { store.lock()?.set_motifs(*run_id, i as i64) }?;
-        }
-
-        { store.lock()?.delete_slices_without_matches(*run_id) }?;
-    }
-
-    // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
-    // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
-
-    Ok(run_ids)
 }
 
 
@@ -663,51 +502,6 @@ impl FilterAndSlicer {
     pub fn new(step: usize, window: i64, filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>>) -> Self {
         Self { step, window, filter }
     }
-}
-
-fn chunk_and_slice<G>(
-    resources_ids: Vec<String>,
-    _max_keys_fifo: usize,
-    chunk_size: usize,
-    filter_and_slicer: Vec<FilterAndSlicer>,
-    mut callback: G,
-    cache: &mut CacheOnThreads<String, Box<Tensor>>,
-) -> Result<(), HbacError>
-where
-    G: FnMut(ChunkOfSicedTensors, ChunkOfSicedTensors, usize) -> Result<(), HbacError>,
-{
-    let mut resources_ids_0 = resources_ids.chunks(chunk_size).collect::<Vec<&[String]>>();
-    resources_ids_0.push(&[]); //to get last window processed
-
-    let mut resources_ids_1 = resources_ids.chunks(chunk_size).collect::<Vec<&[String]>>();
-    resources_ids_1.push(&[]);
-
-
-    resources_ids_0.windows(2).enumerate().for_each(|(chunk_i_0, window_0)| { //window_0 - current,preload windows
-        debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={:?}", window_0);
-
-        if window_0[1].len() > 0 {
-            cache.preload(window_0[1]);
-        }
-
-        resources_ids_1.windows(2).into_iter().skip(chunk_i_0).enumerate().for_each(|(chunk_i_1, window_1)| {
-            debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={:?}", window_1);
-
-            if window_1[1].len() > 0 {
-                cache.preload(window_1[1]);
-            }
-
-            for (params_idx, filter_slicer) in filter_and_slicer.iter().enumerate() {
-                callback(
-                    filter_slicer.slice_tensors_chunk(cache.blocking_get_vec(window_0[0]), window_0[0]),
-                    filter_slicer.slice_tensors_chunk(cache.blocking_get_vec(window_1[0]), window_1[0]),
-                    params_idx,
-                ).expect("cb");
-            }
-        })
-    });
-
-    Ok(())
 }
 
 fn chunk_and_slice_exec<G>(
@@ -1398,7 +1192,6 @@ mod motif_find_tests {
 
     use hbac_shared::val::Val;
     use hbac_store::{SqlStore, Store};
-    use crate::cache_on_threads::CacheOnThreads;
     use crate::cache_on_threads::exec::{Executor, SyncWrapper};
     use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
     use crate::find::iter_all_in_dir;
