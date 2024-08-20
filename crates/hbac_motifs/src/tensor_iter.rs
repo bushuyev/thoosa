@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use log::{debug, warn};
+use log::{debug};
 use tch::Tensor;
 
 use hbac_shared::HbacError;
@@ -126,9 +126,6 @@ impl Iterator for TensorSliceIter {
 #[cfg(test)]
 mod tests {
 
-
-    use rayon::iter::ParallelIterator;
-    use rayon::prelude::ParallelBridge;
     use tch::{Device, Kind, Tensor};
 
     use hbac_common::utils::*;
@@ -348,6 +345,7 @@ mod tests {
         );
     }
 
+    #[allow(dead_code)]
     fn load_rand_tensor(_key:&String) ->Box<Tensor>{
         Box::new(Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu)))
     }

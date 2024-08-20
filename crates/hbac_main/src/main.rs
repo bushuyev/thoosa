@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand};
@@ -272,7 +272,7 @@ fn run_cli() -> Result<(), HbacError> {
     rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
     let exec_loader = ParquetLoader::new(cli.base_path.clone(), cli.tensors_path.clone(),None);
 
-    let mut executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
+    let executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
         move |key: &String| {
 
             SyncWrapper::new(
@@ -722,7 +722,7 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
 
 }
 
-fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, find_motifs_params: &FindMotifsParams, executor: Arc<parking_lot::RwLock<Executor<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError> {
+fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, _device: Device, find_motifs_params: &FindMotifsParams, executor: Arc<parking_lot::RwLock<Executor<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError> {
 
     let resource_ids = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 
@@ -1050,7 +1050,7 @@ mod main_tests {
     use tch::Device::Cpu;
     use hbac_common::ResourceLoader;
     use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
-    use hbac_motifs::loader::{Executor, SyncWrapper};
+    use hbac_common::loader::{Executor, SyncWrapper};
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
     use hbac_store::SqlStore;
@@ -1086,7 +1086,7 @@ mod main_tests {
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let loader = Arc::new(Box::new(ParquetLoader::new("../../test_data/eeg".into(), Some("../../test_data/eeg".into()), None)));
-        let mut executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
+        let executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
             move |key: &String| {
 
                 SyncWrapper::new(

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::{fs, thread};
+use std::{fs};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Instant};
 
 use clap::clap_derive::{Args, Subcommand};
 use crossbeam_utils::sync::WaitGroup;
@@ -508,7 +508,7 @@ fn chunk_and_slice_exec<G>(
     resources_ids: Vec<String>,
     chunk_size: usize,
     filter_and_slicer: Vec<FilterAndSlicer>,
-    mut callback: G,
+    callback: G,
     exec: Arc<RwLock<Executor<String, Box<Tensor>>>>,
 ) -> Result<(), HbacError>
 where
@@ -1173,14 +1173,14 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item
 
 #[cfg(test)]
 mod motif_find_tests {
-    use std::{fs, thread};
-    use std::cell::RefCell;
+    use std::{fs};
+
     use std::collections::{HashMap};
 
     use std::path::Path;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-    use crossbeam_utils::sync::WaitGroup;
+
+
     use log::debug;
     use parking_lot::RwLock;
     use tch::{Device, IndexOp, Tensor};
@@ -1192,7 +1192,7 @@ mod motif_find_tests {
 
     use hbac_shared::val::Val;
     use hbac_store::{SqlStore, Store};
-    use crate::loader::{Executor, SyncWrapper};
+    use hbac_common::loader::{Executor, SyncWrapper};
     use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
     use crate::find::iter_all_in_dir;
     use crate::find::select_motifs_by_corr;
@@ -1481,7 +1481,7 @@ mod motif_find_tests {
         ).unwrap();
         */
 
-        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
+        let  executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = match key.as_str() {
                     "1111" => &sig_0,
@@ -1560,7 +1560,7 @@ mod motif_find_tests {
          ).unwrap();
          */
 
-        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
+        let executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = match key.as_str() {
                     "1111" => &sig_0,
@@ -1640,7 +1640,7 @@ mod motif_find_tests {
             ], "EEG", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
         */
-        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
+        let executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = match key.as_str() {
                     "0000" => &sig_0,
@@ -1713,7 +1713,7 @@ mod motif_find_tests {
         let n = 684400i64;
         let tensors_len = tensors.len();
 
-        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
+        let executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = tensors.get(key.parse::<usize>().expect(format!("parse {}", key).as_str())).expect(format!("tensor {}", key).as_str());
 
@@ -2024,17 +2024,17 @@ mod motif_find_tests {
 
     #[test]
     fn test_chunk_and_slice() -> Result<(), HbacError> {
-        use std::rc::Rc;
+
         let resources: Vec<String> = vec!["111", "222", "333", "444", "555"].into_iter().map(|v| v.into()).collect();
         let resources_to_move = resources.clone();
 
-        let mut chunks_0_test: Arc<parking_lot::Mutex<Vec<Tensor>>> = Arc::new(parking_lot::Mutex::new(vec![]));
-        let mut chunks_0_test_rc = Arc::clone(&chunks_0_test);
+        let chunks_0_test: Arc<parking_lot::Mutex<Vec<Tensor>>> = Arc::new(parking_lot::Mutex::new(vec![]));
+        let chunks_0_test_rc = Arc::clone(&chunks_0_test);
 
-        let mut chunks_1_test: Arc<parking_lot::Mutex<Vec<Tensor>>> = Arc::new(parking_lot::Mutex::new(vec![]));
-        let mut chunks_1_test_rc = Arc::clone(&chunks_1_test);
+        let chunks_1_test: Arc<parking_lot::Mutex<Vec<Tensor>>> = Arc::new(parking_lot::Mutex::new(vec![]));
+        let chunks_1_test_rc = Arc::clone(&chunks_1_test);
 
-        let mut executor = Executor::new(
+        let executor = Executor::new(
             move |key| {
                 let i = resources_to_move.iter().position(|v| v.eq(key)).expect(format!("no {key}").as_str()) + 1;
                 let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
@@ -2046,7 +2046,7 @@ mod motif_find_tests {
                 )
             }, 4, 100,
         );
-        let mut executor_rc = Arc::new(RwLock::new(executor));
+        let executor_rc = Arc::new(RwLock::new(executor));
 
 
         crate::find::chunk_and_slice_exec(
