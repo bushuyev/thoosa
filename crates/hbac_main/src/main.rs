@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand};
@@ -23,6 +23,7 @@ use hbac_common::train_nets::{infer, InferParams, LabelNodeParams, load_motif_mo
 use hbac_common::train_nets::MotifNodeParams;
 use hbac_common::utils::{list_devices, load_tensor, plot_series};
 use hbac_motifs::find;
+use hbac_motifs::cache_on_threads::exec::*;
 use hbac_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, SelectMotifsParams};
 use hbac_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
 use hbac_shared::*;
@@ -269,6 +270,17 @@ fn run_cli() -> Result<(), HbacError> {
 
     //TODO optional for benchmark
     rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
+    let exec_loader = ParquetLoader::new(cli.base_path.clone(), cli.tensors_path.clone(),None);
+
+    let mut executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
+        move |key: &String| {
+
+            SyncWrapper::new(
+                exec_loader.load(key, Device::Cpu),
+                |e| Box::new(e.shallow_clone())
+            )
+        }, 4, 100,
+    )));
 
     match &cli.command {
 
@@ -285,7 +297,7 @@ fn run_cli() -> Result<(), HbacError> {
         Some(FindMotifs(find_motifs_params)) => {
             info!("find_motifs_params={:?} devices={:?}", find_motifs_params, devices);
 
-            let run_id = run_find_motifs_on_set(&cli, &store, devices[0], find_motifs_params, Arc::clone(&loader));
+            let run_id = run_find_motifs_on_set(&cli, &store, devices[0], find_motifs_params, Arc::clone(&executor_rc));
 
             info!("run_find_motifs_on_set done, run_id={:?}", run_id);
         }
@@ -347,7 +359,7 @@ fn run_cli() -> Result<(), HbacError> {
             }
 
             //run_id - params set
-            let run_ids = run_find_motifs_on_group(&cli, &store, devices.clone(), run_all_params, Arc::clone(&loader))?;
+            let run_ids = run_find_motifs_on_group(&cli, &store, devices.clone(), run_all_params, Arc::clone(&executor_rc))?;
 
             info!("find_motifs done: run_ids={:?}", run_ids);
 
@@ -677,7 +689,7 @@ pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<D
     Ok(corr_ids)
 }
 
-fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>+ 'static>>) -> Result<Vec<usize>, HbacError>{
+fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, executor: Arc<parking_lot::RwLock<Executor<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError>{
 
     let resource_sets = { store.lock().unwrap().list_resource_set_group_sets(run_all_params.train_resource_group()).expect("list_resource_set_group_sets")};
 
@@ -694,7 +706,7 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
         for resource_set in chunk_resource_sets {
             let find_motifs_params = &run_all_params.find_motifs_params(resource_set.1.clone());
 
-            match run_find_motifs_on_set(cli, &store, device, find_motifs_params, Arc::clone(&loader)) {
+            match run_find_motifs_on_set(cli, &store, device, find_motifs_params, Arc::clone(&executor)) {
                 Ok(run_id) => {
                     run_ids_for_threads.lock().expect("run_ids lock").push(run_id);
                 }
@@ -710,22 +722,20 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
 
 }
 
-fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, find_motifs_params: &FindMotifsParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'static>>) -> Result<Vec<usize>, HbacError> {
+fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, find_motifs_params: &FindMotifsParams, executor: Arc<parking_lot::RwLock<Executor<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError> {
 
     let resource_ids = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 
     let records_num = clc_records(&resource_ids, cli.base_path.as_str()).unwrap();
     debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} resource_ids={resource_ids:?}", find_motifs_params.resource_set());
 
-    find::find_motifs_euc(
-        move |key: &String| {
-            loader.load(key, device)
-        },
+    find::find_motifs_euc_exec(
         find_motifs_params,
         records_num,
         resource_ids,
         Arc::clone(&store),
         20,
+        executor
     )
 
 }
@@ -1036,9 +1046,11 @@ mod main_tests {
     use std::sync::{Arc, Mutex};
 
     use log::debug;
+    use tch::Device;
     use tch::Device::Cpu;
-
+    use hbac_common::ResourceLoader;
     use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
+    use hbac_motifs::cache_on_threads::exec::{Executor, SyncWrapper};
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
     use hbac_store::SqlStore;
@@ -1074,6 +1086,15 @@ mod main_tests {
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let loader = Arc::new(Box::new(ParquetLoader::new("../../test_data/eeg".into(), Some("../../test_data/eeg".into()), None)));
+        let mut executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
+            move |key: &String| {
+
+                SyncWrapper::new(
+                    loader.load(key, Device::Cpu),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
 
         init_resources(
             &cli,
@@ -1087,7 +1108,7 @@ mod main_tests {
             &store,
             vec![Cpu],
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            Arc::clone(&loader)
+            Arc::clone(&executor_rc)
         )?;
 
         debug!("motifs={motifs:?}");
