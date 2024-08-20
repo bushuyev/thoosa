@@ -8,7 +8,6 @@ use tch::Tensor;
 use hbac_shared::HbacError;
 use hbac_shared::TensorSliceIdx;
 
-use crate::cache_on_threads::CacheOnThreads;
 
 pub trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError>;
@@ -124,66 +123,6 @@ impl Iterator for TensorSliceIter {
     }
 }
 
-
-
-pub(crate) struct CacheOnThreadsStore {
-    cache:CacheOnThreads<String, Box<Tensor>>,
-    keys:Vec<String>,
-    preload_d:usize,//readonly
-}
-
-impl CacheOnThreadsStore {
-
-    pub fn new<F>(loader: F, keys: Vec<String>, preload_d:usize, max_keys_fifo: usize) -> Self
-        where F: Fn(&String) -> Box<Tensor> + Sync + Send + 'static {
-
-
-        Self {
-            cache: CacheOnThreads::new(loader, max_keys_fifo, Some(Box::new(move ||{
-                warn!("on blocking: {:?}", preload_d)
-            }))),
-            keys,
-            preload_d,
-        }
-    }
-
-    fn index_to_key(&self, i:usize)->&String {
-        &self.keys[i]
-    }
-}
-
-impl TensorsStore for CacheOnThreadsStore {
-
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, HbacError> {
-
-        if self.cache.is_empty() || (index + self.preload_d < self.keys.len() && index % self.preload_d == 0){
-            debug!("get_tensor 1: index={}", index);
-
-            let key = self.index_to_key(index).clone();
-            self.cache.preload_and_blocking_get(
-
-                &key,
-                (index..index + self.preload_d).map(|i| self.index_to_key(i).clone()).collect::<Vec<String>>().as_slice()
-
-            ).ok_or_else(||HbacError::new(format!("no tensor at {:?}/{:?} on preload_and_blocking_get", index, key)))
-
-        } else {
-            debug!("get_tensor 2: index={}", index);
-
-            let key = self.index_to_key(index).clone();
-            self.cache.blocking_get(
-                &key
-
-            ).ok_or_else(||HbacError::new(format!("no tensor at {:?}/{:?} on blocking_get", index, key)))
-        }
-    }
-
-    #[inline]
-    fn tensors_len(&self) -> usize {
-        self.keys.len()
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -194,7 +133,7 @@ mod tests {
 
     use hbac_common::utils::*;
     use hbac_shared::HbacError;
-    use crate::tensor_iter::{CacheOnThreadsStore, TensorSliceIter, TensorsStore};
+    use crate::tensor_iter::{TensorSliceIter, TensorsStore};
 
 
     struct VecTensorsStore {
@@ -412,28 +351,4 @@ mod tests {
     fn load_rand_tensor(_key:&String) ->Box<Tensor>{
         Box::new(Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu)))
     }
-
-    #[test]
-    fn test_cache_on_threads() {
-
-        let vec_100 = (0..20).map(|i|format!("key_{}", i)).collect::<Vec<String>>();
-
-        let ts = TensorSliceIter::new(
-            Box::new(CacheOnThreadsStore::new(load_rand_tensor, vec_100, 2, 3)),
-            1, 2, 2
-        );
-
-        let dots = ts.par_bridge().map(|r|{
-            match r {
-                Ok(v) => {
-                    v.0.1.tensordot(&v.1.1, 1, 1)
-                }
-                Err(e) => {
-                    panic!("v={:?}", e);
-                }
-            }
-        }).collect::<Vec<Tensor>>();
-        assert_eq!(4000, dots.len())
-    }
-
 }
