@@ -1111,6 +1111,8 @@ dependencies = [
  "hbac_shared",
  "hbac_store",
  "log",
+ "parking_lot 0.12.3",
+ "parking_lot_mpsc",
  "plotters",
  "polars",
  "rand 0.8.5",

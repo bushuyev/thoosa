@@ -369,6 +369,169 @@ where
     Ok(run_ids)
 }
 
+
+//TODO remove Arc<Mutex around store
+pub fn find_motifs_euc_exec(
+    find_motifs_params: &FindMotifsParams,
+    records_num: usize,
+    resource_ids: Vec<String>,
+    store: Arc<Mutex<impl Store + 'static>>, channels: i64,
+    exec: Arc<RwLock<Executor<String, Box<Tensor>>>>
+) -> Result<Vec<usize>, HbacError> {
+    if records_num < find_motifs_params.window {
+        return Err(HbacError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
+    }
+
+    let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
+    let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
+
+    let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
+
+
+    let t1 = Instant::now();
+    let mut slots_processed = 0;
+
+
+    let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(2));
+
+    let (run_ids, mut trackers): (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]), |mut a: (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
+        let run_id = {
+            store.lock()?.save_tree_run(
+                None,
+                format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
+                &resource_ids,
+                params.to_properties_map(),
+            )
+        }?;
+
+        let all_motif_trackers = min_dot
+            .iter()
+            .enumerate()
+            .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(*min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))) //TODO name
+            .collect::<Vec<SimpMotifTracker<_>>>();
+
+        a.0.push(run_id);
+        a.1.push(all_motif_trackers);
+
+        Ok::<(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), HbacError>(a)
+    })?;
+
+    debug!("find_motifs_euc: run_ids={:?}, param_set.len()={:?}, trackers.len()={:?}", run_ids, param_set.len(), trackers.len());
+    let find_motifs_params = find_motifs_params.clone();
+
+    chunk_and_slice_exec(
+        resource_ids,
+        find_motifs_params.chunk_size,
+        param_set.into_iter().map(|v| v.into()).collect(),
+
+        move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors, params_idx: usize| {
+            debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
+
+            let all_motif_trackers = &mut trackers[params_idx];
+
+            for (c, mt) in all_motif_trackers.iter_mut().enumerate() {
+                let tensor_0 = chunk_0.t.i((.., c as i64, ..)).squeeze();
+                let tensor_1 = chunk_1.t.i((.., c as i64, ..)).squeeze();
+                debug!("find_motifs_euc: tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
+
+                let euc_dist_t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}", c, ).as_str());
+                let t_size = euc_dist_t.size();
+                let max_dist = find_motifs_params.max_dist_k * euc_dist_t.mean(None).double_value(&[]) as f32;
+                debug!("find_motifs_euc: find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", euc_dist_t.size(), tensor_0.size(), tensor_1.size(), max_dist);
+
+                let mut i_0 = 0;
+                let mut i_1 = 0;
+
+
+                for (t_idx_0, t_size_0) in chunk_0.sizes.iter().enumerate() { //t_size_0 - num slices in t_idx_0 tensors
+
+                    'tl0: for (s_0_idx, s_0) in (0..*t_size_0).enumerate() {
+                        for (t_idx_1, t_size_1) in chunk_1.sizes.iter().enumerate() { //.skip(t_idx_0)
+
+                            debug!("find_motifs_euc: i_1 in {}  s_0_idx={}, *t_size_1={}", i_1,  s_0_idx, *t_size_1);
+
+                            for s_1 in 0 as i64..*t_size_1 {
+
+                                // debug!("-------------{} {} {} {}", chunk_0.keys[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64, chunk_1.keys[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64);
+
+                                if i_0 >= t_size[0] || i_1 >= t_size[1] {
+                                    if i_0 >= t_size[0] {
+                                        warn!(
+                                            "find_motifs_euc: wrong index 0 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
+                                            c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
+                                        ); //TODO
+
+                                        break 'tl0;
+                                    }
+
+                                    if i_1 >= t_size[1] {
+                                        warn!(
+                                            "find_motifs_euc: wrong index 1 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
+                                            c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
+                                        ); //TODO
+
+                                        break;
+                                    }
+                                } else if t_idx_0 < t_idx_1 || (t_idx_0 == t_idx_1 && s_0 < s_1) {
+                                    //skipping all under diagonal
+                                    trace!("find_motifs_euc skipping: t_idx_0={}, s_0={}, t_idx_1={}, s_1={} ", t_idx_0, s_0, t_idx_1, s_1);
+                                } else {
+                                    let dist = euc_dist_t.double_value(&[i_0, i_1]);
+
+                                    // debug!(
+                                    //     "find_motifs_euc:  t_idx_0={} t_0={:?} s_0={:3} t_1={:?} s_1:{:3} i_0={}, i_1={} v={}",
+                                    //     t_idx_0, chunk_0.keys[t_idx_0 as usize], s_0 * find_motifs_params.step as i64, chunk_1.keys[t_idx_1 as usize], s_1 * find_motifs_params.step as i64, i_0, i_1, dist
+                                    // );
+
+                                    if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < max_dist {
+                                        mt.track((chunk_0.keys[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64).into(), (chunk_1.keys[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)
+                                    }
+
+                                    if c == 0 {
+                                        slots_processed += 1;
+                                        if slots_processed % 100_000 == 0 {
+                                            let slots_per_sec = (slots_processed as u64 / (t1.elapsed().as_secs() + 1)) as usize;
+                                            let (remaining, overflow) = if slots_to_process > slots_processed {
+                                                ((slots_to_process - slots_processed) / (slots_per_sec + 1), false)
+                                            } else {
+                                                ((slots_processed - slots_to_process) / (slots_per_sec + 1), true)
+                                            };
+                                            info!("class: {} pace: {} num_threads: {} slots_processed: {} out of {}, remaining {} min {}", find_motifs_params.resource_set, slots_per_sec, rayon::current_num_threads(), slots_processed, slots_to_process, remaining/60, if overflow {"overflow"} else {""} )
+                                        }
+                                    }
+                                }
+                                i_1 += 1;
+                            }
+                        }
+                        i_1 = 0;
+                        i_0 += 1;
+                    }
+                }
+                mt.dump();
+            }
+
+            Ok(())
+        },
+
+        exec
+    )?;
+
+
+    for run_id in &run_ids {
+        for i in 0..channels {
+            { store.lock()?.set_motifs(*run_id, i as i64) }?;
+        }
+
+        { store.lock()?.delete_slices_without_matches(*run_id) }?;
+    }
+
+    // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
+    // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
+
+    Ok(run_ids)
+}
+
+
 #[derive(Debug)]
 struct ChunkOfSicedTensors {
     keys: Vec<String>,
@@ -571,7 +734,9 @@ where
     let area_1 = exec.write().get_available_cache_domain();
 
     exec.write().preload(resources_ids_0[0].clone(), area_0);
-    exec.write().preload(resources_ids_0[chunk_size].clone(), area_0);
+    if resources_ids_0.len() > chunk_size {
+        exec.write().preload(resources_ids_0[chunk_size].clone(), area_0);
+    }
 
     let wg_0 = WaitGroup::new();
 
@@ -591,9 +756,7 @@ where
         for (chunk_i_1, window_1) in resources_ids_1.windows(2).into_iter().skip(chunk_i_0).enumerate() {
             debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={:?}", window_1);
             let wg_0 = wg_0.clone();
-            // if area_1 != 0 {
-            //     exec.write().purge_cache(area_1);
-            // }
+
 
             if window_1[1].len() > 0 {
                 exec.write().preload(window_1[1].to_vec(), area_1);
@@ -655,7 +818,6 @@ where
 
             }
             wg_1.wait();
-            // println!("{:?}", window_0[1]);
             exec.write().purge_cache_keys(window_0[1].clone(), area_0);
             drop(wg_0);
 
@@ -1514,7 +1676,6 @@ mod motif_find_tests {
         let sig_1 = join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
         let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
-
         /*
         let x = lin_t(n);
         plot_series(
@@ -1527,8 +1688,7 @@ mod motif_find_tests {
         ).unwrap();
         */
 
-
-        let run_ids = super::find_motifs_euc(
+        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = match key.as_str() {
                     "1111" => &sig_0,
@@ -1537,12 +1697,20 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
-                Box::new(Tensor::vstack(&[
-                    Tensor::from_slice(
-                        sig.as_slice()
-                    ), //ch 0
-                ]))
-            },
+                SyncWrapper::new(
+                    Box::new(Tensor::vstack(&[
+                        Tensor::from_slice(
+                            sig.as_slice()
+                        ), //ch 0
+                    ])),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
+
+
+        let run_ids = super::find_motifs_euc_exec(
+
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1558,6 +1726,7 @@ mod motif_find_tests {
             eeg_id_series,
             Arc::clone(&store),
             1,
+            executor_rc
         )?;
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
@@ -1598,7 +1767,7 @@ mod motif_find_tests {
          ).unwrap();
          */
 
-        let run_ids = super::find_motifs_euc(
+        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = match key.as_str() {
                     "1111" => &sig_0,
@@ -1607,12 +1776,19 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
-                Box::new(Tensor::vstack(&[
-                    Tensor::from_slice(
-                        sig.as_slice()
-                    ), //ch 0
-                ]))
-            },
+                SyncWrapper::new(
+                    Box::new(Tensor::vstack(&[
+                        Tensor::from_slice(
+                            sig.as_slice()
+                        ), //ch 0
+                    ])),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
+
+
+        let run_ids = super::find_motifs_euc_exec(
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1628,6 +1804,7 @@ mod motif_find_tests {
             eeg_id_series,
             Arc::clone(&store),
             1,
+            executor_rc
         )?;
 
         debug!("run_ids={:?}", run_ids);
@@ -1670,8 +1847,7 @@ mod motif_find_tests {
             ], "EEG", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
         */
-
-        super::find_motifs_euc(
+        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = match key.as_str() {
                     "0000" => &sig_0,
@@ -1680,13 +1856,18 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
+                SyncWrapper::new(
+                    Box::new(Tensor::vstack(&[
+                        Tensor::from_slice(
+                            sig.as_slice()
+                        ), //ch 0
+                    ])),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
 
-                Box::new(Tensor::vstack(&[
-                    Tensor::from_slice(
-                        sig.as_slice()
-                    ), //ch 0
-                ]))
-            },
+        super::find_motifs_euc_exec(
             &FindMotifsParams {
                 step: 50,
                 window: 100,
@@ -1702,6 +1883,7 @@ mod motif_find_tests {
             eeg_id_series,
             Arc::clone(&store),
             1,
+            executor_rc
         )?;
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
@@ -1736,19 +1918,27 @@ mod motif_find_tests {
         let tensors = tensor_sizes.into_iter().map(|s| join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(s as usize))).collect::<Vec<Vec<f32>>>();
 
         let n = 684400i64;
-
-
         let tensors_len = tensors.len();
-        super::find_motifs_euc(
+
+        let mut executor_rc = Arc::new(RwLock::new(Executor::new(
             move |key: &String| {
                 let sig = tensors.get(key.parse::<usize>().expect(format!("parse {}", key).as_str())).expect(format!("tensor {}", key).as_str());
 
-                Box::new(Tensor::vstack(&[
-                    Tensor::from_slice(
-                        sig.as_slice()
-                    ), //ch 0
-                ]))
-            },
+                SyncWrapper::new(
+                    Box::new(Tensor::vstack(&[
+                        Tensor::from_slice(
+                            sig.as_slice()
+                        ), //ch 0
+                    ]))
+,
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
+
+
+
+        super::find_motifs_euc_exec(
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1764,6 +1954,7 @@ mod motif_find_tests {
             (0..tensors_len).map(|v| format!("{}", v)).collect(),
             Arc::clone(&store),
             1,
+            executor_rc
         )?;
 
         debug!("{:?}", store.lock()?.list_run_resources(1)?);
