@@ -13,10 +13,11 @@ hbac_shared = {path = "../hbac_shared"}
 rand.workspace = true
 log.workspace = true
 simplelog.workspace = true
-parking_lot.workspace = true
-parking_lot_mpsc.workspace = true
+crossbeam-utils.workspace = true
 tch.workspace = true
 torch-sys.workspace = true
+parking_lot.workspace = true
+futures.workspace = true
 
 sci-rs = "0.3.8"
 plotters = { version = "0.3.5"}
@@ -27,10 +28,7 @@ ctor = "0.2.6"
 chrono = { version = "0.4.32" }
 rayon = "1.8.1"
 
-crossbeam-utils = "0.8.19"
-crossbeam = "0.8.4"
-crossbeam-channel = "0.5.11"
-futures = "0.3.30"
+
 clap = { version = "4.5.0", features = ["derive"] }
 regex = "1.10.3"
 serde = { version = "1.0.204", features = ["derive"] }
