@@ -2,11 +2,11 @@
 resolver = "2"
 
 members = [
-    "hbac_shared",
-    "hbac_common",
-    "hbac_store",
-    "hbac_motifs",
-    "hbac_main",
+    "thoosa_shared",
+    "thoosa_common",
+    "thoosa_store",
+    "thoosa_motifs",
+    "thoosa_main",
 ]
 
 [workspace.package]

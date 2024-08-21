@@ -1072,117 +1072,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hbac_common"
-version = "0.1.0"
-dependencies = [
- "argmin",
- "argmin-math",
- "chrono",
- "clap",
- "crossbeam",
- "crossbeam-channel",
- "crossbeam-utils",
- "ctor",
- "futures",
- "hbac_shared",
- "log",
- "num-traits",
- "parking_lot 0.12.3",
- "parking_lot_mpsc",
- "plotters",
- "rand 0.8.5",
- "rand_mt",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "simplelog",
- "statrs",
- "tch",
- "torch-sys",
-]
-
-[[package]]
-name = "hbac_main"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "chrono",
- "clap",
- "ctor",
- "hbac_common",
- "hbac_motifs",
- "hbac_shared",
- "hbac_store",
- "log",
- "parking_lot 0.12.3",
- "parking_lot_mpsc",
- "plotters",
- "polars",
- "rand 0.8.5",
- "rand_chacha",
- "regex",
- "serde_json",
- "simplelog",
- "tch",
- "torch-sys",
-]
-
-[[package]]
-name = "hbac_motifs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "chrono",
- "clap",
- "crossbeam-utils",
- "ctor",
- "futures",
- "hbac_common",
- "hbac_shared",
- "hbac_store",
- "log",
- "parking_lot 0.12.3",
- "plotters",
- "rand 0.8.5",
- "rand_chacha",
- "rayon",
- "regex",
- "sci-rs",
- "serde",
- "simplelog",
- "tch",
- "torch-sys",
-]
-
-[[package]]
-name = "hbac_shared"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "ctor",
- "log",
- "rand 0.8.5",
- "regex",
- "simplelog",
-]
-
-[[package]]
-name = "hbac_store"
-version = "0.1.0"
-dependencies = [
- "ctor",
- "hbac_shared",
- "log",
- "rand 0.8.5",
- "rusqlite",
- "serde",
- "simplelog",
-]
-
-[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2840,6 +2729,117 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.71",
+]
+
+[[package]]
+name = "thoosa_common"
+version = "0.1.0"
+dependencies = [
+ "argmin",
+ "argmin-math",
+ "chrono",
+ "clap",
+ "crossbeam",
+ "crossbeam-channel",
+ "crossbeam-utils",
+ "ctor",
+ "futures",
+ "log",
+ "num-traits",
+ "parking_lot 0.12.3",
+ "parking_lot_mpsc",
+ "plotters",
+ "rand 0.8.5",
+ "rand_mt",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "simplelog",
+ "statrs",
+ "tch",
+ "thoosa_shared",
+ "torch-sys",
+]
+
+[[package]]
+name = "thoosa_main"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "chrono",
+ "clap",
+ "ctor",
+ "log",
+ "parking_lot 0.12.3",
+ "parking_lot_mpsc",
+ "plotters",
+ "polars",
+ "rand 0.8.5",
+ "rand_chacha",
+ "regex",
+ "serde_json",
+ "simplelog",
+ "tch",
+ "thoosa_common",
+ "thoosa_motifs",
+ "thoosa_shared",
+ "thoosa_store",
+ "torch-sys",
+]
+
+[[package]]
+name = "thoosa_motifs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "chrono",
+ "clap",
+ "crossbeam-utils",
+ "ctor",
+ "futures",
+ "log",
+ "parking_lot 0.12.3",
+ "plotters",
+ "rand 0.8.5",
+ "rand_chacha",
+ "rayon",
+ "regex",
+ "sci-rs",
+ "serde",
+ "simplelog",
+ "tch",
+ "thoosa_common",
+ "thoosa_shared",
+ "thoosa_store",
+ "torch-sys",
+]
+
+[[package]]
+name = "thoosa_shared"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ctor",
+ "log",
+ "rand 0.8.5",
+ "regex",
+ "simplelog",
+]
+
+[[package]]
+name = "thoosa_store"
+version = "0.1.0"
+dependencies = [
+ "ctor",
+ "log",
+ "rand 0.8.5",
+ "rusqlite",
+ "serde",
+ "simplelog",
+ "thoosa_shared",
 ]
 
 [[package]]
