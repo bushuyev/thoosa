@@ -1,0 +1,15 @@
+[package]
+name = "thoosa_shared"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ctor = "0.2.6"
+regex = "1.10.3"
+rand = {workspace = true}
+log = {workspace = true}
+simplelog = {workspace = true}
+chrono.workspace = true

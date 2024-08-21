@@ -1,0 +1,45 @@
+[package]
+#TODO rename to tch_utils
+name = "thoosa_common"
+version.workspace = true
+edition.workspace = true
+
+
+[lib]
+path = "src/lib.rs"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand.workspace = true
+log.workspace = true
+simplelog.workspace = true
+tch.workspace = true
+torch-sys.workspace = true
+crossbeam-utils.workspace = true
+crossbeam.workspace = true
+crossbeam-channel.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+parking_lot_mpsc.workspace = true
+
+thoosa_shared = {path = "../thoosa_shared" }
+plotters = { version = "0.3.5"}
+
+chrono = { version = "0.4.32" }
+ctor = "0.2.6"
+clap = { version = "4.5.0", features = ["derive", "cargo"] }
+rand_mt = "4.2.2"
+statrs = "0.16.0"
+rayon = "1.10.0"
+regex = "1.10.3"
+serde = "1.0.197"
+serde_json = "1.0.111"
+
+#linfa = "0.7.0"
+argmin = "0.10.0"
+argmin-math = { version = "0.4.0", features = ["vec"] }
+num-traits = "0.2.19"
+
+
+[build-dependencies]
+chrono.workspace = true
