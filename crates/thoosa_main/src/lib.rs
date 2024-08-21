@@ -186,21 +186,6 @@ enum Commands {
 }
 
 
-fn main()  {
-    let t1 = Instant::now();
-    match run_cli() {
-
-        Ok(_) => {
-            info!("All done in {} mls", t1.elapsed().as_millis());
-        }
-
-        Err(e) => {
-            error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
-        }
-    }
-    std::process::exit(0x0000);//for jupyter
-}
-
 struct ParquetLoader {
     base_path:String,
     tensors_path:Option<String>,
@@ -235,7 +220,7 @@ impl ResourceLoader for ParquetLoader {
     }
 }
 
-fn run_cli() -> Result<(), ThoosaError> {
+pub fn run_cli() -> Result<(), ThoosaError> {
     let cli = Cli::parse();
 
     CombinedLogger::init(

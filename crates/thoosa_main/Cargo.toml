@@ -3,6 +3,8 @@ name = "thoosa_main"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
 thoosa_common = {path = "../thoosa_common" }
