@@ -272,7 +272,7 @@ fn run_cli() -> Result<(), HbacError> {
     rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
     let exec_loader = ParquetLoader::new(cli.base_path.clone(), cli.tensors_path.clone(),None);
 
-    let executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
+    let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
         move |key: &String| {
 
             SyncWrapper::new(
@@ -689,7 +689,7 @@ pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<D
     Ok(corr_ids)
 }
 
-fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, executor: Arc<parking_lot::RwLock<Executor<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError>{
+fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError>{
 
     let resource_sets = { store.lock().unwrap().list_resource_set_group_sets(run_all_params.train_resource_group()).expect("list_resource_set_group_sets")};
 
@@ -722,14 +722,14 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
 
 }
 
-fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, _device: Device, find_motifs_params: &FindMotifsParams, executor: Arc<parking_lot::RwLock<Executor<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError> {
+fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, _device: Device, find_motifs_params: &FindMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, HbacError> {
 
     let resource_ids = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 
     let records_num = clc_records(&resource_ids, cli.base_path.as_str()).unwrap();
     debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} resource_ids={resource_ids:?}", find_motifs_params.resource_set());
 
-    find::find_motifs_euc_exec(
+    find::find_motifs_by_euc_dist(
         find_motifs_params,
         records_num,
         resource_ids,
@@ -1050,7 +1050,7 @@ mod main_tests {
     use tch::Device::Cpu;
     use hbac_common::ResourceLoader;
     use hbac_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
-    use hbac_common::loader::{Executor, SyncWrapper};
+    use hbac_common::loader::{LoadRunner, SyncWrapper};
     use hbac_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use hbac_shared::HbacError;
     use hbac_store::SqlStore;
@@ -1086,7 +1086,7 @@ mod main_tests {
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let loader = Arc::new(Box::new(ParquetLoader::new("../../test_data/eeg".into(), Some("../../test_data/eeg".into()), None)));
-        let executor_rc = Arc::new(parking_lot::RwLock::new(Executor::new(
+        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
             move |key: &String| {
 
                 SyncWrapper::new(

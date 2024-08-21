@@ -137,10 +137,28 @@ mod distance_tests {
     }
 
     #[test]
+    fn test_dist_d2_0(){
+
+        let slice_0 = Tensor::from_slice(&[0., 0., 1., 1., 2., 2.,]).view((3,2));
+        let slice_1 = Tensor::from_slice(&[3., 4., 4., 5., 5., 6.,]).view((3,2));
+        debug!("slice_0={slice_0}");
+        debug!("slice_1={slice_1}");
+
+        let dist_t = super::dist_d2(1, &slice_0, &slice_1).unwrap();
+        debug!("dist_t={dist_t}");
+
+        assert_eq!(5.0, dist_t.double_value(&[0,0]));
+        assert_eq!(5.0, dist_t.double_value(&[1,1]));
+        assert_eq!(5.0, dist_t.double_value(&[2,2]));
+
+    }
+
+
+    #[test]
     fn test_slice_t(){
         let tensor = super::slice_t(&Tensor::from_slice(&[1., 2., 3., 4., 5.]).view((1, -1)), 1, 2);
 
-
         assert_eq!(Tensor::from_slice(&[1., 2., 2., 3., 3., 4., 4., 5.,]).view((4, 1, 2)), tensor);
     }
+
 }
