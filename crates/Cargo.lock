@@ -2763,6 +2763,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "thoosa_hbac"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "chrono",
+ "clap",
+ "ctor",
+ "log",
+ "parking_lot 0.12.3",
+ "parking_lot_mpsc",
+ "plotters",
+ "polars",
+ "rand 0.8.5",
+ "rand_chacha",
+ "regex",
+ "serde_json",
+ "simplelog",
+ "tch",
+ "thoosa_common",
+ "thoosa_main",
+ "thoosa_motifs",
+ "thoosa_shared",
+ "thoosa_store",
+ "torch-sys",
+]
+
+[[package]]
 name = "thoosa_main"
 version = "0.1.0"
 dependencies = [
