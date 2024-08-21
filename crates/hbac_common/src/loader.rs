@@ -141,7 +141,7 @@ where
     }
 }
 
-pub struct Executor<K, V>
+pub struct LoadRunner<K, V>
 where
     K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
@@ -154,7 +154,7 @@ where
     loader: Arc<RwLock<Loader<K, V>>>,
 }
 
-impl<K, V> Executor<K, V>
+impl<K, V> LoadRunner<K, V>
 where
     K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
@@ -530,7 +530,7 @@ mod tests {
 
 
     #[test]
-    fn test_executor() -> Result<(), HbacError> {
+    fn test_loader() -> Result<(), HbacError> {
         use parking_lot::{RwLock};
         use rayon::iter::IntoParallelIterator;
         use rayon::prelude::*;
@@ -552,7 +552,7 @@ mod tests {
 
 
         let num_items = 10usize;
-        let executor = Executor::new(load_test_entity_sv, 4, 100);
+        let executor = LoadRunner::new(load_test_entity_sv, 4, 100);
         let executor_rc = Arc::new(RwLock::new(executor));
         // let wg_1 = wg.clone();
 
@@ -603,10 +603,10 @@ mod tests {
                         async move {
                             let t = Instant::now();
                             let key_aaa = format!("aaa_{i}");
-                            let _out_a = Executor::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
+                            let _out_a = LoadRunner::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
 
                             let key_bbb = format!("bbb_{i}");
-                            let _out_b = Executor::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
+                            let _out_b = LoadRunner::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
 
                             // let mut waiting_time_guard = waiting_time_rc.lock();
                             let time = t.elapsed().as_millis();
