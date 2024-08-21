@@ -7,7 +7,8 @@ use std::fmt;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use parking_lot::Mutex;
 
 use log::{debug, trace};
 use rand::prelude::SliceRandom;
@@ -141,7 +142,7 @@ pub struct SqlStore {
 impl Store for SqlStore {
 
     fn save_tree_run(&mut self, _input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, ThoosaError> {
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
         t.execute("INSERT INTO tree_run (descr) VALUES (?)", params![descr])?;
@@ -176,7 +177,7 @@ impl Store for SqlStore {
     }
 
     fn save_params_value(&mut self, params:HashMap<String, Val>, run_id:usize, label:Option<&str>) -> Result<(), ThoosaError> {
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
 
@@ -192,7 +193,7 @@ impl Store for SqlStore {
     }
 
     fn save_resources(&mut self, resources:Vec<String>) -> Result<(), ThoosaError>{
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
         for resources_chunk in resources.chunks(500) {
@@ -216,7 +217,7 @@ impl Store for SqlStore {
 
 
     fn save_label(&mut self, label:&str) -> Result<usize, ThoosaError>{
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let  t = conn_guard.transaction()?;
 
         t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
@@ -230,7 +231,7 @@ impl Store for SqlStore {
 
 
     // fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, ThoosaError>{
-    //     let mut conn_guard = self.conn.lock()?;
+    //     let mut conn_guard = self.conn.lock();
     //     let mut t = conn_guard.transaction()?;
     //
     //     t.execute("INSERT INTO params (name, type) VALUES (?, ?)", params![name, data_type])?;
@@ -245,7 +246,7 @@ impl Store for SqlStore {
 
 
     fn list_labels(&mut self) -> Result<Vec<String>, ThoosaError> {
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
         let labels = Self::list_labels(&t)?.into_iter().map(|id_label|id_label.1).collect();
@@ -260,7 +261,7 @@ impl Store for SqlStore {
     fn save_resources_labels(&mut self, resource_labels_probs:HashMap<String, Vec<(String, f32)>>) -> Result<(), ThoosaError>{
         debug!("save_resources_labels: resource_labels_probs.len()={}", resource_labels_probs.len());
 
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
 
@@ -366,7 +367,7 @@ impl Store for SqlStore {
 
     fn save_resources_set(&mut self, descr:String, resource_keys:Vec<String>, group_id: Option<usize>) -> Result<usize, ThoosaError>{
 
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
         match group_id{
@@ -403,7 +404,7 @@ impl Store for SqlStore {
     }
 
     fn save_resource_set_group(&mut self, descr:String)-> Result<usize, ThoosaError> {
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let mut t = conn_guard.transaction()?;
 
         let group_id = Self::save_resource_set_group(descr, &mut t)?;
@@ -414,7 +415,7 @@ impl Store for SqlStore {
     }
 
     fn save_groups_by_label_cnt(&mut self, max_resources_in_set: usize) -> Result<(), ThoosaError>{
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let mut t = conn_guard.transaction()?;
 
         {
@@ -502,7 +503,7 @@ impl Store for SqlStore {
 
 
     fn save_pure_sets(&mut self, max_len: usize, only_unused: bool) -> Result<(), ThoosaError> {
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let mut t = conn_guard.transaction()?;
 
         {
@@ -540,7 +541,7 @@ impl Store for SqlStore {
     }
 
     fn list_resource_set_group_sets(&mut self, group_descr:&str)  -> Result<Vec<(usize, String)>, ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let group_sets = {
@@ -564,7 +565,7 @@ impl Store for SqlStore {
     }
 
     fn list_group_labeled_resources_sets(&mut self, group_descr:&str) -> Result<Vec<(String, String)>, ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let labeled_resources_sets = {
@@ -588,7 +589,7 @@ impl Store for SqlStore {
     }
 
     fn list_resource_set_resources_by_descr(&mut self, descr:&str)  -> Result<Vec<String>, ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let r = Self::list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
@@ -600,7 +601,7 @@ impl Store for SqlStore {
     }
 
     fn list_resource_random_not_label(&mut self, label:&str, limit:i64)  -> Result<Vec<String>, ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let r = t.prepare(
@@ -617,7 +618,7 @@ impl Store for SqlStore {
     }
 
     fn list_resource_random_in_group(&mut self, group_descr:&str)  -> Result<Vec<(String, Vec<f32>)>, ThoosaError> {//vec<(key, vec<(lablel, p)>>
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let labels = Self::list_labels(&t)?;
@@ -665,7 +666,7 @@ impl Store for SqlStore {
     }
 
     fn list_resource_set_resources(&mut self, set_id:usize)  -> Result<Vec<String>, ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let set_resources = Self::list_resource_set_resources(set_id, &t)?;
@@ -676,7 +677,7 @@ impl Store for SqlStore {
     }
 
     fn save_set_by_labels(&mut self, conds:Vec<(String, SetCond)>, _only_unused:bool, limit:usize) -> Result<(), ThoosaError> {
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
         {
@@ -711,7 +712,7 @@ impl Store for SqlStore {
 
 
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), ThoosaError>{
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let  t = conn_guard.transaction()?;
 
         assert!(slices.len() > 0);
@@ -742,7 +743,7 @@ impl Store for SqlStore {
     }
 
     fn set_motifs(&mut self, run_id:usize, channel:i64) -> Result<(), ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         debug!("set_motifs: run_id={:?}, channel={:?}", run_id, channel);
@@ -796,7 +797,7 @@ impl Store for SqlStore {
 
     fn list_motifs_distances(&mut self, run_id:usize) -> Result<HashMap<usize, f32>, ThoosaError>{
 
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
         let tensor_motifs: HashMap<usize, f32> = {
 
@@ -822,7 +823,7 @@ impl Store for SqlStore {
     }
 
     fn delete_slices_without_matches(&mut self, run_id:usize) -> Result<(), ThoosaError>{
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
         t.execute("DELETE FROM slice_matches WHERE run_id=? AND motif_id IS NULL", [run_id])?;
         t.commit()?;
@@ -836,7 +837,7 @@ impl Store for SqlStore {
     * returns map tensor_key - MotifSlice(motif_group, tensor slice idx, channel)
     */
     fn list_motifs_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, ThoosaError>{
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let tensor_motifs = {
@@ -878,7 +879,7 @@ impl Store for SqlStore {
     }
 
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let result = {
@@ -909,7 +910,7 @@ impl Store for SqlStore {
 
     fn list_run_params(&mut self, run_id:usize, _label: Option<&str>) -> Result<HashMap<String, Val>, ThoosaError> {
 
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let result = {
@@ -952,7 +953,7 @@ impl Store for SqlStore {
     fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, ThoosaError>{
         debug!("save_motifs_corrs: motifs_corrs={:?}", motifs_corrs);
 
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         t.execute("INSERT INTO corrs_run (run_id, label, descr) VALUES (?, ?, ?)", params![run_id, label, descr])?;
@@ -991,7 +992,7 @@ impl Store for SqlStore {
     }
 
     fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError> {
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
 
@@ -1029,7 +1030,7 @@ impl Store for SqlStore {
     fn list_corr_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
         let mut channels_corr_motifs = (0..20).into_iter().map(|_|Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
 
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         {
@@ -1051,7 +1052,7 @@ impl Store for SqlStore {
 
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), ThoosaError> {
 
-        let mut guard = self.conn.lock()?;
+        let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let channel_slices = {
@@ -1109,7 +1110,7 @@ impl Store for SqlStore {
     }
 
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, ThoosaError> {
-        let mut conn_guard = self.conn.lock()?;
+        let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
         let descr:String = t.query_row("SELECT descr FROM corrs_run WHERE id=?", [corr_run_id], |row| row.get(0))?;
@@ -1568,7 +1569,7 @@ mod store_tests{
         store.set_motifs(run_id, 7)?;
 
         let m_1_first = {
-            let mut guard = store.conn.lock()?;
+            let mut guard = store.conn.lock();
             let t2 = guard.transaction()?;
             let mut stmt = t2.prepare("SELECT run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, motif_id FROM slice_matches")?;
 

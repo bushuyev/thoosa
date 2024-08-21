@@ -12,6 +12,7 @@ thoosa_shared = {path = "../thoosa_shared" }
 rand.workspace = true
 log.workspace = true
 simplelog.workspace = true
+parking_lot.workspace = true
 
 ctor = "0.2.7"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
