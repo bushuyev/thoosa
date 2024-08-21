@@ -5,7 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Instant};
 
 use clap::clap_derive::{Args, Subcommand};
@@ -235,7 +235,7 @@ pub fn find_motifs_by_euc_dist(
 
     let (run_ids, mut trackers): (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]), |mut a: (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
         let run_id = {
-            store.lock()?.save_tree_run(
+            store.lock().save_tree_run(
                 None,
                 format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
                 &resource_ids,
@@ -352,10 +352,10 @@ pub fn find_motifs_by_euc_dist(
 
     for run_id in &run_ids {
         for i in 0..channels {
-            { store.lock()?.set_motifs(*run_id, i as i64) }?;
+            { store.lock().set_motifs(*run_id, i as i64) }?;
         }
 
-        { store.lock()?.delete_slices_without_matches(*run_id) }?;
+        { store.lock().delete_slices_without_matches(*run_id) }?;
     }
 
     // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
@@ -666,7 +666,7 @@ impl MotifDumper for StoreDumper {
     fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), ThoosaError> {
         debug!("MotifDumper::dump: motifs.len()={:?}, self.run_id={:?}", motifs.len(), self.run_id);
 
-        self.store.lock()?.save_slices(self.run_id, self.channel as i64, motifs.into_iter().map(|v| ((v.0.0.clone(), v.0.1), (v.1.0.clone(), v.1.1), v.2)).collect::<Vec<_>>())?; //TODO move TensorSliceIdx to shared
+        self.store.lock().save_slices(self.run_id, self.channel as i64, motifs.into_iter().map(|v| ((v.0.0.clone(), v.0.1), (v.1.0.clone(), v.1.1), v.2)).collect::<Vec<_>>())?; //TODO move TensorSliceIdx to shared
 
         Ok(())
     }
@@ -947,10 +947,10 @@ where
                     (num_matches, class_label.clone())
                 };
 
-                if let Ok(mut channels_motifs_classes_guard) = channels_motifs_classes.lock() {
-                    channels_motifs_classes_guard[channel_i][motif_i].0.push(num_matches_label.0);
-                    channels_motifs_classes_guard[channel_i][motif_i].1.push(num_matches_label.1);
-                }
+                let mut channels_motifs_classes_guard = channels_motifs_classes.lock();
+                channels_motifs_classes_guard[channel_i][motif_i].0.push(num_matches_label.0);
+                channels_motifs_classes_guard[channel_i][motif_i].1.push(num_matches_label.1);
+
             }
         }
 
@@ -1029,9 +1029,7 @@ where
 
     let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, motifs_distances, channel_motif_ids);
 
-    let Ok(channels_motifs_classes_guard) = channels_motifs_classes_lock.lock() else {
-        panic!("select_motifs: can't lock channels_motifs_classes_lock");
-    };
+    let channels_motifs_classes_guard = channels_motifs_classes_lock.lock();
 
     debug!("select_motifs_by_ratio: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard);
 
@@ -1076,9 +1074,7 @@ where
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>();
 
-    let Ok(channels_motifs_classes_guard) = channels_motifs_classes_lock.lock() else {
-        panic!("select_motifs: can't lock channels_motifs_classes_lock");
-    };
+    let channels_motifs_classes_guard = channels_motifs_classes_lock.lock();
 
     debug!("select_motifs: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard.len());
 
@@ -1164,7 +1160,8 @@ mod motif_find_tests {
     use std::collections::{HashMap};
 
     use std::path::Path;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
 
 
     use log::debug;
@@ -1508,8 +1505,8 @@ mod motif_find_tests {
             executor_rc
         )?;
 
-        debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices = store.lock()?.list_motifs_slices(run_ids[0])?;
+        debug!("{:?}", store.lock().list_run_resources(1)?);
+        let eeg_slices = store.lock().list_motifs_slices(run_ids[0])?;
         debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
@@ -1588,8 +1585,8 @@ mod motif_find_tests {
 
         debug!("run_ids={:?}", run_ids);
 
-        debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices = store.lock()?.list_motifs_slices(run_ids[0])?;
+        debug!("{:?}", store.lock().list_run_resources(1)?);
+        let eeg_slices = store.lock().list_motifs_slices(run_ids[0])?;
         debug!("0: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"2222".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"3333".to_string()));
@@ -1665,8 +1662,8 @@ mod motif_find_tests {
             executor_rc
         )?;
 
-        debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices = store.lock()?.list_motifs_slices(1)?;
+        debug!("{:?}", store.lock().list_run_resources(1)?);
+        let eeg_slices = store.lock().list_motifs_slices(1)?;
         debug!("0: {:?}", eeg_slices.get(&"0000".to_string()));
         debug!("1: {:?}", eeg_slices.get(&"1111".to_string()));
         debug!("2: {:?}", eeg_slices.get(&"2222".to_string()));
@@ -1736,8 +1733,8 @@ mod motif_find_tests {
             executor_rc
         )?;
 
-        debug!("{:?}", store.lock()?.list_run_resources(1)?);
-        let eeg_slices = store.lock()?.list_motifs_slices(1)?;
+        debug!("{:?}", store.lock().list_run_resources(1)?);
+        let eeg_slices = store.lock().list_motifs_slices(1)?;
 
 
         assert_eq!(6, eeg_slices.len());

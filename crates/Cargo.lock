@@ -2863,6 +2863,7 @@ version = "0.1.0"
 dependencies = [
  "ctor",
  "log",
+ "parking_lot 0.12.3",
  "rand 0.8.5",
  "rusqlite",
  "serde",

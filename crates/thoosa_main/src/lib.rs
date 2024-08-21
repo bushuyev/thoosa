@@ -5,26 +5,27 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc};
+use parking_lot::Mutex;
+
 
 use clap::{Args, Parser, Subcommand};
-use log::{debug, error, info, LevelFilter, warn};
+use log::{debug, error, info, warn, LevelFilter};
 use plotters::prelude::BLACK;
 use polars::export::rayon;
 use polars::export::rayon::iter::IntoParallelIterator;
 use polars::export::rayon::iter::ParallelIterator;
-use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
+use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use tch::{Device, Tensor};
 use tch::nn::Module;
 
-use thoosa_common::{ResourceLoader, train_nets};
-use thoosa_common::train_nets::{infer, InferParams, LabelNodeParams, load_motif_models, train_final, train_on_label, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
+use thoosa_common::{train_nets, ResourceLoader};
+use thoosa_common::train_nets::{infer, load_motif_models, train_final, train_on_label, InferParams, LabelNodeParams, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use thoosa_common::train_nets::MotifNodeParams;
 use thoosa_common::utils::{list_devices, load_tensor, plot_series};
 use thoosa_motifs::find;
 use thoosa_common::loader::*;
-use thoosa_motifs::find::{FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, SelectMotifsParams};
+use thoosa_motifs::find::{select_motifs_by_ratio, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, SelectMotifsParams};
 use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
 use thoosa_shared::*;
 use thoosa_shared::ThoosaError;
@@ -35,7 +36,7 @@ use crate::Commands::*;
 use crate::data::{clc_records, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor};
 use crate::version::VERSION;
 
-mod data;
+pub mod data;
 
 
 mod version;
@@ -43,39 +44,39 @@ mod version;
 
 #[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
-pub struct Cli {
+pub struct Cli {//TODO pub
     #[arg(long, default_value="../../data")]
-    base_path: String,
+    pub base_path: String,
 
     #[arg(long, default_value=".")]
-    ws_path: String,
+    pub ws_path: String,
 
     #[arg(long)]
-    tensors_path: Option<String>,
+    pub tensors_path: Option<String>,
 
     #[arg(long, default_value="thoosa.db3")]
-    store_path: String,
+    pub store_path: String,
 
     #[arg(long, default_value = "INFO")]
-    term_logger_level: String,
+    pub term_logger_level: String,
 
     #[arg(long, default_value = "INFO")]
-    write_logger_level: String,
+    pub write_logger_level: String,
 
     #[arg(long, default_value = "thoosa.log")]
-    logfile: String,
+    pub logfile: String,
 
     #[arg(long)]
-    limit: Option<usize>,
+    pub limit: Option<usize>,
 
     #[arg(long)]
-    num_threads: Option<usize>,
+    pub num_threads: Option<usize>,
 
     #[command(subcommand)]
-    command: Option<Commands>,
+    pub command: Option<Commands>,
 
     #[arg(long)]
-    input_filters_kernel: Option<i64>,//TODO all common filters configs
+    pub input_filters_kernel: Option<i64>,//TODO all common filters configs
 }
 
 
@@ -139,8 +140,8 @@ impl RunAllParams {
     fn find_motifs_params(&self, resource_set: String) -> FindMotifsParams {
         FindMotifsParams::dummy(self.step, self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
     }
-    #[cfg(test)]
-    fn dummy(train_resource_group: &str, valid_resource_group: &str) -> Self {
+    // #[cfg(test)]
+    pub fn dummy(train_resource_group: &str, valid_resource_group: &str) -> Self {
         Self {
             train_resource_group: train_resource_group.to_string(),
             valid_resource_group: valid_resource_group.to_string(),
@@ -172,7 +173,7 @@ pub struct InitResourcesParams {
 }
 
 #[derive(Debug, Subcommand, Clone)]
-enum Commands {
+pub enum Commands {
     InitResources (InitResourcesParams),
     FindMotifs (FindMotifsParams),
     PlotMotifSlices(PlotMotifSlicesParams),
@@ -186,7 +187,7 @@ enum Commands {
 }
 
 
-struct ParquetLoader {
+pub struct ParquetLoader {
     base_path:String,
     tensors_path:Option<String>,
     dsp_filters:Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync >>
@@ -220,7 +221,13 @@ impl ResourceLoader for ParquetLoader {
     }
 }
 
-pub fn run_cli() -> Result<(), ThoosaError> {
+pub fn run_cli<F, L>(
+    labeled_resourses:F,
+    parquet_to_tensor_by_path:L
+) -> Result<(), ThoosaError>
+    where F:Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
+            L:Fn(&Path,Device) -> Result<Tensor, ThoosaError> + Sync
+{
     let cli = Cli::parse();
 
     CombinedLogger::init(
@@ -272,10 +279,8 @@ pub fn run_cli() -> Result<(), ThoosaError> {
         Some(InitResources(init_resources_params)) => {
             debug!("InitResources: init_resources_params={:?}", init_resources_params);
             init_resources(
-                &cli,
-                Some(init_resources_params),
                 Arc::clone(&store),
-                "train.csv"
+                ||labeled_resourses(&cli.base_path)
             )?;
         }
 
@@ -291,7 +296,7 @@ pub fn run_cli() -> Result<(), ThoosaError> {
             info!("select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
 
             let select_motifs_params = if let Some(train_resource_group) = select_motifs_params.train_resource_group() {
-                let train_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_resource_group.as_str())? };
+                let train_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_resource_group.as_str())? };
                 select_motifs_params.with_labels_datasets(train_labels_datasets)
             } else {
                 select_motifs_params.clone()
@@ -312,8 +317,8 @@ pub fn run_cli() -> Result<(), ThoosaError> {
             debug!("train_on_eeg_params={:?}", train_on_eeg_params);
 
             let train_on_eeg_params = if let Some(train_resource_group) = train_on_eeg_params.train_resource_group() {
-                let train_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_resource_group.as_str())? };
-                let valid_labels_datasets = { store.lock().expect("store lock").list_group_labeled_resources_sets(train_on_eeg_params.valid_resource_group().expect("valid_resource_group").as_str())? };
+                let train_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_resource_group.as_str())? };
+                let valid_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_on_eeg_params.valid_resource_group().expect("valid_resource_group").as_str())? };
                 train_on_eeg_params.with_labels_datasets(train_labels_datasets, valid_labels_datasets)
 
             } else {
@@ -336,10 +341,8 @@ pub fn run_cli() -> Result<(), ThoosaError> {
             if run_all_params.init {
                 debug!("RunAll: init_resources");
                 init_resources(
-                    &cli,
-                    None,
                     Arc::clone(&store),
-                    "train.csv"
+                    ||labeled_resourses(&cli.base_path)
                 )?;
             }
 
@@ -348,8 +351,8 @@ pub fn run_cli() -> Result<(), ThoosaError> {
 
             info!("find_motifs done: run_ids={:?}", run_ids);
 
-            let train_labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets(run_all_params.train_resource_group())?};
-            let valid_labels_datasets = {store.lock().expect("store lock").list_group_labeled_resources_sets(run_all_params.valid_resource_group())?};
+            let train_labels_datasets = {store.lock().list_group_labeled_resources_sets(run_all_params.train_resource_group())?};
+            let valid_labels_datasets = {store.lock().list_group_labeled_resources_sets(run_all_params.valid_resource_group())?};
 
             info!("run all: train_labels_datasets={:?}", train_labels_datasets);
             info!("run all: valid_labels_datasets={:?}", valid_labels_datasets);
@@ -413,7 +416,7 @@ pub fn run_cli() -> Result<(), ThoosaError> {
         Some(Infer(infer_params)) => {
 
             let (labels,  motif_node_params) =  {
-                let mut store_guard = store.lock().expect("store_in_threads");
+                let mut store_guard = store.lock();
                 (
                     store_guard.list_labels().expect("store_guard"),
                     MotifNodeParams::from_properties_map(store_guard.list_run_params(777, None).expect("list_run_params"))
@@ -423,7 +426,8 @@ pub fn run_cli() -> Result<(), ThoosaError> {
             let t = infer(
                 &infer_params,
                 |path:&Path|{
-                    data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), *devices.first().expect("first device"))
+                    // data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), *devices.first().expect("first device"))
+                    parquet_to_tensor_by_path(path, *devices.first().expect("first device"))
                 },
                 infer_params.window() as i64,
                 infer_params.step(),
@@ -460,7 +464,7 @@ pub fn run_cli() -> Result<(), ThoosaError> {
 
 fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, train_final_params: &TrainFinalParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
 
-    let labels = {store.lock().expect("mutex_guard").list_labels()? };
+    let labels = {store.lock().list_labels()? };
 
     debug!("run_train_final: labels={:?}", labels);
 
@@ -524,7 +528,7 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
         for ((label, resource_set), input_run_id) in chunk_resource_sets {
 
             let motif_node_params =  {
-                let mut store_guard = store_in_threads.lock().expect("store_in_threads");
+                let mut store_guard = store_in_threads.lock();
                 MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store_guard.list_run_params(*input_run_id, None).expect("list_run_params")))
             };
 
@@ -546,7 +550,7 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
 
 
             let (label_node_params_vec, _run_ids) = {
-                let mut store_guard = store.lock().expect("store");
+                let mut store_guard = store.lock();
 
                 (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand
                     let label_node_params = LabelNodeParams::new(20, max_nets, max_motif_batches as i64, train_on_eeg_params.motif_batch_size());
@@ -558,7 +562,6 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
                 })
 
             };
-
 
             info!("training {} on {} device={:?}", label, resource_set, device_i);
             for label_node_params in label_node_params_vec {
@@ -610,7 +613,7 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
     let corr_run_ids = train_on_motif_params.corr_run_ids();
 
     let chunk_len = corr_run_ids.len()/devices.len();
-    let corr_run_id_labels = { store.lock()?.list_corrs(corr_run_ids)? }; //(1..=36).collect::<Vec<usize>>();
+    let corr_run_id_labels = { store.lock().list_corrs(corr_run_ids)? }; //(1..=36).collect::<Vec<usize>>();
 
     let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, usize, String)])>>();//corrs_run(id, label)
 
@@ -633,7 +636,7 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
                 Arc::clone(&loader)
             ).expect("train_on_motifs");
 
-            run_ids_for_threads.lock().expect("run_ids lock").extend(run_ids);
+            run_ids_for_threads.lock().extend(run_ids);
 
             // fs::write(Path::new(train_on_motif_params.output_dir()).join(format!("motif_model_{}.json", run_id)), serde_json::to_string(&node_params).expect("serde_json::to_string"));
         }
@@ -642,7 +645,7 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
     });
 
 
-    let guard = run_ids.lock().expect("run_ids lock on return");
+    let guard = run_ids.lock();
     Ok(guard.to_vec())
 
 }
@@ -666,17 +669,17 @@ pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<D
                 Arc::clone(&loader)
             ).expect("select_motifs_in_class");
 
-            corr_ids_for_iter.lock().expect("corr_ids lock").extend(corr_ids);
+            corr_ids_for_iter.lock().extend(corr_ids);
         }
     });
 
-    let corr_ids = corr_ids.lock().expect("corr_ids lock ret").clone();
+    let corr_ids = corr_ids.lock().clone();
     Ok(corr_ids)
 }
 
-fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>{
+pub fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>{
 
-    let resource_sets = { store.lock().unwrap().list_resource_set_group_sets(run_all_params.train_resource_group()).expect("list_resource_set_group_sets")};
+    let resource_sets = { store.lock().list_resource_set_group_sets(run_all_params.train_resource_group()).expect("list_resource_set_group_sets")};
 
     assert!(resource_sets.len() > 0, "{} is empty", run_all_params.train_resource_group());
 
@@ -693,7 +696,7 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
 
             match run_find_motifs_on_set(cli, &store, device, find_motifs_params, Arc::clone(&executor)) {
                 Ok(run_id) => {
-                    run_ids_for_threads.lock().expect("run_ids lock").push(run_id);
+                    run_ids_for_threads.lock().push(run_id);
                 }
                 Err(e) => {
                     error!("run_find_motifs_on_group: resource_set={:?}, e={:?}", resource_set, e);
@@ -702,14 +705,14 @@ fn run_find_motifs_on_group(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Ve
         }
     });
 
-    let guard = run_ids.lock().expect("run_ids lock on return");
+    let guard = run_ids.lock();
     Ok(guard.iter().flat_map(|v|v.iter().map(|v:&usize|*v)).collect())
 
 }
 
-fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, _device: Device, find_motifs_params: &FindMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
+fn run_find_motifs_on_set(cli: &Cli, store: &Arc<parking_lot::Mutex<SqlStore>>, _device: Device, find_motifs_params: &FindMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
 
-    let resource_ids = { store.lock().unwrap().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
+    let resource_ids = { store.lock().list_resource_set_resources_by_descr(find_motifs_params.resource_set()).expect("list_resource_set_resources") };
 
     let records_num = clc_records(&resource_ids, cli.base_path.as_str()).unwrap();
     debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} resource_ids={resource_ids:?}", find_motifs_params.resource_set());
@@ -726,7 +729,7 @@ fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, _device: Devi
 }
 
 fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, choose_fragments_params: &MotifsToTensorParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
-    let mut store_guard = store.lock()?;
+    let mut store_guard = store.lock();
     let _base_path_1 = cli.base_path.clone();
     let _tensors_path = cli.tensors_path.clone();
     let t = motifs_to_tensor(
@@ -748,8 +751,10 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
     Ok(())
 }
 
-fn init_resources(cli:&Cli, _params:Option<&InitResourcesParams>, store:Arc<Mutex<impl Store + 'static>>, train_csv: &str) -> Result<(), ThoosaError> {
-    let mut store_guard = store.lock()?;
+pub fn init_resources<F>(store:Arc<Mutex<impl Store + 'static>>, labeled_resourses:F) -> Result<(), ThoosaError>
+    where F:Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>
+{
+    let mut store_guard = store.lock();
 
     store_guard.save_label("seizure")?;
     store_guard.save_label("lpd")?;
@@ -759,7 +764,7 @@ fn init_resources(cli:&Cli, _params:Option<&InitResourcesParams>, store:Arc<Mute
     store_guard.save_label("other")?;
 
 
-    store_guard.save_resources_labels(data::labeled_resourses(Path::new(&cli.base_path).join(train_csv))?)?;
+    store_guard.save_resources_labels(labeled_resourses()?)?;
 
     store_guard.save_pure_sets(1000, true)?;
     store_guard.save_pure_sets(100, true)?;
@@ -782,7 +787,7 @@ fn init_resources(cli:&Cli, _params:Option<&InitResourcesParams>, store:Arc<Mute
 
 
 fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, plot_motif_slices_params: &&PlotMotifSlicesParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
-    let mut store_guard = store.lock()?;
+    let mut store_guard = store.lock();
 
     let (channel, _run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
     let _base_path = cli.base_path.as_str();
@@ -818,7 +823,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
     debug!("train_on_motifs: device={:?}, corr_run={:?}", device, corr_run);
 
     let (motifs, params) = {
-        let mut store_guard = store.lock()?;
+        let mut store_guard = store.lock();
 
         // for motif_id in train_on_motif_params.motif_ids() {
 
@@ -843,7 +848,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
     let filter_op = filter_and_slice.filter();
 
     let (node_params_vec, run_ids) = {
-        let mut store_guard = store.lock()?;
+        let mut store_guard = store.lock();
 
         (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand
             let node_params = MotifNodeParams::new(filter_and_slice.window());
@@ -859,7 +864,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
 
     for motif_id in motifs.iter() {
         let (all_sices_0, all_sices_1, channel) = {
-            let mut store_guard = store.lock()?;
+            let mut store_guard = store.lock();
 
             let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, None, None)?;
 
@@ -951,7 +956,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     debug!("select_motifs_in_class: device={:?} cli.tensors_path={:?}", device, cli.tensors_path);
 
     let (resource_id_motif_slices, motifs_avg_distances, params) = {
-        let mut store_guard = store.lock()?;
+        let mut store_guard = store.lock();
 
         (
             store_guard.list_motifs_slices(run_id)?,
@@ -993,7 +998,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
             let loader_m = Arc::clone(&loader);
             (
                 label_dataset.0.clone(),
-                store.lock().expect("store").list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(move |eeg_id| {
+                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(move |eeg_id| {
                     loader_m.load(&eeg_id, device)
                 })
             )
@@ -1020,7 +1025,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
         debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
 
-        store.lock().expect("store").save_motifs_corrs(run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
+        store.lock().save_motifs_corrs(run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
     }).collect::<Vec<usize>>())
 
 }
@@ -1028,20 +1033,17 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
 #[cfg(test)]
 mod main_tests {
-    use std::sync::{Arc, Mutex};
-
+    use std::sync::{Arc};
+    use parking_lot::Mutex;
     use log::debug;
-    use tch::Device;
     use tch::Device::Cpu;
-    use thoosa_common::ResourceLoader;
     use thoosa_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
-    use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
+    use thoosa_motifs::find::{SelectMotifsParams};
     use thoosa_shared::ThoosaError;
     use thoosa_store::SqlStore;
 
-    use crate::{Cli, ParquetLoader, init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, RunAllParams};
-    use crate::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
+    use crate::{run_select_motifs, run_train_final, run_train_on_label, Cli, ParquetLoader};
+    use crate::Commands::{SelectMotifs, TrainFinal, TrainOnLabel};
 
 
     #[ctor::ctor]
@@ -1049,58 +1051,6 @@ mod main_tests {
         thoosa_shared::init_test_logging();
     }
 
-    #[test]
-    fn test_run_find_motifs() -> Result<(), ThoosaError>{
-        let cli = Cli{
-            base_path: "../../test_data/eeg/".to_string(),
-            ws_path: "/tmp".to_string(),
-            tensors_path: None,
-            store_path: "".to_string(),
-            term_logger_level: "".to_string(),
-            write_logger_level: "".to_string(),
-            logfile: "".to_string(),
-            limit: None,
-            num_threads: None,
-            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10, "xxx".into(), 10, 0.3, None))),
-            input_filters_kernel: None,
-        };
-
-
-        // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-
-        let loader = Arc::new(Box::new(ParquetLoader::new("../../test_data/eeg".into(), Some("../../test_data/eeg".into()), None)));
-        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
-            move |key: &String| {
-
-                SyncWrapper::new(
-                    loader.load(key, Device::Cpu),
-                    |e| Box::new(e.shallow_clone())
-                )
-            }, 4, 100,
-        )));
-
-        init_resources(
-            &cli,
-            None,
-            Arc::clone(&store),
-            "train_10.csv"
-        )?;
-
-        let motifs = run_find_motifs_on_group(
-            &cli,
-            &store,
-            vec![Cpu],
-            &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            Arc::clone(&executor_rc)
-        )?;
-
-        debug!("motifs={motifs:?}");
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], motifs);
-
-        Ok(())
-    }
 
     // #[test] TODO
     #[allow(dead_code)]
