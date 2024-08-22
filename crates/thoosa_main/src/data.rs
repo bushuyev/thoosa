@@ -152,8 +152,8 @@ pub fn load_to_logits_tensors<'a>(_base_path:&'a str, _tensors_path:Option<Strin
 }
 
 
-pub fn parquet_to_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, ThoosaError> {
-    let path = format!("{}/train_eegs/{}.parquet", base_path, eeg_id);
+pub fn parquet_to_tensor(base_path: &str, resource_id: &str, device: Device) -> Result<Tensor, ThoosaError> {
+    let path = format!("{}/train_eegs/{}.parquet", base_path, resource_id);
 
     parquet_to_tensor_by_path(path, device)
 }
@@ -168,12 +168,12 @@ pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Resu
 pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoosaError> {
     let scan_conf = ScanArgsParquet::default();
 
-    let eeg_df = LazyFrame::scan_parquet(//TODO read_parallel?
-                                         path,
-                                         scan_conf,
+    let df = LazyFrame::scan_parquet( //TODO read_parallel?
+                                      path,
+                                      scan_conf,
     )?;
 
-    Ok(eeg_df.collect()?)
+    Ok(df.collect()?)
 }
 //TODO loader
 pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, ThoosaError> {
@@ -183,14 +183,14 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
     Ok(resource_ids.iter().map(|resource_id| {
 
         //TODO config path
-        let eeg_df = LazyFrame::scan_parquet(
+        let df = LazyFrame::scan_parquet(
             format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
             scan_conf.clone(),
         ).unwrap().collect().unwrap();
 
-        debug!("eeg_id={:?} eeg_df.shape()={:?}", resource_id, eeg_df.shape());
+        debug!("eeg_id={:?} eeg_df.shape()={:?}", resource_id, df.shape());
 
-        eeg_df.shape().0
+        df.shape().0
     }).sum())
 }
 
@@ -237,11 +237,10 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
 
 }
 
-pub fn eegs_to_labels_tensors<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
+pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
     debug!("eegs_to_labels_tensors: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock();
-
 
     let loader_fn = move |resource: String| loader.load(&resource, *device);
     vec![
