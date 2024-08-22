@@ -2,7 +2,6 @@ mod data;
 
 use std::time::Instant;
 use log::{error, info};
-use thoosa_main::*;
 use thoosa_main::cli::run_cli;
 use thoosa_main::data::parquet_to_tensor_by_path;
 

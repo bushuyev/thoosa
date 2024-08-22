@@ -25,8 +25,8 @@ use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor
 use thoosa_shared::{batch_windows, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_store::{SqlStore, Store};
-use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
-use crate::{data, ParquetLoader};
+use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
+use crate::data;
 use crate::cli::Commands::{FindMotifs, Infer, InitResources, MotifsToTensor, PlotMotifSlices, RunAll, SelectMotifs, TrainFinal, TrainOnLabel, TrainOnMotifs};
 
 use crate::version::VERSION;

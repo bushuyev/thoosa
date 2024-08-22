@@ -14,7 +14,7 @@ use polars::prelude::{
 use tch::{Device, IndexOp, Tensor};
 
 use thoosa_common::ResourceLoader;
-use thoosa_common::utils::{from};
+use thoosa_common::utils::{from, load_tensor};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::TensorSliceIdx;
 use thoosa_store::{SqlStore, Store};
@@ -162,7 +162,6 @@ pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoosaErr
     Ok(df.collect()?)
 }
 
-
 pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, ThoosaError> {
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
@@ -257,9 +256,8 @@ mod data_tests {
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
-    use thoosa_shared::ThoosaError;
-
-    use crate::*;
+    use thoosa_shared::{TensorSliceIdx, ThoosaError};
+    use thoosa_shared::init_test_logging;
     use crate::data::{arr_to_expr, read_motif_to_iter, split_frame_by_offsets};
 
     #[ctor::ctor]
@@ -337,8 +335,6 @@ mod data_tests {
         Ok(())
     }
 
-
-
     #[test]
     fn test_read_motif_to_iter() -> Result<(), ThoosaError>{
         let motifs_iter = read_motif_to_iter("../../data_local/test_motifs/motifs_0.csv")?;
@@ -388,4 +384,53 @@ mod data_tests {
         Ok(())
     }
 
+}
+
+pub struct ParquetLoader {
+    base_path:String,
+    tensors_path:Option<String>,
+    dsp_filters: Option<Box<dyn Fn(Tensor) -> Tensor + Send + Sync>>,
+    resource_to_path:Box<dyn Fn(&str, &str)->String  + Send + Sync>
+}
+
+impl ParquetLoader {
+
+    pub fn new(
+        base_path: String,
+        tensors_path: Option<String>,
+        dsp_filters: Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync>>,
+        resource_to_path:Box<dyn Fn(&str, &str)->String  + Send + Sync>
+    ) -> Self {
+        Self {
+            base_path, tensors_path, dsp_filters, resource_to_path
+        }
+    }
+
+}
+
+impl ResourceLoader for ParquetLoader {
+    type K = String;
+    type V = Tensor;
+
+    fn load(&self, key: &String, device:Device) -> Box<Tensor> {
+
+        let t = if let Some(tensors_path) = self.tensors_path.as_ref() {
+            load_tensor(tensors_path.as_str(), key.as_str(), device)
+
+        } else {
+            parquet_to_tensor_by_path(
+                (self.resource_to_path)(self.base_path.as_str(), key.as_str()),
+                device
+            )
+
+        }.map(|t|{
+            match self.dsp_filters.as_ref() {
+                None => t,
+                Some(f) => f(t)
+            }
+
+        }).expect(format!("can't load {}", key).as_str());
+
+        Box::new(t)
+    }
 }
