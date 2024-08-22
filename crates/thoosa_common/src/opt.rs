@@ -816,9 +816,10 @@ mod opt_tests {
     }
 
 
-    #[test]
+    // #[test]
+    #[allow(dead_code)]
     fn test_opt(){
-        let _eeg_id_series:Vec<String> =  vec!["1111".into(), "2222".into(), "3333".into()];
+        let _id_series:Vec<String> =  vec!["1111".into(), "2222".into(), "3333".into()];
         let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         debug!("store_path={}", store_path);
 

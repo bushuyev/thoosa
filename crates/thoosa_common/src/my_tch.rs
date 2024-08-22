@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Mutex;
 
 use log::{debug, error, warn};
-use tch::{Device, IndexOp, Kind, Tensor};
+use tch::{Device, IndexOp, Tensor};
 use tch::Kind::Float;
 use tch::nn::{Init, LinearConfig, Module, Path};
 use tch::nn::ConvConfig;
@@ -296,77 +296,11 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 }
 
 
-// fn train(base_path:&str, device:Device) -> Result<(), ThoosaError> {
-//
-//
-//     let good_eegs = EEGs::good_eegs(base_path)?;
-//
-//     let t1 = Instant::now();
-//     let eegs = EEGs::load_eegs (
-//         base_path,
-//         // None,
-//         // Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
-//         Some(col("eeg_id").is_in(lit(good_eegs))),
-//         Some(data::ByPatientIdSplitter::new(0.7)),
-//     )?;
-//
-//
-//     debug!("eegs={:?}", eegs.len());
-//
-//     debug!("done in {}", t1.elapsed().as_millis());
-//     let vs = nn::VarStore::new(device.clone());
-//
-//
-//
-//     for num_blocks in [16, 32, 64] { //[2, 4, 6, 8, 16]
-//
-//         for kernel in [3, 5, 10, 20, 50, 100] { //[5, 7, 10, 20, 50, 100]
-//         debug!("---------------------------------------num_blocks={:?} kernel={:?}", num_blocks, kernel);
-//
-//             match configure_dense(50 * 200, num_blocks, 4, kernel, 20).build_tch_module(&vs.root()) {
-//                 Ok(model) => {
-//                     match utils::train(
-//                         &device,
-//                         eegs.as_ref() as &dyn DataBatch,
-//                         model,
-//                         &vs,
-//                         |pred: &Tensor, target: &Tensor| {
-//                             pred.cross_entropy_loss::<Tensor>(target, None, Reduction::Mean, -100, 0.0)
-//                         }
-//                     ){
-//                         Ok(_) => {
-//                             debug!("num_blocks={:?} kernel={:?} done", num_blocks, kernel);
-//                         }
-//                         Err(e) => {
-//                             debug!("num_blocks={:?} kernel={:?} train failed: {:?}", num_blocks, kernel, e);
-//                         }
-//                     }
-//                 }
-//                 Err(e) => {
-//                     debug!("num_blocks={:?} kernel={:?} build_tch_module failed: {:?}", num_blocks, kernel, e);
-//                 }
-//             };
-//
-//         }
-//     }
-//
-//     Ok(())
-//
-// }
-
-#[allow(dead_code)]
-fn load_batch(device: &Device, batch_size:i64) -> (Tensor, Tensor) {
-    (
-        tch::Tensor::randn([batch_size, 50 * 200, 20], (Kind::Float, device.clone())), //batch, 20 EEG feats, 50 sec * 200 samples per second,
-        tch::Tensor::randn([batch_size, 6], (Kind::Float, device.clone())) //batch, seizure_vote,lpd_vote,gpd_vote, lrda_vote, grda_vote,other_vote, 50 sec * 200 samples per second,
-    )
-}
-
 /// returns Tensor nets x batches x batch size
-pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Box<dyn Module>>>, eeg_t_channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
+pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Box<dyn Module>>>, channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
-    let input_t_size = eeg_t_channel.size();
-    debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", eeg_t_channel.size(), input_t_size, motif_nets.len());
+    let input_t_size = channel.size();
+    debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", channel.size(), input_t_size, motif_nets.len());
 
     assert!(input_t_size.len() == 1);
 
@@ -388,7 +322,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
     for slice_0_idx in folds.0 {
         debug!("apply_channel_motifs: slice_0_idx={:?}", slice_0_idx);
 
-        let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| eeg_t_channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
+        let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
         debug!("apply_channel_motifs: batch.size={:?} motif_batch_size={:?} motif_n={:?}", batch.size(), motif_batch_size, motif_n);
 
         let batch = batch.view((motif_batch_size, 1, motif_n));
@@ -404,7 +338,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
     if folds.1.len() > 0 {
         debug!("apply_channel_motifs: reminder={:?}", folds.1);
 
-        let batch = Tensor::stack(folds.1.into_iter().map(|i| eeg_t_channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
+        let batch = Tensor::stack(folds.1.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
         debug!("apply_channel_motifs: reminder, batch.size={:?} motif_batch_size={:?} motif_n={:?}", batch.size(), motif_batch_size, motif_n);
 
         let batch = batch.view((-1, 1, motif_n));
@@ -723,11 +657,11 @@ mod tch_tests {
         let nets = vec![Mutex::new(net_0), Mutex::new(net_1)];
 
 
-        let eeg_tensors = vec![motif_0_t, motif_1_t];
+        let tensors = vec![motif_0_t, motif_1_t];
 
-        let eeg_tensors_len = eeg_tensors.len();
+        let tensors_len = tensors.len();
 
-        let eeg_tensors = Arc::new(Mutex::new(eeg_tensors));
+        let tensors_arc = Arc::new(Mutex::new(tensors));
 
         let motif_batch_size = 10;
 
@@ -735,15 +669,15 @@ mod tch_tests {
         let max_folds = max_folds.0.get(0).map(|v|v.len()).unwrap_or(max_folds.1.len());
 
 
-        let full_batch_vec = (0..eeg_tensors_len).into_par_iter().map(|i|{
+        let full_batch_vec = (0..tensors_len).into_par_iter().map(|i|{
 
-            let eeg_t = {
-                let guard = eeg_tensors.lock().unwrap();
+            let t = {
+                let guard = tensors_arc.lock().unwrap();
                 guard.get(i).expect(format!("can't get tensor at {}", i).as_str()).shallow_clone()
             };
 
 
-            super::apply_channel_motifs(motif_n, step, &nets, eeg_t, motif_batch_size, 2, max_folds, &Cpu)
+            super::apply_channel_motifs(motif_n, step, &nets, t, motif_batch_size, 2, max_folds, &Cpu)
 
         }).collect::<Vec<Tensor>>();
 
