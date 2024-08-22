@@ -14,7 +14,7 @@ use rand::prelude::SliceRandom;
 use regex::Regex;
 
 use thoosa_common::utils::DataBatch;
-use thoosa_main::data::{parquet_to_tensor, AllTrainSplitter, Set, Splitter};
+use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
 use thoosa_shared::ThoosaError;
 
 
@@ -73,6 +73,12 @@ impl Splitter for ByPatientIdSplitter {
         Ok(df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)))
         // Ok(df.clone().with_column(lit(1).alias("set"))) //.collect()?.lazy()
     }
+}
+
+pub fn parquet_to_tensor(base_path: &str, resource_id: &str, device: Device) -> Result<Tensor, ThoosaError> {
+    let path = format!("{}/train_eegs/{}.parquet", base_path, resource_id);
+
+    parquet_to_tensor_by_path(path, device)
 }
 
 
@@ -664,11 +670,11 @@ mod tests {
     use thoosa_common::ResourceLoader;
     use thoosa_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
     use thoosa_common::utils::{from, plot_series};
-    use thoosa_main::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
-    use thoosa_main::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, ParquetLoader, RunAllParams};
-    use thoosa_main::data::parquet_to_tensor;
+    use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
+    use thoosa_main::ParquetLoader;
+    use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
-    use super::{ByPatientIdSplitter, EEG};
+    use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_shared::ThoosaError;
     use thoosa_store::SqlStore;
     use crate::data::EEGs;
