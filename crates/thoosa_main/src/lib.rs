@@ -33,7 +33,7 @@ use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_store::{SqlStore, Store};
 
 use crate::Commands::*;
-use crate::data::{clc_records, eegs_to_labels_tensors, load_to_logits_tensors, parquet_to_tensor};
+use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, parquet_to_tensor};
 use crate::version::VERSION;
 
 pub mod data;
@@ -190,12 +190,21 @@ pub enum Commands {
 pub struct ParquetLoader {
     base_path:String,
     tensors_path:Option<String>,
-    dsp_filters:Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync >>
+    dsp_filters: Option<Box<dyn Fn(Tensor) -> Tensor + Send + Sync>>,
+    resource_to_path:Box<dyn Fn(&str, &str)->String  + Send + Sync>
 }
 
 impl ParquetLoader {
-    pub fn new(base_path: String, tensors_path: Option<String>, dsp_filters: Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync>>) -> Self {
-        Self { base_path, tensors_path, dsp_filters }
+
+    pub fn new(
+        base_path: String,
+        tensors_path: Option<String>,
+        dsp_filters: Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync>>,
+        resource_to_path:Box<dyn Fn(&str, &str)->String  + Send + Sync>
+    ) -> Self {
+        Self {
+            base_path, tensors_path, dsp_filters, resource_to_path
+        }
     }
 
 }
@@ -208,13 +217,16 @@ impl ResourceLoader for ParquetLoader {
 
         let t = if let Some(tensors_path) = self.tensors_path.as_ref() {
             load_tensor(tensors_path.as_str(), key.as_str(), device)
+
         } else {
             parquet_to_tensor(self.base_path.as_str(), key.as_str(), device)
+
         }.map(|t|{
             match self.dsp_filters.as_ref() {
                 None => t,
                 Some(f) => f(t)
             }
+
         }).expect(format!("can't load {}", key).as_str());
 
         Box::new(t)
@@ -238,19 +250,22 @@ pub fn run_cli<F, L>(
     ).expect("failed to init logging");
 
     let store = Arc::new(Mutex::new(SqlStore::from_path(&cli.store_path)?));
-    let loader = Arc::new(Box::new(ParquetLoader::new(cli.base_path.clone(), cli.tensors_path.clone(), Some(Box::new(move |t:Tensor|{
-
-        match cli.input_filters_kernel {
-            None => {
-                t
+    let loader = Arc::new(Box::new(ParquetLoader::new(
+        cli.base_path.clone(),
+        cli.tensors_path.clone(),
+        Some(Box::new(move |t: Tensor| {
+            match cli.input_filters_kernel {
+                None => {
+                    t
+                }
+                Some(kernel) => {
+                    debug!("main: loading with kernel={}", kernel);
+                    t.avg_pool1d(kernel, 1, 0, false, false)
+                }
             }
-            Some(kernel) => {
-                debug!("main: loading with kernel={}", kernel);
-                t.avg_pool1d(kernel, 1, 0, false, false)
-            }
-        }
-
-    })))));
+        })),
+        Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)),
+    )));
 
     let devices = list_devices();
 
@@ -262,7 +277,7 @@ pub fn run_cli<F, L>(
 
     //TODO optional for benchmark
     rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
-    let exec_loader = ParquetLoader::new(cli.base_path.clone(), cli.tensors_path.clone(),None);
+    let exec_loader = ParquetLoader::new(cli.base_path.clone(), cli.tensors_path.clone(),None, Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)));
 
     let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
         move |key: &String| {
@@ -313,19 +328,19 @@ pub fn run_cli<F, L>(
             run_train_on_motifs(&cli, &store, devices, train_on_motif_params, Arc::clone(&loader))?;
         }
 
-        Some(TrainOnLabel(train_on_eeg_params)) => {
-            debug!("train_on_eeg_params={:?}", train_on_eeg_params);
+        Some(TrainOnLabel(train_on_label_params)) => {
+            debug!("train_on_label_params={:?}", train_on_label_params);
 
-            let train_on_eeg_params = if let Some(train_resource_group) = train_on_eeg_params.train_resource_group() {
+            let train_on_label_params = if let Some(train_resource_group) = train_on_label_params.train_resource_group() {
                 let train_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_resource_group.as_str())? };
-                let valid_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_on_eeg_params.valid_resource_group().expect("valid_resource_group").as_str())? };
-                train_on_eeg_params.with_labels_datasets(train_labels_datasets, valid_labels_datasets)
+                let valid_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_on_label_params.valid_resource_group().expect("valid_resource_group").as_str())? };
+                train_on_label_params.with_labels_datasets(train_labels_datasets, valid_labels_datasets)
 
             } else {
-                train_on_eeg_params.clone()
+                train_on_label_params.clone()
             };
 
-            run_train_on_label(&cli, vec![], &store, devices, &train_on_eeg_params, Arc::clone(&loader))?;
+            run_train_on_label(&cli, vec![], &store, devices, &train_on_label_params, Arc::clone(&loader))?;
         }
 
         Some(TrainFinal(train_final_params)) => {
@@ -391,7 +406,7 @@ pub fn run_cli<F, L>(
                 Arc::clone(&loader),
             )?;
 
-            info!("run_train_on_eeg done");
+            info!("run_train_on_label done");
 
             run_train_final(
                 &cli, &store,
@@ -462,7 +477,7 @@ pub fn run_cli<F, L>(
     Ok(())
 }
 
-fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, train_final_params: &TrainFinalParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
+pub fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, train_final_params: &TrainFinalParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
 
     let labels = {store.lock().list_labels()? };
 
@@ -501,23 +516,23 @@ fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device, tra
     Ok(())
 }
 
-fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_eeg_params: &TrainOnLabelParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
-    debug!("run_train_on_eeg: train_on_eeg_params={:?}", train_on_eeg_params);
-    // let labels_kinds = store_guard.corrs_descr(train_on_eeg_params.corr_run())?;
+pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_label_params: &TrainOnLabelParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
+    debug!("run_train_on_label: train_on_label_params={:?}", train_on_label_params);
+    // let labels_kinds = store_guard.corrs_descr(train_on_label_params.corr_run())?;
 
 
-    let valid_datasets_map = train_on_eeg_params.valid_labels_datasets().into_iter().fold(HashMap::new(), |mut a, v|{
+    let valid_datasets_map = train_on_label_params.valid_labels_datasets().into_iter().fold(HashMap::new(), |mut a, v|{
         a.insert(v.0.clone(), v.1.clone());
         a
     });
 
-    if valid_datasets_map.len() != train_on_eeg_params.train_labels_datasets().len() {
+    if valid_datasets_map.len() != train_on_label_params.train_labels_datasets().len() {
         error!("valid_datasets_map={:?}", valid_datasets_map);
-        error!("train_on_eeg_params.train_labels_datasets()={:?}", train_on_eeg_params.train_labels_datasets());
-        panic!("valid_datasets_map.len() != train_on_eeg_params.train_labels_datasets().len()");
+        error!("train_on_label_params.train_labels_datasets()={:?}", train_on_label_params.train_labels_datasets());
+        panic!("valid_datasets_map.len() != train_on_label_params.train_labels_datasets().len()");
     } //TODO check keys
 
-    let label_datasets_with_run_id = train_on_eeg_params.train_labels_datasets().into_iter().flat_map( |ds| input_run_ids.iter().map(|input_run_id|((ds.0.clone(), ds.1.clone()), *input_run_id))).collect::<Vec<((String, String), usize)>>();
+    let label_datasets_with_run_id = train_on_label_params.train_labels_datasets().into_iter().flat_map( |ds| input_run_ids.iter().map(|input_run_id|((ds.0.clone(), ds.1.clone()), *input_run_id))).collect::<Vec<((String, String), usize)>>();
     let chunk_len = max(1, label_datasets_with_run_id.len()/devices.len());
 
     let devices_train_labels_datasets = devices.into_iter().cycle().zip(label_datasets_with_run_id.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[((String, String), usize)])>>();//corrs_run(id, label)
@@ -533,8 +548,7 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
             };
 
             let channels_motifs_models = load_motif_models(Path::new(&cli.ws_path).join("motifs"), label.clone(), 10, &device_i, &motif_node_params).expect("load_motif_models");//TODO num channels, motifs to util
-            // debug!("train_on_eeg: models.size={:?} models={:?}", channels_motifs_models.len(), channels_motifs_models);
-            debug!("train_on_eeg: models.size={:?}", channels_motifs_models.len());
+            debug!("train_on_label: models.size={:?}", channels_motifs_models.len());
 
 
             //TODO remove mutexes
@@ -545,7 +559,7 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
                 panic!("no motif nets found");
             }
 
-            let motif_batches = batch_windows(684400, motif_node_params.num_features() as usize, train_on_eeg_params.step(), train_on_eeg_params.motif_batch_size() as usize);
+            let motif_batches = batch_windows(684400, motif_node_params.num_features() as usize, train_on_label_params.step(), train_on_label_params.motif_batch_size() as usize);
             let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
 
@@ -553,7 +567,7 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
                 let mut store_guard = store.lock();
 
                 (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand
-                    let label_node_params = LabelNodeParams::new(20, max_nets, max_motif_batches as i64, train_on_eeg_params.motif_batch_size());
+                    let label_node_params = LabelNodeParams::new(20, max_nets, max_motif_batches as i64, train_on_label_params.motif_batch_size());
 
                     a.1.push(store_guard.save_tree_run(Some(*input_run_id), "todo", &vec![], prefix_properties("motifs_node", label_node_params.to_properties_map())).expect("save_tree_run"));
                     a.0.push(label_node_params);
@@ -569,33 +583,33 @@ fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<Sq
                     &cli.ws_path,
                     &motif_node_params,
                     &label_node_params,
-                    train_on_eeg_params,
-                    eegs_to_labels_tensors(
+                    train_on_label_params,
+                    labeled_tensors_by_descr(
                         label,
                         resource_set,
                         &device_i,
                         Arc::clone(&store),
                         Arc::clone(&loader)
                     ),
-                    eegs_to_labels_tensors(
+                    labeled_tensors_by_descr(
                         label,
                         valid_datasets_map.get(label).expect(format!("valid dataset for {}", label).as_str()),
                         &device_i,
                         Arc::clone(&store),
                         Arc::clone(&loader)
                     ),
-                    train_on_eeg_params.items_per_label(),
-                    train_on_eeg_params.window() as i64,
-                    train_on_eeg_params.step(),
-                    train_on_eeg_params.motif_batch_size(),
+                    train_on_label_params.items_per_label(),
+                    train_on_label_params.window() as i64,
+                    train_on_label_params.step(),
+                    train_on_label_params.motif_batch_size(),
                     20,
                     684400,
                     &device_i,
                     label
                 ) {
                     Ok(vs) => {
-                        vs.save(Path::new(&cli.ws_path).join("label_models").join(format!("{}_{}.safetensors", label, train_on_eeg_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
-                        // fs::write(Path::new(train_on_eeg_params.models_dir()).join(format!("{}_{}.json", label, train_on_eeg_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
+                        vs.save(Path::new(&cli.ws_path).join("label_models").join(format!("{}_{}.safetensors", label, train_on_label_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
+                        // fs::write(Path::new(train_on_label_params.models_dir()).join(format!("{}_{}.json", label, train_on_label_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
                     }
                     Err(e) => {
                         //should be no motif nets found only
@@ -794,13 +808,13 @@ fn plot_motif_slices(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, pl
 
     let slices = load_motif_slices(
         cli.base_path.as_str(), channel, 1000, slices,
-        move |eeg_id| {
-            loader.load(&eeg_id.to_string(), device)
+        move |resource_id| {
+            loader.load(&resource_id.to_string(), device)
         },
         device
     );
 
-    let all_sices = slices.iter().flat_map(|(_eeg_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+    let all_sices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
     check_slices(&all_sices, 0.9);
 
@@ -873,10 +887,10 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
             let all_sices_1 = train_nets::slices_in_all_resources(
                 load_motif_slices(
                     cli.base_path.as_str(), channel, filter_and_slice.window(), slices,
-                    move |eeg_id| {
+                    move |resource_id| {
                         // loader_m.load(&eeg_id.to_string(), device)
 
-                        let t = loader_m.load(&eeg_id.to_string(), device);
+                        let t = loader_m.load(&resource_id.to_string(), device);
 
                         if let Some(filter) = filter_op {
                             Box::new(filter(&t))
@@ -897,8 +911,8 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
             let all_sices_0 = train_nets::slices_in_all_resources(
                 load_motif_slices(
                     cli.base_path.as_str(), channel, filter_and_slice.window(), slices,
-                    move |eeg_id| {
-                        loader_m.load(&eeg_id.to_string(), device)
+                    move |resource_id| {
+                        loader_m.load(&resource_id.to_string(), device)
                     },
                     device
                 )
@@ -998,8 +1012,8 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
             let loader_m = Arc::clone(&loader);
             (
                 label_dataset.0.clone(),
-                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(move |eeg_id| {
-                    loader_m.load(&eeg_id, device)
+                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(move |resource_id| {
+                    loader_m.load(&resource_id, device)
                 })
             )
         }).collect(),
@@ -1033,17 +1047,6 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
 #[cfg(test)]
 mod main_tests {
-    use std::sync::{Arc};
-    use parking_lot::Mutex;
-    use log::debug;
-    use tch::Device::Cpu;
-    use thoosa_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
-    use thoosa_motifs::find::{SelectMotifsParams};
-    use thoosa_shared::ThoosaError;
-    use thoosa_store::SqlStore;
-
-    use crate::{run_select_motifs, run_train_final, run_train_on_label, Cli, ParquetLoader};
-    use crate::Commands::{SelectMotifs, TrainFinal, TrainOnLabel};
 
 
     #[ctor::ctor]
@@ -1052,161 +1055,5 @@ mod main_tests {
     }
 
 
-    // #[test] TODO
-    #[allow(dead_code)]
-    fn test_run_select_motifs() -> Result<(), ThoosaError>{
-        let cli = Cli{
-            base_path: "../../data/".to_string(),
-            ws_path: "/tmp".to_string(),
-            tensors_path: None,
-            store_path: "".to_string(),
-            term_logger_level: "".to_string(),
-            write_logger_level: "".to_string(),
-            logfile: "".to_string(),
-            limit: None,
-            num_threads: None,
-            command: Some(SelectMotifs(SelectMotifsParams::dummy(vec![0, 1], vec![], 0.1))),
-            input_filters_kernel: None,
-        };
-
-        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
-        let corr_ids = run_select_motifs(
-            &cli,
-            &store,
-            vec![Cpu],
-            &SelectMotifsParams::dummy(vec![0, 1], vec![("seizure".into(), "seizure/10".into())], 0.1),
-            Arc::clone(&loader)
-        )?;
-
-        debug!("corr_ids={:?}", corr_ids);
-
-        Ok(())
-    }
-
-
-
-    // #[test] TODO
-    #[allow(dead_code)]
-    fn test_run_train_on_label() -> Result<(), ThoosaError>{
-        let train_eeg_params = TrainOnLabelParams::dummy(
-            1000,
-            1000,
-            "../../data_local/test_models/".into(),
-            "/tmp".into(),
-            vec![("grda".into(), "grda/3".into())],
-            vec![("grda".into(), "grda/3".into())], 100, 2, 2, 1.0e-5,
-        );
-
-        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
-
-        let cli = Cli{
-            base_path: "../../data/".into(),
-            ws_path: "/tmp".to_string(),
-            tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
-            store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
-            term_logger_level: "DEBUG".into(),
-            write_logger_level: "DEBUG".into(),
-            logfile: "/tmp/thoosa_test.log".into(),
-            limit: None,
-            num_threads: None,
-            command: Some(TrainOnLabel(train_eeg_params.clone())),
-            input_filters_kernel: None,
-        };
-
-        let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
-
-        run_train_on_label(
-            &cli,
-            vec![],
-            &store,
-            vec![Cpu],
-            &train_eeg_params,
-            Arc::clone(&loader),
-        )?;
-
-        Ok(())
-    }
-
-    // #[test] TODO
-    #[allow(dead_code)]
-    fn test_run_train_final() -> Result<(), ThoosaError>{
-
-        let train_final_params = TrainFinalParams::dummy(
-            1000,
-            1000,
-            vec![
-                "../../data_down/group_1_labels_100_0-100/0_100_models".into(),
-                "../../data_down/group_1_labels_100_100_200/100_200_models".into()
-            ],
-            "/tmp/final.safetensors".into(),
-            "pure group 3".into(),
-            "pure group 3".into(),
-            10,
-            100,
-            5
-        );
-
-        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None)));
-
-        let cli = Cli{
-            base_path: "../../data/".into(),
-            ws_path: "/tmp".to_string(),
-            tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
-            store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
-            term_logger_level: "DEBUG".into(),
-            write_logger_level: "DEBUG".into(),
-            logfile: "/tmp/thoosa_test.log".into(),
-            limit: None,
-            num_threads: None,
-            command: Some(TrainFinal(train_final_params.clone())),
-            input_filters_kernel: None,
-        };
-
-        let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
-
-         run_train_final(
-             &cli,
-             &store,
-             &Cpu,
-             &train_final_params,
-             Arc::clone(&loader)
-         )?;
-
-        Ok(())
-    }
-
-    // #[test]
-    // fn motifs_to_store() -> Result<(), ThoosaError>{
-    //     let runs = vec![
-    //         ("2024-02-14T17:36:36Z", "seizure"),
-    //         ("2024-02-15T17:14:09Z", "lpd"),
-    //         ("2024-02-16T06:34:04Z", "gpd"),
-    //         ("2024-02-16T11:31:30Z", "lrda"),
-    //         ("2024-02-16T16:29:11Z", "grda"),
-    //         ("2024-02-19T07:12:01Z", "other"),
-    //     ];
-    //
-    //     let mut store = SqlStore::new("thoosa_imp.db3")?;
-    //
-    //     for (dir, desc) in runs {
-    //         let (_, eeg_ids) = read_eeg_index(format!("../../data_down/14_02_results/{}", dir).as_str())?;
-    //
-    //         let run_id = store.save_run(format!("{}/csv motifs import", desc).as_str(), &eeg_ids)?;
-    //
-    //         for channel in 0..20 {
-    //             let r = read_motif_to_iter_imp(format!("../../data_down/14_02_results/{}/motifs_{}.csv", dir, channel).as_str())?;
-    //
-    //             for chunk in r.chunks(500) {
-    //                 store.save_slices(run_id, channel, chunk.to_vec());
-    //             }
-    //
-    //             store.set_motifs(run_id, channel);
-    //
-    //             debug!("desc={}, channel={}, run_id={}, r.len()={}", desc, channel, run_id, r.len());
-    //         }
-    //     }
-    //     Ok(())
-    // }
 
 }
