@@ -661,7 +661,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::UNIX_EPOCH;
     use log::debug;
-    use parking_lot::{Mutex, RawMutex};
+    use parking_lot::{Mutex};
     use plotters::prelude::{BLACK, RED};
     use polars::prelude::{col, concat_list, count, lit, when, LazyCsvReader, LazyFileListReader, NamedFrom, Series};
     use tch::{Device, Tensor};
@@ -671,7 +671,7 @@ mod tests {
     use thoosa_common::train_nets::{TrainFinalParams, TrainOnLabelParams};
     use thoosa_common::utils::{from, plot_series};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
-    use thoosa_main::ParquetLoader;
+    use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
