@@ -264,8 +264,8 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, ThoosaError>{
 
 }
 
-pub fn load_tensor(base_path: &str, eeg_id: &str, device: Device) -> Result<Tensor, ThoosaError> {
-    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", eeg_id)))
+pub fn load_tensor(base_path: &str, tensor_id: &str, device: Device) -> Result<Tensor, ThoosaError> {
+    Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", tensor_id)))
         .map(|t|t.to_device(device)).map_err(|e| ThoosaError::new(e.to_string()))
 }
 

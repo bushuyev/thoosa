@@ -661,7 +661,7 @@ mod opt_tests {
                 }, x.into_iter().zip(y.into_iter()).collect::<Vec<(f32, f32)>>()),
 
 
-            ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "test_bfgs_one_dim_no_line_search", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         )?;*/
 
         Ok(())
@@ -703,7 +703,7 @@ mod opt_tests {
                   }, x.into_iter().zip(y.into_iter()).collect::<Vec<(f32, f32)>>()),
 
 
-              ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+              ], "test_bfgs_one_dim_with_strong_wolfe", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
           )?;*/
 
         Ok(())

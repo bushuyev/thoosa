@@ -63,7 +63,7 @@ pub struct TrainOnLabelParams {
     motif_batch_size:i64,
 
     #[arg(long, default_value_t = 5)]
-    items_per_label:usize //TODO eeg batch size?
+    items_per_label:usize //TODO batch size?
 }
 
 impl TrainOnLabelParams {
@@ -280,7 +280,7 @@ pub fn train_on_label<I>(
 
     assert!(labels == valid_keys);
 
-    debug!("train_on_eeg: keys={:?} labels_loaders={:?}", labels, train_labels_loaders_map.keys());
+    debug!("train_on_label: keys={:?} labels_loaders={:?}", labels, train_labels_loaders_map.keys());
 
 
     let channels_motifs_models = load_motif_models(Path::new(models_path.as_ref()).join("motifs"), label.clone(), channels as usize, device, &motif_node_params)?;//TODO num channels, motifs to util
@@ -316,20 +316,20 @@ pub fn train_on_label<I>(
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
 
         |pred: &Tensor, target: &Tensor| {
-            debug!("train_on_eeg: pred.size={:?}", pred.size());
+            debug!("train_on_label: pred.size={:?}", pred.size());
             let pred_y = pred.squeeze();
             //pred.i((.., 0, 0));
-            debug!("train_on_eeg: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
+            debug!("train_on_label: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
         },
         params.cycles,
         nn::AdamW::default().build(&vs_0, params.lr)?,
         |t: Tensor| {
-            debug!("train_on_eeg: t.size()={:?} ", t.size());
+            debug!("train_on_label: t.size()={:?} ", t.size());
             //merge max_motif_batches * motif_batch_size
             let t_out = view_for_label_model(t, channels, label_node_params.max_motif_nets, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
             //t.size()[0] - batch size
-            debug!("train_on_eeg: t_out.size()={:?}",  t_out.size());
+            debug!("train_on_label: t_out.size()={:?}",  t_out.size());
             t_out
         },
     )?;
@@ -459,7 +459,7 @@ pub fn train_final<I>(_ws_dir: impl AsRef<Path>, params: &TrainFinalParams, trai
     Ok(vs_0)
 }
 
-pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>, motif_node_params: MotifNodeParams) -> Result<(Vec<String>, Tensor), ThoosaError>
+pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>, motif_node_params: MotifNodeParams) -> Result<(Vec<String>, Tensor), ThoosaError>
     where F:Fn(&Path) -> Result<Tensor, ThoosaError> + Sync{
 
 
@@ -477,10 +477,10 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
     debug!("infer: params.input_data={:?} models={:?}", params.input_data, models);
     debug!("infer: labels={:?}", labels);
 
-    let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|eeg| {
-        let eeg = eeg.expect("file: ");
+    let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|dir_entry| {
+        let dir_entry = dir_entry.expect("file: ");
 
-        let t = eeg_to_tensor(eeg.path().as_path()).expect("eeg");
+        let t = path_to_tensor(dir_entry.path().as_path()).expect(format!("can't load{dir_entry:?}").as_str());
         debug!("infer: t.size={:?}", t.size());
 
         let t = Tensor::stack(labels.iter().map(|label|{
@@ -516,7 +516,7 @@ pub fn infer<F>(params: &InferParams, eeg_to_tensor:F, motif_n: i64, step: usize
         debug!("infer: pred={:?}", pred.size());
         // debug!("infer: pred={:?}", from::<Vec<f32>>(&pred));
         (
-            eeg.path().file_stem().unwrap().to_str().unwrap().to_string(),
+            dir_entry.path().file_stem().unwrap().to_str().unwrap().to_string(),
             pred
         )
     }).collect::<Vec<(String, Tensor)>>();
@@ -616,7 +616,7 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
 
     // let motif_node_params = MotifNodeParams::from_properties_map(store_guard.list_run_params(run_id, None)?);
 
-    debug!("train_on_eeg: motif_node_params={:?}", motif_node_params);
+    debug!("train_on_label: motif_node_params={:?}", motif_node_params);
 
     let mut channels_motifs_models = vec![];
 
@@ -1119,16 +1119,16 @@ impl From<&str> for MotifsBy {
 }
 
 /// returns Tensor channels x nets x batches x batch size
-fn apply_label_motifs(motif_n: i64, step: usize, eeg_t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
+fn apply_label_motifs(motif_n: i64, step: usize, t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
     let max_nets = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
 
-    debug!("apply_label_motifs: eeg_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", eeg_t.size());
+    debug!("apply_label_motifs: eeg_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", t.size());
 
     let channels_motifs = Tensor::stack(
         motif_nets
             .iter()
             .enumerate()
-            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, eeg_t.i((i as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches, device))
+            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, t.i((i as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches, device))
             .collect::<Vec<_>>().as_slice(),
         0
     );
@@ -1390,7 +1390,7 @@ mod train_tests {
         let motif_n = 100;
         let step = (motif_n / 1) as usize;
 
-        let eeg_t = make_test_eeg(input_n);
+        let t = make_test_tensor(input_n);
 
         let motif_nets = vec![
             vec![Mutex::new(test_net(motif_n, 1.)?), Mutex::new(test_net(motif_n, 2.)?)], //channel 0 nets
@@ -1402,7 +1402,7 @@ mod train_tests {
         let motif_batches = batch_windows(input_n as usize, motif_n as usize, step, batch_size);
         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
-        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], eeg_t.i((0, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
+        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], t.i((0, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
 
         let channel_0_motifs = Tensor::stack(&[
@@ -1412,7 +1412,7 @@ mod train_tests {
         ).totype(Float).view((2, 1, 10));
         assert_eq!(channel_0_motifs, channel_0_t);
 
-        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], eeg_t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
+        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
         debug!("max_motif_batches={:?}", max_motif_batches);
 
@@ -1425,7 +1425,7 @@ mod train_tests {
 
         debug!("channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
-        let channels_motifs = super::apply_label_motifs(motif_n, step, &eeg_t, &motif_nets, batch_size as i64, max_motif_batches, &Cpu);
+        let channels_motifs = super::apply_label_motifs(motif_n, step, &t, &motif_nets, batch_size as i64, max_motif_batches, &Cpu);
 
         assert_eq!(
             Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
@@ -1440,8 +1440,8 @@ mod train_tests {
     fn test_apply_motif_models_diff_len() -> Result<(), ThoosaError>{
         let input_n_0 = 1000;
         let motif_n= 120;
-        let eeg_t_0 = make_test_eeg(input_n_0);
-        let eeg_t_1 = make_test_eeg(831);
+        let t_0 = make_test_tensor(input_n_0);
+        let t_1 = make_test_tensor(831);
 
         let motif_batch_size = 13;
 
@@ -1458,11 +1458,11 @@ mod train_tests {
 
         debug!("max_motif_batches={}", max_motif_batches);
 
-        let channels_motifs_0 = super::apply_label_motifs(motif_n, step, &eeg_t_0, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_0 = super::apply_label_motifs(motif_n, step, &t_0, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_0.size={:?}", channels_motifs_0.size());
 
-        let channels_motifs_1 = super::apply_label_motifs(motif_n, step, &eeg_t_1, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_1 = super::apply_label_motifs(motif_n, step, &t_1, &motif_nets, motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
@@ -1472,7 +1472,7 @@ mod train_tests {
     }
 
     //5 ch
-    fn make_test_eeg(input_n: i64) -> Tensor {
+    fn make_test_tensor(input_n: i64) -> Tensor {
         Tensor::vstack(&[
             Tensor::from_slice((0..input_n).map(|i| i as f32).collect::<Vec<_>>().as_slice()),
             Tensor::from_slice((0..input_n).map(|i| i as f32 * 2.).collect::<Vec<_>>().as_slice()),
@@ -1485,13 +1485,13 @@ mod train_tests {
     fn load_test_tensor(id:String) ->Box<Tensor> {
         debug!("test_load_tensor: {}", id);
 
-        Box::new(make_test_eeg(1000))
+        Box::new(make_test_tensor(1000))
     }
 
 
     #[test]
     fn test_train_on_label() -> Result<(), ThoosaError> {
-        let models_path = Path::new("/tmp/test_train_on_eeg").join(cdt_for_dir());
+        let models_path = Path::new("/tmp/test_train_on_label").join(cdt_for_dir());
         fs::create_dir_all(&models_path)?;
         fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(100))?)?;
 
@@ -1582,7 +1582,7 @@ mod train_tests {
         let channels = 5;
 
         let motif_batch_size = 7;
-        let max_motif_batches = 978;//from 684400 in test_train_on_eeg
+        let max_motif_batches = 978;//from 684400 in test_train_on_label
 
 
 
@@ -1593,7 +1593,7 @@ mod train_tests {
 
 
         let load_cl = move |_id| {
-            (Box::new(make_test_eeg(1000)), Box::new(Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
+            (Box::new(make_test_tensor(1000)), Box::new(Tensor::from_slice(&[0.1, 0.1, 0.1, 0.1, 0.3, 0.3])))
         };
         super::train_final(
             &"/tmp/",
@@ -1689,11 +1689,11 @@ mod train_tests {
 
         let input_path = Path::new("/tmp/test_infer_input").join(&cdt);
         for i in 0..10 {
-            save_fake_eeg(&input_path, format!("123123213{}.parquet", i).as_str());
+            save_test_tensor(&input_path, format!("123123213{}.parquet", i).as_str());
         }
 
 
-        fn test_eeg_to_t(path:&Path) -> Result<Tensor, ThoosaError> {
+        fn test_path_to_t(path:&Path) -> Result<Tensor, ThoosaError> {
             debug!("test_eeg_to_t: path={:?}", path);
 
             let t = Tensor::vstack(&[
@@ -1719,7 +1719,7 @@ mod train_tests {
                 input_data: input_path.to_str().unwrap().to_string(),
                 output: "/tmp/out.csv".to_string()
             },
-            test_eeg_to_t,
+            test_path_to_t,
             motif_n,
             step,
             motif_batch_size,
@@ -1744,7 +1744,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_fake_eeg(input_path: &PathBuf, name: &str) {
+    fn save_test_tensor(input_path: &PathBuf, name: &str) {
         fs::create_dir_all(input_path).unwrap();
         fs::write(&input_path.join(name), "lalalal").unwrap();
     }
