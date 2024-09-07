@@ -163,6 +163,7 @@ pub(crate) struct TensorProblem<F> where F:Fn(&ArgmTensor)->Tensor{
 
 impl <F> TensorProblem<F> where F:Fn(&ArgmTensor)->Tensor {
 
+    #[allow(dead_code)]
     pub fn new(loss_fn:F) -> Self {
         Self {
             loss_fn

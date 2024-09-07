@@ -4,6 +4,7 @@ use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 
 //https://github.com/pytorch/pytorch/pull/8824
+#[allow(dead_code)]
 pub struct BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
     func:Box<F>
 }
@@ -23,6 +24,7 @@ pub struct BFGSParams {
     tolerance_change:f64
 }
 
+#[allow(dead_code)]
 impl BFGSParams {
     pub fn with_lr(mut self, lr: f64) -> Self {
         self.lr = lr;
@@ -66,12 +68,14 @@ impl Default for BFGSParams {
 
 impl <F> BFGS<F> where F:FnMut(&mut Tensor)->Tensor {
 
+    #[allow(dead_code)]
     pub fn new(func: F) -> Self {
         Self {
             func:Box::new(func)
         }
     }
 
+    #[allow(dead_code)]
     pub fn opt(&mut self, x: Tensor, params:Option<BFGSParams>){
         tch::no_grad(|| {
             self._opt(x, params.unwrap_or_default())

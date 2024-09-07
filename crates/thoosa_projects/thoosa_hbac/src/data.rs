@@ -26,6 +26,8 @@ pub struct ByPatientIdSplitter {
 }
 
 impl ByPatientIdSplitter {
+
+    #[allow(dead_code)]
     pub fn new(train_frac:f32) -> Self {
         Self {
             train_frac: train_frac,
@@ -359,6 +361,7 @@ pub struct EEGs {
     batch_size: usize
 }
 
+#[allow(dead_code)]
 impl EEGs {
 
     pub fn good_eegs(base_path: &str)  -> Result<Series, ThoosaError>{
