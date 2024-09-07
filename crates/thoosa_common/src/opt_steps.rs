@@ -12,23 +12,23 @@ struct EnvParams {
 }
 
 impl EnvParams {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
+#[allow(dead_code)]
 struct OptParams {
 
 }
 
 impl OptParams {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {}
     }
 }
-
-
-
 
 trait Apply {
     fn apply(&self, t:Box<Tensor>) -> Box<Tensor>;
@@ -40,21 +40,31 @@ struct ApplyComp<'a> {
 }
 
 impl <'a> ApplyComp<'a> {
+
+    #[allow(dead_code)]
     pub fn new(applies: Vec<&'a Box<dyn Apply>>) -> Self {
         Self { applies }
     }
 
     pub fn from_map(value: Option<&'a RunIdsStack>, applies_map:&'a mut HashMap<usize, Box<dyn Apply>>) -> Self {
         Self {
-            applies: value.map(|run_ids_stack|run_ids_stack.run_ids.iter().map(|run_id|applies_map.get(run_id).expect("applies_map.get(run_id)")).collect::<Vec<_>>()).unwrap_or(vec![])
+            applies: value
+                .map(
+                    |run_ids_stack|
+                        run_ids_stack.run_ids.iter()
+                            .map(|run_id|applies_map.get(run_id).expect(format!("applies_map no {run_id}").as_str()))
+                            .collect::<Vec<_>>()
+                ).unwrap_or(vec![])
         }
     }
 }
 #[allow(dead_code)]
 impl Apply for ApplyComp<'_> {
+
     fn apply(&self, t:Box<Tensor>) -> Box<Tensor> {
 
         let mut t = t;
+
         for apply in &self.applies {
             t = apply.apply(t)
         }
@@ -67,7 +77,9 @@ struct ApplyNet {
     net: Box<dyn Module>,
 }
 
+#[allow(dead_code)]
 impl ApplyNet {
+
     pub fn new(net: Box<dyn Module>) -> Self {
         Self { net }
     }
@@ -99,6 +111,7 @@ struct RunIdsStack {
 }
 
 impl RunIdsStack {
+
     pub fn new(run_id: usize, prev:Option<&RunIdsStack>) -> Self {
         let mut run_ids = vec![];
 
@@ -194,14 +207,11 @@ mod tests {
     #[test]
     fn test_two_nets(){
 
-
-
         let _props_store:HashMap<usize, String> = HashMap::new();
 
         let run_id = Rc::new(RefCell::new(0usize));
         let run_id_build_1 = Rc::clone(&run_id);
         let run_id_build_2 = Rc::clone(&run_id);
-
 
         let steps: Vec<OptStep> = vec![
             OptStep::new(

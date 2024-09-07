@@ -407,7 +407,7 @@ impl From<FilterAndSlicerParams> for FilterAndSlicer {
                 Some(input_filter) => {
                     match input_filter {
                         InputFilter::Conv1(_filter_params) => {
-                            Some(Box::new(|t: &Box<Tensor>| t.shallow_clone()))
+                            Some(Box::new(|t: &Box<Tensor>| t.shallow_clone()))//TODO impl filters
                         }
                     }
                 }
@@ -1145,11 +1145,13 @@ where
 //TODO for tests only?
 pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item=Box<Tensor>> {
     fs::read_dir(path.as_ref()).map(|r|
-    r.map(|e_r| e_r.and_then(|e| {
-        debug!("select_motifs: load_all_in_dir");
-        Ok(Box::new(Tensor::load(e.path()).expect(format!("can't load {:?}", e.path()).as_str())))
-    }).expect("")
-    )
+        r.map(|e_r|
+
+            e_r.and_then(|e| {
+                debug!("select_motifs: load_all_in_dir");
+                Ok(Box::new(Tensor::load(e.path()).expect(format!("can't load {:?}", e.path()).as_str())))
+            }).expect("")
+        )
     ).expect("iter_all_in_dir")
 }
 

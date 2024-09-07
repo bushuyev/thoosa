@@ -29,6 +29,6 @@ mod tests {
 
     #[test]
     fn test_0(){
-
+        println!("Ok");
     }
 }

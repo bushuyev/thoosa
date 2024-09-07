@@ -224,6 +224,7 @@ where
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct NumericalGaussian {
     means: Tensor,
     stds: Tensor,
@@ -234,6 +235,7 @@ pub struct NumericalGaussian {
     ub: f64,
     normal_dists: Vec<Normal>,
 }
+
 
 impl NumericalGaussian {
     pub fn new(
@@ -263,6 +265,7 @@ impl NumericalGaussian {
         }
     }
 
+    #[allow(dead_code)]
     pub fn pdf(&self, x: &Tensor) -> Tensor {
         let norm_consts = &self.norm_consts / (SQR2PI * &self.stds);
         let mahalanobis = ((x.view((-1, 1)).repeat([1, self.means.size()[0]])

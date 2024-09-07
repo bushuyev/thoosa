@@ -36,6 +36,7 @@ pub struct TensorSliceIter {//TODO SliceIndex?
 
 impl TensorSliceIter {
 
+    #[allow(dead_code)]
     pub fn new(tensors_store: Box<impl TensorsStore + Send +'static>, dim:usize, m:usize, step:usize) -> Self {
 
         assert!(step <= m);

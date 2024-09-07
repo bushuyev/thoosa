@@ -13,6 +13,7 @@ impl MultiVariateParzenEstimator {
         Self { parzen_estimators }
     }
 
+    #[allow(dead_code)]
     pub fn len(&self)->usize {
         self.parzen_estimators.len()
     }

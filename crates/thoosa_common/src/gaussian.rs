@@ -34,6 +34,7 @@ impl Gaussian {
         (value - &self.μ).matmul(&self.σ.reciprocal()).pow_tensor_scalar(2).multiply_scalar(-0.5).exp().multiply(&self.σ.multiply_scalar((2. * PI).sqrt()).reciprocal())
     }
 
+    #[allow(dead_code)]
     pub fn norm(n:i64) -> Tensor{
         let mut rng = thread_rng();
         let normal = Normal::new(0., 1.).unwrap();
@@ -83,6 +84,7 @@ impl <'g, F> GaussianProcessFit<'g, F> where F: Fn(&Tensor, &Tensor) -> Tensor{
         Self { gp, x_train, alpha,chol_t }
     }
 
+    #[allow(dead_code)]
     pub fn predict(&self, x_s: &Tensor) -> Result<Tensor, ThoosaError> {
         let (mu_s, cov_s) = self.mean_and_cov(x_s);
 
@@ -115,6 +117,8 @@ impl <'g, F> GaussianProcessFit<'g, F> where F: Fn(&Tensor, &Tensor) -> Tensor{
 }
 
 impl <F> GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
+
+    #[allow(dead_code)]
     pub fn new(kernel: F, sigma_y: f64) -> Self {
         Self {
             kernel,
@@ -123,6 +127,7 @@ impl <F> GaussianProcess<F> where F: Fn(&Tensor, &Tensor) -> Tensor {
     }
 
     //Gaussian_Processes_for_ML.pdf
+    #[allow(dead_code)]
     pub fn fit(&self, x_train:&Tensor, y_train:&Tensor) -> Result<GaussianProcessFit<F>, ThoosaError>{
         debug!("fit: x_train={}", x_train);
         debug!("fit: y_train={}", y_train);

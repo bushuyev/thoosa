@@ -412,6 +412,7 @@ struct TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32 {
 
 impl <F> TPEOptimizer<F> where F: Fn(&Vec<Primitives>) -> f32{
 
+    #[allow(dead_code)]
     pub fn new(obj_func:F, cs:ConfigurationSpace, max_evals: usize, n_init: usize) -> Self {
         let estimator = TreeStructuredParzenEstimator::new(&cs);
         Self {
