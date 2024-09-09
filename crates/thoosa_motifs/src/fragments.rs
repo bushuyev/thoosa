@@ -1,15 +1,20 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::ops::Deref;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use clap::Args;
+use crossbeam_utils::sync::WaitGroup;
+use futures::FutureExt;
 use log::{debug, info, warn};
 use regex::Regex;
 use tch::Device;
 use tch::IndexOp;
+use tch::kind::FLOAT_CPU;
 use tch::Tensor;
-
+use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
 use thoosa_common::utils::*;
 use thoosa_shared::*;
 use thoosa_shared::ThoosaError;
@@ -117,7 +122,7 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
 
     for (resource_id, motif_slices) in resource_id_motif_slices {
 
-        let t = (load_tensor)(&resource_id);
+        let t = load_tensor(&resource_id);
         debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
 
         for motif_slice in motif_slices {
@@ -155,7 +160,7 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
 
                 let mut motifs = motif_slices.into_iter().map(|(motif_id, mut slices)| {
 
-                    channel_motif_ids[channel as usize].push(motif_id as usize);
+                    channel_motif_ids[channel as usize].push(motif_id);
                     choose_slice(&mut slices)
 
                 }).collect::<Vec<Tensor>>();
@@ -176,6 +181,101 @@ pub fn motifs_to_tensor<F>(resource_id_motif_slices: HashMap<String, Vec<MotifSl
     Ok((tensor, channel_motif_ids, motifs_slices_map))
 
 }
+
+
+/**
+* returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
+*/
+pub fn motifs_to_tensor_exec(
+    resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, window: i64, channels: i64, device: Device
+) -> Result<(Tensor, Vec<Vec<usize>>, HashMap<usize, MotifSlice>), ThoosaError> {
+
+    debug!("motifs_to_tensor: device={:?}", device);
+
+    let channels_motifs_slices:Arc<parking_lot::RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    // let mut motifs_slices_map:Arc<parking_lot::RwLock<HashMap<usize, MotifSlice>>> = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+
+    let channels_motifs_slices_arc = Arc::clone(&channels_motifs_slices);
+    // let motifs_slices_map_arc = Arc::clone(&motifs_slices_map);
+
+    let wg = WaitGroup::new();
+    let wg_1 = wg.clone();
+
+    executor.write().exec(move |loader, keys_purge| {
+        async move {
+
+            for (resource_id, motif_slices) in resource_id_motif_slices {
+
+                let t =  Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
+                // debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
+
+                for motif_slice in motif_slices {
+
+                    let channel_t = t.get(motif_slice.channel_idx as i64);
+                    let channel_t = channel_t.view([1, -1]);
+
+                    let motifslice_t = channel_t.f_slice(1, Some(motif_slice.slise_idx), Some(motif_slice.slise_idx + window), 1).unwrap();//TODO save window when finding motifs
+
+                    let mut write_guard = channels_motifs_slices_arc.write();
+                    let  channels_motifs = write_guard.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
+                    let  motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
+
+
+                    motif_slices.push(SyncWrapper::new(Box::new(motifslice_t), |e| Box::new(e.shallow_clone())));
+                    // motifs_slices_map_arc.write().insert(motif_slice.motif_id(), motif_slice);
+                }
+            }
+
+            drop(wg_1);
+
+
+        }.boxed()
+    });
+
+    wg.wait();
+
+    // fn choose_slice<T:Deref<Target=Tensor>>(slices:&mut Vec<T>) ->T{
+    //     let tensor = slices.pop().unwrap();
+    //     debug!("motifs_to_tensor: choose_slice tensor.device={:?}", tensor.device());
+    //     tensor//TODO choose best or blend slices
+    // }
+
+    debug!("motifs_to_tensor: channels_motifs_slices={:?}", channels_motifs_slices);
+
+    let motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
+
+    let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::new()).collect();
+
+
+    let tensor = Tensor::vstack(
+        (0..channels).map(|channel| {
+            let motif_slices =  channels_motifs_slices.write().remove(&(channel as u16)).unwrap_or(HashMap::new());
+
+            let mut motifs = motif_slices.into_iter().map(|(motif_id, mut slices)| {
+
+                channel_motif_ids[channel as usize].push(motif_id);
+                // choose_slice(&mut slices).shallow_clone()
+                *slices[0].shallow_clone()
+
+            }).collect::<Vec<Tensor>>();
+
+
+            if (motifs.len() as i64) < motifs_num {
+                motifs.extend((0..motifs_num - motifs.len() as i64).map(|_|Tensor::zeros(window, (tch::Kind::Float, device))))
+            }
+
+            let t = Tensor::vstack(motifs.as_slice());
+
+            t.view((motifs_num, window))
+
+        }).collect::<Vec<Tensor>>().as_slice()
+    );
+
+    let tensor = tensor.view((channels, motifs_num, -1));
+    // Ok((tensor, channel_motif_ids, motifs_slices_map.deref().into_inner()))
+    Ok((tensor, channel_motif_ids, HashMap::new()))
+}
+
 
 pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64) -> Result<(), ThoosaError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, ThoosaError> + Sync {
