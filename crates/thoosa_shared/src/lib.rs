@@ -10,7 +10,7 @@ use std::hash::Hash;
 use std::ops::Mul;
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::SecondsFormat;
-use log::{debug, error, LevelFilter};
+use log::{debug, error, trace, LevelFilter};
 use rand::Rng;
 use regex::Regex;
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
@@ -33,7 +33,7 @@ pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
         let g_1 = pairs_groups.get(&pair.1);
         if let Some(g_0_val) = g_0 {
             if g_1.is_some() {
-                debug!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}", g_0, g_1, ln, pair);
+                trace!("separated group: g_0={:?} g_1={:?} ln={} pair={:?}", g_0, g_1, ln, pair);
                 if g_0.ne(&g_1) {
                     separated_groups.push((*g_0_val, *g_1.unwrap()));
                 }

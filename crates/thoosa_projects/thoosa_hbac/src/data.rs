@@ -675,16 +675,21 @@ mod tests {
     use thoosa_common::utils::{from, plot_series};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, RunAllParams};
+    use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_select_motifs_exec, run_train_final, run_train_on_label, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{init_test_logging, ThoosaError};
     use thoosa_store::SqlStore;
     use crate::data::EEGs;
 
-    // #[test]// to util
+    #[ctor::ctor]
+    fn init() {
+        init_test_logging();
+    }
+
+
     #[allow(dead_code)]
-    pub fn test_plot_eeg_tensor() -> Result<(), ThoosaError> {
+    pub fn plot_eeg_tensor() -> Result<(), ThoosaError> {
         // debug!("tensor={:?}", tensor.size());
 
         let t_0 = parquet_to_tensor("../../data", "1628180742", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
@@ -706,7 +711,6 @@ mod tests {
 
     #[test]
     pub fn test_fetch_similarities() -> Result<(), ThoosaError> {
-
 
         // let good_eegs = EEGs::good_eegs("../../data")?;
         let df = LazyCsvReader::new("../../../data/train.csv")
@@ -749,6 +753,11 @@ mod tests {
             .collect()?;
 
         debug!("df={:?}", df);
+
+        //TODO hash + assert
+        df.column("win_vote")?.str()?.into_iter().zip(df.column("votes_count")?.u32()?.into_iter()).for_each(|v|{
+            debug!("v={:?}", v);
+        });
 
         Ok(())
     }
@@ -862,6 +871,7 @@ mod tests {
 
         let cli = Cli{
             base_path: "test_data/eeg".to_string(),
+            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
             ws_path: "/tmp".to_string(),
             tensors_path: None,
             store_path: "".to_string(),
@@ -900,7 +910,7 @@ mod tests {
             }
         )?;
 
-        let motifs = run_find_motifs_on_group(
+        let motifs_run_ids = run_find_motifs_on_group(
             &cli,
             &store,
             vec![Cpu],
@@ -908,17 +918,17 @@ mod tests {
             Arc::clone(&executor_rc)
         )?;
 
-        debug!("motifs={motifs:?}");
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], motifs);
+        debug!("motifs_run_ids={motifs_run_ids:?}");
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], motifs_run_ids);
 
         Ok(())
     }
 
-    // #[test] TODO
-    #[allow(dead_code)]
+    #[test]
     fn test_run_select_motifs() -> Result<(), ThoosaError>{
         let cli = Cli{
-            base_path: "../../data/".to_string(),
+            base_path: "test_data/eeg".to_string(),
+            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
             ws_path: "/tmp".to_string(),
             tensors_path: None,
             store_path: "".to_string(),
@@ -927,24 +937,48 @@ mod tests {
             logfile: "".to_string(),
             limit: None,
             num_threads: None,
-            command: Some(SelectMotifs(SelectMotifsParams::dummy(vec![0, 1], vec![], 0.1))),
+            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10, "xxx".into(), 10, 0.3, None))),
             input_filters_kernel: None,
         };
 
+        std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+
         let loader = Arc::new(Box::new(ParquetLoader::new(
-            "../../data/".into(),
-            Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
-            None,
-            Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id))
+            "test_data/eeg".into(), Some("test_data/eeg".into()), None,
+            Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
+        )));
+        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+            move |key: &String| {
+                SyncWrapper::new(
+                    loader.load(key, Device::Cpu),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
         )));
 
-        let corr_ids = run_select_motifs(
+        init_resources(
+            Arc::clone(&store),
+            ||{
+                super::labeled_resourses(Path::new(&cli.base_path).join("train_10.csv"))
+            }
+        )?;
+
+        let run_ids = run_find_motifs_on_group(
             &cli,
             &store,
             vec![Cpu],
-            &SelectMotifsParams::dummy(vec![0, 1], vec![("seizure".into(), "seizure/10".into())], 0.1),
-            Arc::clone(&loader)
+            &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
+            Arc::clone(&executor_rc)
+        )?;
+
+        let corr_ids = run_select_motifs_exec(
+            &cli,
+            &store,
+            vec![Cpu],
+            &SelectMotifsParams::dummy(run_ids, vec![("seizure".into(), "seizure/10".into())], 0.1),
+            Arc::clone(&executor_rc)
         )?;
 
         debug!("corr_ids={:?}", corr_ids);
@@ -971,6 +1005,7 @@ mod tests {
         let cli = Cli{
             base_path: "../../data/".into(),
             ws_path: "/tmp".to_string(),
+            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
             tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
             store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
             term_logger_level: "DEBUG".into(),
@@ -1020,6 +1055,7 @@ mod tests {
         let cli = Cli{
             base_path: "../../data/".into(),
             ws_path: "/tmp".to_string(),
+            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
             tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
             store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
             term_logger_level: "DEBUG".into(),

@@ -1,0 +1,7 @@
+cargo run -- --term-logger-level=DEBUG --base-path=test_data/eeg/  --resource-pattern="train_eegs/{}.parquet" --ws-path="/tmp/ws_1" --store-path=/tmp/ws_1/thoosa.db3 --logfile=/tmp/ws_1/thoosa.log  init-resources
+
+cargo run -- --term-logger-level=DEBUG --tensors-path=/media/bu/KINGSTON/all_eegs.pt/all --ws-path="/tmp/ws_1" --store-path=/tmp/ws_1/thoosa.db3 --logfile=/tmp/ws_1/thoosa.log  init-resources
+
+
+cargo run -- --term-logger-level=DEBUG --tensors-path=/media/bu/KINGSTON/all_eegs.pt/all --ws-path="/tmp/ws_1" --store-path=/tmp/ws_1/thoosa.db3 --logfile=/tmp/ws_1/thoosa.log \
+    find-motifs --resource-set="seizure/100"

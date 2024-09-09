@@ -2799,6 +2799,7 @@ dependencies = [
  "chrono",
  "clap",
  "ctor",
+ "futures-util",
  "log",
  "parking_lot 0.12.3",
  "parking_lot_mpsc",

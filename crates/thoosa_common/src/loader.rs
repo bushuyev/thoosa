@@ -252,14 +252,14 @@ where
     }
 
 
-    pub fn exec<F>(&mut self, f: F)
+    pub fn exec<F>(&mut self, make_future: F)
     where
         F: FnOnce(Arc<RwLock<Loader<K, V>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
 
     {
         let loader_for_purge = Arc::clone(&self.loader);
 
-        self.features_sender.send(Mutex::new((f)(
+        self.features_sender.send(Mutex::new(make_future(
             Arc::clone(&self.loader),
             Box::new(move |keys, cache_area| {
                 Loader::purge_resources(loader_for_purge, keys, cache_area);
@@ -403,7 +403,7 @@ impl<V> SyncWrapper<V>
 where
     V: Send + Debug,
 {
-    pub fn new(v: V, shallow_clone_fn: fn(&V) -> V) -> Self {
+    pub fn new(v: V, shallow_clone_fn: fn(&V) -> V) -> Self {//TODO inline shallow_clone_fn for Tensor
         Self {
             v,
             shallow_clone_fn,

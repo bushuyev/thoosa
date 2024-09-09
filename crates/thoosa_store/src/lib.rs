@@ -319,7 +319,7 @@ impl Store for SqlStore {
             let mut rows = stmt.query(rusqlite::params_from_iter(insert_resources_params.into_iter()))?;
 
             let mut resource_ids:Vec<i64> = vec![];
-            while let Some(row) = rows.next()? {
+            while let Some(row) = rows.next()? {//TODO  query_map ?
                 resource_ids.push(row.get_unwrap(0));
             }
 
@@ -447,7 +447,7 @@ impl Store for SqlStore {
                 a
             });
 
-            //labels_cnt number of labels a resource has
+            //labels_cnt number of labels a resource has - the fewer labels the more surely resource is classified
             for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
 
                 let max_labels_resources = labels_resources.values().map(|r|r.len()).sum::<usize>();
@@ -471,26 +471,25 @@ impl Store for SqlStore {
 
                 debug!("save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}", num_groups, groups_max_resources);
 
-                for (labels, mut resources) in labels_resources {
-
+                for (label, mut resources) in labels_resources {
 
                     resources.shuffle(&mut rng);
 
-                    let label_id = labels_ids.get(&labels);//if more than one label - label_id is None and Null in the db
+                    let label_id = labels_ids.get(&label);//if more than one label - label_id is None and Null in the db
 
-                    debug!("save_groups_by_label_cnt: labels={} resources.len()={} label_id={:?}",labels, resources.len(), label_id);
+                    debug!("save_groups_by_label_cnt: labels={} resources.len()={} label_id={:?}",label, resources.len(), label_id);
 
                     if resources.len() > 10 {//TODO min resources
 
                         for (group_id, _max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
                             for (resources_0, resources_1, group_id) in group_id {
                                 if *resources_0 < resources.len() - 1 {
-                                    Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, labels),  label_id, &resources[*resources_0..min(resources.len() - 1, *resources_1)])?;
+                                    Self::insert_resource_set_resources(&mut t, labels_cnt, *group_id, format!("{}/{}", labels_cnt, label), label_id, &resources[*resources_0..min(resources.len() - 1, *resources_1)])?;
                                 }
                             }
                         }
                     }
-                    Self::insert_resource_set_resources(&mut t, labels_cnt, group_all_id, format!("{}/{}", labels_cnt, labels), label_id, resources.as_slice())?;
+                    Self::insert_resource_set_resources(&mut t, labels_cnt, group_all_id, format!("{}/{}", labels_cnt, label), label_id, resources.as_slice())?;
                 }
             }
         }

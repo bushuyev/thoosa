@@ -414,7 +414,7 @@ impl ResourceLoader for ParquetLoader {
 
     fn load(&self, key: &String, device:Device) -> Box<Tensor> {
 
-        let t = if let Some(tensors_path) = self.tensors_path.as_ref() {
+        let t = if let Some(tensors_path) = self.tensors_path.as_ref() {//TODO move into another loader
             load_tensor(tensors_path.as_str(), key.as_str(), device)
 
         } else {
