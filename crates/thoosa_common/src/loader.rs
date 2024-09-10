@@ -3,7 +3,7 @@ use parking_lot_mpsc::*;
 use log::{debug, trace};
 use std::sync::Arc;
 use std::hash::Hash;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use rayon::ThreadPool;
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 use futures::task::Context;
-use std::thread;
+use std::{fmt, thread};
 use std::pin::Pin;
 use futures::task::Poll;
 use std::ops::Deref;
@@ -397,6 +397,12 @@ where
     v: V,
     shallow_clone_fn: fn(&V) -> V,
     cache_areas: u64,
+}
+
+impl<V:Send+Display+Debug> Display for SyncWrapper<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.v, f)
+    }
 }
 
 impl<V> SyncWrapper<V>

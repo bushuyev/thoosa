@@ -852,7 +852,7 @@ impl Store for SqlStore {
                     row.get(5)?, // tensor_id_1,
                     row.get(6)?, // slice_idx_1
                 ))
-            })?.fold(Ok(HashMap::new()), |a: Result<HashMap<String, Vec<thoosa_shared::MotifSlice>>, rusqlite::Error>, v: Result<(i64, Option<usize>, i64, String, i64, String, i64), rusqlite::Error>| {
+            })?.fold(Ok(HashMap::new()), |a: Result<HashMap<String, Vec<MotifSlice>>, Error>, v: Result<(i64, Option<usize>, i64, String, i64, String, i64), Error>| {
                 let v = v?;
                 if let Some(motif_id) = v.1 {
                     let mut a = a?;
