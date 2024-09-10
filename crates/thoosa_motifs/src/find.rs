@@ -287,7 +287,7 @@ pub fn find_motifs_by_euc_dist(
                     'tl0: for (s_0_idx, s_0) in (0..*t_size_0).enumerate() {
                         for (t_idx_1, t_size_1) in chunk_1.sizes.iter().enumerate() { //.skip(t_idx_0)
 
-                            debug!("find_motifs_euc: i_1 in {}  s_0_idx={}, *t_size_1={}", i_1,  s_0_idx, *t_size_1);
+                            trace!("find_motifs_euc: i_1 in {}  s_0_idx={}, *t_size_1={}", i_1,  s_0_idx, *t_size_1);
 
                             for s_1 in 0 as i64..*t_size_1 {
 
@@ -296,7 +296,7 @@ pub fn find_motifs_by_euc_dist(
                                     if i_0 >= t_size[0] {
                                         warn!(
                                             "find_motifs_euc: wrong index 0 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
-                                            c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
+                                            c, t_idx_0, chunk_0.keys[t_idx_0], i_0, t_idx_1, chunk_1.keys[t_idx_1], i_1, t_size
                                         );
 
                                         break 'tl0;
@@ -305,7 +305,7 @@ pub fn find_motifs_by_euc_dist(
                                     if i_1 >= t_size[1] {
                                         warn!(
                                             "find_motifs_euc: wrong index 1 for c={:?}, t_idx_0={} vw_0[t_idx_0]={} i_0={:?},   t_idx_1={} vw_1[t_idx_1]={} i_1={:?}, t_size={:?}",
-                                            c, t_idx_0, chunk_0.keys[t_idx_0 as usize], i_0, t_idx_1, chunk_1.keys[t_idx_1 as usize], i_1, t_size
+                                            c, t_idx_0, chunk_0.keys[t_idx_0], i_0, t_idx_1, chunk_1.keys[t_idx_1], i_1, t_size
                                         );
 
                                         break;
@@ -317,7 +317,7 @@ pub fn find_motifs_by_euc_dist(
                                     let dist = euc_dist_t.double_value(&[i_0, i_1]);
 
                                     if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < max_dist {
-                                        mt.track((chunk_0.keys[t_idx_0 as usize].clone(), s_0 * find_motifs_params.step as i64).into(), (chunk_1.keys[t_idx_1 as usize].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)
+                                        mt.track((chunk_0.keys[t_idx_0].clone(), s_0 * find_motifs_params.step as i64).into(), (chunk_1.keys[t_idx_1].clone(), s_1 * find_motifs_params.step as i64).into(), dist as f32)
                                     }
 
                                     if c == 0 {
@@ -980,70 +980,6 @@ fn clc_dist_matches_exec(series: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Ten
     Ok(matches)
 }
 
-
-
-fn clc_motifs_matches_for_label<I, L>(
-    motifs: &Tensor,
-    all_zero: &Tensor,
-    channels_motifs_classes: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>,
-    tensor_loader: I,
-    class_label: L,
-    limit: Option<usize>,
-    step: usize,
-    motifs_distances: &HashMap<usize, f32>,
-    channel_motif_ids: &Vec<Vec<usize>>,
-) -> Result<(), ThoosaError>
-where
-    I: Iterator<Item=Box<Tensor>>,
-    I: std::marker::Send,
-    L: Clone,
-{
-    let count = AtomicU64::new(0);
-
-    let channels_num = motifs.size()[0] as usize;
-    let motifs_num = motifs.size()[1] as usize;
-
-    debug!("dot_motifs: channels_num={} motifs_num={}", channels_num, motifs_num);
-
-    for t in tensor_loader {
-
-        // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
-        let matches = clc_dist_matches(&t, &motifs, step, motifs_distances, channel_motif_ids)?;
-
-        for motif_i in 0..motifs_num {
-            for channel_i in 0..channels_num {
-                let motif_t = motifs.i((channel_i as i64, motif_i as i64));
-
-                let num_matches_label = if motif_t.equal(&all_zero) {
-                    (0., class_label.clone())
-                } else {
-                    let v = matches.i((channel_i as i64, motif_i as i64));
-                    let num_matches = v.double_value(&[]);
-
-                    (num_matches, class_label.clone())
-                };
-
-                let mut channels_motifs_classes_guard = channels_motifs_classes.lock();
-                channels_motifs_classes_guard[channel_i][motif_i].0.push(num_matches_label.0);
-                channels_motifs_classes_guard[channel_i][motif_i].1.push(num_matches_label.1);
-
-            }
-        }
-
-        //TODO remove
-        if limit.map(|limit| count.load(Ordering::Relaxed) > limit as u64).unwrap_or(false) {
-            return Ok(());
-        }
-
-        let count_ = count.fetch_add(1, Ordering::Relaxed);
-        if count_ % 100 == 0 {
-            info!("dot_motifs: count={}", count_);
-        }
-        debug!("dot_motifs: count={}", count_);
-    }
-    Ok(())
-}
-
 fn clc_motifs_matches_for_label_exec<L>(
     motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
     all_zero: SyncWrapper<Box<Tensor>>,
@@ -1063,9 +999,12 @@ where L: Clone + Send + 'static,
     let channels_num = motifs.read().size()[0] as usize;//TODO read
     let motifs_num = motifs.read().size()[1] as usize;
 
-    debug!("dot_motifs: channels_num={} motifs_num={}", channels_num, motifs_num);
+    debug!("clc_motifs_matches_for_label: channels_num={} motifs_num={}", channels_num, motifs_num);
 
     let label = class_label.clone();
+
+    let wg = WaitGroup::new();
+    let wg_in_loader = wg.clone();
 
     executor.write().exec(move |loader, keys_purge| {
         async move {
@@ -1110,9 +1049,13 @@ where L: Clone + Send + 'static,
                 debug!("dot_motifs: count={}", count_);
             };
 
+            drop(wg_in_loader);
+
 
         }.boxed()
     });
+
+    wg.wait();
 
     Ok(())
 }
@@ -1168,58 +1111,9 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs_by_ratio<I>(motifs: Tensor, labels_loaders: Vec<(String, I)>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError>
-where
-    I: Iterator<Item=Box<Tensor>> + Send + Sync,
-{
-    let mut labels_channels_good_motifs = labels_loaders.iter().fold(HashMap::new(), |mut a, v| {
-        a.insert(v.0.clone(), (0..motifs.size()[0]).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>()); //motifs.size()[0] - channels_num
-        a
-    });
 
-    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, motifs_distances, channel_motif_ids);
+pub fn select_motifs_by_ratio_exec(motifs: Tensor, labels_loaders: Vec<(String, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
 
-    let channels_motifs_classes_guard = channels_motifs_classes_lock.lock();
-
-    debug!("select_motifs_by_ratio: channels_motifs_classes_guard={:?}", channels_motifs_classes_guard);
-
-    for motif_i in 0..motifs_num {
-        for channel_i in 0..channels_num {
-            debug!("select_motifs_by_ratio: channels_motifs_classes_guard[channel_i={}][motif_i={}]={:?}", channel_i, motif_i, channels_motifs_classes_guard[channel_i as usize][motif_i as usize]);
-
-            let counts_labels = &channels_motifs_classes_guard[channel_i as usize][motif_i as usize];
-            let labels_counts: HashMap<String, usize> = counts_labels.0.iter().zip(counts_labels.1.iter()).fold(HashMap::new(), |mut a, v| {
-                *a.entry(v.1.clone()).or_insert_with(|| 0) += *v.0 as usize;
-                a
-            });
-
-            debug!("select_motifs_by_ratio: labels_counts={:?}", labels_counts);
-            let sum: f32 = labels_counts.values().map(|v| *v as f32).sum::<f32>();
-            if sum > 0. {
-                for (label, counts) in labels_counts {
-                    let ratio = counts as f32 / sum;
-                    if ratio > min_ratio {
-                        labels_channels_good_motifs.get_mut(&label).unwrap()[channel_i as usize].push((motif_i, ratio as f64));
-                    }
-                }
-            }
-
-            debug!("select_motifs_by_ratio: labels_channels_good_motifs={:?}", labels_channels_good_motifs);
-        }
-    }
-
-    // let Some(max_motifs) = channels_good_motifs.iter().map(|c| c.len()).max() else {
-    //     return Err("No good motifs".into());
-    // };
-
-    Ok(labels_channels_good_motifs)
-}
-
-
-pub fn select_motifs_by_ratio_exec(motifs: Tensor, labels_loaders: Vec<(String, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError>
-
-
-{
     let mut labels_channels_good_motifs = labels_loaders.iter().fold(HashMap::new(), |mut a, v| {
         a.insert(v.0.clone(), (0..motifs.size()[0]).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>()); //motifs.size()[0] - channels_num
         a
@@ -1273,11 +1167,21 @@ pub fn select_motifs_by_ratio_exec(motifs: Tensor, labels_loaders: Vec<(String, 
 
 
 
-pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders: Vec<(i64, I)>, limit: Option<usize>, step: usize, device: Device, min_corr: f64, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> Result<Vec<Vec<(i64, f64)>>, ThoosaError>
+pub fn select_motifs_by_corr<I>(motifs: Tensor, labels_loaders: Vec<(String, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, limit: Option<usize>, step: usize, device: Device, min_corr: f64, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<Vec<Vec<(i64, f64)>>, ThoosaError>
 where
     I: Iterator<Item=Box<Tensor>> + Send + Sync,
 {
-    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(motifs, labels_loaders, limit, step, &device, motifs_distances, channel_motif_ids);
+
+
+    let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels_exec(
+        Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs), |e| Box::new(e.shallow_clone())))),
+        labels_loaders,
+        executor,
+        limit, step,
+        &device,
+        motifs_distances,
+        channel_motif_ids
+    );
 
     let mut channels_good_motifs = (0..channels_num).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>();
 
@@ -1291,7 +1195,8 @@ where
 
             let vals_labels_t = Tensor::vstack(&[
                 Tensor::from_slice(channels_motifs_classes_guard[channel_i as usize][motif_i as usize].0.as_slice()),
-                Tensor::from_slice(channels_motifs_classes_guard[channel_i as usize][motif_i as usize].1.as_slice())
+                // Tensor::from_slice(channels_motifs_classes_guard[channel_i as usize][motif_i as usize].1.as_slice())
+                Tensor::from_slice(&[0.])
             ]);
 
             let corr = vals_labels_t.corrcoef().double_value(&[0, 1]);
@@ -1313,42 +1218,6 @@ where
     Ok(channels_good_motifs)
 }
 
-fn clc_channels_motifs_labels<I, L>(motifs: Tensor, labels_loaders: Vec<(L, I)>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: &HashMap<usize, f32>, channel_motif_ids: &Vec<Vec<usize>>) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
-where
-    I: Iterator<Item=Box<Tensor>> + Send + Sync,
-    L: Clone,
-{
-    let motifs_size = motifs.size();
-
-    debug!("select_motifs: find_good_motifs: motifs={:?}", motifs_size);
-
-    let channels_num = motifs_size[0];
-    let motifs_num = motifs_size[1];
-    let slice_len = motifs_size[2];
-
-    let mut channels_motifs_classes: Vec<Vec<(Vec<f64>, Vec<L>)>> = Vec::with_capacity(channels_num as usize); // (Vec<f64>, Vec<f64>) - conv. value, class label
-    for _i in 0..channels_num {
-        let mut motifs_classes = Vec::with_capacity(motifs_num as usize);
-        for _i in 0..motifs_num {
-            motifs_classes.push((Vec::with_capacity(400 * labels_loaders.len()), Vec::with_capacity(400 * labels_loaders.len()))); //num of eegs of all classes
-        }
-        channels_motifs_classes.push(motifs_classes);
-    }
-
-    let motifs_ptr = motifs.as_ptr() as usize;
-    let channels_motifs_classes_lock = Arc::new(Mutex::new(channels_motifs_classes));
-
-    labels_loaders.into_iter()/*.par_bridge()*/.try_for_each(|(label, loader)| {
-        clc_motifs_matches_for_label(
-            &unsafe { Tensor::clone_from_ptr(motifs_ptr as *mut C_tensor) },
-            &Tensor::zeros(slice_len, (tch::Kind::Float, *device)), //TODO
-            Arc::clone(&channels_motifs_classes_lock),
-            loader, label, limit, step, motifs_distances, channel_motif_ids, //TODO step - k * slice_len
-        )
-    }).unwrap();
-    (channels_num, motifs_num, channels_motifs_classes_lock)
-}
-
 fn clc_channels_motifs_labels_exec<L>(
     motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>, labels_loaders: Vec<(L, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>
 ) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
@@ -1357,17 +1226,19 @@ where
 {
     let motifs_size = motifs.read().size();
 
-    debug!("select_motifs: find_good_motifs: motifs={:?}", motifs_size);
+    debug!("select_motifs: find_good_motifs: motifs_size={motifs_size:?}");
+    trace!("select_motifs: find_good_motifs: motifs={}", motifs.read());
 
     let channels_num = motifs_size[0];
     let motifs_num = motifs_size[1];
     let slice_len = motifs_size[2];
 
     let mut channels_motifs_classes: Vec<Vec<(Vec<f64>, Vec<L>)>> = Vec::with_capacity(channels_num as usize); // (Vec<f64>, Vec<f64>) - conv. value, class label
+
     for _i in 0..channels_num {
         let mut motifs_classes = Vec::with_capacity(motifs_num as usize);
         for _i in 0..motifs_num {
-            motifs_classes.push((Vec::with_capacity(400 * labels_loaders.len()), Vec::with_capacity(400 * labels_loaders.len()))); //num of eegs of all classes
+            motifs_classes.push((vec![], vec![]));//TODO with_capacity?
         }
         channels_motifs_classes.push(motifs_classes);
     }
@@ -1380,7 +1251,13 @@ where
             Arc::clone(&motifs),
             SyncWrapper::new(Box::new(Tensor::zeros(slice_len, (tch::Kind::Float, *device))), |e| Box::new(e.shallow_clone())), //TODO
             Arc::clone(&channels_motifs_classes_lock),
-            loader, Arc::clone(&executor), label, limit, step, Arc::clone(&motifs_distances), Arc::clone(&channel_motif_ids), //TODO step - k * slice_len
+            loader,
+            Arc::clone(&executor),
+            label,
+            limit,
+            step, //TODO step - k * slice_len ?
+            Arc::clone(&motifs_distances),
+            Arc::clone(&channel_motif_ids)
         )
     }).unwrap();
     (channels_num, motifs_num, channels_motifs_classes_lock)
@@ -1413,6 +1290,7 @@ mod motif_find_tests {
 
     use log::debug;
     use parking_lot::RwLock;
+    use simplelog::SimpleLogger;
     use tch::{Device, IndexOp, Tensor};
     use tch::Kind::{Float, Int};
 
@@ -1423,14 +1301,14 @@ mod motif_find_tests {
     use thoosa_shared::val::Val;
     use thoosa_store::{SqlStore, Store};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
+    use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio_exec};
     use crate::find::iter_all_in_dir;
     use crate::find::select_motifs_by_corr;
 
 
     #[ctor::ctor]
     fn init() {
-        thoosa_shared::init_test_logging();
+        init_test_logging();
     }
 
     #[test]
@@ -1554,20 +1432,18 @@ mod motif_find_tests {
     #[test]
     fn test_select_motifs() -> Result<(), ThoosaError> { //TODO dummy tensors
 
+
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
         fs::create_dir_all(test_dir.clone())?;
-        fs::create_dir_all(test_dir.clone().join("0"))?;
-        fs::create_dir_all(test_dir.clone().join("1"))?;
-        fs::create_dir_all(test_dir.clone().join("2"))?;
 
         //as built in motifs_to_tensor - channels x  motif  x slice
         //for label xxx:
         let motifs_tensor = //Tensor::vstack(&[
             Tensor::vstack(&[ //channel 0
                 Tensor::vstack(&[ //
-                    Tensor::from_slice(&[1., 0., 1.]), //motif 0 first slice - good motif, matches tensors in "0" and does not matches tensors in 1
-                    Tensor::from_slice(&[1., 2., 3.]) //motif 1 first slice - bad motif, matches tensors in "1" and does not matches tensors in 0
+                    Tensor::from_slice(&[1., 0., 1.]), //motif 0 first slice - good motif, matches tensors in "0" and does not match tensors in 1
+                    Tensor::from_slice(&[1., 2., 3.]) //motif 1 first slice - bad motif, matches tensors in "1" and does not match tensors in 0
                 ]).view((2, 3)),
                 Tensor::vstack(&[ //channel 1
                     Tensor::from_slice(&[4., 5., 6.]), //motif 0 first slice - bad motif,
@@ -1582,14 +1458,14 @@ mod motif_find_tests {
             Tensor::from_slice(&[1., 1., 0., 1., 0., 0.]) //channel 1
         ]).view((2, 6));
 
-        t_0_0.save(test_dir.join("0").join("t_0_0.pt"))?;
+        t_0_0.save(test_dir.join("t_0_0.pt"))?;
 
         let t_0_1 = Tensor::vstack(&[
             Tensor::from_slice(&[0., 0., 1., 0., 1., 0.]), //channel 0
             Tensor::from_slice(&[0., 2., 2., 0., 0., 0.]) //channel 1
         ]).view((2, 6));
 
-        t_0_1.save(test_dir.join("0").join("t_0_1.pt"))?; //XXX
+        t_0_1.save(test_dir.join("t_0_1.pt"))?; //XXX
 
 
         // tensors without matches
@@ -1598,14 +1474,14 @@ mod motif_find_tests {
             Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]) //channel 1
         ]).view((2, 6));
 
-        t_1_0.save(test_dir.join("1").join("t_1_0.pt"))?;
+        t_1_0.save(test_dir.join("t_1_0.pt"))?;
 
         let t_1_1 = Tensor::vstack(&[
             Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]), //channel 0
             Tensor::from_slice(&[1., 2., 3., 4., 5., 6.]) //channel 1
         ]).view((2, 6));
 
-        t_1_1.save(test_dir.join("1").join("t_1_1.pt"))?; //YYY
+        t_1_1.save(test_dir.join("t_1_1.pt"))?; //YYY
 
 
         let t_2_0 = Tensor::vstack(&[
@@ -1613,13 +1489,13 @@ mod motif_find_tests {
             Tensor::from_slice(&[0., 2., 2., 1., 1., 1.]) //channel 1
         ]).view((2, 6));
 
-        t_2_0.save(test_dir.join("2").join("t_2_0.pt"))?;
+        t_2_0.save(test_dir.join("t_2_0.pt"))?;
         let t_2_1 = Tensor::vstack(&[
             Tensor::from_slice(&[2., 2., 2., 2., 2., 2.]), //channel 0
             Tensor::from_slice(&[1., 2., 2., 1., 0., 0.]) //channel 1
         ]).view((2, 6));
 
-        t_2_1.save(test_dir.join("2").join("t_2_1.pt"))?; //ZZZ
+        t_2_1.save(test_dir.join("t_2_1.pt"))?; //ZZZ
 
         let channel_motif_ids = vec![
             vec![5, 7],
@@ -1634,7 +1510,7 @@ mod motif_find_tests {
             (9, 0.5)
         ]);
 
-        let channels_good_motifs = select_motifs_by_corr(
+      /*  let channels_good_motifs = select_motifs_by_corr(
             motifs_tensor.shallow_clone(),
             vec![
                 (1, iter_all_in_dir(test_dir.join("0"))),
@@ -1657,22 +1533,36 @@ mod motif_find_tests {
 
 
         assert_eq!(0, channels_good_motifs[0][0].0); //motif 0 is good for channel 0
-        assert_eq!(1, channels_good_motifs[1][0].0); //motif 1 is good for channel 1
+        assert_eq!(1, channels_good_motifs[1][0].0); //motif 1 is good for channel 1*/
 
 
-        let labels_channels_good_motifs = select_motifs_by_ratio(
+        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+            move |key: &String| {
+                debug!("LoadRunner: test_dir={test_dir:?} key={key}");
+                let tensor = Tensor::load(test_dir.join(key)).expect(format!("can't load {:?}", key).as_str());
+                debug!("LoadRunner: tensor={tensor}");
+
+                SyncWrapper::new(
+                    Box::new(tensor),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
+
+        let labels_channels_good_motifs = select_motifs_by_ratio_exec(
             motifs_tensor,
             vec![
-                ("xxx".into(), iter_all_in_dir(test_dir.join("0"))),
-                ("yyy".into(), iter_all_in_dir(test_dir.join("1"))),
-                ("zzz".into(), iter_all_in_dir(test_dir.join("2"))),
+                ("xxx".into(), vec!["t_0_0.pt".to_string(), "t_0_1.pt".to_string()]),
+                ("yyy".into(), vec!["t_1_0.pt".to_string(), "t_1_1.pt".to_string()]),
+                ("zzz".into(), vec!["t_2_0.pt".to_string(), "t_2_1.pt".to_string()]),
             ],
+            executor_rc,
             Some(3),
             1,
             Device::Cpu,
             0.5,
-            &motifs_avg_distances,
-            &channel_motif_ids,
+            Arc::new(RwLock::new(motifs_avg_distances)),
+            Arc::new(RwLock::new(channel_motif_ids)),
         )?;
 
         debug!("2. t={:?}", labels_channels_good_motifs);
@@ -1699,17 +1589,19 @@ mod motif_find_tests {
         let sig_1 = join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));
         let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
+
         /*
         let x = lin_t(n);
         plot_series(
              vec![
-                 (format!("Sig0"), RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
-                 (format!("Sig1"), GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
-                 (format!("Sig2"), BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
-             ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+             ], "test_find_motifs_euc", (1000, 500), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         ).unwrap();
         */
+
 
         let  executor_rc = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
@@ -1786,7 +1678,7 @@ mod motif_find_tests {
                  (format!("Sig1"), GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
                  (format!("Sig2"), BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
-             ], "EEG", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+             ], "test_find_motifs_euc_with_smooth_kernel", (1000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
          ).unwrap();
          */
 
@@ -1867,7 +1759,7 @@ mod motif_find_tests {
                 (format!("Sig1"), GREEN, (0..N).map(|x|x as f32).zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
                 (format!("Sig2"), BLACK, (0..N).map(|x|x as f32).zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "test_find_motifs_euc_diff_sizes", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
         */
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
@@ -2037,7 +1929,7 @@ mod motif_find_tests {
                 (format!("G2"), BLUE, vec_f32_from(&x).into_iter().zip(vec_f32_from(&_sig_1_c)).collect::<Vec<(f32, f32)>>()),
                 // (format!("dots"), MAGENTA, dots.into_iter().enumerate().map(|(i, v)|(i as f32, v)).collect::<Vec<(f32, f32)>>())
 
-            ], "EEG", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "test_simple_motif_tracker", (1000, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         )?;
         */
 
@@ -2205,7 +2097,7 @@ mod motif_find_tests {
         ]).totype(Int);
 
         let _threshold = 2.;
-        let tensor = super::clc_dist_matches(&t_0, &motifs_t, 1, &HashMap::from([
+        let tensor = super::clc_dist_matches_exec(&t_0, Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs_t), |e|Box::new(e.shallow_clone())))), 1, Arc::new(RwLock::new(HashMap::from([
             (1, 0.01),
             (2, 0.01),
             (3, 0.01),
@@ -2214,10 +2106,10 @@ mod motif_find_tests {
             (20, 0.01),
             (30, 0.01),
             (40, 0.01),
-        ]), &vec![
+        ]))), Arc::new(RwLock::new(vec![
             vec![1, 2, 3, 4],
             vec![10, 20, 30, 40],
-        ])?;
+        ])))?;
 
 
         assert_eq!(matches_t, tensor);
@@ -2243,7 +2135,6 @@ mod motif_find_tests {
         ]);
 
         assert_eq!(sample_properties, properties);
-
 
         let loaded_params = crate::find::FilterAndSlicerParams::from_properties_map(properties);
 

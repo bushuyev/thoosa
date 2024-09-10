@@ -21,8 +21,8 @@ use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::train_nets::{infer, load_motif_models, train_final, train_on_label, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{select_motifs_by_ratio, select_motifs_by_ratio_exec, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, SelectMotifsParams};
-use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, motifs_to_tensor_exec, MotifsToTensorParams, PlotMotifSlicesParams};
+use thoosa_motifs::find::{select_motifs_by_ratio_exec, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, SelectMotifsParams};
+use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor_exec, MotifsToTensorParams, PlotMotifSlicesParams};
 use thoosa_shared::{batch_windows, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_store::{SqlStore, Store};
@@ -279,7 +279,7 @@ pub fn run_cli<F, L>(
                 select_motifs_params.clone()
             };
 
-            let corr_ids = run_select_motifs(&cli, &store, devices, &select_motifs_params, Arc::clone(&loader));
+            let corr_ids = run_select_motifs_exec(&cli, &store, devices, &select_motifs_params, Arc::clone(&executor_rc));
 
             info!("run_select_motifs done, corr_ids={:?}", corr_ids);
         }
@@ -334,12 +334,12 @@ pub fn run_cli<F, L>(
             info!("run all: train_labels_datasets={:?}", train_labels_datasets);
             info!("run all: valid_labels_datasets={:?}", valid_labels_datasets);
 
-            let corr_ids = run_select_motifs(
+            let corr_ids = run_select_motifs_exec(
                 &cli,
                 &store,
                 devices.clone(),
                 &SelectMotifsParams::dummy(run_ids, train_labels_datasets.clone(), run_all_params.select_motifs_min_ratio),
-                Arc::clone(&loader)
+                Arc::clone(&executor_rc)
             )?;
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
@@ -429,7 +429,7 @@ pub fn run_cli<F, L>(
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
-            motifs_to_tensor_cmd(&cli, &store, *devices.first().expect("first device"), choose_fragments_params, Arc::clone(&loader))?;
+            motifs_to_tensor_cmd(&cli, &store, *devices.first().expect("first device"), choose_fragments_params, Arc::clone(&executor_rc))?;
         }
 
         Some(Commands::MotifsWithTpe(motifs_with_tpe_params)) => {
@@ -633,32 +633,6 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
 
 }
 
-pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, select_motifs_params: &SelectMotifsParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<Vec<usize>, ThoosaError>{
-
-    let chunk_len = select_motifs_params.run_ids().len()/devices.len();
-
-    let cli_clone = cli.clone();
-    let corr_ids = Arc::new(Mutex::new(vec![]));
-    let corr_ids_for_iter =  Arc::clone(&corr_ids);
-
-    devices.into_iter().cycle().zip(select_motifs_params.run_ids().chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[usize])>>().into_par_iter().for_each(move |(device_i, run_ids)| {
-        for run_id in run_ids {
-            let corr_ids = select_motifs_for_label(
-                &cli_clone,
-                Arc::clone(&store),
-                device_i,
-                &select_motifs_params,
-                *run_id,
-                Arc::clone(&loader)
-            ).expect("select_motifs_in_class");
-
-            corr_ids_for_iter.lock().extend(corr_ids);
-        }
-    });
-
-    let corr_ids = corr_ids.lock().clone();
-    Ok(corr_ids)
-}
 
 pub fn run_select_motifs_exec(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, select_motifs_params: &SelectMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>{
 
@@ -668,7 +642,14 @@ pub fn run_select_motifs_exec(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: 
     let corr_ids = Arc::new(Mutex::new(vec![]));
     let corr_ids_for_iter =  Arc::clone(&corr_ids);
 
-    devices.into_iter().cycle().zip(select_motifs_params.run_ids().chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[usize])>>().into_par_iter().for_each(move |(device_i, run_ids)| {
+    devices
+        .into_iter()
+        .cycle()
+        .zip(select_motifs_params.run_ids().chunks(chunk_len).into_iter())
+        .collect::<Vec<(Device, &[usize])>>()
+        .into_par_iter()
+        .for_each(move |(device_i, run_ids)| {
+
         for run_id in run_ids {
             let corr_ids = select_motifs_for_label_exec(
                 &cli_clone,
@@ -739,15 +720,12 @@ fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, _device: Devi
 
 }
 
-fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, choose_fragments_params: &MotifsToTensorParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
+fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, choose_fragments_params: &MotifsToTensorParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<(), ThoosaError> {
     let mut store_guard = store.lock();
 
-    let t = motifs_to_tensor(
+    let t = motifs_to_tensor_exec(
         store_guard.list_motifs_slices(choose_fragments_params.run_id())?,
-        move |key: &String| {
-
-            loader.load(&key, device)
-        },
+        executor,
         choose_fragments_params.window(),
         20,
         device
@@ -967,83 +945,6 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
     Ok(run_ids)
 }
 
-fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, select_motifs_params: &SelectMotifsParams, run_id:usize, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<Vec<usize>, ThoosaError> {
-    debug!("select_motifs_in_class: device={:?} cli.tensors_path={:?}", device, cli.tensors_path);
-
-    let (resource_id_motif_slices, motifs_avg_distances, params) = {
-        let mut store_guard = store.lock();
-
-        (
-            store_guard.list_motifs_slices(run_id)?,
-            store_guard.list_motifs_distances(run_id)?,
-            FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(run_id, None)?)
-        )
-    };
-
-    assert!(resource_id_motif_slices.len() > 0, "no slices for run_id={}", run_id);
-    let loader_m = Arc::clone(&loader);
-
-    let filter_and_slice:FilterAndSlicer = params.into();
-    let filter_op = filter_and_slice.filter();
-
-    let (motifs, channel_motif_ids, _motifs_slices_map) = motifs_to_tensor(
-        resource_id_motif_slices,
-
-        move |key: &String| {
-            let t = loader_m.load(key, device);
-
-            if let Some(filter) = filter_op {
-                Box::new(filter(&t))
-            } else {
-                t
-            }
-
-        },
-        filter_and_slice.window() as i64,
-        20,//TODO
-        device
-    )?;
-
-    info!("select_motifs: motifs tensor built, size={:?}", motifs.size());
-
-    let labels_channels_good_motif_idxs = select_motifs_by_ratio(
-        motifs,
-        select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
-            let loader_m = Arc::clone(&loader);
-            (
-                label_dataset.0.clone(),
-                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(move |resource_id| {
-                    loader_m.load(&resource_id, device)
-                })
-            )
-        }).collect(),
-        cli.limit,
-        filter_and_slice.step(),
-        device,
-        select_motifs_params.min_ratio(),
-        &motifs_avg_distances,//TODO keeps motif indexes with motif tensors
-        &channel_motif_ids
-    )?;
-
-    Ok(labels_channels_good_motif_idxs.into_iter().map(|(label, channels_good_motif_idxs)| {
-
-        let motifs_corrs = channel_motif_ids.iter()
-            .zip(channels_good_motif_idxs.into_iter())
-            .map(|(motif_ids, motif_idxs_corss)| {
-
-                motif_idxs_corss.into_iter().map(|(motif_idx, motif_idx_corr)| {
-                    (motif_ids[motif_idx as usize], motif_idx_corr)
-                }).collect::<Vec<(usize, f64)>>()
-
-            }).collect::<Vec<Vec<(usize, f64)>>>();
-
-        debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
-
-        store.lock().save_motifs_corrs(run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
-    }).collect::<Vec<usize>>())
-
-}
-
 fn select_motifs_for_label_exec(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, select_motifs_params: &SelectMotifsParams, run_id:usize, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
     debug!("select_motifs_in_class: device={:?} cli.tensors_path={:?}", device, cli.tensors_path);
 
@@ -1058,13 +959,10 @@ fn select_motifs_for_label_exec(cli: &Cli, store:Arc<Mutex<impl Store + 'static>
     };
 
     assert!(resource_id_motif_slices.len() > 0, "no slices for run_id={}", run_id);
-    // let loader_m = Arc::clone(&executor);
 
     let filter_and_slice:FilterAndSlicer = params.into();
-    // let filter_op = filter_and_slice.filter();
 
-
-    let (motifs, channel_motif_ids, _motifs_slices_map) = motifs_to_tensor_exec(
+    let (motifs, channel_motif_ids) = motifs_to_tensor_exec(
         resource_id_motif_slices,
 
         Arc::clone(&executor),
@@ -1080,8 +978,6 @@ fn select_motifs_for_label_exec(cli: &Cli, store:Arc<Mutex<impl Store + 'static>
     let labels_channels_good_motif_idxs:HashMap<String, Vec<Vec<(i64, f64)>>> = select_motifs_by_ratio_exec(
         motifs,
         select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
-
-            // let loader_m = Arc::clone(&executor);
             (
                 label_dataset.0.clone(),
                 store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap()
@@ -1113,7 +1009,6 @@ fn select_motifs_for_label_exec(cli: &Cli, store:Arc<Mutex<impl Store + 'static>
 
         store.lock().save_motifs_corrs(run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
     }).collect::<Vec<usize>>())
-    // Ok(vec![0])
 
 }
 
