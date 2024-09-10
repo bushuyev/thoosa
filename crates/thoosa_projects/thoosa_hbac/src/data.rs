@@ -675,7 +675,7 @@ mod tests {
     use thoosa_common::utils::{from, plot_series};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, RunAllParams};
+    use thoosa_main::cli::{init_resources, motifs_with_tpe, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_shared::{init_test_logging, ThoosaError};
@@ -982,6 +982,61 @@ mod tests {
         )?;
 
         debug!("corr_ids={:?}", corr_ids);
+
+        Ok(())
+    }
+
+    // #[test]
+    fn test_motifs_with_tpe()-> Result<(), ThoosaError>{
+        let cli = Cli{
+            base_path: "/media/bu/KINGSTON/hbac_orig/".to_string(),
+            resource_pattern: "{}.parquet".to_string(),
+            ws_path: "/tmp".to_string(),
+            tensors_path: None,
+            store_path: "".to_string(),
+            term_logger_level: "".to_string(),
+            write_logger_level: "".to_string(),
+            logfile: "".to_string(),
+            limit: None,
+            num_threads: None,
+            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10, "xxx".into(), 10, 0.3, None))),
+            input_filters_kernel: None,
+        };
+
+        std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
+        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+
+        let loader = Arc::new(Box::new(ParquetLoader::new(
+            "/media/bu/KINGSTON/hbac_orig".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None,
+            Box::new(|base_path,resource_id|format!("{}/{}.parquet", base_path, resource_id))
+        )));
+
+        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+            move |key: &String| {
+                SyncWrapper::new(
+                    loader.load(key, Device::Cpu),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
+
+        init_resources(
+            Arc::clone(&store),
+            ||{
+                super::labeled_resourses(Path::new(&cli.base_path).join("train.csv"))
+            }
+        )?;
+
+        let run_all_params = RunAllParams::dummy("pure group 10", "pure group 10");
+
+        motifs_with_tpe(
+            &cli,
+            &run_all_params,
+            &store,
+            Cpu,
+            executor_rc
+        );
 
         Ok(())
     }

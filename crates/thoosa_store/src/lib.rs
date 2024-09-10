@@ -570,7 +570,6 @@ impl Store for SqlStore {
         let labeled_resources_sets = {
             let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
 
-
             let vec = stmt.query_map([group_descr], |row| {//TODO move group_slices out, not for store
                 Ok((
                     row.get::<usize, String>(0).expect("row 0 in list_group_labeled_resources_sets"),
