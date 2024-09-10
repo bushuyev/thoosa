@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::ops::Deref;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,7 +12,7 @@ use log::{debug, info, warn};
 use regex::Regex;
 use tch::Device;
 use tch::IndexOp;
-use tch::kind::FLOAT_CPU;
+
 use tch::Tensor;
 use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
 use thoosa_common::utils::*;
@@ -114,7 +114,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor_exec(
+pub fn motifs_to_tensor(
     resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, window: i64, channels: i64, device: Device
 ) -> Result<(Tensor, Vec<Vec<usize>>), ThoosaError> {
 
@@ -129,7 +129,7 @@ pub fn motifs_to_tensor_exec(
     let wg = WaitGroup::new();
     let wg_1 = wg.clone();
 
-    executor.write().exec(move |loader, keys_purge| {
+    executor.write().exec(move |loader, _keys_purge| {
         async move {
 
             for (resource_id, motif_slices) in resource_id_motif_slices {
@@ -174,7 +174,7 @@ pub fn motifs_to_tensor_exec(
         (0..channels).map(|channel| {
             let motif_slices =  channels_motifs_slices.write().remove(&(channel as u16)).unwrap_or(HashMap::new());
 
-            let mut motifs = motif_slices.into_iter().map(|(motif_id, mut slices)| {
+            let mut motifs = motif_slices.into_iter().map(|(motif_id, slices)| {
 
                 channel_motif_ids[channel as usize].push(motif_id);
                 // choose_slice(&mut slices).shallow_clone()
@@ -564,7 +564,7 @@ mod motifs_tests {
         )));
 
 
-        let (t, motif_ids) = super::motifs_to_tensor_exec(
+        let (t, motif_ids) = super::motifs_to_tensor(
             eeg_id_fragments_map,
             executor_rc,
             10, 2,

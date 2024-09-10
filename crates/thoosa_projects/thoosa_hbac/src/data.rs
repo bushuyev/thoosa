@@ -675,7 +675,7 @@ mod tests {
     use thoosa_common::utils::{from, plot_series};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs_exec, run_train_final, run_train_on_label, Cli, RunAllParams};
+    use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_shared::{init_test_logging, ThoosaError};
@@ -941,9 +941,9 @@ mod tests {
             input_filters_kernel: None,
         };
 
-        std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
+        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let loader = Arc::new(Box::new(ParquetLoader::new(
             "test_data/eeg".into(), Some("test_data/eeg".into()), None,
@@ -973,7 +973,7 @@ mod tests {
             Arc::clone(&executor_rc)
         )?;
 
-        let corr_ids = run_select_motifs_exec(
+        let corr_ids = run_select_motifs(
             &cli,
             &store,
             vec![Cpu],
