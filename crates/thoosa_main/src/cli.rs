@@ -164,10 +164,6 @@ pub struct InitResourcesParams {
 
 }
 
-#[derive(Debug, Args, Clone, Default)]
-pub struct MotifsWithTPEParams {
-
-}
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum Commands {
@@ -179,7 +175,7 @@ pub enum Commands {
     TrainOnMotifs(TrainOnMotifsParams),
     TrainOnLabel(TrainOnLabelParams),
     TrainFinal(TrainFinalParams),
-    MotifsWithTpe(MotifsWithTPEParams),
+    MotifsWithTpe(RunAllParams),
     RunAll(RunAllParams),
     Infer(InferParams),
 }
@@ -435,7 +431,7 @@ pub fn run_cli<F, L>(
         Some(Commands::MotifsWithTpe(motifs_with_tpe_params)) => {
             debug!("MotifsWithTPE: motifs_with_tpe_params={:?}", motifs_with_tpe_params);
 
-            motifs_with_tpe(&cli, &store, devices[0], Arc::clone(&executor_rc));
+            motifs_with_tpe(&cli, motifs_with_tpe_params, &store, devices[0], Arc::clone(&executor_rc));
         }
 
         None => {
@@ -731,7 +727,6 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
         device
     )?;
 
-
     let out = Path::new(&cli.ws_path).join("out");
     fs::create_dir_all(&out)?;
     t.0.save(out.join(format!("motifs_in_{}", choose_fragments_params.run_id())))?;
@@ -739,10 +734,27 @@ fn motifs_to_tensor_cmd(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device,
     Ok(())
 }
 
-fn motifs_with_tpe(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: Device, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>){
-    let find_motifs_params = FindMotifsParams::dummy(1000, 1000, "".to_string(), 1000, 0.9, None);
+pub fn motifs_with_tpe(cli: &Cli, run_all_params:&RunAllParams, store: &Arc<Mutex<SqlStore>>, device: Device, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>)-> Result<(), ThoosaError>{
 
-    let _run_id = run_find_motifs_on_set(&cli, &store, device, &find_motifs_params, executor);
+    let run_ids = run_find_motifs_on_group(&cli, &store, vec![device], run_all_params, Arc::clone(&executor))?;
+
+    info!("find_motifs done: run_ids={:?}", run_ids);
+
+    let train_labels_datasets = {store.lock().list_group_labeled_resources_sets(run_all_params.train_resource_group())?};
+    let valid_labels_datasets = {store.lock().list_group_labeled_resources_sets(run_all_params.valid_resource_group())?};
+
+    info!("run all: train_labels_datasets={:?}", train_labels_datasets);
+    info!("run all: valid_labels_datasets={:?}", valid_labels_datasets);
+
+    let corr_ids = run_select_motifs(
+        &cli,
+        &store,
+        vec![device],
+        &SelectMotifsParams::dummy(run_ids, train_labels_datasets.clone(), run_all_params.select_motifs_min_ratio),
+        Arc::clone(&executor)
+    )?;
+
+    Ok(())
 }
 
 pub fn init_resources<F>(store:Arc<Mutex<impl Store + 'static>>, labeled_resourses:F) -> Result<(), ThoosaError>
