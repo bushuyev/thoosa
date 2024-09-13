@@ -716,7 +716,7 @@ fn run_find_motifs_on_set(cli: &Cli, store: &Arc<Mutex<SqlStore>>, _device: Devi
         resource_ids,
         Arc::clone(&store),
         20,
-        executor
+        executor, Some(10)
     )
 
 }
@@ -1197,7 +1197,8 @@ mod main_tests {
             vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()],
             Arc::clone(&store),
             channels,
-            Arc::clone(&executor_rc)
+            Arc::clone(&executor_rc),
+            None
         )?;
 
         debug!("{:?}", store.lock().list_run_resources(1)?);

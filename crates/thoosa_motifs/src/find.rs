@@ -215,7 +215,7 @@ pub fn find_motifs_by_euc_dist(
     records_num: usize,
     resource_ids: Vec<String>,
     store: Arc<Mutex<impl Store + 'static>>, channels: i64,
-    exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>
+    exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, mit_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
     if records_num < find_motifs_params.window {
         return Err(ThoosaError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
@@ -246,7 +246,11 @@ pub fn find_motifs_by_euc_dist(
         let all_motif_trackers = min_dot
             .iter()
             .enumerate()
-            .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(*min_dot, StoreDumper::new(Arc::clone(&store), run_id, i))) //TODO name
+            .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(
+                *min_dot,
+                StoreDumper::new(Arc::clone(&store), run_id, i),
+                mit_tracker_step
+            )) //TODO name
             .collect::<Vec<SimpMotifTracker<_>>>();
 
         a.0.push(run_id);
@@ -690,29 +694,53 @@ impl MotifDumper for StoreDumper {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct SimpMotifTracker<D: MotifDumper + Debug> {
+    last:Option<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>,
     motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>, //i_0, match_0, match_1, dist
     min_dot: f32,
     dumper: D,
+    min_step:Option<usize>
 }
 
 impl<D: MotifDumper + Debug> SimpMotifTracker<D> {
-    pub fn new(min_dot: f32, dumper: D) -> SimpMotifTracker<D> {
+
+    pub fn new(min_dot: f32, dumper: D, min_step:Option<usize>) -> SimpMotifTracker<D> {
         Self {
+            last:None,
             min_dot,
             motifs: vec![],
             dumper,
+            min_step
         }
     }
 
     pub fn track(&mut self, i_0: TensorSliceIdx<String>, i_1: TensorSliceIdx<String>, dist: f32) {
         debug!("SimpMotifTracker::track: i_0={i_0} i_1={i_1}");
 
-        self.motifs.push((i_0, i_1, dist));
+        match self.min_step {
+            None => {
+                self.motifs.push((i_0, i_1, dist));
+            }
+
+            Some(min_step) => {
+
+                let last = self.last.take();
+                if let Some(last) = last {
+                    if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
+                        self.motifs.push(last);
+                    }
+                }
+                self.last.replace((i_0, i_1, dist));
+            }
+        }
 
     }
 
     fn dump(&mut self) {
         debug!("SimpMotifTracker::dump: self.motifs={}", self.motifs.len());
+        if let Some(last) = self.last.take(){
+            self.motifs.push(last);
+        }
+
         if self.motifs.len() > 0 {
             self.dumper.dump(&mut self.motifs).expect("dumper");
             self.motifs.clear();
@@ -1240,7 +1268,7 @@ mod motif_find_tests {
     use thoosa_shared::val::Val;
     use thoosa_store::{SqlStore, Store};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio};
+    use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper};
 
     use crate::find::select_motifs_by_corr;
 
@@ -1590,7 +1618,7 @@ mod motif_find_tests {
             eeg_id_series,
             Arc::clone(&store),
             1,
-            executor_rc
+            executor_rc, Some(10)
         )?;
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
@@ -1668,7 +1696,7 @@ mod motif_find_tests {
             eeg_id_series,
             Arc::clone(&store),
             1,
-            executor_rc
+            executor_rc, Some(10)
         )?;
 
         debug!("run_ids={:?}", run_ids);
@@ -1747,7 +1775,7 @@ mod motif_find_tests {
             eeg_id_series,
             Arc::clone(&store),
             1,
-            executor_rc
+            executor_rc, Some(10)
         )?;
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
@@ -1800,8 +1828,6 @@ mod motif_find_tests {
             }, 4, 100,
         )));
 
-
-
         super::find_motifs_by_euc_dist(
             &FindMotifsParams {
                 step: 100,
@@ -1818,7 +1844,8 @@ mod motif_find_tests {
             (0..tensors_len).map(|v| format!("{}", v)).collect(),
             Arc::clone(&store),
             1,
-            executor_rc
+            executor_rc,
+            None
         )?;
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
@@ -1830,9 +1857,59 @@ mod motif_find_tests {
         Ok(())
     }
 
-
     #[test]
     pub fn test_simple_motif_tracker() -> Result<(), ThoosaError> {
+        #[derive(Debug)]
+        struct DummyDumper {
+            motifs:  Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>
+        }
+
+        impl DummyDumper {
+            pub fn new() -> Self {
+                Self {
+                    motifs:vec![]
+                }
+            }
+        }
+
+        impl MotifDumper for DummyDumper {
+            fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), ThoosaError> {
+
+                self.motifs.extend(motifs.drain(..));
+
+                Ok(())
+            }
+        }
+/*
+        let mut mt = super::SimpMotifTracker::new(0.9, DummyDumper::new(), None);
+
+        mt.track(TensorSliceIdx("t_0".to_string(), 10), TensorSliceIdx("t_1".to_string(), 10), 1.0);
+        mt.track(TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0);
+        mt.track(TensorSliceIdx("t_0".to_string(), 30), TensorSliceIdx("t_1".to_string(), 30), 1.0);
+
+        mt.dump();
+        assert_eq!(mt.dumper.motifs.len(), 3);
+        assert_eq!((TensorSliceIdx("t_0".to_string(), 10), TensorSliceIdx("t_1".to_string(), 10), 1.0), mt.dumper.motifs[0]);
+        assert_eq!((TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0), mt.dumper.motifs[1]);
+        assert_eq!((TensorSliceIdx("t_0".to_string(), 30), TensorSliceIdx("t_1".to_string(), 30), 1.0), mt.dumper.motifs[2]);
+
+*/
+        let mut mt = super::SimpMotifTracker::new(0.9, DummyDumper::new(), Some(10));
+
+        mt.track(TensorSliceIdx("t_0".to_string(), 10), TensorSliceIdx("t_1".to_string(), 10), 1.0);
+        mt.track(TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0);
+        mt.track(TensorSliceIdx("t_0".to_string(), 31), TensorSliceIdx("t_1".to_string(), 30), 1.0);
+
+        mt.dump();
+        assert_eq!(mt.dumper.motifs.len(), 2);
+        assert_eq!((TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0), mt.dumper.motifs[0]);
+        assert_eq!((TensorSliceIdx("t_0".to_string(), 31), TensorSliceIdx("t_1".to_string(), 30), 1.0), mt.dumper.motifs[1]);
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_simple_motif_tracker_with_tensorssource() -> Result<(), ThoosaError> {
         let n = 1_000i64;
 
 
@@ -1851,7 +1928,7 @@ mod motif_find_tests {
         let step = 100;
 
 
-        let mut mt = super::SimpMotifTracker::new(0.9, FileDumper::new("/tmp/test_motifs.csv"));
+        let mut mt = super::SimpMotifTracker::new(0.9, FileDumper::new("/tmp/test_motifs.csv"), None);
 
         let dim = 1;
 

@@ -988,7 +988,8 @@ mod tests {
             &store,
             vec![Cpu],
             &SelectMotifsParams::dummy(run_ids, vec![("seizure".into(), "seizure/10".into())], 0.1),
-            Arc::clone(&executor_rc)
+            Arc::clone(&executor_rc),
+            20
         )?;
 
         debug!("corr_ids={:?}", corr_ids);
