@@ -1,6 +1,7 @@
 // #![feature(backtrace_frames)]
 
 use std::backtrace::Backtrace;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::error::Error;
 use std::f32::consts::PI;
@@ -11,7 +12,7 @@ use std::ops::Mul;
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::SecondsFormat;
 use log::{debug, error, trace, LevelFilter};
-use rand::Rng;
+use rand::{Rng, RngCore};
 use regex::Regex;
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
 use std::env;
@@ -171,7 +172,6 @@ impl MotifSlice {
     }
 }
 
-
 pub fn random_saw(n: usize) -> Vec<f32> {
     let mut rng = rand::thread_rng();
     let step = 25usize;
@@ -185,6 +185,68 @@ pub fn random_saw(n: usize) -> Vec<f32> {
         ).collect::<Vec<f32>>()
 }
 
+pub fn random_saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
+    let mut rng = rand::thread_rng();
+
+    let mut y = vec![0.;n];
+    let mut x = 0;
+
+    let def_step = n/steps;
+
+    loop {
+        let mut dx = min(n-x, (def_step as f32 * rng.gen_range(0.5 .. 1.5)) as usize);
+        if dx % 2 == 0 {
+            dx+=1;
+        }
+
+        let max_y = max_y  * rng.gen_range(-1.5 .. 1.5);
+
+        if dx > 2 {
+            let dy = max_y / (dx-1) as f32 * 2.;
+
+            for i in 1..dx / 2  {
+                y[x + i] = if x + i > 0 { y[x + i - 1] } else { 0. } + dy;
+                y[x + dx - i - 1] = y[x + i];
+            }
+
+        }
+
+        y[x + dx / 2 ] = max_y;
+
+        x = x+dx-1;
+        if x>=n{
+            break
+        }
+
+    }
+
+    y
+}
+
+pub fn sig_2(n: i64, max_y: f32) -> Vec<f32> {
+    join_with_offset::<f32>(0., 1.0, &[
+        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
+        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
+        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
+    ], random_saw_with_steps(n as usize, 20, 100.))
+}
+
+pub fn sig_1(n: i64, max_y: f32) -> Vec<f32> {
+    join_with_offset::<f32>(0., 1.0, &[
+        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
+        ((0.2*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
+    ], random_saw_with_steps(n as usize, 20, 100.))
+}
+
+pub fn sig_0(n: i64, max_y: f32) -> Vec<f32> {
+    join_with_offset::<f32>(0., 1.0, &[
+        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.8*n as f32) as i64, 20., 100., max_y)),
+    ], random_saw_with_steps(n as usize, 20, 100.))
+}
+
+pub fn saw(n: i64) -> Vec<f32> {
+    random_saw_with_steps(n as usize, 30, 100.)
+}
 
 pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
     let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset + pulse.len()).sum();
@@ -210,32 +272,45 @@ pub fn pulse_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], random_amplitude: f32
     join_with_offset::<f32>(0., pulse_scale, pulses, random)
 }
 
-pub fn join_with_offset<T>(def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T> + PartialEq + Default{
+pub fn join_with_offset<T:Debug>(def:T, scale:T, pulses: &[(usize, Vec<T>)], main: Vec<T>) -> Vec<T> where T:Copy + Clone + Mul<Output = T> + std::ops::Add<Output = T> + PartialEq + Default{
     let mut x:T = T::default();
     let main_len = main.len();
     main.into_iter().zip(
         pulses
             .into_iter()
             .flat_map(
-                |(offset, pulse)|
+                |(offset, pulse)| {
                     std::iter::repeat(def)
                         .take(*offset)
                         .chain(pulse.into_iter().map(|v| *v))
+                }
             )
-            .chain(std::iter::repeat(def).take(main_len as usize - pulses.last().map(|p|p.0+p.1.len()).unwrap_or(0)))
+            .chain(std::iter::repeat(def).take(main_len - pulses.last().map(|p| p.0 + p.1.len()).unwrap_or(0)))
 
-    ).map(|(v1, v2)| if v2!=def {
-        x + scale * v2
-    } else {
-        x =  v1;
-        x
+    ).map(|(main_v, pulse_v)| {
+        if pulse_v !=def {
+            scale * pulse_v
+        } else {
+            x = main_v;
+            x
+        }
     }).collect::<Vec<T>>()
 }
 
-
+pub fn gauss_v(μ: f32, σ: f32, n: i64) -> Vec<f32> {
+    gauss_i(μ, σ, n).collect()
+}
 
 pub fn gauss_i(μ: f32, σ: f32, n: i64) -> impl Iterator<Item=f32> {
     (0..n).map(move |x| (-0.5 * ((x as f32 - μ) / σ).powi(2)).exp())
+}
+
+pub fn gauss_scaled(μ: f32, σ: f32, n: i64, max_x:f32, max_y:f32) -> Vec<f32> {
+    (0..n).map(move |i| -max_x /2. + i as f32 * max_x /n as f32).map(move |x| (-0.5 * ((x - μ) / σ).powi(2)).exp()).map(|y|y*max_y).collect()
+}
+
+pub fn pulse_v_fit(μ: f32, σ: f32, n: i64, f: f32, max_x:f32, max_y:f32) -> Vec<f32> {
+    gauss_scaled(μ, σ, n, max_x, max_y).into_iter().enumerate().map(|(i, x)|  x * ( f * 2. * PI *  i as f32 / n as f32).sin() ).collect::<Vec<_>>()
 }
 
 pub fn sin_v(n: i64, p: f32) -> Vec<f32> {
@@ -281,6 +356,7 @@ pub fn random_v(n: i64, amplitude: f32, max_slope: f32) -> Vec<f32> {
     let rnd_vals_1 = (0..n / 10).flat_map(move |_i|std::iter::repeat(   rand::thread_rng().gen_range(-max_slope..max_slope)).take(10)).collect::<Vec<f32>>();
     let rnd_vals_2 = (0..n / 60).flat_map(move |_i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(100)).collect::<Vec<f32>>();
     let rnd_vals_3 = (0..n / 120).flat_map(move |_i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(300)).collect::<Vec<f32>>();
+
     rnd_vals_0.into_iter().zip(
         rnd_vals_1.into_iter().zip(
             rnd_vals_2.into_iter().zip(

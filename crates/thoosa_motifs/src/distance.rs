@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, trace};
 use tch::{IndexOp, Tensor};
 use tch::Kind;
 
@@ -32,7 +32,7 @@ pub fn slice_t(t_0: &Tensor, step: usize, window: i64) -> Tensor {
     debug!("slice_t:  t_0.size()={:?} step={step} window={window}", t_0.size());
 
     let tensors_vec = (0..=t_0.size()[1] - window).step_by(step).map(|i| t_0.i((.., i..i + window))).collect::<Vec<Tensor>>();
-    debug!("slice_t: tensors_vec={tensors_vec:?}");
+    trace!("slice_t: tensors_vec={tensors_vec:?}");
     Tensor::stack(&tensors_vec, 0)
 }
 
