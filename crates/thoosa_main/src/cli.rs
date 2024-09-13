@@ -966,7 +966,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
 }
 
 fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, select_motifs_params: &SelectMotifsParams, run_id:usize, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, channels: i64) -> Result<Vec<usize>, ThoosaError> {
-    debug!("select_motifs_in_class: device={:?} cli.tensors_path={:?}", device, cli.tensors_path);
+    debug!("select_motifs_for_label: device={:?} cli.tensors_path={:?}", device, cli.tensors_path);
 
     let (resource_id_motif_slices, motifs_avg_distances, params) = {
         let mut store_guard = store.lock();
@@ -981,6 +981,8 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
     assert!(resource_id_motif_slices.len() > 0, "FAILED: no slices for run_id={}", run_id);
 
     let filter_and_slice:FilterAndSlicer = params.into();
+
+    debug!("select_motifs_for_label: filter_and_slice={filter_and_slice:?}");
 
     let (motifs, channel_motif_ids) = motifs_to_tensor(
         resource_id_motif_slices,
@@ -1083,7 +1085,7 @@ mod main_tests {
         debug!("test_dir={test_dir:?}");
         let base_path = test_dir.to_string_lossy().to_string();
 
-        let n = 100i64;
+        let n = 1000i64;
         let max_y = 30.0;
         let sig_0_v = sig_0(n, max_y);
         let sig_1_v = sig_1(n, max_y);
@@ -1113,7 +1115,8 @@ mod main_tests {
             // Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
             Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
             // Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([saw(n),          saw(n), saw(n)].concat().as_slice())
+            Tensor::from_slice([sig_2_v.clone(),          saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
         ]);
         t_0_0.save(test_dir.join(format!("t_0_0.pt")))?;
 
@@ -1121,10 +1124,11 @@ mod main_tests {
         debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
 
         let t_0_1 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n), saw(n), sig_0_v.clone()].concat().as_slice()),
+            Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n) ].concat().as_slice()),
             // Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
             // Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([saw(n),          saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
+            Tensor::from_slice([sig_2_v.clone(),          saw(n), saw(n)].concat().as_slice()),
         ]);
         t_0_1.save(test_dir.join(format!("t_0_1.pt")))?;
 
@@ -1133,10 +1137,11 @@ mod main_tests {
 
 
         let t_1_0 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
             // Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),
             // Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([saw(n),          saw(n), saw(n)].concat().as_slice())
+            Tensor::from_slice([saw(n),          saw(n), sig_2_v.clone()].concat().as_slice()),
+            Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice())
         ]);
         t_1_0.save(test_dir.join(format!("t_1_0.pt")))?;
 
@@ -1144,16 +1149,17 @@ mod main_tests {
         debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
 
         let t_1_1 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n), saw(n), sig_1_v.clone()].concat().as_slice()),
             // Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),
             // Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([saw(n),          saw(n), saw(n)].concat().as_slice())
+            Tensor::from_slice([saw(n),          saw(n), sig_2_v.clone()].concat().as_slice()),
+            Tensor::from_slice([sig_2_v.clone(),          sig_2_v.clone(), saw(n)].concat().as_slice()),
         ]);
         t_1_1.save(test_dir.join(format!("t_1_1.pt")))?;
 
         // debug!("t_1_1={t_1_1}");
         debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
-        let channels = 1;
+        let channels = 3;
 
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
@@ -1183,14 +1189,14 @@ mod main_tests {
         let run_ids = find_motifs_by_euc_dist(
 
             &FindMotifsParams {
-                step: 10,
-                window: 80,
+                step: 100,
+                window: 800,
                 min_dot: 0.0,
                 resource_set: "test".to_string(),
                 preload_d: 3,
                 max_keys_fifo: 3,
                 chunk_size: 2,
-                max_dist: 0.1,
+                max_dist: 0.5,
                 input_filter: None,
             },
             3 * n as usize,
@@ -1198,18 +1204,19 @@ mod main_tests {
             Arc::clone(&store),
             channels,
             Arc::clone(&executor_rc),
-            None
+            Some(100)
         )?;
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
         let slices = store.lock().list_motifs_slices(run_ids[0])?;
-        debug!("slices: {:?}", slices);
+        debug!("test_motifs_with_tpe: slices={:?}", slices);
+        assert_eq!(slices.len(), 4);
 
         // assert_eq!((110, 0), slices.get(&"t_0".to_string()).and_then(|v| v.get(0).map(|v|(v.slise_idx, v.channel_idx))).unwrap());
         // assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1100, channel_idx: 0 }, slices.get(&"t_1".to_string()).and_then(|v| v.get(0)).unwrap());
 
 
-        /*
+
         let cli = Cli{
             base_path,
             resource_pattern: "{}.parquet".to_string(),
@@ -1242,7 +1249,7 @@ mod main_tests {
         ).expect("select_motifs_in_class");
 
         println!("corr_ids={corr_ids:?}");
-        */
+
 
         Ok(())
 

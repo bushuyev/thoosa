@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::{fs};
+use std::fmt::{Debug, Display};
+use std::{fmt, fs};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::Arc;
@@ -329,7 +329,7 @@ pub fn find_motifs_by_euc_dist(
 
                                     if dist == 0. {
                                         debug!("find_motifs_euc: t_idx_0={t_idx_0} t_idx_1={t_idx_1} s_0={s_0} s_1={s_1} dist={dist}");
-                                        debug!("find_motifs_euc: tensor_0={} tensor_1={}", tensor_0.i(s_0), tensor_1.i(s_1));
+                                        trace!("find_motifs_euc: tensor_0={} tensor_1={}", tensor_0.i(s_0), tensor_1.i(s_1));
                                     }
 
                                     if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < find_motifs_params.max_dist {
@@ -407,10 +407,21 @@ pub struct FilterAndSlicerParams {
     descr: String,
 }
 
+
 pub struct FilterAndSlicer {
     step: usize,
     window: i64,
     filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>>,
+}
+
+impl Debug for FilterAndSlicer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f. debug_struct("FilterAndSlicer")
+            .field("step", &self.step)
+            .field("window", &self.window)
+            .field("filter", &self.filter.is_some())
+            .finish()
+    }
 }
 
 unsafe impl Send for FilterAndSlicer {
@@ -875,9 +886,10 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step: usize, threshold: f32
 /**
  * series - [channel x data]
  * motifs = [channel x motif x data slice]
+ * channel_motif_ids - max distances for motifs
  */
-fn clc_dist_matches(series: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>, step: usize, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<Tensor, ThoosaError> {
-    let channels_num = series.size()[0];
+fn clc_dist_matches(target: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>, step: usize, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<Tensor, ThoosaError> {
+    let channels_num = target.size()[0];
 
     let motifs_num = motifs.read().size()[1];
     let motif_len = motifs.read().size()[2];
@@ -886,7 +898,7 @@ fn clc_dist_matches(series: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>
     //channels, motif, motif x series dots
     let mut channels_matches: Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_| Vec::new()).collect();
 
-    let slices = slice_t(&series, step, motif_len);
+    let slices = slice_t(&target, step, motif_len);
 
     for c in 0..channels_num {
         let t_0 = slices.i((.., c, ..));
@@ -904,11 +916,9 @@ fn clc_dist_matches(series: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>
         }
     }
 
-    let channels_matches_lens = channels_matches.iter().map(|c| c.len()).collect::<Vec<usize>>();
-    let channel_motif_ids_lens = channel_motif_ids.read().iter().map(|c| c.len()).collect::<Vec<usize>>();
 
-    debug!("clc_dist_matches: channels_matches_lens={:?}", channels_matches_lens);
-    debug!("clc_dist_matches: channel_motif_ids_lens={:?}", channel_motif_ids_lens);
+    debug!("clc_dist_matches: channels_matches_lens={:?}", channels_matches.iter().map(|c| c.len()).collect::<Vec<usize>>());
+    debug!("clc_dist_matches: channel_motif_ids_lens={:?}", channel_motif_ids.read().iter().map(|c| c.len()).collect::<Vec<usize>>());
 
     let channel_motif_ids: Vec<Vec<Option<usize>>> = channel_motif_ids.read().iter().map(|ids_in_c| {
         let mut x: Vec<Option<usize>> = ids_in_c.iter().map(|v| Some(*v)).collect();
@@ -924,17 +934,18 @@ fn clc_dist_matches(series: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>
 
 
     let matches = Tensor::vstack(channels_matches.into_iter().zip(channel_motif_ids.iter()).map(|(channel_motifs, motif_ids)| {
-        debug!("motif_ids={:?}", motif_ids);
-        debug!("channel_motifs={:?}", channel_motifs);
-        debug!("motifs_distances={:?}", motifs_distances);
+        debug!("clc_dist_matches: motif_ids={:?}", motif_ids);
+        debug!("clc_dist_matches: channel_motifs={:?}", channel_motifs);
+        debug!("clc_dist_matches: motifs_distances={:?}", motifs_distances);
         Tensor::from_slice(channel_motifs.into_iter().zip(motif_ids.into_iter()).map(|(motifs_dists, motif_id_op)| {
-            debug!("motifs_dists={:?}", motifs_dists);
+            // debug!("motifs_dists={:?}", motifs_dists);
 
             motifs_dists.into_iter().map(|motif_dist| {
 
-                // debug!("motif_id={:?} motif_dist={}", motif_id, motif_dist);
+                // debug!("clc_dist_matches: motif_id={:?} motifs_distances.read().get(motif_id)={:?} motif_dist={}", motif_id_op, motifs_distances.read().get(&motif_id_op.unwrap_or(0)), motif_dist);
 
-                if motif_id_op.as_ref().map(|motif_id| motifs_distances.read().get(motif_id).expect(format!("no motif with motif_id={}", motif_id).as_str()) > &motif_dist).unwrap_or(false) {
+                //= in >=  for tests where avg motif dist 0.0
+                if motif_id_op.as_ref().map(|motif_id| motifs_distances.read().get(motif_id).expect(format!("no motif with motif_id={}", motif_id).as_str()) >= &motif_dist).unwrap_or(false) {
                     1
                 } else {
                     0
@@ -952,22 +963,22 @@ fn clc_motifs_matches_for_label<L>(
     channels_motifs_matches_labels: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>,//output TODO return it
     resources: Vec<String>,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-    class_label: L,
+    label: L,
     limit: Option<usize>,
     step: usize,
     motifs_distances: Arc<RwLock<HashMap<usize, f32>>>,
     channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>,
 ) -> Result<(), ThoosaError>
-where L: Clone + Send + 'static,
+where L: Clone + Send + Display + Debug + 'static,
 {
     let count = AtomicU64::new(0);
 
     let channels_num = motifs.read().size()[0] as usize;//TODO read
     let motifs_num = motifs.read().size()[1] as usize;
 
-    debug!("clc_motifs_matches_for_label: channels_num={} motifs_num={}", channels_num, motifs_num);
+    debug!("clc_motifs_matches_for_label: label={label} channels_num={} motifs_num={} motifs.read().size()={:?} step={step}", channels_num, motifs_num, motifs.read().size());
 
-    let label = class_label.clone();
+
 
     let wg = WaitGroup::new();
     let wg_in_loader = wg.clone();
@@ -976,6 +987,8 @@ where L: Clone + Send + 'static,
         async move {
 
             for resource_id in resources {
+
+                debug!("clc_motifs_matches_for_label: resource_id={resource_id}");
 
                 // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
                 let matches = clc_dist_matches(
@@ -990,8 +1003,9 @@ where L: Clone + Send + 'static,
                         let num_matches_label = if motif_t.equal(&all_zero) {//TODO this is to handle zero motifs which were added to pad up to max motifs num per channel
                             (0., label.clone())
                         } else {
-                            let v = matches.i((channel_i as i64, motif_i as i64));
-                            let num_matches = v.double_value(&[]);
+                            let matches_t = matches.i((channel_i as i64, motif_i as i64));
+                            let num_matches = matches_t.double_value(&[]);
+                            debug!("clc_motifs_matches_for_label: channel_i={channel_i} motif_i={motif_i} matches_t={matches_t} num_matches={num_matches}");
 
                             (num_matches, label.clone())
                         };
@@ -1012,9 +1026,10 @@ where L: Clone + Send + 'static,
                 if count_ % 100 == 0 {
                     info!("dot_motifs: count={}", count_);
                 }
-                debug!("dot_motifs: count={}", count_);
+                debug!("clc_motifs_matches_for_label: dot_motifs: count={}", count_);
             };
 
+            debug!("clc_motifs_matches_for_label: channels_motifs_classes_guard[channel_i][motif_i]={:?}", channels_motifs_matches_labels.lock());
             drop(wg_in_loader);
 
 
@@ -1189,7 +1204,7 @@ fn clc_channels_motifs_labels<L>(
     motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>, labels_resources: Vec<(L, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>
 ) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
 where
-    L: Clone + Send + Sync + 'static,
+    L: Clone + Send + Sync + Display + Debug + 'static,
 {
     let motifs_size = motifs.read().size();
 

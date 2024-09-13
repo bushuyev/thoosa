@@ -118,7 +118,7 @@ pub fn motifs_to_tensor(
     resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, window: i64, channels: i64, device: Device
 ) -> Result<(Tensor, Vec<Vec<usize>>), ThoosaError> {
 
-    debug!("motifs_to_tensor: device={:?}", device);
+    debug!("motifs_to_tensor: device={device:?} window={window}");
 
     let channels_motifs_slices:Arc<parking_lot::RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(parking_lot::RwLock::new(HashMap::new()));
     // let mut motifs_slices_map:Arc<parking_lot::RwLock<HashMap<usize, MotifSlice>>> = Arc::new(parking_lot::RwLock::new(HashMap::new()));
