@@ -167,7 +167,7 @@ pub fn motifs_to_tensor(
 
     let motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
 
-    let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::new()).collect();
+    let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::with_capacity(motifs_num as usize)).collect();
 
 
     let tensor = Tensor::vstack(
@@ -195,6 +195,8 @@ pub fn motifs_to_tensor(
     );
 
     let tensor = tensor.view((channels, motifs_num, -1));
+    debug!("motifs_to_tensor: channel_motif_ids={channel_motif_ids:?}");
+
     Ok((tensor, channel_motif_ids))
 }
 

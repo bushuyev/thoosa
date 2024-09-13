@@ -10,7 +10,16 @@ fn main()  {
 
     match run_cli(
         |base_path|data::labeled_resourses(base_path.as_ref().join("train.csv")),
-        |path, device| parquet_to_tensor_by_path(path, device)
+        vec![
+            "seizure",
+            "lpd",
+            "gpd",
+            "lrda",
+            "grda",
+            "other"
+        ],
+        |path, device| parquet_to_tensor_by_path(path, device),
+        20
     ) {
 
         Ok(_) => {

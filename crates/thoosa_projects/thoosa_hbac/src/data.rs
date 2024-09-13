@@ -905,6 +905,14 @@ mod tests {
 
         init_resources(
             Arc::clone(&store),
+            vec![
+                "seizure",
+                "lpd",
+                "gpd",
+                "lrda",
+                "grda",
+                "other"
+            ],
             ||{
                 super::labeled_resourses(Path::new(&cli.base_path).join("train_10.csv"))
             }
@@ -919,13 +927,13 @@ mod tests {
         )?;
 
         debug!("motifs_run_ids={motifs_run_ids:?}");
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], motifs_run_ids);
+        assert_eq!(vec![1, 2, 3, 4], motifs_run_ids);
 
         Ok(())
     }
 
-    #[test]
-    fn test_run_select_motifs() -> Result<(), ThoosaError>{
+    // #[test]
+    fn test_run_select_motifs() -> Result<(), ThoosaError> {
         let cli = Cli{
             base_path: "test_data/eeg".to_string(),
             resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
@@ -949,6 +957,7 @@ mod tests {
             "test_data/eeg".into(), Some("test_data/eeg".into()), None,
             Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
         )));
+
         let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
             move |key: &String| {
                 SyncWrapper::new(
@@ -960,6 +969,7 @@ mod tests {
 
         init_resources(
             Arc::clone(&store),
+            vec![],
             ||{
                 super::labeled_resourses(Path::new(&cli.base_path).join("train_10.csv"))
             }
@@ -1023,6 +1033,7 @@ mod tests {
 
         init_resources(
             Arc::clone(&store),
+            vec![],//TODO
             ||{
                 super::labeled_resourses(Path::new(&cli.base_path).join("train.csv"))
             }

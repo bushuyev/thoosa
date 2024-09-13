@@ -156,7 +156,7 @@ impl Store for SqlStore {
                     a.0.push(", ");
                     a.1.push(Value::Integer(run_id as i64));
                     a.1.push(Value::Integer(ord_id as i64));
-                    a.1.push(Value::Text(v.clone()));
+                    a.1.push(Value::Text(v.to_string()));
                     a
                 });
 
