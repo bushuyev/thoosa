@@ -225,16 +225,16 @@ pub fn random_saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
 
 pub fn sig_2(n: i64, max_y: f32) -> Vec<f32> {
     join_with_offset::<f32>(0., 1.0, &[
-        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
-        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
-        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
+        ((0.2*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
+        ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
+        ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
 pub fn sig_1(n: i64, max_y: f32) -> Vec<f32> {
     join_with_offset::<f32>(0., 1.0, &[
-        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
         ((0.2*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
+        ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
