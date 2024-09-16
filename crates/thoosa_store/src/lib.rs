@@ -989,12 +989,15 @@ impl Store for SqlStore {
         Ok(corr_run_id)
     }
 
-    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError> {
+    /*
+     returns - Vec<id, corrs's run_id, label>
+     */
+    fn list_corrs(&mut self, corrs_run_ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
 
-        let (mut q, params) = ids.into_iter().fold((vec!["SELECT id, run_id, label FROM corrs_run WHERE id IN ("], vec![]), |mut a, v|{
+        let (mut q, params) = corrs_run_ids.into_iter().fold((vec!["SELECT id, run_id, label FROM corrs_run WHERE id IN ("], vec![]), |mut a, v|{
             a.0.push("?");
             a.0.push(",");
             a.1.push(*v);
