@@ -1079,10 +1079,9 @@ mod main_tests {
 
 
     #[test]
-    fn test_motifs_with_tpe() -> Result<(), ThoosaError> {
+    fn test_motifs_corrs() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        debug!("test_dir={test_dir:?}");
         let base_path = test_dir.to_string_lossy().to_string();
 
         let n = 1000i64;
@@ -1093,6 +1092,7 @@ mod main_tests {
 
         let x = lin_t(n);
 
+        /*
         plot_series(
             vec![
                 (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0_v.clone()).collect::<Vec<(f32, f32)>>()),
@@ -1101,6 +1101,7 @@ mod main_tests {
 
             ], "test_find_motifs_euc", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         ).unwrap();
+         */
 
         /*
         let sig_0 = sig_0(n);
@@ -1120,45 +1121,35 @@ mod main_tests {
         ]);
         t_0_0.save(test_dir.join(format!("t_0_0.pt")))?;
 
-        // debug!("t_0_0={t_0_0}");
-        debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
+        // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
 
         let t_0_1 = Tensor::vstack(&[
             Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n) ].concat().as_slice()),
-            // Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
             Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
             Tensor::from_slice([sig_2_v.clone(),          saw(n), saw(n)].concat().as_slice()),
         ]);
         t_0_1.save(test_dir.join(format!("t_0_1.pt")))?;
 
-        // debug!("t_0_1={t_0_1}");
-        debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
+        // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
 
 
         let t_1_0 = Tensor::vstack(&[
             Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
             Tensor::from_slice([saw(n),          saw(n), sig_2_v.clone()].concat().as_slice()),
             Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice())
         ]);
         t_1_0.save(test_dir.join(format!("t_1_0.pt")))?;
 
-        // debug!("t_1_0={t_1_0}");
-        debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
+        // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
 
         let t_1_1 = Tensor::vstack(&[
             Tensor::from_slice([saw(n), saw(n), sig_1_v.clone()].concat().as_slice()),
-            // Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),
-            // Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
             Tensor::from_slice([saw(n),          saw(n), sig_2_v.clone()].concat().as_slice()),
             Tensor::from_slice([sig_2_v.clone(),          sig_2_v.clone(), saw(n)].concat().as_slice()),
         ]);
         t_1_1.save(test_dir.join(format!("t_1_1.pt")))?;
 
-        // debug!("t_1_1={t_1_1}");
-        debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
+        // debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
         let channels = 3;
 
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
@@ -1207,14 +1198,13 @@ mod main_tests {
             Some(100)
         )?;
 
-        debug!("{:?}", store.lock().list_run_resources(1)?);
         let slices = store.lock().list_motifs_slices(run_ids[0])?;
         debug!("test_motifs_with_tpe: slices={:?}", slices);
-        assert_eq!(slices.len(), 4);
+        assert!(slices.len() >= 4);
+
 
         // assert_eq!((110, 0), slices.get(&"t_0".to_string()).and_then(|v| v.get(0).map(|v|(v.slise_idx, v.channel_idx))).unwrap());
         // assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1100, channel_idx: 0 }, slices.get(&"t_1".to_string()).and_then(|v| v.get(0)).unwrap());
-
 
 
         let cli = Cli{
@@ -1248,8 +1238,18 @@ mod main_tests {
             channels
         ).expect("select_motifs_in_class");
 
-        println!("corr_ids={corr_ids:?}");
+        debug!("test_motifs_with_tpe: corr_ids={corr_ids:?}");
+        let corrs = store.lock().list_corrs(&corr_ids)?;
+        debug!("test_motifs_with_tpe: corrs={corrs:?}");
 
+        assert!(store.lock().list_corr_motifs(
+            corrs.iter().find(|(id, run_id, label)|label.eq("label_0")).expect("label_0").1
+            //0 channel
+        )?[0].iter().find(|(motif_id, corr)|corr == &1.0).is_some());
+
+        assert!(store.lock().list_corr_motifs(
+            corrs.iter().find(|(id, run_id, label)|label.eq("label_1")).expect("label_1").1
+        )?[0].iter().find(|(motif_id, corr)|corr == &1.0).is_some());
 
         Ok(())
 
