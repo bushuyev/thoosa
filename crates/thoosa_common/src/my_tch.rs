@@ -312,7 +312,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
 
     if motif_nets.len() == 0 {
         //if no 'main' folds build motifs on remainder
-        return Tensor::zeros([max_nets as i64, max_motif_batches as i64, motif_batch_size as i64], (Float, *device));
+        return Tensor::zeros([max_nets, max_motif_batches as i64, motif_batch_size], (Float, *device));
     }
 
     let nets_len = motif_nets.len();
@@ -377,9 +377,9 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
 }
 
 fn add_net_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Tensor) {
-    if net_rs.size()[0] < motif_batch_size as i64 {
+    if net_rs.size()[0] < motif_batch_size {
         net_batch.push(
-            pad_to(&net_rs, &[motif_batch_size as i64]).expect("pad_to failed")
+            pad_to(&net_rs, &[motif_batch_size]).expect("pad_to failed")
         );
     } else {
         net_batch.push(

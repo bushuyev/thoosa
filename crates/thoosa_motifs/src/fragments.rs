@@ -9,6 +9,7 @@ use clap::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use log::{debug, info, warn};
+use parking_lot::RwLock;
 use regex::Regex;
 use tch::Device;
 use tch::IndexOp;
@@ -115,12 +116,12 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
 pub fn motifs_to_tensor(
-    resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, window: i64, channels: i64, device: Device
+    resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, window: i64, channels: i64, device: Device
 ) -> Result<(Tensor, Vec<Vec<usize>>), ThoosaError> {
 
     debug!("motifs_to_tensor: device={device:?} window={window}");
 
-    let channels_motifs_slices:Arc<parking_lot::RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let channels_motifs_slices:Arc<RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(RwLock::new(HashMap::new()));
     // let mut motifs_slices_map:Arc<parking_lot::RwLock<HashMap<usize, MotifSlice>>> = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
     let channels_motifs_slices_arc = Arc::clone(&channels_motifs_slices);
@@ -247,11 +248,20 @@ pub struct PlotMotifSlicesParams {
     #[arg(long)]
     motif_id: usize,
 
+
+    #[arg(long)]
+    pub window: usize,
+
 }
 
 impl PlotMotifSlicesParams {
+
     pub fn motif_id(&self) -> usize {
         self.motif_id
+    }
+
+    pub fn new(motif_id: usize, window:usize) -> Self {
+        Self { motif_id, window }
     }
 }
 
@@ -272,8 +282,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices<F>(_base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, load_tensor: F, _device: Device) -> Vec<(String, Vec<Box<Tensor>>)>
-    where F: Fn(&str) -> Box<Tensor>  {
+pub fn load_motif_slices(_base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, _device: Device) -> Vec<(String, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
@@ -287,40 +296,55 @@ pub fn load_motif_slices<F>(_base_path: &str, channel: i64, widow: i64, slices: 
 
     debug!("load_motif_slices: tensors_ids_slices.len={}", tensors_ids_slices.len());
 
-    let mut all_slices:Vec<(String, Vec<Box<Tensor>>)> = vec![];
+    let mut all_slices:Arc<RwLock<Vec<(String, Vec<Box<SyncWrapper<Tensor>>>)>>> = Arc::new(RwLock::new(vec![]));
+    let wg = WaitGroup::new();
+
 
     tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).for_each(|tensor_idxs|{//TODO remove chunks?
 
         debug!("load_motif_slices: tensor_idxs={:?}", tensor_idxs);
 
-        let slices = tensor_idxs./*par_*/iter().map(|tensor_idx|{
-            let slices = tensors_ids_slices.get(*tensor_idx).expect(format!("no {}", tensor_idx).as_str());
+        tensor_idxs.iter().map(|v|(*v).clone()).for_each(|tensor_idx| {
+            let slices = tensors_ids_slices.get(&tensor_idx).expect(format!("no {}", tensor_idx).as_str()).clone();
 
-            let t = load_tensor(tensor_idx.as_str());
-
-            let take = t.size()[1]/widow;
-            debug!("load_motif_slices: tensor_idx={} slices.len={} t.size={:?} take={}", tensor_idx, slices.len(), t.size(),  take  );
-
-            (tensor_idx.to_string(), slices.into_iter().filter(|slice_idx|{
-                let slice_ok = t.size()[1] >= **slice_idx + widow;
-
-                if !slice_ok {
-                    warn!("slice doesn't fit into tensor: tensor_idx={:?}, t.size()={:?}, *slice_idx={:?}, widow={:?}", tensor_idx, t.size(), *slice_idx, widow)
-                }
-
-                slice_ok
-            }).map(|slice_idx| Box::new(t.i((channel, *slice_idx..*slice_idx + widow)))).collect::<Vec<Box<Tensor>>>())
-
-        }).collect::<Vec<(String, Vec<Box<Tensor>>)>>();
+            let all_slices = Arc::clone(&all_slices);
+            let wg = wg.clone();
+            executor.write().exec(move |loader, _keys_purge| {
+                async move {
 
 
-        all_slices.extend(slices);
+                    let t = LoadRunner::<String, Box<Tensor>>::load_future(loader, tensor_idx.clone(), 0).await;
+
+                    let take = t.size()[1] / widow;
+                    debug!("load_motif_slices: tensor_idx={} slices.len={} t.size={:?} take={}", tensor_idx, slices.len(), t.size(),  take  );
+
+                    all_slices.write().push(
+                        (tensor_idx.to_string(),
+                         slices.into_iter().filter(|slice_idx| {
+                             let slice_ok = t.size()[1] >= *slice_idx + widow;
+
+                             if !slice_ok {
+                                 warn!("slice doesn't fit into tensor: tensor_idx={:?}, t.size()={:?}, *slice_idx={:?}, widow={:?}", tensor_idx, t.size(), slice_idx, widow)
+                             }
+
+                             slice_ok
+                         }).map(|slice_idx| Box::new(
+                             SyncWrapper::new(t.i((channel, slice_idx..slice_idx + widow)), |b|b.shallow_clone())
+                         )).collect::<Vec<Box<SyncWrapper<Tensor>>>>()
+                        )
+                    );
+                    drop(wg);
+                }.boxed()
+            });
+        });
+
     });
-
+    wg.wait();
 
     debug!("load_motif_slices: loaded slices={}",  slices.len());
 
-    all_slices
+    let x= all_slices.write().drain(..).map(|v|(v.0, v.1.into_iter().map(|b|Box::new(b.shallow_clone())).collect())).collect();
+    x
 }
 
 
@@ -363,6 +387,7 @@ mod motifs_tests {
     use thoosa_shared::MotifSlice;
     use thoosa_shared::TensorSliceIdx;
     use log::debug;
+    use parking_lot::RwLock;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
 
     #[ctor::ctor]
@@ -627,21 +652,24 @@ mod motifs_tests {
     #[test]
     fn test_load_motif_slices()-> Result<(), ThoosaError>{
 
-        fn test_eeg_to_t(_eeg_id:&str) -> Box<Tensor> {
+        fn test_eeg_to_t(_eeg_id:&String) -> SyncWrapper<Box<Tensor>> {
             let t = Tensor::vstack(&[
                 Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
             ]);
 
-            Box::new(t)
+            SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
         }
+
+        let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
+        let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
             "base",
             0,
             2,
             vec![TensorSliceIdx(123.to_string(), 2)],
-            test_eeg_to_t,
+            executor_rc,
             Device::Cpu
         );
 
@@ -654,21 +682,24 @@ mod motifs_tests {
 
     #[test]
     fn test_load_motif_slices_5000()-> Result<(), ThoosaError>{
-        fn test_eeg_to_t(_eeg_id:&str) -> Box<Tensor> {
+        fn test_eeg_to_t(_eeg_id:&String) -> SyncWrapper<Box<Tensor>> {
 
             let t = Tensor::vstack(&[
                 Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
             ]);
 
-            Box::new(t)
+            SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
         }
+
+        let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
+        let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
             "base",
             0,
             5000,
             vec![TensorSliceIdx(123.to_string(), 2)],
-            test_eeg_to_t,
+            executor_rc,
             Device::Cpu
         );
 
