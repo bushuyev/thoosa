@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use clap::clap_derive::Args;
 use log::{debug, info, warn};
+use plotters::prelude::BLACK;
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
 use rayon::iter::ParallelBridge;
@@ -24,7 +25,7 @@ use thoosa_shared::val::Val;
 use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::apply_channel_motifs;
 use crate::train_nets;
-use crate::utils::{DataBatch, train};
+use crate::utils::{DataBatch, train, plot_series};
 use crate::utils::from;
 
 #[derive(Debug, Args, Clone)]
@@ -480,8 +481,8 @@ pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_n: i64, step: usiz
     let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|dir_entry| {
         let dir_entry = dir_entry.expect("file: ");
 
-        let t = path_to_tensor(dir_entry.path().as_path()).expect(format!("can't load{dir_entry:?}").as_str());
-        debug!("infer: t.size={:?}", t.size());
+        let input_t = path_to_tensor(dir_entry.path().as_path()).expect(format!("can't load{dir_entry:?}").as_str());
+        debug!("infer: t.size={:?}", input_t.size());
 
         let t = Tensor::stack(labels.iter().map(|label|{
             match models.get(label) {
@@ -492,7 +493,7 @@ pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_n: i64, step: usiz
                     debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
 
 
-                    let t = apply_label_motifs(model.motif_node_params.num_features, step, &t, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                    let t = apply_label_motifs(model.motif_node_params.num_features, step, &input_t, &model.motif_models, motif_batch_size, max_motif_batches, device);
                     let t_x = view_for_label_model(t.reshape([1, channels, max_nets, motif_batch_size, max_motif_batches as i64]), channels, max_nets, motif_batch_size, max_motif_batches);
                     // debug!("train_final: t_x.size()={:?} max_nets={}", t_x.size(), max_nets);
                     debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
@@ -664,6 +665,10 @@ pub struct TrainOnMotifsParams {
     #[arg(long, default_value_t = 1000)]
     cycles: usize,
 
+    #[arg(long, default_value_t = 10)]
+    pub batch_size: usize,
+
+
     #[arg(long, default_value_t = 1.0e-5)]
     lr: f64,
 
@@ -700,7 +705,7 @@ impl TrainOnMotifsParams {
         self.min_corr
     }
 
-    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize) ->Self{
+    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize) ->Self{
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
@@ -710,7 +715,9 @@ impl TrainOnMotifsParams {
 
             lr: 1.0e-5,
 
-            max_loss: 0.2,
+            max_loss,
+
+            batch_size,
 
             min_corr: 0.05,
         }
@@ -940,7 +947,27 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
     assert!(all_slices_0.len() > 0, "all_slices_0 len");
     assert!(all_slices_1.len() > 0, "all_slices_1 len");
 
-    let vs = nn::VarStore::new(device);
+    /*
+    plot_series(
+        all_slices_0.iter().map(|t| {
+            (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+        }).collect(),
+        "all_slices_0",
+        (2000, 1000),
+        &"/tmp/plots/all_slices_0.png"
+    ).unwrap();
+
+    plot_series(
+        all_slices_1.iter().map(|t| {
+            (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+        }).collect(),
+        "all_slices_0",
+        (2000, 1000),
+        &"/tmp/plots/all_slices_1.png"
+    ).unwrap();
+    */
+
+    let vs = VarStore::new(device);
 
     let net = motif_node(node_params).build_tch_module(&vs.root())?;
 
@@ -966,6 +993,7 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
         nn::AdamW::default().build(&vs, train_on_motif_params.lr)?,
         |t|t
     )?;
+
     Ok((valid_loss, vs))
 }
 
@@ -1001,7 +1029,7 @@ impl ClassTensorsDataBatch {
 
         let classes_len = classes_tensors.len();
         assert!(classes_len > 0);
-        assert!(batch_size % classes_len == 0);
+        // assert!(batch_size % classes_len == 0);
 
         let (train, val):(Vec<Vec<Box<Tensor>>>, Vec<Vec<Box<Tensor>>>) = classes_tensors
             .into_iter()
@@ -1110,16 +1138,16 @@ impl From<&str> for MotifsBy {
 }
 
 /// returns Tensor channels x nets x batches x batch size
-fn apply_label_motifs(motif_n: i64, step: usize, t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
+fn apply_label_motifs(motif_n: i64, step: usize, input_t: &Tensor, motif_nets: &Vec<Vec<Mutex<Box<dyn Module>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
     let max_nets = motif_nets.iter().map(|nets| nets.len()).max().unwrap_or(0);
 
-    debug!("apply_label_motifs: eeg_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", t.size());
+    debug!("apply_label_motifs: input_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
 
     let channels_motifs = Tensor::stack(
         motif_nets
             .iter()
             .enumerate()
-            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, t.i((i as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches, device))
+            .map(|(i, net)| apply_channel_motifs(motif_n, step, &net, input_t.i((i as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches, device))
             .collect::<Vec<_>>().as_slice(),
         0
     );

@@ -27,6 +27,7 @@ crossbeam-utils = "0.8.19"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.11"
 futures = "0.3.30"
+clap = { version = "4.5.17", features = ["derive", "cargo"] }
 
 [profile.test]
 opt-level = 0

@@ -344,7 +344,7 @@ pub fn run_cli<F, L>(
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(corr_ids, 300), Arc::clone(&executor_rc))?;
+            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(corr_ids, 300, 0.2, 10), Arc::clone(&executor_rc))?;
 
             info!("run_train_on_motifs done");
 
@@ -595,8 +595,11 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
 fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_motif_params: &TrainOnMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
     let corr_run_ids = train_on_motif_params.corr_run_ids();
 
+
     let chunk_len = corr_run_ids.len()/devices.len();
     let corr_run_id_labels = { store.lock().list_corrs(corr_run_ids)? }; //(1..=36).collect::<Vec<usize>>();
+
+    debug!("run_train_on_motifs: corr_run_ids={corr_run_ids:?} devices={devices:?} corr_run_id_labels={corr_run_id_labels:?}");
 
     let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, usize, String)])>>();//corrs_run(id, label)
 
@@ -621,7 +624,6 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
 
             run_ids_for_threads.lock().extend(run_ids);
 
-            // fs::write(Path::new(train_on_motif_params.output_dir()).join(format!("motif_model_{}.json", run_id)), serde_json::to_string(&node_params).expect("serde_json::to_string"));
         }
 
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?} done ", corrs_run, device_i);
@@ -849,11 +851,6 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
 
     debug!("train_on_motifs: motifs={motifs:?}");
 
-    let output_dir = Path::new(&cli.ws_path).join("motifs").join(input_run_id.to_string()).join(label);//TODO corr_run
-
-    fs::create_dir_all(&output_dir)?;
-
-
     let filter_and_slice:FilterAndSlicer = params.into();
 
     let (node_params_vec, run_ids) = {
@@ -905,21 +902,24 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
             (all_sices_0, all_sices_1, channel)
         };
 
-        assert!(all_sices_1.len() > 0, "all_sices_1.len(), motif={}", motif_id);
-        assert!(all_sices_0.len() > 0, "all_sices_0.len(), motif={}", motif_id);
+        assert!(all_sices_1.len() > 0, "all_sices_1.len(), motif={motif_id}");
+        assert!(all_sices_0.len() > 0, "all_sices_0.len(), motif={motif_id}");
 
-        let batch_size = 2; //TODO, purge small motifs
+        let batch_size = train_on_motif_params.batch_size; //TODO, purge small motifs
         if all_sices_1.len() < batch_size {
-            warn!("num of motif_id {} {} in channel {} is less than {}", motif_id, all_sices_1.len(), channel, batch_size);
+            warn!("num of motif_id {motif_id} all_sices_1.len()={} in channel {channel} is less than {batch_size}", all_sices_1.len());
             continue;
         }
 
         if all_sices_0.len() < batch_size {
-            warn!("num of not motif_id {} {} in channel {} is less than {}", motif_id, all_sices_0.len(),  channel, batch_size);
+            warn!("num of not motif_id {motif_id} all_sices_0.len()={} in channel {channel} is less than {batch_size}", all_sices_0.len());
             continue;
         }
 
-        debug!("train_on_motif: all_sices_1.len()={}, all_sices_0.len()={} all_sices_1[0].size()={:?}", all_sices_1.len(), all_sices_0.len(), all_sices_1[0].size());
+        debug!("train_on_motif:  all_sices_0.len()={:?}, all_sices_0[0].size()={:?}, all_sices_1.len()={:?}, all_sices_1[0].size()={:?}", all_sices_0.len(), all_sices_0[0].size(), all_sices_1.len(), all_sices_1[0].size());
+        let output_dir = Path::new(&cli.ws_path).join("motifs").join(input_run_id.to_string()).join(label);//TODO corr_run
+
+        fs::create_dir_all(&output_dir)?;
 
 
         for node_params in &node_params_vec {
@@ -1035,15 +1035,16 @@ mod main_tests {
     use std::sync::Arc;
     use log::debug;
     use parking_lot::{Mutex, RawMutex, RwLock};
+    use plotters::prelude::BLACK;
     use polars::export::chrono;
-    use tch::{nn, Device, Tensor};
+    use tch::{nn, Device, IndexOp, Tensor};
     use tch::Device::Cpu;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainOnMotifsParams};
     use thoosa_common::utils::{cdt_for_dir, lin_t, plot_series, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FilterAndSlicerParams, FindMotifsParams, LinearExpander, SelectMotifsParams};
     use thoosa_motifs::fragments::PlotMotifSlicesParams;
-    use thoosa_shared::{recurse_files, saw, sig_0, sig_1, sig_2, ThoosaError};
+    use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_two_imp, sig_three_imp, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{SqlStore, Store};
     use crate::cli::{init_resources, motifs_with_tpe, plot_motif_slices, resource_path, run_train_on_motifs, select_motifs_for_label, Cli, RunAllParams};
@@ -1077,9 +1078,9 @@ mod main_tests {
 
         let n = 1000i64;
         let max_y = 30.0;
-        let sig_0_v = sig_0(n, max_y);
-        let sig_1_v = sig_1(n, max_y);
-        let sig_2_v = sig_2(n, max_y);
+        let sig_0_v = sig_one_imp(n, max_y);
+        let sig_1_v = sig_two_imp(n, max_y);
+        let sig_2_v = sig_three_imp(n, max_y);
 
         let x = lin_t(n);
 
@@ -1231,6 +1232,7 @@ mod main_tests {
         let corrs = store.lock().list_corrs(&corr_ids)?;
         debug!("test_motifs_with_tpe: corrs={corrs:?}");
 
+        //there are motifs with corr 1.0 for each label
         assert!(store.lock().list_corr_motifs(
             corrs.iter().find(|(id, run_id, label)|label.eq("label_0")).expect("label_0").1
             //0 channel
@@ -1257,17 +1259,11 @@ mod main_tests {
 
 
         (0..10).for_each(|i|{
-            let t_0_0 = Tensor::vstack(&[
-                Tensor::from_slice([sig_0(n, max_y), sig_0(n, max_y)].concat().as_slice()),
-            ]);
-            t_0_0.save(test_dir.join(format!("t_0_{i}.pt"))).unwrap();
+            label_0_t(n, max_y).save(test_dir.join(format!("t_0_{i}.pt"))).unwrap();
         });
 
         (0..10).for_each(|i|{
-            let t_0_0 = Tensor::vstack(&[
-                Tensor::from_slice([sig_1(n, max_y), sig_1(n, max_y)].concat().as_slice()),
-            ]);
-            t_0_0.save(test_dir.join(format!("t_1_{i}.pt"))).unwrap();
+            label_1_t(n, max_y).save(test_dir.join(format!("t_1_{i}.pt"))).unwrap();
         });
 
         /*
@@ -1311,13 +1307,13 @@ mod main_tests {
         let run_id_0 = save_test_motifs(Arc::clone(&store), find_motifs_params.clone(), param_set.clone(), "t_0_")?;
         let run_id_1 = save_test_motifs(Arc::clone(&store), find_motifs_params, param_set, "t_1_")?;
 
-        let motifs_corrs:Vec<Vec<(usize, f64)>> = store.lock().list_motifs_slices(run_id_0)?.into_values().map(|v| v.into_iter().map(|s| (s.motif_id, 1.0f64)).collect()).collect();
+        let motifs_corrs:Vec<Vec<(usize, f64)>> = store.lock().list_motifs_slices(run_id_1)?.into_values().map(|v| v.into_iter().map(|s| (s.motif_id, 1.0f64)).collect()).collect();
         debug!("test_run_train_on_motifs: motifs_corrs={motifs_corrs:?}");
         //0 channel
         let motif_ids = motifs_corrs[0].iter().map(| (motif, corr)| *motif).collect::<HashSet<usize>>();
         debug!("test_run_train_on_motifs: motif_ids={motif_ids:?}");
 
-        let corr_run_id = store.lock().save_motifs_corrs(run_id_0, "test", motifs_corrs, "test_label".to_string())?;
+        let corr_run_id = store.lock().save_motifs_corrs(run_id_1, "test", motifs_corrs, "test_label".to_string())?;
 
 
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
@@ -1333,29 +1329,59 @@ mod main_tests {
 
         plot_motif_slices(&cli, Arc::clone(&store), Cpu, &PlotMotifSlicesParams::new(motif_ids.into_iter().next().unwrap(), 800), Arc::clone(&executor_rc));
 
-        let train_on_motifs_params = TrainOnMotifsParams::dummy(vec![corr_run_id], 20);
-
-        run_train_on_motifs(
+        let train_run_ids = run_train_on_motifs(
             &cli,
             &store,
             vec![Cpu],
-            &train_on_motifs_params,
+            &TrainOnMotifsParams::dummy(vec![corr_run_id], 1000, 100.0, 10),
             executor_rc
         )?;
 
         let models = recurse_files(&models_dir)?;
-        debug!("test_run_train_on_motifs: models={models:?}");
+        debug!("test_run_train_on_motifs: train_run_ids={train_run_ids:?} models={models:?}");
 
-        let motif_node_params = MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store.lock().list_run_params(*run_id_0, None).expect("list_run_params")));
+        let motif_node_params = MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store.lock().list_run_params(train_run_ids[0], None).expect("list_run_params")));
 
         let mut vs = nn::VarStore::new(Cpu);
         let node = motif_node(&motif_node_params).build_tch_module(&vs.root())?;//TODO window
         vs.load(&models[0])?;
         vs.freeze();
 
-        // node.forward()
+        let t_0 = label_0_t(n, max_y).i((.., 100..900));
+        plot_t(&t_0, "t_0")?;
+        let label_0_p = node.forward(&t_0.view((1,1,-1)));
+
+        let t_1 = label_1_t(n, max_y).i((.., 100..900));
+        plot_t(&t_1, "t_1")?;
+        let label_1_p = node.forward(&t_1.view((1,1,-1)));
+
+        debug!("test_run_train_on_motifs: label_0_p={label_0_p} label_1_p={label_1_p}");
+
+        assert!(label_1_p.double_value(&[0]) > label_0_p.double_value(&[0]));
 
         Ok(())
+    }
+
+    fn plot_t(t_0: &Tensor, label:&str) -> Result<(), ThoosaError> {
+        plot_series(
+            (0..1).into_iter().map(|channel| {
+                (format!("0"), BLACK, t_0.i((channel, ..)).iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+            }).collect(),
+            label, (2000, 1000), &format!("/tmp/plots/{label}_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+        )?;
+        Ok(())
+    }
+
+    fn label_1_t(n: i64, max_y: f32) -> Tensor {
+        Tensor::vstack(&[
+            Tensor::from_slice([sig_one_imp(n, max_y), sig_one_imp(n, max_y)].concat().as_slice()),
+        ])
+    }
+
+    fn label_0_t(n: i64, max_y: f32) -> Tensor {
+        Tensor::vstack(&[
+            Tensor::from_slice([sig_two_imp(n, max_y), sig_two_imp(n, max_y)].concat().as_slice()),
+        ])
     }
 
     fn save_test_motifs(store: Arc<Mutex<SqlStore>>, find_motifs_params: FindMotifsParams, param_set: Vec<FilterAndSlicerParams>, resource_label_key: &str) -> Result<usize, ThoosaError> {
