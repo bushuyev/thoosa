@@ -13,3 +13,4 @@ rand = {workspace = true}
 log = {workspace = true}
 simplelog = {workspace = true}
 chrono.workspace = true
+clap.workspace = true

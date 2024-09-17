@@ -84,7 +84,6 @@ pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)
         fs::create_dir_all(parent)?;
     }
 
-
     let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
         if max_min.0 > *x {
             max_min.0 = *x
@@ -531,7 +530,7 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
 
         let pred_y = model.forward(&x_t);
 
-        mem::drop(x_t);
+        drop(x_t);
         unsafe { at_autocast_clear_cache(); }
 
         debug!("train: device={:?} pred_y.size()={:?}", device, pred_y.size());

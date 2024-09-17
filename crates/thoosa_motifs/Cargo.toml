@@ -18,18 +18,14 @@ tch.workspace = true
 torch-sys.workspace = true
 parking_lot.workspace = true
 futures.workspace = true
+clap.workspace = true
 
 sci-rs = "0.3.8"
 plotters = { version = "0.3.5"}
-
-
 anyhow = "1.0.79"
 ctor = "0.2.6"
 chrono = { version = "0.4.32" }
 rayon = "1.8.1"
-
-
-clap = { version = "4.5.0", features = ["derive"] }
 regex = "1.10.3"
 serde = { version = "1.0.204", features = ["derive"] }
 

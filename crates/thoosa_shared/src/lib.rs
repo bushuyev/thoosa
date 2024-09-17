@@ -8,7 +8,7 @@ use std::f32::consts::PI;
 use std::fmt::{Debug, Display};
 use std::fmt;
 use std::hash::Hash;
-use std::ops::Mul;
+use std::ops::{Mul, Range};
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::SecondsFormat;
 use log::{debug, error, trace, LevelFilter};
@@ -225,7 +225,7 @@ pub fn random_saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
     y
 }
 
-pub fn sig_2(n: i64, max_y: f32) -> Vec<f32> {
+pub fn sig_three_imp(n: i64, max_y: f32) -> Vec<f32> {
     join_with_offset::<f32>(0., 1.0, &[
         ((0.2*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
         ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
@@ -233,14 +233,14 @@ pub fn sig_2(n: i64, max_y: f32) -> Vec<f32> {
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
-pub fn sig_1(n: i64, max_y: f32) -> Vec<f32> {
+pub fn sig_two_imp(n: i64, max_y: f32) -> Vec<f32> {
     join_with_offset::<f32>(0., 1.0, &[
         ((0.2*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
         ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
-pub fn sig_0(n: i64, max_y: f32) -> Vec<f32> {
+pub fn sig_one_imp(n: i64, max_y: f32) -> Vec<f32> {
     join_with_offset::<f32>(0., 1.0, &[
         ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.8*n as f32) as i64, 20., 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
@@ -379,15 +379,37 @@ pub fn random_v(n: i64, amplitude: f32, max_slope: f32) -> Vec<f32> {
 
 pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
     where
-        T: std::str::FromStr,
+        T: FromStr,
         T::Err: Error + Send + Sync + 'static,
-        U: std::str::FromStr,
+        U: FromStr,
         U::Err: Error + Send + Sync + 'static,
 {
     let pos = s
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+#[derive(Debug, Clone)]
+enum RangeOrValue<V> {
+    Range(Range<V>),
+    Value(V)
+}
+
+pub fn parse_range_or_value<V>(s: &str) -> Result<RangeOrValue<V>, Box<dyn Error + Send + Sync + 'static>>
+where
+    V: FromStr,
+    V::Err: Error + Send + Sync + 'static {
+
+
+    match s.find("..") {
+        None => {
+            Ok(RangeOrValue::Value(s.parse()?))
+        }
+        Some(pos) => {
+            Ok(RangeOrValue::Range(s[..pos].parse()? .. s[pos + 2..].parse()?))
+        }
+    }
 }
 
 
@@ -432,7 +454,7 @@ pub fn init_test_logging() {
             vec![
                 TermLogger::new(
                     env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|e| {
-                        println!("{}", e);
+                        println!("Can't find loglevel: {}", e);
                         VarError::NotPresent
                     })).unwrap_or(LevelFilter::Debug),
                     Config::default(),
@@ -487,10 +509,9 @@ mod shared_tests {
    group 2: e, f, g
    group 3: x, y
    */
-
-
-
-    use crate::{batch_windows, group_slices, ThoosaError};
+    use std::ops::Range;
+    use clap::{Args, Parser};
+    use crate::{batch_windows, group_slices, RangeOrValue, ThoosaError};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -604,6 +625,50 @@ mod shared_tests {
             vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
             super::parse_corr_labels("[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]")?
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_range_or_value_range() -> Result<(), ThoosaError>{
+        use crate::parse_range_or_value;
+
+        #[derive(Debug, Parser, Clone)]
+        struct TestParams {
+
+            #[arg(long, value_parser=parse_range_or_value::<usize>)]
+            window: RangeOrValue<usize>,
+
+
+            #[arg(long, value_parser=parse_range_or_value::<f64>)]
+            step: RangeOrValue<f64>
+        }
+
+        let params = TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())?;
+
+        println!("params={params:?}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_range_or_value_value() -> Result<(), ThoosaError>{
+        use crate::parse_range_or_value;
+
+        #[derive(Debug, Parser, Clone)]
+        struct TestParams {
+
+            #[arg(long, value_parser=parse_range_or_value::<usize>)]
+            window: RangeOrValue<usize>,
+
+
+            #[arg(long, value_parser=parse_range_or_value::<f64>)]
+            step: RangeOrValue<f64>
+        }
+
+        let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())?;
+
+        println!("params={params:?}");
 
         Ok(())
     }
