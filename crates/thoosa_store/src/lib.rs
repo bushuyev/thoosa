@@ -948,8 +948,8 @@ impl Store for SqlStore {
     }
 
 
-    fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, motifs_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, ThoosaError>{
-        debug!("save_motifs_corrs: motifs_corrs={:?}", motifs_corrs);
+    fn save_motifs_corrs(&mut self, run_id: usize, descr:&str, channels_motif_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, ThoosaError>{
+        debug!("save_motifs_corrs: motifs_corrs={:?}", channels_motif_corrs);
 
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -957,7 +957,7 @@ impl Store for SqlStore {
         t.execute("INSERT INTO corrs_run (run_id, label, descr) VALUES (?, ?, ?)", params![run_id, label, descr])?;
         let corr_run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
-        let motifs_corrs = motifs_corrs.into_iter().filter(|corrs|corrs.len() > 0).collect::<Vec<Vec<(usize, f64)>>>();
+        let motifs_corrs = channels_motif_corrs.into_iter().filter(|corrs|corrs.len() > 0).collect::<Vec<Vec<(usize, f64)>>>();
         debug!("save_motifs_corrs: filtered motifs_corrs={:?}", motifs_corrs);
 
         if motifs_corrs.len() > 0 {
@@ -1035,7 +1035,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         {
-            let mut stmt = t.prepare("SELECT mc.motif_id, mc.corr, m.channel_id FROM motifs_corrs mc LEFT JOIN motifs AS m ON m.id=mc.motif_id WHERE mc.corr_id=?")?;
+            let mut stmt = t.prepare("SELECT DISTINCT mc.motif_id, mc.corr, m.channel_id FROM motifs_corrs mc LEFT JOIN motifs AS m ON m.id=mc.motif_id WHERE mc.corr_id=?")?;
 
             stmt.query_map([corr_run_id], |row| {
                 Ok((row.get::<usize, usize>(0)?, row.get::<usize, f32>(1)?, row.get::<usize, usize>(2)?))

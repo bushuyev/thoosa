@@ -607,16 +607,7 @@ fn load_label_and_motif_models(motif_models_path: impl AsRef<Path>, channels: us
 }
 
 pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels:usize, device: &Device, motif_node_params: &MotifNodeParams) -> Result<Vec<Vec<Box<dyn Module>>>, ThoosaError> {
-    debug!("load_motif_models: motif_models_path={:?} label={:?}", motif_models_path.as_ref(), label);
-
-    //TODO remove
-    // let motif_node_params = serde_json::from_str::<MotifNodeParams>(
-    //     fs::read_to_string(&motif_models_path.as_ref().join("motif_model.json"))?.as_str()
-    // )?;
-
-    // let motif_node_params = MotifNodeParams::from_properties_map(store_guard.list_run_params(run_id, None)?);
-
-    debug!("train_on_label: motif_node_params={:?}", motif_node_params);
+    debug!("load_motif_models: motif_models_path={:?} label={label:?} motif_node_params={motif_node_params:?}", motif_models_path.as_ref());
 
     let mut channels_motifs_models = vec![];
 
@@ -642,7 +633,7 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
                 debug!("load_motif_models: motif={:?}", motif);
 
                 let mut vs = nn::VarStore::new(device.clone());
-                let node = train_nets::motif_node(&motif_node_params).build_tch_module(&vs.root())?;//TODO window
+                let node = motif_node(&motif_node_params).build_tch_module(&vs.root())?;//TODO window
                 vs.load(&motif_path.join(motif))?;
                 vs.freeze();
                 debug!("load_motif_models: len={:?}", vs.variables().len());
@@ -951,9 +942,9 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
 
     let vs = nn::VarStore::new(device);
 
-    let net = train_nets::motif_node(node_params).build_tch_module(&vs.root())?;
+    let net = motif_node(node_params).build_tch_module(&vs.root())?;
 
-    let valid_loss = crate::utils::train(
+    let valid_loss = train(
         &device,
         &mut ClassTensorsDataBatch::new(
             vec![
@@ -1414,7 +1405,7 @@ mod train_tests {
 
         let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
-        debug!("max_motif_batches={:?}", max_motif_batches);
+        debug!("test_apply_motif_models: max_motif_batches={:?}", max_motif_batches);
 
         let channel_1_motifs = Tensor::stack(&[
                 Tensor::from_slice(&[99000., 299000., 499000., 699000., 899000., 1.099e+06, 1.299e+06, 1.499e+06, 1.699e+06, 1.899e+06]),  //ch 1 net 0 (k=1)
@@ -1423,7 +1414,7 @@ mod train_tests {
         ).totype(Float).view((2, 1, 10));
         assert_eq!(channel_1_motifs, channel_1_t);
 
-        debug!("channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
+        debug!("test_apply_motif_models: channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
         let channels_motifs = super::apply_label_motifs(motif_n, step, &t, &motif_nets, batch_size as i64, max_motif_batches, &Cpu);
 
