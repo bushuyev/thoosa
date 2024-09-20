@@ -5,7 +5,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::error::Error;
 use std::f32::consts::PI;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::fmt;
 use std::hash::Hash;
 use std::ops::{Mul, Range};
@@ -225,25 +225,37 @@ pub fn random_saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
     y
 }
 
-pub fn sig_three_imp(n: i64, max_y: f32) -> Vec<f32> {
+pub fn sig_three_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
+    let (σ, f) = σ_f_params(σ_range, f_range);
+
     join_with_offset::<f32>(0., 1.0, &[
-        ((0.2*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
-        ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
-        ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.2 * n as f32) as i64, 10., 100., max_y)),
+        ((0.1*n as f32) as usize, pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y)),
+        ((0.0*n as f32) as usize, pulse_v_fit(0., σ, (0.2 * n as f32) as i64, f, 100., max_y)),
+        ((0.0*n as f32) as usize, pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
-pub fn sig_two_imp(n: i64, max_y: f32) -> Vec<f32> {
+pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
+    let (σ, f) = σ_f_params(σ_range, f_range);
+
     join_with_offset::<f32>(0., 1.0, &[
-        ((0.2*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
-        ((0.0*n as f32) as usize, pulse_v_fit(0., 20., (0.3*n as f32) as i64, 30., 100., max_y)),
+        ((0.1*n as f32) as usize, pulse_v_fit(0., σ, (0.4*n as f32) as i64, f, 100., max_y)),
+        ((0.0*n as f32) as usize, pulse_v_fit(0., σ, (0.4*n as f32) as i64, f, 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
-pub fn sig_one_imp(n: i64, max_y: f32) -> Vec<f32> {
+pub fn sig_one_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
+    let (σ, f) = σ_f_params(σ_range, f_range);
     join_with_offset::<f32>(0., 1.0, &[
-        ((0.1*n as f32) as usize, pulse_v_fit(0., 20., (0.8*n as f32) as i64, 20., 100., max_y)),
+        ((0.1*n as f32) as usize, pulse_v_fit(0., σ, (0.8*n as f32) as i64, f, 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
+}
+
+fn σ_f_params(σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> (f32, f32) {
+    let mut rng = rand::thread_rng();
+    let σ = σ_range.map(|r| rng.gen_range(r)).unwrap_or(20.);
+    let f = f_range.map(|r| rng.gen_range(r)).unwrap_or(20.);
+    (σ, f)
 }
 
 pub fn saw(n: i64) -> Vec<f32> {
@@ -390,10 +402,35 @@ pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Syn
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
-#[derive(Debug, Clone)]
-enum RangeOrValue<V> {
+#[derive(Debug, Clone, PartialEq)]
+pub enum RangeOrValue<V> {
     Range(Range<V>),
     Value(V)
+}
+
+impl <V:Display> Display for RangeOrValue<V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            RangeOrValue::Range(r) => {
+                write!(f, "{}-{}", r.start, r.end)
+            }
+            RangeOrValue::Value(v) => {
+                write!(f, "{}", v)
+            }
+        }
+    }
+}
+
+impl  From<f64> for RangeOrValue<f64>  {
+    fn from(value: f64) -> Self {
+        RangeOrValue::Value(value)
+    }
+}
+
+impl  From<Range<f64>> for RangeOrValue<f64>  {
+    fn from(value: Range<f64>) -> Self {
+        RangeOrValue::Range(value)
+    }
 }
 
 pub fn parse_range_or_value<V>(s: &str) -> Result<RangeOrValue<V>, Box<dyn Error + Send + Sync + 'static>>
@@ -633,7 +670,7 @@ mod shared_tests {
     fn test_parse_range_or_value_range() -> Result<(), ThoosaError>{
         use crate::parse_range_or_value;
 
-        #[derive(Debug, Parser, Clone)]
+        #[derive(Debug, Parser, Clone, PartialEq)]
         struct TestParams {
 
             #[arg(long, value_parser=parse_range_or_value::<usize>)]
@@ -646,7 +683,8 @@ mod shared_tests {
 
         let params = TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())?;
 
-        println!("params={params:?}");
+
+        assert_eq!(TestParams { window: RangeOrValue::Range(1..2), step: RangeOrValue::Range(1.1..2.2) }, params);
 
         Ok(())
     }
@@ -655,7 +693,7 @@ mod shared_tests {
     fn test_parse_range_or_value_value() -> Result<(), ThoosaError>{
         use crate::parse_range_or_value;
 
-        #[derive(Debug, Parser, Clone)]
+        #[derive(Debug, Parser, Clone, PartialEq)]
         struct TestParams {
 
             #[arg(long, value_parser=parse_range_or_value::<usize>)]
@@ -668,7 +706,8 @@ mod shared_tests {
 
         let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())?;
 
-        println!("params={params:?}");
+        assert_eq!(TestParams { window: RangeOrValue::Value(10), step: RangeOrValue::Value(1.1) }, params);
+
 
         Ok(())
     }

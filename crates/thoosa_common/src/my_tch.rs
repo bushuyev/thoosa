@@ -471,7 +471,7 @@ mod tch_tests {
     #[test]
     pub fn test_simp()-> Result<(), ThoosaError>{
 
-        let mut vs_0 = nn::VarStore::new(Device::Cpu);
+        let mut vs_0 = VarStore::new(Cpu);
 
         let n = 1000;
         let net_0 = test_net(&vs_0, n)?;
@@ -483,8 +483,8 @@ mod tch_tests {
         let t_1 = Tensor::from_slice(sin_v(n, 22.).as_slice());
 
 
-        utils::train(
-            &Device::Cpu,
+        train(
+            &Cpu,
             &mut crate::simp::DummyDs::new(
                 t_0.shallow_clone(),
                 t_1.shallow_clone(),
@@ -494,18 +494,23 @@ mod tch_tests {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
 
                 let pred_y = pred.i((.., 0, 0));
-                debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
-                pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
+                let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean);
+                debug!("pred_y ={pred_y} ");
+                debug!("target ={target} ");
+
+                loss
             },
             n as usize,
             nn::AdamW::default().build(&vs_0, 1.0e-4)?,
-            |t|t
+            |t|t,
+            None
         )?;
 
 
 
         let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
         let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
+
         debug!("net t_0={:?}, t_1={:?}",
              from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)),
              from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1))
@@ -601,13 +606,14 @@ mod tch_tests {
             },
             100,
             nn::AdamW::default().build(&vs_0, 1.0e-4)?,
-            |t|t
+            |t|t,
+            None
         )?;
 
-        let vs_1 = nn::VarStore::new(Device::Cpu);
+        let vs_1 = nn::VarStore::new(Cpu);
         let net_1 = test_net(&vs_1, motif_n)?;
-        utils::train(
-            &Device::Cpu,
+        train(
+            &Cpu,
             &mut crate::simp::DummyDs::new(
                 rnd_t.shallow_clone(),
                 motif_1_t.shallow_clone(),
@@ -622,7 +628,8 @@ mod tch_tests {
             },
             100,
             nn::AdamW::default().build(&vs_1, 1.0e-4)?,
-            |t|t
+            |t|t,
+            None
         )?;
 
         let batch_rnd = Tensor::stack((0..10).map(|_| rnd_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));

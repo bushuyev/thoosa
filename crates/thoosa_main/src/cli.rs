@@ -14,8 +14,7 @@ use std::fs::File;
 use std::str::FromStr;
 use std::io::Write;
 use parking_lot::lock_api::RwLock;
-use polars::export::rayon;
-use polars::export::rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::train_nets::{infer, load_motif_models, train_final, train_on_label, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
@@ -344,7 +343,7 @@ pub fn run_cli<F, L>(
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(corr_ids, 300, 0.2, 10), Arc::clone(&executor_rc))?;
+            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(corr_ids, 300, 0.2, 10, 1.0e-5.into()), Arc::clone(&executor_rc))?;
 
             info!("run_train_on_motifs done");
 
@@ -593,7 +592,7 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
 }
 
 fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_motif_params: &TrainOnMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
-    let corr_run_ids = train_on_motif_params.corr_run_ids();
+    let corr_run_ids = &train_on_motif_params.corr_run_ids;
 
 
     let chunk_len = corr_run_ids.len()/devices.len();
@@ -842,7 +841,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
             store_guard.list_corr_motifs(corr_run)?//TODO param
                 .into_iter()
                 .flat_map(|channel_motifs| channel_motifs.into_iter())
-                .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr())
+                .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr)
                 .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>(),
 
             FilterAndSlicerParams::from_properties_map(store_guard.list_run_params(input_run_id, None)?)
@@ -926,6 +925,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
             debug!("train_on_motif: node_params={node_params:?}");
 
             let (loss,  vs) = train_nets::train_on_motif(
+                *motif_id,
                 all_sices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(),//TODO change ClassTensorsDataBatch to accept refs
                 all_sices_1.iter().map(|v|Box::new(v.shallow_clone())).collect(),
                 train_on_motif_params,
@@ -936,7 +936,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
 
             debug!("train_on_motif: motif_id={motif_id} loss={loss}");
 
-            if loss < train_on_motif_params.max_loss() {
+            if loss < train_on_motif_params.max_loss {
 
                 let channel_models = output_dir.join(channel.to_string());
                 fs::create_dir_all(&channel_models)?;
@@ -1037,6 +1037,8 @@ mod main_tests {
     use parking_lot::{Mutex, RawMutex, RwLock};
     use plotters::prelude::BLACK;
     use polars::export::chrono;
+    use rayon::iter::ParallelIterator;
+    use rayon::prelude::IntoParallelIterator;
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Device::Cpu;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -1078,13 +1080,16 @@ mod main_tests {
 
         let n = 1000i64;
         let max_y = 30.0;
-        let sig_0_v = sig_one_imp(n, max_y);
-        let sig_1_v = sig_two_imp(n, max_y);
-        let sig_2_v = sig_three_imp(n, max_y);
+        let sig_0_v = sig_one_imp(n, max_y, None, None);
+        let sig_1_v = sig_two_imp(n, max_y, None, None);
+        let sig_2_v = sig_three_imp(n, max_y, None, None);
+
 
         let x = lin_t(n);
+        // let sig_0_v_00 = sig_one_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
+        // let sig_0_v_01 = sig_two_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
+        // let sig_0_v_02 = sig_one_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
 
-        /*
         plot_series(
             vec![
                 (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0_v.clone()).collect::<Vec<(f32, f32)>>()),
@@ -1093,7 +1098,7 @@ mod main_tests {
 
             ], "test_find_motifs_euc", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         ).unwrap();
-         */
+
 
         /*
         let sig_0 = sig_0(n);
@@ -1315,7 +1320,6 @@ mod main_tests {
 
         let corr_run_id = store.lock().save_motifs_corrs(run_id_1, "test", motifs_corrs, "test_label".to_string())?;
 
-
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
                 let path = test_dir.join(format!("{key}.pt"));
@@ -1333,7 +1337,7 @@ mod main_tests {
             &cli,
             &store,
             vec![Cpu],
-            &TrainOnMotifsParams::dummy(vec![corr_run_id], 1000, 100.0, 10),
+            &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, (10e-5..10e-3).into()),
             executor_rc
         )?;
 
@@ -1343,21 +1347,32 @@ mod main_tests {
         let motif_node_params = MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store.lock().list_run_params(train_run_ids[0], None).expect("list_run_params")));
 
         let mut vs = nn::VarStore::new(Cpu);
-        let node = motif_node(&motif_node_params).build_tch_module(&vs.root())?;//TODO window
+        let node = RwLock::new(
+            SyncWrapper::new(
+            motif_node(&motif_node_params).build_tch_module(&vs.root())?
+                , |v| todo!()
+            )
+        );//TODO window
         vs.load(&models[0])?;
         vs.freeze();
 
-        let t_0 = label_0_t(n, max_y).i((.., 100..900));
-        plot_t(&t_0, "t_0")?;
-        let label_0_p = node.forward(&t_0.view((1,1,-1)));
+        let oks = (0..10).into_par_iter().map(|i| {
+            let t_0 = label_0_t(n, max_y).i((.., 100..900));
+            plot_t(&t_0, "t_0_{i}").unwrap();
+            let label_0_p = node.read().forward(&t_0.view((1, 1, -1)));
 
-        let t_1 = label_1_t(n, max_y).i((.., 100..900));
-        plot_t(&t_1, "t_1")?;
-        let label_1_p = node.forward(&t_1.view((1,1,-1)));
+            let t_1 = label_1_t(n, max_y).i((.., 100..900));
+            plot_t(&t_1, "t_1_{i}").unwrap();
+            let label_1_p = node.read().forward(&t_1.view((1, 1, -1)));
 
-        debug!("test_run_train_on_motifs: label_0_p={label_0_p} label_1_p={label_1_p}");
+            debug!("test_run_train_on_motifs: label_0_p={label_0_p} label_1_p={label_1_p}");
 
-        assert!(label_1_p.double_value(&[0]) > label_0_p.double_value(&[0]));
+            label_1_p.double_value(&[0]) > label_0_p.double_value(&[0])
+        }).filter(|r|*r).count();
+
+        debug!("test_run_train_on_motifs: oks={oks:?}");
+
+        assert!(oks > 7);
 
         Ok(())
     }
@@ -1374,13 +1389,13 @@ mod main_tests {
 
     fn label_1_t(n: i64, max_y: f32) -> Tensor {
         Tensor::vstack(&[
-            Tensor::from_slice([sig_one_imp(n, max_y), sig_one_imp(n, max_y)].concat().as_slice()),
+            Tensor::from_slice([sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)), sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))].concat().as_slice()),
         ])
     }
 
     fn label_0_t(n: i64, max_y: f32) -> Tensor {
         Tensor::vstack(&[
-            Tensor::from_slice([sig_two_imp(n, max_y), sig_two_imp(n, max_y)].concat().as_slice()),
+            Tensor::from_slice([sig_three_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)), sig_two_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))].concat().as_slice()),
         ])
     }
 

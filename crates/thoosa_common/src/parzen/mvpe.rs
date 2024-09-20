@@ -64,26 +64,29 @@ mod multi_variate_parzen_estimator_tests {
 
         let mvpe = MultiVariateParzenEstimator::new(vec![
             NumericalParzenEstimator::new(
+                None,
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist(Tensor::from_slice(&samples), None),
+            ).clc_distr(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
+                None,
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist(Tensor::from_slice(&samples), None),
+            ).clc_distr(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
+                None,
                 // Tensor::from_slice(&samples),
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
                 true
-            ).clc_dist(Tensor::from_slice(&samples), None)
+            ).clc_distr(Tensor::from_slice(&samples), None)
 
         ]);
 
