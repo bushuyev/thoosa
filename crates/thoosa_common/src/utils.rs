@@ -510,7 +510,20 @@ pub trait DataBatch {
     fn valid_batch(&mut self) -> (Tensor, Tensor);
 }
 
-pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>, loss_fn:LossFp, cycles: usize, mut opt: Optimizer, x_f:F) -> Result<f32, ThoosaError>
+pub trait TrainListener {
+    fn on_valid_cycle(&mut self, cycle:usize, loss:f32);
+}
+
+pub fn train<F>(
+    device:&Device,
+    data:&mut dyn DataBatch,
+    model:&Box<dyn Module>,
+    loss_fn:LossFp,
+    cycles: usize,
+    mut opt: Optimizer,
+    x_f:F,
+    mut listener: Option<&mut dyn TrainListener>
+) -> Result<f32, ThoosaError>
     where F:Fn(Tensor)->Tensor {
 
     debug!("train: device={:?} cycles={}", device, cycles);
@@ -533,8 +546,8 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
         drop(x_t);
         unsafe { at_autocast_clear_cache(); }
 
-        debug!("train: device={:?} pred_y.size()={:?}", device, pred_y.size());
-        debug!("train: device={:?}   y_t ={:?}", device, from::<Vec<f32>>(&y_t));
+        // debug!("train: device={:?} pred_y.size()={:?}", device, pred_y.size());
+        // debug!("train: device={:?}   y_t ={:?}", device, from::<Vec<f32>>(&y_t));
 
         // let pred_y_mean = pred_y.view((10, 1)); //pred_y.mean_dim(1, false, tch::Kind::Float);
 
@@ -542,50 +555,42 @@ pub fn train<F>(device:&Device, data:&mut dyn DataBatch, model:&Box<dyn Module>,
 
         let t1 = Instant::now();
 
-
-
         opt.backward_step(&loss);
 
         debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
-
 
 
         if idx % 10 == 0 {
 
             tch::no_grad(||{
                 let (x_t_0, y_t) = data.valid_batch();
+                // debug!("train: x_t_0.size={:?}", x_t_0.size());
 
                 let x_t = x_f(x_t_0);
 
-                debug!("train: device={:?}  vaid    x_t.size()={:?}",  device, x_t.size());
 
                 let pred_y = model.forward(&x_t);
 
-                debug!("train: device={:?}  vaid pred_y.size()={:?} y_t.size()={:?}", device, pred_y.size(), y_t.size());
-                debug!("train: device={:?}  vaid    y_t.size()={:?}",  device, from::<Vec<f32>>(&y_t));
-                // debug!("vaid: pred_y.size()={:?} ", from::<Vec<f32>>(&pred_y));
+                // debug!("train:  pred_y={pred_y} y_t={y_t}");
 
                 // let pred_y_mean = pred_y.view((10, 1)); // pred_y.mean_dim(1, false, tch::Kind::Float);
 
                 let valid_loss = loss_fn(&pred_y, &y_t);
+
+                if let Some(mut l) = listener.as_mut() {
+                    l.on_valid_cycle(idx, valid_loss.double_value(&[]) as f32)
+                }
+
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss.double_value(&[]) as f32;
-                info!("train: device={:?}  loss={:?}, valid loss={:?} avg loss={}", device, loss, valid_loss, last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+                info!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
                 std::io::stdout().flush().unwrap();
             });
         }
 
-
-
         debug!("train: idx={} loss={:?}", idx, loss);
         std::io::stdout().flush()?;
-
-
-        // drop(x_t);
-        drop(y_t);
-        drop(pred_y);
-        drop(loss);
     }
-
+    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",  last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
     Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
 

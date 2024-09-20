@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
-use log::trace;
+use log::{debug, trace};
 use num_traits::*;
 use rand::Rng;
 use rand::seq::SliceRandom;
@@ -14,8 +14,10 @@ use crate::parzen::util::uniform_weight;
 #[allow(dead_code)]
 pub enum BandwidthFactor<N>
 where
-    N: Float,
+    N: Num,
     f64: Into<N>,
+    f64: From<N>,
+
 {
     Min(N),
     MagicClipExponent(N, N),
@@ -66,9 +68,10 @@ impl BandwidthFn {
 
 impl<N> BandwidthFactor<N>
 where
-    N: Float + PartialOrd,
+    N: Num + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
+
 {
     pub fn value(&self, size: i64) -> N {
         match self {
@@ -88,8 +91,10 @@ where
 
 impl<N> Default for BandwidthFactor<N>
 where
-    N: Float,
+    N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
+    f64: From<N>,
+
 {
     fn default() -> Self {
         BandwidthFactor::Min(1e-2.into())
@@ -98,11 +103,13 @@ where
 #[allow(dead_code)]
 pub struct NumericalParzenEstimator<N>
 where
-    N: Float + tch::kind::Element + PartialOrd,
+    N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
+
     tch::Scalar: From<N>,
 {
+    name:Option<String>,
     lb: N,
     ub: N,
     bandwidth_clip: BandwidthFactor<N>,
@@ -112,15 +119,16 @@ where
 
 impl<N> Debug for NumericalParzenEstimator<N>
 where
-    N: Float + tch::kind::Element + PartialOrd,
+    N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
+
     tch::Scalar: From<N>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Test")
-            .field("lb", &<N as Into<f64>>::into(self.lb))
-            .field("ub", &<N as Into<f64>>::into(self.ub))
+            // .field("lb", &<N as Into<f64>>::into(self.lb))
+            // .field("ub", &<N as Into<f64>>::into(self.ub))
             .field("prior", &self.prior)
             .finish()
     }
@@ -128,16 +136,18 @@ where
 
 impl<N> ParzenEstimator for NumericalParzenEstimator<N>
 where
-    N: Float + tch::kind::Element + PartialOrd,
+    N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
+
     tch::Scalar: From<N>,
 {
-    fn clc_dist(&self, samples: Tensor, _weights: Option<Tensor>) -> Box<dyn Distribution> {
-        Box::new(self._clc_dist(samples))
+    fn clc_distr(&self, samples: Tensor, _weights: Option<Tensor>) -> Box<dyn Distribution> {
+        Box::new(self.clc_dist(samples))
     }
-    fn clc_dist_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, _weights: Option<Tensor>) -> Box<dyn Distribution>{
-        Box::new(self._clc_dist(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<f32>>().as_slice())))
+
+    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, _weights: Option<Tensor>) -> Box<dyn Distribution>{
+        Box::new(self.clc_dist(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<f32>>().as_slice())))
         // todo!()
     }
 
@@ -147,13 +157,14 @@ const SQR2PI: f64 = 2.5066282746310002;
 
 impl<N> NumericalParzenEstimator<N>
 where
-    N: Float + tch::kind::Element + PartialOrd,
+    N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
     tch::Scalar: From<N>,
 {
-    pub fn new(lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior: bool) -> Self {
+    pub fn new(name: Option<String>, lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior: bool) -> Self {
         let i = Self {
+            name,
             lb,
             ub,
             bandwidth_clip: bandwidth_factor,
@@ -164,7 +175,7 @@ where
         i
     }
 
-    fn _clc_dist(&self, samples: Tensor) -> NumericalGaussian {
+    fn clc_dist(&self, samples: Tensor) -> NumericalGaussian {
         let samples = if self.prior {
             //prior adds midpoint to 'stabilize the density estimation process' (gpt)
             Tensor::cat(
@@ -248,11 +259,15 @@ impl NumericalGaussian {
         ub: f64,
     ) -> Self {
         Self {
+
             normal_dists: means
                 .iter::<f64>()
                 .unwrap()
                 .zip(stds.iter::<f64>().unwrap())
-                .map(|(mean, std)| Normal::new(mean, std).unwrap())
+                .map(|(mean, std)| {
+                    debug!("NumericalGaussian::new: mean={mean:} std={std}");
+                    Normal::new(mean, std).unwrap()
+                })
                 .collect::<Vec<_>>(),
 
             means,
@@ -365,6 +380,7 @@ mod tests {
         StdRng::seed_from_u64(42);
 
         let npe = NumericalParzenEstimator::new(
+            None,
             // Tensor::from_slice(&[-1.0, 0.0, 1.0]),
             -3.0f64,
             3.0f64,
@@ -379,7 +395,7 @@ mod tests {
         //     npe.weights.round_decimals(4)
         // );
 
-        let gaussian = npe._clc_dist(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
+        let gaussian = npe.clc_dist(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
         debug!("x={:?}", gaussian.means);
         assert_eq!(
             Tensor::from_slice(&[-1., 0., 1., 0.]).round_decimals(4),

@@ -234,6 +234,7 @@ mod tests {
                         1,
                         AdamW::default().build(&vs, 1.0e-4).unwrap(),
                         |t| t,
+                        None,
                     ).expect("train");
 
 
@@ -273,6 +274,7 @@ mod tests {
                         1,
                         AdamW::default().build(&vs, 1.0e-4).unwrap(),
                         |t| t,
+                        None,
                     ).expect("train");
 
 

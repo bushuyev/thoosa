@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use clap::clap_derive::Args;
+use futures::StreamExt;
 use log::{debug, info, warn};
 use plotters::prelude::BLACK;
 use rand::prelude::SliceRandom;
@@ -17,15 +18,17 @@ use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
 use tch::Kind::Float;
 use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 
-use thoosa_shared::{batch_windows, ThoosaError};
+use thoosa_shared::{batch_windows, RangeOrValue, ThoosaError};
 use thoosa_shared::parse_key_val;
 use thoosa_shared::val::unprefix_properties;
 use thoosa_shared::val::Val;
+use thoosa_shared::parse_range_or_value;
 
 use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::apply_channel_motifs;
+use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use crate::train_nets;
-use crate::utils::{DataBatch, train, plot_series};
+use crate::utils::{DataBatch, train, plot_series, TrainListener};
 use crate::utils::from;
 
 #[derive(Debug, Args, Clone)]
@@ -313,9 +316,7 @@ pub fn train_on_label<I>(
             items_per_label
 
         ) as &mut dyn DataBatch,
-
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
-
         |pred: &Tensor, target: &Tensor| {
             debug!("train_on_label: pred.size={:?}", pred.size());
             let pred_y = pred.squeeze();
@@ -325,6 +326,7 @@ pub fn train_on_label<I>(
         },
         params.cycles,
         nn::AdamW::default().build(&vs_0, params.lr)?,
+
         |t: Tensor| {
             debug!("train_on_label: t.size()={:?} ", t.size());
             //merge max_motif_batches * motif_batch_size
@@ -333,9 +335,8 @@ pub fn train_on_label<I>(
             debug!("train_on_label: t_out.size()={:?}",  t_out.size());
             t_out
         },
+        None,
     )?;
-
-
 
     Ok(vs_0)
 }
@@ -432,7 +433,6 @@ pub fn train_final<I>(_ws_dir: impl AsRef<Path>, params: &TrainFinalParams, trai
             valid_tensors_loader.map(apply_final_nets_f)
         ) as &mut dyn DataBatch,
         &final_node(&FinalNodeParams::new(params.models_dir.len() as i64* 6, 6)).build_tch_module(&vs_0.root())?,
-
         |pred: &Tensor, target: &Tensor| {
 
             let pred_y = pred; //pred.i((.., 0, 0));
@@ -454,7 +454,8 @@ pub fn train_final<I>(_ws_dir: impl AsRef<Path>, params: &TrainFinalParams, trai
             let t_out = t.view(t.size()[0] * t.size()[1]); //model_dirs * labels
             debug!(" t_out.size()={:?}",  t_out.size());
             t_out
-        }
+        },
+        None
     )?;
 
     Ok(vs_0)
@@ -657,55 +658,34 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
 #[derive(Debug, Args, Clone)]
 pub struct TrainOnMotifsParams {
     #[arg(long)]
-    motif_ids: MotifsBy,
+    pub motif_ids: MotifsBy,
 
     #[arg(long)]
-    corr_run_ids: Vec<usize>,
+    pub corr_run_ids: Vec<usize>,
 
     #[arg(long, default_value_t = 1000)]
-    cycles: usize,
+    pub cycles: usize,
 
     #[arg(long, default_value_t = 10)]
     pub batch_size: usize,
 
-
-    #[arg(long, default_value_t = 1.0e-5)]
-    lr: f64,
+    #[arg(long, value_parser=parse_range_or_value::<f64>, default_value_t = 1.0e-5.into())]
+    pub lr: RangeOrValue<f64>,
 
     #[arg(long, default_value_t = 0.2)]
-    max_loss: f32,
+    pub max_loss: f32,
 
     #[arg(long, default_value_t = 0.05)]
-    min_corr: f64,
+    pub min_corr: f64,
 }
 
 impl TrainOnMotifsParams {
 
-    pub fn cycles(&self) -> usize {
-        self.cycles
-    }
-    pub fn lr(&self) -> f64 {
-        self.lr
-    }
+    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: RangeOrValue<f64>) ->Self{
+        if let RangeOrValue::Range(r) = &lr {
+            assert!(r.end > r.start);
+        }
 
-
-    pub fn motif_ids(&self) -> &MotifsBy {
-        &self.motif_ids
-    }
-
-    pub fn corr_run_ids(&self) -> &Vec<usize> {
-        &self.corr_run_ids
-    }
-
-    pub fn max_loss(&self) -> f32 {
-        self.max_loss
-    }
-
-    pub fn min_corr(&self) -> f64 {
-        self.min_corr
-    }
-
-    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize) ->Self{
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
@@ -713,7 +693,7 @@ impl TrainOnMotifsParams {
 
             cycles,
 
-            lr: 1.0e-5,
+            lr,
 
             max_loss,
 
@@ -721,6 +701,16 @@ impl TrainOnMotifsParams {
 
             min_corr: 0.05,
         }
+    }
+
+    pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
+        [
+            &self.lr
+        ].into_iter()
+            .map(|v|v.try_into().ok())
+            .collect::<Option<Vec<Hyperparameter>>>()
+            .map(|v|ConfigurationSpace::new(v))
+
     }
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -746,7 +736,6 @@ impl MotifNodeParams {
         )
     }
 
-
     pub fn num_features(&self) -> i64 {
         self.num_features
     }
@@ -754,8 +743,12 @@ impl MotifNodeParams {
 
 pub fn motif_node(params: &MotifNodeParams) -> Node {
     SeqBuilder::new(params.num_features)
-        .batch_norm()
-        .conv_1d(10, 1, 1, ConvConfig::default())
+        // .batch_norm()
+        // .conv_1d(10, 1, 1, ConvConfig::default())
+        .linear_s(100)
+        .func(Tensor::relu)
+        // .linear_s(180)
+        // .func(Tensor::relu)
         .linear_s(1)
         .func(Tensor::sigmoid)
         .end_seq()
@@ -941,13 +934,13 @@ pub fn final_node(params:&FinalNodeParams) -> Node {
         .end_seq()
 }
 
-pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainOnMotifsParams, device: Device, node_params: &MotifNodeParams, batch_size: usize) -> Result<(f32, VarStore), ThoosaError> {
+pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainOnMotifsParams, device: Device, node_params: &MotifNodeParams, batch_size: usize) -> Result<(f32, VarStore), ThoosaError> {
     info!("train_on_motif: device={:?} training on {} slices_0 {} slices_1", device, all_slices_0.len(), all_slices_1.len());
 
     assert!(all_slices_0.len() > 0, "all_slices_0 len");
     assert!(all_slices_1.len() > 0, "all_slices_1 len");
 
-    /*
+
     plot_series(
         all_slices_0.iter().map(|t| {
             (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
@@ -965,36 +958,99 @@ pub fn train_on_motif(all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor
         (2000, 1000),
         &"/tmp/plots/all_slices_1.png"
     ).unwrap();
-    */
 
-    let vs = VarStore::new(device);
 
-    let net = motif_node(node_params).build_tch_module(&vs.root())?;
+    let mut min_loss = f32::MAX;
+    let mut min_var_store : Option<VarStore> = None;
+    let mut batch = ClassTensorsDataBatch::new(
+        vec![
+            all_slices_0,
+            all_slices_1
+        ],
+        batch_size,
+        0.8,
+        device
+    );
 
-    let valid_loss = train(
-        &device,
-        &mut ClassTensorsDataBatch::new(
-            vec![
-                all_slices_0,
-                all_slices_1
-            ],
-            batch_size,
-            0.8,
-            device
-        ) as &mut dyn DataBatch,
-        &net,
-        |pred: &Tensor, target: &Tensor| {
-            // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-            let pred_y = pred.i((.., 0, 0));
-            debug!("train_on_motif: pred_y.device={:?}, target.device()={:?} pred_y ={:?} ", pred_y.device(), target.device(), from::<Vec<f32>>(&pred_y));
-            pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
+    struct PlotVecf32 {
+        id:String,
+        data:Vec<f32>
+    }
+
+    impl PlotVecf32 {
+        pub fn new(id:&str) -> Self {
+            Self {id: id.into(), data: vec![] }
+        }
+
+        fn plot(&self){
+            plot_series(
+                 vec![
+                     (
+                      self.id.clone(),
+                      BLACK, self.
+                         data.iter().enumerate().map(|(i, v)| (i as f32, *v as f32)).collect::<Vec<(f32, f32)>>()
+                     )
+                 ],
+                self.id.clone().as_str(),
+                (2000, 1000),
+                &format!("/tmp/plots/motif_train_{}.png", self.id)
+            ).unwrap();
+        }
+    }
+
+    impl TrainListener for PlotVecf32 {
+        fn on_valid_cycle(&mut self, cycle: usize, loss: f32) {
+            self.data.push(loss);
+        }
+    }
+
+    let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
+        |params| {
+            let vs = VarStore::new(device);
+
+            let mut tr = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, params).as_str());
+
+            let loss = train(
+                &device,
+                &mut batch as &mut dyn DataBatch,
+
+                &motif_node(node_params).build_tch_module(&vs.root()).unwrap(),
+
+                |pred: &Tensor, target: &Tensor| {
+                    let pred_y = pred.i((.., 0, 0));
+
+                    let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+                    debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
+
+                    loss
+                },
+                train_on_motif_params.cycles,
+                nn::AdamW::default().build(&vs, params[0].into()).unwrap(),
+                |t| t,
+                Some(&mut tr),
+
+            ).unwrap();
+
+            tr.plot();
+
+            debug!("train_on_motif: params={params:?} loss={loss}");
+            if loss < min_loss {
+                min_loss = loss;
+                min_var_store.replace(vs);
+            }
+
+            loss
         },
-        train_on_motif_params.cycles,
-        nn::AdamW::default().build(&vs, train_on_motif_params.lr)?,
-        |t|t
-    )?;
+        train_on_motif_params.to_config_space().unwrap(),
+        100,
+        10,
+    );
+    let best_config = opt.optimize();
+    println!("train_on_motif: best_config={best_config:?} min_loss={min_loss}");
+    // let best_config = opt.optimize();
 
-    Ok((valid_loss, vs))
+
+    Ok((min_loss, min_var_store.expect("min_var_store")))
 }
 
 pub fn slices_in_all_resources(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
@@ -1065,10 +1121,10 @@ impl ClassTensorsDataBatch {
         let mut rng = thread_rng();
 
         let per_class_len = batch_size / class_tensors.len();//TODO make balanced
-        debug!("ClassTensorsDataBatch::to_x_y: per_class_len={} device={:?}", per_class_len, device);
+        debug!("ClassTensorsDataBatch::to_x_y: class_tensors={} per_class_len={per_class_len}", class_tensors.len());
 
         let mut x_y_vecs = class_tensors.iter().enumerate().fold(vec![], |mut x_y_acc, (class, tensors)| {
-            assert!(tensors.len() > 0, "no tensors for class={} in ClassTensorsDataBatch", class);
+            assert!(tensors.len() > 0, "no tensors for class={class} in ClassTensorsDataBatch");
 
             tensors.choose_multiple(&mut rng, per_class_len).for_each(|t| {
 
@@ -1080,8 +1136,9 @@ impl ClassTensorsDataBatch {
 
         x_y_vecs.shuffle(&mut rng);
 
-        debug!("ClassTensorsDataBatch::to_x_y: x_y_vecs.1.len()={} ", x_y_vecs.len());
+        debug!("ClassTensorsDataBatch::to_x_y: x_y_vecs.1.len()={} batch_size={batch_size}", x_y_vecs.len());
 
+        //TODO throw if not enough tensors for batch
         (x_y_vecs.len()..batch_size).for_each(|i|{
             x_y_vecs.push(
                 (
