@@ -504,14 +504,22 @@ pub fn lin_t(n: i64) -> Tensor {
     Tensor::from((0..n).map(|x| x as f32).collect::<Vec<f32>>().as_slice())
 }
 
-
 pub trait DataBatch {
     fn train_batch(&mut self) -> (Tensor, Tensor);
     fn valid_batch(&mut self) -> (Tensor, Tensor);
 }
 
 pub trait TrainListener {
-    fn on_valid_cycle(&mut self, cycle:usize, loss:f32);
+    fn on_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse {
+        ListenerResponse::Nope
+    }
+    fn on_valid_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse;
+}
+
+pub enum ListenerResponse {
+    Stop,
+    UpdateLR(f64),
+    Nope
 }
 
 pub fn train<F>(
@@ -562,7 +570,7 @@ pub fn train<F>(
 
         if idx % 10 == 0 {
 
-            tch::no_grad(||{
+            if let Some(rs) = tch::no_grad(||{
                 let (x_t_0, y_t) = data.valid_batch();
                 // debug!("train: x_t_0.size={:?}", x_t_0.size());
 
@@ -571,20 +579,26 @@ pub fn train<F>(
 
                 let pred_y = model.forward(&x_t);
 
-                // debug!("train:  pred_y={pred_y} y_t={y_t}");
-
-                // let pred_y_mean = pred_y.view((10, 1)); // pred_y.mean_dim(1, false, tch::Kind::Float);
-
                 let valid_loss = loss_fn(&pred_y, &y_t);
+                let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
 
-                if let Some(mut l) = listener.as_mut() {
-                    l.on_valid_cycle(idx, valid_loss.double_value(&[]) as f32)
-                }
 
-                last_valid_loss[idx % last_valid_loss.len()] = valid_loss.double_value(&[]) as f32;
+                last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
                 info!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-                std::io::stdout().flush().unwrap();
-            });
+
+                listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
+
+            }).take() {
+                match rs {
+                    ListenerResponse::Stop => {
+                        break;
+                    }
+                    ListenerResponse::UpdateLR(lr) => {
+                        opt.set_lr(lr);
+                    }
+                    ListenerResponse::Nope => {}
+                }
+            }
         }
 
         debug!("train: idx={} loss={:?}", idx, loss);
@@ -593,8 +607,6 @@ pub fn train<F>(
     debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",  last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
     Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
-
-
 
 pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
     let sig_1 = Tensor::from_slice(

@@ -28,7 +28,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::my_tch::apply_channel_motifs;
 use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use crate::train_nets;
-use crate::utils::{DataBatch, train, plot_series, TrainListener};
+use crate::utils::{DataBatch, train, plot_series, TrainListener, ListenerResponse};
 use crate::utils::from;
 
 #[derive(Debug, Args, Clone)]
@@ -635,7 +635,7 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
                 debug!("load_motif_models: motif={:?}", motif);
 
                 let mut vs = nn::VarStore::new(device.clone());
-                let node = motif_node(&motif_node_params).build_tch_module(&vs.root())?;//TODO window
+                let node = motif_node(&motif_node_params, None).build_tch_module(&vs.root())?;//TODO window
                 vs.load(&motif_path.join(motif))?;
                 vs.freeze();
                 debug!("load_motif_models: len={:?}", vs.variables().len());
@@ -672,6 +672,9 @@ pub struct TrainOnMotifsParams {
     #[arg(long, value_parser=parse_range_or_value::<f64>, default_value_t = 1.0e-5.into())]
     pub lr: RangeOrValue<f64>,
 
+    #[arg(long, value_parser=parse_range_or_value::<i64>, default_value_t = 1i64.into())]
+    pub num_layers: RangeOrValue<i64>,
+
     #[arg(long, default_value_t = 0.2)]
     pub max_loss: f32,
 
@@ -681,8 +684,11 @@ pub struct TrainOnMotifsParams {
 
 impl TrainOnMotifsParams {
 
-    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: RangeOrValue<f64>) ->Self{
-        if let RangeOrValue::Range(r) = &lr {
+    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<i64>>) ->Self{
+
+        let lr = lr.into();
+
+        if let RangeOrValue::Range(r) = &lr{
             assert!(r.end > r.start);
         }
 
@@ -695,6 +701,8 @@ impl TrainOnMotifsParams {
 
             lr,
 
+            num_layers: num_layers.into(),
+
             max_loss,
 
             batch_size,
@@ -705,22 +713,25 @@ impl TrainOnMotifsParams {
 
     pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
         [
-            &self.lr
+            (&self.lr).try_into().ok(),
+            (&self.num_layers).try_into().ok(),
         ].into_iter()
-            .map(|v|v.try_into().ok())
             .collect::<Option<Vec<Hyperparameter>>>()
             .map(|v|ConfigurationSpace::new(v))
+
 
     }
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MotifNodeParams {
-    num_features: i64
+    num_features: i64,
 }
 
 impl MotifNodeParams {
     pub fn new(num_features: i64) -> Self {
-        Self { num_features }
+        Self {
+            num_features
+        }
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
@@ -741,12 +752,22 @@ impl MotifNodeParams {
     }
 }
 
-pub fn motif_node(params: &MotifNodeParams) -> Node {
-    SeqBuilder::new(params.num_features)
+pub fn motif_node(params: &MotifNodeParams, num_layers: Option<i64>) -> Node {
+    let mut builder = SeqBuilder::new(params.num_features);
+    let mut net = builder
         // .batch_norm()
         // .conv_1d(10, 1, 1, ConvConfig::default())
         .linear_s(100)
-        .func(Tensor::relu)
+        .func(Tensor::relu);
+
+    if let Some(num_layers) = num_layers{
+        for layer in 0..num_layers as usize {
+            net =  net.linear_s(100)
+                .func(Tensor::relu);
+        }
+    }
+
+    net
         // .linear_s(180)
         // .func(Tensor::relu)
         .linear_s(1)
@@ -999,22 +1020,37 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
     }
 
     impl TrainListener for PlotVecf32 {
-        fn on_valid_cycle(&mut self, cycle: usize, loss: f32) {
+        fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
             self.data.push(loss);
+
+            //TODO move into another listener
+            if self.data.len() > 10 {
+                let len_half = self.data.len() / 2;
+                if self.data[0..len_half].iter().sum::<f32>() < self.data[len_half..].iter().sum::<f32>()  {
+                    debug!("TrainListener for PlotVecf32::on_valid_cycle stopping self.data={:?}", self.data);
+                    return ListenerResponse::Stop;
+                }
+            }
+
+            ListenerResponse::Nope
         }
     }
 
     let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
         |params| {
             let vs = VarStore::new(device);
+            let lr = params[0].into();
+            let num_layers = params[1].into();
 
-            let mut tr = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, params).as_str());
+            debug!("train_on_motif in opt: params={params:?}");
+
+            let mut listener = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, params).as_str());
 
             let loss = train(
                 &device,
                 &mut batch as &mut dyn DataBatch,
 
-                &motif_node(node_params).build_tch_module(&vs.root()).unwrap(),
+                &motif_node(node_params, Some(num_layers)).build_tch_module(&vs.root()).unwrap(),
 
                 |pred: &Tensor, target: &Tensor| {
                     let pred_y = pred.i((.., 0, 0));
@@ -1025,13 +1061,13 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
                     loss
                 },
                 train_on_motif_params.cycles,
-                nn::AdamW::default().build(&vs, params[0].into()).unwrap(),
+                nn::AdamW::default().build(&vs, lr).unwrap(),
                 |t| t,
-                Some(&mut tr),
+                Some(&mut listener),
 
             ).unwrap();
 
-            tr.plot();
+            listener.plot();
 
             debug!("train_on_motif: params={params:?} loss={loss}");
             if loss < min_loss {
@@ -1858,7 +1894,7 @@ mod train_tests {
         fs::create_dir_all(channel_0.clone())?;
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
-        let _test_motif_model = train_nets::motif_node(&super::MotifNodeParams::new(window)).build_tch_module(&vs_0.root())?;
+        let _test_motif_model = train_nets::motif_node(&super::MotifNodeParams::new(window), None).build_tch_module(&vs_0.root())?;
 
         // let test_motif_model = SeqBuilder::new(100)
         //     .linear_s_with_conf(1, LinearConfig {
