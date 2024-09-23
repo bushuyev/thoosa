@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 use log::{debug, trace};
@@ -115,6 +116,7 @@ where
     bandwidth_clip: BandwidthFactor<N>,
     bandwidth: BandwidthFn,
     prior: bool,
+    quant_step: Option<usize>
 }
 
 impl<N> Debug for NumericalParzenEstimator<N>
@@ -162,7 +164,7 @@ where
     f64: From<N>,
     tch::Scalar: From<N>,
 {
-    pub fn new(name: Option<String>, lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior: bool) -> Self {
+    pub fn new(name: Option<String>, lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior: bool, quant_step: Option<usize>) -> Self {
         let i = Self {
             name,
             lb,
@@ -170,12 +172,14 @@ where
             bandwidth_clip: bandwidth_factor,
             bandwidth: BandwidthFn::Simp,
             prior,
+            quant_step
         };
 
         i
     }
 
     fn clc_distr(&self, samples: Tensor) -> NumericalGaussian {
+        trace!("clc_distr: samples={samples} kind={:?} ", samples.kind());
         let samples = if self.prior {
             //prior adds midpoint to 'stabilize the density estimation process' (gpt)
             Tensor::cat(
@@ -221,6 +225,7 @@ where
             weights,
             self.lb.into(),
             self.ub.into(),
+            self.quant_step.clone()
         )
     }
 
@@ -245,6 +250,7 @@ pub struct NumericalGaussian {
     lb: f64,
     ub: f64,
     normal_dists: Vec<Normal>,
+    quant_step: Option<usize>,
 }
 
 
@@ -257,9 +263,9 @@ impl NumericalGaussian {
         weights: Tensor,
         lb: f64,
         ub: f64,
+        quant_step: Option<usize>,
     ) -> Self {
         Self {
-
             normal_dists: means
                 .iter::<f64>()
                 .unwrap()
@@ -277,6 +283,7 @@ impl NumericalGaussian {
             weights,
             lb,
             ub,
+            quant_step
         }
     }
 
@@ -311,18 +318,19 @@ impl NumericalGaussian {
                     let val = opt_rnd().sample(distr);
 
                     if self.lb <= val && val <= self.ub {
-                        // if let Some(q_val) = q {
-                        //     return ((val - hard_lb) / q_val).round() * q_val + hard_lb;
-                        // } else {
-                        //     return val;
-                        // }
-                        return val;
+                        if let Some(q_val) = self.quant_step.as_ref() {
+                            return (((val - self.lb) / *q_val as f64).round() as usize * *q_val) as f64 + self.lb; //TODO hard bounds
+                        } else {
+                            return val;
+                        }
                     }
                 }
             })
             .collect()
     }
 }
+
+
 
 impl Distribution for NumericalGaussian {
     fn sample(&self, n_samples: usize) -> Vec<Primitives> {
@@ -386,6 +394,7 @@ mod tests {
             3.0f64,
             BandwidthFactor::default(),
             true,
+            None,
         );
 
         // debug!("npe.weights={}", npe.weights);
