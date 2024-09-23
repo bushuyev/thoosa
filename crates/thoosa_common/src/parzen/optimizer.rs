@@ -489,7 +489,7 @@ impl <F> TPEOptimizer<F>
         let config_cands = stack_params(
 
             self.tpe_samplers.values().map(|tpe| {
-                tpe.get_config_candidates(24)
+                tpe.get_config_candidates(24)//TODO to param
             }).collect::<Vec<Vec<Vec<Primitives>>>>() //tpe(only loss)/params/candidates
         );
 
@@ -511,7 +511,7 @@ impl <F> TPEOptimizer<F>
     }
 
 }
-#[allow(dead_code)]
+
 fn stack_params<T:Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
     let num_rows = input[0].len();
     let mut result = vec![vec![]; num_rows];
@@ -589,6 +589,27 @@ mod tpe_optimizer_tests {
         assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
         assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
     }
+
+
+    #[test]
+    fn test_optimize_numeric_int() {
+        let mut opt = TPEOptimizer::new(
+            sphere(300),
+            ConfigurationSpace::new(
+                (0..3).map(|i| Hyperparameter::UniformInt { name: format!("x_{}", i), lower: -500, upper: 500 }).collect()
+            ),
+            500,
+            10,
+        );
+
+        let best_config = opt.optimize();
+
+        debug!("best_config={best_config:?}");
+        // assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
+        // assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
+        // assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
+    }
+
 
     #[test]
     fn test_optimize_ctaegoric(){
@@ -717,11 +738,19 @@ impl TryFrom<&RangeOrValue<f64>> for Hyperparameter {
     }
 }
 
-impl TryFrom<&RangeOrValue<usize>> for Hyperparameter {
+impl TryFrom<&RangeOrValue<i64>> for Hyperparameter {
     type Error = ();
 
-    fn try_from(value: &RangeOrValue<usize>) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(value: &RangeOrValue<i64>) -> Result<Self, Self::Error> {
+        if let RangeOrValue::Range(range) = value {
+            Ok(Hyperparameter::UniformInt {
+                name: "param_0".into(),
+                lower: range.start,
+                upper: range.end
+            })
+        } else {
+            Err(())
+        }
     }
 }
 

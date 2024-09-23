@@ -427,8 +427,20 @@ impl  From<f64> for RangeOrValue<f64>  {
     }
 }
 
+impl  From<i64> for RangeOrValue<i64>  {
+    fn from(value: i64) -> Self {
+        RangeOrValue::Value(value)
+    }
+}
+
 impl  From<Range<f64>> for RangeOrValue<f64>  {
     fn from(value: Range<f64>) -> Self {
+        RangeOrValue::Range(value)
+    }
+}
+
+impl  From<Range<i64>> for RangeOrValue<i64>  {
+    fn from(value: Range<i64>) -> Self {
         RangeOrValue::Range(value)
     }
 }

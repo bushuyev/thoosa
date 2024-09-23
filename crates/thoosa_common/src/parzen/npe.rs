@@ -143,11 +143,11 @@ where
     tch::Scalar: From<N>,
 {
     fn clc_distr(&self, samples: Tensor, _weights: Option<Tensor>) -> Box<dyn Distribution> {
-        Box::new(self.clc_dist(samples))
+        Box::new(self.clc_distr(samples))
     }
 
     fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, _weights: Option<Tensor>) -> Box<dyn Distribution>{
-        Box::new(self.clc_dist(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<f32>>().as_slice())))
+        Box::new(self.clc_distr(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<f32>>().as_slice())))
         // todo!()
     }
 
@@ -175,7 +175,7 @@ where
         i
     }
 
-    fn clc_dist(&self, samples: Tensor) -> NumericalGaussian {
+    fn clc_distr(&self, samples: Tensor) -> NumericalGaussian {
         let samples = if self.prior {
             //prior adds midpoint to 'stabilize the density estimation process' (gpt)
             Tensor::cat(
@@ -265,7 +265,7 @@ impl NumericalGaussian {
                 .unwrap()
                 .zip(stds.iter::<f64>().unwrap())
                 .map(|(mean, std)| {
-                    debug!("NumericalGaussian::new: mean={mean:} std={std}");
+                    // debug!("NumericalGaussian::new: mean={mean:} std={std}");
                     Normal::new(mean, std).unwrap()
                 })
                 .collect::<Vec<_>>(),
@@ -395,7 +395,7 @@ mod tests {
         //     npe.weights.round_decimals(4)
         // );
 
-        let gaussian = npe.clc_dist(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
+        let gaussian = npe.clc_distr(Tensor::from_slice(&[-1.0, 0.0, 1.0]));
         debug!("x={:?}", gaussian.means);
         assert_eq!(
             Tensor::from_slice(&[-1., 0., 1., 0.]).round_decimals(4),

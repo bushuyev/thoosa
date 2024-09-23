@@ -343,7 +343,7 @@ pub fn run_cli<F, L>(
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
 
-            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(corr_ids, 300, 0.2, 10, 1.0e-5.into()), Arc::clone(&executor_rc))?;
+            let run_ids = run_train_on_motifs(&cli, &store, devices.clone(), &TrainOnMotifsParams::dummy(corr_ids, 300, 0.2, 10, 1.0e-5, 1), Arc::clone(&executor_rc))?;
 
             info!("run_train_on_motifs done");
 
@@ -1337,7 +1337,7 @@ mod main_tests {
             &cli,
             &store,
             vec![Cpu],
-            &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, (10e-5..10e-3).into()),
+            &TrainOnMotifsParams::dummy(vec![corr_run_id], 300, 100.0, 10, 10e-5..10e-3, 1..3),
             executor_rc
         )?;
 
@@ -1349,7 +1349,7 @@ mod main_tests {
         let mut vs = nn::VarStore::new(Cpu);
         let node = RwLock::new(
             SyncWrapper::new(
-            motif_node(&motif_node_params).build_tch_module(&vs.root())?
+            motif_node(&motif_node_params, None).build_tch_module(&vs.root())?
                 , |v| todo!()
             )
         );//TODO window
