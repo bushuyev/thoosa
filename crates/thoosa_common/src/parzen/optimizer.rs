@@ -235,7 +235,8 @@ impl TreeStructuredParzenEstimator {
                             *lower,
                             *upper,
                             BandwidthFactor::default(),
-                            true
+                            true,
+                            None
                         )) as Box<dyn ParzenEstimator>
 
                     }
@@ -246,7 +247,8 @@ impl TreeStructuredParzenEstimator {
                             *lower as f64, //TODO
                             *upper as f64,
                             BandwidthFactor::default(),
-                            true
+                            true,
+                            Some(1)//TODO step
                         )) as Box<dyn ParzenEstimator>
                     }
 
@@ -277,12 +279,12 @@ impl TreeStructuredParzenEstimator {
 
         let (lower_vals, upper_vals) = self.pop_observations(n_lower);
 
-        let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold((vec![], vec![]), |mut lower_upper_esitmators, (param_i, e)|{
+        let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold((vec![], vec![]), |mut lower_upper_esitmators, (param_i, pe)|{
             lower_upper_esitmators.0.push(
-                e.clc_distr_from_vec(&mut lower_vals.iter().map(|v|v[param_i]), None)
+                pe.clc_distr_from_vec(&mut lower_vals.iter().map(|v|v[param_i]), None)
             );
             lower_upper_esitmators.1.push(
-                e.clc_distr_from_vec(&mut upper_vals.iter().map(|v|v[param_i]), None)
+                pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v|v[param_i]), None)
             );
 
             lower_upper_esitmators
@@ -394,17 +396,17 @@ mod tree_structured_parzen_estimator_tests {
 
 
         tsp.mvpe_lower = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_distr(Tensor::from_slice(&samples), None),
-            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_distr(Tensor::from_slice(&samples), None),
-            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_distr(Tensor::from_slice(&samples), None)
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None)
 
         ]));
         let samples = [-2.0, 0.0, 2.0];
 
         tsp.mvpe_upper = Some(MultiVariateParzenEstimator::new(vec![
-            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_distr(Tensor::from_slice(&samples), None),
-            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_distr(Tensor::from_slice(&samples), None),
-            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true).clc_distr(Tensor::from_slice(&samples), None)
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None),
+            NumericalParzenEstimator::new(None, -3.0f64, 3.0f64, BandwidthFactor::default(), true, None).clc_distr(Tensor::from_slice(&samples), None)
 
         ]));
 
@@ -533,6 +535,13 @@ mod tpe_optimizer_tests {
     use crate::argmin::ArgmTensor;
     use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, stack_params, TPEOptimizer};
     use crate::parzen::optimizer::Primitives::Integer;
+
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::init_test_logging();
+    }
+
 
     #[test]
     fn test_params_stack(){

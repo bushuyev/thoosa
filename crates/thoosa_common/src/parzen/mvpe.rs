@@ -69,7 +69,8 @@ mod multi_variate_parzen_estimator_tests {
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
-                true
+                true,
+                None
             ).clc_distr(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
                 None,
@@ -77,7 +78,8 @@ mod multi_variate_parzen_estimator_tests {
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
-                true
+                true,
+                None
             ).clc_distr(Tensor::from_slice(&samples), None),
             NumericalParzenEstimator::new(
                 None,
@@ -85,7 +87,8 @@ mod multi_variate_parzen_estimator_tests {
                 -3.0f64,
                 3.0f64,
                 BandwidthFactor::default(),
-                true
+                true,
+                None
             ).clc_distr(Tensor::from_slice(&samples), None)
 
         ]);
