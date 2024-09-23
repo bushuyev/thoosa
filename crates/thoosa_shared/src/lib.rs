@@ -421,6 +421,30 @@ impl <V:Display> Display for RangeOrValue<V> {
     }
 }
 
+impl<V> RangeOrValue<V> {
+    pub fn expect_value(&self) -> Result<&V, ThoosaError> {
+        match self {
+            RangeOrValue::Range(_) => {
+                Err(ThoosaError::new("expected value"))
+            }
+            RangeOrValue::Value(v) => {
+                Ok(v)
+            }
+        }
+    }
+
+    pub fn expect_range(&self) -> Result<&Range<V>, ThoosaError> {
+        match self {
+            RangeOrValue::Range(r) => {
+                Ok(r)
+            }
+            RangeOrValue::Value(v) => {
+                Err(ThoosaError::new("expected range"))
+            }
+        }
+    }
+}
+
 impl  From<f64> for RangeOrValue<f64>  {
     fn from(value: f64) -> Self {
         RangeOrValue::Value(value)

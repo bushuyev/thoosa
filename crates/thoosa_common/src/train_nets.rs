@@ -753,6 +753,7 @@ impl MotifNodeParams {
 }
 
 pub fn motif_node(params: &MotifNodeParams, num_layers: Option<i64>) -> Node {
+    debug!("motif_node: num_layers={num_layers:?}");
     let mut builder = SeqBuilder::new(params.num_features);
     let mut net = builder
         // .batch_norm()
@@ -760,12 +761,20 @@ pub fn motif_node(params: &MotifNodeParams, num_layers: Option<i64>) -> Node {
         .linear_s(100)
         .func(Tensor::relu);
 
-    if let Some(num_layers) = num_layers{
-        for layer in 0..num_layers as usize {
-            net =  net.linear_s(100)
-                .func(Tensor::relu);
-        }
-    }
+    // if let Some(num_layers) = num_layers {
+    //     for i in 0..1 {
+    //         net = net.linear_s(100)
+    //             .func(Tensor::relu);
+    //     }
+    // }
+
+
+    //
+    //     for layer in 0..num_layers as usize {
+    //         net =  net.linear_s(100)
+    //             .func(Tensor::relu);
+    //     }
+    // }
 
     net
         // .linear_s(180)
@@ -1036,15 +1045,16 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
         }
     }
 
-    let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
-        |params| {
+
+    match train_on_motif_params.to_config_space() {
+        None => {
             let vs = VarStore::new(device);
-            let lr = params[0].into();
-            let num_layers = params[1].into();
+            let lr = *train_on_motif_params.lr.expect_value()?;
+            let num_layers = *train_on_motif_params.num_layers.expect_value()?;
 
-            debug!("train_on_motif in opt: params={params:?}");
+            debug!("train_on_motif no opt: train_on_motif_params={train_on_motif_params:?}");
 
-            let mut listener = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, params).as_str());
+            let mut listener = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, train_on_motif_params).as_str());
 
             let loss = train(
                 &device,
@@ -1069,24 +1079,72 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
 
             listener.plot();
 
-            debug!("train_on_motif: params={params:?} loss={loss}");
             if loss < min_loss {
                 min_loss = loss;
                 min_var_store.replace(vs);
             }
 
-            loss
-        },
-        train_on_motif_params.to_config_space().unwrap(),
-        100,
-        10,
-    );
-    let best_config = opt.optimize();
-    println!("train_on_motif: best_config={best_config:?} min_loss={min_loss}");
-    // let best_config = opt.optimize();
+            println!("train_on_motif:  min_loss={min_loss}");
+            // let best_config = opt.optimize();
 
 
-    Ok((min_loss, min_var_store.expect("min_var_store")))
+            Ok((min_loss, min_var_store.expect("min_var_store")))
+        }
+        Some(cs) => {
+            let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
+                |params| {
+                    let vs = VarStore::new(device);
+                    let lr = params[0].into();
+                    let num_layers = params[1].into();
+
+                    debug!("train_on_motif in opt: params={params:?}");
+
+                    let mut listener = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, params).as_str());
+
+                    let loss = train(
+                        &device,
+                        &mut batch as &mut dyn DataBatch,
+
+                        &motif_node(node_params, Some(num_layers)).build_tch_module(&vs.root()).unwrap(),
+
+                        |pred: &Tensor, target: &Tensor| {
+                            let pred_y = pred.i((.., 0, 0));
+
+                            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+                            debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
+
+                            loss
+                        },
+                        train_on_motif_params.cycles,
+                        nn::AdamW::default().build(&vs, lr).unwrap(),
+                        |t| t,
+                        Some(&mut listener),
+
+                    ).unwrap();
+
+                    listener.plot();
+
+                    debug!("train_on_motif: params={params:?} loss={loss}");
+                    if loss < min_loss {
+                        min_loss = loss;
+                        min_var_store.replace(vs);
+                    }
+
+                    loss
+                },
+                cs,
+                100,
+                10,
+            );
+            let best_config = opt.optimize();
+            println!("train_on_motif: best_config={best_config:?} min_loss={min_loss}");
+            // let best_config = opt.optimize();
+
+
+            Ok((min_loss, min_var_store.expect("min_var_store")))
+        }
+    }
+
 }
 
 pub fn slices_in_all_resources(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {

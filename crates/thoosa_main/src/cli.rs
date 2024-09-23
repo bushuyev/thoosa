@@ -537,7 +537,7 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
                 (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand
                     let label_node_params = LabelNodeParams::new(20, max_nets, max_motif_batches as i64, train_on_label_params.motif_batch_size());
 
-                    a.1.push(store_guard.save_tree_run(Some(*input_run_id), "todo", &vec![], prefix_properties("motifs_node", label_node_params.to_properties_map())).expect("save_tree_run"));
+                    a.1.push(store_guard.save_tree_run(Some(*input_run_id), "todo", &vec![], prefix_properties("label_node", label_node_params.to_properties_map())).expect("save_tree_run"));
                     a.0.push(label_node_params);
 
                     a
@@ -1337,7 +1337,8 @@ mod main_tests {
             &cli,
             &store,
             vec![Cpu],
-            &TrainOnMotifsParams::dummy(vec![corr_run_id], 300, 100.0, 10, 10e-5..10e-3, 1..3),
+            // &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, 10e-5..10e-3, 1),
+            &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, 10e-5, 1),
             executor_rc
         )?;
 
