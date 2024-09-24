@@ -838,7 +838,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
         let mut store_guard = store.lock();
 
         (
-            store_guard.list_corr_motifs(corr_run)?//TODO param
+            store_guard.list_selected_motifs(corr_run)?//TODO param
                 .into_iter()
                 .flat_map(|channel_motifs| channel_motifs.into_iter())
                 .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr)
@@ -1017,7 +1017,7 @@ fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, de
 
         debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
 
-        store.lock().save_motifs_corrs(run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
+        store.lock().save_selected_motifs(run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs, label).expect("save_motifs_corrs")
     }).collect::<Vec<usize>>())
 
 }
@@ -1238,12 +1238,12 @@ mod main_tests {
         debug!("test_motifs_with_tpe: corrs={corrs:?}");
 
         //there are motifs with corr 1.0 for each label
-        assert!(store.lock().list_corr_motifs(
+        assert!(store.lock().list_selected_motifs(
             corrs.iter().find(|(id, run_id, label)|label.eq("label_0")).expect("label_0").1
             //0 channel
         )?[0].iter().find(|(motif_id, corr)|corr == &1.0).is_some());
 
-        assert!(store.lock().list_corr_motifs(
+        assert!(store.lock().list_selected_motifs(
             corrs.iter().find(|(id, run_id, label)|label.eq("label_1")).expect("label_1").1
         )?[0].iter().find(|(motif_id, corr)|corr == &1.0).is_some());
 
@@ -1318,7 +1318,7 @@ mod main_tests {
         let motif_ids = motifs_corrs[0].iter().map(| (motif, corr)| *motif).collect::<HashSet<usize>>();
         debug!("test_run_train_on_motifs: motif_ids={motif_ids:?}");
 
-        let corr_run_id = store.lock().save_motifs_corrs(run_id_1, "test", motifs_corrs, "test_label".to_string())?;
+        let corr_run_id = store.lock().save_selected_motifs(run_id_1, "test", motifs_corrs, "test_label".to_string())?;
 
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
