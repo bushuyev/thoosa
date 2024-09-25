@@ -592,15 +592,15 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
 }
 
 fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_motif_params: &TrainOnMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
-    let corr_run_ids = &train_on_motif_params.corr_run_ids;
+    let motif_selection_ids = &train_on_motif_params.motif_selection_ids;
 
 
-    let chunk_len = corr_run_ids.len()/devices.len();
-    let corr_run_id_labels = { store.lock().list_corrs(corr_run_ids)? }; //(1..=36).collect::<Vec<usize>>();
+    let chunk_len = motif_selection_ids.len()/devices.len();
+    let motif_selection_ids_labels = { store.lock().list_motif_selections(motif_selection_ids)? }; //(1..=36).collect::<Vec<usize>>();
 
-    debug!("run_train_on_motifs: corr_run_ids={corr_run_ids:?} devices={devices:?} corr_run_id_labels={corr_run_id_labels:?}");
+    debug!("run_train_on_motifs: motif_selection_ids={motif_selection_ids:?} devices={devices:?} motif_selection_ids_labels={motif_selection_ids_labels:?}");
 
-    let devices_corr_run = devices.into_iter().cycle().zip(corr_run_id_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, usize, String)])>>();//corrs_run(id, label)
+    let devices_corr_run = devices.into_iter().cycle().zip(motif_selection_ids_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, usize, String)])>>();//corrs_run(id, label)
 
     let cli_clone = cli.clone();
     let run_ids = Arc::new(Mutex::new(vec![]));
@@ -609,11 +609,11 @@ fn run_train_on_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Dev
     devices_corr_run.into_par_iter().for_each( |(device_i, corrs_run)| {
         info!("TrainOnMotifs: corrs_run: {:?} device_i={:?}", corrs_run, device_i);
 
-        for (corr_run_id, run_id, label) in corrs_run {
+        for (motif_selection_id, run_id, label) in corrs_run {
             let run_ids = train_on_motifs(
                 &cli_clone,
                 *run_id,
-                *corr_run_id,
+                *motif_selection_id,
                 Arc::clone(&store),
                 device_i,
                 train_on_motif_params,
@@ -831,14 +831,14 @@ fn plot_motif_slices(cli: &Cli, store: Arc<Mutex<SqlStore>>, device: Device, plo
     Ok(())
 }
 
-fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mutex<impl Store + 'static>>, device: Device, train_on_motif_params: &TrainOnMotifsParams, label: &String, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
-    debug!("train_on_motifs: device={device:?}, corr_run={corr_run:?}");
+fn train_on_motifs(cli: &Cli, input_run_id: usize, motif_selection_id: usize, store:Arc<Mutex<impl Store + 'static>>, device: Device, train_on_motif_params: &TrainOnMotifsParams, label: &String, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
+    debug!("train_on_motifs: device={device:?}, motif_selection_id={motif_selection_id:?}");
 
     let (motifs, params) = {
         let mut store_guard = store.lock();
 
         (
-            store_guard.list_selected_motifs(corr_run)?//TODO param
+            store_guard.list_selected_motifs(motif_selection_id)?//TODO param
                 .into_iter()
                 .flat_map(|channel_motifs| channel_motifs.into_iter())
                 .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr)
@@ -941,7 +941,7 @@ fn train_on_motifs(cli: &Cli, input_run_id: usize, corr_run: usize, store:Arc<Mu
                 let channel_models = output_dir.join(channel.to_string());
                 fs::create_dir_all(&channel_models)?;
 
-                let path = channel_models.join(format!("{}_{}_{:03}.safetensors", corr_run, motif_id, loss));
+                let path = channel_models.join(format!("{}_{}_{:03}.safetensors", motif_selection_id, motif_id, loss));
 
                 vs.save(&path)?;
 
@@ -1234,7 +1234,7 @@ mod main_tests {
         ).expect("select_motifs_in_class");
 
         debug!("test_motifs_with_tpe: corr_ids={corr_ids:?}");
-        let corrs = store.lock().list_corrs(&corr_ids)?;
+        let corrs = store.lock().list_motif_selections(&corr_ids)?;
         debug!("test_motifs_with_tpe: corrs={corrs:?}");
 
         //there are motifs with corr 1.0 for each label
@@ -1339,7 +1339,7 @@ mod main_tests {
             vec![Cpu],
             // &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, 10e-5..10e-3, 1),
             &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, 10e-5, 1),
-            executor_rc
+            executor_rc,
         )?;
 
         let models = recurse_files(&models_dir)?;
