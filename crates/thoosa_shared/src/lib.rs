@@ -17,6 +17,7 @@ use regex::Regex;
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
 use std::env;
 use std::env::VarError;
+use std::ffi::OsStr;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -545,7 +546,8 @@ pub fn init_test_logging() {
     }
 }
 
-pub fn recurse_files(path: impl AsRef<Path>) -> std::io::Result<Vec<PathBuf>> {
+pub fn recurse_files<F>(path: impl AsRef<Path>, filter:&F) -> std::io::Result<Vec<PathBuf>>
+where F:Fn(&PathBuf)->bool{
     let mut buf = vec![];
     let entries = read_dir(path)?;
 
@@ -554,14 +556,15 @@ pub fn recurse_files(path: impl AsRef<Path>) -> std::io::Result<Vec<PathBuf>> {
         let meta = entry.metadata()?;
 
         if meta.is_dir() {
-            let mut subdir = recurse_files(entry.path())?;
+            let mut subdir = recurse_files(entry.path(), filter)?;
             buf.append(&mut subdir);
         }
 
         if meta.is_file() {
             let path = entry.path();
             debug!("path={path:?} path.ends_with(safetensors)={} ", path.ends_with("safetensors"));
-            if path.extension().map(|e|e.eq("safetensors")).unwrap_or(false) { //TODO param
+            // if path.extension().map(|e|e.eq("safetensors")).unwrap_or(false) { //TODO param
+            if filter(&path) { //TODO param
                 buf.push(path);
             }
         }

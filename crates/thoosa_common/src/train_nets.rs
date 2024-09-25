@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::iter::Map;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use clap::clap_derive::Args;
@@ -635,7 +635,7 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
                 debug!("load_motif_models: motif={:?}", motif);
 
                 let mut vs = nn::VarStore::new(device.clone());
-                let node = motif_node(&motif_node_params, None).build_tch_module(&vs.root())?;//TODO window
+                let node = motif_node(&motif_node_params).build_tch_module(&vs.root())?;//TODO window
                 vs.load(&motif_path.join(motif))?;
                 vs.freeze();
                 debug!("load_motif_models: len={:?}", vs.variables().len());
@@ -725,12 +725,15 @@ impl TrainOnMotifsParams {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MotifNodeParams {
     num_features: i64,
+    num_layers:i64
 }
 
 impl MotifNodeParams {
+
     pub fn new(num_features: i64) -> Self {
         Self {
-            num_features
+            num_features,
+            num_layers: 1
         }
     }
 
@@ -747,13 +750,26 @@ impl MotifNodeParams {
         )
     }
 
+    pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
+        serde_json::from_str::<MotifNodeParams>(
+            fs::read_to_string(&path)?.as_str()
+        ).map_err(|serde_err|ThoosaError::new(serde_err.to_string()))
+    }
+
     pub fn num_features(&self) -> i64 {
         self.num_features
     }
+
+    pub fn with_num_layer(&self, num_layers:i64) -> Self {
+        Self {
+            num_features: self.num_features,
+            num_layers,
+        }
+    }
 }
 
-pub fn motif_node(params: &MotifNodeParams, num_layers: Option<i64>) -> Node {
-    debug!("motif_node: num_layers={num_layers:?}");
+pub fn motif_node(params: &MotifNodeParams) -> Node {
+    debug!("motif_node: params={params:?}");
     let mut builder = SeqBuilder::new(params.num_features);
     let mut net = builder
         // .batch_norm()
@@ -761,20 +777,12 @@ pub fn motif_node(params: &MotifNodeParams, num_layers: Option<i64>) -> Node {
         .linear_s(100)
         .func(Tensor::relu);
 
-    // if let Some(num_layers) = num_layers {
-    //     for i in 0..1 {
-    //         net = net.linear_s(100)
-    //             .func(Tensor::relu);
-    //     }
-    // }
 
+        for i in 0..params.num_layers as usize {
+            net = net.linear_s(100)
+                .func(Tensor::relu);
+        }
 
-    //
-    //     for layer in 0..num_layers as usize {
-    //         net =  net.linear_s(100)
-    //             .func(Tensor::relu);
-    //     }
-    // }
 
     net
         // .linear_s(180)
@@ -964,7 +972,7 @@ pub fn final_node(params:&FinalNodeParams) -> Node {
         .end_seq()
 }
 
-pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainOnMotifsParams, device: Device, node_params: &MotifNodeParams, batch_size: usize) -> Result<(f32, VarStore), ThoosaError> {
+pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainOnMotifsParams, device: Device, node_params: &MotifNodeParams, batch_size: usize) -> Result<(f32, (VarStore, MotifNodeParams)), ThoosaError> {
     info!("train_on_motif: device={:?} training on {} slices_0 {} slices_1", device, all_slices_0.len(), all_slices_1.len());
 
     assert!(all_slices_0.len() > 0, "all_slices_0 len");
@@ -991,7 +999,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
 
 
     let mut min_loss = f32::MAX;
-    let mut min_var_store : Option<VarStore> = None;
+    let mut min_var_store : Option<(VarStore, MotifNodeParams)> = None;
     let mut batch = ClassTensorsDataBatch::new(
         vec![
             all_slices_0,
@@ -1050,7 +1058,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
         None => {
             let vs = VarStore::new(device);
             let lr = *train_on_motif_params.lr.expect_value()?;
-            let num_layers = *train_on_motif_params.num_layers.expect_value()?;
+            let node_params = node_params.with_num_layer(*train_on_motif_params.num_layers.expect_value()?);
 
             debug!("train_on_motif no opt: train_on_motif_params={train_on_motif_params:?}");
 
@@ -1060,7 +1068,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
                 &device,
                 &mut batch as &mut dyn DataBatch,
 
-                &motif_node(node_params, Some(num_layers)).build_tch_module(&vs.root()).unwrap(),
+                &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
 
                 |pred: &Tensor, target: &Tensor| {
                     let pred_y = pred.i((.., 0, 0));
@@ -1081,7 +1089,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
 
             if loss < min_loss {
                 min_loss = loss;
-                min_var_store.replace(vs);
+                min_var_store.replace((vs, node_params));
             }
 
             println!("train_on_motif:  min_loss={min_loss}");
@@ -1095,7 +1103,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
                 |params| {
                     let vs = VarStore::new(device);
                     let lr = params[0].into();
-                    let num_layers = params[1].into();
+                    let node_params = node_params.with_num_layer(params[1].into());
 
                     debug!("train_on_motif in opt: params={params:?}");
 
@@ -1105,7 +1113,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
                         &device,
                         &mut batch as &mut dyn DataBatch,
 
-                        &motif_node(node_params, Some(num_layers)).build_tch_module(&vs.root()).unwrap(),
+                        &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
 
                         |pred: &Tensor, target: &Tensor| {
                             let pred_y = pred.i((.., 0, 0));
@@ -1127,7 +1135,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
                     debug!("train_on_motif: params={params:?} loss={loss}");
                     if loss < min_loss {
                         min_loss = loss;
-                        min_var_store.replace(vs);
+                        min_var_store.replace((vs, node_params));
                     }
 
                     loss
@@ -1952,7 +1960,7 @@ mod train_tests {
         fs::create_dir_all(channel_0.clone())?;
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
-        let _test_motif_model = train_nets::motif_node(&super::MotifNodeParams::new(window), None).build_tch_module(&vs_0.root())?;
+        let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window)).build_tch_module(&vs_0.root())?;
 
         // let test_motif_model = SeqBuilder::new(100)
         //     .linear_s_with_conf(1, LinearConfig {
