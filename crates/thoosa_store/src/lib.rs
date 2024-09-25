@@ -121,8 +121,8 @@ pub trait Store:Sync + Send{
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, ThoosaError>;
     fn list_run_params(&mut self, run_id:usize, label: Option<&str>) -> Result<HashMap<String, Val>, ThoosaError>;
     fn save_selected_motifs(&mut self, run_id: usize, descr:&str, selected_motifs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, ThoosaError>;
-    fn list_corrs(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError>;//corr_run_id, run_id, label
-    fn list_selected_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
+    fn list_motif_selections(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError>;//corr_run_id, run_id, label
+    fn list_selected_motifs(&mut self, motif_selection_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), ThoosaError>;
     fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, ThoosaError>;
     fn delete_slices_without_matches(&mut self, run_id:usize) -> Result<(), ThoosaError>;
@@ -990,9 +990,9 @@ impl Store for SqlStore {
     }
 
     /*
-     returns - Vec<id, corrs's run_id, label>
+     returns - Vec<id, motif_selection's run_id, label>
      */
-    fn list_corrs(&mut self, motif_selection_ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError> {
+    fn list_motif_selections(&mut self, motif_selection_ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1028,7 +1028,7 @@ impl Store for SqlStore {
     /**
     * returns vec of channel X (motif id, corr)
     */
-    fn list_selected_motifs(&mut self, corr_run_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
+    fn list_selected_motifs(&mut self, motif_selection_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
         let mut channels_corr_motifs = (0..20).into_iter().map(|_|Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
 
         let mut guard = self.conn.lock();
@@ -1037,7 +1037,7 @@ impl Store for SqlStore {
         {
             let mut stmt = t.prepare("SELECT DISTINCT mc.motif_id, mc.rate, m.channel_id FROM selected_motifs mc LEFT JOIN motifs AS m ON m.id=mc.motif_id WHERE mc.motif_selection_id=?")?;
 
-            stmt.query_map([corr_run_id], |row| {
+            stmt.query_map([motif_selection_id], |row| {
                 Ok((row.get::<usize, usize>(0)?, row.get::<usize, f32>(1)?, row.get::<usize, usize>(2)?))
 
             })?.map(|v|v.unwrap()).for_each(|(motif_id, corr, channel_id)| {
@@ -1636,7 +1636,7 @@ mod store_tests{
             "seizure_vote".into()
         )?;
 
-        let corrs = store.list_corrs(&vec![corr_id])?;
+        let corrs = store.list_motif_selections(&vec![corr_id])?;
         assert_eq!([(1, 1, "seizure_vote".to_string())], corrs.as_slice());
 
         let motifs = store.list_selected_motifs(corr_id)?;

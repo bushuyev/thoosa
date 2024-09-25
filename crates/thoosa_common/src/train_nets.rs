@@ -661,7 +661,7 @@ pub struct TrainOnMotifsParams {
     pub motif_ids: MotifsBy,
 
     #[arg(long)]
-    pub corr_run_ids: Vec<usize>,
+    pub motif_selection_ids: Vec<usize>,
 
     #[arg(long, default_value_t = 1000)]
     pub cycles: usize,
@@ -695,7 +695,7 @@ impl TrainOnMotifsParams {
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
-            corr_run_ids,
+            motif_selection_ids: corr_run_ids,
 
             cycles,
 

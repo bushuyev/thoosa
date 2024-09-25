@@ -559,7 +559,11 @@ pub fn recurse_files(path: impl AsRef<Path>) -> std::io::Result<Vec<PathBuf>> {
         }
 
         if meta.is_file() {
-            buf.push(entry.path());
+            let path = entry.path();
+            debug!("path={path:?} path.ends_with(safetensors)={} ", path.ends_with("safetensors"));
+            if path.extension().map(|e|e.eq("safetensors")).unwrap_or(false) { //TODO param
+                buf.push(path);
+            }
         }
     }
 
