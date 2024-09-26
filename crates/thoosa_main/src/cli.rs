@@ -575,7 +575,7 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
                     train_on_label_params.window() as i64,
                     train_on_label_params.step(),
                     train_on_label_params.motif_batch_size(),
-                    20,
+                    20,//TODO
                     684400,
                     &device_i,
                     label
@@ -1335,7 +1335,7 @@ mod main_tests {
             &store,
             vec![Cpu],
             // &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, 10e-5..10e-3, 1),
-            &TrainOnMotifsParams::dummy(vec![motif_selection_id], 100, 100.0, 10, 10e-5..10e-3, 2..4),
+            &TrainOnMotifsParams::dummy(vec![motif_selection_id], 100, 100.0, 10, 10e-9 .. 10e-5, 2..5),
             executor_rc,
         )?;
 

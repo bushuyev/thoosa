@@ -1102,6 +1102,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
             let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
                 |params| {
                     let vs = VarStore::new(device);
+                    // let lr = 1. / 10_f64.powf(params[0].into());
                     let lr = params[0].into();
                     let node_params = node_params.with_num_layer(params[1].into());
 
