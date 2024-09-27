@@ -1055,48 +1055,48 @@ mod tests {
 
 
 
-    // #[test] TODO
-    #[allow(dead_code)]
-    fn test_run_train_on_label() -> Result<(), ThoosaError>{
-        let train_on_label_params = TrainOnLabelParams::dummy(
-            1000,
-            1000,
-            "../../data_local/test_models/".into(),
-            "/tmp".into(),
-            vec![("grda".into(), "grda/3".into())],
-            vec![("grda".into(), "grda/3".into())], 100, 2, 2, 1.0e-5,
-        );
-
-        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None, Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)),)));
-
-        let cli = Cli{
-            base_path: "../../data/".into(),
-            ws_path: "/tmp".to_string(),
-            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
-            tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
-            store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
-            term_logger_level: "DEBUG".into(),
-            write_logger_level: "DEBUG".into(),
-            logfile: "/tmp/thoosa_test.log".into(),
-            limit: None,
-            num_threads: None,
-            command: Some(TrainOnLabel(train_on_label_params.clone())),
-            input_filters_kernel: None,
-        };
-
-        let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
-
-        run_train_on_label(
-            &cli,
-            vec![],
-            &store,
-            vec![Cpu],
-            &train_on_label_params,
-            Arc::clone(&loader),
-        )?;
-
-        Ok(())
-    }
+    // // #[test] TODO
+    // #[allow(dead_code)]
+    // fn test_run_train_on_label() -> Result<(), ThoosaError>{
+    //     let train_on_label_params = TrainOnLabelParams::dummy(
+    //         1000,
+    //         1000,
+    //         "../../data_local/test_models/".into(),
+    //         "/tmp".into(),
+    //         vec![("grda".into(), "grda/3".into())],
+    //         vec![("grda".into(), "grda/3".into())], 100, 2, 2, 1.0e-5,
+    //     );
+    //
+    //     let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None, Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)),)));
+    //
+    //     let cli = Cli{
+    //         base_path: "../../data/".into(),
+    //         ws_path: "/tmp".to_string(),
+    //         resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
+    //         tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
+    //         store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
+    //         term_logger_level: "DEBUG".into(),
+    //         write_logger_level: "DEBUG".into(),
+    //         logfile: "/tmp/thoosa_test.log".into(),
+    //         limit: None,
+    //         num_threads: None,
+    //         command: Some(TrainOnLabel(train_on_label_params.clone())),
+    //         input_filters_kernel: None,
+    //     };
+    //
+    //     let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
+    //
+    //     run_train_on_label(
+    //         &cli,
+    //         vec![],
+    //         &store,
+    //         vec![Cpu],
+    //         &train_on_label_params,
+    //         Arc::clone(&loader),
+    //     )?;
+    //
+    //     Ok(())
+    // }
 
     // #[test] TODO
     #[allow(dead_code)]

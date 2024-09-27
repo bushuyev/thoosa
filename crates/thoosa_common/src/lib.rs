@@ -19,6 +19,7 @@ mod gaussian;
 mod acquisitions;
 mod parzen;
 pub mod loader;
+pub mod ws;
 
 pub trait ResourceLoader:Send+Sync {
     type K;
