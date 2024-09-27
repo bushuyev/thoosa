@@ -878,6 +878,7 @@ fn train_on_motifs(ws: Arc<RwLock<Workspace>>, input_run_id: usize, motif_select
 
             let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, None, None)?;
 
+            //TODO move load to DataBatch to avoid preload?
             debug!("train_on_motif: 1. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
             let all_sices_1 = train_nets::slices_in_all_resources(
                 load_motif_slices(

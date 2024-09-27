@@ -312,7 +312,6 @@ pub fn load_motif_slices(_base_path: &str, channel: i64, widow: i64, slices: Vec
             executor.write().exec(move |loader, _keys_purge| {
                 async move {
 
-
                     let t = LoadRunner::<String, Box<Tensor>>::load_future(loader, tensor_idx.clone(), 0).await;
 
                     let take = t.size()[1] / widow;
