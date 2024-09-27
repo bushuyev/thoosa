@@ -1,7 +1,8 @@
 use core::fmt;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
-use parking_lot::Mutex;
+use std::sync::Arc;
+use parking_lot::{Mutex, RwLock};
 
 use log::{debug, error, warn};
 use tch::{Device, IndexOp, Tensor};
@@ -15,6 +16,7 @@ use thoosa_shared::ThoosaError;
 use crate::builder::Node;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
+use crate::train_nets::SyncModule;
 use crate::utils::*;
 
 #[derive(Debug)]
@@ -297,7 +299,7 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 
 
 /// returns Tensor nets x batches x batch size
-pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Box<dyn Module>>>, channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
+pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<SyncModule>, channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let input_t_size = channel.size();
     debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", channel.size(), input_t_size, motif_nets.len());
@@ -329,7 +331,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
 
         for ((_net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
-            let net_rs = net.lock().forward(&batch).squeeze();
+            let net_rs = net.forward(&batch).squeeze();
             debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
             add_net_batch(motif_batch_size, net_batch, net_rs);
         };
@@ -345,7 +347,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
 
         for ((net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
-            let net_rs = net.lock().forward(&batch).set_requires_grad(false).squeeze();
+            let net_rs = net.forward(&batch).set_requires_grad(false).squeeze();
 
             if net_rs.size().len() > 0 {
                 add_net_batch(motif_batch_size, net_batch, net_rs);
@@ -410,6 +412,7 @@ mod tch_tests {
 
     use crate::builder::{clc_conv1d_out};
     use crate::builder::SeqBuilder;
+    use crate::train_nets::SyncModule;
     use crate::utils;
     use crate::utils::*;
 
@@ -661,7 +664,7 @@ mod tch_tests {
         let step = (motif_n / 4) as usize;
 
 
-        let nets = vec![Mutex::new(net_0), Mutex::new(net_1)];
+        let nets = vec![SyncModule::new(net_0), SyncModule::new(net_1)];
 
 
         let tensors = vec![motif_0_t, motif_1_t];

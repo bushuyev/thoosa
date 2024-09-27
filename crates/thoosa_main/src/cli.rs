@@ -16,9 +16,10 @@ use std::io::Write;
 use futures_util::AsyncReadExt;
 use parking_lot::RwLock;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use tch::Device::Cpu;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
-use thoosa_common::train_nets::{infer, load_motif_models, train_final, train_on_label, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
+use thoosa_common::train_nets::{infer, load_motif_models, load_motif_models_ws, train_final, train_on_label, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{select_motifs_by_ratio, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, SelectMotifsParams};
@@ -32,7 +33,7 @@ use crate::cli::Commands::{FindMotifs, Infer, InitResources, MotifsToTensor, Plo
 
 
 use crate::version::VERSION;
-use crate::ws::Workspace;
+use thoosa_common::ws::Workspace;
 
 #[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
@@ -305,7 +306,7 @@ pub fn run_cli<F, L>(
                 train_on_label_params.clone()
             };
 
-            run_train_on_label(&cli, vec![], &store, devices, &train_on_label_params, Arc::clone(&loader))?;
+            run_train_on_label(Arc::clone(&ws), vec![], &store, devices, &train_on_label_params, Arc::clone(&loader), Arc::clone(&executor_rc))?;
         }
 
         Some(TrainFinal(train_final_params)) => {
@@ -353,7 +354,7 @@ pub fn run_cli<F, L>(
             info!("run_train_on_motifs done");
 
             run_train_on_label(
-                &cli,
+                Arc::clone(&ws),
                 run_ids,
                 &store,
                 devices.clone(),
@@ -370,6 +371,7 @@ pub fn run_cli<F, L>(
                     1.0e-5,
                 ),
                 Arc::clone(&loader),
+                Arc::clone(&executor_rc)
             )?;
 
             info!("run_train_on_label done");
@@ -489,7 +491,7 @@ pub fn run_train_final(cli: &Cli, store: &Arc<Mutex<SqlStore>>, device: &Device,
     Ok(())
 }
 
-pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_label_params: &TrainOnLabelParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>) -> Result<(), ThoosaError> {
+pub fn run_train_on_label(ws: Arc<RwLock<Workspace>>, input_run_ids: Vec<usize>, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_on_label_params: &TrainOnLabelParams, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor>>>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<(), ThoosaError> {
     debug!("run_train_on_label: train_on_label_params={:?}", train_on_label_params);
     // let labels_kinds = store_guard.corrs_descr(train_on_label_params.corr_run())?;
 
@@ -511,6 +513,9 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
     let devices_train_labels_datasets = devices.into_iter().cycle().zip(label_datasets_with_run_id.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[((String, String), usize)])>>();//corrs_run(id, label)
     let store_in_threads =  Arc::clone(&store);
 
+    let channels_motifs_models = load_motif_models_ws(&ws.read(),  20,  &Cpu).expect("load_motif_models");//TODO num channels, motifs to util
+    let channels_motifs_models: Arc<RwLock<Vec<Vec<SyncModule>>>> = Arc::new(RwLock::new(channels_motifs_models)); //channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
+
     devices_train_labels_datasets.into_par_iter().for_each(move |(device_i, chunk_resource_sets)| {
 
         for ((label, resource_set), input_run_id) in chunk_resource_sets {
@@ -520,14 +525,11 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
                 MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store_guard.list_run_params(*input_run_id, None).expect("list_run_params")))
             };
 
-            let channels_motifs_models = load_motif_models(Path::new(&cli.ws_path).join("motifs"), label.clone(), 10, &device_i, &motif_node_params).expect("load_motif_models");//TODO num channels, motifs to util
-            debug!("train_on_label: models.size={:?}", channels_motifs_models.len());
+            // let channels_motifs_models = load_motif_models(ws.read().models_path(), label.clone(), 10, &device_i, &motif_node_params).expect("load_motif_models");//TODO num channels, motifs to util
+            // debug!("train_on_label: models.size={:?}", channels_motifs_models.len());
 
 
-            //TODO remove mutexes
-            let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
-
-            let max_nets =  motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
+            let max_nets =  channels_motifs_models.read().iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
             if max_nets <= 0 {
                 panic!("no motif nets found");
             }
@@ -553,7 +555,7 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
             info!("training {} on {} device={:?}", label, resource_set, device_i);
             for label_node_params in label_node_params_vec {
                 match train_on_label(
-                    &cli.ws_path,
+                    Arc::clone(&ws),
                     &motif_node_params,
                     &label_node_params,
                     train_on_label_params,
@@ -578,10 +580,12 @@ pub fn run_train_on_label(cli: &Cli, input_run_ids: Vec<usize>, store: &Arc<Mute
                     20,//TODO
                     684400,
                     &device_i,
-                    label
+                    label,
+                    Arc::clone(&executor),
+                    Arc::clone(&channels_motifs_models)
                 ) {
                     Ok(vs) => {
-                        vs.save(Path::new(&cli.ws_path).join("label_models").join(format!("{}_{}.safetensors", label, train_on_label_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
+                        vs.save(ws.read().models_path().join("label_models").join(format!("{}_{}.safetensors", label, train_on_label_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
                         // fs::write(Path::new(train_on_label_params.models_dir()).join(format!("{}_{}.json", label, train_on_label_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
                     }
                     Err(e) => {
@@ -640,7 +644,7 @@ fn run_train_on_motifs(ws: &Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>
 }
 
 
-pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, select_motifs_params: &SelectMotifsParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, channels: i64) -> Result<Vec<usize>, ThoosaError>{
+pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, select_motifs_params: &SelectMotifsParams, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, channels: i64) -> Result<Vec<usize>, ThoosaError>{
 
     let chunk_len = select_motifs_params.run_ids().len()/devices.len();
 
@@ -1048,7 +1052,7 @@ mod main_tests {
     use crate::cli::{init_resources, motifs_with_tpe, plot_motif_slices, resource_path, run_train_on_motifs, select_motifs_for_label, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
-    use crate::ws::Workspace;
+    use thoosa_common::ws::Workspace;
 
     #[ctor::ctor]
     fn init() {
@@ -1340,10 +1344,10 @@ mod main_tests {
             executor_rc,
         )?;
 
-        let models = ws.read().motif_models()?;
+        let models = ws.read().motif_models(1)?;
         debug!("test_run_train_on_motifs: train_run_ids={train_run_ids:?} models={models:?}");
 
-        let motif_node_params = MotifNodeParams::from_file(&models[0].1)?; //from_properties_map(unprefix_properties("motifs_node", &store.lock().list_run_params(train_run_ids[0], None).expect("list_run_params")));
+        let motif_node_params = MotifNodeParams::from_file(&models[0][0].1)?; //from_properties_map(unprefix_properties("motifs_node", &store.lock().list_run_params(train_run_ids[0], None).expect("list_run_params")));
 
         let mut vs = nn::VarStore::new(Cpu);
         let node = RwLock::new(
@@ -1352,7 +1356,7 @@ mod main_tests {
                 , |v| todo!()
             )
         );//TODO window
-        vs.load(&models[0].0)?;
+        vs.load(&models[0][0].0)?;
         vs.freeze();
 
         let oks = (0..10).into_par_iter().map(|i| {

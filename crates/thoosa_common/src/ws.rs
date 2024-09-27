@@ -1,10 +1,12 @@
 use std::fmt::Display;
 use std::fs;
 use std::fs::read_dir;
+use std::num::ParseIntError;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use log::{debug, info};
+use log::{debug, info, warn};
 use tch::nn::VarStore;
-use thoosa_common::train_nets::MotifNodeParams;
+use crate::train_nets::MotifNodeParams;
 use thoosa_shared::{recurse_files, ThoosaError};
 
 pub struct Workspace {
@@ -13,6 +15,7 @@ pub struct Workspace {
     tensors_path:PathBuf,
     models_path:PathBuf,
     motifs_models_path:PathBuf
+    //TODO labels model, final model
 }
 
 impl Workspace {
@@ -73,7 +76,7 @@ impl Workspace {
 
     pub fn save_motif_model(&self, channel:impl Display, motif_selection_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
 
-        let channel_models = self.motifs_models_path.join(format!("channel_{}", channel));
+        let channel_models = self.motifs_models_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
         let vs_path = channel_models.join(format!("{}_{}.safetensors", motif_selection_id, motif_id));
@@ -90,19 +93,35 @@ impl Workspace {
         Ok(())
     }
 
-    pub fn motif_models(&self) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
+    /**
+    returns channels x Vec<safetensors_path, config jsonpath>
+    */
+    pub fn motif_models(&self, channels_num:usize) -> Result<Vec<Vec<(PathBuf, PathBuf)>>, ThoosaError> {
 
         recurse_files(&self.motifs_models_path, &|path|{
             path.extension().map(|v|v.eq("safetensors")).unwrap_or(false)
-        })?.into_iter().map(|safetensors_path|{
+        })?.into_iter().try_fold(vec![vec![];channels_num], |mut a, safetensors_path|{
             let parent= safetensors_path.parent().expect("parent");
+            let channel = parent.file_stem().expect("channel");
             let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
             let json = format!("{}.json", file_stem);
             let json = parent.join(json);
 
-             debug!("motif_models: safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
-            Ok((safetensors_path, json))
-        }).collect()
+             debug!("motif_models: channel={channel:?} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
+
+            match channel.to_str().and_then(|c|c.parse::<usize>().ok()){
+                None => {
+                    warn!("unexpected channel: channel{channel:?}");
+                }
+                Some(channel) => {
+                    a[channel].push((safetensors_path, json));
+
+                }
+
+            };
+            Ok(a)
+
+        })
     }
 }
 
@@ -111,9 +130,12 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use log::debug;
-    use thoosa_common::utils::cdt_for_dir;
+    use tch::Device::Cpu;
+    use tch::nn::VarStore;
+    use crate::utils::cdt_for_dir;
     use thoosa_shared::ThoosaError;
-    use crate::ws::Workspace;
+    use crate::train_nets::MotifNodeParams;
+    use super::Workspace;
 
     #[ctor::ctor]
     fn init() {
@@ -135,14 +157,22 @@ mod tests {
 
         assert!(ws.store_path().ends_with("main_db.db3"));
 
-        fs::write(ws.motifs_models_path().join("1_0.safetensors"), "zzz")?;
-        fs::write(ws.motifs_models_path().join("1_0.json"), "zzz")?;
 
-        for mm in ws.motif_models()?{
+        ws.save_motif_model(0, 0, 0, VarStore::new(Cpu), MotifNodeParams::new(10));
+        ws.save_motif_model(0, 0, 1, VarStore::new(Cpu), MotifNodeParams::new(20));
+
+        ws.save_motif_model(1, 0, 2, VarStore::new(Cpu), MotifNodeParams::new(30));
+        ws.save_motif_model(1, 0, 3, VarStore::new(Cpu), MotifNodeParams::new(40));
+        ws.save_motif_model(1, 0, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
+
+
+        let models = ws.motif_models(2)?;
+        for mm in &models{
             debug!("mm={mm:?}");
         }
 
-        assert_eq!(ws.motif_models()?.len(), 1);
+        assert_eq!(models[0].len(), 2);
+        assert_eq!(models[1].len(), 3);
 
         Ok(())
     }
