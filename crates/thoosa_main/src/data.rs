@@ -222,7 +222,8 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
 
 }
 
-pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
+// pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
+pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, Vec<String>)>  {
     debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock();
@@ -234,16 +235,18 @@ pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, d
             store_lock.list_resource_set_resources_by_descr(resource_set_descr)
                 .expect("list_resource_set_resources_by_descr")
                 .into_iter()
-                .map(loader_fn.clone())
-                .cycle()
+                // .map(loader_fn.clone())
+                // .cycle()
+                .collect()
         ),
         (
             0,
             store_lock.list_resource_random_not_label(label.as_str(), 100)//TODO limit
                 .expect("list_resource_random_not_label")
                 .into_iter()
-                .map(loader_fn)
-                .cycle()
+                // .map(loader_fn)
+                // .cycle()
+                .collect()
         )
     ]
 }

@@ -1,7 +1,7 @@
 use core::fmt;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use log::{debug, error, warn};
 use tch::{Device, IndexOp, Tensor};
@@ -329,7 +329,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
 
         for ((_net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
-            let net_rs = net.lock().unwrap().forward(&batch).squeeze();
+            let net_rs = net.lock().forward(&batch).squeeze();
             debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
             add_net_batch(motif_batch_size, net_batch, net_rs);
         };
@@ -345,7 +345,7 @@ pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<Mutex<Bo
 
         for ((net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
 
-            let net_rs = net.lock().unwrap().forward(&batch).set_requires_grad(false).squeeze();
+            let net_rs = net.lock().forward(&batch).set_requires_grad(false).squeeze();
 
             if net_rs.size().len() > 0 {
                 add_net_batch(motif_batch_size, net_batch, net_rs);
@@ -393,7 +393,7 @@ fn add_net_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Ten
 mod tch_tests {
 
     use std::sync::Arc;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     use chrono::Utc;
     use log::debug;
@@ -679,7 +679,7 @@ mod tch_tests {
         let full_batch_vec = (0..tensors_len).into_par_iter().map(|i|{
 
             let t = {
-                let guard = tensors_arc.lock().unwrap();
+                let guard = tensors_arc.lock();
                 guard.get(i).expect(format!("can't get tensor at {}", i).as_str()).shallow_clone()
             };
 
