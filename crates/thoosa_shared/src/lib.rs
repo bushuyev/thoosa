@@ -26,7 +26,9 @@ pub mod repeat_iter;
 pub mod val;
 
 //group of similar slices - motif
-pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>> where T:Hash + Eq + core::fmt::Debug {
+pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>>
+where T:Hash + Eq + Debug {
+
     let mut pairs_groups: HashMap<T, u16> = HashMap::new();
     let mut last_group = 0u16;
 
@@ -63,7 +65,7 @@ pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
             .fold(HashMap::new(), |mut h, v| {
 
                 for i in v.iter().skip(1) {
-                    h.insert(v[0], *i);
+                    h.insert(*i, v[0]);
                 }
                 h
             });
@@ -75,7 +77,7 @@ pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<
 
     let mut groups: HashMap<u16, Vec<T>> = HashMap::new();
     for (val, group) in pairs_groups {
-        let group= separated_groups_map.as_ref().and_then(|m|m.get(&group)).unwrap_or(&group); //replace separted group pairs with one in pair
+        let group= separated_groups_map.as_ref().and_then(|m|m.get(&group)).unwrap_or(&group); //replace separated group pairs with one in pair
         let gr_vec = groups.entry(*group).or_insert_with(|| vec![]);
         gr_vec.push(val);
     }
