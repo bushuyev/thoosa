@@ -46,8 +46,6 @@ pub struct TrainOnLabelParams {
     #[arg(long,  default_value_t = 1000)]
     step: usize,
 
-    #[arg(long,  default_value_t = 1000)]
-    window: usize,
 
     #[arg(long)]
     train_resource_group: Option<String>,
@@ -63,9 +61,6 @@ pub struct TrainOnLabelParams {
     valid_labels_datasets: Vec<(String, String)>,
 
 
-    #[arg(long)]
-    corr_run: usize,
-
     #[arg(long, default_value_t = 10)]
     cycles: usize,
 
@@ -76,13 +71,10 @@ pub struct TrainOnLabelParams {
     motif_batch_size:i64,
 
     #[arg(long, default_value_t = 5)]
-    items_per_label:usize //TODO batch size?
+    label_batch_size:usize
 }
 
 impl TrainOnLabelParams {
-    pub fn corr_run(&self) -> usize {
-        self.corr_run
-    }
 
     pub fn cycles(&self) -> usize {
         self.cycles
@@ -92,11 +84,9 @@ impl TrainOnLabelParams {
     }
 
     #[allow(dead_code)]
-    pub fn dummy(step: usize, window: usize, _motif_models_dir:String, _models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
+    pub fn dummy(step: usize, _motif_models_dir:String, _models_dir:String, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
         TrainOnLabelParams {
             step,
-            window,
-            corr_run:0,
             cycles,
             lr,
             train_labels_datasets,
@@ -104,7 +94,7 @@ impl TrainOnLabelParams {
             train_resource_group: None,
             valid_resource_group: None,
             motif_batch_size,
-            items_per_label
+            label_batch_size: items_per_label
         }
     }
 
@@ -124,30 +114,21 @@ impl TrainOnLabelParams {
         clone
     }
 
-
     pub fn train_resource_group(&self) -> Option<&String> {
         self.train_resource_group.as_ref()
     }
+
     pub fn valid_resource_group(&self) -> Option<&String> {
         self.valid_resource_group.as_ref()
     }
-
 
     pub fn motif_batch_size(&self) -> i64 {
         self.motif_batch_size
     }
 
 
-    pub fn items_per_label(&self) -> usize {
-        self.items_per_label
-    }
-
-
     pub fn step(&self) -> usize {
         self.step
-    }
-    pub fn window(&self) -> usize {
-        self.window
     }
 
     pub fn dsp_filter(&self) ->Box<impl Fn(Tensor)->Tensor> {
@@ -321,47 +302,15 @@ pub fn train_on_label(
     ws: Arc<RwLock<Workspace>>,
     motif_node_params:&MotifNodeParams,
     label_node_params:&LabelNodeParams,
-    params: &TrainOnLabelParams,
+    train_on_label_params: &TrainOnLabelParams,
     train_labels_loaders:Vec<(i64, Vec<String>)>,
     valid_labels_loaders: Vec<(i64, Vec<String>)>,
-    items_per_label: usize,
-    _motif_n: i64,
-    step: usize,
-    motif_batch_size: i64,
     channels: i64,
-    _max_input:usize,
     device: &Device,
-    label: &String,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
     channels_motifs_models:Arc<RwLock<Vec<Vec<SyncModule>>>>
 ) -> Result<VarStore, ThoosaError>
     {
-
-    // let train_labels_loaders_map = train_labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
-    //     a.entry(label).or_insert_with(||vec![]).push(loader);
-    //     a
-    // });
-    //
-    // let valid_labels_loaders_map = valid_labels_loaders.into_iter().fold(HashMap::new(), |mut a, (label, loader)|{
-    //     a.entry(label).or_insert_with(||vec![]).push(loader);
-    //     a
-    // });
-    //
-    // let mut labels = train_labels_loaders_map.keys().map(|v|*v).collect::<Vec<i64>>();
-    // labels.sort();
-    //
-    // let mut valid_keys = valid_labels_loaders_map.keys().map(|v|*v).collect::<Vec<i64>>();
-    // valid_keys.sort();
-
-    // assert!(labels == valid_keys);
-    //
-    // debug!("train_on_label: keys={:?} labels_loaders={:?}", labels, train_labels_loaders_map.keys());
-
-
-    // let channels_motifs_models = load_motif_models(ws.read().motifs_models_path(), label.clone(), channels as usize, device, &motif_node_params)?;//TODO num channels, motifs to util
-
-    // //TODO remove mutexes
-    // let motif_nets: Vec<Vec<Mutex<Box<dyn Module>>>> = channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
 
     let vs_0 = nn::VarStore::new(device.clone());
@@ -372,26 +321,16 @@ pub fn train_on_label(
     let num_features = motif_node_params.num_features;
     let motif_batch_size = label_node_params.motif_batch_size;
     let max_motif_batches = label_node_params.max_motif_batches as usize;
-    // let channels_motifs_models = Arc::clone(&channels_motifs_models);
     let device = device.clone();
+        let step = train_on_label_params.step();
     train(
         &device,
         &mut LoadingTensorsDataBatch::new(
-            // apply_motifs_to_loaders(
-            //     train_labels_loaders_map,
-            //     &mut labels,
-            //     apply_motifs,
-            // ),
-            //
-            // apply_motifs_to_loaders(
-            //     valid_labels_loaders_map,
-            //     &mut labels,
-            //     apply_motifs,
-            // ),
+
             train_labels_loaders,
             valid_labels_loaders,
 
-            items_per_label,
+            train_on_label_params.label_batch_size,
             Arc::clone(&executor),
             device.clone(),
             Some( Box::new(move |t:Box<Tensor>| Box::new(apply_label_motifs(num_features, step, &t, Arc::clone(&channels_motifs_models), motif_batch_size, max_motif_batches, &device))))
@@ -405,8 +344,8 @@ pub fn train_on_label(
             debug!("train_on_label: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
         },
-        params.cycles,
-        nn::AdamW::default().build(&vs_0, params.lr)?,
+        train_on_label_params.cycles,
+        nn::AdamW::default().build(&vs_0, train_on_label_params.lr)?,
 
         |t: Tensor| {
             debug!("train_on_label: t.size()={:?} ", t.size());
@@ -726,6 +665,7 @@ pub fn load_motif_models_ws(ws:&Workspace, channels:usize, device: &Device) -> R
 
 }
 
+//TODO remove
 pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, channels:usize, device: &Device, motif_node_params: &MotifNodeParams) -> Result<Vec<Vec<Box<dyn Module>>>, ThoosaError> {
     debug!("load_motif_models: motif_models_path={:?} label={label:?} motif_node_params={motif_node_params:?}", motif_models_path.as_ref());
 
@@ -1791,16 +1731,14 @@ mod train_tests {
 
 
         let params = TrainOnLabelParams {
-            corr_run: 0,
-            step: 1000,
-            window: 100,
+            step: 100,
             cycles: 3,
             lr: 1.0e-5,
             train_labels_datasets: vec![],
             valid_labels_datasets: vec![],
             train_resource_group: None,
             valid_resource_group: None,
-            items_per_label: 5,
+            label_batch_size: 13,
             motif_batch_size: 7
         };
 
@@ -1838,8 +1776,8 @@ mod train_tests {
 
         super::train_on_label(
             Arc::new(RwLock::new(ws)),
-            &MotifNodeParams::new(100),
-            &LabelNodeParams::new(3, 4, 20, 7),//max motif nets - 2 for seizure
+            &MotifNodeParams::new(100),//TODO take window/num_features from saved motif model or motif run id
+            &LabelNodeParams::new(3, 4, 20, 7), //max motif nets - 2 for seizure
             &params,
             vec![
                 (1, "seizure_vote".to_string()),
@@ -1858,11 +1796,8 @@ mod train_tests {
                 (0, "grda_vote".to_string()),
                 (0, "other_vote".to_string())
 
-            ].into_iter().map(resource_keys).collect::<Vec<_>>(),
-            13, 100, 100, 7, 3,
-            684400,
+            ].into_iter().map(resource_keys).collect::<Vec<_>>(), 3,
             &Cpu,
-            &"seizure".to_string(),
             executor_rc,
             channels_motifs_models
         )?;

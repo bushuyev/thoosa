@@ -19,7 +19,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tch::Device::Cpu;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
-use thoosa_common::train_nets::{infer, load_motif_models, load_motif_models_ws, train_final, train_on_label, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
+use thoosa_common::train_nets::{infer, load_motif_models_ws, train_final, train_on_label, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{select_motifs_by_ratio, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, SelectMotifsParams};
@@ -360,7 +360,6 @@ pub fn run_cli<F, L>(
                 devices.clone(),
                 &TrainOnLabelParams::dummy(
                     run_all_params.step,
-                    run_all_params.window,
                     run_all_params.models_dir.clone(),
                     run_all_params.models_dir.clone(),
                     train_labels_datasets.clone(),
@@ -573,19 +572,13 @@ pub fn run_train_on_label(ws: Arc<RwLock<Workspace>>, input_run_ids: Vec<usize>,
                         Arc::clone(&store),
                         Arc::clone(&loader)
                     ),
-                    train_on_label_params.items_per_label(),
-                    train_on_label_params.window() as i64,
-                    train_on_label_params.step(),
-                    train_on_label_params.motif_batch_size(),
-                    20,//TODO
-                    684400,
+                    20,
                     &device_i,
-                    label,
                     Arc::clone(&executor),
                     Arc::clone(&channels_motifs_models)
                 ) {
                     Ok(vs) => {
-                        vs.save(ws.read().models_path().join("label_models").join(format!("{}_{}.safetensors", label, train_on_label_params.corr_run()))).expect("save vs")//TODO corr_run-> run_id
+                        vs.save(ws.read().models_path().join("label_models").join(format!("{}.safetensors", label))).expect("save vs")
                         // fs::write(Path::new(train_on_label_params.models_dir()).join(format!("{}_{}.json", label, train_on_label_params.corr_run())), serde_json::to_string(&node_params).expect("save params"));
                     }
                     Err(e) => {
