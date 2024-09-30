@@ -14,8 +14,10 @@ pub struct Workspace {
     store_path:PathBuf,
     tensors_path:PathBuf,
     models_path:PathBuf,
-    motifs_models_path:PathBuf
-    //TODO labels model, final model
+    motifs_models_path:PathBuf,
+    labels_models_path:PathBuf,
+    final_models_path:PathBuf
+
 }
 
 impl Workspace {
@@ -33,6 +35,8 @@ impl Workspace {
 
         let models_path:PathBuf = base_path.join("models");
         let motifs_models_path:PathBuf = models_path.join("motifs");
+        let labels_models_path:PathBuf = models_path.join("labels");
+        let final_models_path:PathBuf = models_path.join("final");
         fs::create_dir_all(&motifs_models_path)?;
 
         Ok(Self {
@@ -40,7 +44,9 @@ impl Workspace {
             store_path,
             tensors_path,
             models_path,
-            motifs_models_path
+            motifs_models_path,
+            labels_models_path,
+            final_models_path
         })
     }
 
@@ -61,7 +67,6 @@ impl Workspace {
     }
 
     pub fn tensor_path(&self, key:impl Display) -> PathBuf {
-
         self.tensors_path.join(format!("{key}.pt"))
     }
 
@@ -71,6 +76,14 @@ impl Workspace {
 
     pub fn motifs_models_path(&self) -> &PathBuf {
         &self.motifs_models_path
+    }
+
+    pub fn labels_models_path(&self) -> &PathBuf {
+        &self.labels_models_path
+    }
+
+    pub fn final_models_path(&self) -> &PathBuf {
+        &self.final_models_path
     }
 
 
@@ -123,6 +136,7 @@ impl Workspace {
 
         })
     }
+
 }
 
 #[cfg(test)]
