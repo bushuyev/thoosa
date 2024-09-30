@@ -488,7 +488,6 @@ where
     }
 }
 
-
 pub fn batch_windows(input_n: usize, motif_n: usize, step: usize, batch_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) { // (batches, reminder)
     debug!("slice_windows: input_n={}, motif_n={}, step={}", input_n, motif_n, step);
 
