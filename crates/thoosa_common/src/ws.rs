@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs;
 use std::fs::read_dir;
@@ -6,7 +7,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use log::{debug, info, warn};
 use tch::nn::VarStore;
-use crate::train_nets::MotifNodeParams;
+use crate::train_nets::{LabelNodeParams, MotifNodeParams};
 use thoosa_shared::{recurse_files, ThoosaError};
 
 pub struct Workspace {
@@ -16,13 +17,14 @@ pub struct Workspace {
     models_path:PathBuf,
     motifs_models_path:PathBuf,
     labels_models_path:PathBuf,
-    final_models_path:PathBuf
+    final_models_path:PathBuf,
 
+    channels_num:usize //TODO move into input meta
 }
 
 impl Workspace {
 
-    pub fn new(base_path: impl Into<PathBuf>) -> Result<Self, ThoosaError> {
+    pub fn new(base_path: impl Into<PathBuf>, channels_num: usize) -> Result<Self, ThoosaError> {
         let base_path = base_path.into();
         if !base_path.exists() {
             fs::create_dir_all(&base_path)?;
@@ -46,7 +48,8 @@ impl Workspace {
             models_path,
             motifs_models_path,
             labels_models_path,
-            final_models_path
+            final_models_path,
+            channels_num
         })
     }
 
@@ -89,17 +92,17 @@ impl Workspace {
 
     pub fn save_motif_model(&self, channel:impl Display, motif_selection_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
 
-        let channel_models = self.motifs_models_path.join(format!("{}", channel));
+        let channel_models = self.motifs_models_path.join(format!("{}", motif_selection_id)).join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
-        let vs_path = channel_models.join(format!("{}_{}.safetensors", motif_selection_id, motif_id));
+        let vs_path = channel_models.join(format!("{}.safetensors", motif_id));
 
         info!("train_on_motif:  motif_id={motif_id} saved to {vs_path:?}");
 
         vs.save(vs_path);
 
         fs::write(
-            channel_models.join(format!("{}_{}.json", motif_selection_id, motif_id)),
+            channel_models.join(format!("{}.json", motif_id)),
             serde_json::to_string(&params)?
         )?;
 
@@ -109,18 +112,21 @@ impl Workspace {
     /**
     returns channels x Vec<safetensors_path, config jsonpath>
     */
-    pub fn motif_models(&self, channels_num:usize) -> Result<Vec<Vec<(PathBuf, PathBuf)>>, ThoosaError> {
+    pub fn motif_models(&self, motif_selection_id:usize) -> Result<Vec<Vec<(PathBuf, PathBuf)>>, ThoosaError> {
 
-        recurse_files(&self.motifs_models_path, &|path|{
+        recurse_files(&self.motifs_models_path.join(motif_selection_id.to_string()), &|path|{
             path.extension().map(|v|v.eq("safetensors")).unwrap_or(false)
-        })?.into_iter().try_fold(vec![vec![];channels_num], |mut a, safetensors_path|{
+
+        })?.into_iter().try_fold(vec![vec![];self.channels_num], |mut a, safetensors_path|{
+            debug!("safetensors_path={safetensors_path:?}");
+
             let parent= safetensors_path.parent().expect("parent");
             let channel = parent.file_stem().expect("channel");
             let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
             let json = format!("{}.json", file_stem);
             let json = parent.join(json);
 
-             debug!("motif_models: channel={channel:?} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
+            debug!("motif_models: channel={channel:?} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
 
             match channel.to_str().and_then(|c|c.parse::<usize>().ok()){
                 None => {
@@ -137,6 +143,46 @@ impl Workspace {
         })
     }
 
+    pub fn save_label_model(&self, run_id:usize, label:impl Display, vs:VarStore, params:LabelNodeParams)-> Result<(), ThoosaError> {
+        let label_models_path = self.labels_models_path.join(format!("{}", label));
+
+        fs::create_dir_all(&label_models_path)?;
+
+        let vs_path = label_models_path.join(format!("{}.safetensors", run_id));
+
+        info!("save_label_model:  run_id={run_id} label={label} saved to {vs_path:?}");
+
+        vs.save(vs_path);
+
+        fs::write(
+            label_models_path.join(format!("{}.json", run_id)),
+            serde_json::to_string(&params)?
+        )?;
+
+        Ok(())
+    }
+
+
+    pub fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
+        recurse_files(&self.labels_models_path, &|path|{
+            println!("path={path:?}");
+            path.extension().map(|v|v.eq("safetensors")).unwrap_or(false)
+
+        })?.into_iter().try_fold(HashMap::new(), |mut a, safetensors_path|{
+
+            let parent= safetensors_path.parent().expect("parent");
+            let label = parent.file_stem().expect("label");
+            let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
+            let json = format!("{}.json", file_stem);
+            let json = parent.join(json);
+
+            debug!("label_models: label={label:?} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
+
+            a.entry(label.to_str().expect("label").to_string()).or_insert(vec![]).push((safetensors_path, json));
+            Ok(a)
+        })
+    }
+
 }
 
 #[cfg(test)]
@@ -148,7 +194,7 @@ mod tests {
     use tch::nn::VarStore;
     use crate::utils::cdt_for_dir;
     use thoosa_shared::ThoosaError;
-    use crate::train_nets::MotifNodeParams;
+    use crate::train_nets::{LabelNodeParams, MotifNodeParams};
     use super::Workspace;
 
     #[ctor::ctor]
@@ -158,13 +204,12 @@ mod tests {
 
 
     #[test]
-    fn test_0() -> Result<(), ThoosaError>{
-
+    fn test_motifs() -> Result<(), ThoosaError>{
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = Workspace::new(test_dir)?;
+        let ws = Workspace::new(test_dir, 2)?;
 
 
         debug!("store_path={:?}", ws.store_path());
@@ -173,20 +218,53 @@ mod tests {
 
 
         ws.save_motif_model(0, 0, 0, VarStore::new(Cpu), MotifNodeParams::new(10));
-        ws.save_motif_model(0, 0, 1, VarStore::new(Cpu), MotifNodeParams::new(20));
+        ws.save_motif_model(1, 0, 1, VarStore::new(Cpu), MotifNodeParams::new(20));
 
         ws.save_motif_model(1, 0, 2, VarStore::new(Cpu), MotifNodeParams::new(30));
-        ws.save_motif_model(1, 0, 3, VarStore::new(Cpu), MotifNodeParams::new(40));
-        ws.save_motif_model(1, 0, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
+        ws.save_motif_model(0, 0, 3, VarStore::new(Cpu), MotifNodeParams::new(40));
+        ws.save_motif_model(1, 1, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
 
 
-        let models = ws.motif_models(2)?;
+        let models = ws.motif_models(0)?;
         for mm in &models{
             debug!("mm={mm:?}");
         }
 
         assert_eq!(models[0].len(), 2);
-        assert_eq!(models[1].len(), 3);
+        assert_eq!(models[1].len(), 2);
+
+        let models = ws.motif_models(1)?;
+        for mm in &models{
+            debug!("mm={mm:?}");
+        }
+
+        assert_eq!(models[0].len(), 0);
+        assert_eq!(models[1].len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_labels() -> Result<(), ThoosaError> {
+
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
+
+        let ws = Workspace::new(test_dir, 20)?;
+
+        ws.save_label_model(1, "label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10));
+        ws.save_label_model(2, "label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10));
+        ws.save_label_model(3, "label_1", VarStore::new(Cpu), LabelNodeParams::new(30, 4, 3, 10));
+        ws.save_label_model(4, "label_1", VarStore::new(Cpu), LabelNodeParams::new(40, 4, 3, 10));
+
+        let models =  ws.label_models()?;
+        for mm in &models{
+            debug!("mm={mm:?}");
+        }
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models.get("label_0".into()).expect("label_0").len(), 2);
+        assert_eq!(models.get("label_1".into()).expect("label_1").len(), 2);
 
         Ok(())
     }

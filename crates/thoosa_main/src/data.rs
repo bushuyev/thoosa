@@ -127,7 +127,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 
-pub fn load_to_logits_tensors<'a>(_base_path:&'a str, _tensors_path:Option<String>, group:&str, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> impl Iterator<Item=(Box<Tensor>, Box<Tensor>)> + Send + Sync + 'a {
+pub fn load_to_logits_tensors(group:&str,  device: &Device, store: Arc<Mutex<SqlStore>>) -> Vec<(String, Vec<f32>)> {
 
     let mut store_lock = store.lock();
 
@@ -137,11 +137,11 @@ pub fn load_to_logits_tensors<'a>(_base_path:&'a str, _tensors_path:Option<Strin
 
                 debug!("labels_p={:?}", labels_p);
                 (
-                    loader.load(&key, *device),
-                    Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
+                    key,
+                    labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
                 )
         })
-        .cycle()
+        .collect()
 }
 
 pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, ThoosaError> {
@@ -223,30 +223,21 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
 }
 
 // pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
-pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, Vec<String>)>  {
+pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, store: Arc<Mutex<SqlStore>>) -> Vec<(i64, Vec<String>)>  {
     debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock();
 
-    let loader_fn = move |resource: String| loader.load(&resource, *device);
     vec![
         (
             1,
-            store_lock.list_resource_set_resources_by_descr(resource_set_descr)
-                .expect("list_resource_set_resources_by_descr")
-                .into_iter()
-                // .map(loader_fn.clone())
-                // .cycle()
-                .collect()
+            store_lock.list_resource_set_resources_by_descr(resource_set_descr).expect("list_resource_set_resources_by_descr")
+
         ),
         (
             0,
-            store_lock.list_resource_random_not_label(label.as_str(), 100)//TODO limit
-                .expect("list_resource_random_not_label")
-                .into_iter()
-                // .map(loader_fn)
-                // .cycle()
-                .collect()
+            store_lock.list_resource_random_not_label(label.as_str(), 100) .expect("list_resource_random_not_label")//TODO limit
+
         )
     ]
 }

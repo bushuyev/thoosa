@@ -141,11 +141,11 @@ pub struct SqlStore {
 
 impl Store for SqlStore {
 
-    fn save_tree_run(&mut self, _input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, ThoosaError> {
+    fn save_tree_run(&mut self, input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
-        t.execute("INSERT INTO tree_run (descr) VALUES (?)", params![descr])?;
+        t.execute("INSERT INTO tree_run (input_run_id, descr) VALUES (?, ?)", params![input_run_id, descr])?;
 
         let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
@@ -1474,9 +1474,9 @@ mod store_tests{
     #[test]
     fn test_save_slices() -> Result<(), ThoosaError> {
 
-        // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
-        let mut store = SqlStore::in_mem()?;
+        std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+        let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
+        // let mut store = SqlStore::in_mem()?;
 
         let _aaa_id = store.save_label("aaa")?;
         let _bbb_id = store.save_label("bbb")?;
@@ -1496,8 +1496,6 @@ mod store_tests{
 
         let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into())?;
         let _set_all_id = store.save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
-
-
 
 
         let group_sets = store.list_resource_set_group_sets("pure group 10")?;
@@ -1532,6 +1530,12 @@ mod store_tests{
             None,
             "test", &vec!["aaa".into(), "bbb".into()],
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))])
+        )?;
+
+        let next_run_id= store.save_tree_run(
+            Some(run_id),
+            "test next", &vec!["bbb".into(), "bbb".into()],
+            HashMap::from([("next_prop1".into(), Val::Int(1)), ("next_prop2".into(), Val::Real(2.0)), ("next_prop3".into(), Val::Str("333".to_string()))])
         )?;
 
         store.save_params_value(
@@ -1604,11 +1608,11 @@ mod store_tests{
                 (1, 7, "3".to_string(), 200, "5".to_string(), 300, 1)
             ] == rows;
 
-            assert!(m_2_first  || m_1_first  );                        //TODO motif ids are random
+            assert!(m_2_first  || m_1_first  );   //TODO motif ids are random
 
-            let mut stmt = t2.prepare("SELECT run_id, ord_id, key FROM run_resources")?;
+            let mut stmt = t2.prepare("SELECT run_id, ord_id, key FROM run_resources WHERE run_id=?")?;
 
-            let rows = stmt.query_map([], |row| {
+            let rows = stmt.query_map([run_id], |row| {
                 Ok((row.get(0)?, row.get(1)?,  row.get(2)?))
             })?.map(|v|v.unwrap()).collect::<Vec<(usize, usize, String)>>();
 
