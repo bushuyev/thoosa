@@ -392,11 +392,14 @@ pub fn train_on_label(
 
     // let apply_motifs = |t:Box<Tensor>| Box::new(apply_label_motifs(motif_node_params.num_features, step, &t, &motif_nets, label_node_params.motif_batch_size, label_node_params.max_motif_batches as usize, device));
     //TODO pass params to LoadingTensorsDataBatch ?
+
     let num_features = motif_node_params.num_features;
     let motif_batch_size = label_node_params.motif_batch_size;
     let max_motif_batches = label_node_params.max_motif_batches as usize;
+
     let device = device.clone();
-        let step = train_on_label_params.step();
+    let step = train_on_label_params.step();
+
     let loss = train(
         &device,
         &mut LoadingTensorsDataBatch::new(
@@ -457,14 +460,17 @@ fn apply_motifs_to_loaders<I, F>(
         .collect::<Vec<Vec<_>>>()
 }
 
+//TODO trains on all label models, add param to train on selected run_ids
 pub fn train_final(
     ws: Arc<RwLock<Workspace>>,
     train_final_params: &TrainFinalParams,
     train_tensors_loader:Vec<(String, Vec<f32>)>,
     valid_tensors_loader: Vec<(String, Vec<f32>)>,
-    step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>,
-    executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>
+    step: usize, motif_batch_size: i64, channels: usize, max_input:usize, device: &Device, labels: Vec<String>,
+    executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>
 ) -> Result<VarStore, ThoosaError> {
+
+
 /*
     // let models = Path::new(ws_dir.as_ref()).join("label_models").iter().flat_map(|dir| {
     //     load_label_and_motif_models(dir.as_str(), channels as usize, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
@@ -571,7 +577,7 @@ pub fn train_final(
 
 }
 
-pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: i64, max_input:usize, device: &Device, labels: Vec<String>, motif_node_params: MotifNodeParams) -> Result<(Vec<String>, Tensor), ThoosaError>
+pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: usize, max_input:usize, device: &Device, labels: Vec<String>, motif_node_params: MotifNodeParams) -> Result<(Vec<String>, Tensor), ThoosaError>
     where F:Fn(&Path) -> Result<Tensor, ThoosaError> + Sync{
 
 
@@ -750,6 +756,37 @@ pub fn load_motif_models_ws(ws:&Workspace, motif_selection_id:usize, device: &De
             Ok(node)
         }).collect()
     }).collect()
+
+}
+
+
+pub fn load_all_label_models_ws(ws:&Workspace, device: &Device) -> Result<HashMap<String, Vec<SyncModule>>, ThoosaError> {
+    let label_models_paths = ws.label_models()?;
+
+    debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?}");
+
+    label_models_paths.into_iter().try_fold(HashMap::new(), |mut a, (label, paths)|{
+
+        let models:Result<Vec<SyncModule>, ThoosaError>  =  paths.into_iter().map(|(model, config)|{
+            debug!("load_all_label_models_ws: model={model:?} run_id={:?}", Workspace::model_path_to_run_id(&model));
+
+            let mut vs = nn::VarStore::new(device.clone());
+            let node = SyncModule::new(label_node(&LabelNodeParams::from_file(&config)?).build_tch_module(&vs.root())?);
+            vs.load(&model)?;
+            vs.freeze();
+
+            Ok(node)
+        }).collect();
+
+
+        a.insert(
+            label,
+            models?
+        );
+
+        Ok(a)
+
+    })
 
 }
 
@@ -971,6 +1008,12 @@ impl LabelNodeParams {
             properties.get("max_motif_batches").expect("max_motif_batches").as_i64().expect("max_motif_batches as_i64"),
             properties.get("motif_batch_size").expect("motif_batch_size").as_i64().expect("motif_batch_size as_i64"),
         )
+    }
+
+    pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
+        serde_json::from_str::<LabelNodeParams>(
+            fs::read_to_string(&path)?.as_str()
+        ).map_err(|serde_err|ThoosaError::new(serde_err.to_string()))
     }
 }
 
@@ -1618,7 +1661,7 @@ mod train_tests {
     use crate::builder::SeqBuilder;
     use crate::loader::{LoadRunner, SyncWrapper};
     use crate::my_tch::apply_channel_motifs;
-    use crate::train_nets::{TensorsDataBatch, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainOnLabelParams, SyncModule, load_motif_models_ws};
+    use crate::train_nets::{TensorsDataBatch, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainOnLabelParams, SyncModule, load_motif_models_ws, load_all_label_models_ws};
     use crate::train_nets;
     use crate::utils::{cdt_for_dir, from};
     use crate::utils::DataBatch;
@@ -1883,8 +1926,8 @@ mod train_tests {
     fn test_train_final() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_train_on_label: test_dir={test_dir:?}");
-
-        let ws = Workspace::new(test_dir, 20)?;
+        let channels = 5;
+        let ws = Workspace::new(test_dir, channels)?;
 
         let params = TrainFinalParams {
             step:100,
@@ -1896,15 +1939,20 @@ mod train_tests {
             valid_resource_group: "zzz".into(),
             items_per_label: 5
         };
-        let channels = 5;
+
 
         let motif_batch_size = 7;
         let max_motif_batches = 978;//from 684400 in test_train_on_label
 
 
-        save_test_models(&ws, ws.models_path(), channels, max_motif_batches, motif_batch_size)?;
-        save_test_models(&ws, ws.models_path(), channels, max_motif_batches, motif_batch_size)?;
+        save_test_models(&ws, 10, channels, max_motif_batches, motif_batch_size, 1)?;
+        // save_test_models(&ws, 20, channels, max_motif_batches, motif_batch_size, 2)?;
 
+
+        // let channels_motifs_models = load_motif_models_ws(&ws,  motif_selection_id,  &Cpu).expect("load_motif_models");//called from cli
+        let label_models = load_all_label_models_ws(&ws,  &Cpu).expect("load_all_label_models_ws");//called from cli
+
+        /*
         fs::write(&ws.models_path().join("unexpected.file"), "lalala")?;
 
         let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
@@ -1932,63 +1980,63 @@ mod train_tests {
         )?;
 
         // fs::remove_dir_all(dir)?;
-
+*/
         Ok(())
     }
 
     //6 corrs 4 motif models
-    fn save_test_models(ws: &Workspace, models_path: &PathBuf, channels: i64, max_motif_batches: i64, max_batch_size: i64) -> Result<(), ThoosaError> {
-        fs::create_dir_all(models_path)?;
+    fn save_test_models(ws: &Workspace, base_run_id: usize, channels: usize, max_motif_batches: i64, max_batch_size: i64, motif_selection_id: usize) -> Result<(), ThoosaError> {
+        // fs::create_dir_all(models_path)?;
 
         let window = 100;
-        fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(window))?)?;
+        // fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(window))?)?;
 
 
-        save_test_label_model(&ws, "seizure", channels, 4, max_motif_batches, max_batch_size)?;
-        fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(window))?)?;
+        save_test_label_model(&ws, base_run_id + 1, "seizure", channels, 4, max_motif_batches, max_batch_size)?;
+        // fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(window))?)?;
 
 
-        save_test_motif_model(ws, "seizure", "0", "00", window, 1)?;
-        save_test_motif_model(ws, "seizure", "0", "01", window, 1)?;
-        save_test_motif_model(ws, "seizure", "0", "02", window, 1)?;
-        save_test_motif_model(ws, "seizure", "0", "03", window, 1)?;
-        save_test_motif_model(ws, "seizure", "1", "10", window, 1)?;
-        save_test_motif_model(ws, "seizure", "1", "11", window, 1)?;
-        save_test_motif_model(ws, "seizure", "2", "20", window, 1)?;
+        save_test_motif_model(ws, "seizure", "0", "00", window, motif_selection_id)?;
+        save_test_motif_model(ws, "seizure", "0", "01", window, motif_selection_id)?;
+        save_test_motif_model(ws, "seizure", "0", "02", window, motif_selection_id)?;
+        save_test_motif_model(ws, "seizure", "0", "03", window, motif_selection_id)?;
+        save_test_motif_model(ws, "seizure", "1", "10", window, motif_selection_id)?;
+        save_test_motif_model(ws, "seizure", "1", "11", window, motif_selection_id)?;
+        save_test_motif_model(ws, "seizure", "2", "20", window, motif_selection_id)?;
 
-        save_test_label_model(ws, "lpd", channels, 1, max_motif_batches, max_batch_size)?;
+        save_test_label_model(ws, base_run_id + 1, "lpd", channels, 1, max_motif_batches, max_batch_size)?;
 
-        save_test_motif_model(ws, "lpd", "0", "00", window, 1)?;
-        save_test_motif_model(ws, "lpd", "1", "10", window, 1)?;
-        save_test_motif_model(ws, "lpd", "2", "20", window, 1)?;
-
-
-        save_test_label_model(ws, "gpd", channels, 1, max_motif_batches, max_batch_size)?;
-
-        save_test_motif_model(ws, "gpd", "0", "00", window, 1)?;
-        save_test_motif_model(ws, "gpd", "1", "10", window, 1)?;
-        save_test_motif_model(ws, "gpd", "2", "20", window, 1)?;
+        save_test_motif_model(ws, "lpd", "0", "00", window, motif_selection_id)?;
+        save_test_motif_model(ws, "lpd", "1", "10", window, motif_selection_id)?;
+        save_test_motif_model(ws, "lpd", "2", "20", window, motif_selection_id)?;
 
 
-        save_test_label_model(ws, "lrda", channels, 1, max_motif_batches, max_batch_size)?;
+        save_test_label_model(ws, base_run_id + 1, "gpd", channels, 1, max_motif_batches, max_batch_size)?;
 
-        save_test_motif_model(ws, "lrda", "0", "00", window, 1)?;
-        save_test_motif_model(ws, "lrda", "1", "10", window, 1)?;
-        save_test_motif_model(ws, "lrda", "2", "20", window, 1)?;
-
-
-        save_test_label_model(ws, "grda", channels, 1, max_motif_batches, max_batch_size)?;
-
-        save_test_motif_model(ws, "grda", "0", "00", window, 1)?;
-        save_test_motif_model(ws, "grda", "1", "10", window, 1)?;
-        save_test_motif_model(ws, "grda", "2", "20", window, 1)?;
+        save_test_motif_model(ws, "gpd", "0", "00", window, motif_selection_id)?;
+        save_test_motif_model(ws, "gpd", "1", "10", window, motif_selection_id)?;
+        save_test_motif_model(ws, "gpd", "2", "20", window, motif_selection_id)?;
 
 
-        save_test_label_model(ws, "other", channels, 1, max_motif_batches, max_batch_size)?;
+        save_test_label_model(ws, base_run_id + 1, "lrda", channels, 1, max_motif_batches, max_batch_size)?;
 
-        save_test_motif_model(ws, "other", "0", "00", window, 1)?;
-        save_test_motif_model(ws, "other", "1", "10", window, 1)?;
-        save_test_motif_model(ws, "other", "2", "20", window, 1)?;
+        save_test_motif_model(ws, "lrda", "0", "00", window, motif_selection_id)?;
+        save_test_motif_model(ws, "lrda", "1", "10", window, motif_selection_id)?;
+        save_test_motif_model(ws, "lrda", "2", "20", window, motif_selection_id)?;
+
+
+        save_test_label_model(ws, base_run_id + 1, "grda", channels, 1, max_motif_batches, max_batch_size)?;
+
+        save_test_motif_model(ws, "grda", "0", "00", window, motif_selection_id)?;
+        save_test_motif_model(ws, "grda", "1", "10", window, motif_selection_id)?;
+        save_test_motif_model(ws, "grda", "2", "20", window, motif_selection_id)?;
+
+
+        save_test_label_model(ws, base_run_id + 1, "other", channels, 1, max_motif_batches, max_batch_size)?;
+
+        save_test_motif_model(ws, "other", "0", "00", window, motif_selection_id)?;
+        save_test_motif_model(ws, "other", "1", "10", window, motif_selection_id)?;
+        save_test_motif_model(ws, "other", "2", "20", window, motif_selection_id)?;
         Ok(())
     }
 
@@ -2007,7 +2055,7 @@ mod train_tests {
         let models_path = Path::new("/tmp/test_infer").join(&cdt);
 
 
-        save_test_models(&Workspace::new(&cdt, 20)?, &models_path, channels, max_motif_batches, motif_batch_size)?;
+        save_test_models(&Workspace::new(&cdt, 20)?, 1, channels, max_motif_batches, motif_batch_size, 1)?;
         save_test_final_model(&models_path, 6)?;
 
         let input_path = Path::new("/tmp/test_infer_input").join(&cdt);
@@ -2084,25 +2132,19 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_label_model(ws: &Workspace, label:&str, channels: i64, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
-        // fs::create_dir_all(models_path.clone())?;
-        let label_node_params = LabelNodeParams::new(channels, max_motif_nets, max_motif_batches, motif_batch_size);
+    fn save_test_label_model(ws: &Workspace, run_id: usize, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
+        let label_node_params = LabelNodeParams::new(channels as i64, max_motif_nets, max_motif_batches, motif_batch_size);
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
         let _ = train_nets::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
-
-        //TODO use label path from ws
-        fs::write(ws.models_path().join(format!("{}_0.json", label)), serde_json::to_string(&label_node_params)?)?;
-
         vs_0.freeze();
         debug!("save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}", channels, max_motif_nets, max_motif_batches, motif_batch_size, vs_0.variables());
-        vs_0.save(ws.models_path().join(format!("{}_0.safetensors", label)))?;
+
+        ws.save_label_model(run_id, label, vs_0, label_node_params );
         Ok(())
     }
 
     fn save_test_motif_model(ws: &Workspace, label: &str, channel: &str, motif_id: &str, window: i64, motif_selection_id: usize) -> Result<(), ThoosaError> {
-        // let channel_0 = ws/*.join(format!("{}", label))*/.join(channel);
-        // fs::create_dir_all(channel_0.clone())?;
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
         let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window)).build_tch_module(&vs_0.root())?;
@@ -2118,7 +2160,6 @@ mod train_tests {
 
         vs_0.freeze();
         debug!("save_test_motif_model: channel={channel} vs_0.variables()={:?}", vs_0.variables());
-        // vs_0.save(channel_0.join(format!("test_motif_{}.safetensors", motif_id)))?;
         ws.save_motif_model(channel, motif_selection_id, motif_id, vs_0, MotifNodeParams::new(100));
         Ok(())
     }

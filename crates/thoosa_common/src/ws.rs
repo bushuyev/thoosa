@@ -183,6 +183,9 @@ impl Workspace {
         })
     }
 
+    pub fn model_path_to_run_id(model_path:&Path) -> usize {
+        model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<usize>().ok())).expect("can't parse run_id from {model_path}")
+    }
 }
 
 #[cfg(test)]
