@@ -13,7 +13,7 @@ use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, W
 use std::fs::File;
 use std::str::FromStr;
 use std::io::Write;
-use futures_util::AsyncReadExt;
+use futures_util::{AsyncReadExt, StreamExt};
 use parking_lot::RwLock;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tch::Device::Cpu;
@@ -186,7 +186,7 @@ pub fn run_cli<F, L>(
     labeled_resourses:F,
     labels:Vec<&str>,
     parquet_to_tensor_by_path:L,
-    channels: i64
+    channels: usize
 ) -> Result<(), ThoosaError>
     where F:Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
             L:Fn(&Path,Device) -> Result<Tensor, ThoosaError> + Sync
@@ -283,7 +283,7 @@ pub fn run_cli<F, L>(
                 select_motifs_params.clone()
             };
 
-            let corr_ids = run_select_motifs(&cli, &store, devices, &select_motifs_params, Arc::clone(&executor_rc), channels);
+            let corr_ids = run_select_motifs(&cli, &store, devices, &select_motifs_params, Arc::clone(&executor_rc), channels as i64);
 
             info!("run_select_motifs done, corr_ids={:?}", corr_ids);
         }
@@ -344,7 +344,7 @@ pub fn run_cli<F, L>(
                 &store,
                 devices.clone(),
                 &SelectMotifsParams::dummy(run_ids, train_labels_datasets.clone(), run_all_params.select_motifs_min_ratio),
-                Arc::clone(&executor_rc), channels
+                Arc::clone(&executor_rc), ws.read().channels() as i64
             )?;
 
             info!("select_motifs done: corr_ids={:?}", corr_ids);
@@ -476,7 +476,8 @@ pub fn run_train_final(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>,
         684400,
         &device,
         labels,
-        executor
+        executor,
+        label_models
     )?;
 
     vs.save(ws.read().final_models_path())?;
@@ -517,7 +518,7 @@ pub fn run_train_on_label_on_single_motif_selection(ws: Arc<RwLock<Workspace>>, 
 
         for ((label, resource_set), motif_selection_id) in chunk_resource_sets {
 
-            let channels_motifs_models = load_motif_models_ws(&ws.read(),  20,  &Cpu).expect("load_motif_models");//TODO num channels, motifs to util
+            let channels_motifs_models = load_motif_models_ws(&ws.read(),  *motif_selection_id,  &Cpu).expect("load_motif_models");//TODO num channels, motifs to util
             let channels_motifs_models: Arc<RwLock<Vec<Vec<SyncModule>>>> = Arc::new(RwLock::new(channels_motifs_models)); //channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
 
@@ -603,7 +604,12 @@ fn run_train_on_motifs(ws: &Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>
 
     debug!("run_train_on_motifs: motif_selection_ids={motif_selection_ids:?} devices={devices:?} motif_selection_ids_labels={motif_selection_ids_labels:?}");
 
-    let devices_motif_selection = devices.into_iter().cycle().zip(motif_selection_ids_labels.chunks(chunk_len).into_iter()).collect::<Vec<(Device, &[(usize, usize, String)])>>();//corrs_run(id, label)
+    let devices_motif_selection = devices
+        .into_iter()
+        .cycle()
+        .zip(
+            motif_selection_ids_labels.chunks(chunk_len).into_iter()
+        ).collect::<Vec<(Device, &[(usize, usize, String)])>>();
 
 
     let run_ids = Arc::new(Mutex::new(vec![]));
@@ -855,14 +861,20 @@ fn train_on_motifs(ws: Arc<RwLock<Workspace>>, input_run_id: usize, motif_select
 
     let filter_and_slice:FilterAndSlicer = params.into();
 
-    let (node_params_vec, run_ids) = {
+    let (run_ids_node_params) = {
         let mut store_guard = store.lock();
 
-        (0..1).fold((vec![], vec![]), |mut a, _| {//TODO expand grid search params
+        (0..1).fold((vec![]), |mut a, _| {//TODO expand grid search params
             let node_params = MotifNodeParams::new(filter_and_slice.window());
 
-            a.1.push(store_guard.save_tree_run(Some(input_run_id), "todo", &vec![], prefix_properties("motifs_node", node_params.to_properties_map())).expect("save_tree_run"));
-            a.0.push(node_params);
+            a.push(
+                (
+                 store_guard
+                     .save_tree_run(Some(input_run_id), "todo", &vec![], prefix_properties("motifs_node", node_params.to_properties_map()))
+                     .expect("save_tree_run"),
+                 node_params
+                )
+            );
 
             a
         })
@@ -922,7 +934,8 @@ fn train_on_motifs(ws: Arc<RwLock<Workspace>>, input_run_id: usize, motif_select
         debug!("train_on_motif:  all_sices_0.len()={:?}, all_sices_0[0].size()={:?}, all_sices_1.len()={:?}, all_sices_1[0].size()={:?}", all_sices_0.len(), all_sices_0[0].size(), all_sices_1.len(), all_sices_1[0].size());
 
 
-        for node_params in &node_params_vec {
+
+        for (run_id, node_params) in &run_ids_node_params {
             debug!("train_on_motif: node_params={node_params:?}");
 
             let (loss,  (vs, params)) = train_nets::train_on_motif(
@@ -938,17 +951,18 @@ fn train_on_motifs(ws: Arc<RwLock<Workspace>>, input_run_id: usize, motif_select
             debug!("train_on_motif: motif_id={motif_id} loss={loss}");
 
             if loss < train_on_motif_params.max_loss {
+                //TODO save to run_id <<<<<<<<<<<<<<<<<<<<<<
                 ws.read().save_motif_model(channel, &motif_selection_id, motif_id, vs, params)?;
 
             }
         }
     }
 
-    Ok(run_ids)
+    Ok(run_ids_node_params.into_iter().map(|run_id_node_params|run_id_node_params.0).collect())
 }
 
 fn select_motifs_for_label(cli: &Cli, store:Arc<Mutex<impl Store + 'static>>, device: Device, select_motifs_params: &SelectMotifsParams, run_id:usize, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, channels: i64) -> Result<Vec<usize>, ThoosaError> {
-    debug!("select_motifs_for_label: device={:?} cli.tensors_path={:?}", device, cli.tensors_path);
+    debug!("select_motifs_for_label: device={:?}", device);
 
     let (resource_id_motif_slices, motifs_avg_distances, params) = {
         let mut store_guard = store.lock();
@@ -1029,6 +1043,7 @@ mod main_tests {
     use std::sync::Arc;
     use log::debug;
     use parking_lot::{Mutex, RawMutex, RwLock};
+    use parking_lot::lock_api::MutexGuard;
     use plotters::prelude::BLACK;
     use polars::export::chrono;
     use rayon::iter::ParallelIterator;
@@ -1036,14 +1051,14 @@ mod main_tests {
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Device::Cpu;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainOnMotifsParams};
+    use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
     use thoosa_common::utils::{cdt_for_dir, lin_t, plot_series, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FilterAndSlicerParams, FindMotifsParams, LinearExpander, SelectMotifsParams};
     use thoosa_motifs::fragments::PlotMotifSlicesParams;
     use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_two_imp, sig_three_imp, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{SqlStore, Store};
-    use crate::cli::{init_resources, motifs_with_tpe, plot_motif_slices, resource_path, run_train_on_motifs, select_motifs_for_label, Cli, RunAllParams};
+    use crate::cli::{init_resources, motifs_with_tpe, plot_motif_slices, resource_path, run_train_final, run_train_on_label_on_single_motif_selection, run_train_on_motifs, select_motifs_for_label, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
     use thoosa_common::ws::Workspace;
@@ -1247,7 +1262,7 @@ mod main_tests {
     }
 
     #[test]
-    fn test_run_train_on_motifs() -> Result<(), ThoosaError> {
+    fn test_run_all() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
@@ -1301,6 +1316,9 @@ mod main_tests {
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        init_test_store(store.lock());
+
+        ///////////////////////////
 
         let find_motifs_params = FindMotifsParams::dummy(100, 800, "test set".into(), 10, 1.0, None);
         let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(1));
@@ -1334,10 +1352,12 @@ mod main_tests {
             &store,
             vec![Cpu],
             // &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, 10e-5..10e-3, 1),
-            &TrainOnMotifsParams::dummy(vec![motif_selection_id], 100, 100.0, 10, 10e-9 .. 10e-5, 2..5),
-            executor_rc,
+            // &TrainOnMotifsParams::dummy(vec![motif_selection_id], 10, 100.0, 10, 10e-9 .. 10e-5, 2..5),
+            &TrainOnMotifsParams::dummy(vec![motif_selection_id], 10, 100.0, 10, 10e-5, 2),
+            Arc::clone(&executor_rc),
         )?;
 
+        /*
         let models = ws.read().motif_models(1)?;
         debug!("test_run_train_on_motifs: train_run_ids={train_run_ids:?} models={models:?}");
 
@@ -1352,6 +1372,7 @@ mod main_tests {
         );//TODO window
         vs.load(&models[0][0].0)?;
         vs.freeze();
+
 
         let oks = (0..10).into_par_iter().map(|i| {
             let t_0 = label_0_t(n, max_y).i((.., 100..900));
@@ -1368,8 +1389,71 @@ mod main_tests {
         }).filter(|r|*r).count();
 
         debug!("test_run_train_on_motifs: oks={oks:?}");
-
         assert!(oks > 7);
+         */
+
+
+        /////////////////////LABEL
+        run_train_on_label_on_single_motif_selection(
+            Arc::clone(&ws),
+            &store,
+            vec![Cpu],
+            &TrainOnLabelParams::dummy(100, train_run_ids, vec![
+                ("Label_0".into(), "Label_0/6".into()),
+                ("Label_1".into(), "Label_1/6".into())
+            ], vec![
+                ("Label_0".into(), "Label_0/4".into()),
+                ("Label_1".into(), "Label_1/4".into())
+            ]
+                                       , 100, 10, 10, 0.4),
+            Arc::clone(&executor_rc),
+        )?;
+
+        /////////////////////FINAL
+        run_train_final(
+            Arc::clone(&ws),
+            &store,
+            &Cpu,
+            &TrainFinalParams::dummy(100, 10, "xxx".into(), "zzz".into(), 10, 100, 10),
+            Arc::clone(&executor_rc),
+        )?;
+
+
+        Ok(())
+    }
+
+    fn init_test_store(mut store_guard: MutexGuard<RawMutex, SqlStore>) -> Result<(), ThoosaError>{
+
+        store_guard.save_label("Label_0")?;
+        store_guard.save_label("Label_1")?;
+
+        store_guard.save_resources_labels(HashMap::from([
+            ("t_0_0.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_1.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_2.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_3.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_4.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_5.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_6.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_7.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_8.pt".into(), vec![("Label_0".into(), 1.0)]),
+            ("t_0_9.pt".into(), vec![("Label_0".into(), 1.0)]),
+
+            ("t_1_0.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_1.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_2.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_3.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_4.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_5.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_6.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_7.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_8.pt".into(), vec![("Label_1".into(), 1.0)]),
+            ("t_1_9.pt".into(), vec![("Label_1".into(), 1.0)]),
+
+        ]))?;
+
+        store_guard.save_pure_sets(4, true)?;
+        store_guard.save_pure_sets(6, true)?;
 
         Ok(())
     }

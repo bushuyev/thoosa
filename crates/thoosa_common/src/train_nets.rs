@@ -409,7 +409,7 @@ pub fn train_on_label(
             train_on_label_params.label_batch_size,
             Arc::clone(&executor),
             device.clone(),
-            Some( Box::new(move |t:Box<Tensor>| Box::new(apply_label_motifs(num_features, step, &t, Arc::clone(&channels_motifs_models), motif_batch_size, max_motif_batches, &device))))
+            Some( Box::new(move |t:Box<Tensor>| Box::new(apply_motif_nets(num_features, step, &t, Arc::clone(&channels_motifs_models), motif_batch_size, max_motif_batches, &device))))
 
         ) as &mut dyn DataBatch,
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
@@ -467,7 +467,8 @@ pub fn train_final(
     train_tensors_loader:Vec<(String, Vec<f32>)>,
     valid_tensors_loader: Vec<(String, Vec<f32>)>,
     step: usize, motif_batch_size: i64, channels: usize, max_input:usize, device: &Device, labels: Vec<String>,
-    executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>
+    executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
+    label_models: HashMap<String, Vec<(usize, SyncModule)>>//TODO Arc<RwLock...
 ) -> Result<VarStore, ThoosaError> {
 
 
@@ -748,6 +749,8 @@ pub fn load_motif_models_ws(ws:&Workspace, motif_selection_id:usize, device: &De
 
     channel_motif_models_paths.into_iter().map(|paths|{
         paths.into_iter().map(|(model, config)|{
+            debug!("load_motif_models_ws: model={model:?} config={config:?}");
+
             let mut vs = nn::VarStore::new(device.clone());
             let node = SyncModule::new(motif_node(&MotifNodeParams::from_file(&config)?).build_tch_module(&vs.root())?);
             vs.load(&model)?;
@@ -760,22 +763,23 @@ pub fn load_motif_models_ws(ws:&Workspace, motif_selection_id:usize, device: &De
 }
 
 
-pub fn load_all_label_models_ws(ws:&Workspace, device: &Device) -> Result<HashMap<String, Vec<SyncModule>>, ThoosaError> {
+pub fn load_all_label_models_ws(ws:&Workspace, device: &Device) -> Result<HashMap<String, Vec<(usize, SyncModule)>>, ThoosaError> {
     let label_models_paths = ws.label_models()?;
 
     debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?}");
 
     label_models_paths.into_iter().try_fold(HashMap::new(), |mut a, (label, paths)|{
 
-        let models:Result<Vec<SyncModule>, ThoosaError>  =  paths.into_iter().map(|(model, config)|{
-            debug!("load_all_label_models_ws: model={model:?} run_id={:?}", Workspace::model_path_to_run_id(&model));
+        let models:Result<Vec<(usize, SyncModule)>, ThoosaError>  =  paths.into_iter().map(|(model, config)|{
+            let run_id = Workspace::model_path_to_run_id(&model);
+            debug!("load_all_label_models_ws: model={model:?} run_id={:?}", run_id);
 
             let mut vs = nn::VarStore::new(device.clone());
             let node = SyncModule::new(label_node(&LabelNodeParams::from_file(&config)?).build_tch_module(&vs.root())?);
             vs.load(&model)?;
             vs.freeze();
 
-            Ok(node)
+            Ok((run_id, node))
         }).collect();
 
 
@@ -867,7 +871,7 @@ pub struct TrainOnMotifsParams {
 
 impl TrainOnMotifsParams {
 
-    pub fn dummy(corr_run_ids:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<i64>>) ->Self{
+    pub fn dummy(motif_selection_id:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<i64>>) ->Self{
 
         let lr = lr.into();
 
@@ -878,7 +882,7 @@ impl TrainOnMotifsParams {
         TrainOnMotifsParams {
             motif_ids: MotifsBy::CorrRunId(0),
 
-            motif_selection_ids: corr_run_ids,
+            motif_selection_ids: motif_selection_id,
 
             cycles,
 
@@ -1481,7 +1485,7 @@ impl From<&str> for MotifsBy {
 }
 
 /// returns Tensor channels x nets x batches x batch size
-fn apply_label_motifs(motif_n: i64, step: usize, input_t: &Tensor, channels_motifs_models: Arc<RwLock<Vec<Vec<SyncModule>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
+fn apply_motif_nets(motif_n: i64, step: usize, input_t: &Tensor, channels_motifs_models: Arc<RwLock<Vec<Vec<SyncModule>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
     let max_nets = channels_motifs_models.read().iter().map(|nets| nets.len()).max().unwrap_or(0);//TODO remove
 
     debug!("apply_label_motifs: input_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
@@ -1774,7 +1778,7 @@ mod train_tests {
 
         debug!("test_apply_motif_models: channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
-        let channels_motifs = super::apply_label_motifs(motif_n, step, &t, Arc::new(RwLock::new(motif_nets)), batch_size as i64, max_motif_batches, &Cpu);
+        let channels_motifs = super::apply_motif_nets(motif_n, step, &t, Arc::new(RwLock::new(motif_nets)), batch_size as i64, max_motif_batches, &Cpu);
 
         assert_eq!(
             Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
@@ -1807,11 +1811,11 @@ mod train_tests {
 
         debug!("max_motif_batches={}", max_motif_batches);
 
-        let channels_motifs_0 = super::apply_label_motifs(motif_n, step, &t_0, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_0 = super::apply_motif_nets(motif_n, step, &t_0, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_0.size={:?}", channels_motifs_0.size());
 
-        let channels_motifs_1 = super::apply_label_motifs(motif_n, step, &t_1, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_1 = super::apply_motif_nets(motif_n, step, &t_1, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
@@ -1950,9 +1954,9 @@ mod train_tests {
 
 
         // let channels_motifs_models = load_motif_models_ws(&ws,  motif_selection_id,  &Cpu).expect("load_motif_models");//called from cli
-        let label_models = load_all_label_models_ws(&ws,  &Cpu).expect("load_all_label_models_ws");//called from cli
+        let label_models = load_all_label_models_ws(&ws,  &Cpu)?;//called from cli
 
-        /*
+
         fs::write(&ws.models_path().join("unexpected.file"), "lalala")?;
 
         let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
@@ -1976,11 +1980,12 @@ mod train_tests {
             684400,
             &Cpu,
             vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect(),
-            executor_rc
+            executor_rc,
+            label_models
         )?;
 
         // fs::remove_dir_all(dir)?;
-*/
+
         Ok(())
     }
 
