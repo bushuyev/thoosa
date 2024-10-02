@@ -1101,7 +1101,8 @@ pub fn select_motifs_by_ratio(motifs: Tensor, labels_resources: Vec<(String, Vec
         Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs), |e| Box::new(e.shallow_clone())))),
         labels_resources,
         executor,
-        limit, step,
+        limit,
+        step,
         &device,
         motifs_distances,
         channel_motif_ids
@@ -1201,7 +1202,14 @@ pub fn select_motifs_by_corr(
 }
 
 fn clc_channels_motifs_labels<L>(
-    motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>, labels_resources: Vec<(L, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, limit: Option<usize>, step: usize, device: &Device, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>
+    motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
+    labels_resources: Vec<(L, Vec<String>)>,
+    executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
+    limit: Option<usize>,
+    step: usize,
+    device: &Device,
+    motifs_distances: Arc<RwLock<HashMap<usize, f32>>>,
+    channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>
 ) -> (i64, i64, Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>)
 where
     L: Clone + Send + Sync + Display + Debug + 'static,

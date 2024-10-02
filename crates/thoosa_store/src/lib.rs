@@ -95,6 +95,7 @@ impl SetCond {
 
 pub trait Store:Sync + Send{
     fn save_tree_run(&mut self, input_run_id: Option<usize>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, ThoosaError>;
+    fn get_input_run_id(&mut self, run_id: usize) -> Result<usize, ThoosaError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), ThoosaError>;
     fn save_resources_set(&mut self, set:String, resource_keys:Vec<String>, group_id: Option<usize>) -> Result<usize, ThoosaError>;
     fn save_resource_set_group(&mut self, descr:String) -> Result<usize, ThoosaError>;
@@ -174,6 +175,14 @@ impl Store for SqlStore {
         t.commit()?;
 
         Ok(run_id)
+    }
+
+    fn get_input_run_id(&mut self, run_id: usize) -> Result<usize, ThoosaError>{
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
+
+
+        t.query_row("SELECT input_run_id FROM tree_run WHERE id=?", [run_id], |row| row.get(0)).map_err(|e|ThoosaError::new(e.to_string()))
     }
 
     fn save_params_value(&mut self, params:HashMap<String, Val>, run_id:usize, label:Option<&str>) -> Result<(), ThoosaError> {
@@ -1693,12 +1702,27 @@ mod store_tests{
     }
 
     #[test]
-    fn test_conv_cond(){
+    fn test_conv_cond() {
         let input = vec![("aaa".into(), SetCond::Lt(0.4)), ("bbb".into(), SetCond::Gt(0.1))];
 
         let conds = super::conds_to_q(&input);
         assert_eq!("(l.label='aaa' and p<?) or (l.label='bbb' and p>?)", conds);
 
+    }
+
+    #[test]
+    fn test_get_prev_run_id() -> Result<(), ThoosaError> {
+
+        // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+        // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
+        let mut store = SqlStore::in_mem()?;
+
+        let input_run_id = store.save_tree_run(None, "test 0", &vec![], HashMap::new())?;
+        let run_id = store.save_tree_run(Some(input_run_id), "test 1", &vec![], HashMap::new())?;
+
+        assert_eq!(store.get_input_run_id(run_id)?, input_run_id);
+
+        Ok(())
     }
 
 }

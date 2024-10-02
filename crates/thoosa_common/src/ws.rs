@@ -19,7 +19,7 @@ pub struct Workspace {
     labels_models_path:PathBuf,
     final_models_path:PathBuf,
 
-    channels_num:usize //TODO move into input meta
+    channels:usize //TODO move into input meta
 }
 
 impl Workspace {
@@ -49,7 +49,7 @@ impl Workspace {
             motifs_models_path,
             labels_models_path,
             final_models_path,
-            channels_num
+            channels: channels_num
         })
     }
 
@@ -117,8 +117,8 @@ impl Workspace {
         recurse_files(&self.motifs_models_path.join(motif_selection_id.to_string()), &|path|{
             path.extension().map(|v|v.eq("safetensors")).unwrap_or(false)
 
-        })?.into_iter().try_fold(vec![vec![];self.channels_num], |mut a, safetensors_path|{
-            debug!("safetensors_path={safetensors_path:?}");
+        })?.into_iter().try_fold(vec![vec![];self.channels], |mut a, safetensors_path|{
+            debug!("motif_models: safetensors_path={safetensors_path:?}");
 
             let parent= safetensors_path.parent().expect("parent");
             let channel = parent.file_stem().expect("channel");
@@ -185,6 +185,10 @@ impl Workspace {
 
     pub fn model_path_to_run_id(model_path:&Path) -> usize {
         model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<usize>().ok())).expect("can't parse run_id from {model_path}")
+    }
+
+    pub fn channels(&self) -> usize {
+        self.channels
     }
 }
 
