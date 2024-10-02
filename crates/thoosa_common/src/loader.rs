@@ -91,7 +91,6 @@ where
 
             debug!("preload_vec: adding key={key:?}");
 
-
             let loader = Arc::clone(&self_lock.loader_fn);
             let self_arc_pool = Arc::clone(&self_arc);
 

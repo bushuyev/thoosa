@@ -675,7 +675,7 @@ mod tests {
     use thoosa_common::utils::{from, plot_series};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{init_resources, motifs_with_tpe, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label, Cli, RunAllParams};
+    use thoosa_main::cli::{init_resources, motifs_with_tpe, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label_on_single_motif_selection, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_shared::{init_test_logging, ThoosaError};
@@ -1098,54 +1098,50 @@ mod tests {
     //     Ok(())
     // }
 
-    // #[test] TODO
-    #[allow(dead_code)]
-    fn test_run_train_final() -> Result<(), ThoosaError>{
-
-        let train_final_params = TrainFinalParams::dummy(
-            1000,
-            1000,
-            vec![
-                "../../data_down/group_1_labels_100_0-100/0_100_models".into(),
-                "../../data_down/group_1_labels_100_100_200/100_200_models".into()
-            ],
-            "/tmp/final.safetensors".into(),
-            "pure group 3".into(),
-            "pure group 3".into(),
-            10,
-            100,
-            5
-        );
-
-        let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None, Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)),)));
-
-        let cli = Cli{
-            base_path: "../../data/".into(),
-            ws_path: "/tmp".to_string(),
-            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
-            tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
-            store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
-            term_logger_level: "DEBUG".into(),
-            write_logger_level: "DEBUG".into(),
-            logfile: "/tmp/thoosa_test.log".into(),
-            limit: None,
-            num_threads: None,
-            command: Some(TrainFinal(train_final_params.clone())),
-            input_filters_kernel: None,
-        };
-
-        let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
-
-        run_train_final(
-            &cli,
-            &store,
-            &Cpu,
-            &train_final_params,
-            Arc::clone(&loader)
-        )?;
-
-        Ok(())
-    }
+    // // #[test] TODO
+    // #[allow(dead_code)]
+    // fn test_run_train_final() -> Result<(), ThoosaError>{
+    //
+    //     let train_final_params = TrainFinalParams::dummy(
+    //         1000,
+    //         1000,
+    //
+    //         "pure group 3".into(),
+    //         "pure group 3".into(),
+    //         10,
+    //         100,
+    //         5
+    //     );
+    //
+    //     let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None, Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)),)));
+    //
+    //     let cli = Cli{
+    //         base_path: "../../data/".into(),
+    //         ws_path: "/tmp".to_string(),
+    //         resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
+    //         tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
+    //         store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
+    //         term_logger_level: "DEBUG".into(),
+    //         write_logger_level: "DEBUG".into(),
+    //         logfile: "/tmp/thoosa_test.log".into(),
+    //         limit: None,
+    //         num_threads: None,
+    //         command: Some(TrainFinal(train_final_params.clone())),
+    //         input_filters_kernel: None,
+    //     };
+    //
+    //     let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
+    //
+    //     run_train_final(
+    //         &cli,
+    //         &store,
+    //         &Cpu,
+    //         &train_final_params,
+    //         Arc::clone(&loader)
+    //     )?;
+    //
+    //     Ok(())
+    // }
 
     // #[test]
     // fn motifs_to_store() -> Result<(), ThoosaError>{
