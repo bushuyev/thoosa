@@ -90,9 +90,12 @@ impl Workspace {
     }
 
 
-    pub fn save_motif_model(&self, channel:impl Display, motif_selection_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
+    /*
+        motif_selection_run_id/channel/motif_id
+     */
+    pub fn save_motif_model(&self, channel:impl Display, motif_model_run_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
 
-        let channel_models = self.motifs_models_path.join(format!("{}", motif_selection_id)).join(format!("{}", channel));
+        let channel_models = self.motifs_models_path.join(format!("{}", motif_model_run_id)).join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
         let vs_path = channel_models.join(format!("{}.safetensors", motif_id));

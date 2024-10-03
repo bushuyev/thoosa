@@ -114,9 +114,12 @@ impl ThoosaError {
 
     pub fn new(msg:impl Into<String> + Display) -> Self {
         error!("ThoosaError::new: msg={}", msg);
+        let backtrace = Backtrace::capture();
+
+        debug!("{}", backtrace.to_string());
         Self {
             msg: msg.into(),
-            backtrace:Backtrace::capture()
+            backtrace
         }
     }
 }

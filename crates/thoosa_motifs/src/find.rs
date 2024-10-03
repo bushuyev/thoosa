@@ -215,7 +215,8 @@ pub fn find_motifs_by_euc_dist(
     records_num: usize,
     resource_ids: Vec<String>,
     store: Arc<Mutex<impl Store + 'static>>, channels: i64,
-    exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, mit_tracker_step: Option<usize>
+    exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
+    min_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
     if records_num < find_motifs_params.window {
         return Err(ThoosaError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
@@ -234,7 +235,7 @@ pub fn find_motifs_by_euc_dist(
     let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(1));
 
     let (run_ids, mut trackers): (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]), |mut a: (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
-        let run_id = {
+        let find_motifs_run_id = {
             store.lock().save_tree_run(
                 None,
                 format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
@@ -248,12 +249,12 @@ pub fn find_motifs_by_euc_dist(
             .enumerate()
             .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(
                 *min_dot,
-                StoreDumper::new(Arc::clone(&store), run_id, i),
-                mit_tracker_step
+                StoreDumper::new(Arc::clone(&store), find_motifs_run_id, i),
+                min_tracker_step
             )) //TODO name
             .collect::<Vec<SimpMotifTracker<_>>>();
 
-        a.0.push(run_id);
+        a.0.push(find_motifs_run_id);
         a.1.push(all_motif_trackers);
 
         Ok::<(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), ThoosaError>(a)

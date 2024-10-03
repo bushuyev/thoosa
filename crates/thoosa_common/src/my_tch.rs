@@ -302,14 +302,14 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<SyncModule>, channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
     let input_t_size = channel.size();
-    debug!("apply_channel_motifs: eeg_t_channel.size()={:?} input_t_size={:?} nets.len()={:?}", channel.size(), input_t_size, motif_nets.len());
+    debug!("apply_channel_motifs: channel.size()={:?} input_t_size={:?} nets.len()={:?}", channel.size(), input_t_size, motif_nets.len());
 
     assert!(input_t_size.len() == 1);
 
     let input_n = input_t_size[0];
     let folds = batch_windows(input_n as usize, motif_n as usize, step, motif_batch_size as usize);
 
-    debug!("nput_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
+    debug!("apply_channel_motifs: input_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
 
 
     if motif_nets.len() == 0 {
