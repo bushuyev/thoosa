@@ -121,11 +121,11 @@ pub trait Store:Sync + Send{
     fn list_motifs_slices(&mut self, run_id:usize) -> Result<HashMap<String, Vec<MotifSlice>>, ThoosaError>;
     fn list_run_resources(&mut self, run_id:usize) -> Result<Vec<String>, ThoosaError>;
     fn list_run_params(&mut self, run_id:usize, label: Option<&str>) -> Result<HashMap<String, Val>, ThoosaError>;
-    fn save_selected_motifs(&mut self, run_id: usize, descr:&str, selected_motifs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, ThoosaError>;
-    fn list_motif_selections(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError>;//corr_run_id, run_id, label
+    fn save_selected_motifs(&mut self, run_id: usize, descr:&str, selected_motifs:Vec<Vec<(usize, f64)>>) -> Result<usize, ThoosaError>;
+    fn list_input_run_ids(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize)>, ThoosaError>;//corr_run_id, run_id, label
     fn list_selected_motifs(&mut self, motif_selection_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), ThoosaError>;
-    fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, ThoosaError>;
+    fn tree_run_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, ThoosaError>;
     fn delete_slices_without_matches(&mut self, run_id:usize) -> Result<(), ThoosaError>;
 }
 
@@ -957,16 +957,16 @@ impl Store for SqlStore {
     }
 
 
-    fn save_selected_motifs(&mut self, run_id: usize, descr:&str, channels_motif_corrs:Vec<Vec<(usize, f64)>>, label: String) -> Result<usize, ThoosaError>{
-        debug!("save_selected_motifs: selected_motifs={:?}", channels_motif_corrs);
+    fn save_selected_motifs(&mut self, run_id: usize, descr:&str, selected_motifs:Vec<Vec<(usize, f64)>>) -> Result<usize, ThoosaError>{
+        debug!("save_selected_motifs: selected_motifs={:?}", selected_motifs);
 
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        t.execute("INSERT INTO motif_selection (run_id, label, descr) VALUES (?, ?, ?)", params![run_id, label, descr])?;
-        let corr_run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
+        t.execute("INSERT INTO tree_run (input_run_id, descr) VALUES (?, ?)", params![run_id, descr])?;
+        let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
 
-        let selected_motifs = channels_motif_corrs.into_iter().filter(|corrs|corrs.len() > 0).collect::<Vec<Vec<(usize, f64)>>>();
+        let selected_motifs = selected_motifs.into_iter().filter(|selected_motif| selected_motif.len() > 0).collect::<Vec<Vec<(usize, f64)>>>();
         debug!("save_selected_motifs: filtered selected_motifs={:?}", selected_motifs);
 
         if selected_motifs.len() > 0 {
@@ -974,11 +974,11 @@ impl Store for SqlStore {
             for selected_motifs_chunk in selected_motifs.chunks(500) {
 
                 let (mut q, params) = selected_motifs_chunk.into_iter().flat_map(|channel_motif_corrs| channel_motif_corrs.into_iter()).into_iter().fold(
-                    (vec!["INSERT INTO selected_motifs (motif_selection_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
+                    (vec!["INSERT INTO selected_motifs (tree_run_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
                     |mut a: (Vec<&str>, Vec<Value>), (motif_id, rate)| {
                         a.0.push("(?, ?, ?)");
                         a.0.push(", ");
-                        a.1.push(Value::Integer(corr_run_id as i64));
+                        a.1.push(Value::Integer(run_id as i64));
                         a.1.push(Value::Integer(*motif_id as i64));
                         a.1.push(Value::Real(*rate));
 
@@ -995,18 +995,18 @@ impl Store for SqlStore {
         }
         t.commit()?;
 
-        Ok(corr_run_id)
+        Ok(run_id)
     }
 
     /*
-     returns - Vec<id, motif_selection's run_id, label>
+     returns - Vec<id, input_run_id>
      */
-    fn list_motif_selections(&mut self, motif_selection_ids:&Vec<usize>) -> Result<Vec<(usize, usize, String)>, ThoosaError> {
+    fn list_input_run_ids(&mut self, run_ids:&Vec<usize>) -> Result<Vec<(usize, usize)>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
 
-        let (mut q, params) = motif_selection_ids.into_iter().fold((vec!["SELECT id, run_id, label FROM motif_selection WHERE id IN ("], vec![]), |mut a, v|{
+        let (mut q, params) = run_ids.into_iter().fold((vec!["SELECT id, input_run_id  FROM tree_run WHERE id IN ("], vec![]), |mut a, v|{
             a.0.push("?");
             a.0.push(",");
             a.1.push(*v);
@@ -1023,7 +1023,6 @@ impl Store for SqlStore {
                 Ok((
                     row.get::<usize, usize>(0)?,
                     row.get::<usize, usize>(1)?,
-                    row.get::<usize, String>(2)?
                 ))
             })?.map(|v| v.unwrap()).collect();
 
@@ -1044,7 +1043,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         {
-            let mut stmt = t.prepare("SELECT DISTINCT mc.motif_id, mc.rate, m.channel_id FROM selected_motifs mc LEFT JOIN motifs AS m ON m.id=mc.motif_id WHERE mc.motif_selection_id=?")?;
+            let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.tree_run_id=?")?;
 
             stmt.query_map([motif_selection_id], |row| {
                 Ok((row.get::<usize, usize>(0)?, row.get::<usize, f32>(1)?, row.get::<usize, usize>(2)?))
@@ -1060,6 +1059,9 @@ impl Store for SqlStore {
         Ok(channels_corr_motifs)
     }
 
+    /**
+    returns channel, find_motifs_run_id, slices
+    */
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), ThoosaError> {
 
         let mut guard = self.conn.lock();
@@ -1119,11 +1121,11 @@ impl Store for SqlStore {
         Ok(channel_slices)
     }
 
-    fn corrs_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, ThoosaError> {
+    fn tree_run_descr(&mut self, run_id:usize) -> Result<Vec<(i64, String)>, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
-        let descr:String = t.query_row("SELECT descr FROM motif_selection WHERE id=?", [corr_run_id], |row| row.get(0))?;
+        let descr:String = t.query_row("SELECT descr FROM tree_run WHERE id=?", [run_id], |row| row.get(0))?;
 
         debug!("descr={:?}", descr);
 
@@ -1271,20 +1273,20 @@ impl SqlStore {
             )", ())?;
 
             //resource_set_id-
-            t.execute(
-                "CREATE TABLE IF NOT EXISTS motif_selection (
-                id          INTEGER PRIMARY KEY,
-                run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
-                descr       VARCHAR(256),
-                label       VARCHAR(256),
-                run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
-            )", ())?;
+            // t.execute(
+            //     "CREATE TABLE IF NOT EXISTS motif_selection (
+            //     id          INTEGER PRIMARY KEY,
+            //     run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
+            //     descr       VARCHAR(256),
+            //     label       VARCHAR(256),
+            //     run_on      DATETIME DEFAULT CURRENT_TIMESTAMP
+            // )", ())?;
 
             //labels_motifs on resource_set
             t.execute( //todo label
                 "CREATE TABLE IF NOT EXISTS selected_motifs (
                 motif_id   REFERENCES motifs(id),
-                motif_selection_id      NOT NULL REFERENCES motif_selection(id) ON DELETE CASCADE,
+                tree_run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 rate    FLOAT NOT NULL
             )", ())?;
 
@@ -1642,17 +1644,17 @@ mod store_tests{
 
         assert_eq!(vec!["aaa".to_owned(), "bbb".to_owned()], store.list_run_resources(run_id)?);
 
-        let corr_id = store.save_selected_motifs(
+        let selected_motifs_run_id = store.save_selected_motifs(
             run_id,
             "[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]",
-            vec![vec![(1, 0.1), (2, 0.2)]],
-            "seizure_vote".into()
+            vec![vec![(1, 0.1), (2, 0.2)]]
         )?;
 
-        let corrs = store.list_motif_selections(&vec![corr_id])?;
-        assert_eq!([(1, 1, "seizure_vote".to_string())], corrs.as_slice());
+        let input_run_ids = store.list_input_run_ids(&vec![selected_motifs_run_id])?;
 
-        let motifs = store.list_selected_motifs(corr_id)?;
+        assert_eq!([(selected_motifs_run_id, run_id)], input_run_ids.as_slice());
+
+        let motifs = store.list_selected_motifs(selected_motifs_run_id)?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -1693,7 +1695,7 @@ mod store_tests{
 
         assert_eq!(
             vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
-            store.corrs_descr(corr_id)?
+            store.tree_run_descr(selected_motifs_run_id)?
         );
 
         store.delete_slices_without_matches(run_id)?;
