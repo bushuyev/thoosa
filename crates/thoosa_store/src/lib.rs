@@ -123,6 +123,7 @@ pub trait Store:Sync + Send{
     fn list_run_params(&mut self, run_id:usize, label: Option<&str>) -> Result<HashMap<String, Val>, ThoosaError>;
     fn save_selected_motifs(&mut self, run_id: usize, descr:&str, selected_motifs:Vec<Vec<(usize, f64)>>) -> Result<usize, ThoosaError>;
     fn list_input_run_ids(&mut self, ids:&Vec<usize>) -> Result<Vec<(usize, usize)>, ThoosaError>;//corr_run_id, run_id, label
+    fn list_output_run_ids(&mut self, input_run_id:usize) -> Result<Vec<usize>, ThoosaError>;//corr_run_id, run_id, label
     fn list_selected_motifs(&mut self, motif_selection_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
     fn list_motif_slices(&mut self, motif_id:usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<String>>), ThoosaError>;
     fn tree_run_descr(&mut self, corr_run_id:usize) -> Result<Vec<(i64, String)>, ThoosaError>;
@@ -950,7 +951,7 @@ impl Store for SqlStore {
         };
 
         t.commit()?;
-        debug!("list_run_resources: result={:?}", result);
+        debug!("list_run_params: run_id={run_id} result={result:?}");
 
         Ok(result)
 
@@ -1006,7 +1007,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
 
-        let (mut q, params) = run_ids.into_iter().fold((vec!["SELECT id, input_run_id  FROM tree_run WHERE id IN ("], vec![]), |mut a, v|{
+        let (mut q, params) = run_ids.into_iter().fold((vec!["SELECT id, input_run_id FROM tree_run WHERE id IN ("], vec![]), |mut a, v|{
             a.0.push("?");
             a.0.push(",");
             a.1.push(*v);
@@ -1016,7 +1017,7 @@ impl Store for SqlStore {
         q.pop();
         q.push(")");
 
-        let corrs = {
+        let id__input_id = {
             let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
 
             let r= stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
@@ -1031,13 +1032,36 @@ impl Store for SqlStore {
         t.commit()?;
 
 
-        Ok(corrs)
+        Ok(id__input_id)
     }
-    /**
+
+    fn list_output_run_ids(&mut self, input_run_id:usize) -> Result<Vec<usize>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+
+        let q = "SELECT id FROM tree_run WHERE input_run_id=?";
+
+        let id__input_id = {
+            let mut stmt = t.prepare(q)?;
+
+            let r= stmt.query_map([input_run_id], |row| {
+                row.get::<usize, usize>(0)
+            })?.map(|v| v.unwrap()).collect();
+
+            r
+        };
+        t.commit()?;
+
+
+        Ok(id__input_id)
+    }
+
+    /**k
     * returns vec of channel X (motif id, corr)
     */
-    fn list_selected_motifs(&mut self, motif_selection_id:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
-        let mut channels_corr_motifs = (0..20).into_iter().map(|_|Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
+    fn list_selected_motifs(&mut self, selected_motif_run_ids:usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
+        let mut channels_motifs = (0..20).into_iter().map(|_|Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
 
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -1045,18 +1069,18 @@ impl Store for SqlStore {
         {
             let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.tree_run_id=?")?;
 
-            stmt.query_map([motif_selection_id], |row| {
+            stmt.query_map([selected_motif_run_ids], |row| {
                 Ok((row.get::<usize, usize>(0)?, row.get::<usize, f32>(1)?, row.get::<usize, usize>(2)?))
 
             })?.map(|v|v.unwrap()).for_each(|(motif_id, corr, channel_id)| {
 
-                channels_corr_motifs[channel_id].push((motif_id, corr as f64))
+                channels_motifs[channel_id].push((motif_id, corr as f64))
             });
 
         }
         t.commit()?;
 
-        Ok(channels_corr_motifs)
+        Ok(channels_motifs)
     }
 
     /**

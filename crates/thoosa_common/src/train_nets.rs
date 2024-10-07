@@ -44,8 +44,7 @@ enum BinaryLabel {
 pub struct TrainOnLabelParams {
 
     #[arg(long)]
-    motif_run_ids: Vec<usize>,
-
+    motif_node_params_selection_run_ids: Vec<usize>,
 
     #[arg(long)]
     train_resource_group: Option<String>,
@@ -86,9 +85,9 @@ impl TrainOnLabelParams {
     }
 
     #[allow(dead_code)]
-    pub fn dummy(step: usize, motif_run_ids: Vec<usize>, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
+    pub fn dummy(step: usize, motif_node_params_selection_run_ids: Vec<usize>, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
         TrainOnLabelParams {
-            motif_run_ids,
+            motif_node_params_selection_run_ids,
             step,
             cycles,
             lr,
@@ -138,8 +137,8 @@ impl TrainOnLabelParams {
         Box::new(|t:Tensor|t)
     }
 
-    pub fn motif_run_ids(&self) -> &Vec<usize> {
-        &self.motif_run_ids
+    pub fn motif_node_params_selection_run_ids(&self) -> &Vec<usize> {
+        &self.motif_node_params_selection_run_ids
     }
 }
 
@@ -749,22 +748,22 @@ impl Module for SyncModule {
     }
 }
 
-pub fn load_motif_models_ws(ws:&Workspace, motif_selection_run_id:usize, device: &Device) -> Result<Vec<Vec<SyncModule>>, ThoosaError> {
-    debug!("load_motif_models_ws: motif_selection_run_id={motif_selection_run_id}");
+pub fn load_motif_models_ws(ws:&Workspace, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<SyncModule>, ThoosaError> {
+    debug!("load_motif_models_ws: motif_selection_run_id={motif_id}");
 
-    let channel_motif_models_paths = ws.motif_models(motif_selection_run_id)?;
+    let channel_motif_models_paths = ws.motif_models(channel, motif_id)?;
 
-    channel_motif_models_paths.into_iter().map(|paths|{
-        paths.into_iter().map(|(model, config)|{
-            debug!("load_motif_models_ws: model={model:?} config={config:?}");
+    channel_motif_models_paths.into_iter().map(|(model, config)|{
 
-            let mut vs = nn::VarStore::new(device.clone());
-            let node = SyncModule::new(motif_node(&MotifNodeParams::from_file(&config)?).build_tch_module(&vs.root())?);
-            vs.load(&model)?;
-            vs.freeze();
+        debug!("load_motif_models_ws: model={model:?} config={config:?}");
 
-            Ok(node)
-        }).collect()
+        let mut vs = nn::VarStore::new(device.clone());
+        let node = SyncModule::new(motif_node(&MotifNodeParams::from_file(&config)?).build_tch_module(&vs.root())?);
+        vs.load(&model)?;
+        vs.freeze();
+
+        Ok(node)
+
     }).collect()
 
 }
@@ -788,7 +787,6 @@ pub fn load_all_label_models_ws(ws:&Workspace, device: &Device) -> Result<HashMa
 
             Ok((run_id, node))
         }).collect();
-
 
         a.insert(
             label,
@@ -943,7 +941,7 @@ impl MotifNodeParams {
     pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
         serde_json::from_str::<MotifNodeParams>(
             fs::read_to_string(&path)?.as_str()
-        ).map_err(|serde_err|ThoosaError::new(serde_err.to_string()))
+        ).map_err(|serde_err|ThoosaError::new(format!("err={}, path={path:?}", serde_err.to_string())))
     }
 
     pub fn num_features(&self) -> i64 {
@@ -1837,7 +1835,7 @@ mod train_tests {
         let ws = Workspace::new(test_dir, 3)?;
 
         let params = TrainOnLabelParams {
-            motif_run_ids: vec![0],
+            motif_node_params_selection_run_ids: vec![0],
             step: 100,
             cycles: 3,
             lr: 1.0e-5,
@@ -2136,7 +2134,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_motif_model(ws: &Workspace, label: &str, channel: &str, motif_id: &str, window: i64, motif_model_run_id: usize) -> Result<(), ThoosaError> {
+    fn save_test_motif_model(ws: &Workspace, label: &str, channel: &str, motif_id: &str, window: i64, motif_node_run_id: usize) -> Result<(), ThoosaError> {
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
         let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window)).build_tch_module(&vs_0.root())?;
@@ -2152,7 +2150,7 @@ mod train_tests {
 
         vs_0.freeze();
         debug!("save_test_motif_model: channel={channel} vs_0.variables()={:?}", vs_0.variables());
-        ws.save_motif_model(channel, motif_model_run_id, motif_id, vs_0, MotifNodeParams::new(100));
+        ws.save_motif_model(channel, motif_node_run_id, motif_id, vs_0, MotifNodeParams::new(100));
         Ok(())
     }
 
