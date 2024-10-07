@@ -93,19 +93,19 @@ impl Workspace {
     /*
         motif_selection_run_id/channel/motif_id
      */
-    pub fn save_motif_model(&self, channel:impl Display, motif_model_run_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
+    pub fn save_motif_model(&self, channel:impl Display, motif_node_params_run_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
 
-        let channel_models = self.motifs_models_path.join(format!("{}", motif_model_run_id)).join(format!("{}", channel));
+        let channel_models = self.motifs_models_path/*.join(format!("{}", motif_id))*/.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
-        let vs_path = channel_models.join(format!("{}.safetensors", motif_id));
+        let vs_path = channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.safetensors"));
 
-        info!("train_on_motif:  motif_id={motif_id} saved to {vs_path:?}");
+        info!("train_on_motif:  motif_id={motif_id} motif_model_run_id={motif_node_params_run_id} saved to {vs_path:?}");
 
         vs.save(vs_path);
 
         fs::write(
-            channel_models.join(format!("{}.json", motif_id)),
+            channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.json")),
             serde_json::to_string(&params)?
         )?;
 
@@ -113,52 +113,44 @@ impl Workspace {
     }
 
     /**
-    returns channels x Vec<safetensors_path, config jsonpath>
+    returns Vec<safetensors_path, config jsonpath>
     */
-    pub fn motif_models(&self, motif_selection_id:usize) -> Result<Vec<Vec<(PathBuf, PathBuf)>>, ThoosaError> {
+    pub fn motif_models(&self, channel:impl Display, motif_id:usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
 
-        recurse_files(&self.motifs_models_path.join(motif_selection_id.to_string()), &|path|{
-            path.extension().map(|v|v.eq("safetensors")).unwrap_or(false)
+        recurse_files(&self.motifs_models_path.join(channel.to_string()), &|path|{
+            path.extension().map(|v|v.eq("safetensors")).unwrap_or(false) &&
+                path.file_stem().and_then(|s|s.to_str()).map(|s|s.starts_with(format!("{}_", motif_id).as_str())).unwrap_or(false)
 
-        })?.into_iter().try_fold(vec![vec![];self.channels], |mut a, safetensors_path|{
+        })?.into_iter().try_fold(vec![], |mut a, safetensors_path|{
             debug!("motif_models: safetensors_path={safetensors_path:?}");
 
             let parent= safetensors_path.parent().expect("parent");
-            let channel = parent.file_stem().expect("channel");
+            // let channel = parent.file_stem().expect("channel");
             let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
             let json = format!("{}.json", file_stem);
             let json = parent.join(json);
 
-            debug!("motif_models: channel={channel:?} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
+            debug!("motif_models: channel={channel} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
 
-            match channel.to_str().and_then(|c|c.parse::<usize>().ok()){
-                None => {
-                    warn!("unexpected channel: channel{channel:?}");
-                }
-                Some(channel) => {
-                    a[channel].push((safetensors_path, json));
-
-                }
-
-            };
+            a.push((safetensors_path, json));
             Ok(a)
 
         })
     }
 
-    pub fn save_label_model(&self, run_id:usize, label:impl Display, vs:VarStore, params:LabelNodeParams)-> Result<(), ThoosaError> {
+    pub fn save_label_model(&self, label_node_run_id:usize, label:impl Display, vs:VarStore, params:LabelNodeParams) -> Result<(), ThoosaError> {
         let label_models_path = self.labels_models_path.join(format!("{}", label));
 
         fs::create_dir_all(&label_models_path)?;
 
-        let vs_path = label_models_path.join(format!("{}.safetensors", run_id));
+        let vs_path = label_models_path.join(format!("{label_node_run_id}.safetensors"));
 
-        info!("save_label_model:  run_id={run_id} label={label} saved to {vs_path:?}");
+        info!("save_label_model:  run_id={label_node_run_id} label={label} saved to {vs_path:?}");
 
         vs.save(vs_path);
 
         fs::write(
-            label_models_path.join(format!("{}.json", run_id)),
+            label_models_path.join(format!("{}.json", label_node_run_id)),
             serde_json::to_string(&params)?
         )?;
 
@@ -234,22 +226,24 @@ mod tests {
         ws.save_motif_model(0, 0, 3, VarStore::new(Cpu), MotifNodeParams::new(40));
         ws.save_motif_model(1, 1, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
 
+        ws.save_motif_model(1, 3, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
+
 
         let models = ws.motif_models(0)?;
         for mm in &models{
             debug!("mm={mm:?}");
         }
 
-        assert_eq!(models[0].len(), 2);
-        assert_eq!(models[1].len(), 2);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models.len(), 2);
 
         let models = ws.motif_models(1)?;
         for mm in &models{
             debug!("mm={mm:?}");
         }
 
-        assert_eq!(models[0].len(), 0);
-        assert_eq!(models[1].len(), 1);
+        assert_eq!(models.len(), 0);
+        assert_eq!(models.len(), 1);
 
         Ok(())
     }

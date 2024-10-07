@@ -1042,11 +1042,10 @@ where L: Clone + Send + Display + Debug + 'static,
     Ok(())
 }
 
-
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
     #[arg(long)]
-    run_ids: Vec<usize>,
+    find_motifs_run_ids: Vec<usize>,
 
     #[arg(long, value_parser = parse_key_val::< String, String >, default_value = "xxx=yyy")]
     labels_datasets: Vec<(String, String)>,
@@ -1059,13 +1058,13 @@ pub struct SelectMotifsParams {
 }
 
 impl SelectMotifsParams {
-    pub fn run_ids(&self) -> &Vec<usize> {
-        &self.run_ids
+    pub fn find_motifs_run_ids(&self) -> &Vec<usize> {
+        &self.find_motifs_run_ids
     }
 
     pub fn dummy(run_ids: Vec<usize>, labels_datasets: Vec<(String, String)>, min_ratio: f32) -> Self {
         SelectMotifsParams {
-            run_ids,
+            find_motifs_run_ids: run_ids,
             train_resource_group: None,
             labels_datasets,
             min_ratio,

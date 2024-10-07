@@ -675,7 +675,7 @@ mod tests {
     use thoosa_common::utils::{from, plot_series};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{init_resources, motifs_with_tpe, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_label_on_single_motif_selection, Cli, RunAllParams};
+    use thoosa_main::cli::{init_resources, motifs_with_tpe, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_on_motif_nodes, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_shared::{init_test_logging, ThoosaError};
