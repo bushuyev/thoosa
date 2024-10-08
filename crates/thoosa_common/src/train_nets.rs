@@ -85,7 +85,7 @@ impl TrainOnLabelParams {
     }
 
     #[allow(dead_code)]
-    pub fn dummy(step: usize, motif_node_params_selection_run_ids: Vec<usize>, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, items_per_label: usize, cycles: usize, lr: f64) ->Self {
+    pub fn dummy(step: usize, motif_node_params_selection_run_ids: Vec<usize>, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, label_batch_size: usize, cycles: usize, lr: f64) ->Self {
         TrainOnLabelParams {
             motif_node_params_selection_run_ids,
             step,
@@ -96,7 +96,7 @@ impl TrainOnLabelParams {
             train_resource_group: None,
             valid_resource_group: None,
             motif_batch_size,
-            label_batch_size: items_per_label
+            label_batch_size
         }
     }
 
@@ -375,8 +375,7 @@ impl ClassTensorsLoaderData {
     }
 }
 
-#[allow(dead_code)]
-pub fn train_on_label(
+pub fn train_on_motif_nodes(
     ws: Arc<RwLock<Workspace>>,
     motif_node_params:&MotifNodeParams,
     label_node_params:&LabelNodeParams,
@@ -385,10 +384,11 @@ pub fn train_on_label(
     valid_labels_resources: Vec<(i64, Vec<String>)>,
     device: &Device,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-    channels_motifs_models:Arc<RwLock<Vec<Vec<SyncModule>>>>
+    channels_motifs_models:Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>
 ) -> Result<(f32, (VarStore, LabelNodeParams)), ThoosaError>
     {
 
+    debug!("train_on_motif_nodes: motif_node_params={motif_node_params:?} label_node_params={label_node_params:?}");
 
     let vs_0 = nn::VarStore::new(device.clone());
 
@@ -470,74 +470,27 @@ pub fn train_final(
     train_final_params: &TrainFinalParams,
     train_tensors_loader:Vec<(String, Vec<f32>)>,
     valid_tensors_loader: Vec<(String, Vec<f32>)>,
-    step: usize, motif_batch_size: i64, channels: usize, max_input:usize, device: &Device, labels: Vec<String>,
+    step: usize, motif_batch_size: i64, device: &Device, labels: Vec<String>,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-    label_models: HashMap<String, Vec<(usize, SyncModule)>>//TODO Arc<RwLock...
+    label_models: HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>, //TODO Arc<RwLock...
+    labels_channels_motifs_models:HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>
 ) -> Result<VarStore, ThoosaError> {
 
 
-/*
-    // let models = Path::new(ws_dir.as_ref()).join("label_models").iter().flat_map(|dir| {
-    //     load_label_and_motif_models(dir.as_str(), channels as usize, device).expect(format!("load_corr_and_motif_models: {}", dir).as_str())
-    // }).collect::<Vec<LabelModels>>();
-
-    let models: Vec<LabelModels> = vec![];
-
-
-    let labels_models = models.into_iter().fold(HashMap::new(), |mut a, corr_models| {
-        a.entry(corr_models.label.clone()).or_insert_with(||vec![]).push(corr_models);
-        a
-    });
-
-    debug!("train_final: models.size={:?} models={:?}", labels_models.len(), labels_models);
-
-    let apply_final_nets_f =  |t:(Box<Tensor>, Box<Tensor>)| {
-        debug!("train_final: tensors_loader.map: t.0.size={:?} t.1.size={:?}", t.0.size(), t.1.size());
-
-        let apply_nets = |label| {
-            match labels_models.get(label) {
-                Some(label_models) => {//label_models in one of the model dirs
-                    Tensor::stack(label_models.iter().map(|model| {
-
-                        let motif_batches = batch_windows(max_input, model.motif_node_params.num_features as usize, step, motif_batch_size as usize);
-                        let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
-
-                        debug!("train_final: model.motif_node_params={:?} motif_batches={}", model.motif_node_params, max_motif_batches);
-
-                        let t = apply_label_motifs(model.motif_node_params.num_features, step, &t.0, &model.motif_models, motif_batch_size, max_motif_batches, device);
-
-                        //TODO move into CorrModels
-                        let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
-                        debug!("train_final: motif models model.label={} t.size()={:?}", model.label, t.size());
-                        debug!("train_final: t.size()={:?} ", t.size());
-
-                        let t_x = view_for_label_model(t.reshape([1, channels, max_nets, motif_batch_size, max_motif_batches as i64]), channels, max_nets, motif_batch_size, max_motif_batches);
-                        debug!("train_final: t_x.size()={:?} max_nets={}", t_x.size(), max_nets);
-
-                        let t = model.label_model.lock().forward(&t_x);
-                        debug!("train_final: corr_model out t.size()={:?}", t.size());
-                        t
-                    }).collect::<Vec<Tensor>>().as_slice(), 0)
-                }
-                None => {
-                    debug!("train_final: no model for label {:?}", label);
-
-                    Tensor::zeros(&[params.models_dir.len() as i64, 1, 1], (Float, *device))
-                }
-            }
-        };
-        Ok(
-            (
-                Tensor::stack(labels.iter().map(apply_nets).collect::<Vec<Tensor>>().as_slice(), 0),
-                t.1.shallow_clone()
-            )
-        )
-    };*/
 
     let vs_0 = nn::VarStore::new(device.clone());
 
+    let label_nets = labels_channels_motifs_models.len() as i64;
+    let labels_channels_motifs_models_rw = labels_channels_motifs_models.into_iter().fold(HashMap::new(), |mut a, v|{
+        a.insert(v.0, Arc::new(RwLock::new(v.1)));
+        a
+    });
+
+
+    let device =device.clone();
+    let channels = ws.read().channels();
     train(
-        device,
+        &device,
         &mut ClassTensorsLoaderData::new(
 
             train_tensors_loader,
@@ -546,13 +499,44 @@ pub fn train_final(
             train_final_params.batch_size,
             Arc::clone(&executor),
             device.clone(),
-            // Some( Box::new(move |t:Box<Tensor>| {
-            //     Box::new(apply_label_motifs(num_features, step, &t, Arc::clone(&channels_motifs_models), motif_batch_size, max_motif_batches, &device))
-            // }))
-            None
+            Some( Box::new(move |t:Box<Tensor>| {
+
+                let mut labels_tensors = vec![];
+                for (label, label_nodes) in &label_models {
+                    debug!("train_final: label={label} label_nodes.len={:?} t.size()={:?}", label_nodes.len(), t.size());
+
+                    let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("labels_channels_motifs_models for {label}").as_str());
+                    debug!("train_final:v  channels_motifs_models={channels_motifs_models:?}");
+                    let max_motif_batches = 10;
+                    let t_net = apply_motif_nets(0, step, &t, Arc::clone(channels_motifs_models), motif_batch_size, max_motif_batches, &device);
+
+                    for (label_node_run_id, label_node_params, label_node) in label_nodes{
+                        debug!("train_final: label_node_params={label_node_params:?} label_node_run_id={:?} t_net.size()={:?}",  label_node_run_id, t_net.size());
+
+
+                        let t_net_view = view_for_label_model(t_net.unsqueeze(0), channels as i64, label_node_params.max_motif_nets, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
+
+                        debug!("train_final: label_node_run_id={:?} t_net_view.size()={:?}", label_node_run_id, t_net_view.size());
+
+                        let t_out = label_node.forward(&t_net_view);
+                        debug!("train_final: label_node.forward t_out.size()={:?}", t_out.size());
+
+                        labels_tensors.push(t_out);
+
+                    }
+
+                }
+                // Box::new(apply_label_motifs(num_features, step, &t, Arc::clone(&channels_motifs_models), motif_batch_size, max_motif_batches, &device))
+                let final_input_t = Tensor::stack(labels_tensors.as_slice(), 0);
+                debug!("train_final: final_input_t.size()={:?}", final_input_t.size());
+
+                Box::new(final_input_t)
+
+            }))
+            // None
 
         ) as &mut dyn DataBatch,
-        &final_node(&FinalNodeParams::new(6, 6)).build_tch_module(&vs_0.root())?,//TODO features?
+        &final_node(&FinalNodeParams::new(label_nets, label_nets)).build_tch_module(&vs_0.root())?,//TODO features?
         |pred: &Tensor, target: &Tensor| {
 
             let pred_y = pred; //pred.i((.., 0, 0));
@@ -567,11 +551,9 @@ pub fn train_final(
         |t:Tensor|{
             debug!("t.size()={:?} ", t.size());
 
-            debug!("xxxxx: 0 ={}",  t);
-            // debug!("xxxxx: 1 ={:?}",  from::<Vec<f32>>(&t.i((.., 1)).squeeze()));
-            // debug!("xxxxx: 2 ={:?}",  from::<Vec<f32>>(&t.i((.., 2)).squeeze()));
+            // debug!("xxxxx: 0 ={}",  t);
 
-            let t_out = t.view(t.size()[0] * t.size()[1]); //model_dirs * labels
+            let t_out = t.view((t.size()[0], t.size()[1], -1)); //model_dirs * labels
             debug!(" t_out.size()={:?}",  t_out.size());
             t_out
         },
@@ -748,7 +730,7 @@ impl Module for SyncModule {
     }
 }
 
-pub fn load_motif_models_ws(ws:&Workspace, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<SyncModule>, ThoosaError> {
+pub fn load_motif_models_ws(ws:&Workspace, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<(MotifNodeParams, SyncModule)>, ThoosaError> {
     debug!("load_motif_models_ws: motif_selection_run_id={motif_id}");
 
     let channel_motif_models_paths = ws.motif_models(channel, motif_id)?;
@@ -758,34 +740,36 @@ pub fn load_motif_models_ws(ws:&Workspace, channel:usize, motif_id:usize, device
         debug!("load_motif_models_ws: model={model:?} config={config:?}");
 
         let mut vs = nn::VarStore::new(device.clone());
-        let node = SyncModule::new(motif_node(&MotifNodeParams::from_file(&config)?).build_tch_module(&vs.root())?);
+        let motif_node_params = MotifNodeParams::from_file(&config)?;
+        let node = SyncModule::new(motif_node(&motif_node_params).build_tch_module(&vs.root())?);
         vs.load(&model)?;
         vs.freeze();
 
-        Ok(node)
+        Ok((motif_node_params, node))
 
     }).collect()
 
 }
 
 
-pub fn load_all_label_models_ws(ws:&Workspace, device: &Device) -> Result<HashMap<String, Vec<(usize, SyncModule)>>, ThoosaError> {
+pub fn load_all_label_models_ws(ws:&Workspace, device: &Device) -> Result<HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>, ThoosaError> {
     let label_models_paths = ws.label_models()?;
 
     debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?}");
 
     label_models_paths.into_iter().try_fold(HashMap::new(), |mut a, (label, paths)|{
 
-        let models:Result<Vec<(usize, SyncModule)>, ThoosaError>  =  paths.into_iter().map(|(model, config)|{
+        let models:Result<Vec<(usize, LabelNodeParams, SyncModule)>, ThoosaError>  =  paths.into_iter().map(|(model, config)|{
             let run_id = Workspace::model_path_to_run_id(&model);
             debug!("load_all_label_models_ws: model={model:?} run_id={:?}", run_id);
 
             let mut vs = nn::VarStore::new(device.clone());
-            let node = SyncModule::new(label_node(&LabelNodeParams::from_file(&config)?).build_tch_module(&vs.root())?);
+            let label_node_params = LabelNodeParams::from_file(&config)?;
+            let node = SyncModule::new(label_node(&label_node_params).build_tch_module(&vs.root())?);
             vs.load(&model)?;
             vs.freeze();
 
-            Ok((run_id, node))
+            Ok((run_id, label_node_params, node))
         }).collect();
 
         a.insert(
@@ -1064,8 +1048,8 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
                         // debug!(">>>>>>>>>>>>>> 0 {:?}", t.size());
                         t.shallow_clone()
                     }), None)
-                    .conv_1d(10, params.channels, params.channels, ConvConfig::default())
-                    .max_pool(10, 1, 0)
+                    // .conv_1d(10, params.channels, params.channels, ConvConfig::default())
+                    // .max_pool(10, 1, 0)
                     // .func(Tensor::relu)
                     // .linear_s(channels)
                     // .func(Tensor::sigmoid)
@@ -1074,7 +1058,7 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
                     //     t.squeeze()
                     // }), Some(channels))
                     // .func(Tensor::relu)
-                    // .linear_s(1)
+                    .linear_s(100)
                     // .func(Tensor::sigmoid)
                     // .closure(Box::new(|t:&Tensor|{
                     //     debug!(">>>>>>>>>>>>>> 2 {:?}", t.size());
@@ -1082,8 +1066,8 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
                     // }), Some(channels))
 
                     .func(Tensor::relu)
-                    .linear_f(0.5)
-                    .linear_f(0.5)
+                    // .linear_f(0.5)
+                    // .linear_f(0.5)
                     .linear_s(1)
                     .func(Tensor::sigmoid)
                     .closure(Box::new(|t:&Tensor|{
@@ -1265,7 +1249,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
                 &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
 
                 |pred: &Tensor, target: &Tensor| {
-                    let pred_y = pred.i((.., 0, 0));
+                    let pred_y = pred.i((.., 0));
 
                     let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
                     debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
@@ -1419,7 +1403,7 @@ impl TensorsDataBatch {
         let tensor = Tensor::stack(
             x_y_vecs.into_iter().map(|e|e.0).collect::<Vec<_>>().as_slice(),
             0,
-        ).view((batch_size as i64, 1, -1));
+        ).view((batch_size as i64, -1));
 
 
 
@@ -1470,7 +1454,7 @@ fn split_train_val<T>(classes_tensors: Vec<Vec<T>>, train_valid_split: f32) -> (
 
 
 /// returns Tensor channels x nets x batches x batch size
-fn apply_motif_nets(motif_n: i64, step: usize, input_t: &Tensor, channels_motifs_models: Arc<RwLock<Vec<Vec<SyncModule>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
+fn apply_motif_nets(motif_n: i64, step: usize, input_t: &Tensor, channels_motifs_models: Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
     let max_nets = channels_motifs_models.read().iter().map(|nets| nets.len()).max().unwrap_or(0);//TODO remove
 
     debug!("apply_label_motifs: input_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
@@ -1633,6 +1617,7 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
 
 #[cfg(test)]
 mod train_tests {
+    use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc};
@@ -1731,8 +1716,8 @@ mod train_tests {
         let t = make_test_tensor(input_n);
 
         let motif_nets = vec![
-            vec![SyncModule::new(test_net(motif_n, 1.)?), SyncModule::new(test_net(motif_n, 2.)?)], //channel 0 nets
-            vec![SyncModule::new(test_net(motif_n, 10.)?)] //channel 1 nets
+            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 1. )?)), (MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 2. )?))], //channel 0 nets
+            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 10.)?))] //channel 1 nets
         ];
 
         let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0);
@@ -1784,8 +1769,8 @@ mod train_tests {
         let motif_batch_size = 13;
 
         let motif_nets = Arc::new(RwLock::new(vec![
-            vec![SyncModule::new(test_net(motif_n, 1.)?), SyncModule::new(test_net(motif_n, 1.)?)], //channel 0 nets
-            vec![SyncModule::new(test_net(motif_n, 10.)?)], //channel 1 nets
+            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 1.)?)), (MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 1.)?))], //channel 0 nets
+            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 10.)?))], //channel 1 nets
             vec![]
         ]));
 
@@ -1832,7 +1817,7 @@ mod train_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_train_on_label: test_dir={test_dir:?}");
 
-        let ws = Workspace::new(test_dir, 3)?;
+        let ws = Workspace::new(test_dir, 3, 684400)?;
 
         let params = TrainOnLabelParams {
             motif_node_params_selection_run_ids: vec![0],
@@ -1873,14 +1858,16 @@ mod train_tests {
             }, 4, 100,
         )));
 
-        let channels_motifs_models = load_motif_models_ws(&ws, motif_selection_run_id, &Cpu).expect("load_motif_models");//TODO num channels, motifs to util
-        let channels_motifs_models: Arc<RwLock<Vec<Vec<SyncModule>>>> = Arc::new(RwLock::new(channels_motifs_models));
+        //TODO num channels, motifs to util
+        let channel_0_motifs_models: Vec<(MotifNodeParams, SyncModule)> = load_motif_models_ws(&ws, 0, motif_selection_run_id, &Cpu).expect("load_motif_models");
+        let channel_1_motifs_models: Vec<(MotifNodeParams, SyncModule)> = load_motif_models_ws(&ws, 1, motif_selection_run_id, &Cpu).expect("load_motif_models");
+        let channel_2_motifs_models: Vec<(MotifNodeParams, SyncModule)> = load_motif_models_ws(&ws, 2, motif_selection_run_id, &Cpu).expect("load_motif_models");
 
-        for channel_models in channels_motifs_models.read().iter(){
-            debug!("test_train_on_label: channel_models={}", channel_models.len());
-        }
+        debug!("test_train_on_label: channel 0 models={}", channel_0_motifs_models.len());
+        debug!("test_train_on_label: channel 1 models={}", channel_0_motifs_models.len());
+        debug!("test_train_on_label: channel 2 models={}", channel_0_motifs_models.len());
 
-        super::train_on_label(
+        super::train_on_motif_nodes(
             Arc::new(RwLock::new(ws)),
             &MotifNodeParams::new(100), //TODO take window/num_features from saved motif model or motif run id
             &LabelNodeParams::new(3, 4, 20, 7), //max motif nets - 2 for seizure
@@ -1905,7 +1892,11 @@ mod train_tests {
             ].into_iter().map(resource_keys).collect::<Vec<_>>(),
             &Cpu,
             executor_rc,
-            channels_motifs_models
+            Arc::new(RwLock::new(vec![
+                channel_0_motifs_models,
+                channel_1_motifs_models,
+                channel_2_motifs_models
+            ]))
         )?;
 
         Ok(())
@@ -1916,7 +1907,7 @@ mod train_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_train_on_label: test_dir={test_dir:?}");
         let channels = 5;
-        let ws = Workspace::new(test_dir, channels)?;
+        let ws = Workspace::new(test_dir, channels, 684400)?;
 
         let params = TrainFinalParams {
             step:100,
@@ -1961,12 +1952,11 @@ mod train_tests {
             vec![],
             100,
             motif_batch_size,
-            channels,
-            684400,
             &Cpu,
             vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect(),
             executor_rc,
-            label_models
+            label_models,
+            HashMap::new()
         )?;
 
         // fs::remove_dir_all(dir)?;
@@ -2045,7 +2035,7 @@ mod train_tests {
         let models_path = Path::new("/tmp/test_infer").join(&cdt);
 
 
-        save_test_models(&Workspace::new(&cdt, 20)?, 1, channels, max_motif_batches, motif_batch_size, 1)?;
+        save_test_models(&Workspace::new(&cdt, 20, 684400)?, 1, channels, max_motif_batches, motif_batch_size, 1)?;
         save_test_final_model(&models_path, 6)?;
 
         let input_path = Path::new("/tmp/test_infer_input").join(&cdt);

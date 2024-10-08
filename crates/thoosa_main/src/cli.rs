@@ -19,7 +19,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tch::Device::Cpu;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
-use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_on_label, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
+use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_on_motif_nodes, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainOnLabelParams, TrainOnMotifsParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{select_motifs_by_ratio, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, SelectMotifsParams};
@@ -186,14 +186,14 @@ pub fn run_cli<F, L>(
     labeled_resourses:F,
     labels:Vec<&str>,
     parquet_to_tensor_by_path:L,
-    channels: usize
+    channels: usize, max_input: usize
 ) -> Result<(), ThoosaError>
     where F:Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
             L:Fn(&Path,Device) -> Result<Tensor, ThoosaError> + Sync
 {
     let cli = Cli::parse();
 
-    let ws = Arc::new(RwLock::new(Workspace::new(cli.base_path.clone(), 20)?));//TODO channels
+    let ws = Arc::new(RwLock::new(Workspace::new(cli.base_path.clone(), channels, max_input)?));//TODO channels
 
     CombinedLogger::init(
         vec![
@@ -412,7 +412,7 @@ pub fn run_cli<F, L>(
                 infer_params.step(),
                 infer_params.motif_batch_size(),
                 channels,
-                684400,//TODO
+                max_input, //TODO
                 &devices[0],
                 labels,
                 motif_node_params
@@ -454,6 +454,25 @@ pub fn run_train_final(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>,
 
     let label_models = load_all_label_models_ws(&ws.read(),  &Cpu).expect("load_all_label_models_ws");
 
+    let mut labels_channels_motifs_models:HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>  = HashMap::new();
+
+    for (label, label_run_id_nodes) in  label_models.iter() {
+        for (label_run_id, label_node_params, node) in label_run_id_nodes {
+            let motif_node_params_selection_run_id = store.lock().get_input_run_id(*label_run_id).expect("get_input_run_id(label_run_id)");
+            let selected_motifs_run_id = store.lock().get_input_run_id(motif_node_params_selection_run_id).expect("get_input_run_id(motif_node_params_selection_run_id)");
+
+            let channels_motifs_models = store.lock()
+                .list_selected_motifs(selected_motifs_run_id).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+                |(channel, channels_motifs)|{
+                    let ws_moved = Arc::clone(&ws);
+                    channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved.read(), channel, motif_id, &device).expect("load_motif_models"))
+                }).collect();
+
+
+            labels_channels_motifs_models.insert(label.clone(), channels_motifs_models);
+        }
+    }
+
     debug!("run_train_final: labels={:?}", labels);
 
     let vs = train_final(
@@ -472,12 +491,11 @@ pub fn run_train_final(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>,
         ),
         train_final_params.step(),
         train_final_params.motif_batch_size(),
-        20,
-        684400,
         &device,
         labels,
         executor,
-        label_models
+        label_models,
+        labels_channels_motifs_models
     )?;
 
     vs.save(ws.read().final_models_path())?;
@@ -525,11 +543,10 @@ pub fn run_train_on_motif_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<Sq
                 .list_selected_motifs(selected_motifs_run_id).expect("list_selected_motifs").into_iter().enumerate().flat_map(
                      |(channel, channels_motifs)|{
                         let ws_moved = Arc::clone(&ws);
-                        channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved.read(), channel, motif_id, &device_i).expect("load_motif_models"))
+                         channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved.read(), channel, motif_id, &device_i).expect("load_motif_models"))
                 }).collect();
 
-            let channels_motifs_models: Arc<RwLock<Vec<Vec<SyncModule>>>> = Arc::new(RwLock::new(channels_motifs_models)); //channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
-
+            let channels_motifs_models: Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>> = Arc::new(RwLock::new(channels_motifs_models)); //channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
 
 
@@ -548,9 +565,10 @@ pub fn run_train_on_motif_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<Sq
                 MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store_in_threads.lock().list_run_params(motif_node_params_run_ids, None).expect("list_run_params")))
             };
 
-            let motif_batches = batch_windows(684400, motif_node_params.num_features() as usize, train_on_label_params.step(), train_on_label_params.motif_batch_size() as usize);
-            let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+            let motif_batches = batch_windows(ws.read().max_input(), motif_node_params.num_features() as usize, train_on_label_params.step(), train_on_label_params.motif_batch_size() as usize);
 
+            let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+            debug!("run_train_on_motif_nodes: motif_batches={motif_batches:?} max_motif_batches={max_motif_batches}");
 
             let (label_node_run_ids_params) = {
                 let mut store_guard = store.lock();
@@ -560,7 +578,7 @@ pub fn run_train_on_motif_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<Sq
 
                     a.push(
                         (
-                            store_guard.save_tree_run(Some(selected_motifs_run_id), "todo", &vec![], prefix_properties("label_node", label_node_params.to_properties_map())).expect("save_tree_run"),
+                            store_guard.save_tree_run(Some(*motif_node_params_selection_run_id), "todo", &vec![], prefix_properties("label_node", label_node_params.to_properties_map())).expect("save_tree_run"),
                             label_node_params
                         )
                     );
@@ -569,10 +587,10 @@ pub fn run_train_on_motif_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<Sq
                 })
             };
 
-            info!("training {} on {} device={:?}", label, resource_set, device_i);
+            info!("run_train_on_motif_nodes: training {} on {} device={:?}", label, resource_set, device_i);
             for (label_node_run_id, label_node_params) in label_node_run_ids_params {
 
-                match train_on_label(
+                match train_on_motif_nodes(
                     Arc::clone(&ws),
                     &motif_node_params,
                     &label_node_params,
@@ -592,6 +610,7 @@ pub fn run_train_on_motif_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<Sq
                     Arc::clone(&channels_motifs_models)
                 ) {
                     Ok((loss, (vs, params))) => {
+                        debug!("run_train_on_motif_nodes: save_label_model label_node_run_id={label_node_run_id} label={label} motif_node_params_run_ids={motif_node_params_run_ids}");
                         ws.read().save_label_model(label_node_run_id, label, vs, params).expect("save_label_model failed");
                     }
                     Err(e) => {
@@ -831,10 +850,8 @@ fn plot_motif_slices(cli: &Cli, store: Arc<Mutex<SqlStore>>, device: Device, plo
     let (channel, _run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
 
 
-    let slices = load_motif_slices(
-        cli.base_path.as_str(), channel, plot_motif_slices_params.window as i64, slices,
-        executor,
-        device
+    let slices = load_motif_slices(channel, plot_motif_slices_params.window as i64, slices,
+                                   executor
     );
 
     let all_sices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
@@ -882,8 +899,8 @@ fn train_on_motifs(ws: Arc<RwLock<Workspace>>, find_motifs_run_id: usize, select
         let mut store_guard = store.lock();
 
         let motif_node_selection_run_id =  store_guard
-                                                                                                                    //TODO motif_node_selection params - max error
-            .save_tree_run(Some(selected_motifs_run_id), "todo", &vec![], prefix_properties("motifs_node", HashMap::new()))
+            //TODO motif_node_selection params - max error
+            .save_tree_run(Some(selected_motifs_run_id), "motifs_node", &vec![], prefix_properties("motifs_node", HashMap::new()))
             .expect("motif_node_selection_run_id");
 
         ((0..1).fold((vec![]), |mut a, _| {//TODO expand grid search params
@@ -914,14 +931,10 @@ fn train_on_motifs(ws: Arc<RwLock<Workspace>>, find_motifs_run_id: usize, select
 
             //TODO move load to DataBatch to avoid preload?
             debug!("train_on_motif: 1. channel={}, find_motifs_run_id={}, slices={}", channel, find_motifs_run_id, slices.len());
-            let all_sices_1 = train_nets::slices_in_all_resources(
-                load_motif_slices(
-                    ws.read().base_path_as_str().as_str(), channel, filter_and_slice.window(), slices,
-                    Arc::clone(&executor),
-                    device
-                )
-            );
 
+            let all_sices_1 = train_nets::slices_in_all_resources(
+                load_motif_slices(channel, filter_and_slice.window(), slices, Arc::clone(&executor))
+            );
 
             //list motifs which are NOT motif_id and NOT from run_id
             let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, Some(all_sices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
@@ -929,11 +942,7 @@ fn train_on_motifs(ws: Arc<RwLock<Workspace>>, find_motifs_run_id: usize, select
             debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
             let all_sices_0 = train_nets::slices_in_all_resources(
-                load_motif_slices(
-                    ws.read().base_path_as_str().as_str(), channel, filter_and_slice.window(), slices,
-                    Arc::clone(&executor),
-                    device
-                )
+                load_motif_slices(channel, filter_and_slice.window(), slices, Arc::clone(&executor))
             );
 
             debug!("train_on_motif: 0. run_id={}, done", run_id);
@@ -1295,12 +1304,13 @@ mod main_tests {
     fn test_run_all() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
+        let n = 1000i64;
 
-        let ws = Arc::new(RwLock::new(Workspace::new(test_dir, 1)?));
+        let ws = Arc::new(RwLock::new(Workspace::new(test_dir, 1, 2 * n as usize)?));
         let ws_runner = Arc::clone(&ws);
 
 
-        let n = 1000i64;
+
         let max_y = 30.0;
 
 
@@ -1385,7 +1395,7 @@ mod main_tests {
             vec![Cpu],
             // &TrainOnMotifsParams::dummy(vec![corr_run_id], 100, 100.0, 10, 10e-5..10e-3, 1),
             // &TrainOnMotifsParams::dummy(vec![motif_selection_id], 10, 100.0, 10, 10e-9 .. 10e-5, 2..5),
-            &TrainOnMotifsParams::dummy(vec![motif_selection_run_id], 10, 100.0, 10, 10e-5, 2),
+            &TrainOnMotifsParams::dummy(vec![motif_selection_run_id], 3, 100.0, 10, 10e-5, 2),
             Arc::clone(&executor_rc),
         )?;
 
@@ -1432,14 +1442,18 @@ mod main_tests {
             Arc::clone(&ws),
             &store,
             vec![Cpu],
-            &TrainOnLabelParams::dummy(100, motif_node_params_selection_run_ids, vec![
-                ("Label_0".into(), "Label_0/6".into()),
-                ("Label_1".into(), "Label_1/6".into())
-            ], vec![
-                ("Label_0".into(), "Label_0/4".into()),
-                ("Label_1".into(), "Label_1/4".into())
-            ],
-                                       100, 10, 10, 0.4),
+            &TrainOnLabelParams::dummy(
+                100,
+                motif_node_params_selection_run_ids,
+                vec![
+                    ("Label_0".into(), "Label_0/6".into()),
+                    ("Label_1".into(), "Label_1/6".into())
+                ], vec![
+                    ("Label_0".into(), "Label_0/4".into()),
+                    ("Label_1".into(), "Label_1/4".into())
+                ],
+                10, 10, 3, 0.4
+            ),
             Arc::clone(&executor_rc),
         )?;
 
@@ -1448,7 +1462,7 @@ mod main_tests {
             Arc::clone(&ws),
             &store,
             &Cpu,
-            &TrainFinalParams::dummy(100, 3, "pure group 6".into(), "pure group 4".into(), 10, 100, 10),
+            &TrainFinalParams::dummy(100, 3, "pure group 6".into(), "pure group 4".into(), 10, 10, 10),
             Arc::clone(&executor_rc),
         )?;
 
@@ -1543,5 +1557,25 @@ mod main_tests {
 
         { store.lock().delete_slices_without_matches(run_id) }?;
         Ok(run_id)
+    }
+
+    #[test]
+    fn test_0(){
+        let t_0 = Tensor::from_slice(&[0., 1., 2., 3.]);
+
+        println!("t_0={t_0}");
+        println!("t_0.size={:?}", t_0.size());
+        println!("----------------");
+
+        let t_0 = t_0.view((1, -1));
+        println!("t_0={t_0}");
+        println!("t_0.size={:?}", t_0.size());
+
+        println!("----------------");
+        let t_0 = t_0.unsqueeze(0);
+        println!("t_0={t_0}");
+        println!("t_0.size={:?}", t_0.size());
+
+
     }
 }

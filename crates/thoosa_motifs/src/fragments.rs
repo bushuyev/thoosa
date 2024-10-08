@@ -282,7 +282,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices(_base_path: &str, channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>, _device: Device) -> Vec<(String, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices(channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
@@ -300,11 +300,11 @@ pub fn load_motif_slices(_base_path: &str, channel: i64, widow: i64, slices: Vec
     let wg = WaitGroup::new();
 
 
-    tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).for_each(|tensor_idxs|{//TODO remove chunks?
+    tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).for_each(|tensor_keys|{//TODO remove chunks?
 
-        debug!("load_motif_slices: tensor_idxs={:?}", tensor_idxs);
+        debug!("load_motif_slices: tensor_keys={:?}", tensor_keys);
 
-        tensor_idxs.iter().map(|v|(*v).clone()).for_each(|tensor_idx| {
+        tensor_keys.iter().map(|v|(*v).clone()).for_each(|tensor_idx| {
             let slices = tensors_ids_slices.get(&tensor_idx).expect(format!("no {}", tensor_idx).as_str()).clone();
 
             let all_slices = Arc::clone(&all_slices);
@@ -328,7 +328,7 @@ pub fn load_motif_slices(_base_path: &str, channel: i64, widow: i64, slices: Vec
 
                              slice_ok
                          }).map(|slice_idx| Box::new(
-                             SyncWrapper::new(t.i((channel, slice_idx..slice_idx + widow)), |b|b.shallow_clone())
+                             SyncWrapper::new_t(t.i((channel, slice_idx..slice_idx + widow)))
                          )).collect::<Vec<Box<SyncWrapper<Tensor>>>>()
                         )
                     );
@@ -342,8 +342,18 @@ pub fn load_motif_slices(_base_path: &str, channel: i64, widow: i64, slices: Vec
 
     debug!("load_motif_slices: loaded slices={}",  slices.len());
 
-    let x= all_slices.write().drain(..).map(|v|(v.0, v.1.into_iter().map(|b|Box::new(b.shallow_clone())).collect())).collect();
-    x
+    let t= all_slices
+        .write()
+        .drain(..)
+        .map(
+            |v|
+                (
+                    v.0,
+                    v.1.into_iter().map(|b|Box::new(b.shallow_clone())).collect()
+                )
+        )
+        .collect();
+    t
 }
 
 
@@ -664,12 +674,10 @@ mod motifs_tests {
         let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
-            "base",
             0,
             2,
             vec![TensorSliceIdx(123.to_string(), 2)],
-            executor_rc,
-            Device::Cpu
+            executor_rc
         );
 
         assert_eq!(vec![("123".to_string(), vec![Box::new(Tensor::from_slice(&[2.0, 3.0]))])], motif_slices);
@@ -694,12 +702,10 @@ mod motifs_tests {
         let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
-            "base",
             0,
             5000,
             vec![TensorSliceIdx(123.to_string(), 2)],
-            executor_rc,
-            Device::Cpu
+            executor_rc
         );
 
 
