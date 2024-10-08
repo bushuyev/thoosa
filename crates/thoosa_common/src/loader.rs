@@ -20,7 +20,7 @@ use futures::{
     future::{BoxFuture, FutureExt},
     task::{waker_ref, ArcWake},
 };
-
+use tch::{IndexOp, Tensor};
 
 struct RayonNotify {}
 
@@ -401,6 +401,12 @@ where
 impl<V:Send+Display+Debug> Display for SyncWrapper<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.v, f)
+    }
+}
+
+impl SyncWrapper<Tensor> {
+    pub fn new_t(t:Tensor) -> Self {
+        SyncWrapper::new(t, |b|b.shallow_clone())
     }
 }
 

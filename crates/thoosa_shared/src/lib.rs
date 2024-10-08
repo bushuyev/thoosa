@@ -491,8 +491,11 @@ where
     }
 }
 
+/**
+calculates indexes for sliding  windows of size {motif_n} and step {step} in input of length {input_n} and splits them in N batches of  {batch_size} and reminder M
+*/
 pub fn batch_windows(input_n: usize, motif_n: usize, step: usize, batch_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) { // (batches, reminder)
-    debug!("slice_windows: input_n={}, motif_n={}, step={}", input_n, motif_n, step);
+    debug!("slice_windows: input_n={input_n}, motif_n={motif_n}, step={step} batch_size={batch_size}");
 
     (0..=input_n - motif_n).step_by(step).fold((vec![], vec![]), |mut a, v| {
         a.1.push(v);

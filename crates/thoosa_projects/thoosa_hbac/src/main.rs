@@ -19,7 +19,8 @@ fn main()  {
             "other"
         ],
         |path, device| parquet_to_tensor_by_path(path, device),
-        20
+        20,
+        684400
     ) {
 
         Ok(_) => {

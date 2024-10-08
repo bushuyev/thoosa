@@ -19,12 +19,13 @@ pub struct Workspace {
     labels_models_path:PathBuf,
     final_models_path:PathBuf,
 
-    channels:usize //TODO move into input meta
+    channels:usize, //TODO move into input meta
+    max_input:usize //TODO move into input meta
 }
 
 impl Workspace {
 
-    pub fn new(base_path: impl Into<PathBuf>, channels_num: usize) -> Result<Self, ThoosaError> {
+    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Self, ThoosaError> {
         let base_path = base_path.into();
         if !base_path.exists() {
             fs::create_dir_all(&base_path)?;
@@ -49,7 +50,8 @@ impl Workspace {
             motifs_models_path,
             labels_models_path,
             final_models_path,
-            channels: channels_num
+            channels,
+            max_input
         })
     }
 
@@ -182,8 +184,14 @@ impl Workspace {
         model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<usize>().ok())).expect("can't parse run_id from {model_path}")
     }
 
+    #[inline]
     pub fn channels(&self) -> usize {
         self.channels
+    }
+
+    #[inline]
+    pub fn max_input(&self) -> usize {
+        self.max_input
     }
 }
 
@@ -211,7 +219,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = Workspace::new(test_dir, 2)?;
+        let ws = Workspace::new(test_dir, 2, 684400)?;
 
 
         debug!("store_path={:?}", ws.store_path());
@@ -220,30 +228,24 @@ mod tests {
 
 
         ws.save_motif_model(0, 0, 0, VarStore::new(Cpu), MotifNodeParams::new(10));
-        ws.save_motif_model(1, 0, 1, VarStore::new(Cpu), MotifNodeParams::new(20));
+        ws.save_motif_model(1, 1, 0, VarStore::new(Cpu), MotifNodeParams::new(20));
 
-        ws.save_motif_model(1, 0, 2, VarStore::new(Cpu), MotifNodeParams::new(30));
-        ws.save_motif_model(0, 0, 3, VarStore::new(Cpu), MotifNodeParams::new(40));
-        ws.save_motif_model(1, 1, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
+        ws.save_motif_model(1, 2, 2, VarStore::new(Cpu), MotifNodeParams::new(30));
+        ws.save_motif_model(1, 3, 2, VarStore::new(Cpu), MotifNodeParams::new(40));
+        ws.save_motif_model(1, 4, 2, VarStore::new(Cpu), MotifNodeParams::new(50));
 
         ws.save_motif_model(1, 3, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
 
 
-        let models = ws.motif_models(0)?;
-        for mm in &models{
-            debug!("mm={mm:?}");
-        }
+        let models = ws.motif_models(0, 0)?;
 
-        assert_eq!(models.len(), 2);
-        assert_eq!(models.len(), 2);
 
-        let models = ws.motif_models(1)?;
-        for mm in &models{
-            debug!("mm={mm:?}");
-        }
+        assert_eq!(ws.motif_models(0, 0)?.len(), 1);
+        assert_eq!(ws.motif_models(1, 0)?.len(), 1);
+        assert_eq!(ws.motif_models(1, 2)?.len(), 3);
+        assert_eq!(ws.motif_models(1, 4)?.len(), 1);
 
-        assert_eq!(models.len(), 0);
-        assert_eq!(models.len(), 1);
+
 
         Ok(())
     }
@@ -254,7 +256,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = Workspace::new(test_dir, 20)?;
+        let ws = Workspace::new(test_dir, 20, 684400)?;
 
         ws.save_label_model(1, "label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10));
         ws.save_label_model(2, "label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10));
