@@ -507,6 +507,10 @@ pub fn batch_windows(input_n: usize, motif_width: usize, step: usize, batch_size
     })
 }
 
+pub fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, batch_size: usize) -> usize {
+    (((input_n-motif_width)/step) as f32 / batch_size as f32).ceil() as usize
+}
+
 pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoosaError> {
     let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)?;//TODO const
     Ok(re.captures_iter(descr).map(|caps| (caps["id"].parse::<i64>().expect(&caps["id"]), caps["kind"].into())).collect::<Vec<(i64, String)>>())
@@ -598,7 +602,7 @@ mod shared_tests {
    */
     use std::ops::Range;
     use clap::{Args, Parser};
-    use crate::{batch_windows, group_slices, RangeOrValue, ThoosaError};
+    use crate::{batch_windows, clc_num_batches, group_slices, RangeOrValue, ThoosaError};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -704,6 +708,29 @@ mod shared_tests {
         assert_eq!(vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900], batches.0[1]);
         assert_eq!(vec![2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900], batches.0[2]);
         assert_eq!(vec![3000, 3100, 3200, 3300, 3400], batches.1)
+    }
+
+    #[test]
+    fn test_clc_num_batches(){
+        assert_eq!(
+            clc_num_batches(1000, 100, 10, 1000),
+            1
+        );
+
+        assert_eq!(
+            clc_num_batches(1000, 100, 10, 90),
+            1
+        );
+
+        assert_eq!(
+            clc_num_batches(1000, 100, 10, 50),
+            2
+        );
+
+        assert_eq!(
+            clc_num_batches(1000, 100, 10, 30),
+            3
+        );
     }
 
     #[test]

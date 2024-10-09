@@ -315,7 +315,8 @@ pub fn apply_channel_motifs(
     max_motif_nodes: i64,
     max_motif_batches: usize,
     device: &Device
-) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
+) -> Tensor {
+
     if motif_nodes.len() == 0 {
         //if no 'main' folds build motifs on remainder
         return Tensor::zeros([max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size], (Float, *device));
@@ -329,6 +330,8 @@ pub fn apply_channel_motifs(
     assert!(input_t_size.len() == 1);
 
     let input_n = input_t_size[0];
+
+
     let folds = batch_windows(input_n as usize, motif_width as usize, input_slice_step, input_slices_motif_batch_size as usize);
 
     debug!("apply_channel_motifs: input_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
@@ -343,13 +346,12 @@ pub fn apply_channel_motifs(
         let input_slices_batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);
         debug!("apply_channel_motifs: input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
-        let input_slices_batch = input_slices_batch.view((input_slices_motif_batch_size, motif_width));
 
         for ((_node_i, node), node_output_batches) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
-            let node_rs = node.1.forward(&input_slices_batch).squeeze();
-            debug!("apply_channel_motifs: batch.size()={:?} node_rs size={:?} node_rs_vals={:?}", input_slices_batch.size(), node_rs.size(), from::<Vec<f32>>(&node_rs));
-            add_node_output_batch(input_slices_motif_batch_size, node_output_batches, node_rs);
+            let motifs_p_t = node.1.forward(&input_slices_batch).squeeze();//squeeze is to remove motif width dimension: batch x width -> batch x 1 (probability) -> batch of probabilities that slice matches the motif
+            debug!("apply_channel_motifs: motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
+            add_node_output_batch(input_slices_motif_batch_size, node_output_batches, motifs_p_t);
         };
     }
 
@@ -359,14 +361,15 @@ pub fn apply_channel_motifs(
         let input_slices_batch = Tensor::stack(folds.1.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);
         debug!("apply_channel_motifs: reminder, input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
-        let input_slices_batch = input_slices_batch.view((-1,  motif_width));
 
         for ((node_i, node), node_batch) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
-            let node_rs = node.1.forward(&input_slices_batch).set_requires_grad(false).squeeze();
+            let motifs_p_t = node.1.forward(&input_slices_batch).squeeze();
 
-            if node_rs.size().len() > 0 {
-                add_node_output_batch(input_slices_motif_batch_size, node_batch, node_rs);
+            debug!("apply_channel_motifs: motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
+
+            if motifs_p_t.size().len() > 0 {
+                add_node_output_batch(input_slices_motif_batch_size, node_batch, motifs_p_t);
 
             } else {
                 warn!("apply_channel_motifs: reminder, no rs for node_i={} batch.size()={:?}", node_i, input_slices_batch.size());
@@ -388,20 +391,21 @@ pub fn apply_channel_motifs(
     debug!("apply_channel_motifs: 2.2 nodes_t.size={:?}", nodes_t.size());
     debug!("apply_channel_motifs: 1. nodes_t={:?} max_nodes={}, max_motif_batches={} motif_batch_size={}", nodes_t.size(), max_motif_nodes, max_motif_batches, input_slices_motif_batch_size);
 
+    //pad_motifs_to- to have num motifs in all channels same
     let nodes_t = pad_to(&nodes_t, &[max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size]).unwrap();
 
     debug!("apply_channel_motifs: 2. nodes_t={:?}", nodes_t.size());
     nodes_t
 }
 
-fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Tensor) {
-    if net_rs.size()[0] < motif_batch_size {
+fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, motifs_p_t: Tensor) {
+    if motifs_p_t.size()[0] < motif_batch_size {
         net_batch.push(
-            pad_to(&net_rs, &[motif_batch_size]).expect("pad_to failed")
+            pad_to(&motifs_p_t, &[motif_batch_size]).expect("pad_to failed")
         );
     } else {
         net_batch.push(
-            net_rs
+            motifs_p_t
         );
     }
 }

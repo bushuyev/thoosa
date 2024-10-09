@@ -486,6 +486,8 @@ pub fn train_final(
         a
     });
 
+    debug!("train_final: label_nets={label_nets}");
+
 
     let device =device.clone();
     let channels = ws.read().channels();
@@ -507,7 +509,8 @@ pub fn train_final(
 
                     let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("labels_channels_motifs_models for {label}").as_str());
                     debug!("train_final:v  channels_motifs_models={channels_motifs_models:?}");
-                    let max_motif_batches = 10;
+                    let max_motif_batches = 2;
+
                     let t_net = apply_motif_nets(step, &t, Arc::clone(channels_motifs_models), motif_batch_size, max_motif_batches, &device);
 
                     for (label_node_run_id, label_node_params, label_node) in label_nodes{
@@ -541,8 +544,8 @@ pub fn train_final(
 
             let pred_y = pred; //pred.i((.., 0, 0));
             debug!("pred_y.size ={:?} target.size={:?}", pred_y.size(), target.size());
-            debug!("xxxxx: target={:?}", from::<Vec<f32>>(&target));
-            debug!("xxxxx: pred_y={:?} ", from::<Vec<f32>>(&pred_y));
+            // debug!("xxxxx: target={:?}", from::<Vec<f32>>(&target));
+            // debug!("xxxxx: pred_y={:?} ", from::<Vec<f32>>(&pred_y));
             pred_y.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0)
 
         },
@@ -553,9 +556,10 @@ pub fn train_final(
 
             // debug!("xxxxx: 0 ={}",  t);
 
-            let t_out = t.view((t.size()[0], t.size()[1], -1)); //model_dirs * labels
-            debug!(" t_out.size()={:?}",  t_out.size());
-            t_out
+            // let t_out = t.view((t.size()[0], t.size()[1], -1)); //model_dirs * labels
+            // debug!(" t_out.size()={:?}",  t_out.size());
+            // t_out
+            t.squeeze()
         },
         None
     )?;
@@ -1462,7 +1466,7 @@ fn apply_motif_nets(
     max_motif_batches: usize,
     device: &Device
 ) -> Tensor {
-    let max_motif_nodes = channels_motifs_nodes.read().iter().map(|nets| nets.len()).max().unwrap_or(0);//TODO remove
+    let max_motif_nodes = channels_motifs_nodes.read().iter().map(|nets| nets.len()).max().unwrap_or(0);
 
     debug!("apply_label_motifs: input_t.size()={:?} max_motif_nodes={max_motif_nodes} input_slices_motif_batch_size={input_slices_motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
 
