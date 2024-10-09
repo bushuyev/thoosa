@@ -321,29 +321,29 @@ pub fn apply_channel_motifs(
         return Tensor::zeros([max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size], (Float, *device));
     }
 
-    let motif_n = motif_nodes[0].0.num_features();//TODO different window lengths in same selection?
+    let motif_width = motif_nodes[0].0.num_features();//TODO different window lengths in same selection?
 
     let input_t_size = channel.size();
-    debug!("apply_channel_motifs: channel.size()={:?} input_t_size={:?} nodes.len()={:?} motif_n={motif_n}", channel.size(), input_t_size, motif_nodes.len());
+    debug!("apply_channel_motifs: channel.size()={:?} input_t_size={:?} nodes.len()={:?} motif_width={motif_width}", channel.size(), input_t_size, motif_nodes.len());
 
     assert!(input_t_size.len() == 1);
 
     let input_n = input_t_size[0];
-    let folds = batch_windows(input_n as usize, motif_n as usize, input_slice_step, input_slices_motif_batch_size as usize);
+    let folds = batch_windows(input_n as usize, motif_width as usize, input_slice_step, input_slices_motif_batch_size as usize);
 
     debug!("apply_channel_motifs: input_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
 
     let nodes_len = motif_nodes.len();
-    let mut node_batches = (0..nodes_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / input_slice_step)).collect::<Vec<Vec<Tensor>>>();
+    let mut node_batches = (0..nodes_len).map(|_| Vec::with_capacity(((input_n - motif_width) as usize) / input_slice_step)).collect::<Vec<Vec<Tensor>>>();
 
 
     for slice_0_idx in folds.0 {
         debug!("apply_channel_motifs: slice_0_idx={:?}", slice_0_idx);
 
-        let input_slices_batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-        debug!("apply_channel_motifs: input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_n={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_n);
+        let input_slices_batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);
+        debug!("apply_channel_motifs: input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
-        let input_slices_batch = input_slices_batch.view((input_slices_motif_batch_size, motif_n));
+        let input_slices_batch = input_slices_batch.view((input_slices_motif_batch_size, motif_width));
 
         for ((_node_i, node), node_output_batches) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
@@ -356,10 +356,10 @@ pub fn apply_channel_motifs(
     if folds.1.len() > 0 {
         debug!("apply_channel_motifs: reminder={:?}", folds.1);
 
-        let input_slices_batch = Tensor::stack(folds.1.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-        debug!("apply_channel_motifs: reminder, input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_n={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_n);
+        let input_slices_batch = Tensor::stack(folds.1.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);
+        debug!("apply_channel_motifs: reminder, input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
-        let input_slices_batch = input_slices_batch.view((-1,  motif_n));
+        let input_slices_batch = input_slices_batch.view((-1,  motif_width));
 
         for ((node_i, node), node_batch) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
@@ -567,27 +567,27 @@ mod tch_tests {
 
     #[test]
     pub fn test_full() -> Result<(), ThoosaError>{
-        let motif_n =  1000;
+        let motif_width =  1000;
         let input_n =  10000;
 
-        // let motif_0_slice = comp_sin_v(motif_n);
-        let motif_0_slice = sin_v(motif_n, 10.);
+        // let motif_0_slice = comp_sin_v(motif_width);
+        let motif_0_slice = sin_v(motif_width, 10.);
         let motif_0_v = pulse_in_rand(
             input_n,
-            &[(((input_n-motif_n)/2) as usize, motif_0_slice.clone()), ], 0.05, 1., 0.1
+            &[(((input_n-motif_width)/2) as usize, motif_0_slice.clone()), ], 0.05, 1., 0.1
         );
 
-        // let motif_1_slice = comp_sin_k_v(motif_n, vec![30., 20., 10., 5., 3.]);
-        let motif_1_slice = sin_v(motif_n, 20.);
+        // let motif_1_slice = comp_sin_k_v(motif_width, vec![30., 20., 10., 5., 3.]);
+        let motif_1_slice = sin_v(motif_width, 20.);
         let motif_1_v = pulse_in_rand(
             input_n,
-            &[(((input_n-motif_n)/2) as usize, motif_1_slice.clone()), ], 0.05, 1., 0.1
+            &[(((input_n-motif_width)/2) as usize, motif_1_slice.clone()), ], 0.05, 1., 0.1
         );
 
-        let rnd_v_slice = comp_sin_k_v(motif_n, vec![6., 3., 2.], 0.5);
+        let rnd_v_slice = comp_sin_k_v(motif_width, vec![6., 3., 2.], 0.5);
         let rnd_v = pulse_in_rand(
             input_n,
-            &[(((input_n-motif_n)/2) as usize, rnd_v_slice.clone()), ], 0.05, 1., 0.1
+            &[(((input_n-motif_width)/2) as usize, rnd_v_slice.clone()), ], 0.05, 1., 0.1
         );
 
         let x = lin_t(input_n);
@@ -607,7 +607,7 @@ mod tch_tests {
         debug!("rnd_t.size()={:?}, motif_0_t.size()={:?}, motif_1_t.size()={:?}", rnd_t.size(), motif_0_t.size(), motif_1_t.size());
 
         let vs_0 = nn::VarStore::new(Device::Cpu);
-        let net_0 = test_net(&vs_0, motif_n)?;
+        let net_0 = test_net(&vs_0, motif_width)?;
 
         utils::train(
             &Device::Cpu,
@@ -630,7 +630,7 @@ mod tch_tests {
         )?;
 
         let vs_1 = nn::VarStore::new(Cpu);
-        let net_1 = test_net(&vs_1, motif_n)?;
+        let net_1 = test_net(&vs_1, motif_width)?;
         train(
             &Cpu,
             &mut crate::simp::DummyDs::new(
@@ -651,9 +651,9 @@ mod tch_tests {
             None
         )?;
 
-        let batch_rnd = Tensor::stack((0..10).map(|_| rnd_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));
-        let batch_0 = Tensor::stack((0..10).map(|_| motif_0_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));
-        let batch_1 = Tensor::stack((0..10).map(|_| motif_1_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_n));
+        let batch_rnd = Tensor::stack((0..10).map(|_| rnd_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
+        let batch_0 = Tensor::stack((0..10).map(|_| motif_0_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
+        let batch_1 = Tensor::stack((0..10).map(|_| motif_1_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
 
         debug!("net_0 rnd_t={:?}, motif_0={:?}",
              from::<Vec<f32>>(&net_0.forward(&batch_rnd).view(-1)),
@@ -676,8 +676,8 @@ mod tch_tests {
         let motif_1_t = Tensor::from_slice(motif_1_v.as_slice());
         debug!("motif_1_t={:?}", motif_1_t.size());
 
-        // motif_0_t.split(motif_n, 0).into_iter().array_chunks::<10>().for_each(|slice|{
-        let step = (motif_n / 4) as usize;
+        // motif_0_t.split(motif_width, 0).into_iter().array_chunks::<10>().for_each(|slice|{
+        let step = (motif_width / 4) as usize;
 
 
         let nets = vec![(MotifNodeParams::new(input_n), SyncModule::new(net_0)), (MotifNodeParams::new(input_n), SyncModule::new(net_1))];
@@ -691,7 +691,7 @@ mod tch_tests {
 
         let motif_batch_size = 10;
 
-        let max_folds = batch_windows(input_n as usize, motif_n as usize, step, motif_batch_size as usize);
+        let max_folds = batch_windows(input_n as usize, motif_width as usize, step, motif_batch_size as usize);
         let max_folds = max_folds.0.get(0).map(|v|v.len()).unwrap_or(max_folds.1.len());
 
 
