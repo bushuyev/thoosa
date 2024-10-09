@@ -492,12 +492,12 @@ where
 }
 
 /**
-calculates indexes for sliding  windows of size {motif_n} and step {step} in input of length {input_n} and splits them in N batches of  {batch_size} and reminder M
+calculates indexes for sliding  windows of size {motif_width} and step {step} in input of length {input_n} and splits them in N batches of  {batch_size} and reminder M
 */
-pub fn batch_windows(input_n: usize, motif_n: usize, step: usize, batch_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) { // (batches, reminder)
-    debug!("slice_windows: input_n={input_n}, motif_n={motif_n}, step={step} batch_size={batch_size}");
+pub fn batch_windows(input_n: usize, motif_width: usize, step: usize, batch_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) { // (batches, reminder)
+    debug!("slice_windows: input_n={input_n}, motif_width={motif_width}, step={step} batch_size={batch_size}");
 
-    (0..=input_n - motif_n).step_by(step).fold((vec![], vec![]), |mut a, v| {
+    (0..=input_n - motif_width).step_by(step).fold((vec![], vec![]), |mut a, v| {
         a.1.push(v);
         if a.1.len() == batch_size {
             a.0.push(a.1);
@@ -677,10 +677,10 @@ mod shared_tests {
     #[test]
     fn test_batch_windows_1000(){
         let input_n = 1000;
-        let motif_n = 100;
+        let motif_width = 100;
         let step = 100;
 
-        let batches = batch_windows(input_n, motif_n, step, 10);
+        let batches = batch_windows(input_n, motif_width, step, 10);
 
         assert_eq!(
             vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900],
@@ -695,10 +695,10 @@ mod shared_tests {
     #[test]
     fn test_batch_windows_3500(){
         let input_n = 3500;
-        let motif_n = 100;
+        let motif_width = 100;
         let step = 100;
 
-        let batches = batch_windows(input_n, motif_n, step, 10);
+        let batches = batch_windows(input_n, motif_width, step, 10);
 
         assert_eq!(vec![0,    100,  200,  300,  400,  500,  600,  700,  800,  900], batches.0[0]);
         assert_eq!(vec![1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900], batches.0[1]);

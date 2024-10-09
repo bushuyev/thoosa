@@ -564,7 +564,7 @@ pub fn train_final(
 
 }
 
-pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_n: i64, step: usize, motif_batch_size: i64, channels: usize, max_input:usize, device: &Device, labels: Vec<String>, motif_node_params: MotifNodeParams) -> Result<(Vec<String>, Tensor), ThoosaError>
+pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_width: i64, step: usize, motif_batch_size: i64, channels: usize, max_input:usize, device: &Device, labels: Vec<String>, motif_node_params: MotifNodeParams) -> Result<(Vec<String>, Tensor), ThoosaError>
     where F:Fn(&Path) -> Result<Tensor, ThoosaError> + Sync{
 
 
@@ -594,7 +594,7 @@ pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_n: i64, step: usiz
                     let motif_batches = batch_windows(max_input, model.motif_node_params.num_features as usize, step, motif_batch_size as usize);
                     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
                     let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
-                    debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_n={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_n);
+                    debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_width={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_width);
 
 
                     let t = apply_label_motifs(model.motif_node_params.num_features, step, &input_t, &model.motif_models, motif_batch_size, max_motif_batches, device);
@@ -1725,19 +1725,19 @@ mod train_tests {
     #[test]
     fn test_apply_motif_models() -> Result<(), ThoosaError>{
         let input_n = 1000;
-        let motif_n = 100;
-        let step = (motif_n / 1) as usize;
+        let motif_width = 100;
+        let step = (motif_width / 1) as usize;
 
         let t = make_test_tensor(input_n);
 
         let motif_nets = vec![
-            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 1. )?)), (MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 2. )?))], //channel 0 nets
-            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 10.)?))] //channel 1 nets
+            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 1. )?)), (MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 2. )?))], //channel 0 nets
+            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 10.)?))] //channel 1 nets
         ];
 
         let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0);
         let batch_size = 10;
-        let motif_batches = batch_windows(input_n as usize, motif_n as usize, step, batch_size);
+        let motif_batches = batch_windows(input_n as usize, motif_width as usize, step, batch_size);
         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
         let channel_0_t = apply_channel_motifs(step, batch_size as i64, &motif_nets[0], t.i((0, ..)), max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
@@ -1777,21 +1777,21 @@ mod train_tests {
     #[test]
     fn test_apply_motif_models_diff_len() -> Result<(), ThoosaError>{
         let input_n_0 = 1000;
-        let motif_n= 120;
+        let motif_width= 120;
         let t_0 = make_test_tensor(input_n_0);
         let t_1 = make_test_tensor(831);
 
         let motif_batch_size = 13;
 
         let motif_nets = Arc::new(RwLock::new(vec![
-            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 1.)?)), (MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 1.)?))], //channel 0 nets
-            vec![(MotifNodeParams::new(motif_n), SyncModule::new(test_net(motif_n, 10.)?))], //channel 1 nets
+            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 1.)?)), (MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 1.)?))], //channel 0 nets
+            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 10.)?))], //channel 1 nets
             vec![]
         ]));
 
         let step = 11;
         let batch_size = 10;
-        let motif_batches = batch_windows(input_n_0 as usize, motif_n as usize, step, batch_size);
+        let motif_batches = batch_windows(input_n_0 as usize, motif_width as usize, step, batch_size);
         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
         debug!("max_motif_batches={}", max_motif_batches);
@@ -2040,10 +2040,10 @@ mod train_tests {
         let channels = 5;
         let motif_batch_size = 7;
         let max_input = 684400;//TODO
-        let motif_n = 100;
+        let motif_width = 100;
         let step = 100;
 
-        // let motif_batches = batch_windows(max_input, motif_n as usize, step, motif_batch_size as usize);
+        // let motif_batches = batch_windows(max_input, motif_width as usize, step, motif_batch_size as usize);
         let max_motif_batches = 978; //(motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0}) as i64;
 
         let cdt = cdt_for_dir();
@@ -2086,7 +2086,7 @@ mod train_tests {
                 output: "/tmp/out.csv".to_string()
             },
             test_path_to_t,
-            motif_n,
+            motif_width,
             step,
             motif_batch_size,
             channels,
