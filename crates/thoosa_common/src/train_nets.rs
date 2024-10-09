@@ -238,8 +238,6 @@ impl LoadingTensorsDataBatch {
             0,
         );
 
-
-
         debug!("LoadingTensorsDataBatch::choose_for_batch: tensor.size()={:?} tensor.device()={:?}", tensor.size(), tensor.device());
 
         (
@@ -252,11 +250,15 @@ impl LoadingTensorsDataBatch {
 impl  DataBatch for LoadingTensorsDataBatch {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
-        Self::choose_for_batch(&self.train, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
+        tch::no_grad(|| {
+            Self::choose_for_batch(&self.train, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
+        })
     }
 
     fn valid_batch(&mut self) -> (Tensor, Tensor){
-        Self::choose_for_batch(&self.val, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
+        tch::no_grad(|| {
+            Self::choose_for_batch(&self.val, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
+        })
     }
 }
 
@@ -384,7 +386,7 @@ pub fn train_on_motif_nodes(
     valid_labels_resources: Vec<(i64, Vec<String>)>,
     device: &Device,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-    channels_motifs_models:Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>
+    channels_motifs_nodes:Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>
 ) -> Result<(f32, (VarStore, LabelNodeParams)), ThoosaError>
     {
 
@@ -392,16 +394,14 @@ pub fn train_on_motif_nodes(
 
     let vs_0 = nn::VarStore::new(device.clone());
 
-
     // let apply_motifs = |t:Box<Tensor>| Box::new(apply_label_motifs(motif_node_params.num_features, step, &t, &motif_nets, label_node_params.motif_batch_size, label_node_params.max_motif_batches as usize, device));
     //TODO pass params to LoadingTensorsDataBatch ?
 
-    let num_features = motif_node_params.num_features;
     let motif_batch_size = label_node_params.motif_batch_size;
     let max_motif_batches = label_node_params.max_motif_batches as usize;
 
     let device = device.clone();
-    let step = train_on_label_params.step();
+    let input_slice_step = train_on_label_params.step();
     let channels = ws.read().channels();
 
     let loss = train(
@@ -413,7 +413,7 @@ pub fn train_on_motif_nodes(
             train_on_label_params.label_batch_size,
             Arc::clone(&executor),
             device.clone(),
-            Some( Box::new(move |t:Box<Tensor>| Box::new(apply_motif_nets(num_features, step, &t, Arc::clone(&channels_motifs_models), motif_batch_size, max_motif_batches, &device))))
+            Some( Box::new(move |t:Box<Tensor>| Box::new(apply_motif_nets(input_slice_step, &t, Arc::clone(&channels_motifs_nodes), motif_batch_size, max_motif_batches, &device))))
 
         ) as &mut dyn DataBatch,
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
@@ -508,7 +508,7 @@ pub fn train_final(
                     let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("labels_channels_motifs_models for {label}").as_str());
                     debug!("train_final:v  channels_motifs_models={channels_motifs_models:?}");
                     let max_motif_batches = 10;
-                    let t_net = apply_motif_nets(0, step, &t, Arc::clone(channels_motifs_models), motif_batch_size, max_motif_batches, &device);
+                    let t_net = apply_motif_nets(step, &t, Arc::clone(channels_motifs_models), motif_batch_size, max_motif_batches, &device);
 
                     for (label_node_run_id, label_node_params, label_node) in label_nodes{
                         debug!("train_final: label_node_params={label_node_params:?} label_node_run_id={:?} t_net.size()={:?}",  label_node_run_id, t_net.size());
@@ -1295,7 +1295,7 @@ pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_
                         &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
 
                         |pred: &Tensor, target: &Tensor| {
-                            let pred_y = pred.i((.., 0, 0));
+                            let pred_y = pred.i((.., 0));
 
                             let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
                             debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
@@ -1454,16 +1454,31 @@ fn split_train_val<T>(classes_tensors: Vec<Vec<T>>, train_valid_split: f32) -> (
 
 
 /// returns Tensor channels x nets x batches x batch size
-fn apply_motif_nets(motif_n: i64, step: usize, input_t: &Tensor, channels_motifs_models: Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>, motif_batch_size: i64, max_motif_batches: usize, device: &Device) -> Tensor {
-    let max_nets = channels_motifs_models.read().iter().map(|nets| nets.len()).max().unwrap_or(0);//TODO remove
+fn apply_motif_nets(
+    input_slice_step: usize,
+    input_t: &Tensor,
+    channels_motifs_nodes: Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>,
+    input_slices_motif_batch_size: i64,
+    max_motif_batches: usize,
+    device: &Device
+) -> Tensor {
+    let max_motif_nodes = channels_motifs_nodes.read().iter().map(|nets| nets.len()).max().unwrap_or(0);//TODO remove
 
-    debug!("apply_label_motifs: input_t.size()={:?} max_nets={max_nets} motif_batch_size={motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
+    debug!("apply_label_motifs: input_t.size()={:?} max_motif_nodes={max_motif_nodes} input_slices_motif_batch_size={input_slices_motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
 
     let channels_motifs = Tensor::stack(
-        channels_motifs_models.read()
+        channels_motifs_nodes.read()
             .iter()
             .enumerate()
-            .map(|(channel, net)| apply_channel_motifs(motif_n, step, &net, input_t.i((channel as i64, ..)), motif_batch_size, max_nets as i64, max_motif_batches, device))
+            .map(|(channel, motif_nodes)| apply_channel_motifs(
+                input_slice_step,
+                input_slices_motif_batch_size,
+                &motif_nodes,
+                input_t.i((channel as i64, ..)),
+                max_motif_nodes as i64,
+                max_motif_batches,
+                device
+            ))
             .collect::<Vec<_>>().as_slice(),
         0
     );
@@ -1725,7 +1740,7 @@ mod train_tests {
         let motif_batches = batch_windows(input_n as usize, motif_n as usize, step, batch_size);
         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
-        let channel_0_t = apply_channel_motifs(motif_n, step, &motif_nets[0], t.i((0, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
+        let channel_0_t = apply_channel_motifs(step, batch_size as i64, &motif_nets[0], t.i((0, ..)), max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
 
         let channel_0_motifs = Tensor::stack(&[
@@ -1735,7 +1750,7 @@ mod train_tests {
         ).totype(Float).view((2, 1, 10));
         assert_eq!(channel_0_motifs, channel_0_t);
 
-        let channel_1_t = apply_channel_motifs(motif_n, step, &motif_nets[1], t.i((1, ..)), batch_size as i64, max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
+        let channel_1_t = apply_channel_motifs(step, batch_size as i64, &motif_nets[1], t.i((1, ..)), max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
         debug!("test_apply_motif_models: max_motif_batches={:?}", max_motif_batches);
 
@@ -1748,7 +1763,7 @@ mod train_tests {
 
         debug!("test_apply_motif_models: channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
-        let channels_motifs = super::apply_motif_nets(motif_n, step, &t, Arc::new(RwLock::new(motif_nets)), batch_size as i64, max_motif_batches, &Cpu);
+        let channels_motifs = super::apply_motif_nets(step, &t, Arc::new(RwLock::new(motif_nets)), batch_size as i64, max_motif_batches, &Cpu);
 
         assert_eq!(
             Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
@@ -1781,11 +1796,11 @@ mod train_tests {
 
         debug!("max_motif_batches={}", max_motif_batches);
 
-        let channels_motifs_0 = super::apply_motif_nets(motif_n, step, &t_0, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_0 = super::apply_motif_nets(step, &t_0, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_0.size={:?}", channels_motifs_0.size());
 
-        let channels_motifs_1 = super::apply_motif_nets(motif_n, step, &t_1, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_1 = super::apply_motif_nets(step, &t_1, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
