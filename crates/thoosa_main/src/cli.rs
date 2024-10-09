@@ -1429,6 +1429,8 @@ mod main_tests {
 
         /////////////////////LABEL
         //apply_channel_motifs - input 2000 - motif_width=800, step=100 batch_size=10
+        //                     - two batches of slices- one full - [0, 100, 200, 300, 400, 500, 600, 700, 800, 900] + one reminder 1000, 1100, 1200
+        //
         run_train_on_motif_nodes(
             Arc::clone(&ws),
             &store,
