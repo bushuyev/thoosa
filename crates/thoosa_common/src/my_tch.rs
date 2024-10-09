@@ -297,90 +297,104 @@ pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block
 
 }
 
+/**
+slices single input tensor's channel into batches of input_slices_motif_batch_size with input_slice_step which were used during motif node training.
+all motif nodes are to be from same run so have same input params.
+Arranges output into max_motif_nodes x max_motif_batches  (max_ - to be same for all channels)
 
-/// returns Tensor nets x batches x batch size
-pub fn apply_channel_motifs(motif_n: i64, step: usize, motif_nets: &Vec<(MotifNodeParams, SyncModule)>, channel: Tensor, motif_batch_size: i64, max_nets: i64, max_motif_batches: usize, device: &Device) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
 
-    let motif_n = motif_nets[0].0.num_features();//TODO different window lengths in same selection?
+input_slices_motif_batch_size - both for motif node input batch size and output (input for label node) batch
+
+ # returns Tensor nodes x batches x batch size
+*/
+pub fn apply_channel_motifs(
+    input_slice_step: usize,
+    input_slices_motif_batch_size: i64,
+    motif_nodes: &Vec<(MotifNodeParams, SyncModule)>,
+    channel: Tensor,
+    max_motif_nodes: i64,
+    max_motif_batches: usize,
+    device: &Device
+) -> Tensor {//pad_motifs_to- to have num motifs in all channels same
+    if motif_nodes.len() == 0 {
+        //if no 'main' folds build motifs on remainder
+        return Tensor::zeros([max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size], (Float, *device));
+    }
+
+    let motif_n = motif_nodes[0].0.num_features();//TODO different window lengths in same selection?
 
     let input_t_size = channel.size();
-    debug!("apply_channel_motifs: channel.size()={:?} input_t_size={:?} nets.len()={:?} motif_n={motif_n}", channel.size(), input_t_size, motif_nets.len());
+    debug!("apply_channel_motifs: channel.size()={:?} input_t_size={:?} nodes.len()={:?} motif_n={motif_n}", channel.size(), input_t_size, motif_nodes.len());
 
     assert!(input_t_size.len() == 1);
 
     let input_n = input_t_size[0];
-    let folds = batch_windows(input_n as usize, motif_n as usize, step, motif_batch_size as usize);
+    let folds = batch_windows(input_n as usize, motif_n as usize, input_slice_step, input_slices_motif_batch_size as usize);
 
     debug!("apply_channel_motifs: input_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
 
-
-    if motif_nets.len() == 0 {
-        //if no 'main' folds build motifs on remainder
-        return Tensor::zeros([max_nets, max_motif_batches as i64, motif_batch_size], (Float, *device));
-    }
-
-    let nets_len = motif_nets.len();
-    let mut net_batches = (0..nets_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / step)).collect::<Vec<Vec<Tensor>>>();
+    let nodes_len = motif_nodes.len();
+    let mut node_batches = (0..nodes_len).map(|_| Vec::with_capacity(((input_n - motif_n) as usize) / input_slice_step)).collect::<Vec<Vec<Tensor>>>();
 
 
     for slice_0_idx in folds.0 {
         debug!("apply_channel_motifs: slice_0_idx={:?}", slice_0_idx);
 
-        let batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-        debug!("apply_channel_motifs: batch.size={:?} motif_batch_size={:?} motif_n={:?}", batch.size(), motif_batch_size, motif_n);
+        let input_slices_batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
+        debug!("apply_channel_motifs: input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_n={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_n);
 
-        let batch = batch.view((motif_batch_size, 1, motif_n));
+        let input_slices_batch = input_slices_batch.view((input_slices_motif_batch_size, motif_n));
 
-        for ((_net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
+        for ((_node_i, node), node_output_batches) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
-            let net_rs = net.1.forward(&batch).squeeze();
-            debug!("apply_channel_motifs: batch.size()={:?} net_rs size={:?} net_rs_vals={:?}", batch.size(), net_rs.size(), from::<Vec<f32>>(&net_rs));
-            add_net_batch(motif_batch_size, net_batch, net_rs);
+            let node_rs = node.1.forward(&input_slices_batch).squeeze();
+            debug!("apply_channel_motifs: batch.size()={:?} node_rs size={:?} node_rs_vals={:?}", input_slices_batch.size(), node_rs.size(), from::<Vec<f32>>(&node_rs));
+            add_node_output_batch(input_slices_motif_batch_size, node_output_batches, node_rs);
         };
     }
 
     if folds.1.len() > 0 {
         debug!("apply_channel_motifs: reminder={:?}", folds.1);
 
-        let batch = Tensor::stack(folds.1.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
-        debug!("apply_channel_motifs: reminder, batch.size={:?} motif_batch_size={:?} motif_n={:?}", batch.size(), motif_batch_size, motif_n);
+        let input_slices_batch = Tensor::stack(folds.1.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_n)).collect::<Vec<Tensor>>().as_slice(), 0);
+        debug!("apply_channel_motifs: reminder, input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_n={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_n);
 
-        let batch = batch.view((-1, 1, motif_n));
+        let input_slices_batch = input_slices_batch.view((-1,  motif_n));
 
-        for ((net_i, net), net_batch) in motif_nets.iter().enumerate().zip(net_batches.iter_mut()) {
+        for ((node_i, node), node_batch) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
-            let net_rs = net.1.forward(&batch).set_requires_grad(false).squeeze();
+            let node_rs = node.1.forward(&input_slices_batch).set_requires_grad(false).squeeze();
 
-            if net_rs.size().len() > 0 {
-                add_net_batch(motif_batch_size, net_batch, net_rs);
+            if node_rs.size().len() > 0 {
+                add_node_output_batch(input_slices_motif_batch_size, node_batch, node_rs);
 
             } else {
-                warn!("apply_channel_motifs: reminder, no rs for net_i={} batch.size()={:?}", net_i, batch.size());
+                warn!("apply_channel_motifs: reminder, no rs for node_i={} batch.size()={:?}", node_i, input_slices_batch.size());
             }
         };
     }
 
-    //nets x batches in tensor/motif_batch_size x motif_batch_size
-    net_batches.iter().enumerate().for_each(|(i, net)| {
-        debug!("apply_channel_motifs: i={i:?} net sizes={:?}",  net.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
+    //nodes x batches in tensor/motif_batch_size x motif_batch_size
+    node_batches.iter().enumerate().for_each(|(i, node)| {
+        debug!("apply_channel_motifs: i={i:?} node sizes={:?}",  node.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
     });
-    let net_tensors = net_batches.into_iter().map(|net_batches| Tensor::stack(net_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
-    debug!("apply_channel_motifs: net_tensors.len()={:?} sizes={:?}", net_tensors.len(), net_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
+    let node_tensors = node_batches.into_iter().map(|node_batches| Tensor::stack(node_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
+    debug!("apply_channel_motifs: node_tensors.len()={:?} sizes={:?}", node_tensors.len(), node_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
 
-    let nets_t = Tensor::stack(
-        net_tensors.as_slice(),
+    let nodes_t = Tensor::stack(
+        node_tensors.as_slice(),
         0
     );
-    debug!("apply_channel_motifs: 2.2 nets_t.size={:?}", nets_t.size());
-    debug!("apply_channel_motifs: 1. nets_t={:?} max_nets={}, max_motif_batches={} motif_batch_size={}", nets_t.size(), max_nets, max_motif_batches, motif_batch_size);
+    debug!("apply_channel_motifs: 2.2 nodes_t.size={:?}", nodes_t.size());
+    debug!("apply_channel_motifs: 1. nodes_t={:?} max_nodes={}, max_motif_batches={} motif_batch_size={}", nodes_t.size(), max_motif_nodes, max_motif_batches, input_slices_motif_batch_size);
 
-    let nets_t = pad_to(&nets_t, &[max_nets as i64, max_motif_batches as i64, motif_batch_size as i64]).unwrap();
+    let nodes_t = pad_to(&nodes_t, &[max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size]).unwrap();
 
-    debug!("apply_channel_motifs: 2. nets_t={:?}", nets_t.size());
-    nets_t.set_requires_grad(false) //TODO run all with no grad
+    debug!("apply_channel_motifs: 2. nodes_t={:?}", nodes_t.size());
+    nodes_t
 }
 
-fn add_net_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Tensor) {
+fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, net_rs: Tensor) {
     if net_rs.size()[0] < motif_batch_size {
         net_batch.push(
             pad_to(&net_rs, &[motif_batch_size]).expect("pad_to failed")
@@ -689,7 +703,7 @@ mod tch_tests {
             };
 
 
-            super::apply_channel_motifs(motif_n, step, &nets, t, motif_batch_size, 2, max_folds, &Cpu)
+            super::apply_channel_motifs(step, motif_batch_size, &nets, t, 2, max_folds, &Cpu)
 
         }).collect::<Vec<Tensor>>();
 
