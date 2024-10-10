@@ -21,7 +21,7 @@ use tch::Kind::Float;
 use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 use futures::FutureExt;
 
-use thoosa_shared::{batch_windows, RangeOrValue, ThoosaError};
+use thoosa_shared::{batch_windows, clc_num_batches, RangeOrValue, ThoosaError};
 use thoosa_shared::parse_key_val;
 use thoosa_shared::val::unprefix_properties;
 use thoosa_shared::val::Val;
@@ -36,12 +36,9 @@ use crate::utils::{DataBatch, train, plot_series, TrainListener, ListenerRespons
 use crate::utils::from;
 use crate::ws::Workspace;
 
-enum BinaryLabel {
-
-}
 
 #[derive(Debug, Args, Clone)]
-pub struct TrainOnLabelParams {
+pub struct TrainLabelNodeParams {
 
     #[arg(long)]
     motif_node_params_selection_run_ids: Vec<usize>,
@@ -60,7 +57,7 @@ pub struct TrainOnLabelParams {
     valid_labels_datasets: Vec<(String, String)>,
 
     #[arg(long,  default_value_t = 1000)]
-    step: usize,
+    input_slice_step: usize,
 
     #[arg(long, default_value_t = 10)]
     cycles: usize,
@@ -75,7 +72,7 @@ pub struct TrainOnLabelParams {
     label_batch_size:usize
 }
 
-impl TrainOnLabelParams {
+impl TrainLabelNodeParams {
 
     pub fn cycles(&self) -> usize {
         self.cycles
@@ -86,9 +83,9 @@ impl TrainOnLabelParams {
 
     #[allow(dead_code)]
     pub fn dummy(step: usize, motif_node_params_selection_run_ids: Vec<usize>, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, label_batch_size: usize, cycles: usize, lr: f64) ->Self {
-        TrainOnLabelParams {
+        TrainLabelNodeParams {
             motif_node_params_selection_run_ids,
-            step,
+            input_slice_step: step,
             cycles,
             lr,
             train_labels_datasets,
@@ -129,8 +126,8 @@ impl TrainOnLabelParams {
     }
 
 
-    pub fn step(&self) -> usize {
-        self.step
+    pub fn input_slice_step(&self) -> usize {
+        self.input_slice_step
     }
 
     pub fn dsp_filter(&self) ->Box<impl Fn(Tensor)->Tensor> {
@@ -377,11 +374,11 @@ impl ClassTensorsLoaderData {
     }
 }
 
-pub fn train_on_motif_nodes(
+pub fn train_label_nodes(
     ws: Arc<RwLock<Workspace>>,
     motif_node_params:&MotifNodeParams,
     label_node_params:&LabelNodeParams,
-    train_on_label_params: &TrainOnLabelParams,
+    train_on_label_params: &TrainLabelNodeParams,
     train_labels_resources:Vec<(i64, Vec<String>)>,
     valid_labels_resources: Vec<(i64, Vec<String>)>,
     device: &Device,
@@ -401,7 +398,7 @@ pub fn train_on_motif_nodes(
     let max_motif_batches = label_node_params.max_motif_batches as usize;
 
     let device = device.clone();
-    let input_slice_step = train_on_label_params.step();
+    let input_slice_step = train_on_label_params.input_slice_step();
     let channels = ws.read().channels();
 
     let loss = train(
@@ -491,6 +488,7 @@ pub fn train_final(
 
     let device =device.clone();
     let channels = ws.read().channels();
+    let max_input = ws.read().max_input();
     train(
         &device,
         &mut ClassTensorsLoaderData::new(
@@ -509,11 +507,12 @@ pub fn train_final(
 
                     let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("labels_channels_motifs_models for {label}").as_str());
                     debug!("train_final:v  channels_motifs_models={channels_motifs_models:?}");
-                    let max_motif_batches = 2;
 
-                    let t_net = apply_motif_nets(step, &t, Arc::clone(channels_motifs_models), motif_batch_size, max_motif_batches, &device);
+                    //TODO keep common conifg for motif nets used to build label
+                    let t_net = apply_motif_nets(step, &t, Arc::clone(channels_motifs_models), label_nodes[0].1.motif_batch_size, label_nodes[0].1.max_motif_batches as usize, &device);
 
                     for (label_node_run_id, label_node_params, label_node) in label_nodes{
+
                         debug!("train_final: label_node_params={label_node_params:?} label_node_run_id={:?} t_net.size()={:?}",  label_node_run_id, t_net.size());
 
 
@@ -836,7 +835,7 @@ pub fn load_motif_models(motif_models_path: impl AsRef<Path>, label:String, chan
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct TrainOnMotifsParams {
+pub struct TrainMotifsNodesParams {
 
     #[arg(long)]
     pub motif_selection_run_id: Vec<usize>,
@@ -845,7 +844,7 @@ pub struct TrainOnMotifsParams {
     pub cycles: usize,
 
     #[arg(long, default_value_t = 10)]
-    pub batch_size: usize,
+    pub batch_size: usize,//number of the motif slices in a batch
 
     #[arg(long, value_parser=parse_range_or_value::<f64>, default_value_t = 1.0e-5.into())]
     pub lr: RangeOrValue<f64>,
@@ -860,7 +859,7 @@ pub struct TrainOnMotifsParams {
     pub min_corr: f64,
 }
 
-impl TrainOnMotifsParams {
+impl TrainMotifsNodesParams {
 
     pub fn dummy(motif_selection_run_id:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<i64>>) ->Self{
 
@@ -870,7 +869,7 @@ impl TrainOnMotifsParams {
             assert!(r.end > r.start);
         }
 
-        TrainOnMotifsParams {
+        TrainMotifsNodesParams {
             motif_selection_run_id,
 
             cycles,
@@ -1154,7 +1153,7 @@ pub fn final_node(params:&FinalNodeParams) -> Node {
         .end_seq()
 }
 
-pub fn train_on_motif(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainOnMotifsParams, device: Device, node_params: &MotifNodeParams, batch_size: usize) -> Result<(f32, (VarStore, MotifNodeParams)), ThoosaError> {
+pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainMotifsNodesParams, device: Device, node_params: &MotifNodeParams, batch_size: usize) -> Result<(f32, (VarStore, MotifNodeParams)), ThoosaError> {
     info!("train_on_motif: device={:?} training on {} slices_0 {} slices_1", device, all_slices_0.len(), all_slices_1.len());
 
     assert!(all_slices_0.len() > 0, "all_slices_0 len");
@@ -1654,7 +1653,7 @@ mod train_tests {
     use crate::builder::SeqBuilder;
     use crate::loader::{LoadRunner, SyncWrapper};
     use crate::my_tch::apply_channel_motifs;
-    use crate::train_nets::{TensorsDataBatch, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainOnLabelParams, SyncModule, load_motif_models_ws, load_all_label_models_ws};
+    use crate::train_nets::{TensorsDataBatch, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, SyncModule, load_motif_models_ws, load_all_label_models_ws};
     use crate::train_nets;
     use crate::utils::{cdt_for_dir, from};
     use crate::utils::DataBatch;
@@ -1838,9 +1837,9 @@ mod train_tests {
 
         let ws = Workspace::new(test_dir, 3, 684400)?;
 
-        let params = TrainOnLabelParams {
+        let params = TrainLabelNodeParams {
             motif_node_params_selection_run_ids: vec![0],
-            step: 100,
+            input_slice_step: 100,
             cycles: 3,
             lr: 1.0e-5,
             train_labels_datasets: vec![],
@@ -1886,7 +1885,7 @@ mod train_tests {
         debug!("test_train_on_label: channel 1 models={}", channel_0_motifs_models.len());
         debug!("test_train_on_label: channel 2 models={}", channel_0_motifs_models.len());
 
-        super::train_on_motif_nodes(
+        super::train_label_nodes(
             Arc::new(RwLock::new(ws)),
             &MotifNodeParams::new(100), //TODO take window/num_features from saved motif model or motif run id
             &LabelNodeParams::new(3, 4, 20, 7), //max motif nets - 2 for seizure
