@@ -9,6 +9,7 @@ use log::{debug, info, warn};
 use tch::nn::VarStore;
 use crate::train_nets::{LabelNodeParams, MotifNodeParams};
 use thoosa_shared::{recurse_files, ThoosaError};
+use crate::utils::cdt_for_dir;
 
 pub struct Workspace {
     base_path:PathBuf,
@@ -89,6 +90,10 @@ impl Workspace {
 
     pub fn final_models_path(&self) -> &PathBuf {
         &self.final_models_path
+    }
+
+    pub fn final_models_path_for_run(&self, run_id:usize) -> PathBuf {
+        self.final_models_path.join(format!("{run_id}.safetensors"))
     }
 
 

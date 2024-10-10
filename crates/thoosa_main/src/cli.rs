@@ -19,7 +19,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tch::Device::Cpu;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
-use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
+use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{select_motifs_by_ratio, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, SelectMotifsParams};
@@ -203,27 +203,7 @@ pub fn run_cli<F, L>(
     ).expect("failed to init logging");
 
     let store = Arc::new(Mutex::new(SqlStore::from_path(&cli.store_path)?));
-    // let base_path = ws.bas.clone();
-    let resource_pattern = cli.resource_pattern.clone();
 
-    let ws_loader = Arc::clone(&ws);
-    //TODO replace with executor_rc
-    let loader = Arc::new(Box::new(ParquetLoader::new(
-        cli.base_path.clone(),
-        cli.tensors_path.clone(),
-        Some(Box::new(move |t: Tensor| {
-            match cli.input_filters_kernel {
-                None => {
-                    t
-                }
-                Some(kernel) => {
-                    debug!("main: loading with kernel={}", kernel);
-                    t.avg_pool1d(kernel, 1, 0, false, false)
-                }
-            }
-        })),
-        Box::new(move |_, resource_id| resource_path(ws_loader.read().base_path().as_os_str().to_str().unwrap(), &resource_pattern, resource_id))//TODO move resource_path into ws
-    )));
 
     let devices = list_devices();
 
@@ -372,24 +352,23 @@ pub fn run_cli<F, L>(
 
             info!("run_train_on_label done");
 
-            // run_train_final(
-            //     &cli, &store,
-            //     &devices[0],
-            //     &TrainFinalParams::dummy(
-            //         run_all_params.step,
-            //         run_all_params.window,
-            //         vec![run_all_params.models_dir.clone()],
-            //         format!("{}/final.safetensors", run_all_params.models_dir),
-            //         run_all_params.train_resource_group.clone(),
-            //         run_all_params.valid_resource_group.clone(),
-            //         run_all_params.train_final_cycles,
-            //         run_all_params.motif_batch_size,
-            //         5,
-            //     ),
-            //     Arc::clone(&loader)
-            // )?;
-            //
-            // info!("run_train_final done");
+            run_train_final(
+                Arc::clone(&ws),
+                &store,
+                &devices[0],
+                &TrainFinalParams::dummy(
+                    run_all_params.step,
+                    run_all_params.window,
+                    run_all_params.train_resource_group.clone(),
+                    run_all_params.valid_resource_group.clone(),
+                    run_all_params.train_final_cycles,
+                    run_all_params.motif_batch_size,
+                    5,
+                ),
+                Arc::clone(&executor_rc)
+            )?;
+
+            info!("run_train_final done");
         }
 
         Some(Infer(infer_params)) => {
@@ -403,23 +382,24 @@ pub fn run_cli<F, L>(
             };
 
             let t = infer(
-                &infer_params,
+
+            //     &infer_params,
                 |path:&Path|{
                     // data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), *devices.first().expect("first device"))
                     parquet_to_tensor_by_path(path, *devices.first().expect("first device"))
                 },
-                infer_params.window() as i64,
-                infer_params.step(),
-                infer_params.motif_batch_size(),
-                channels,
-                max_input, //TODO
-                &devices[0],
-                labels,
-                motif_node_params
+            //     infer_params.window() as i64,
+            //     infer_params.step(),
+            //     infer_params.motif_batch_size(),
+            //     channels,
+            //     max_input, //TODO
+            //     &devices[0],
+            //     labels,
+            //     motif_node_params
             )?;
 
             data::save_tensor(
-                &["eeg_id","seizure_vote","lpd_vote","gpd_vote","lrda_vote","grda_vote","other_vote"],
+                &labels.iter().map(|v|v.as_str()).collect::<Vec<&str>>(),
                 t.0,
                 &t.1,
                 infer_params.output()
@@ -452,30 +432,16 @@ pub fn run_train_final(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>,
 
     let labels = {store.lock().list_labels()? };
 
-    let label_models = load_all_label_models_ws(&ws.read(),  &Cpu).expect("load_all_label_models_ws");
+    let (label_models, labels_channels_motifs_models) = load_all_label_and_motif_models(&ws, store, &device);
 
-    let mut labels_channels_motifs_models:HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>  = HashMap::new();
+    let labels_len = labels_channels_motifs_models.len() as i64;
+    let final_node_params = FinalNodeParams::new(labels_len, labels_len);
 
-    for (label, label_run_id_nodes) in  label_models.iter() {
-
-        for (label_run_id, label_node_params, node) in label_run_id_nodes {
-
-            let motif_node_params_selection_run_id = store.lock().get_input_run_id(*label_run_id).expect("get_input_run_id(label_run_id)");
-            let selected_motifs_run_id = store.lock().get_input_run_id(motif_node_params_selection_run_id).expect("get_input_run_id(motif_node_params_selection_run_id)");
-
-            let channels_motifs_models = store.lock()
-                .list_selected_motifs(selected_motifs_run_id).expect("list_selected_motifs").into_iter().enumerate().flat_map(
-                |(channel, channels_motifs)|{
-                    let ws_moved = Arc::clone(&ws);
-                    channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved.read(), channel, motif_id, &device).expect("load_motif_models"))
-                }).collect();
-
-
-            labels_channels_motifs_models.insert(label.clone(), channels_motifs_models);
-        }
-    }
+    let final_run_id = store.lock().save_tree_run(Some(11111), "final", &vec![], prefix_properties("final_node", final_node_params.to_properties_map())).expect("save_tree_run");
 
     debug!("run_train_final: labels={:?}", labels);
+
+
 
     let vs = train_final(
         Arc::clone(&ws),
@@ -497,11 +463,39 @@ pub fn run_train_final(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>,
         labels,
         executor,
         label_models,
-        labels_channels_motifs_models
+        labels_channels_motifs_models,
+        final_node_params
     )?;
 
-    vs.save(ws.read().final_models_path())?;
+    vs.save(ws.read().final_models_path_for_run(final_run_id))?;
     Ok(())
+}
+
+fn load_all_label_and_motif_models(ws: &Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>, device: &&Device) -> (
+    HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>,
+    HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>
+) {
+    let label_models = load_all_label_models_ws(&ws.read(), &Cpu).expect("load_all_label_models_ws");
+
+    let mut labels_channels_motifs_models: HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>> = HashMap::new();
+
+    for (label, label_run_id_nodes) in label_models.iter() {
+        for (label_run_id, label_node_params, node) in label_run_id_nodes {
+            let motif_node_params_selection_run_id = store.lock().get_input_run_id(*label_run_id).expect("get_input_run_id(label_run_id)");
+            let selected_motifs_run_id = store.lock().get_input_run_id(motif_node_params_selection_run_id).expect("get_input_run_id(motif_node_params_selection_run_id)");
+
+            let channels_motifs_models = store.lock()
+                .list_selected_motifs(selected_motifs_run_id).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+                |(channel, channels_motifs)| {
+                    let ws_moved = Arc::clone(&ws);
+                    channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved.read(), channel, motif_id, &device).expect("load_motif_models"))
+                }).collect();
+
+
+            labels_channels_motifs_models.insert(label.clone(), channels_motifs_models);
+        }
+    }
+    (label_models, labels_channels_motifs_models)
 }
 
 pub fn run_train_label_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, train_label_node_params: &TrainLabelNodeParams, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<(), ThoosaError> {

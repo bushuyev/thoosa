@@ -470,25 +470,23 @@ pub fn train_final(
     step: usize, motif_batch_size: i64, device: &Device, labels: Vec<String>,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
     label_models: HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>, //TODO Arc<RwLock...
-    labels_channels_motifs_models:HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>
+    labels_channels_motifs_models:HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>,
+    final_node_params:FinalNodeParams
 ) -> Result<VarStore, ThoosaError> {
-
-
 
     let vs_0 = nn::VarStore::new(device.clone());
 
-    let label_nets = labels_channels_motifs_models.len() as i64;
     let labels_channels_motifs_models_rw = labels_channels_motifs_models.into_iter().fold(HashMap::new(), |mut a, v|{
         a.insert(v.0, Arc::new(RwLock::new(v.1)));
         a
     });
 
-    debug!("train_final: label_nets={label_nets}");
 
 
     let device =device.clone();
     let channels = ws.read().channels();
     let max_input = ws.read().max_input();
+
     train(
         &device,
         &mut ClassTensorsLoaderData::new(
@@ -538,7 +536,7 @@ pub fn train_final(
             // None
 
         ) as &mut dyn DataBatch,
-        &final_node(&FinalNodeParams::new(label_nets, label_nets)).build_tch_module(&vs_0.root())?,//TODO features?
+        &final_node(&final_node_params).build_tch_module(&vs_0.root())?, //TODO features?
         |pred: &Tensor, target: &Tensor| {
 
             let pred_y = pred; //pred.i((.., 0, 0));
@@ -567,74 +565,75 @@ pub fn train_final(
 
 }
 
-pub fn infer<F>(params: &InferParams, path_to_tensor:F, motif_width: i64, step: usize, motif_batch_size: i64, channels: usize, max_input:usize, device: &Device, labels: Vec<String>, motif_node_params: MotifNodeParams) -> Result<(Vec<String>, Tensor), ThoosaError>
+pub fn infer<F>(load_tensor:F) -> Result<(Vec<String>, Tensor), ThoosaError>
     where F:Fn(&Path) -> Result<Tensor, ThoosaError> + Sync{
 
 
-   /* let models = load_label_and_motif_models(params.models_dir.as_str(), channels as usize, device, motif_node_params)?
-        .into_iter().fold(HashMap::new(), |mut a, v|{
-        a.insert(v.label.clone(), v);
-        a
-    });
 
-    let mut vs = nn::VarStore::new(*device);
-    let final_model = Mutex::new(train_nets::final_node(&FinalNodeParams::new(6, 6)).build_tch_module(&vs.root())?);
-    vs.load(params.final_model.as_ref().unwrap_or(&Path::new(&params.models_dir).join("final.safetensors").to_str().unwrap().to_string()))?;
-    vs.freeze();
+    /* let models = load_label_and_motif_models(params.models_dir.as_str(), channels as usize, device, motif_node_params)?
+         .into_iter().fold(HashMap::new(), |mut a, v|{
+         a.insert(v.label.clone(), v);
+         a
+     });
 
-    debug!("infer: params.input_data={:?} models={:?}", params.input_data, models);
-    debug!("infer: labels={:?}", labels);
+     let mut vs = nn::VarStore::new(*device);
+     let final_model = Mutex::new(train_nets::final_node(&FinalNodeParams::new(6, 6)).build_tch_module(&vs.root())?);
+     vs.load(params.final_model.as_ref().unwrap_or(&Path::new(&params.models_dir).join("final.safetensors").to_str().unwrap().to_string()))?;
+     vs.freeze();
 
-    let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|dir_entry| {
-        let dir_entry = dir_entry.expect("file: ");
+     debug!("infer: params.input_data={:?} models={:?}", params.input_data, models);
+     debug!("infer: labels={:?}", labels);
 
-        let input_t = path_to_tensor(dir_entry.path().as_path()).expect(format!("can't load{dir_entry:?}").as_str());
-        debug!("infer: t.size={:?}", input_t.size());
+     let tensors_ids = fs::read_dir(&params.input_data)?.par_bridge().map(|dir_entry| {
+         let dir_entry = dir_entry.expect("file: ");
 
-        let t = Tensor::stack(labels.iter().map(|label|{
-            match models.get(label) {
-                Some(model) => {
-                    let motif_batches = batch_windows(max_input, model.motif_node_params.num_features as usize, step, motif_batch_size as usize);
-                    let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
-                    let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
-                    debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_width={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_width);
+         let input_t = path_to_tensor(dir_entry.path().as_path()).expect(format!("can't load{dir_entry:?}").as_str());
+         debug!("infer: t.size={:?}", input_t.size());
+
+         let t = Tensor::stack(labels.iter().map(|label|{
+             match models.get(label) {
+                 Some(model) => {
+                     let motif_batches = batch_windows(max_input, model.motif_node_params.num_features as usize, step, motif_batch_size as usize);
+                     let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
+                     let max_nets =  model.motif_models.iter().map(|nets|nets.len()).max().unwrap_or(0) as i64;
+                     debug!("infer: channels={:?}, max_motif_batches={:?} motif_batch_size={:?} features={:?} motif_width={:?}", channels, max_motif_batches, motif_batch_size, channels *  max_motif_batches as i64 * motif_batch_size, motif_width);
 
 
-                    let t = apply_label_motifs(model.motif_node_params.num_features, step, &input_t, &model.motif_models, motif_batch_size, max_motif_batches, device);
-                    let t_x = view_for_label_model(t.reshape([1, channels, max_nets, motif_batch_size, max_motif_batches as i64]), channels, max_nets, motif_batch_size, max_motif_batches);
-                    // debug!("train_final: t_x.size()={:?} max_nets={}", t_x.size(), max_nets);
-                    debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
+                     let t = apply_label_motifs(model.motif_node_params.num_features, step, &input_t, &model.motif_models, motif_batch_size, max_motif_batches, device);
+                     let t_x = view_for_label_model(t.reshape([1, channels, max_nets, motif_batch_size, max_motif_batches as i64]), channels, max_nets, motif_batch_size, max_motif_batches);
+                     // debug!("train_final: t_x.size()={:?} max_nets={}", t_x.size(), max_nets);
+                     debug!("infer: motif models model={:?} model.label={} t.size()={:?} t_x.size()={:?}", model, model.label, t.size(), t_x.size());
 
-                    let t = model.label_model.lock().forward(&t_x);
-                    debug!("infer: label_model out .size()={:?}", t.size());
-                    t.view(1)
-                }
-                None => {
-                    Tensor::zeros(&[1], (Float, *device))
-                }
-            }
+                     let t = model.label_model.lock().forward(&t_x);
+                     debug!("infer: label_model out .size()={:?}", t.size());
+                     t.view(1)
+                 }
+                 None => {
+                     Tensor::zeros(&[1], (Float, *device))
+                 }
+             }
 
-        }).collect::<Vec<Tensor>>().as_slice(), 0);
+         }).collect::<Vec<Tensor>>().as_slice(), 0);
 
-        debug!("infer: t.size()={:?}", t.size());
+         debug!("infer: t.size()={:?}", t.size());
 
-        let pred = final_model.lock().forward(&t.transpose(0, 1)); //for single eeg
+         let pred = final_model.lock().forward(&t.transpose(0, 1)); //for single eeg
 
-        let pred= pred.softmax(1, Float);
-        debug!("infer: pred={:?}", pred.size());
-        // debug!("infer: pred={:?}", from::<Vec<f32>>(&pred));
-        (
-            dir_entry.path().file_stem().unwrap().to_str().unwrap().to_string(),
-            pred
-        )
-    }).collect::<Vec<(String, Tensor)>>();
+         let pred= pred.softmax(1, Float);
+         debug!("infer: pred={:?}", pred.size());
+         // debug!("infer: pred={:?}", from::<Vec<f32>>(&pred));
+         (
+             dir_entry.path().file_stem().unwrap().to_str().unwrap().to_string(),
+             pred
+         )
+     }).collect::<Vec<(String, Tensor)>>();
 
-    let (ids, tensors) = tensors_ids.into_iter().fold((vec![], vec![]), |mut a, v|{
-        a.0.push(v.0);
-        a.1.push(v.1);
-        a
-    });
-    Ok((ids, Tensor::vstack(tensors.as_slice())))*/
+     let (ids, tensors) = tensors_ids.into_iter().fold((vec![], vec![]), |mut a, v|{
+         a.0.push(v.0);
+         a.1.push(v.1);
+         a
+     });
+     Ok((ids, Tensor::vstack(tensors.as_slice())))*/
     todo!()
 }
 
@@ -1138,6 +1137,14 @@ impl FinalNodeParams {
     pub fn new(features: i64, classes_num: i64) -> Self {
         Self { features, classes_num }
     }
+
+    pub fn to_properties_map(&self) -> HashMap<String, Val> {
+        HashMap::from([
+            ("FinalNodeParams.kernel".into(), self.features.into()),
+            ("FinalNodeParams.stride".into(), self.classes_num.into()),
+        ])
+    }
+
 }
 
 pub fn final_node(params:&FinalNodeParams) -> Node {
@@ -2040,6 +2047,9 @@ mod train_tests {
 
     // #[test]
     fn test_infer() -> Result<(), ThoosaError> {
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        debug!("test_infer: test_dir={test_dir:?}");
+
         let channels = 5;
         let motif_batch_size = 7;
         let max_input = 684400;//TODO
@@ -2077,6 +2087,19 @@ mod train_tests {
             Ok(t)
         }
 
+        let ws = Arc::new(RwLock::new(Workspace::new(test_dir, channels, 684400)?));
+
+
+        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+            move |key: &String| {
+
+                SyncWrapper::new(
+                    load_test_tensor(key),
+                    |e| Box::new(e.shallow_clone())
+                )
+            }, 4, 100,
+        )));
+
 
         let t = super::infer(
             &InferParams {
@@ -2088,22 +2111,8 @@ mod train_tests {
                 input_data: input_path.to_str().unwrap().to_string(),
                 output: "/tmp/out.csv".to_string()
             },
-            test_path_to_t,
-            motif_width,
-            step,
-            motif_batch_size,
-            channels,
-            max_input,
-            &Cpu,
-            vec![
-                "other".into(),
-                "grda".into(),
-                "lrda".into(),
-                "gpd".into(),
-                "lpd".into(),
-                "seizure".into()
-            ],
-            MotifNodeParams::new(100)
+            ws,
+            &executor_rc
         )?;
 
         debug!("t={:?}", t.1.size());
