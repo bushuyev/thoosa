@@ -1042,6 +1042,9 @@ where L: Clone + Send + Display + Debug + 'static,
     Ok(())
 }
 
+/**
+TODO  selects motifs based on correlation to a label only
+*/
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
     #[arg(long)]
@@ -1058,6 +1061,7 @@ pub struct SelectMotifsParams {
 }
 
 impl SelectMotifsParams {
+
     pub fn find_motifs_run_ids(&self) -> &Vec<usize> {
         &self.find_motifs_run_ids
     }
