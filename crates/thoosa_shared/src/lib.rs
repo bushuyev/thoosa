@@ -384,7 +384,7 @@ pub fn random_v(n: i64, amplitude: f32, max_slope: f32) -> Vec<f32> {
             )
         )
     ).for_each(|(r_0, (r_1, (r_2, r_3)))| {
-        debug!("random_v: r_0={:?}, r_1={:?}, r_2={:?}, r_3={:?}", r_0, r_1, r_2, r_3);
+        // debug!("random_v: r_0={:?}, r_1={:?}, r_2={:?}, r_3={:?}", r_0, r_1, r_2, r_3);
 
         current_value = prev_value + 10.* r_0 + r_1 +  r_2 + r_3;
         signal.push(current_value * amplitude);

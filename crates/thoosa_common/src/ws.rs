@@ -7,7 +7,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use log::{debug, info, warn};
 use tch::nn::VarStore;
-use crate::train_nets::{LabelNodeParams, MotifNodeParams};
+use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
 use thoosa_shared::{recurse_files, ThoosaError};
 use crate::utils::cdt_for_dir;
 
@@ -92,8 +92,19 @@ impl Workspace {
         &self.final_models_path
     }
 
-    pub fn final_models_path_for_run(&self, run_id:usize) -> PathBuf {
-        self.final_models_path.join(format!("{run_id}.safetensors"))
+    pub fn save_final_model(&self, run_id:usize, vs:VarStore, params:FinalNodeParams) -> Result<(), ThoosaError> {
+
+        fs::create_dir_all(&self.final_models_path)?;
+
+        vs.save(&self.final_models_path.join(format!("{run_id}.safetensors")));
+
+        fs::write(
+            self.final_models_path.join(format!("{run_id}.json")),
+            serde_json::to_string(&params)?
+        )?;
+
+
+        Ok(())
     }
 
 
@@ -102,7 +113,7 @@ impl Workspace {
      */
     pub fn save_motif_model(&self, channel:impl Display, motif_node_params_run_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
 
-        let channel_models = self.motifs_models_path/*.join(format!("{}", motif_id))*/.join(format!("{}", channel));
+        let channel_models = self.motifs_models_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
         let vs_path = channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.safetensors"));
@@ -123,10 +134,13 @@ impl Workspace {
     returns Vec<safetensors_path, config jsonpath>
     */
     pub fn motif_models(&self, channel:impl Display, motif_id:usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
+        let motif_prefix = format!("{}_", motif_id);
 
         recurse_files(&self.motifs_models_path.join(channel.to_string()), &|path|{
             path.extension().map(|v|v.eq("safetensors")).unwrap_or(false) &&
-                path.file_stem().and_then(|s|s.to_str()).map(|s|s.starts_with(format!("{}_", motif_id).as_str())).unwrap_or(false)
+                path.file_stem().and_then(|s|s.to_str()).map(|s| {
+                    s.starts_with(motif_prefix.as_str())
+                }).unwrap_or(false)
 
         })?.into_iter().try_fold(vec![], |mut a, safetensors_path|{
             debug!("motif_models: safetensors_path={safetensors_path:?}");
