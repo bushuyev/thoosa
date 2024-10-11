@@ -410,6 +410,12 @@ impl SyncWrapper<Tensor> {
     }
 }
 
+impl SyncWrapper<Box<Tensor>> {
+    pub fn new_tb(t:Box<Tensor>) -> Self {
+        SyncWrapper::new(t, |b|Box::new(b.shallow_clone()))
+    }
+}
+
 impl<V> SyncWrapper<V>
 where
     V: Send + Debug,

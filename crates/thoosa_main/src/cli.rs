@@ -382,12 +382,14 @@ pub fn run_cli<F, L>(
             };
 
             let t = infer(
-
-            //     &infer_params,
+                ws,
+                &infer_params,
                 |path:&Path|{
                     // data::parquet_to_tensor_by_path(<Path as AsRef<Path>>::as_ref(path), *devices.first().expect("first device"))
-                    parquet_to_tensor_by_path(path, *devices.first().expect("first device"))
-                },
+                    // parquet_to_tensor_by_path(path, *devices.first().expect("first device"))
+                    // Box::new(move |_, resource_id| resource_path(&base_path, &resource_pattern, resource_id))
+                    Ok(Tensor::from_slice(&[0.]))
+                }
             //     infer_params.window() as i64,
             //     infer_params.step(),
             //     infer_params.motif_batch_size(),
@@ -437,7 +439,7 @@ pub fn run_train_final(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>,
     let labels_len = labels_channels_motifs_models.len() as i64;
     let final_node_params = FinalNodeParams::new(labels_len, labels_len);
 
-    let final_run_id = store.lock().save_tree_run(Some(11111), "final", &vec![], prefix_properties("final_node", final_node_params.to_properties_map())).expect("save_tree_run");
+    let final_run_id = store.lock().save_tree_run(Some(label_models.values().flat_map(|v|v.iter().map(|w|w.0)).collect::<Vec<usize>>().as_slice()), "final", &vec![], prefix_properties("final_node", final_node_params.to_properties_map())).expect("save_tree_run");
 
     debug!("run_train_final: labels={:?}", labels);
 
@@ -464,10 +466,12 @@ pub fn run_train_final(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlStore>>,
         executor,
         label_models,
         labels_channels_motifs_models,
-        final_node_params
+        &final_node_params
     )?;
 
-    vs.save(ws.read().final_models_path_for_run(final_run_id))?;
+
+    ws.read().save_final_model(final_run_id, vs, final_node_params);
+
     Ok(())
 }
 
@@ -481,11 +485,16 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Workspace>>, store: &Arc<Mute
 
     for (label, label_run_id_nodes) in label_models.iter() {
         for (label_run_id, label_node_params, node) in label_run_id_nodes {
-            let motif_node_params_selection_run_id = store.lock().get_input_run_id(*label_run_id).expect("get_input_run_id(label_run_id)");
-            let selected_motifs_run_id = store.lock().get_input_run_id(motif_node_params_selection_run_id).expect("get_input_run_id(motif_node_params_selection_run_id)");
+
+            let motif_node_params_selection_run_ids = store.lock().get_input_run_ids(*label_run_id).expect("get_input_run_id(label_run_id)");
+            assert_eq!(motif_node_params_selection_run_ids.len(), 1);
+
+            let selected_motifs_run_ids = store.lock().get_input_run_ids(motif_node_params_selection_run_ids[0]).expect("get_input_run_ids(motif_node_params_selection_run_ids");
+            assert_eq!(selected_motifs_run_ids.len(), 1);
+
 
             let channels_motifs_models = store.lock()
-                .list_selected_motifs(selected_motifs_run_id).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+                .list_selected_motifs(selected_motifs_run_ids[0]).expect("list_selected_motifs").into_iter().enumerate().flat_map(
                 |(channel, channels_motifs)| {
                     let ws_moved = Arc::clone(&ws);
                     channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved.read(), channel, motif_id, &device).expect("load_motif_models"))
@@ -529,10 +538,11 @@ pub fn run_train_label_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlSt
     devices__label_datasets__motif_node_params_selection_run_ids_chunks.into_par_iter().for_each(move |(device_i, devices__label_datasets__motif_node_params_selection_run_ids_chunk)| {
 
         for ((label, resource_set),  motif_node_params_selection_run_id) in devices__label_datasets__motif_node_params_selection_run_ids_chunk {
-            let selected_motifs_run_id = store_in_threads.lock().get_input_run_id(*motif_node_params_selection_run_id).expect("get_input_run_id(*motif_node_selection_run_id)"); //TODO format err
+            let selected_motifs_run_ids = store_in_threads.lock().get_input_run_ids(*motif_node_params_selection_run_id).expect("get_input_run_id(*motif_node_selection_run_id)"); //TODO format err
+            assert_eq!(selected_motifs_run_ids.len(), 1);
 
-            let channels_motifs_models = store_in_threads.lock()
-                .list_selected_motifs(selected_motifs_run_id).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+            let channels_motifs_models = store_in_threads.lock().list_selected_motifs(selected_motifs_run_ids[0]).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+
                 |(channel, channels_motifs)| {
                     let ws_moved = Arc::clone(&ws);
                     channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved.read(), channel, motif_id, &device_i).expect("load_motif_models"))
@@ -564,7 +574,7 @@ pub fn run_train_label_nodes(ws: Arc<RwLock<Workspace>>, store: &Arc<Mutex<SqlSt
 
                     a.push(
                         (
-                            store_guard.save_tree_run(Some(*motif_node_params_selection_run_id), "todo", &vec![], prefix_properties("label_node", label_node_params.to_properties_map())).expect("save_tree_run"),
+                            store_guard.save_tree_run(Some(&[*motif_node_params_selection_run_id]), "todo", &vec![], prefix_properties("label_node", label_node_params.to_properties_map())).expect("save_tree_run"),
                             label_node_params
                         )
                     );
@@ -636,11 +646,13 @@ fn run_train_motif_nodes_on_motif_selection(ws: &Arc<RwLock<Workspace>>, store: 
     devices_motif_selection.into_par_iter().for_each( |(device_i, selected_motifs_run_ids_chunk)| {
 
         for (selected_motifs_run_id) in selected_motifs_run_ids_chunk {
-            let find_motifs_run_id = store.lock().get_input_run_id(*selected_motifs_run_id).expect("motif_selection_id failed");
-            debug!("run_train_motif_nodes_on_motif_selection: input_run_id={find_motifs_run_id} motif_selection_id={selected_motifs_run_id}");
+            let find_motifs_run_ids = store.lock().get_input_run_ids(*selected_motifs_run_id).expect("motif_selection_id failed");
+            assert_eq!(find_motifs_run_ids.len(), 1);
+            debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={selected_motifs_run_id}");
+
             let motif_node_params_selection_run_id = run_train_motif_nodes(
                 Arc::clone(&ws),
-                find_motifs_run_id,
+                find_motifs_run_ids[0],
                 *selected_motifs_run_id,
                 Arc::clone(&store),
                 device_i,
@@ -650,7 +662,7 @@ fn run_train_motif_nodes_on_motif_selection(ws: &Arc<RwLock<Workspace>>, store: 
 
             run_ids_for_threads.lock().push(motif_node_params_selection_run_id);
 
-            info!("TrainOnMotifs: motif_node_params_selection_run_id={motif_node_params_selection_run_id}, find_motifs_run_id={find_motifs_run_id:?} device_i={device_i:?} done ");
+            info!("TrainOnMotifs: motif_node_params_selection_run_id={motif_node_params_selection_run_id} done ");
         }
 
 
@@ -885,7 +897,7 @@ fn run_train_motif_nodes(ws: Arc<RwLock<Workspace>>, find_motifs_run_id: usize, 
 
         let motif_node_selection_run_id =  store_guard
             //TODO motif_node_selection params - max error
-            .save_tree_run(Some(selected_motifs_run_id), "motifs_node", &vec![], prefix_properties("motifs_node", HashMap::new()))
+            .save_tree_run(Some(&[selected_motifs_run_id]), "motifs_node", &vec![], prefix_properties("motifs_node", HashMap::new()))
             .expect("motif_node_selection_run_id");
 
         ((0..1).fold((vec![]), |mut a, _| {//TODO expand grid search params
@@ -894,7 +906,7 @@ fn run_train_motif_nodes(ws: Arc<RwLock<Workspace>>, find_motifs_run_id: usize, 
             a.push(
                 (
                  store_guard
-                     .save_tree_run(Some(motif_node_selection_run_id), "todo", &vec![], prefix_properties("motifs_node", node_params.to_properties_map()))
+                     .save_tree_run(Some(&[motif_node_selection_run_id]), "todo", &vec![], prefix_properties("motifs_node", node_params.to_properties_map()))
                      .expect("save_tree_run"),
                  node_params
                 )

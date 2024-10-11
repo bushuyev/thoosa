@@ -44,7 +44,7 @@ impl DataBatch for DummyDs {
             Tensor::stack(
                 x.as_slice(),
                 0,
-            ).view([self.batch_size as i64, 1i64, -1]),
+            ).view([self.batch_size as i64, -1]),
 
             Tensor::stack(
                 y.as_slice(),

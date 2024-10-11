@@ -425,6 +425,7 @@ mod tch_tests {
 
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
     use tch::Device::Cpu;
+    use tch::Kind::Float;
     use tch::nn::{ConvConfig, Init, Module, OptimizerConfig, VarStore};
 
     use thoosa_shared::*;
@@ -531,8 +532,8 @@ mod tch_tests {
 
 
 
-        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
-        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, n));
+        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n));
+        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n));
 
         debug!("net t_0={:?}, t_1={:?}",
              from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)),
@@ -562,6 +563,9 @@ mod tch_tests {
     fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn Module>, ThoosaError> {
         SeqBuilder::new(num_features)
             .batch_norm()
+            .closure(Box::new(|t:&Tensor|{
+                t.view((t.size()[0], 1, t.size()[1]))//channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
+            }), None)
             .conv_1d(num_features/10, 1, 1, ConvConfig::default())
             .linear_s(1)
             .func(Tensor::sigmoid)
@@ -601,7 +605,7 @@ mod tch_tests {
                 (format!("Motif 1"), GREEN, vec_f32_from(&x).into_iter().zip(motif_1_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
                 (format!("Rand"), BLACK,  vec_f32_from(&x).into_iter().zip(rnd_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (input_n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+            ], "Motifs", (input_n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         )?;
         let motif_0_t = Tensor::from_slice(motif_0_slice.as_slice());
         let motif_1_t = Tensor::from_slice(motif_1_slice.as_slice());
@@ -613,7 +617,7 @@ mod tch_tests {
         let vs_0 = nn::VarStore::new(Device::Cpu);
         let net_0 = test_net(&vs_0, motif_width)?;
 
-        utils::train(
+        train(
             &Device::Cpu,
             &mut crate::simp::DummyDs::new(
                 rnd_t.shallow_clone(),
@@ -624,12 +628,15 @@ mod tch_tests {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
 
                 let pred_y = pred.i((.., 0, 0));
-                debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
+                debug!("pred_y.size() ={:?} ", pred_y.size());
                 pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
             },
-            100,
+            10,
             nn::AdamW::default().build(&vs_0, 1.0e-4)?,
-            |t|t,
+            |t|{
+                debug!("net_0: x ={:?} ", x.size());
+                t
+            },
             None
         )?;
 
@@ -646,12 +653,15 @@ mod tch_tests {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
 
                 let pred_y = pred.i((.., 0, 0));
-                debug!("pred_y ={:?} ", from::<Vec<f32>>(&pred_y));
+                debug!("pred_y.size() ={:?} ", pred_y.size());
                 pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
             },
-            100,
+            10,
             nn::AdamW::default().build(&vs_1, 1.0e-4)?,
-            |t|t,
+            |t|{
+                debug!("net_1: x ={:?} ", x.size());
+                t
+            },
             None
         )?;
 
@@ -659,6 +669,7 @@ mod tch_tests {
         let batch_0 = Tensor::stack((0..10).map(|_| motif_0_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
         let batch_1 = Tensor::stack((0..10).map(|_| motif_1_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
 
+        /*
         debug!("net_0 rnd_t={:?}, motif_0={:?}",
              from::<Vec<f32>>(&net_0.forward(&batch_rnd).view(-1)),
              from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1))
@@ -673,6 +684,7 @@ mod tch_tests {
              from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1)),
              from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1))
         );
+        */
 
         let motif_0_t = Tensor::from_slice(motif_0_v.as_slice());
         debug!("motif_0_t={:?}", motif_0_t.size());
@@ -684,7 +696,7 @@ mod tch_tests {
         let step = (motif_width / 4) as usize;
 
 
-        let nets = vec![(MotifNodeParams::new(input_n), SyncModule::new(net_0)), (MotifNodeParams::new(input_n), SyncModule::new(net_1))];
+        let nets = vec![(MotifNodeParams::new(motif_width), SyncModule::new(net_0)), (MotifNodeParams::new(motif_width), SyncModule::new(net_1))];
 
 
         let tensors = vec![motif_0_t, motif_1_t];
@@ -711,7 +723,7 @@ mod tch_tests {
 
         }).collect::<Vec<Tensor>>();
 
-        let node = SeqBuilder::new(400 as i64)
+        let node = SeqBuilder::new(400i64)
             .linear_s(1)
             .func(Tensor::sigmoid)
             .end_seq();
@@ -727,8 +739,8 @@ mod tch_tests {
         let net = node.build_tch_module(&vs.root())?;
 
         let _ = net.forward(&full_batch.view(-1));
-        //TODO
 
+        //if all matrix multiplication succeeded it's ok
         Ok(())
     }
 
@@ -761,26 +773,43 @@ mod tch_tests {
     #[test]
     pub fn test_scale_x(){
         let v_5 = (0..5).map(|i| i as f32).collect::<Vec<f32>>();
-        let t_5 = Tensor::from_slice(v_5.as_slice());
 
         let v_10 = (0..10).map(|i| i as f32).collect::<Vec<f32>>();
-        let t_10 = Tensor::from_slice(v_10.as_slice());
 
         let v_20 = (0..20).map(|i| i as f32).collect::<Vec<f32>>();
-        let t_20 = Tensor::from_slice(v_20.as_slice());
 
-        // (0..10).zip(v_5.into_iter()).map(|v|)
 
         debug!("v_5={:?} x={:?}",  v_5, scale_x(v_5.as_slice(), 10));
         debug!("v_10={:?} x={:?}", v_10, scale_x(v_10.as_slice(), 10));
         debug!("v_20 ={:?} x={:?}", v_20, scale_x(v_20.as_slice(), 10));
 
-        // let v_20_x = [0.0, 100.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0];
-        // debug!("v_20_x={:?} x={:?}", v_20_x, scale_horizontally(v_20_x.as_slice(), 10));
 
-        //[1, 2, 10, 4, 5] -> [1, 1.5, 2, 2.5, 10., 3.5, 4., 4.5. 5.]
-        //[1, 2, 3, 4, 5, 6, 7, 8, 9, 100, 11, 12, 13, 14, 15, 16, 17, 18, 19] -> [1,3,5,7,9,100,13,15,17,19]
-        //TODO
+        assert!(
+            Tensor::from_slice(
+                scale_x(v_5.as_slice(), 10).as_slice()
+            ).allclose(
+                &Tensor::from_slice(&[0.0, 0.44444445, 0.8888889, 1.3333334, 1.7777778, 2.2222223, 2.6666667, 3.1111112, 3.5555556, 4.0]).totype(Float),
+                0.02, 0.02, true
+            )
+        );
+
+        assert!(
+            Tensor::from_slice(
+                scale_x(v_10.as_slice(), 10).as_slice()
+            ).allclose(
+                &Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]).totype(Float),
+                0.02, 0.02, true
+            )
+        );
+
+        assert!(
+            Tensor::from_slice(
+                scale_x(v_20.as_slice(), 10).as_slice()
+            ).allclose(
+                &Tensor::from_slice(&[0.0, 2.1111112, 4.2222223, 6.3333335, 8.444445, 10.555555, 12.666667, 14.777779, 16.88889, 19.0]).totype(Float),
+                0.02, 0.02, true
+            )
+        );
     }
 
     #[allow(dead_code)]
