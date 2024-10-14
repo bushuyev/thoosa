@@ -1711,17 +1711,17 @@ mod store_tests{
 
         assert_eq!(vec!["aaa".to_owned(), "bbb".to_owned()], store.list_run_resources(run_id)?);
 
-        let selected_motifs_run_id = store.save_selected_motifs(
+        let motif_selection_run_id = store.save_selected_motifs(
             run_id,
             "[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]",
             vec![vec![(1, 0.1), (2, 0.2)]]
         )?;
 
-        let input_run_ids = store.list_input_run_ids(&vec![selected_motifs_run_id])?;
+        let input_run_ids = store.list_input_run_ids(&vec![motif_selection_run_id])?;
 
-        assert_eq!([(selected_motifs_run_id, run_id)], input_run_ids.as_slice());
+        assert_eq!([(motif_selection_run_id, run_id)], input_run_ids.as_slice());
 
-        let motifs = store.list_selected_motifs(selected_motifs_run_id)?;
+        let motifs = store.list_selected_motifs(motif_selection_run_id)?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -1762,7 +1762,7 @@ mod store_tests{
 
         assert_eq!(
             vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
-            store.tree_run_descr(selected_motifs_run_id)?
+            store.tree_run_descr(motif_selection_run_id)?
         );
 
         store.delete_slices_without_matches(run_id)?;
