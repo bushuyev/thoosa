@@ -919,7 +919,6 @@ mod tests {
         )?;
 
         let motifs_run_ids = run_find_motifs_on_group(
-            &cli,
             &store,
             vec![Cpu],
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
@@ -976,7 +975,6 @@ mod tests {
         )?;
 
         let run_ids = run_find_motifs_on_group(
-            &cli,
             &store,
             vec![Cpu],
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),

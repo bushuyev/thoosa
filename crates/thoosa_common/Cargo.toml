@@ -24,6 +24,7 @@ parking_lot_mpsc.workspace = true
 clap.workspace = true
 rayon.workspace = true
 serde.workspace = true
+lazy_static.workspace = true
 
 thoosa_shared = {path = "../thoosa_shared" }
 plotters = { version = "0.3.5"}

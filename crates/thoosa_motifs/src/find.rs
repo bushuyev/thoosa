@@ -24,13 +24,14 @@ use thoosa_shared::val::Val;
 use thoosa_store::Store;
 use thoosa_store::StoreDumper;
 
+
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::loader::Loader;
 use crate::distance::dist_d2;
 use crate::distance::slice_t;
 use rayon::iter::{ParallelBridge};
 use rayon::iter::ParallelIterator;
-use thoosa_common::ws::Workspace;
+use thoosa_common::ws::{FsWorkspace, Workspace, WS};
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -212,7 +213,6 @@ impl Expander for LinearExpander {
 }
 
 pub fn find_motifs_by_euc_dist(
-    ws: Arc<RwLock<Workspace>>,
     find_motifs_params: &FindMotifsParams,
     resource_ids: Vec<String>,
     store: Arc<Mutex<impl Store + 'static>>, channels: i64,
@@ -220,7 +220,7 @@ pub fn find_motifs_by_euc_dist(
     min_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
 
-    let records_num = ws.read().clc_records(&resource_ids)? as usize;
+    let records_num = WS.read().clc_records(&resource_ids)? as usize;
     debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} resource_ids={resource_ids:?}", find_motifs_params.resource_set());
     if records_num < find_motifs_params.window {
         return Err(ThoosaError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
@@ -1299,7 +1299,7 @@ mod motif_find_tests {
     use thoosa_shared::val::Val;
     use thoosa_store::{SqlStore, Store};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::ws::Workspace;
+    use thoosa_common::ws::FsWorkspace;
     use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper};
 
     use crate::find::select_motifs_by_corr;
@@ -1634,7 +1634,6 @@ mod motif_find_tests {
 
 
         let run_ids = super::find_motifs_by_euc_dist(
-            Arc::new(RwLock::new(Workspace::new("", 0, 1000)?)),
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1712,7 +1711,6 @@ mod motif_find_tests {
 
 
         let run_ids = super::find_motifs_by_euc_dist(
-            Arc::new(RwLock::new(Workspace::new("", 0, 0)?)),
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1791,7 +1789,6 @@ mod motif_find_tests {
         )));
 
         super::find_motifs_by_euc_dist(
-            Arc::new(RwLock::new(Workspace::new("", 0, 0)?)),
             &FindMotifsParams {
                 step: 50,
                 window: 100,
@@ -1860,7 +1857,6 @@ mod motif_find_tests {
         )));
 
         super::find_motifs_by_euc_dist(
-        Arc::new(RwLock::new(Workspace::new("", 0, 0)?)),
             &FindMotifsParams {
                 step: 100,
                 window: 100,

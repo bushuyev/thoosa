@@ -5,14 +5,17 @@ use std::fs::read_dir;
 use std::num::ParseIntError;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use lazy_static::lazy_static;
 use log::{debug, info, warn};
+use parking_lot::RwLock;
 use tch::nn::VarStore;
 use tch::Tensor;
 use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
 use thoosa_shared::{recurse_files, ThoosaError};
 use crate::utils::cdt_for_dir;
 
-pub struct Workspace {
+
+pub struct FsWorkspace {
     base_path:PathBuf,
     store_path:PathBuf,
     tensors_path:PathBuf,
@@ -25,7 +28,7 @@ pub struct Workspace {
     max_input:usize //TODO move into input meta
 }
 
-impl Workspace {
+impl FsWorkspace {
 
     pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Self, ThoosaError> {
         let base_path = base_path.into();
@@ -57,44 +60,45 @@ impl Workspace {
         })
     }
 
-    pub fn base_path_as_str(&self) -> String {
+
+    /*
+        motif_selection_run_id/channel/motif_id
+     */
+
+    pub fn model_path_to_run_id(model_path:&Path) -> usize {
+        model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<usize>().ok())).expect("can't parse run_id from {model_path}")
+    }
+}
+
+impl Workspace for FsWorkspace {
+    fn base_path_as_str(&self) -> String {
         self.base_path.to_string_lossy().to_string()
     }
-
-    pub fn base_path(&self) -> &PathBuf {
+    fn base_path(&self) -> &PathBuf {
         &self.base_path
     }
-
-    pub fn store_path(&self) -> &PathBuf {
+    fn store_path(&self) -> &PathBuf {
         &self.store_path
     }
-
-    pub fn tensors_path(&self) -> &PathBuf {
+    fn tensors_path(&self) -> &PathBuf {
         &self.tensors_path
     }
-
-    pub fn tensor_path(&self, key:impl Display) -> PathBuf {
+    fn tensor_path(&self, key: &dyn Display) -> PathBuf {
         self.tensors_path.join(format!("{key}.pt"))
     }
-
-    pub fn models_path(&self) -> &PathBuf {
+    fn models_path(&self) -> &PathBuf {
         &self.models_path
     }
-
-    pub fn motifs_models_path(&self) -> &PathBuf {
+    fn motifs_models_path(&self) -> &PathBuf {
         &self.motifs_models_path
     }
-
-    pub fn labels_models_path(&self) -> &PathBuf {
+    fn labels_models_path(&self) -> &PathBuf {
         &self.labels_models_path
     }
-
-    pub fn final_models_path(&self) -> &PathBuf {
+    fn final_models_path(&self) -> &PathBuf {
         &self.final_models_path
     }
-
-    pub fn save_final_model(&self, run_id:usize, vs:VarStore, params:FinalNodeParams) -> Result<(), ThoosaError> {
-
+    fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError> {
         fs::create_dir_all(&self.final_models_path)?;
 
         vs.save(&self.final_models_path.join(format!("{run_id}.safetensors")));
@@ -107,13 +111,7 @@ impl Workspace {
 
         Ok(())
     }
-
-
-    /*
-        motif_selection_run_id/channel/motif_id
-     */
-    pub fn save_motif_model(&self, channel:impl Display, motif_node_params_run_id:impl Display, motif_id:impl Display, vs:VarStore, params:MotifNodeParams) -> Result<(), ThoosaError>{
-
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: VarStore, params: MotifNodeParams) -> Result<(), ThoosaError> {
         let channel_models = self.motifs_models_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
@@ -130,23 +128,21 @@ impl Workspace {
 
         Ok(())
     }
-
     /**
     returns Vec<safetensors_path, config jsonpath>
-    */
-    pub fn motif_models(&self, channel:impl Display, motif_id:usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
+     */
+    fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
         let motif_prefix = format!("{}_", motif_id);
 
-        recurse_files(&self.motifs_models_path.join(channel.to_string()), &|path|{
-            path.extension().map(|v|v.eq("safetensors")).unwrap_or(false) &&
-                path.file_stem().and_then(|s|s.to_str()).map(|s| {
+        recurse_files(&self.motifs_models_path.join(channel.to_string()), &|path| {
+            path.extension().map(|v| v.eq("safetensors")).unwrap_or(false) &&
+                path.file_stem().and_then(|s| s.to_str()).map(|s| {
                     s.starts_with(motif_prefix.as_str())
                 }).unwrap_or(false)
-
-        })?.into_iter().try_fold(vec![], |mut a, safetensors_path|{
+        })?.into_iter().try_fold(vec![], |mut a, safetensors_path| {
             debug!("motif_models: safetensors_path={safetensors_path:?}");
 
-            let parent= safetensors_path.parent().expect("parent");
+            let parent = safetensors_path.parent().expect("parent");
             // let channel = parent.file_stem().expect("channel");
             let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
             let json = format!("{}.json", file_stem);
@@ -156,11 +152,9 @@ impl Workspace {
 
             a.push((safetensors_path, json));
             Ok(a)
-
         })
     }
-
-    pub fn save_label_model(&self, label_node_run_id:usize, label:impl Display, vs:VarStore, params:LabelNodeParams) -> Result<(), ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: VarStore, params: LabelNodeParams) -> Result<(), ThoosaError> {
         let label_models_path = self.labels_models_path.join(format!("{}", label));
 
         fs::create_dir_all(&label_models_path)?;
@@ -178,16 +172,12 @@ impl Workspace {
 
         Ok(())
     }
-
-
-    pub fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
-        recurse_files(&self.labels_models_path, &|path|{
+    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
+        recurse_files(&self.labels_models_path, &|path| {
             println!("path={path:?}");
-            path.extension().map(|v|v.eq("safetensors")).unwrap_or(false)
-
-        })?.into_iter().try_fold(HashMap::new(), |mut a, safetensors_path|{
-
-            let parent= safetensors_path.parent().expect("parent");
+            path.extension().map(|v| v.eq("safetensors")).unwrap_or(false)
+        })?.into_iter().try_fold(HashMap::new(), |mut a, safetensors_path| {
+            let parent = safetensors_path.parent().expect("parent");
             let label = parent.file_stem().expect("label");
             let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
             let json = format!("{}.json", file_stem);
@@ -199,23 +189,15 @@ impl Workspace {
             Ok(a)
         })
     }
-
-    pub fn model_path_to_run_id(model_path:&Path) -> usize {
-        model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<usize>().ok())).expect("can't parse run_id from {model_path}")
-    }
-
     #[inline]
-    pub fn channels(&self) -> usize {
+    fn channels(&self) -> usize {
         self.channels
     }
-
     #[inline]
-    pub fn max_input(&self) -> usize {
+    fn max_input(&self) -> usize {
         self.max_input
     }
-
-    pub fn clc_records(&self, resource_ids:&Vec<String>) -> Result<i64, ThoosaError> {
-
+    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
         read_dir(&self.tensors_path)?
             .map(|res| {
                 let tensor = Tensor::load(res?.path())?;
@@ -223,6 +205,111 @@ impl Workspace {
                 Ok(tensor.size()[1])
             })
             .sum()
+    }
+}
+
+
+lazy_static! {
+    pub static ref WS: RwLock<Box<dyn Workspace>> = RwLock::new(Box::new(DummyWorkspace{}));
+}
+
+pub trait Workspace:Sync + Send {
+    fn base_path_as_str(&self) -> String;
+    fn base_path(&self) -> &PathBuf;
+    fn store_path(&self) -> &PathBuf;
+    fn tensors_path(&self) -> &PathBuf;
+    fn tensor_path(&self, key: &dyn Display) -> PathBuf;
+    fn models_path(&self) -> &PathBuf;
+    fn motifs_models_path(&self) -> &PathBuf;
+    fn labels_models_path(&self) -> &PathBuf;
+    fn final_models_path(&self) -> &PathBuf;
+    fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError>;
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: VarStore, params: MotifNodeParams) -> Result<(), ThoosaError>;
+    /**
+    returns Vec<safetensors_path, config jsonpath>
+     */
+    fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
+    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: VarStore, params: LabelNodeParams) -> Result<(), ThoosaError>;
+    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
+    #[inline]
+    fn channels(&self) -> usize;
+    #[inline]
+    fn max_input(&self) -> usize;
+    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError>;
+}
+
+#[derive(Debug)]
+pub struct DummyWorkspace {
+
+}
+
+impl Workspace for DummyWorkspace {
+    fn base_path_as_str(&self) -> String {
+        todo!()
+    }
+
+    fn base_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn store_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn tensors_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn tensor_path(&self, key: &dyn Display) -> PathBuf {
+        todo!()
+    }
+
+    fn models_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn motifs_models_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn labels_models_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn final_models_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError> {
+        todo!()
+    }
+
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: VarStore, params: MotifNodeParams) -> Result<(), ThoosaError> {
+        todo!()
+    }
+
+    fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
+        todo!()
+    }
+
+    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: VarStore, params: LabelNodeParams) -> Result<(), ThoosaError> {
+        todo!()
+    }
+
+    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
+        todo!()
+    }
+
+    fn channels(&self) -> usize {
+        todo!()
+    }
+
+    fn max_input(&self) -> usize {
+        todo!()
+    }
+
+    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
+        Ok(1000)
     }
 }
 
@@ -236,7 +323,7 @@ mod tests {
     use crate::utils::cdt_for_dir;
     use thoosa_shared::ThoosaError;
     use crate::train_nets::{LabelNodeParams, MotifNodeParams};
-    use super::Workspace;
+    use super::{FsWorkspace, Workspace};
 
     #[ctor::ctor]
     fn init() {
@@ -250,7 +337,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = Workspace::new(test_dir, 2, 684400)?;
+        let ws = FsWorkspace::new(test_dir, 2, 684400)?;
 
 
         debug!("store_path={:?}", ws.store_path());
@@ -258,23 +345,23 @@ mod tests {
         assert!(ws.store_path().ends_with("main_db.db3"));
 
 
-        ws.save_motif_model(0, 0, 0, VarStore::new(Cpu), MotifNodeParams::new(10));
-        ws.save_motif_model(1, 1, 0, VarStore::new(Cpu), MotifNodeParams::new(20));
+        ws.save_motif_model(&0, &0, &0, VarStore::new(Cpu), MotifNodeParams::new(10));
+        ws.save_motif_model(&1, &1, &0, VarStore::new(Cpu), MotifNodeParams::new(20));
 
-        ws.save_motif_model(1, 2, 2, VarStore::new(Cpu), MotifNodeParams::new(30));
-        ws.save_motif_model(1, 3, 2, VarStore::new(Cpu), MotifNodeParams::new(40));
-        ws.save_motif_model(1, 4, 2, VarStore::new(Cpu), MotifNodeParams::new(50));
+        ws.save_motif_model(&1, &2, &2, VarStore::new(Cpu), MotifNodeParams::new(30));
+        ws.save_motif_model(&1, &3, &2, VarStore::new(Cpu), MotifNodeParams::new(40));
+        ws.save_motif_model(&1, &4, &2, VarStore::new(Cpu), MotifNodeParams::new(50));
 
-        ws.save_motif_model(1, 3, 4, VarStore::new(Cpu), MotifNodeParams::new(50));
-
-
-        let models = ws.motif_models(0, 0)?;
+        ws.save_motif_model(&1, &3, &4, VarStore::new(Cpu), MotifNodeParams::new(50));
 
 
-        assert_eq!(ws.motif_models(0, 0)?.len(), 1);
-        assert_eq!(ws.motif_models(1, 0)?.len(), 1);
-        assert_eq!(ws.motif_models(1, 2)?.len(), 3);
-        assert_eq!(ws.motif_models(1, 4)?.len(), 1);
+        let models = ws.motif_models(&0, 0)?;
+
+
+        assert_eq!(ws.motif_models(&0, 0)?.len(), 1);
+        assert_eq!(ws.motif_models(&1, 0)?.len(), 1);
+        assert_eq!(ws.motif_models(&1, 2)?.len(), 3);
+        assert_eq!(ws.motif_models(&1, 4)?.len(), 1);
 
         Ok(())
     }
@@ -285,12 +372,12 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = Workspace::new(test_dir, 20, 684400)?;
+        let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
-        ws.save_label_model(1, "label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10));
-        ws.save_label_model(2, "label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10));
-        ws.save_label_model(3, "label_1", VarStore::new(Cpu), LabelNodeParams::new(30, 4, 3, 10));
-        ws.save_label_model(4, "label_1", VarStore::new(Cpu), LabelNodeParams::new(40, 4, 3, 10));
+        ws.save_label_model(1, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10));
+        ws.save_label_model(2, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10));
+        ws.save_label_model(3, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(30, 4, 3, 10));
+        ws.save_label_model(4, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(40, 4, 3, 10));
 
         let models =  ws.label_models()?;
         for mm in &models{
