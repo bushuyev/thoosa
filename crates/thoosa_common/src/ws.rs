@@ -7,6 +7,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use log::{debug, info, warn};
 use tch::nn::VarStore;
+use tch::Tensor;
 use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
 use thoosa_shared::{recurse_files, ThoosaError};
 use crate::utils::cdt_for_dir;
@@ -212,6 +213,17 @@ impl Workspace {
     pub fn max_input(&self) -> usize {
         self.max_input
     }
+
+    pub fn clc_records(&self, resource_ids:&Vec<String>) -> Result<i64, ThoosaError> {
+
+        read_dir(&self.tensors_path)?
+            .map(|res| {
+                let tensor = Tensor::load(res?.path())?;
+                debug!("clc_records: tensor={:?}", tensor.size());
+                Ok(tensor.size()[1])
+            })
+            .sum()
+    }
 }
 
 #[cfg(test)]
@@ -263,8 +275,6 @@ mod tests {
         assert_eq!(ws.motif_models(1, 0)?.len(), 1);
         assert_eq!(ws.motif_models(1, 2)?.len(), 3);
         assert_eq!(ws.motif_models(1, 4)?.len(), 1);
-
-
 
         Ok(())
     }
