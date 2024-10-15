@@ -491,7 +491,7 @@ impl Store for SqlStore {
                 a
             });
 
-            //labels_cnt number of labels a resource has - the fewer labels the more surely resource is classified
+            //labels_cnt number of labels a resource has - the fewer labels the more chances that resource is classified correctly
             for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
 
                 let max_labels_resources = labels_resources.values().map(|r|r.len()).sum::<usize>();
