@@ -230,7 +230,7 @@ mod data_tests {
     use tch::{IndexOp, Tensor};
     use thoosa_shared::{TensorSliceIdx, ThoosaError};
     use thoosa_shared::init_test_logging;
-    use crate::data::{arr_to_expr, read_motif_to_iter, split_frame_by_offsets};
+    use crate::data::{arr_to_expr, split_frame_by_offsets};
 
     #[ctor::ctor]
     fn init() {

@@ -48,28 +48,6 @@ impl MotifsToFragmentsParams {
     }
 }
 
-/**
-* returns Vec<(channel_id, chanel's motifs file)>
-*/
-pub fn list_motifs(motifs_dir:&str) -> Result<Vec<(u16, String)>, ThoosaError>{
-    let re = Regex::new(r".+_(?<id>[0-9]+).csv$").unwrap();//TODO lazy_static
-
-    let mut motiffs:Vec<(u16, String)> = vec![];
-    for p in fs::read_dir(motifs_dir)?.into_iter() {
-        let path = p?.path();
-        let file_name = path.to_str().expect("file_name");
-
-        if let Some(caps) = re.captures(file_name) {
-            debug!("file_name={} id={}", file_name, &caps["id"]);
-
-            motiffs.push((caps["id"].parse::<u16>()?, file_name.to_string()))
-        };
-    }
-
-    motiffs.sort_by(|a, b| a.0.cmp(&b.0));
-
-    Ok(motiffs)
-}
 
 /**
 * returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
@@ -537,16 +515,6 @@ mod motifs_tests {
             MotifSlice::new(group, 7000, 0)
         ]);
 
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_motif_to_iter() -> Result<(), ThoosaError>{
-        let motifs = &super::list_motifs("../../data_local/motifs/2024-02-18T21:08:49+01:00")?;
-
-        assert_eq!(motifs.len(), 20);
-        assert_eq!((0..20).collect::<Vec<u16>>(), motifs.into_iter().map(|v|v.0).collect::<Vec<u16>>());
 
         Ok(())
     }

@@ -1603,7 +1603,7 @@ mod main_tests {
         let devices = vec![Cpu, Cpu];
         run_step(
             None,
-            FindMotifsParams::dummy(10, 100, "test".into(), 100, 0.1, None),
+            Params0{},
             run_0,
             ws,
             store,
