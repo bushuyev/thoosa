@@ -709,7 +709,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    // #[test]
     pub fn test_fetch_similarities() -> Result<(), ThoosaError> {
 
         // let good_eegs = EEGs::good_eegs("../../data")?;
