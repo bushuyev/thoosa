@@ -724,7 +724,7 @@ pub fn run_select_motifs(cli: &Cli, store: &Arc<Mutex<SqlStore>>, devices: Vec<D
 }
 
 
-pub fn run_find_motifs_on_group(store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, executor: Arc<parking_lot::RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>{
+pub fn run_find_motifs_on_group(store: &Arc<Mutex<SqlStore>>, devices: Vec<Device>, run_all_params: &RunAllParams, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>{
 
     let resource_sets = { store.lock().list_resource_set_group_sets(run_all_params.train_resource_group()).expect("list_resource_set_group_sets")};
 
@@ -1079,7 +1079,7 @@ mod main_tests {
     use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_two_imp, sig_three_imp, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{SqlStore, Store};
-    use crate::cli::{init_resources, plot_motif_slices, resource_path, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
+    use crate::cli::{init_resources, plot_motif_slices, resource_path, run_find_motifs_on_group, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
     use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -1554,14 +1554,27 @@ mod main_tests {
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
 
-        fn run_step<P, F:FnOnce(P)>(
+        struct Params0{
+
+        }
+
+        struct Params1{
+
+        }
+
+        fn run_0(p:Params0){
+
+        }
+
+        fn run_step<P, F>(
             input:Option<Vec<usize>>,
             config:P,
             f:F,
             ws: Arc<RwLock<FsWorkspace>>,
             store: Arc<Mutex<impl Store + 'static>>,
             exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-        ) -> Result<Option<Vec<usize>>, ThoosaError>{
+        )  -> Result<Option<Vec<usize>>, ThoosaError>
+        where F:FnOnce(P) {
 
             Ok(None)
         }
@@ -1587,13 +1600,11 @@ mod main_tests {
             }, 4, 100,
         )));
 
-
+        let devices = vec![Cpu, Cpu];
         run_step(
             None,
             FindMotifsParams::dummy(10, 100, "test".into(), 100, 0.1, None),
-            |params|{
-
-            },
+            run_0,
             ws,
             store,
             executor_rc

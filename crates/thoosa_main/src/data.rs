@@ -179,28 +179,6 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
     }).sum())
 }
 
-#[allow(dead_code)]
-pub fn read_motif_to_iter(motif_file:&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, ThoosaError>{
-
-    let motif_df = CsvReader::from_path(motif_file)?.has_header(false).finish()?;
-    let columns = motif_df.get_columns();
-
-    Ok(columns[0].i64()?.into_iter().zip(
-        columns[1].i64()?.into_iter().zip(
-            columns[2].i64()?.into_iter().zip(
-                columns[3].i64()?.into_iter()
-            )
-        )
-
-    ).map(|v|{
-        let (Some(id_0), (Some(sl_0), (Some(id_1), Some(sl_1)))) = v else {
-            panic!("unexpected entry in motif");
-        };
-        (TensorSliceIdx(id_0.to_string(), sl_0), TensorSliceIdx(id_1.to_string(), sl_1))
-    }).collect::<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>>())
-
-}
-
 
 pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
     assert_eq!(t.size().len(), 2);
@@ -329,16 +307,6 @@ mod data_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_read_motif_to_iter() -> Result<(), ThoosaError>{
-        let motifs_iter = read_motif_to_iter("../../data_local/test_motifs/motifs_0.csv")?;
-
-        assert_eq!(motifs_iter.len(), 4);
-        assert_eq!((TensorSliceIdx(0.to_string(), 1000), TensorSliceIdx(1.to_string(), 3000)), motifs_iter[0]);
-        assert_eq!((TensorSliceIdx(1.to_string(), 3000), TensorSliceIdx(2.to_string(), 25000)), motifs_iter[1]);
-
-        Ok(())
-    }
 
     #[test]
     fn test_save_tensor() -> Result<(), ThoosaError>{
