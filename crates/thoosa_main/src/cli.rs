@@ -218,7 +218,7 @@ pub fn run_cli<F, L>(
     let store = Arc::new(Mutex::new(SqlStore::from_path(&cli.store_path)?));
 
 
-    let devices = list_devices();
+    let devices  = list_devices();
 
     let cpu_num = std::thread::available_parallelism()?;
     let num_threads = cli.num_threads.unwrap_or_else(||max(2, cpu_num.get()/2));
@@ -1553,6 +1553,8 @@ mod main_tests {
 
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
+
+        // tch::c
 
         struct Params0{
 

@@ -67,6 +67,9 @@ pub fn plot_heatmap(path:&str, _t:&Tensor)  -> Result<(), Box<dyn std::error::Er
 }
 
 pub fn list_devices() ->Vec<Device> {
+    let cuda_if_available = Device::cuda_if_available();
+    debug!("cuda_if_available={cuda_if_available:?}");
+
     let devices = unsafe {atc_cuda_device_count()};
     if devices == 0 {
         vec![Device::Cpu]

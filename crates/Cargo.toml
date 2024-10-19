@@ -20,8 +20,8 @@ rand = "0.8.5"
 log = "0.4.22"
 simplelog = "0.12.2"
 chrono = { version = "0.4.38" }
-tch = { version = "0.17.0" }
-torch-sys = "0.17.0"
+tch = { version = "0.18.0" }
+torch-sys = "0.18.0"
 parking_lot =  "0.12.3"
 parking_lot_mpsc =  "0.1.5"
 crossbeam-utils = "0.8.19"
