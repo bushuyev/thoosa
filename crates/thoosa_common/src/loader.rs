@@ -166,7 +166,7 @@ where
         let features_rc = Arc::clone(&futures);
 
 
-        let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|thread_builder| {
+        let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(11).spawn_handler(|thread_builder| {
             let b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "futures_pool", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
@@ -186,18 +186,14 @@ where
             debug!("loader_pool spawned");
             let waker = waker_ref(&p_notify);
             let mut cx = Context::from_waker(&waker);
-            let mut cycle = 0usize;
+
 
             // let mut t = Instant::now();
             loop {
                 if stop_arc.load(Ordering::Relaxed) {
                     break;
                 }
-                if cycle == usize::MAX {
-                    cycle = 0;
-                } else {
-                    cycle += 1;
-                }
+
 
                 let futures_len = futures.read().len();
                 if futures_len > 0 {

@@ -213,6 +213,7 @@ impl Expander for LinearExpander {
 }
 
 pub fn find_motifs_by_euc_dist(
+    ws:&Arc<RwLock<Box<dyn Workspace>>>,
     find_motifs_params: &FindMotifsParams,
     resource_ids: Vec<String>,
     store: Arc<Mutex<impl Store + 'static>>, channels: i64,
@@ -220,7 +221,7 @@ pub fn find_motifs_by_euc_dist(
     min_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
 
-    let records_num = WS.read().clc_records(&resource_ids)? as usize;
+    let records_num = ws.read().clc_records(&resource_ids)? as usize;
     debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} resource_ids={resource_ids:?}", find_motifs_params.resource_set());
     if records_num < find_motifs_params.window {
         return Err(ThoosaError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
