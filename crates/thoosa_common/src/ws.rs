@@ -1,18 +1,20 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs;
-use std::fs::read_dir;
+use std::fs::{read_dir, ReadDir};
 use std::num::ParseIntError;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use tch::nn::VarStore;
-use tch::Tensor;
+use tch::{Device, TchError, Tensor};
 use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
 use thoosa_shared::{recurse_files, ThoosaError};
 use crate::utils::cdt_for_dir;
+use rayon::iter::ParallelIterator;
 
 
 pub struct FsWorkspace {
@@ -30,7 +32,7 @@ pub struct FsWorkspace {
 
 impl FsWorkspace {
 
-    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Self, ThoosaError> {
+    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Box<dyn Workspace>, ThoosaError> {
         let base_path = base_path.into();
         if !base_path.exists() {
             fs::create_dir_all(&base_path)?;
@@ -38,7 +40,7 @@ impl FsWorkspace {
         }
 
         let store_path:PathBuf = base_path.join("main_db.db3");
-        let tensors_path:PathBuf = base_path.join("tensors");
+        let tensors_path:PathBuf = "/media/bu/KINGSTON/all_eegs.pt/all/".into(); // base_path.join("tensors");
         fs::create_dir_all(&tensors_path)?;
 
         let models_path:PathBuf = base_path.join("models");
@@ -47,7 +49,7 @@ impl FsWorkspace {
         let final_models_path:PathBuf = models_path.join("final");
         fs::create_dir_all(&motifs_models_path)?;
 
-        Ok(Self {
+        Ok(Box::new(Self {
             base_path,
             store_path,
             tensors_path,
@@ -57,7 +59,7 @@ impl FsWorkspace {
             final_models_path,
             channels,
             max_input
-        })
+        }))
     }
 
 
@@ -198,13 +200,26 @@ impl Workspace for FsWorkspace {
         self.max_input
     }
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
-        read_dir(&self.tensors_path)?
-            .map(|res| {
-                let tensor = Tensor::load(res?.path())?;
-                debug!("clc_records: tensor={:?}", tensor.size());
-                Ok(tensor.size()[1])
+        debug!("FsWorkspace::clc_records: self.tensors_path={:?}", self.tensors_path);
+
+        Ok(read_dir(&self.tensors_path)?.enumerate().map(|(i, dir)| (i, dir.unwrap().path().as_os_str().to_str().unwrap().to_string())).collect::<Vec<(usize, String)>>()
+            .into_par_iter().map(|(i, path)| {
+            let result = Tensor::load(path);
+            match result {
+                Ok(t) => {
+                    let tensor = t.to_device(Device::Cuda(0));
+
+                    debug!("clc_records: i={i} tensor={:?}", tensor.size());
+                    tensor.size()[1]
+                }
+                Err(e) => {
+                    debug!("clc_records: i={i} warning e={e:?}");
+                    0
+                }
+            }
+
             })
-            .sum()
+            .sum())
     }
 }
 

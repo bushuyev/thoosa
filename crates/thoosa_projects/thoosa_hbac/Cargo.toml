@@ -10,6 +10,7 @@ thoosa_motifs = {path = "../../thoosa_motifs" }
 thoosa_store = {path = "../../thoosa_store" }
 thoosa_shared = {path = "../../thoosa_shared" }
 thoosa_main = {path = "../../thoosa_main" }
+libloading = "0.8.5"
 
 rand.workspace = true
 tch.workspace = true

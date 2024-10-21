@@ -375,7 +375,7 @@ impl ClassTensorsLoaderData {
 }
 
 pub fn train_label_nodes(
-    ws: Arc<RwLock<FsWorkspace>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     motif_node_params:&MotifNodeParams,
     label_node_params:&LabelNodeParams,
     train_on_label_params: &TrainLabelNodeParams,
@@ -466,7 +466,7 @@ fn apply_motifs_to_loaders<I, F>(
 
 //TODO trains on all label models, add param to train on selected run_ids
 pub fn train_final(
-    ws: Arc<RwLock<FsWorkspace>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     train_final_params: &TrainFinalParams,
     train_resources:Vec<(String, Vec<f32>)>,
     valid_resources: Vec<(String, Vec<f32>)>,
@@ -568,7 +568,7 @@ pub fn train_final(
 }
 
 pub fn infer<F>(
-    ws: Arc<RwLock<FsWorkspace>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     train_final_params: &InferParams,
     load_tensor:F
 ) -> Result<(Vec<String>, Tensor), ThoosaError> where F:Fn(&Path) -> Result<Tensor, ThoosaError> + Sync{
@@ -686,10 +686,10 @@ impl Module for SyncModule {
     }
 }
 
-pub fn load_motif_models_ws(ws:&FsWorkspace, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<(MotifNodeParams, SyncModule)>, ThoosaError> {
+pub fn load_motif_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<(MotifNodeParams, SyncModule)>, ThoosaError> {
     debug!("load_motif_models_ws: motif_selection_run_id={motif_id}");
 
-    let channel_motif_models_paths = ws.motif_models(&channel, motif_id)?;
+    let channel_motif_models_paths = ws.read().motif_models(&channel, motif_id)?;
 
     channel_motif_models_paths.into_iter().map(|(model, config)|{
 
@@ -708,8 +708,8 @@ pub fn load_motif_models_ws(ws:&FsWorkspace, channel:usize, motif_id:usize, devi
 }
 
 
-pub fn load_all_label_models_ws(ws:&FsWorkspace, device: &Device) -> Result<HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>, ThoosaError> {
-    let label_models_paths = ws.label_models()?;
+pub fn load_all_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, device: &Device) -> Result<HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>, ThoosaError> {
+    let label_models_paths = ws.read().label_models()?;
 
     debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?}");
 

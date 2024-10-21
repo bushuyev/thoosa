@@ -1,12 +1,23 @@
 mod data;
 
 use std::time::Instant;
-use log::{error, info};
+use log::{debug, error, info};
 use thoosa_main::cli::run_cli;
 use thoosa_main::data::parquet_to_tensor_by_path;
 
 fn main()  {
     let t1 = Instant::now();
+
+    unsafe {
+        //TODO to kick REGISTER_CUDA_HOOKS(CUDAHooks); in
+        // ATen   cuda
+        //     │ │ │   detail
+        //     │ │ │ │ │ 󰙲 CUDAHooks.cpp
+        let lib = libloading::Library::new("libtorch_cuda.so").expect("pytorch-dst/lib/libtorch_cuda.so");
+        // let func: libloading::Symbol<unsafe extern fn() -> u32> = lib.get(b"my_func")?;
+        // Ok(func())
+        println!("lib={lib:?}"); //logging is not set up yet
+    };
 
     match run_cli(
         |base_path|data::labeled_resourses(base_path.as_ref().join("train.csv")),
