@@ -463,6 +463,12 @@ impl  From<i64> for RangeOrValue<i64>  {
     }
 }
 
+impl  From<u32> for RangeOrValue<u32>  {
+    fn from(value: u32) -> Self {
+        RangeOrValue::Value(value)
+    }
+}
+
 impl  From<Range<f64>> for RangeOrValue<f64>  {
     fn from(value: Range<f64>) -> Self {
         RangeOrValue::Range(value)
@@ -479,7 +485,6 @@ pub fn parse_range_or_value<V>(s: &str) -> Result<RangeOrValue<V>, Box<dyn Error
 where
     V: FromStr,
     V::Err: Error + Send + Sync + 'static {
-
 
     match s.find("..") {
         None => {
