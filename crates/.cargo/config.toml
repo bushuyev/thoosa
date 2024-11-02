@@ -4,4 +4,5 @@ target-dir = "target"
 
 
 [env]
-LIBTORCH="/home/bu/dvl/torch/src/pytorch-dst"
+LIBTORCH_BYPASS_VERSION_CHECK="1"
+LIBTORCH="/home/bu/dvl/torch/2.5.1/libtorch"

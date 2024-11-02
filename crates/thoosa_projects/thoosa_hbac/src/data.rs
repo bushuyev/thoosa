@@ -664,7 +664,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::UNIX_EPOCH;
     use log::debug;
-    use parking_lot::{Mutex};
+    use parking_lot::{Mutex, RwLock};
     use plotters::prelude::{BLACK, RED};
     use polars::prelude::{col, concat_list, count, lit, when, LazyCsvReader, LazyFileListReader, NamedFrom, Series};
     use tch::{Device, Tensor};
@@ -672,7 +672,8 @@ mod tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
     use thoosa_common::train_nets::{TrainFinalParams, TrainLabelNodeParams};
-    use thoosa_common::utils::{from, plot_series};
+    use thoosa_common::utils::{cdt_for_dir, from, plot_series};
+    use thoosa_common::ws::FsWorkspace;
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_label_nodes, Cli, RunAllParams};
@@ -868,6 +869,8 @@ mod tests {
     fn test_run_find_motifs() -> Result<(), ThoosaError>{
         let path = std::env::current_dir()?;
         println!("The current directory is {}", path.display());
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
 
         let cli = Cli{
             base_path: "test_data/eeg".to_string(),
@@ -888,12 +891,14 @@ mod tests {
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
 
         let loader = Arc::new(Box::new(ParquetLoader::new(
             "test_data/eeg".into(), Some("test_data/eeg".into()), None,
             Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
         )));
-        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+        let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
 
                 SyncWrapper::new(
@@ -919,6 +924,7 @@ mod tests {
         )?;
 
         let motifs_run_ids = run_find_motifs_on_group(
+            &ws,
             &store,
             vec![Cpu],
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
@@ -933,6 +939,9 @@ mod tests {
 
     // #[test]
     fn test_run_select_motifs() -> Result<(), ThoosaError> {
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+
         let cli = Cli{
             base_path: "test_data/eeg".to_string(),
             resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
@@ -975,6 +984,7 @@ mod tests {
         )?;
 
         let run_ids = run_find_motifs_on_group(
+            &ws,
             &store,
             vec![Cpu],
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
