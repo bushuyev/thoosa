@@ -872,7 +872,7 @@ mod tests {
         println!("The current directory is {}", path.display());
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         // let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400, Some(test_dir.join("tensors")))?));
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(3)?));
 
         let cli = Cli{
             base_path: "test_data/eeg".to_string(),

@@ -1074,7 +1074,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
     assert!(all_slices_1.len() > 0, "all_slices_1 len");
 
 
-    plot_series(
+    /*plot_series(
         all_slices_0.iter().map(|t| {
             (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
         }).collect(),
@@ -1090,7 +1090,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
         "all_slices_0",
         (2000, 1000),
         &"/tmp/plots/all_slices_1.png"
-    ).unwrap();
+    ).unwrap();*/
 
 
     let mut min_loss = f32::MAX;

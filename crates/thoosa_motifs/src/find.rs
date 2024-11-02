@@ -31,7 +31,7 @@ use crate::distance::dist_d2;
 use crate::distance::slice_t;
 use rayon::iter::{ParallelBridge};
 use rayon::iter::ParallelIterator;
-use thoosa_common::ws::{FsWorkspace, Workspace, WS};
+use thoosa_common::ws::{FsWorkspace, Workspace};
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -216,7 +216,7 @@ pub fn find_motifs_by_euc_dist(
     ws:&Arc<RwLock<Box<dyn Workspace>>>,
     find_motifs_params: &FindMotifsParams,
     resource_ids: Vec<String>,
-    store: Arc<Mutex<impl Store + 'static>>, channels: i64,
+    store: Arc<Mutex<impl Store + 'static>>,
     exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
     min_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
@@ -230,6 +230,7 @@ pub fn find_motifs_by_euc_dist(
     let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
     let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
 
+    let channels = ws.read().channels() as i64;
     let min_dot = (0..channels).map(|_| find_motifs_params.min_dot).collect::<Vec<f32>>();
 
 
@@ -1592,7 +1593,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -1651,7 +1652,6 @@ mod motif_find_tests {
             },
             eeg_id_series,
             Arc::clone(&store),
-            1,
             executor_rc, Some(10)
         )?;
 
@@ -1671,7 +1671,7 @@ mod motif_find_tests {
     #[test]
     fn test_find_motifs_euc_with_smooth_kernel() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
 
         let eeg_id_series = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -1732,7 +1732,6 @@ mod motif_find_tests {
             },
             eeg_id_series,
             Arc::clone(&store),
-            1,
             executor_rc, Some(10)
         )?;
 
@@ -1759,7 +1758,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1813,7 +1812,6 @@ mod motif_find_tests {
             },
             eeg_id_series,
             Arc::clone(&store),
-            1,
             executor_rc, Some(10)
         )?;
 
@@ -1838,7 +1836,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1884,7 +1882,6 @@ mod motif_find_tests {
             },
             (0..tensors_len).map(|v| format!("{}", v)).collect(),
             Arc::clone(&store),
-            1,
             executor_rc,
             None
         )?;
