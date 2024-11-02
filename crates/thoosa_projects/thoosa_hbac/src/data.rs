@@ -994,7 +994,7 @@ mod tests {
         )?;
 
         let corr_ids = run_select_motifs(
-            &cli,
+            &ws,
             &store,
             vec![Cpu],
             &SelectMotifsParams::dummy(run_ids, vec![("seizure".into(), "seizure/10".into())], 0.1),

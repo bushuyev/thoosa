@@ -31,6 +31,7 @@ use crate::distance::dist_d2;
 use crate::distance::slice_t;
 use rayon::iter::{ParallelBridge};
 use rayon::iter::ParallelIterator;
+use thoosa_common::runs::{Params, RunConfig};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 
 #[derive(Debug, Args, Clone)]
@@ -61,6 +62,14 @@ pub struct FindMotifsParams {//TODO pub
 
     #[command(subcommand)]
     pub input_filter: Option<InputFilter>,
+}
+
+impl Params for FindMotifsParams {
+    fn to_run_configs(&self) -> Vec<impl RunConfig> {
+        vec![
+            FindMotifsRunConfig::new(10, 10, "", None)
+        ]
+    }
 }
 
 #[derive(Debug, Subcommand, PartialEq, Clone)]
@@ -177,8 +186,8 @@ impl FindMotifsParams {
         self.max_dist
     }
 
-    pub fn to_filter_and_slice_params(&self, expander: &dyn Expander<T=FilterAndSlicerParams>) -> Vec<FilterAndSlicerParams> {
-        expander.expand(FilterAndSlicerParams::new(self.step, self.window as i64, "no filter", self.input_filter.clone()))
+    pub fn to_filter_and_slice_params(&self, expander: &dyn Expander<T=FindMotifsRunConfig>) -> Vec<FindMotifsRunConfig> {
+        expander.expand(FindMotifsRunConfig::new(self.step, self.window as i64, "no filter", self.input_filter.clone()))
     }
 }
 
@@ -198,9 +207,9 @@ impl LinearExpander {
 }
 
 impl Expander for LinearExpander {
-    type T = FilterAndSlicerParams;
+    type T = FindMotifsRunConfig;
 
-    fn expand(&self, t: FilterAndSlicerParams) -> Vec<FilterAndSlicerParams> {
+    fn expand(&self, t: FindMotifsRunConfig) -> Vec<FindMotifsRunConfig> {
         (0..self.n as i64).map(|i| {
             let mut params = t.clone();
             // t.window * i;
@@ -216,7 +225,7 @@ pub fn find_motifs_by_euc_dist(
     ws:&Arc<RwLock<Box<dyn Workspace>>>,
     find_motifs_params: &FindMotifsParams,
     resource_ids: Vec<String>,
-    store: Arc<Mutex<impl Store + 'static>>,
+    store: &Arc<Mutex<impl Store + 'static>>,
     loader: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
     min_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
@@ -272,7 +281,7 @@ pub fn find_motifs_by_euc_dist(
     chunk_and_slice(
         resource_ids,
         find_motifs_params.chunk_size,
-        param_set.into_iter().map(|v| v.into()).collect(),
+        param_set,
 
         move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors, params_idx: usize| {
             debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
@@ -406,56 +415,18 @@ impl ChunkOfSicedTensors {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct FilterAndSlicerParams {
+pub struct FindMotifsRunConfig {
     step: usize,
     window: i64,
     filter: Option<InputFilter>,
     descr: String,
 }
 
-
-pub struct FilterAndSlicer {
-    step: usize,
-    window: i64,
-    filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>>,
-}
-
-impl Debug for FilterAndSlicer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f. debug_struct("FilterAndSlicer")
-            .field("step", &self.step)
-            .field("window", &self.window)
-            .field("filter", &self.filter.is_some())
-            .finish()
-    }
-}
-
-unsafe impl Send for FilterAndSlicer {
+impl RunConfig for FindMotifsRunConfig {
 
 }
 
-impl From<FilterAndSlicerParams> for FilterAndSlicer {
-    fn from(params: FilterAndSlicerParams) -> Self {
-        Self {
-            step: params.step,
-            window: params.window,
-            filter: match &params.filter {
-                None => None, //Box::new(|t: &Box<Tensor>| t.shallow_clone()),
-
-                Some(input_filter) => {
-                    match input_filter {
-                        InputFilter::Conv1(_filter_params) => {
-                            Some(Box::new(|t: &Box<Tensor>| t.shallow_clone()))//TODO impl filters
-                        }
-                    }
-                }
-            },
-        }
-    }
-}
-
-
-impl FilterAndSlicerParams {
+impl FindMotifsRunConfig {
     pub fn new(
         step: usize,
         window: i64,
@@ -486,22 +457,32 @@ impl FilterAndSlicerParams {
 
     pub fn from_properties_map(properties: HashMap<String, Val>) -> Self {
         let properties = thoosa_shared::val::unprefix_properties("FilterAndSlicerParams", &properties);
-        FilterAndSlicerParams::new(
+        FindMotifsRunConfig::new(
             properties.get("step").expect("no step").as_usize().expect("step as_usize"),
             properties.get("window").expect("no window").as_i64().expect("window as_i64"),
             properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
             InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)).ok(),
         )
     }
-}
 
-impl FilterAndSlicer {
+    pub fn window(&self) -> i64 {
+        self.window
+    }
+
+
 
     fn slice_tensors_chunk(&self, tensors_chunk: Vec<&Box<Tensor>>, keys: &[String]) -> ChunkOfSicedTensors {
 
         let tensors_sliced = tensors_chunk.into_iter().map(|t| {
+            /*
+             match input_filter {
+                        InputFilter::Conv1(_filter_params) => {
+                            Some(Box::new(|t: &Box<Tensor>| t.shallow_clone()))//TODO impl filters
+                        }
+                    }
+             */
             let sliced = slice_t(
-                &self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone())),
+                t, //&self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone())),
                 self.step,
                 self.window,
             );
@@ -519,27 +500,16 @@ impl FilterAndSlicer {
         )
     }
 
-
     pub fn step(&self) -> usize {
         self.step
     }
-    pub fn window(&self) -> i64 {
-        self.window
-    }
-
-    pub fn filter(&self) -> Option<&Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>> {
-        self.filter.as_ref()
-    }
-
-    pub fn new(step: usize, window: i64, filter: Option<Box<dyn Fn(&Box<Tensor>) -> Tensor + Send + Sync>>) -> Self {
-        Self { step, window, filter }
-    }
 }
+
 
 fn chunk_and_slice<G>(
     resources_ids: Vec<String>,
     chunk_size: usize,
-    filter_and_slicer: Vec<FilterAndSlicer>,
+    filter_and_slicer: Vec<FindMotifsRunConfig>,
     callback: G,
     exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
 ) -> Result<(), ThoosaError>
@@ -966,11 +936,10 @@ fn clc_dist_matches(target: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>
 fn clc_motifs_matches_for_label<L>(
     motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
     all_zero: SyncWrapper<Box<Tensor>>,
-    channels_motifs_matches_labels: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>,//output TODO return it
+    channels_motifs_matches_labels: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>, //output TODO return it
     resources: Vec<String>,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
     label: L,
-    limit: Option<usize>,
     step: usize,
     motifs_distances: Arc<RwLock<HashMap<usize, f32>>>,
     channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>,
@@ -1021,11 +990,6 @@ where L: Clone + Send + Display + Debug + 'static,
                         channels_motifs_classes_guard[channel_i][motif_i].1.push(num_matches_label.1);
 
                     }
-                }
-
-                //TODO remove
-                if limit.map(|limit| count.load(Ordering::Relaxed) > limit as u64).unwrap_or(false) {
-                    return;
                 }
 
                 let count_ = count.fetch_add(1, Ordering::Relaxed);
@@ -1099,7 +1063,7 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs_by_ratio(motifs: Tensor, labels_resources: Vec<(String, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, limit: Option<usize>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
+pub fn select_motifs_by_ratio(motifs: Tensor, labels_resources: Vec<(String, Vec<String>)>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
 
     let mut labels_channels_good_motifs = labels_resources.iter().fold(HashMap::new(), |mut a, v| {
         a.insert(v.0.clone(), (0..motifs.size()[0]).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>()); //motifs.size()[0] - channels_num
@@ -1110,7 +1074,6 @@ pub fn select_motifs_by_ratio(motifs: Tensor, labels_resources: Vec<(String, Vec
         Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs), |e| Box::new(e.shallow_clone())))),
         labels_resources,
         executor,
-        limit,
         step,
         &device,
         motifs_distances,
@@ -1158,7 +1121,6 @@ pub fn select_motifs_by_corr(
     motifs: Tensor,
     labels_loaders: Vec<(i64, Vec<String>)>,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-    limit: Option<usize>,
     step: usize,
     device: Device,
     min_corr: f64,
@@ -1169,8 +1131,7 @@ pub fn select_motifs_by_corr(
     let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(
         Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs), |e| Box::new(e.shallow_clone())))),
         labels_loaders,
-        executor,
-        limit, step,
+        executor, step,
         &device,
         motifs_distances,
         channel_motif_ids
@@ -1214,7 +1175,6 @@ fn clc_channels_motifs_labels<L>(
     motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
     labels_resources: Vec<(L, Vec<String>)>,
     executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-    limit: Option<usize>,
     step: usize,
     device: &Device,
     motifs_distances: Arc<RwLock<HashMap<usize, f32>>>,
@@ -1253,7 +1213,6 @@ where
             resources,
             Arc::clone(&executor),
             label,
-            limit,
             step, //TODO step - k * slice_len ?
             Arc::clone(&motifs_distances),
             Arc::clone(&channel_motif_ids)
@@ -1301,7 +1260,7 @@ mod motif_find_tests {
     use thoosa_store::{SqlStore, Store};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
-    use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper};
+    use crate::find::{Conv1Params, FileDumper, FindMotifsRunConfig, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper};
 
     use crate::find::select_motifs_by_corr;
 
@@ -1532,7 +1491,6 @@ mod motif_find_tests {
                 (0, vec!["t_1_0.pt".to_string(), "t_1_1.pt".to_string()]),
             ],
             Arc::clone(&executor_rc),
-            Some(3),
             1,
             Device::Cpu,
             0.1,
@@ -1551,7 +1509,6 @@ mod motif_find_tests {
                 ("zzz".into(), vec!["t_2_0.pt".to_string(), "t_2_1.pt".to_string()]),
             ],
             executor_rc,
-            Some(3),
             1,
             Device::Cpu,
             0.5,
@@ -1650,7 +1607,7 @@ mod motif_find_tests {
                 input_filter: None,
             },
             eeg_id_series,
-            Arc::clone(&store),
+            &store,
             &executor_rc,
             Some(10)
         )?;
@@ -1731,7 +1688,7 @@ mod motif_find_tests {
                 input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
             },
             eeg_id_series,
-            Arc::clone(&store),
+            &store,
             &executor_rc,
             Some(10)
         )?;
@@ -1812,7 +1769,7 @@ mod motif_find_tests {
                 input_filter: None,
             },
             eeg_id_series,
-            Arc::clone(&store),
+            &store,
             &loader,
             Some(10)
         )?;
@@ -1883,7 +1840,7 @@ mod motif_find_tests {
                 input_filter: None,
             },
             (0..tensors_len).map(|v| format!("{}", v)).collect(),
-            Arc::clone(&store),
+            &store,
             &loader,
             None
         )?;
@@ -2185,7 +2142,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_filter_and_slicer_params() {
-        let params = FilterAndSlicerParams::new(10, 10, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
+        let params = FindMotifsRunConfig::new(10, 10, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
 
         let properties: HashMap<String, Val> = params.to_properties_map();
 
@@ -2202,7 +2159,7 @@ mod motif_find_tests {
 
         assert_eq!(sample_properties, properties);
 
-        let loaded_params = crate::find::FilterAndSlicerParams::from_properties_map(properties);
+        let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map(properties);
 
         debug!("loaded_params={:?}", loaded_params);
 
@@ -2239,7 +2196,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice(
             resources,
             2,
-            vec![FilterAndSlicer::new(3, 5, None)],
+            vec![FindMotifsRunConfig::new(3, 5, "", None)],
             move |chunk_0, chunk_1, _size| {
                 debug!("cccc{chunk_0:?} chunk_1={chunk_1:?}");
 

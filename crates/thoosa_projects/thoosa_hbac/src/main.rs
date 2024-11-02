@@ -29,7 +29,6 @@ fn main()  {
             "grda",
             "other"
         ],
-        |path, device| parquet_to_tensor_by_path(path, device),
         20,
         684400
     ) {

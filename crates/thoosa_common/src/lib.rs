@@ -17,9 +17,10 @@ mod bfgs;
 mod argmin;
 mod gaussian;
 mod acquisitions;
-mod parzen;
+pub mod parzen;
 pub mod loader;
 pub mod ws;
+pub mod runs;
 
 pub trait ResourceLoader:Send+Sync {
     type K;
