@@ -673,12 +673,13 @@ mod tests {
     use thoosa_common::ResourceLoader;
     use thoosa_common::train_nets::{TrainFinalParams, TrainLabelNodeParams};
     use thoosa_common::utils::{cdt_for_dir, from, plot_series};
-    use thoosa_common::ws::FsWorkspace;
+    use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_label_nodes, Cli, RunAllParams};
     use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
+    use thoosa_common::ws::Workspace;
     use thoosa_shared::{init_test_logging, ThoosaError};
     use thoosa_store::SqlStore;
     use crate::data::EEGs;
@@ -870,7 +871,8 @@ mod tests {
         let path = std::env::current_dir()?;
         println!("The current directory is {}", path.display());
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+        // let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400, Some(test_dir.join("tensors")))?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
 
         let cli = Cli{
             base_path: "test_data/eeg".to_string(),
@@ -891,8 +893,7 @@ mod tests {
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+
 
         let loader = Arc::new(Box::new(ParquetLoader::new(
             "test_data/eeg".into(), Some("test_data/eeg".into()), None,
@@ -940,7 +941,7 @@ mod tests {
     // #[test]
     fn test_run_select_motifs() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400, None)?));
 
         let cli = Cli{
             base_path: "test_data/eeg".to_string(),

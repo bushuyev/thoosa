@@ -1300,7 +1300,7 @@ mod motif_find_tests {
     use thoosa_shared::val::Val;
     use thoosa_store::{SqlStore, Store};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::ws::FsWorkspace;
+    use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use crate::find::{Conv1Params, FileDumper, FilterAndSlicer, FilterAndSlicerParams, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper};
 
     use crate::find::select_motifs_by_corr;
@@ -1592,7 +1592,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -1671,7 +1671,7 @@ mod motif_find_tests {
     #[test]
     fn test_find_motifs_euc_with_smooth_kernel() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
 
         let eeg_id_series = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -1759,7 +1759,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1838,7 +1838,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
