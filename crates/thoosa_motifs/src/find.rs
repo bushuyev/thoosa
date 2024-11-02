@@ -217,7 +217,7 @@ pub fn find_motifs_by_euc_dist(
     find_motifs_params: &FindMotifsParams,
     resource_ids: Vec<String>,
     store: Arc<Mutex<impl Store + 'static>>,
-    exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
     min_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
 
@@ -373,8 +373,7 @@ pub fn find_motifs_by_euc_dist(
 
             Ok(())
         },
-
-        exec
+        Arc::clone(&loader)
     )?;
 
 
@@ -1652,7 +1651,8 @@ mod motif_find_tests {
             },
             eeg_id_series,
             Arc::clone(&store),
-            executor_rc, Some(10)
+            &executor_rc,
+            Some(10)
         )?;
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
@@ -1732,7 +1732,8 @@ mod motif_find_tests {
             },
             eeg_id_series,
             Arc::clone(&store),
-            executor_rc, Some(10)
+            &executor_rc,
+            Some(10)
         )?;
 
         debug!("run_ids={:?}", run_ids);
@@ -1777,7 +1778,7 @@ mod motif_find_tests {
             ], "test_find_motifs_euc_diff_sizes", (3000, 500), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
         ).unwrap();
         */
-        let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
                 let sig = match key.as_str() {
                     "0000" => &sig_0,
@@ -1812,7 +1813,8 @@ mod motif_find_tests {
             },
             eeg_id_series,
             Arc::clone(&store),
-            executor_rc, Some(10)
+            &loader,
+            Some(10)
         )?;
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
@@ -1851,7 +1853,7 @@ mod motif_find_tests {
         let n = 684400i64;
         let tensors_len = tensors.len();
 
-        let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
                 let sig = tensors.get(key.parse::<usize>().expect(format!("parse {}", key).as_str())).expect(format!("tensor {}", key).as_str());
 
@@ -1882,7 +1884,7 @@ mod motif_find_tests {
             },
             (0..tensors_len).map(|v| format!("{}", v)).collect(),
             Arc::clone(&store),
-            executor_rc,
+            &loader,
             None
         )?;
 

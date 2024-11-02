@@ -929,7 +929,7 @@ mod tests {
             &store,
             vec![Cpu],
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            Arc::clone(&executor_rc)
+            &executor_rc
         )?;
 
         debug!("motifs_run_ids={motifs_run_ids:?}");
@@ -962,16 +962,17 @@ mod tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
-        let loader = Arc::new(Box::new(ParquetLoader::new(
+        let parquet_loader = Arc::new(Box::new(ParquetLoader::new(
             "test_data/eeg".into(), Some("test_data/eeg".into()), None,
             Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
         )));
 
-        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+        let loader = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
             move |key: &String| {
                 SyncWrapper::new(
-                    loader.load(key, Device::Cpu),
+                    parquet_loader.load(key, Device::Cpu),
                     |e| Box::new(e.shallow_clone())
+
                 )
             }, 4, 100,
         )));
@@ -989,7 +990,7 @@ mod tests {
             &store,
             vec![Cpu],
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            Arc::clone(&executor_rc)
+            &loader
         )?;
 
         let corr_ids = run_select_motifs(
@@ -997,7 +998,7 @@ mod tests {
             &store,
             vec![Cpu],
             &SelectMotifsParams::dummy(run_ids, vec![("seizure".into(), "seizure/10".into())], 0.1),
-            Arc::clone(&executor_rc),
+            &loader,
             20
         )?;
 
