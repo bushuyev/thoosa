@@ -1754,7 +1754,8 @@ mod train_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_train_on_label: test_dir={test_dir:?}");
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000)?));
+        let tensors_path = Some(test_dir.join("tensors"));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, tensors_path)?));
 
         let params = TrainLabelNodeParams {
             motif_node_params_selection_run_ids: vec![0],
@@ -1851,7 +1852,8 @@ mod train_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_train_on_label: test_dir={test_dir:?}");
         let channels = 5;
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 1000)?));
+        let tensors_path = Some(test_dir.join("tensors"));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 1000, tensors_path)?));
 
         let params = TrainFinalParams {
             step:100,
@@ -2017,7 +2019,7 @@ mod train_tests {
         let models_path = Path::new("/tmp/test_infer").join(&cdt);
 
 
-        save_test_models(&Arc::new(RwLock::new(FsWorkspace::new(&cdt, 20, 684400)?)), 1, channels, max_motif_batches, motif_batch_size, 1)?;
+        save_test_models(&Arc::new(RwLock::new(FsWorkspace::new(&cdt, 20, 684400, None)?)), 1, channels, max_motif_batches, motif_batch_size, 1)?;
         save_test_final_model(&models_path, 6)?;
 
         let input_path = Path::new("/tmp/test_infer_input").join(&cdt);
@@ -2041,7 +2043,7 @@ mod train_tests {
             Ok(t)
         }
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 684400)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 684400, None)?));
 
 
         let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(

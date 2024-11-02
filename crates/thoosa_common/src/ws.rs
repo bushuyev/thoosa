@@ -32,7 +32,7 @@ pub struct FsWorkspace {
 
 impl FsWorkspace {
 
-    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Box<dyn Workspace>, ThoosaError> {
+    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize, tensors_path: Option<PathBuf>) -> Result<Box<dyn Workspace>, ThoosaError> {
         let base_path = base_path.into();
         if !base_path.exists() {
             fs::create_dir_all(&base_path)?;
@@ -40,7 +40,8 @@ impl FsWorkspace {
         }
 
         let store_path:PathBuf = base_path.join("main_db.db3");
-        let tensors_path:PathBuf = "/media/bu/KINGSTON/all_eegs.pt/all/".into(); // base_path.join("tensors");
+        let tensors_path:PathBuf = tensors_path.unwrap_or("/media/bu/KINGSTON/all_eegs.pt/all/".into()); // base_path.join("tensors");
+        debug!("FsWorkspace: tensors_path={tensors_path:?}");
         fs::create_dir_all(&tensors_path)?;
 
         let models_path:PathBuf = base_path.join("models");
@@ -207,7 +208,7 @@ impl Workspace for FsWorkspace {
             let result = Tensor::load(path);
             match result {
                 Ok(t) => {
-                    let tensor = t.to_device(Device::Cuda(0));
+                    let tensor = t; //.to_device(Device::Cuda(0));
 
                     debug!("clc_records: i={i} tensor={:?}", tensor.size());
                     tensor.size()[1]
@@ -256,6 +257,12 @@ pub trait Workspace:Sync + Send {
 #[derive(Debug)]
 pub struct DummyWorkspace {
 
+}
+
+impl DummyWorkspace {
+    pub fn new()->Result<Box<dyn Workspace>, ThoosaError> {
+        Ok(Box::new(Self {}))
+    }
 }
 
 impl Workspace for DummyWorkspace {
@@ -338,7 +345,7 @@ mod tests {
     use crate::utils::cdt_for_dir;
     use thoosa_shared::ThoosaError;
     use crate::train_nets::{LabelNodeParams, MotifNodeParams};
-    use super::{FsWorkspace, Workspace};
+    use super::{DummyWorkspace, FsWorkspace, Workspace};
 
     #[ctor::ctor]
     fn init() {
@@ -352,7 +359,8 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = FsWorkspace::new(test_dir, 2, 684400)?;
+        let tensors_path = Some(test_dir.join("tensors"));
+        let ws = FsWorkspace::new(test_dir, 2, 684400, tensors_path)?;
 
 
         debug!("store_path={:?}", ws.store_path());
@@ -387,7 +395,8 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = FsWorkspace::new(test_dir, 20, 684400)?;
+        let ws = FsWorkspace::new(test_dir, 20, 684400, Some("tensors".into()))?;
+
 
         ws.save_label_model(1, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10));
         ws.save_label_model(2, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10));

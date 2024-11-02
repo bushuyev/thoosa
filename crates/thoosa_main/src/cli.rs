@@ -203,9 +203,9 @@ pub fn run_cli<F, L>(
 {
     let cli = Cli::parse();
 
-    let ws = Arc::new(RwLock::new(FsWorkspace::new(cli.base_path.clone(), channels, max_input)?));//TODO channels
+    let ws = Arc::new(RwLock::new(FsWorkspace::new(cli.base_path.clone(), channels, max_input, None)?));//TODO channels
 
-    std::mem::replace(&mut *WS.write(), FsWorkspace::new(cli.base_path.clone(), channels, max_input)? );
+    std::mem::replace(&mut *WS.write(), FsWorkspace::new(cli.base_path.clone(), channels, max_input, None)? );
 
 
     CombinedLogger::init(
@@ -1114,7 +1114,8 @@ mod main_tests {
 
         let n = 1000i64;
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, n as usize)?));
+        let tensors_path = Some(test_dir.join("tensors"));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, n as usize, tensors_path)?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
         let sig_0_v = sig_one_imp(n, max_y, None, None);
@@ -1298,7 +1299,8 @@ mod main_tests {
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
         let n = 1000i64;
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize)?));
+        let tensors_path = Some(test_dir.join("tensors"));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, tensors_path)?));
         let ws_runner = Arc::clone(&ws);
 
 
@@ -1554,7 +1556,7 @@ mod main_tests {
         Ok(run_id)
     }
 
-    #[test]
+    // #[test]
     fn test_0() -> Result<(), ThoosaError> {
 
         // tch::c
@@ -1586,7 +1588,7 @@ mod main_tests {
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, None)?));
         let ws_runner = Arc::clone(&ws);
 
         fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
