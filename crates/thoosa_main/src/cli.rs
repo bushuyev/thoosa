@@ -34,7 +34,7 @@ use crate::cli::Commands::{FindMotifs, Infer, InitResources, MotifsToTensor, Plo
 
 
 use crate::version::VERSION;
-use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace, WS};
+use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 
 #[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
@@ -204,8 +204,6 @@ pub fn run_cli<F, L>(
     let cli = Cli::parse();
 
     let ws = Arc::new(RwLock::new(FsWorkspace::new(cli.base_path.clone(), channels, max_input, None)?));//TODO channels
-
-    std::mem::replace(&mut *WS.write(), FsWorkspace::new(cli.base_path.clone(), channels, max_input, None)? );
 
 
     CombinedLogger::init(
@@ -433,7 +431,7 @@ pub fn run_cli<F, L>(
 
         //gdb --args target/x86_64-unknown-linux-gnu/debug/thoosa_hbac --term-logger-level=DEBUG --base-path=/tmp/ --resource-pattern=xxx say-hello
         Some(SayHello(params)) => {
-            debug!("w.base_paths={:?}", WS.read().base_path());
+            debug!("w.base_paths={:?}", ws.read().base_path());
         }
 
         None => {
@@ -767,9 +765,8 @@ fn run_find_motifs_on_set(ws:&Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
         find_motifs_params,
         resource_ids,
         Arc::clone(&store),
-        20,
         executor,
-        Some(10)//TODO to params
+        Some(10) //TODO to params
     )
 
 }
@@ -1227,7 +1224,6 @@ mod main_tests {
             },
             vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()],
             Arc::clone(&store),
-            channels,
             Arc::clone(&executor_rc),
             Some(100)
         )?;
@@ -1556,7 +1552,7 @@ mod main_tests {
         Ok(run_id)
     }
 
-    // #[test]
+    #[test]
     fn test_0() -> Result<(), ThoosaError> {
 
         // tch::c
@@ -1588,7 +1584,8 @@ mod main_tests {
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, None)?));
+        let tensors_path = Some(test_dir.join("tensors"));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, tensors_path)?));
         let ws_runner = Arc::clone(&ws);
 
         fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());

@@ -225,10 +225,6 @@ impl Workspace for FsWorkspace {
 }
 
 
-lazy_static! {
-    pub static ref WS: RwLock<Box<dyn Workspace>> = RwLock::new(Box::new(DummyWorkspace{}));
-}
-
 pub trait Workspace:Sync + Send {
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
@@ -256,12 +252,14 @@ pub trait Workspace:Sync + Send {
 
 #[derive(Debug)]
 pub struct DummyWorkspace {
-
+    channels:usize
 }
 
 impl DummyWorkspace {
-    pub fn new()->Result<Box<dyn Workspace>, ThoosaError> {
-        Ok(Box::new(Self {}))
+    pub fn new(channels: usize) ->Result<Box<dyn Workspace>, ThoosaError> {
+        Ok(Box::new(Self {
+            channels
+        }))
     }
 }
 
@@ -323,7 +321,7 @@ impl Workspace for DummyWorkspace {
     }
 
     fn channels(&self) -> usize {
-        todo!()
+        self.channels
     }
 
     fn max_input(&self) -> usize {
