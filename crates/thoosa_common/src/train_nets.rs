@@ -1754,7 +1754,7 @@ mod train_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_train_on_label: test_dir={test_dir:?}");
 
-        let ws = FsWorkspace::new(test_dir, 3, 1000)?;
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000)?));
 
         let params = TrainLabelNodeParams {
             motif_node_params_selection_run_ids: vec![0],
@@ -1769,7 +1769,7 @@ mod train_tests {
             motif_batch_size: 7
         };
 
-        let motifs_path = ws.motifs_models_path();
+        let motifs_path = ws.read().motifs_models_path();
         let motif_node_params_run_id = 1;
         save_test_motif_model(&ws, "0", 0, 100, motif_node_params_run_id)?;
         save_test_motif_model(&ws, "0", 1, 100, motif_node_params_run_id)?;
@@ -1807,7 +1807,7 @@ mod train_tests {
         debug!("test_train_on_label: channel 2 models={}", channel_2_motifs_models.len());
 
         super::train_label_nodes(
-            Arc::new(RwLock::new(ws)),
+            &ws,
             &MotifNodeParams::new(100), //TODO take window/num_features from saved motif model or motif run id
             &LabelNodeParams::new(3, 4, clc_num_batches(1000, 100, 100, 7) as i64, 7), //max motif nets - 2 for seizure
             &params,
@@ -1841,7 +1841,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn load_test_channels_motifs_models(ws1: &FsWorkspace, channels_motif_ids: Vec<(usize, usize)>) -> Vec<(MotifNodeParams, SyncModule)> {
+    fn load_test_channels_motifs_models(ws1: &Arc<RwLock<Box<dyn Workspace>>>, channels_motif_ids: Vec<(usize, usize)>) -> Vec<(MotifNodeParams, SyncModule)> {
 
         channels_motif_ids.into_iter().flat_map(|(channel, motif_id)|load_motif_models_ws(ws1, channel, motif_id, &Cpu).expect("load_motif_models")).collect()
     }
@@ -1851,7 +1851,7 @@ mod train_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_train_on_label: test_dir={test_dir:?}");
         let channels = 5;
-        let ws = FsWorkspace::new(test_dir, channels, 1000)?;
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 1000)?));
 
         let params = TrainFinalParams {
             step:100,
@@ -1908,7 +1908,7 @@ mod train_tests {
         ]);
 
 
-        fs::write(&ws.models_path().join("unexpected.file"), "lalala")?;
+        fs::write(&ws.read().models_path().join("unexpected.file"), "lalala")?;
 
         let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
             move |key: &String| {
@@ -1921,7 +1921,7 @@ mod train_tests {
         let final_node_params = FinalNodeParams::new(6, 6);
 
         super::train_final(
-            Arc::new(RwLock::new(ws)),
+            &ws,
             &params,
 
             (0..13).map(|i|(format!("{i}"), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
@@ -1944,7 +1944,7 @@ mod train_tests {
     }
 
     //6 corrs 4 motif models
-    fn save_test_models(ws: &FsWorkspace, base_run_id: usize, channels: usize, max_motif_batches: i64, max_batch_size: i64, motif_node_params_run_id: usize) -> Result<(), ThoosaError> {
+    fn save_test_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, base_run_id: usize, channels: usize, max_motif_batches: i64, max_batch_size: i64, motif_node_params_run_id: usize) -> Result<(), ThoosaError> {
         // fs::create_dir_all(models_path)?;
 
         let window = 100;
@@ -2017,7 +2017,7 @@ mod train_tests {
         let models_path = Path::new("/tmp/test_infer").join(&cdt);
 
 
-        save_test_models(&FsWorkspace::new(&cdt, 20, 684400)?, 1, channels, max_motif_batches, motif_batch_size, 1)?;
+        save_test_models(&Arc::new(RwLock::new(FsWorkspace::new(&cdt, 20, 684400)?)), 1, channels, max_motif_batches, motif_batch_size, 1)?;
         save_test_final_model(&models_path, 6)?;
 
         let input_path = Path::new("/tmp/test_infer_input").join(&cdt);
@@ -2056,7 +2056,7 @@ mod train_tests {
 
 
         let t = super::infer(
-            ws,
+            &ws,
             &InferParams {
                 step:100,
                 window:100,
@@ -2097,7 +2097,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_label_model(ws: &FsWorkspace, run_id: usize, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
+    fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: usize, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
         let label_node_params = LabelNodeParams::new(channels as i64, max_motif_nets, max_motif_batches, motif_batch_size);
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
@@ -2105,11 +2105,11 @@ mod train_tests {
         vs_0.freeze();
         debug!("save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}", channels, max_motif_nets, max_motif_batches, motif_batch_size, vs_0.variables());
 
-        ws.save_label_model(run_id, &label, vs_0, label_node_params );
+        ws.write().save_label_model(run_id, &label, vs_0, label_node_params );
         Ok(())
     }
 
-    fn save_test_motif_model(ws: &FsWorkspace, channel: &str, motif_id: usize, window: i64, motif_node_params_run_id: usize) -> Result<(), ThoosaError> {
+    fn save_test_motif_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, channel: &str, motif_id: usize, window: i64, motif_node_params_run_id: usize) -> Result<(), ThoosaError> {
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
         let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window)).build_tch_module(&vs_0.root())?;
@@ -2125,7 +2125,7 @@ mod train_tests {
 
         vs_0.freeze();
         debug!("save_test_motif_model: channel={channel} vs_0.variables()={:?}", vs_0.variables());
-        ws.save_motif_model(&channel, &motif_node_params_run_id, &motif_id, vs_0, MotifNodeParams::new(100));
+        ws.write().save_motif_model(&channel, &motif_node_params_run_id, &motif_id, vs_0, MotifNodeParams::new(100));
         Ok(())
     }
 

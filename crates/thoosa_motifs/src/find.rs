@@ -1591,6 +1591,8 @@ mod motif_find_tests {
         // let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -1635,6 +1637,7 @@ mod motif_find_tests {
 
 
         let run_ids = super::find_motifs_by_euc_dist(
+            &ws,
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1667,6 +1670,9 @@ mod motif_find_tests {
 
     #[test]
     fn test_find_motifs_euc_with_smooth_kernel() -> Result<(), ThoosaError> {
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
+
         let eeg_id_series = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
@@ -1712,6 +1718,7 @@ mod motif_find_tests {
 
 
         let run_ids = super::find_motifs_by_euc_dist(
+            &ws,
             &FindMotifsParams {
                 step: 100,
                 window: 100,
@@ -1751,6 +1758,8 @@ mod motif_find_tests {
         // let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1790,6 +1799,7 @@ mod motif_find_tests {
         )));
 
         super::find_motifs_by_euc_dist(
+            &ws,
             &FindMotifsParams {
                 step: 50,
                 window: 100,
@@ -1827,6 +1837,8 @@ mod motif_find_tests {
         // let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1858,6 +1870,7 @@ mod motif_find_tests {
         )));
 
         super::find_motifs_by_euc_dist(
+            &ws,
             &FindMotifsParams {
                 step: 100,
                 window: 100,
