@@ -1,14 +1,14 @@
 // #![feature(backtrace_frames)]
 
 use std::backtrace::Backtrace;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::error::Error;
 use std::f32::consts::PI;
 use std::fmt::{Debug, Display, Formatter};
 use std::fmt;
 use std::hash::Hash;
-use std::ops::{Mul, Range};
+use std::ops::{Div, Mul, Range};
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::SecondsFormat;
 use log::{debug, error, trace, LevelFilter};
@@ -21,6 +21,9 @@ use std::ffi::OsStr;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use lazy_static::lazy_static;
+use num_traits::{Num, PrimInt};
+
 
 pub mod repeat_iter;
 pub mod val;
@@ -124,6 +127,16 @@ impl ThoosaError {
     }
 }
 
+impl Display for ThoosaError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
+impl std::error::Error for ThoosaError {
+
+}
+
 //TODO https://github.com/rust-lang/rust/issues/65280
 impl Debug for ThoosaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -142,14 +155,14 @@ impl Debug for ThoosaError {
 }
 
 
-impl<D> From<D> for ThoosaError
-where D: Display {
-
-    fn from(value: D) -> Self {
-        error!("ThoosaError::from: value={}", value);
-        ThoosaError::new(value.to_string())
-    }
-}
+// impl<D> From<D> for ThoosaError
+// where D: Display + ?Error{
+//
+//     fn from(value: D) -> Self {
+//         error!("ThoosaError::from: value={}", value);
+//         ThoosaError::new(value.to_string())
+//     }
+// }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct MotifSlice {
@@ -410,15 +423,107 @@ pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Syn
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RangeOrValue<V> {
-    Range(Range<V>),
+    Range{range:Range<V>, step:Option<(V, u32)>},
     Value(V)
 }
 
-impl <V:Display> Display for RangeOrValue<V> {
+
+impl IntoIterator for RangeOrValue<u32> {
+    type Item = u32;
+    type IntoIter = Box<dyn Iterator<Item = u32>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            RangeOrValue::Range { range, step } => {
+                if let Some((step, mul)) = step {
+                    Box::new(
+                        (range.start .. range.end)
+                            .step_by(step as usize)
+                    )
+                } else {
+                    Box::new(std::iter::empty())
+                }
+            }
+            RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
+        }
+    }
+}
+
+impl IntoIterator for RangeOrValue<i32> {
+    type Item = i32;
+    type IntoIter = Box<dyn Iterator<Item = i32>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            RangeOrValue::Range { range, step } => {
+                if let Some((step, mul)) = step {
+                    Box::new(
+                        (range.start .. range.end)
+                            .step_by(step as usize)
+                    )
+                } else {
+                    Box::new(std::iter::empty())
+                }
+            }
+            RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
+        }
+    }
+}
+
+
+impl IntoIterator for RangeOrValue<f64> {
+    type Item = f64;
+    type IntoIter = Box<dyn Iterator<Item = f64>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            RangeOrValue::Range { range, step } => {
+                if let Some((step, mul)) = step {
+                    Box::new(
+                        ((range.start * <u32 as Into<f64>>::into(mul)) as u32 .. (range.end * <u32 as Into<f64>>::into(mul)) as u32)
+                            .step_by((step * <u32 as Into<f64>>::into(mul)) as usize)
+                            .map(move |v|<u32 as Into<f64>>::into(v)/<u32 as Into<f64>>::into(mul))
+                    )
+                } else {
+                    Box::new(std::iter::empty())
+                }
+            }
+            RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
+        }
+    }
+}
+
+
+
+/*impl<V: 'static + Mul<V, Output = usize> + From<u32> + Div<Output=V>> IntoIterator for RangeOrValue<V>
+
+{
+    type Item = V;
+    type IntoIter = Box<dyn Iterator<Item = V>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            RangeOrValue::Range { range, step } => {
+                if let Some((step, mul)) = step {
+                    Box::new(
+                        ((range.start * mul.into()) as u32 .. (range.end * mul.into()) as u32)
+                            .step_by(step * mul.into())
+                            .map(move |v|<u32 as Into<V>>::into(v)/mul.into())
+                    )
+                } else {
+                    Box::new(std::iter::empty())
+                }
+            }
+            RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
+        }
+    }
+}
+*/
+impl <V:Display+PrimInt> Display for RangeOrValue<V> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            RangeOrValue::Range(r) => {
-                write!(f, "{}-{}", r.start, r.end)
+            RangeOrValue::Range{range, step} => {
+                write!(f, "{}-{}", range.start, range.end)
             }
             RangeOrValue::Value(v) => {
                 write!(f, "{}", v)
@@ -427,10 +532,10 @@ impl <V:Display> Display for RangeOrValue<V> {
     }
 }
 
-impl<V> RangeOrValue<V> {
+impl<V> RangeOrValue<V> where V:From<i32> + Mul<i32> + Clone + 'static, i32: From<V> {
     pub fn expect_value(&self) -> Result<&V, ThoosaError> {
         match self {
-            RangeOrValue::Range(_) => {
+            RangeOrValue::Range{..} => {
                 Err(ThoosaError::new("expected value"))
             }
             RangeOrValue::Value(v) => {
@@ -441,59 +546,84 @@ impl<V> RangeOrValue<V> {
 
     pub fn expect_range(&self) -> Result<&Range<V>, ThoosaError> {
         match self {
-            RangeOrValue::Range(r) => {
-                Ok(r)
+            RangeOrValue::Range{range, step} => {
+                Ok(range)
             }
             RangeOrValue::Value(v) => {
                 Err(ThoosaError::new("expected range"))
             }
         }
     }
-}
 
-impl  From<f64> for RangeOrValue<f64>  {
-    fn from(value: f64) -> Self {
-        RangeOrValue::Value(value)
+    pub fn to_iter(&self) -> Box<dyn Iterator<Item=V>> {
+        match self {
+            RangeOrValue::Range { range, step } => {
+                let range =  range.clone();
+
+                Box::new(
+                    ((<V as Into<i32>>::into(range.start) * 1000i32) ..(<V as Into<i32>>::into(range.end) * 1000i32) ).step_by(1).map(|v:i32| v.into())
+                )
+            }
+            RangeOrValue::Value(v) => {
+                Box::new(std::iter::once(v.clone()))
+            }
+        }
     }
 }
+//
+// impl  From<f32> for RangeOrValue<f32>  {
+//     fn from(value: f32) -> Self {
+//         RangeOrValue::Value(value)
+//     }
+// }
+//
+// impl  From<u32> for RangeOrValue<u32>  {
+//     fn from(value: u32) -> Self {
+//         RangeOrValue::Value(value)
+//     }
+// }
+//
+// impl  From<i32> for RangeOrValue<i32>  {
+//     fn from(value: i32) -> Self {
+//         RangeOrValue::Value(value)
+//     }
+// }
 
-impl  From<i64> for RangeOrValue<i64>  {
-    fn from(value: i64) -> Self {
-        RangeOrValue::Value(value)
-    }
-}
 
-impl  From<u32> for RangeOrValue<u32>  {
-    fn from(value: u32) -> Self {
-        RangeOrValue::Value(value)
-    }
-}
 
-impl  From<Range<f64>> for RangeOrValue<f64>  {
-    fn from(value: Range<f64>) -> Self {
-        RangeOrValue::Range(value)
-    }
-}
-
-impl  From<Range<i64>> for RangeOrValue<i64>  {
-    fn from(value: Range<i64>) -> Self {
-        RangeOrValue::Range(value)
-    }
-}
-
-pub fn parse_range_or_value<V>(s: &str) -> Result<RangeOrValue<V>, Box<dyn Error + Send + Sync + 'static>>
+pub fn parse_range_or_value<'a, V>(s: &str) -> Result<RangeOrValue<V>, Box<dyn Error + Send + Sync + 'static>>
 where
     V: FromStr,
     V::Err: Error + Send + Sync + 'static {
 
-    match s.find("..") {
-        None => {
-            Ok(RangeOrValue::Value(s.parse()?))
-        }
-        Some(pos) => {
-            Ok(RangeOrValue::Range(s[..pos].parse()? .. s[pos + 2..].parse()?))
-        }
+    if s.contains("..") {
+        let ((from, from_d_len), (to, to_d_len), step) =  parse_range_str(s)?;
+
+        Ok(RangeOrValue::Range{
+            range: from.parse()?..to.parse()?,
+            step:step.map(|(step, step_len)|(step.parse().unwrap(), 10u32.pow([from_d_len,to_d_len, step_len].into_iter().max().unwrap_or(0) as u32)))
+        })
+
+    } else {
+        Ok(RangeOrValue::Value(s.parse()?))
     }
+
+    // match s.find("..") {
+    //     None => {
+    //         Ok(RangeOrValue::Value(s.parse()?))
+    //     }
+    //     Some(pos) => {
+    //         match s.find(":") {
+    //             None => {
+    //                 Ok(RangeOrValue::Range{range:s[..pos].parse()? .. s[pos + 2..].parse()?, step:None})
+    //             }
+    //             Some(step_pos) => {
+    //                 Ok(RangeOrValue::Range{range:s[..pos].parse()? .. s[pos + 2..step_pos].parse()?, step:Some(s[step_pos..].parse()?)})
+    //             }
+    //         }
+    //
+    //     }
+    // }
 }
 
 /**
@@ -517,7 +647,7 @@ pub fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, batch_si
 }
 
 pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoosaError> {
-    let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)?;//TODO const
+    let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO const, error
     Ok(re.captures_iter(descr).map(|caps| (caps["id"].parse::<i64>().expect(&caps["id"]), caps["kind"].into())).collect::<Vec<(i64, String)>>())
 }
 
@@ -589,6 +719,31 @@ where F:Fn(&PathBuf)->bool{
     Ok(buf)
 }
 
+fn parse_range_str(range: &str) -> Result<((String, u8), (String, u8), Option<(String, u8)>), ThoosaError> {
+
+    lazy_static!{
+        static ref RANGE_RE:Regex = Regex::new(r"^(?P<from>-?\d+(\.(?P<from_d>\d+))?)\.{2}(?P<to>-?\d+(\.(?P<to_d>\d+))?)(:(?P<step>-?\d+(\.(?P<step_d>\d+))?))?$").unwrap();
+    }
+
+    RANGE_RE.captures(range).map(|caps|{
+
+        let from_i = caps.name("from").map(|v|v.as_str().to_string()).expect("from");
+        let from_d = caps.name("from_d").and_then(|v| v.as_str().len().try_into().ok()).unwrap_or(0);
+
+        let to_i = caps.name("to").map(|v|v.as_str().to_string()).expect("to");
+        let to_d = caps.name("to_d").and_then(|v| v.as_str().len().try_into().ok()).unwrap_or(0);
+
+        let step_i = caps.name("step").map(|v|v.as_str().to_string());
+        let step_d = caps.name("step_d").and_then(|v| v.as_str().len().try_into().ok()).unwrap_or(0);
+
+
+        Ok(((from_i, from_d), (to_i, to_d), step_i.map(|step| (step, step_d))))
+    }).unwrap_or_else(||Err(ThoosaError::new(format!("can't parse range {range}"))))
+
+}
+
+
+
 
 #[cfg(test)]
 mod shared_tests {
@@ -605,9 +760,11 @@ mod shared_tests {
    group 2: e, f, g
    group 3: x, y
    */
-    use std::ops::Range;
+
     use clap::{Args, Parser};
-    use crate::{batch_windows, clc_num_batches, group_slices, RangeOrValue, ThoosaError};
+
+
+    use crate::{batch_windows, clc_num_batches, group_slices, parse_range_str, RangeOrValue, ThoosaError};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -755,21 +912,54 @@ mod shared_tests {
         #[derive(Debug, Parser, Clone, PartialEq)]
         struct TestParams {
 
-            #[arg(long, value_parser=parse_range_or_value::<usize>)]
-            window: RangeOrValue<usize>,
+            #[arg(long, value_parser=parse_range_or_value::<i32>)]
+            window: RangeOrValue<i32>,
+
+
+            #[arg(long, value_parser=parse_range_or_value::<f32>)]
+            step: RangeOrValue<f32>
+        }
+
+        let params = TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
+
+
+        assert_eq!(TestParams { window: RangeOrValue::Range{range: 1..2, step:None}, step: RangeOrValue::Range{range: 1.1..2.2, step:None} }, params);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_range_or_value_range_with_step() -> Result<(), ThoosaError>{
+        use crate::parse_range_or_value;
+
+        #[derive(Debug, Parser, Clone, PartialEq)]
+        struct TestParams {
+
+            #[arg(long, value_parser=parse_range_or_value::<i32>)]
+            window: RangeOrValue<i32>,
 
 
             #[arg(long, value_parser=parse_range_or_value::<f64>)]
             step: RangeOrValue<f64>
         }
 
-        let params = TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())?;
+        let params = TestParams::try_parse_from(vec!["", "--step=1.01..2.2:0.1", "--window=-20..20:2"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
 
+        println!("params={params:?}");
 
-        assert_eq!(TestParams { window: RangeOrValue::Range(1..2), step: RangeOrValue::Range(1.1..2.2) }, params);
+        assert_eq!(TestParams { window: RangeOrValue::Range{range: -20..20, step:Some((2, 1))}, step: RangeOrValue::Range{range: 1.01..2.2, step:Some((0.1, 100)) } }, params);
+
+        for window in params.window {
+            println!("window={window}");
+        }
+
+        for step in params.step {
+            println!("step={step}");
+        }
 
         Ok(())
     }
+
 
     #[test]
     fn test_parse_range_or_value_value() -> Result<(), ThoosaError>{
@@ -778,15 +968,15 @@ mod shared_tests {
         #[derive(Debug, Parser, Clone, PartialEq)]
         struct TestParams {
 
-            #[arg(long, value_parser=parse_range_or_value::<usize>)]
-            window: RangeOrValue<usize>,
+            #[arg(long, value_parser=parse_range_or_value::<i32>)]
+            window: RangeOrValue<i32>,
 
 
-            #[arg(long, value_parser=parse_range_or_value::<f64>)]
-            step: RangeOrValue<f64>
+            #[arg(long, value_parser=parse_range_or_value::<f32>)]
+            step: RangeOrValue<f32>
         }
 
-        let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())?;
+        let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
 
         assert_eq!(TestParams { window: RangeOrValue::Value(10), step: RangeOrValue::Value(1.1) }, params);
 
@@ -795,4 +985,60 @@ mod shared_tests {
     }
 
 
+    #[test]
+    fn test_parser_regex_str() -> Result<(), ThoosaError> {
+        let ((from, from_d_len), (to, to_d_len), step) = parse_range_str("1.22..333.4444")?;
+
+        assert_eq!("1.22".to_string(), from);
+        assert_eq!(2, from_d_len);
+
+        assert_eq!("333.4444".to_string(), to);
+        assert_eq!(4, to_d_len);
+
+        assert!(step.is_none());
+
+        let ((from, from_d_len), (to, to_d_len), step) = parse_range_str("-1.22..-333.4444")?;
+
+        assert_eq!("-1.22".to_string(), from);
+        assert_eq!(2, from_d_len);
+
+        assert_eq!("-333.4444".to_string(), to);
+        assert_eq!(4, to_d_len);
+
+        assert!(step.is_none());
+
+
+
+        let ((from, from_d_len), (to, to_d_len), Some((step, step_d_len))) = parse_range_str("-1.22..-333.4444:7.8")? else {
+            panic!("no step");
+        };
+
+        assert_eq!("-1.22".to_string(), from);
+        assert_eq!(2, from_d_len);
+
+        assert_eq!("-333.4444".to_string(), to);
+        assert_eq!(4, to_d_len);
+
+        assert_eq!("7.8".to_string(), step);
+        assert_eq!(1, step_d_len);
+
+
+        let ((from, from_d_len), (to, to_d_len), Some((step, step_d_len))) = parse_range_str("-1.22..-333.4444:-7.8")? else {
+            panic!("no step");
+        };
+        // println!("from_i={from} from_d={from_d_len:?} to={to} to_d_len={to_d_len} step={step:?}");
+
+        assert_eq!("-1.22".to_string(), from);
+        assert_eq!(2, from_d_len);
+
+        assert_eq!("-333.4444".to_string(), to);
+        assert_eq!(4, to_d_len);
+
+        assert_eq!("-7.8".to_string(), step);
+        assert_eq!(1, step_d_len);
+
+
+
+        Ok(())
+    }
 }
