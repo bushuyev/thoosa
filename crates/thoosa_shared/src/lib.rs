@@ -423,10 +423,9 @@ pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Syn
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RangeOrValue<V> {
-    Range{range:Range<V>, step:Option<(V, u32)>},
+    Range{range:Range<V>, step:Option<(V, u32)>},//TODO replace step in params with number of steps? how choose number of decimals in step=to-from/steps?
     Value(V)
 }
-
 
 impl IntoIterator for RangeOrValue<u32> {
     type Item = u32;
@@ -480,9 +479,9 @@ impl IntoIterator for RangeOrValue<f64> {
             RangeOrValue::Range { range, step } => {
                 if let Some((step, mul)) = step {
                     Box::new(
-                        ((range.start * <u32 as Into<f64>>::into(mul)) as u32 .. (range.end * <u32 as Into<f64>>::into(mul)) as u32)
+                        ((range.start * <u32 as Into<f64>>::into(mul)) as i32 .. (range.end * <u32 as Into<f64>>::into(mul)) as i32)
                             .step_by((step * <u32 as Into<f64>>::into(mul)) as usize)
-                            .map(move |v|<u32 as Into<f64>>::into(v)/<u32 as Into<f64>>::into(mul))
+                            .map(move |v|<i32 as Into<f64>>::into(v)/<u32 as Into<f64>>::into(mul))
                     )
                 } else {
                     Box::new(std::iter::empty())
@@ -943,19 +942,22 @@ mod shared_tests {
             step: RangeOrValue<f64>
         }
 
-        let params = TestParams::try_parse_from(vec!["", "--step=1.01..2.2:0.1", "--window=-20..20:2"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
+        let params = TestParams::try_parse_from(vec!["", "--step=-1.01..2.2:0.1", "--window=-20..20:2"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
 
         println!("params={params:?}");
 
-        assert_eq!(TestParams { window: RangeOrValue::Range{range: -20..20, step:Some((2, 1))}, step: RangeOrValue::Range{range: 1.01..2.2, step:Some((0.1, 100)) } }, params);
+        assert_eq!(TestParams { window: RangeOrValue::Range{range: -20..20, step:Some((2, 1))}, step: RangeOrValue::Range{range: -1.01..2.2, step:Some((0.1, 100)) } }, params);
 
-        for window in params.window {
-            println!("window={window}");
-        }
+        assert_eq!(
+            (-20..20).step_by(2).collect::<Vec<i32>>(),
+            params.window.into_iter().collect::<Vec<i32>>()
+        );
 
-        for step in params.step {
-            println!("step={step}");
-        }
+
+        assert_eq!(
+            (-101..220).step_by(10).map(|i|i as f64/100.).collect::<Vec<f64>>(),
+            params.step.into_iter().collect::<Vec<f64>>()
+        );
 
         Ok(())
     }
