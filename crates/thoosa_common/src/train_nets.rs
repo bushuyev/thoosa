@@ -771,8 +771,8 @@ impl TrainMotifsNodesParams {
 
         let lr = lr.into();
 
-        if let RangeOrValue::Range(r) = &lr{
-            assert!(r.end > r.start);
+        if let RangeOrValue::Range{range, step} = &lr{
+            assert!(range.end > range.start);
         }
 
         TrainMotifsNodesParams {

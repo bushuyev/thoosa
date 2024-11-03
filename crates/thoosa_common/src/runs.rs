@@ -5,7 +5,7 @@ pub trait Params {
 }
 
 pub trait RunConfig {
-    fn to_config_space(&self) -> Option<ConfigurationSpace> {
+    fn config_space(&self) -> Option<&ConfigurationSpace> {
         None
     }
 }

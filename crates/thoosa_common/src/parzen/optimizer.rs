@@ -734,7 +734,7 @@ impl TryFrom<&RangeOrValue<f64>> for Hyperparameter {
     type Error = ();
 
     fn try_from(value: &RangeOrValue<f64>) -> Result<Self, Self::Error> {
-        if let RangeOrValue::Range(range) = value {
+        if let RangeOrValue::Range{range,..} = value {
             Ok(Hyperparameter::UniformFloat {
                 name: "param_0".into(),
                 lower: range.start,
@@ -751,7 +751,7 @@ impl TryFrom<&RangeOrValue<i64>> for Hyperparameter {
     type Error = ();
 
     fn try_from(value: &RangeOrValue<i64>) -> Result<Self, Self::Error> {
-        if let RangeOrValue::Range(range) = value {
+        if let RangeOrValue::Range{range, ..} = value {
             Ok(Hyperparameter::UniformInt {
                 name: "param_0".into(),
                 lower: range.start,

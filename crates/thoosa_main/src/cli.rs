@@ -20,7 +20,7 @@ use tch::Device::{Cpu, Cuda};
 use lazy_static::lazy_static;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
-use thoosa_common::parzen::optimizer::ConfigurationSpace;
+use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Params, RunConfig};
 use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
 use thoosa_common::utils::{list_devices, plot_series};
@@ -180,20 +180,30 @@ pub struct SayHelloParams {
 }
 
 pub struct SayHelloRunConfig {
-   cs: ConfigurationSpace
+    step: u32,
+    cs: Option<ConfigurationSpace>,
 }
 
 impl Params for SayHelloParams {
     fn to_run_configs(&self) -> Vec<impl RunConfig> {
+
         vec![
             SayHelloRunConfig {
-                cs: ConfigurationSpace::new(vec![])
+                step: 10,
+                cs:  [
+                    (&self.lr).try_into().ok(),
+                ].into_iter()
+                    .collect::<Option<Vec<Hyperparameter>>>()
+                    .map(|v|ConfigurationSpace::new(v))
             }
         ]
     }
 }
 
 impl RunConfig for SayHelloRunConfig {
+    fn config_space(&self) -> Option<&ConfigurationSpace> {
+        self.cs.as_ref()
+    }
 
     // fn to_config_space(&self) -> Option<ConfigurationSpace> {
     //     [
@@ -1108,7 +1118,7 @@ mod main_tests {
     use log::debug;
     use parking_lot::{Mutex, RawMutex, RwLock};
     use parking_lot::lock_api::MutexGuard;
-    use plotters::prelude::BLACK;
+    use plotters::prelude::{IntoLinspace, BLACK};
     use polars::export::arrow::array::clone;
     use polars::export::chrono;
     use rayon::iter::ParallelIterator;
@@ -1657,6 +1667,14 @@ mod main_tests {
         // let v_r = v.map(|v|v.as_slice());
         // for _ in 0..3 {
         //     test_1(&v_r);
+        // }
+        let x:f32 = 1.123;
+
+
+
+        println!("x={}", (x - x.floor()).log10());
+        // for x in (0.1..10.3).step_by(1) {
+        //     println!("x={x}");
         // }
     }
 }
