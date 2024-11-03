@@ -172,10 +172,10 @@ pub struct InitResourcesParams {
 #[derive(Debug, Args, Clone)]
 pub struct SayHelloParams {
 
-    #[arg(long, value_parser=parse_range_or_value::<f64>, default_value_t = 1.0e-5.into())]
+    #[arg(long, value_parser=parse_range_or_value::<f64>, default_value = "1.0e-5")]
     pub lr: RangeOrValue<f64>,
 
-    #[arg(long, value_parser=parse_range_or_value::<u32>, default_value_t = 1000.into())]
+    #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "1000")]
     pub step: RangeOrValue<u32>
 }
 
@@ -401,7 +401,7 @@ pub fn run_cli<F>(
 
             info!("select_motifs done: motif_selection_run_ids={:?}", motif_selection_run_ids);
 
-            let motif_node_selection_run_id = run_train_motif_nodes_on_motif_selection(&ws, &store, devices.clone(), &TrainMotifsNodesParams::dummy(motif_selection_run_ids, 300, 0.2, 10, 1.0e-5, 1), Arc::clone(&loader))?;
+            let motif_node_selection_run_id = run_train_motif_nodes_on_motif_selection(&ws, &store, devices.clone(), &TrainMotifsNodesParams::dummy(motif_selection_run_ids, 300, 0.2, 10, 1.0e-5, 1i32), Arc::clone(&loader))?;
 
             info!("run_train_on_motifs done");
 
@@ -1115,6 +1115,7 @@ mod main_tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::vec::IntoIter;
     use log::debug;
     use parking_lot::{Mutex, RawMutex, RwLock};
     use parking_lot::lock_api::MutexGuard;
@@ -1657,24 +1658,6 @@ mod main_tests {
         println!("cuda={cuda:?}");
     }
 
-    #[test]
-    fn test_test(){
-        // fn test_1(p:&Option<&[i32]>){
-        //
-        // }
-        //
-        // let v = Some(vec![1,2,3]);
-        // let v_r = v.map(|v|v.as_slice());
-        // for _ in 0..3 {
-        //     test_1(&v_r);
-        // }
-        let x:f32 = 1.123;
 
 
-
-        println!("x={}", (x - x.floor()).log10());
-        // for x in (0.1..10.3).step_by(1) {
-        //     println!("x={x}");
-        // }
-    }
 }

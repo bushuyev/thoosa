@@ -747,15 +747,15 @@ impl TryFrom<&RangeOrValue<f64>> for Hyperparameter {
     }
 }
 
-impl TryFrom<&RangeOrValue<i64>> for Hyperparameter {
+impl TryFrom<&RangeOrValue<i32>> for Hyperparameter {
     type Error = ();
 
-    fn try_from(value: &RangeOrValue<i64>) -> Result<Self, Self::Error> {
+    fn try_from(value: &RangeOrValue<i32>) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range, ..} = value {
             Ok(Hyperparameter::UniformInt {
                 name: "param_0".into(),
-                lower: range.start,
-                upper: range.end
+                lower: range.start as i64, //TODO as i64
+                upper: range.end as i64
             })
         } else {
             Err(())

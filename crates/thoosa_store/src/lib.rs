@@ -145,7 +145,7 @@ impl Store for SqlStore {
 
     fn save_tree_run(&mut self, input_run_ids_op: Option<&[usize]>, descr:&str, keys:&Vec<String>, properties_vals:HashMap<String, Val>) -> Result<usize, ThoosaError> {
         let mut conn_guard = self.conn.lock();
-        let t = conn_guard.transaction()?;
+        let t = conn_guard.transaction().map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
 
         t.execute("INSERT INTO tree_run (descr) VALUES (?)", params![ descr])?;
 
