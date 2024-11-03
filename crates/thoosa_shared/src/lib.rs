@@ -127,15 +127,15 @@ impl ThoosaError {
     }
 }
 
-impl Display for ThoosaError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-
-impl std::error::Error for ThoosaError {
-
-}
+// impl Display for ThoosaError {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         write!(f, "{}", self.msg)
+//     }
+// }
+//TODO remove impl<D> From<D> for ThoosaError
+// impl std::error::Error for ThoosaError {
+//
+// }
 
 //TODO https://github.com/rust-lang/rust/issues/65280
 impl Debug for ThoosaError {
@@ -155,14 +155,14 @@ impl Debug for ThoosaError {
 }
 
 
-// impl<D> From<D> for ThoosaError
-// where D: Display + ?Error{
-//
-//     fn from(value: D) -> Self {
-//         error!("ThoosaError::from: value={}", value);
-//         ThoosaError::new(value.to_string())
-//     }
-// }
+impl<D> From<D> for ThoosaError
+where D: Display {
+
+    fn from(value: D) -> Self {
+        error!("ThoosaError::from: value={}", value);
+        ThoosaError::new(value.to_string())
+    }
+}
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct MotifSlice {
@@ -531,7 +531,7 @@ impl <V:Display+PrimInt> Display for RangeOrValue<V> {
     }
 }
 
-impl<V> RangeOrValue<V> where V:From<i32> + Mul<i32> + Clone + 'static, i32: From<V> {
+impl<V> RangeOrValue<V> where V: Clone + 'static  {
     pub fn expect_value(&self) -> Result<&V, ThoosaError> {
         match self {
             RangeOrValue::Range{..} => {
@@ -554,39 +554,25 @@ impl<V> RangeOrValue<V> where V:From<i32> + Mul<i32> + Clone + 'static, i32: Fro
         }
     }
 
-    pub fn to_iter(&self) -> Box<dyn Iterator<Item=V>> {
-        match self {
-            RangeOrValue::Range { range, step } => {
-                let range =  range.clone();
+}
 
-                Box::new(
-                    ((<V as Into<i32>>::into(range.start) * 1000i32) ..(<V as Into<i32>>::into(range.end) * 1000i32) ).step_by(1).map(|v:i32| v.into())
-                )
-            }
-            RangeOrValue::Value(v) => {
-                Box::new(std::iter::once(v.clone()))
-            }
-        }
+impl  From<f64> for RangeOrValue<f64>  {
+    fn from(value: f64) -> Self {
+        RangeOrValue::Value(value)
     }
 }
-//
-// impl  From<f32> for RangeOrValue<f32>  {
-//     fn from(value: f32) -> Self {
-//         RangeOrValue::Value(value)
-//     }
-// }
-//
-// impl  From<u32> for RangeOrValue<u32>  {
-//     fn from(value: u32) -> Self {
-//         RangeOrValue::Value(value)
-//     }
-// }
-//
-// impl  From<i32> for RangeOrValue<i32>  {
-//     fn from(value: i32) -> Self {
-//         RangeOrValue::Value(value)
-//     }
-// }
+
+impl  From<u32> for RangeOrValue<u32>  {
+    fn from(value: u32) -> Self {
+        RangeOrValue::Value(value)
+    }
+}
+
+impl  From<i32> for RangeOrValue<i32>  {
+    fn from(value: i32) -> Self {
+        RangeOrValue::Value(value)
+    }
+}
 
 
 
@@ -596,7 +582,7 @@ where
     V::Err: Error + Send + Sync + 'static {
 
     if s.contains("..") {
-        let ((from, from_d_len), (to, to_d_len), step) =  parse_range_str(s)?;
+        let ((from, from_d_len), (to, to_d_len), step) =  parse_range_str(s).expect("parse_range_str"); //.map_err(|e|)?;
 
         Ok(RangeOrValue::Range{
             range: from.parse()?..to.parse()?,
@@ -742,6 +728,23 @@ fn parse_range_str(range: &str) -> Result<((String, u8), (String, u8), Option<(S
 }
 
 
+pub fn make_combos<V:Clone>(iters: Vec<impl Iterator<Item=V>>) -> Vec<Vec<V>> {
+    let mut combos: Vec<Vec<V>> = vec![vec![]];
+
+    for iter in iters {
+        let mut new_combos = vec![];
+        for item in iter {
+            for combo in &combos {
+                let mut new_combo = combo.clone();
+                new_combo.push(item.clone());
+                new_combos.push(new_combo);
+            }
+        }
+        combos = new_combos;
+    }
+
+    combos
+}
 
 
 #[cfg(test)]
@@ -759,11 +762,11 @@ mod shared_tests {
    group 2: e, f, g
    group 3: x, y
    */
-
+    use std::vec::IntoIter;
     use clap::{Args, Parser};
 
 
-    use crate::{batch_windows, clc_num_batches, group_slices, parse_range_str, RangeOrValue, ThoosaError};
+    use crate::{batch_windows, clc_num_batches, make_combos, group_slices, parse_range_str, RangeOrValue, ThoosaError};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -944,7 +947,6 @@ mod shared_tests {
 
         let params = TestParams::try_parse_from(vec!["", "--step=-1.01..2.2:0.1", "--window=-20..20:2"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
 
-        println!("params={params:?}");
 
         assert_eq!(TestParams { window: RangeOrValue::Range{range: -20..20, step:Some((2, 1))}, step: RangeOrValue::Range{range: -1.01..2.2, step:Some((0.1, 100)) } }, params);
 
@@ -1043,4 +1045,51 @@ mod shared_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_make_combos() {
+        assert_eq!(
+            [
+               ["a1", "b1", "c1"],
+               ["a2", "b1", "c1"],
+               ["a3", "b1", "c1"],
+               ["a1", "b1", "c2"],
+               ["a2", "b1", "c2"],
+               ["a3", "b1", "c2"]
+           ].into_iter().map(|v|v.to_vec()).collect::<Vec<_>>(),
+            make_combos(
+               vec![
+                   vec!["a1", "a2", "a3"].into_iter(),
+                   vec!["b1"].into_iter(),
+                   vec!["c1", "c2"].into_iter()
+               ]
+           )
+        );
+
+        assert_eq!(
+            [
+                ["a1", "b1", ],
+                ["a2", "b1", ]
+            ].into_iter().map(|v|v.to_vec()).collect::<Vec<_>>(),
+            make_combos(
+                vec![
+                    vec!["a1", "a2"].into_iter(),
+                    vec!["b1"].into_iter(),
+                ]
+            )
+        );
+
+        assert_eq!(
+            [
+                ["a1"]
+            ].into_iter().map(|v|v.to_vec()).collect::<Vec<_>>(),
+            make_combos(
+                vec![
+                    vec!["a1"].into_iter(),
+                ]
+            )
+        );
+
+    }
+
 }

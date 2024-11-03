@@ -752,11 +752,11 @@ pub struct TrainMotifsNodesParams {
     #[arg(long, default_value_t = 10)]
     pub batch_size: usize,//number of the motif slices in a batch
 
-    #[arg(long, value_parser=parse_range_or_value::<f64>, default_value_t = 1.0e-5.into())]
+    #[arg(long, value_parser=parse_range_or_value::<f64>)]//default_value_t = 1.0e-5
     pub lr: RangeOrValue<f64>,
 
-    #[arg(long, value_parser=parse_range_or_value::<i64>, default_value_t = 1i64.into())]
-    pub num_layers: RangeOrValue<i64>,
+    #[arg(long, value_parser=parse_range_or_value::<i32>)]
+    pub num_layers: RangeOrValue<i32>,
 
     #[arg(long, default_value_t = 0.2)]
     pub max_loss: f32,
@@ -767,7 +767,7 @@ pub struct TrainMotifsNodesParams {
 
 impl TrainMotifsNodesParams {
 
-    pub fn dummy(motif_selection_run_id:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<i64>>) ->Self{
+    pub fn dummy(motif_selection_run_id:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<i32>>) ->Self{
 
         let lr = lr.into();
 
@@ -1153,7 +1153,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
         None => {
             let vs = VarStore::new(device);
             let lr = *train_on_motif_params.lr.expect_value()?;
-            let node_params = node_params.with_num_layer(*train_on_motif_params.num_layers.expect_value()?);
+            let node_params = node_params.with_num_layer(*train_on_motif_params.num_layers.expect_value()? as i64);
 
             debug!("train_on_motif no opt: train_on_motif_params={train_on_motif_params:?}");
 
