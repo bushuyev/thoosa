@@ -28,10 +28,10 @@ pub fn dist_d2(_dim: i64, slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, 
     Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
 }
 
-pub fn slice_t(t_0: &Tensor, step: usize, window: i64) -> Tensor {
+pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
     debug!("slice_t:  t_0.size()={:?} step={step} window={window}", t_0.size());
 
-    let tensors_vec = (0..=t_0.size()[1] - window).step_by(step).map(|i| t_0.i((.., i..i + window))).collect::<Vec<Tensor>>();
+    let tensors_vec = (0..=t_0.size()[1] - window as i64).step_by(step as usize).map(|i| t_0.i((.., i..i + window as i64))).collect::<Vec<Tensor>>();
     trace!("slice_t: tensors_vec={tensors_vec:?}");
     Tensor::stack(&tensors_vec, 0)
 }
@@ -127,7 +127,7 @@ mod distance_tests {
             debug!("t=\n{}", t);
             for i_0 in 0..t.size()[0] {
                  for i_1 in 0..t.size()[1] {
-                     debug!("t_0={}/{} t_1={}/{} v={}", i_0, i_0 * window, tensor_ids[i_1 as usize], i_1 * window, t.double_value(&[i_0, i_1]));
+                     debug!("t_0={}/{} t_1={}/{} v={}", i_0, i_0 * window as i64, tensor_ids[i_1 as usize], i_1 * window as i64, t.double_value(&[i_0, i_1]));
                  }
             }
         }

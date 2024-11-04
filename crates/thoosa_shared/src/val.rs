@@ -59,6 +59,13 @@ impl From<i32> for Val {
     }
 }
 
+impl From<u32> for Val {
+    fn from(v: u32) -> Self {
+        Val::Int(v as i64)
+    }
+}
+
+
 impl From<f64> for Val {
     fn from(v: f64) -> Self {
         Val::Real(v)
