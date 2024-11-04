@@ -17,11 +17,11 @@ use tch::{Device, IndexOp, Tensor};
 
 
 use thoosa_common::utils::*;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{make_combos, RangeOrValue, ThoosaError};
 use thoosa_shared::parse_key_val;
 use thoosa_shared::TensorSliceIdx;
 use thoosa_shared::val::Val;
-use thoosa_store::Store;
+use thoosa_store::{SqlStore, Store};
 use thoosa_store::StoreDumper;
 
 
@@ -31,16 +31,18 @@ use crate::distance::dist_d2;
 use crate::distance::slice_t;
 use rayon::iter::{ParallelBridge};
 use rayon::iter::ParallelIterator;
-use thoosa_common::runs::{Params, RunConfig};
+use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
+use thoosa_common::runs::{Params, ResourcesConfig, RunConfig};
 use thoosa_common::ws::{FsWorkspace, Workspace};
+use thoosa_shared::parse_range_or_value;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
-    #[arg(long, default_value_t = 1000)]
-    pub step: usize,
+    #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "1000")]
+    pub step: RangeOrValue<u32>,
 
-    #[arg(long, default_value_t = 1000)]
-    pub window: usize,
+    #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "1000")]
+    pub window: RangeOrValue<u32>,
 
     #[arg(long, default_value_t = 0.9)]
     pub min_dot: f32,
@@ -64,11 +66,18 @@ pub struct FindMotifsParams {//TODO pub
     pub input_filter: Option<InputFilter>,
 }
 
-impl Params for FindMotifsParams {
-    fn to_run_configs(&self) -> Vec<impl RunConfig> {
-        vec![
-            FindMotifsRunConfig::new(10, 10, "", None)
-        ]
+impl Params<FindMotifsRunConfig> for FindMotifsParams {
+    fn to_run_configs(&self) -> Vec<FindMotifsRunConfig> {
+        // vec![
+        //     FindMotifsRunConfig::new(10, 10, "", None)
+        // ]
+
+        make_combos(vec![
+            self.step.clone().into_iter(),
+            self.window.clone().into_iter(),
+        ]).into_iter().map(|config_combo|{
+            FindMotifsRunConfig::new(config_combo[0], config_combo[1], "".to_string(), None)
+        }).collect()
     }
 }
 
@@ -139,11 +148,11 @@ impl Conv1Params {
 
 impl FindMotifsParams {
     // #[cfg(test)]
-    pub fn dummy(step: usize, window: usize, resource_set: String, chunk_size: usize, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
+    pub fn dummy(step: u32, window: u32, resource_set: String, chunk_size: usize, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
         FindMotifsParams {
-            step,
+            step:step.into(),
 
-            window,
+            window:window.into(),
 
             min_dot: 0.1,
 
@@ -161,12 +170,6 @@ impl FindMotifsParams {
         }
     }
 
-    pub fn step(&self) -> usize {
-        self.step
-    }
-    pub fn window(&self) -> usize {
-        self.window
-    }
     pub fn min_dot(&self) -> f32 {
         self.min_dot
     }
@@ -187,7 +190,7 @@ impl FindMotifsParams {
     }
 
     pub fn to_filter_and_slice_params(&self, expander: &dyn Expander<T=FindMotifsRunConfig>) -> Vec<FindMotifsRunConfig> {
-        expander.expand(FindMotifsRunConfig::new(self.step, self.window as i64, "no filter", self.input_filter.clone()))
+        expander.expand(FindMotifsRunConfig::new(*self.step.expect_value().unwrap(), *self.window.expect_value().unwrap(), "no filter", self.input_filter.clone()))
     }
 }
 
@@ -221,22 +224,36 @@ impl Expander for LinearExpander {
     }
 }
 
+pub fn find_motifs_by_euc_dist_(
+    configs:Vec<FindMotifsRunConfig>,
+    resource_ids: Option<&ResourcesConfig>,
+    ws:&Arc<RwLock<Box<dyn Workspace>>>,
+    store:&Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>
+) -> Result<Vec<usize>, ThoosaError>{
+
+
+    Ok(vec![])
+}
+
 pub fn find_motifs_by_euc_dist(
     ws:&Arc<RwLock<Box<dyn Workspace>>>,
     find_motifs_params: &FindMotifsParams,
     resource_ids: Vec<String>,
-    store: &Arc<Mutex<impl Store + 'static>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
     min_tracker_step: Option<usize>
 ) -> Result<Vec<usize>, ThoosaError> {
 
-    let records_num = ws.read().clc_records(&resource_ids)? as usize;
+    let records_num:u32 = ws.read().clc_records(&resource_ids)?.try_into().expect("clc_records to u32");
     debug!("run_find_motifs_on_set: records_num={records_num} resource_set={} resource_ids={resource_ids:?}", find_motifs_params.resource_set());
-    if records_num < find_motifs_params.window {
+    let window = *find_motifs_params.window.expect_value().unwrap();
+    let step = *find_motifs_params.step.expect_value().unwrap();
+    if records_num < window {
         return Err(ThoosaError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
     }
 
-    let slots_to_process = (records_num - find_motifs_params.window) / find_motifs_params.step;
+    let slots_to_process = (&records_num -  window) / step;
     let slots_to_process = slots_to_process.pow(2) / 2; //- slots_to_process; // n x n - diagonal
 
     let channels = ws.read().channels() as i64;
@@ -247,14 +264,14 @@ pub fn find_motifs_by_euc_dist(
     let mut slots_processed = 0;
 
 
-    let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(1));
+    let run_configs = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(1));
 
-    let (run_ids, mut trackers): (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = param_set.iter().try_fold((vec![], vec![]), |mut a: (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
+    let (run_ids, mut trackers): (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>) = run_configs.iter().try_fold((vec![], vec![]), |mut a: (Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), params| {
         let find_motifs_run_id = {
             store.lock().save_tree_run(
                 None,
                 format!("find motifs with params {:?}/{:?}", find_motifs_params, params).as_str(),
-                &resource_ids,
+                "".into(), //&resource_ids,
                 params.to_properties_map(),
             )
         }?;
@@ -264,7 +281,7 @@ pub fn find_motifs_by_euc_dist(
             .enumerate()
             .map(|(i, min_dot)| SimpMotifTracker::<StoreDumper>::new(
                 *min_dot,
-                StoreDumper::new(Arc::clone(&store), find_motifs_run_id, i),
+                StoreDumper::new( Arc::clone(&store), find_motifs_run_id, i),
                 min_tracker_step
             )) //TODO name
             .collect::<Vec<SimpMotifTracker<_>>>();
@@ -275,13 +292,13 @@ pub fn find_motifs_by_euc_dist(
         Ok::<(Vec<usize>, Vec<Vec<SimpMotifTracker<StoreDumper>>>), ThoosaError>(a)
     })?;
 
-    debug!("find_motifs_euc: run_ids={:?}, param_set.len()={:?}, trackers.len()={:?}", run_ids, param_set.len(), trackers.len());
+    debug!("find_motifs_euc: run_ids={:?}, param_set.len()={:?}, trackers.len()={:?}", run_ids, run_configs.len(), trackers.len());
     let find_motifs_params = find_motifs_params.clone();
 
     chunk_and_slice(
         resource_ids,
         find_motifs_params.chunk_size,
-        param_set,
+        run_configs,
 
         move |chunk_0: ChunkOfSicedTensors, chunk_1: ChunkOfSicedTensors, params_idx: usize| {
             debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
@@ -350,8 +367,8 @@ pub fn find_motifs_by_euc_dist(
 
                                     if (t_idx_0 != t_idx_1 || s_0 != s_1) && (dist as f32) < find_motifs_params.max_dist {
                                         mt.track(
-                                            (chunk_0.keys[t_idx_0].clone(), s_0 * find_motifs_params.step as i64).into(),
-                                            (chunk_1.keys[t_idx_1].clone(), s_1 * find_motifs_params.step as i64).into(),
+                                            (chunk_0.keys[t_idx_0].clone(), s_0 * step as i64).into(),
+                                            (chunk_1.keys[t_idx_1].clone(), s_1 * step as i64).into(),
                                             dist as f32
                                         )
                                     }
@@ -359,7 +376,7 @@ pub fn find_motifs_by_euc_dist(
                                     if c == 0 {
                                         slots_processed += 1;
                                         if slots_processed % 100_000 == 0 {
-                                            let slots_per_sec = (slots_processed as u64 / (t1.elapsed().as_secs() + 1)) as usize;
+                                            let slots_per_sec = (slots_processed as u64 / (t1.elapsed().as_secs() + 1)) as u32;
                                             let (remaining, overflow) = if slots_to_process > slots_processed {
                                                 ((slots_to_process - slots_processed) / (slots_per_sec + 1), false)
                                             } else {
@@ -412,66 +429,8 @@ impl ChunkOfSicedTensors {
     pub fn new(keys: Vec<String>, sizes: Vec<i64>, t: Tensor) -> Self {
         Self { keys, sizes, t }
     }
-}
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct FindMotifsRunConfig {
-    step: usize,
-    window: i64,
-    filter: Option<InputFilter>,
-    descr: String,
-}
-
-impl RunConfig for FindMotifsRunConfig {
-
-}
-
-impl FindMotifsRunConfig {
-    pub fn new(
-        step: usize,
-        window: i64,
-        descr: impl Into<String>,
-        filter: Option<InputFilter>,
-    ) -> Self {
-        Self {
-            step,
-            window,
-            filter,
-            descr: descr.into(),
-        }
-    }
-
-    pub fn to_properties_map(&self) -> HashMap<String, Val> {
-        let mut map = HashMap::from([
-            ("FilterAndSlicerParams.step".into(), self.step.into()),
-            ("FilterAndSlicerParams.window".into(), self.window.into()),
-            ("FilterAndSlicerParams.descr".into(), self.descr.as_str().into()),
-        ]);
-
-        if let Some(filter) = self.filter.as_ref() {
-            map.extend(thoosa_shared::val::prefix_properties("FilterAndSlicerParams.filter", filter.to_properties_map()).into_iter());
-        }
-
-        map
-    }
-
-    pub fn from_properties_map(properties: HashMap<String, Val>) -> Self {
-        let properties = thoosa_shared::val::unprefix_properties("FilterAndSlicerParams", &properties);
-        FindMotifsRunConfig::new(
-            properties.get("step").expect("no step").as_usize().expect("step as_usize"),
-            properties.get("window").expect("no window").as_i64().expect("window as_i64"),
-            properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
-            InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)).ok(),
-        )
-    }
-
-    pub fn window(&self) -> i64 {
-        self.window
-    }
-
-
-
-    fn slice_tensors_chunk(&self, tensors_chunk: Vec<&Box<Tensor>>, keys: &[String]) -> ChunkOfSicedTensors {
+    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: Vec<&Box<Tensor>>, keys: &[String]) -> ChunkOfSicedTensors {
 
         let tensors_sliced = tensors_chunk.into_iter().map(|t| {
             /*
@@ -483,8 +442,8 @@ impl FindMotifsRunConfig {
              */
             let sliced = slice_t(
                 t, //&self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone())),
-                self.step,
-                self.window,
+                step,
+                window,
             );
 
             debug!("slice_tensors_chunk: sliced size={:?}", sliced.size());
@@ -500,8 +459,69 @@ impl FindMotifsRunConfig {
         )
     }
 
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct FindMotifsRunConfig {
+    id:Option<usize>,
+    step: u32,
+    window: u32,
+    filter: Option<InputFilter>,
+    descr: String,
+}
+
+impl RunConfig for FindMotifsRunConfig {
+    fn to_properties_map(&self) -> HashMap<String, Val> {
+        let mut map = HashMap::from([
+            ("FilterAndSlicerParams.step".into(), self.step.into()),
+            ("FilterAndSlicerParams.window".into(), self.window.into()),
+            ("FilterAndSlicerParams.descr".into(), self.descr.as_str().into()),
+        ]);
+
+        if let Some(filter) = self.filter.as_ref() {
+            map.extend(thoosa_shared::val::prefix_properties("FilterAndSlicerParams.filter", filter.to_properties_map()).into_iter());
+        }
+
+        map
+    }
+
+    fn from_properties_map(properties: HashMap<String, Val>) -> Self {
+        let properties = thoosa_shared::val::unprefix_properties("FilterAndSlicerParams", &properties);
+        FindMotifsRunConfig::new(
+            properties.get("step").expect("no step").as_usize().expect("step as_usize") as u32,
+            properties.get("window").expect("no window").as_i64().expect("window as_i64") as u32,
+            properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
+            InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)).ok(),
+        )
+    }
+
+    fn set_id(&mut self, id:usize) {
+        self.id.replace(id);
+    }
+}
+
+impl FindMotifsRunConfig {
+    pub fn new(
+        step: u32,
+        window: u32,
+        descr: impl Into<String>,
+        filter: Option<InputFilter>,
+    ) -> Self {
+        Self {
+            id:None,
+            step,
+            window,
+            filter,
+            descr: descr.into(),
+        }
+    }
+
+    pub fn window(&self) -> i64 {
+        self.window as i64//TODO
+    }
+
     pub fn step(&self) -> usize {
-        self.step
+        self.step as usize //TODO
     }
 }
 
@@ -509,7 +529,7 @@ impl FindMotifsRunConfig {
 fn chunk_and_slice<G>(
     resources_ids: Vec<String>,
     chunk_size: usize,
-    filter_and_slicer: Vec<FindMotifsRunConfig>,
+    find_motifs_run_configs: Vec<FindMotifsRunConfig>,
     callback: G,
     exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
 ) -> Result<(), ThoosaError>
@@ -517,8 +537,8 @@ where
     G: FnMut(ChunkOfSicedTensors, ChunkOfSicedTensors, usize) -> Result<(), ThoosaError> + Send + Sync + 'static,
 {
     let resources_ids = resources_ids.iter().map(|key| key.clone()).collect::<Vec<String>>();
-    let filter_and_slicer = filter_and_slicer.into_iter().map(|fs|Arc::new(parking_lot::Mutex::new(fs))).collect::<Vec<_>>();
-    let callback_arc = Arc::new(parking_lot::Mutex::new(callback));
+    let find_motifs_run_configs_mutexes = find_motifs_run_configs.into_iter().map(|fs|Arc::new(Mutex::new(fs))).collect::<Vec<_>>();
+    let callback_arc = Arc::new(Mutex::new(callback));
 
     let mut resources_ids_0 = resources_ids.chunks(chunk_size).map(|v| v.iter().map(|k| k.clone()).collect::<Vec<String>>()).collect::<Vec<Vec<String>>>();
     resources_ids_0.push(vec![]); //to get last window processed
@@ -558,7 +578,7 @@ where
             debug!("chunk_and_slice: area_1={area_1:064b}");
 
             let wg_1 = WaitGroup::new();
-            filter_and_slicer.iter().enumerate().par_bridge().for_each(|(params_idx, filter_slicer)| {
+            find_motifs_run_configs_mutexes.iter().enumerate().par_bridge().for_each(|(params_idx, filter_slicer)| {
                 let wg_1 = wg_1.clone();
 
                 let window_0_0 = window_0[0].clone();
@@ -592,11 +612,15 @@ where
                         let filter_slicer_guard = filter_slicer_arc.lock();
 
                         callback_arc.lock()(
-                            filter_slicer_guard.slice_tensors_chunk(
+                            ChunkOfSicedTensors::slice_tensors_chunk(
+                                filter_slicer_guard.step,
+                                filter_slicer_guard.window,
                                 window_0_tensors.iter().collect(),
                                 window_0_0.as_slice()
                             ),
-                            filter_slicer_guard.slice_tensors_chunk(
+                            ChunkOfSicedTensors::slice_tensors_chunk(
+                                filter_slicer_guard.step,
+                                filter_slicer_guard.window,
                                 window_1_tensors.iter().collect(),
                                 window_1_0.as_slice()
                             ),
@@ -874,7 +898,7 @@ fn clc_dist_matches(target: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>
     //channels, motif, motif x series dots
     let mut channels_matches: Vec<Vec<Vec<f32>>> = (0..channels_num).map(|_| Vec::new()).collect();
 
-    let slices = slice_t(&target, step, motif_len);
+    let slices = slice_t(&target, step as u32, motif_len as u32);//TODO as
 
     for c in 0..channels_num {
         let t_0 = slices.i((.., c, ..));
@@ -1259,6 +1283,7 @@ mod motif_find_tests {
     use thoosa_shared::val::Val;
     use thoosa_store::{SqlStore, Store};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
+    use thoosa_common::runs::RunConfig;
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use crate::find::{Conv1Params, FileDumper, FindMotifsRunConfig, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper};
 
@@ -1596,8 +1621,8 @@ mod motif_find_tests {
         let run_ids = super::find_motifs_by_euc_dist(
             &ws,
             &FindMotifsParams {
-                step: 100,
-                window: 100,
+                step: 100.into(),
+                window: 100.into(),
                 min_dot: 0.99,
                 resource_set: "seizure_vote".to_string(),
                 preload_d: 3,
@@ -1677,8 +1702,8 @@ mod motif_find_tests {
         let run_ids = super::find_motifs_by_euc_dist(
             &ws,
             &FindMotifsParams {
-                step: 100,
-                window: 100,
+                step: 100.into(),
+                window: 100.into(),
                 min_dot: 0.99,
                 resource_set: "seizure_vote".to_string(),
                 preload_d: 3,
@@ -1758,8 +1783,8 @@ mod motif_find_tests {
         super::find_motifs_by_euc_dist(
             &ws,
             &FindMotifsParams {
-                step: 50,
-                window: 100,
+                step: 50.into(),
+                window: 100.into(),
                 min_dot: 0.99,
                 resource_set: "seizure_vote".to_string(),
                 preload_d: 3,
@@ -1829,8 +1854,8 @@ mod motif_find_tests {
         super::find_motifs_by_euc_dist(
             &ws,
             &FindMotifsParams {
-                step: 100,
-                window: 100,
+                step: 100.into(),
+                window: 100.into(),
                 min_dot: 0.99,
                 resource_set: "seizure_vote".to_string(),
                 preload_d: 100,
