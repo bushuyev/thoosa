@@ -695,7 +695,7 @@ mod tpe_optimizer_tests {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Hyperparameter {
     UniformFloat{name:String, lower:f64, upper:f64},
     UniformInt{name:String, lower:i64, upper:i64},
@@ -763,7 +763,7 @@ impl TryFrom<&RangeOrValue<i32>> for Hyperparameter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConfigurationSpace {
     hyperparameters:Vec<Hyperparameter>
 }

@@ -127,7 +127,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 
-pub fn load_to_logits_tensors(group:&str,  device: &Device, store: Arc<Mutex<SqlStore>>) -> Vec<(String, Vec<f32>)> {
+pub fn load_to_logits_tensors(group:&str,  device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(String, Vec<f32>)> {
 
     let mut store_lock = store.lock();
 
@@ -200,8 +200,8 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
 
 }
 
-// pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<SqlStore>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
-pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, store: Arc<Mutex<SqlStore>>) -> Vec<(i64, Vec<String>)>  {
+// pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<Box<dyn Store>>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
+pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec<String>)>  {
     debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock();
