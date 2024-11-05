@@ -32,6 +32,7 @@ use crate::distance::dist_d2;
 use crate::distance::slice_t;
 use rayon::iter::{ParallelBridge};
 use rayon::iter::ParallelIterator;
+use tch::Device::Cpu;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Params, Resources, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -256,13 +257,14 @@ fn resource_config_to_keys(store:&Arc<Mutex<Box<dyn Store>>>, resource_config:&S
     }
 }
 
-pub fn find_motifs_by_euc_dist_(
+pub fn find_motifs_by_euc_dist_<'a>(
     run_configs: Vec<FindMotifsRunConfig>,
     resource_config: &Simple,
     common_config: &CommonFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
+    devices:Vec<Device>
 ) -> Result<Vec<usize>, ThoosaError> {
     let resource_keys = resource_config_to_keys(store, resource_config);
     let records_num: u32 = ws.read().clc_records(&resource_keys)?.try_into().expect("clc_records to u32");
@@ -293,14 +295,24 @@ pub fn find_motifs_by_euc_dist_(
 
             let channels_motif_trackers = &mut run_config__trackers[params_idx];
 
+            //TODO spread channels over devices
             for (channel, mt) in channels_motif_trackers.iter_mut().enumerate() {
                 let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
                 let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).squeeze();
                 debug!("find_motifs_euc: tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
 
-                let euc_dist_t = dist_d2(1, &tensor_0, &tensor_1).expect(format!("dist_d2 on channel={}", channel, ).as_str());
+                let euc_dist_t = dist_d2(
+                    1,
+                    &tensor_0.to_device(devices[0]),
+                    &tensor_1.to_device(devices[0])
+                ).expect(format!("dist_d2 on channel={}", channel, ).as_str());
+
                 let t_size = euc_dist_t.size();
                 let mean = euc_dist_t.mean(None).double_value(&[]);
+
+                debug!("find_motifs_euc: euc_dist_t.device={:?}", euc_dist_t.device());
+
+                let euc_dist_t = euc_dist_t.to_device(Cpu);
 
                 debug!("find_motifs_euc: t={:?} tensor_0.size()={:?}, tensor_1.size()={:?} mean={:?}", euc_dist_t.size(), tensor_0.size(), tensor_1.size(), mean);
 
