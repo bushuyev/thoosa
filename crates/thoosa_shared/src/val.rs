@@ -26,6 +26,14 @@ impl Val {
         }
     }
 
+    pub fn as_f32(&self) -> Result<f32, ThoosaError> {
+        match self {
+            Self::Real(v)=> Ok(*v as f32),
+            _=> Err(ThoosaError::new("can't be f32"))
+        }
+    }
+
+
     pub fn as_str(&self) -> Result<String, ThoosaError> {
         match self {
             Self::Str(v)=> Ok(v.clone()),

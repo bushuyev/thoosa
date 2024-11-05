@@ -885,7 +885,7 @@ mod tests {
             logfile: "".to_string(),
             limit: None,
             num_threads: None,
-            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10, "xxx".into(), 10, 0.3, None))),
+            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10..10, "xxx".into(), 10, 0.3, None))),
             input_filters_kernel: None,
         };
 
@@ -954,7 +954,7 @@ mod tests {
             logfile: "".to_string(),
             limit: None,
             num_threads: None,
-            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10, "xxx".into(), 10, 0.3, None))),
+            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10..10, "xxx".into(), 10, 0.3, None))),
             input_filters_kernel: None,
         };
 

@@ -13,10 +13,10 @@ fn main()  {
         // ATen   cuda
         //     │ │ │   detail
         //     │ │ │ │ │ 󰙲 CUDAHooks.cpp
-        // let lib = libloading::Library::new("libtorch_cuda.so").expect("pytorch-dst/lib/libtorch_cuda.so");
+        let lib = libloading::Library::new("libtorch_cuda.so").expect("pytorch-dst/lib/libtorch_cuda.so");
         // let func: libloading::Symbol<unsafe extern fn() -> u32> = lib.get(b"my_func")?;
         // Ok(func())
-        // println!("lib={lib:?}"); //logging is not set up yet
+        println!("lib={lib:?}"); //logging is not set up yet
     };
 
     match run_cli(

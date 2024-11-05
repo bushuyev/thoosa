@@ -575,6 +575,17 @@ impl  From<i32> for RangeOrValue<i32>  {
 }
 
 
+impl <V>  From<Range<V>> for RangeOrValue<V> where V:PartialEq + Into<RangeOrValue<V>> {
+    fn from(r: Range<V>) -> Self {
+        if r.start == r.end {
+            r.start.into()
+        } else {
+            RangeOrValue::Range {range: r, step: None}
+        }
+    }
+}
+
+
 
 pub fn parse_range_or_value<'a, V>(s: &str) -> Result<RangeOrValue<V>, Box<dyn Error + Send + Sync + 'static>>
 where
