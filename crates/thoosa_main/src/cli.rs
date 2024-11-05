@@ -21,11 +21,11 @@ use lazy_static::lazy_static;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{Params, Resources, RunConfig, Simple};
+use thoosa_common::runs::{Params, Resources, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{select_motifs_by_ratio, FindMotifsRunConfig, FindMotifsParams, InputFilter, SelectMotifsParams};
+use thoosa_motifs::find::{select_motifs_by_ratio, FindMotifsRunConfig, FindMotifsParams, InputFilter, SelectMotifsParams, find_motifs_by_euc_dist_};
 use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
@@ -42,13 +42,13 @@ use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 #[command(version, about, long_about = None)]
 pub struct Cli {//TODO pub
     #[arg(long)]
-    pub base_path: String,
+    pub base_path: String,//TODO remove
 
     #[arg(long)]
-    pub resource_pattern: String,
+    pub resource_pattern: String,//TODO remove, add Import
 
     #[arg(long, default_value=".")]
-    pub ws_path: String,//TODO remove
+    pub ws_path: String,
 
     #[arg(long)]
     pub tensors_path: Option<String>,
@@ -339,9 +339,22 @@ pub fn run_cli<F>(
         Some(FindMotifs(find_motifs_params)) => {
             info!("find_motifs_params={:?} devices={:?}", find_motifs_params, devices);
 
-            let run_id = run_find_motifs_on_set(find_motifs_params, &ws, &store, &loader);
+            // let run_id = run_find_motifs_on_set(find_motifs_params, &ws, &store, &loader);
+            //
+            // info!("run_find_motifs_on_set done, run_id={:?}", run_id);
 
-            info!("run_find_motifs_on_set done, run_id={:?}", run_id);
+
+            let run_ids = run_step(
+                None,
+                find_motifs_params,
+                find_motifs_by_euc_dist_,
+                &ws,
+                &store,
+                &loader,
+                devices
+            )?;
+
+            info!("run_find_motifs_on_set done, run_id={:?}", run_ids);
         }
 
         Some(SelectMotifs(select_motifs_params)) => {
@@ -1131,6 +1144,54 @@ fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) ->
     Path::new(base_path).join(resource_pattern.replace("{}", resource_key)).into_os_string().into_string().unwrap()
 }
 
+//P - params
+// RC - RunConfig
+//R  - Resources Config
+//CC  - CommonConfig - same for all run configurations
+fn run_step<'a, P, RC, R, CC, F>(
+    input_run_ids:Option<Vec<usize>>,
+    params:&P,
+    step:F,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    exec: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
+    devices:Vec<Device>
+) -> Result<Option<Vec<usize>>, ThoosaError>
+where
+    F:FnOnce(Vec<RC>, &R, &CC, &Arc<RwLock<Box<dyn Workspace>>>, &Arc<Mutex<Box<dyn Store>>>, &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, Vec<Device>) -> Result<Vec<usize>, ThoosaError>,
+    P:Params<RC, R, CC>,
+    RC:RunConfig,
+    R:ResourcesConfig
+{
+    let run_configs = params.to_run_configs();
+    let resource_config = params.resource_config();
+    let resources_serialized = resource_config.to_string();
+
+    let ran_ids = step(
+        run_configs.into_iter().map(|mut run_config|{
+            let run_config_id = store.lock().save_tree_run(
+                input_run_ids.as_deref(),
+                "zzz",//TODO
+                &resources_serialized,
+                run_config.to_properties_map()
+            ).unwrap();
+
+            run_config.set_id(run_config_id);
+
+            run_config
+        }).collect::<Vec<RC>>(),
+        &resource_config,
+        &params.common_config(),
+        ws,
+        store,
+        exec,
+        devices
+    )?;
+
+    Ok(Some(ran_ids))
+}
+
+
 
 #[cfg(test)]
 mod main_tests {
@@ -1158,7 +1219,7 @@ mod main_tests {
     use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_two_imp, sig_three_imp, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{SqlStore, Store};
-    use crate::cli::{init_resources, plot_motif_slices, resource_path, run_find_motifs_on_group, run_find_motifs_on_set, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
+    use crate::cli::{init_resources, plot_motif_slices, resource_path, run_find_motifs_on_group, run_find_motifs_on_set, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
     use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -1314,7 +1375,6 @@ mod main_tests {
 
         // assert_eq!((110, 0), slices.get(&"t_0".to_string()).and_then(|v| v.get(0).map(|v|(v.slise_idx, v.channel_idx))).unwrap());
         // assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1100, channel_idx: 0 }, slices.get(&"t_1".to_string()).and_then(|v| v.get(0)).unwrap());
-
 
         let select_motifs_run_ids = select_motifs_for_label(
             &ws_rc,
@@ -1617,53 +1677,6 @@ mod main_tests {
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
 
-
-        //P - params
-        // RC - RunConfig
-        //R  - Resources Config
-        //CC  - CommonConfig - same for all run configurations
-        fn run_step<P, RC, R, CC, F>(
-            input_run_ids:Option<Vec<usize>>,
-            params:P,
-            step:F,
-            ws: &Arc<RwLock<Box<dyn Workspace>>>,
-            store: &Arc<Mutex<Box<dyn Store>>>,
-            exec: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
-        ) -> Result<Option<Vec<usize>>, ThoosaError>
-        where
-            F:FnOnce(Vec<RC>, &R, &CC, &Arc<RwLock<Box<dyn Workspace>>>, &Arc<Mutex<Box<dyn Store>>>, &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>,
-            P:Params<RC, R, CC>,
-            RC:RunConfig,
-            R:ResourcesConfig
-
-        {
-            let run_configs = params.to_run_configs();
-            let resource_config = params.resource_config();
-            let resources_serialized = resource_config.to_string();
-
-            let ran_ids = step(
-                run_configs.into_iter().map(|mut run_config|{
-                    let run_config_id = store.lock().save_tree_run(
-                        input_run_ids.as_deref(),
-                        "zzz",//TODO
-                        &resources_serialized,
-                        run_config.to_properties_map()
-                    ).unwrap();
-
-                    run_config.set_id(run_config_id);
-
-                    run_config
-                }).collect::<Vec<RC>>(),
-                &resource_config,
-                &params.common_config(),
-                ws,
-                store,
-                exec
-            )?;
-
-            Ok(Some(ran_ids))
-        }
-
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let tensors_path = Some(test_dir.join("tensors"));
@@ -1677,7 +1690,6 @@ mod main_tests {
         fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         init_test_store(store.lock());
-
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
@@ -1693,11 +1705,12 @@ mod main_tests {
         let devices = vec![Cpu, Cpu];
         let run_ids = run_step(
             None,
-            FindMotifsParams::dummy(10, 10..20, "Label_0/4".into(), 10, 0.1, None),
+            &FindMotifsParams::dummy(10, 10..20, "Label_0/4".into(), 10, 0.1, None),
             find_motifs_by_euc_dist_,
             &ws,
             &store,
-            &loader
+            &loader,
+            devices
         )?;
 
         println!("run_ids={run_ids:?}");

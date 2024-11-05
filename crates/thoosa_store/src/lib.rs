@@ -756,7 +756,6 @@ impl Store for SqlStore {
         Ok(t.commit()?)
     }
 
-
     fn save_slices(&mut self, run_id:usize, channel:i64, slices:Vec<((String, i64), (String, i64), f32)>) -> Result<(), ThoosaError>{
         let mut conn_guard = self.conn.lock();
         let  t = conn_guard.transaction()?;
@@ -770,7 +769,7 @@ impl Store for SqlStore {
                     a.0.push(", ");
 
                     a.1.push(Value::Integer(run_id as i64));
-                    a.1.push(Value::Integer(channel as i64));
+                    a.1.push(Value::Integer(channel));
                     a.1.push(Value::Text(v.0.0.clone()));
                     a.1.push(Value::Integer(v.0.1));
                     a.1.push(Value::Text(v.1.0.clone()));
