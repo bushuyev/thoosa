@@ -21,7 +21,7 @@ use lazy_static::lazy_static;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{Params, RunConfig, Simple};
+use thoosa_common::runs::{Params, Resources, RunConfig, Simple};
 use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
@@ -133,7 +133,7 @@ impl RunAllParams {
     }
 
     fn find_motifs_params(&self, resource_set: String) -> FindMotifsParams {
-        FindMotifsParams::dummy(self.step as u32, self.window..self.window, resource_set, self.find_motifs_chunk_size, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
+        FindMotifsParams::dummy(self.step as u32, self.window..self.window, resource_set, self.find_motifs_chunk_size as u32, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
     }
     // #[cfg(test)]
     pub fn dummy(train_resource_group: &str, valid_resource_group: &str) -> Self {
@@ -186,7 +186,7 @@ pub struct SayHelloRunConfig {
     cs: Option<ConfigurationSpace>,
 }
 
-impl Params<SayHelloRunConfig, Simple> for SayHelloParams {
+impl Params<SayHelloRunConfig, Simple, ()> for SayHelloParams {
     fn to_run_configs(&self) -> Vec<SayHelloRunConfig> {
 
         let tpe_config_space = [
@@ -205,6 +205,14 @@ impl Params<SayHelloRunConfig, Simple> for SayHelloParams {
                 cs: tpe_config_space.as_ref().map(|v|v.clone())
             }
         }).collect()
+    }
+
+    fn resource_config(&self) -> Simple {
+        Simple::new(Resources::List(vec![]))
+    }
+
+    fn common_config(&self) -> () {
+        ()
     }
 }
 
@@ -1287,7 +1295,7 @@ mod main_tests {
                 window: 800.into(),
                 min_dot: 0.0,
                 resource_set: "test".to_string(),
-                preload_d: 3,
+                min_tracker_step: 3,
                 max_keys_fifo: 3,
                 chunk_size: 2,
                 max_dist: 0.5,
@@ -1609,7 +1617,12 @@ mod main_tests {
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
 
-        fn run_step<P, C, R, F>(
+
+        //P - params
+        // RC - RunConfig
+        //R  - Resources Config
+        //CC  - CommonConfig - same for all run configurations
+        fn run_step<P, RC, R, CC, F>(
             input_run_ids:Option<Vec<usize>>,
             params:P,
             step:F,
@@ -1618,9 +1631,9 @@ mod main_tests {
             exec: &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
         ) -> Result<Option<Vec<usize>>, ThoosaError>
         where
-            F:FnOnce(Vec<C>, &R, &Arc<RwLock<Box<dyn Workspace>>>, &Arc<Mutex<Box<dyn Store>>>, &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>,
-            P:Params<C, R>,
-            C:RunConfig,
+            F:FnOnce(Vec<RC>, &R, &CC, &Arc<RwLock<Box<dyn Workspace>>>, &Arc<Mutex<Box<dyn Store>>>, &Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError>,
+            P:Params<RC, R, CC>,
+            RC:RunConfig,
             R:ResourcesConfig
 
         {
@@ -1629,7 +1642,6 @@ mod main_tests {
             let resources_serialized = resource_config.to_string();
 
             let ran_ids = step(
-
                 run_configs.into_iter().map(|mut run_config|{
                     let run_config_id = store.lock().save_tree_run(
                         input_run_ids.as_deref(),
@@ -1641,14 +1653,13 @@ mod main_tests {
                     run_config.set_id(run_config_id);
 
                     run_config
-                }).collect::<Vec<C>>(),
-
+                }).collect::<Vec<RC>>(),
                 &resource_config,
+                &params.common_config(),
                 ws,
                 store,
                 exec
             )?;
-
 
             Ok(Some(ran_ids))
         }

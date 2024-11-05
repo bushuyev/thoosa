@@ -57,11 +57,10 @@ impl Display for NodeResources {
 }
 
 
-pub trait Params<C:RunConfig, R:ResourcesConfig>:Debug {
+pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
     fn to_run_configs(&self) ->Vec<C>;
-    fn resource_config(&self) -> R {
-        todo!()
-    }
+    fn resource_config(&self) -> R;
+    fn common_config(&self) -> CommonConfig;
 }
 
 pub trait RunConfig:Debug {

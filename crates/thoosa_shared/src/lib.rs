@@ -436,11 +436,10 @@ impl IntoIterator for RangeOrValue<u32> {
             RangeOrValue::Range { range, step } => {
                 if let Some((step, mul)) = step {
                     Box::new(
-                        (range.start .. range.end)
-                            .step_by(step as usize)
+                        (range.start .. range.end).step_by(step as usize)
                     )
                 } else {
-                    Box::new(std::iter::empty())
+                    Box::new([range.start, range.end].into_iter())
                 }
             }
             RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
