@@ -560,7 +560,7 @@ impl ChunkOfSicedTensors {
         Self { keys, sizes, t }
     }
 
-    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: Vec<&Box<Tensor>>, keys: &[String]) -> ChunkOfSicedTensors {
+    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &Vec<SyncWrapper<Box<Tensor>>>, keys: &[String]) -> ChunkOfSicedTensors {
 
         let tensors_sliced = tensors_chunk.into_iter().map(|t| {
             /*
@@ -571,7 +571,7 @@ impl ChunkOfSicedTensors {
                     }
              */
             let sliced = slice_t(
-                t, //&self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone())),
+                &t, //&self.filter.as_ref().map(|f| Box::new((f)(t))).unwrap_or(Box::new(t.shallow_clone())),
                 step,
                 window,
             );
@@ -607,6 +607,7 @@ impl RunConfig for FindMotifsRunConfig {
         let mut map = HashMap::from([
             ("FilterAndSlicerParams.step".into(), self.step.into()),
             ("FilterAndSlicerParams.window".into(), self.window.into()),
+            ("FilterAndSlicerParams.max_dist".into(), self.max_dist.into()),
             ("FilterAndSlicerParams.descr".into(), self.descr.as_str().into()),
         ]);
 
@@ -673,7 +674,7 @@ where
     G: FnMut(ChunkOfSicedTensors, ChunkOfSicedTensors, usize) -> Result<(), ThoosaError> + Send + Sync + 'static,
 {
     let resources_ids = resources_ids.iter().map(|key| key.clone()).collect::<Vec<String>>();
-    let find_motifs_run_configs_locks = find_motifs_run_configs.into_iter().map(|fs|Arc::new(RwLock::new(fs))).collect::<Vec<_>>();
+    let find_motifs_run_configs_locks = Arc::new(find_motifs_run_configs);
     let callback_arc = Arc::new(Mutex::new(callback));
 
     let mut resources_ids_0 = resources_ids.chunks(chunk_size).map(|v| v.iter().map(|k| k.clone()).collect::<Vec<String>>()).collect::<Vec<Vec<String>>>();
@@ -714,63 +715,64 @@ where
             debug!("chunk_and_slice: area_1={area_1:064b}");
 
             let wg_1 = WaitGroup::new();
-            find_motifs_run_configs_locks.iter().enumerate().par_bridge().for_each(|(params_idx, run_config)| {
-                let wg_1 = wg_1.clone();
 
-                let window_0_0 = window_0[0].clone();
-                let window_1_0 = window_1[0].clone();
 
-                let run_config_arc = Arc::clone(&run_config);
-                let callback_arc = Arc::clone(&callback_arc);
+            let window_0_0 = window_0[0].clone();
+            let window_1_0 = window_1[0].clone();
 
-                exec.write().exec(move |loader, keys_purge| {
+            let callback_arc = Arc::clone(&callback_arc);
+            let find_motifs_run_configs_locks_rc = Arc::clone(&find_motifs_run_configs_locks);
+            let wg_1_clone = wg_1.clone();
+            exec.write().exec(move |loader, keys_purge| {
 
-                    async move {
+                async move {
 
-                        let mut window_0_tensors = vec![];
-                        for key in &window_0_0 {
-                            debug!("0. exec:callback_arc: key={key}");
+                    let mut window_0_tensors = vec![];
+                    for key in &window_0_0 {
+                        debug!("0. exec:callback_arc: key={key}");
 
-                            window_0_tensors.push(
-                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await
-                            );
-                        }
+                        window_0_tensors.push(
+                            SyncWrapper::new_tb(Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await)
+                        );
+                    }
 
-                        let mut window_1_tensors = vec![];
-                        for key in &window_1_0 {
-                            debug!("1. exec:callback_arc: key={key}");
+                    let mut window_1_tensors = vec![];
+                    for key in &window_1_0 {
+                        debug!("1. exec:callback_arc: key={key}");
 
-                            window_1_tensors.push(
-                                Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await
-                            );
-                        }
+                        window_1_tensors.push(
+                            SyncWrapper::new_tb(Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await)
+                        );
+                    }
 
-                        let run_config_guard = run_config_arc.read();
+                    let callback_arc = Arc::clone(&callback_arc);
+                    find_motifs_run_configs_locks_rc.iter().enumerate().par_bridge().for_each(|(params_idx, run_config)| {
 
                         callback_arc.lock()(
                             ChunkOfSicedTensors::slice_tensors_chunk(
-                                run_config_guard.step,
-                                run_config_guard.window,
-                                window_0_tensors.iter().collect(),
+                                run_config.step,
+                                run_config.window,
+                                &window_0_tensors,
                                 window_0_0.as_slice()
                             ),
                             ChunkOfSicedTensors::slice_tensors_chunk(
-                                run_config_guard.step,
-                                run_config_guard.window,
-                                window_1_tensors.iter().collect(),
+                                run_config.step,
+                                run_config.window,
+                                &window_1_tensors,
                                 window_1_0.as_slice()
                             ),
                             params_idx,
                         ).expect("callback_arc failed");
+                    });
 
-                        keys_purge(window_1_0, area_1);
+                    keys_purge(window_1_0, area_1);
 
-                        drop(wg_1);
+                    drop(wg_1_clone);
 
-                    }.boxed()
-                });
-
+                }.boxed()
             });
+
+
             wg_1.wait();
             exec.write().purge_cache_keys(window_0[1].clone(), area_0);
             drop(wg_0);
@@ -2310,6 +2312,7 @@ mod motif_find_tests {
         let sample_properties: HashMap<String, Val> = HashMap::from([
             ("FilterAndSlicerParams.window".into(), 10.into()),
             ("FilterAndSlicerParams.step".into(), 10.into()),
+            ("FilterAndSlicerParams.max_dist".into(), 1.0.into()),
             ("FilterAndSlicerParams.descr".into(), "test".into()),
             ("FilterAndSlicerParams.filter.conv_1.Conv1Params.padding".into(), 1.into()),
             ("FilterAndSlicerParams.filter.conv_1.Conv1Params.stride".into(), 1.into()),
@@ -2343,10 +2346,7 @@ mod motif_find_tests {
                 let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
-                SyncWrapper::new(
-                    Box::new(Tensor::from_slice(v.as_slice()).view((1, 10))),
-                    |e| Box::new(e.shallow_clone()),
-                )
+                SyncWrapper::new_tb(Box::new(Tensor::from_slice(v.as_slice()).view((1, 10))))
             }, 4, 100,
         );
         let executor_rc = Arc::new(RwLock::new(executor));
@@ -2357,7 +2357,7 @@ mod motif_find_tests {
             2,
             vec![FindMotifsRunConfig::new(3, 5, 1.0, "", None)],
             move |chunk_0, chunk_1, _size| {
-                debug!("cccc{chunk_0:?} chunk_1={chunk_1:?}");
+                debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
                 debug!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
                 debug!("callback: chunk_1.t=\n{}", chunk_1.t.i((.., 0, ..)).squeeze());
