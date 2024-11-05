@@ -12,23 +12,55 @@ pub enum Resources {
 
 type Label = i64;//TODO
 
-#[derive(Debug)]
-pub enum ResourcesConfig {
-    Simple(Resources),
-    ML{train:Vec<(Label, Resources)>, valid:Vec<(Label, Resources)>},
+
+
+pub trait ResourcesConfig:Display {
+
 }
 
-impl Display for  ResourcesConfig {
+pub struct Simple {
+    resources: Resources
+}
+
+impl Simple {
+    pub fn new(resources: Resources) -> Self {
+        Self { resources }
+    }
+
+    pub fn resources(&self) -> &Resources {
+        &self.resources
+    }
+}
+
+impl ResourcesConfig for Simple {
+
+}
+
+impl Display for Simple{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "xxx")
+    }
+}
+
+pub struct NodeResources {//TODO rename Node to Net
+    resources: Resources
+}
+
+impl ResourcesConfig for NodeResources {
+
+}
+
+impl Display for NodeResources {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "xxx")
     }
 }
 
 
-pub trait Params<C:RunConfig>:Debug {
+pub trait Params<C:RunConfig, R:ResourcesConfig>:Debug {
     fn to_run_configs(&self) ->Vec<C>;
-    fn resource_keys(&self) -> Option<&ResourcesConfig> {
-        None
+    fn resource_config(&self) -> R {
+        todo!()
     }
 }
 

@@ -2082,7 +2082,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_tensor(input_path: &PathBuf, name: &str) {
+    pub fn save_test_tensor(input_path: &PathBuf, name: &str) {
         fs::create_dir_all(input_path).unwrap();
         fs::write(&input_path.join(name), "lalalal").unwrap();
     }
