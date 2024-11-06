@@ -603,22 +603,30 @@ where
         Ok(RangeOrValue::Value(s.parse()?))
     }
 
-    // match s.find("..") {
-    //     None => {
-    //         Ok(RangeOrValue::Value(s.parse()?))
-    //     }
-    //     Some(pos) => {
-    //         match s.find(":") {
-    //             None => {
-    //                 Ok(RangeOrValue::Range{range:s[..pos].parse()? .. s[pos + 2..].parse()?, step:None})
-    //             }
-    //             Some(step_pos) => {
-    //                 Ok(RangeOrValue::Range{range:s[..pos].parse()? .. s[pos + 2..step_pos].parse()?, step:Some(s[step_pos..].parse()?)})
-    //             }
-    //         }
-    //
-    //     }
-    // }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Resources {
+    List(Vec<String>),
+    Set(String),
+    Group(String)
+}
+
+pub fn parse_resources<'a, V>(s: &str) -> Result<Resources, Box<dyn Error + Send + Sync + 'static>> {
+    let value_pos = s.find(":").expect("resource specifier should contain ':'") + 1;
+
+    if s.starts_with("list") {
+        Ok(Resources::List(s[value_pos..].split(",").map(|v|v.to_string()).collect()))
+
+    } else if s.starts_with("set") {
+        Ok(Resources::Set(s[value_pos..].to_string()))
+
+    } else if s.starts_with("group") {
+        Ok(Resources::Group(s[value_pos..].to_string()))
+
+    } else {
+        panic!("unexpected param {s}")
+    }
 }
 
 /**
@@ -776,7 +784,7 @@ mod shared_tests {
     use clap::{Args, Parser};
 
 
-    use crate::{batch_windows, clc_num_batches, make_combos, group_slices, parse_range_str, RangeOrValue, ThoosaError};
+    use crate::{batch_windows, clc_num_batches, make_combos, group_slices, parse_range_str, RangeOrValue, ThoosaError, Resources};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -936,6 +944,38 @@ mod shared_tests {
 
 
         assert_eq!(TestParams { window: RangeOrValue::Range{range: 1..2, step:None}, step: RangeOrValue::Range{range: 1.1..2.2, step:None} }, params);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resources_param()-> Result<(), ThoosaError>{
+        use crate::parse_resources;
+
+        #[derive(Debug, Parser, Clone, PartialEq)]
+        struct TestParams {
+
+            #[arg(long,value_parser=parse_resources::<Resources>)]
+            resources: Resources,
+        }
+
+        let params = TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
+
+        assert_eq!(
+            Resources::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
+            params.resources
+        );
+        let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
+        assert_eq!(
+            Resources::Set("aaa".into()),
+            params.resources
+        );
+
+        let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
+        assert_eq!(
+            Resources::Group("bbb".into()),
+            params.resources
+        );
 
         Ok(())
     }

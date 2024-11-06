@@ -1,14 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use thoosa_shared::Resources;
 use thoosa_shared::val::Val;
 use crate::parzen::optimizer::ConfigurationSpace;
 
-#[derive(Debug)]
-pub enum Resources {
-    List(Vec<String>),
-    Set(String),
-    Group(Vec<String>)
-}
 
 type Label = i64;//TODO
 

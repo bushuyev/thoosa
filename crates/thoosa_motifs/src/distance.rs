@@ -19,12 +19,12 @@ pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tenso
     )
 }
 
-pub fn dist_d2(_dim: i64, slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError> {
+pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError> {
     //https://github.com/pytorch/pytorch/blob/96487d0d1f638ae9c665dcd3d4b79e7e2a976f59/aten/src/ATen/native/cuda/DistanceKernel.cu#L188
     //0 -use_mm_for_euclid_dist_if_necessary
     //1 -use_mm_for_euclid_dist
     //2 -donot_use_mm_for_euclid_dist
-    assert_eq!(slice_0.size()[1], slice_1.size()[1]);
+    assert_eq!(slice_0.size()[1], slice_1.size()[1]);//same slice size
     Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
 }
 
@@ -117,7 +117,7 @@ mod distance_tests {
             let tensor1 = t_1_2_3_sliced.i((.., c, ..)).squeeze();
             debug!("tensor.size()={:?} tensor1.size()={:?}", tensor.size(), tensor1.size());
             debug!("tensor=\n{} tensor1=\n{}", tensor, tensor1);
-            let t = super::dist_d2(1, &tensor, &tensor1)?;
+            let t = super::dist_d2(&tensor, &tensor1)?;
 
 
             //first slice in t_0  & last slice in t_3 - 0.00, 0.01
@@ -132,7 +132,6 @@ mod distance_tests {
             }
         }
 
-
         Ok(())
     }
 
@@ -144,7 +143,7 @@ mod distance_tests {
         debug!("slice_0={slice_0}");
         debug!("slice_1={slice_1}");
 
-        let dist_t = super::dist_d2(1, &slice_0, &slice_1).unwrap();
+        let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         debug!("dist_t={dist_t}");
 
         assert_eq!(5.0, dist_t.double_value(&[0,0]));
@@ -153,6 +152,39 @@ mod distance_tests {
 
     }
 
+    #[test]
+    fn test_dist_d2_1(){//TODO remove
+        let x = [
+            0.9, 1.8,
+            2.7, 3.6,
+            4.5, 5.4,
+            6.3, 7.2,
+            8.1, 9.0,
+        ];
+
+        for (i_0, x_0) in x.windows(2).enumerate() {
+            for (i_1, x_1) in x.windows(2).enumerate() {
+                let dist:f64 = (x_0[0] - x_1[0]) * (x_0[0] - x_1[0]) + (x_0[1] - x_1[1]) * (x_0[1] - x_1[1]);
+                let dist = dist.sqrt();
+                debug!("[{i_0},{i_1}] x_0={x_0:?} x_1={x_1:?} dist={}", dist);
+            }
+        }
+        //
+        let slice_0 = Tensor::from_slice(&x).view((5, 2));
+        let slice_1 = Tensor::from_slice(&x).view((5, 2));
+        debug!("slice_0={slice_0}");
+        debug!("slice_1={slice_1}");
+
+        let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
+        debug!("dist_t={dist_t}");
+
+        // // assert_eq!(5.0, dist_t.double_value(&[0,0]));
+        // // assert_eq!(5.0, dist_t.double_value(&[1,1]));
+        // // assert_eq!(5.0, dist_t.double_value(&[2,2]));
+
+
+
+    }
 
     #[test]
     fn test_slice_t(){
