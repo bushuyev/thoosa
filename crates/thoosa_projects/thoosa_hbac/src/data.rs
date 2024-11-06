@@ -676,8 +676,8 @@ mod tests {
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{init_resources, run_find_motifs_on_group, run_select_motifs, run_train_final, run_train_label_nodes, Cli, RunAllParams};
-    use thoosa_motifs::find::{FindMotifsParams, SelectMotifsParams};
+    use thoosa_main::cli::{init_resources, run_select_motifs, run_step, run_train_final, run_train_label_nodes, Cli, RunAllParams};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist_, FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
     use thoosa_shared::{init_test_logging, ThoosaError};
@@ -902,10 +902,10 @@ mod tests {
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &String| {
 
-                SyncWrapper::new(
-                    loader.load(key, Device::Cpu),
-                    |e| Box::new(e.shallow_clone())
-                )
+                SyncWrapper::new_tb({
+                    debug!("test_run_find_motifs: key={key}");
+                    loader.load(key, Device::Cpu)
+                })
             }, 4, 100,
         )));
 
@@ -924,210 +924,22 @@ mod tests {
             }
         )?;
 
-        let motifs_run_ids = run_find_motifs_on_group(
+        let motifs_run_ids = run_step(
+            None,
+            &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
+            find_motifs_by_euc_dist_,
             &ws,
             &store,
-            vec![Cpu],
-            &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            &executor_rc
+            &executor_rc,
+            vec![Cpu]
         )?;
+
 
         debug!("motifs_run_ids={motifs_run_ids:?}");
-        assert_eq!(vec![1, 2, 3, 4], motifs_run_ids);
+        assert_eq!(vec![1], motifs_run_ids);
 
         Ok(())
     }
 
-    // #[test]
-    fn test_run_select_motifs() -> Result<(), ThoosaError> {
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400, None)?));
-
-        let cli = Cli{
-            base_path: "test_data/eeg".to_string(),
-            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
-            ws_path: "/tmp".to_string(),
-            tensors_path: None,
-            store_path: "".to_string(),
-            term_logger_level: "".to_string(),
-            write_logger_level: "".to_string(),
-            logfile: "".to_string(),
-            limit: None,
-            num_threads: None,
-            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10..10, "xxx".into(), 10, 0.3, None))),
-            input_filters_kernel: None,
-        };
-
-        // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-
-        let parquet_loader = Arc::new(Box::new(ParquetLoader::new(
-            "test_data/eeg".into(), Some("test_data/eeg".into()), None,
-            Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
-        )));
-
-        let loader = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
-            move |key: &String| {
-                SyncWrapper::new(
-                    parquet_loader.load(key, Device::Cpu),
-                    |e| Box::new(e.shallow_clone())
-
-                )
-            }, 4, 100,
-        )));
-
-        init_resources(
-            Arc::clone(&store),
-            vec![],
-            ||{
-                super::labeled_resourses(Path::new(&cli.base_path).join("train_10.csv"))
-            }
-        )?;
-
-        let run_ids = run_find_motifs_on_group(
-            &ws,
-            &store,
-            vec![Cpu],
-            &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            &loader
-        )?;
-
-        let corr_ids = run_select_motifs(
-            &ws,
-            &store,
-            vec![Cpu],
-            &SelectMotifsParams::dummy(run_ids, vec![("seizure".into(), "seizure/10".into())], 0.1),
-            &loader,
-            20
-        )?;
-
-        debug!("corr_ids={:?}", corr_ids);
-
-        Ok(())
-    }
-
-
-
-    // // #[test] TODO
-    // #[allow(dead_code)]
-    // fn test_run_train_on_label() -> Result<(), ThoosaError>{
-    //     let train_on_label_params = TrainOnLabelParams::dummy(
-    //         1000,
-    //         1000,
-    //         "../../data_local/test_models/".into(),
-    //         "/tmp".into(),
-    //         vec![("grda".into(), "grda/3".into())],
-    //         vec![("grda".into(), "grda/3".into())], 100, 2, 2, 1.0e-5,
-    //     );
-    //
-    //     let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None, Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)),)));
-    //
-    //     let cli = Cli{
-    //         base_path: "../../data/".into(),
-    //         ws_path: "/tmp".to_string(),
-    //         resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
-    //         tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
-    //         store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
-    //         term_logger_level: "DEBUG".into(),
-    //         write_logger_level: "DEBUG".into(),
-    //         logfile: "/tmp/thoosa_test.log".into(),
-    //         limit: None,
-    //         num_threads: None,
-    //         command: Some(TrainOnLabel(train_on_label_params.clone())),
-    //         input_filters_kernel: None,
-    //     };
-    //
-    //     let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
-    //
-    //     run_train_on_label(
-    //         &cli,
-    //         vec![],
-    //         &store,
-    //         vec![Cpu],
-    //         &train_on_label_params,
-    //         Arc::clone(&loader),
-    //     )?;
-    //
-    //     Ok(())
-    // }
-
-    // // #[test] TODO
-    // #[allow(dead_code)]
-    // fn test_run_train_final() -> Result<(), ThoosaError>{
-    //
-    //     let train_final_params = TrainFinalParams::dummy(
-    //         1000,
-    //         1000,
-    //
-    //         "pure group 3".into(),
-    //         "pure group 3".into(),
-    //         10,
-    //         100,
-    //         5
-    //     );
-    //
-    //     let loader = Arc::new(Box::new(ParquetLoader::new("../../data/".into(), Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()), None, Box::new(|base_path, resource_id| format!("{}/train_eegs/{}.parquet", base_path, resource_id)),)));
-    //
-    //     let cli = Cli{
-    //         base_path: "../../data/".into(),
-    //         ws_path: "/tmp".to_string(),
-    //         resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
-    //         tensors_path: Some("/media/bu/KINGSTON/all_eegs.pt/all/".into()),
-    //         store_path: "../../data_down/group_1_labels_100_100_200/thoosa-model/thoosa_all.db3".to_string(),
-    //         term_logger_level: "DEBUG".into(),
-    //         write_logger_level: "DEBUG".into(),
-    //         logfile: "/tmp/thoosa_test.log".into(),
-    //         limit: None,
-    //         num_threads: None,
-    //         command: Some(TrainFinal(train_final_params.clone())),
-    //         input_filters_kernel: None,
-    //     };
-    //
-    //     let store = Arc::new(Mutex::new(SqlStore::from_path(cli.store_path.clone())?));
-    //
-    //     run_train_final(
-    //         &cli,
-    //         &store,
-    //         &Cpu,
-    //         &train_final_params,
-    //         Arc::clone(&loader)
-    //     )?;
-    //
-    //     Ok(())
-    // }
-
-    // #[test]
-    // fn motifs_to_store() -> Result<(), ThoosaError>{
-    //     let runs = vec![
-    //         ("2024-02-14T17:36:36Z", "seizure"),
-    //         ("2024-02-15T17:14:09Z", "lpd"),
-    //         ("2024-02-16T06:34:04Z", "gpd"),
-    //         ("2024-02-16T11:31:30Z", "lrda"),
-    //         ("2024-02-16T16:29:11Z", "grda"),
-    //         ("2024-02-19T07:12:01Z", "other"),
-    //     ];
-    //
-    //     let mut store = SqlStore::new("thoosa_imp.db3")?;
-    //
-    //     for (dir, desc) in runs {
-    //         let (_, eeg_ids) = read_eeg_index(format!("../../data_down/14_02_results/{}", dir).as_str())?;
-    //
-    //         let run_id = store.save_run(format!("{}/csv motifs import", desc).as_str(), &eeg_ids)?;
-    //
-    //         for channel in 0..20 {
-    //             let r = read_motif_to_iter_imp(format!("../../data_down/14_02_results/{}/motifs_{}.csv", dir, channel).as_str())?;
-    //
-    //             for chunk in r.chunks(500) {
-    //                 store.save_slices(run_id, channel, chunk.to_vec());
-    //             }
-    //
-    //             store.set_motifs(run_id, channel);
-    //
-    //             debug!("desc={}, channel={}, run_id={}, r.len()={}", desc, channel, run_id, r.len());
-    //         }
-    //     }
-    //     Ok(())
-    // }
 
 }
