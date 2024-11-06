@@ -249,7 +249,7 @@ where
 
     pub fn exec<F>(&mut self, make_future: F)
     where
-        F: FnOnce(Arc<RwLock<Loader<K, V>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,
+        F: FnOnce(Arc<RwLock<Loader<K, V>>>, Box<dyn FnOnce(Vec<K>, u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
 
     {
         let loader_for_purge = Arc::clone(&self.loader);

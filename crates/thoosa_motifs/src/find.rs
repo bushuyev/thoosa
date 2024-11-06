@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::{fmt, fs};
+use std::{fmt, fs, mem};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
@@ -279,33 +280,30 @@ pub fn find_motifs_by_euc_dist_<'a>(
     devices:Vec<Device>
 ) -> Result<Vec<usize>, ThoosaError> {
     let resource_keys = resource_config_to_keys(store, resource_config);
-    let records_num: u32 = 0; //ws.read().clc_records(&resource_keys)?.try_into().expect("clc_records to u32");
-
-
-    // let window = *find_motifs_params.window.expect_value().unwrap();
-    // let step = *find_motifs_params.step.expect_value().unwrap();
-    // if records_num < window {
-    //     return Err(ThoosaError::new(format!("too few records: records_num={} < find_motifs_params.window={}", records_num, find_motifs_params.window)));
-    // }
-
-    let mut run_config__trackers: Vec<Vec<SimpMotifTracker<StoreDumper>>> = run_configs.iter().map(|run_config| {
-        (0..ws.read().channels()).map(|channel| SimpMotifTracker::<StoreDumper>::new(
-            StoreDumper::new(Arc::clone(&store), run_config.id.expect("id"), channel),
-            None, //common_config.min_tracker_step,
-        )).collect::<Vec<SimpMotifTracker<_>>>()
-    }).collect();
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
-    debug!("find_motifs_by_euc_dist_: records_num={records_num} resource_keys={resource_keys:?} run_config_ids={run_config_ids:?}");
 
+    let run_config__trackers: Vec<(FindMotifsRunConfig, Vec<SimpMotifTracker<StoreDumper>>)> = run_configs.into_iter().map(|run_config| {
+
+        let run_id = run_config.id.expect("id");
+        (
+            run_config,
+            (0..ws.read().channels()).map(|channel|
+                SimpMotifTracker::<StoreDumper>::new(
+                StoreDumper::new(Arc::clone(&store), run_id, channel),
+                common_config.min_tracker_step,
+            )).collect::<Vec<SimpMotifTracker<StoreDumper>>>()
+        )
+
+    }).collect();
+
+    // debug!("find_motifs_by_euc_dist_: records_num={records_num} resource_keys={resource_keys:?} run_config_ids={run_config_ids:?}");
     chunk_and_slice(
         resource_keys,
         common_config.chunk_size as usize,
-        run_configs,
-        move |chunk_0: ChunkOfSlicedTensors, chunk_1: ChunkOfSlicedTensors, params_idx: usize, find_motifs_run_config| {
-            debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
-
-            let channels_motif_trackers = &mut run_config__trackers[params_idx];
+        run_config__trackers,
+        move |chunk_0: ChunkOfSlicedTensors, chunk_1: ChunkOfSlicedTensors, params_idx: usize, find_motifs_run_config, channels_motif_trackers| {
+            debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
 
             //TODO spread channels over devices
             for (channel, mt) in channels_motif_trackers.iter_mut().enumerate() {
@@ -322,13 +320,20 @@ pub fn find_motifs_by_euc_dist_<'a>(
                     &chunk_0,
                     &chunk_1,
                     &euc_dist_t,
+                    find_motifs_run_config.step as i64,
                     |(slice_0, slice_1, dist)|{
-                        // distance_pairs.push(pair);
-                        // mt.track(
-                        //     slice_0,
-                        //     slice_1,
-                        //     dist as f32,
-                        // )
+
+                        if dist < find_motifs_run_config.max_dist {
+                            mt.track(
+                                slice_0,
+                                slice_1,
+                                dist,
+                            );
+                        }
+
+                    },
+                    |dist:&f32|{
+                        dist < &find_motifs_run_config.max_dist
                     }
                 );
                 debug!("find_motifs_euc: channel={channel} done");
@@ -357,18 +362,18 @@ pub fn find_motifs_by_euc_dist_<'a>(
 
 
 #[derive(Debug)]
-struct ChunkOfSlicedTensors<'a> {
-    keys: &'a Vec<String>,
+struct ChunkOfSlicedTensors{
+    keys:Vec<String>,
     sizes: Vec<i64>,
     t: Tensor,
 }
 
-impl <'a> ChunkOfSlicedTensors<'a> {
-    pub fn new(keys: &'a Vec<String>, sizes: Vec<i64>, t: Tensor) -> Self {
+impl  ChunkOfSlicedTensors {
+    pub fn new(keys:  Vec<String>, sizes: Vec<i64>, t: Tensor) -> Self {
         Self { keys, sizes, t }
     }
 
-    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &Vec<SyncWrapper<Box<Tensor>>>, keys: &'a Vec<String>) -> ChunkOfSlicedTensors<'a> {
+    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &Vec<SyncWrapper<Box<Tensor>>>, keys: Vec<String>) -> ChunkOfSlicedTensors {
 
         let tensors_sliced = tensors_chunk.into_iter().map(|t| {
 
@@ -465,18 +470,18 @@ impl FindMotifsRunConfig {
 }
 
 
-fn chunk_and_slice<G>(
+fn chunk_and_slice<'a, G>(
     resources_ids: Vec<String>,
     chunk_size: usize,
-    find_motifs_run_configs: Vec<FindMotifsRunConfig>,
+    find_motifs_run_configs_trackers: Vec<(FindMotifsRunConfig, Vec<SimpMotifTracker<StoreDumper>>)>,
     callback: G,
     exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
 ) -> Result<(), ThoosaError>
 where
-    G: FnMut(ChunkOfSlicedTensors, ChunkOfSlicedTensors, usize, &FindMotifsRunConfig) -> Result<(), ThoosaError> + Send + Sync + 'static,
+    G: FnMut(ChunkOfSlicedTensors, ChunkOfSlicedTensors, usize, &FindMotifsRunConfig, &mut Vec<SimpMotifTracker<StoreDumper>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
+    'a: 'static
 {
-    let resources_ids = resources_ids.iter().map(|key| key.clone()).collect::<Vec<String>>();
-    let find_motifs_run_configs_locks = Arc::new(find_motifs_run_configs);
+    let find_motifs_run_configs_locks = Arc::new(RwLock::new(find_motifs_run_configs_trackers));
     let callback_arc = Arc::new(Mutex::new(callback));
 
     let mut resources_ids_0 = resources_ids.chunks(chunk_size).map(|v| v.iter().map(|k| k.clone()).collect::<Vec<String>>()).collect::<Vec<Vec<String>>>();
@@ -519,10 +524,10 @@ where
             let window_1_0 = window_1[0].clone();
 
             let callback_arc = Arc::clone(&callback_arc);
-            let find_motifs_run_configs_locks_rc = Arc::clone(&find_motifs_run_configs_locks);
+            let mut find_motifs_run_configs_locks_rc = Arc::clone(&find_motifs_run_configs_locks);
             let wg_1_clone = wg_1.clone();
             exec.write().exec(move |loader, keys_purge| {
-
+                let mut find_motifs_run_configs_locks_rc = Arc::clone(&find_motifs_run_configs_locks_rc);
                 async move {
 
                     let mut window_0_tensors = vec![];
@@ -544,27 +549,28 @@ where
                     }
 
                     let callback_arc = Arc::clone(&callback_arc);
-                    find_motifs_run_configs_locks_rc.iter().enumerate().par_bridge().for_each(|(params_idx, run_config)| {
+                    find_motifs_run_configs_locks_rc.write().iter_mut().enumerate().par_bridge().for_each(|(params_idx, (run_config, mt))| {
 
                         callback_arc.lock()(
                             ChunkOfSlicedTensors::slice_tensors_chunk(
                                 run_config.step,
                                 run_config.window,
                                 &window_0_tensors,
-                                &window_0_0
+                                window_0_0.clone()
                             ),
                             ChunkOfSlicedTensors::slice_tensors_chunk(
                                 run_config.step,
                                 run_config.window,
                                 &window_1_tensors,
-                                &window_1_0
+                                window_1_0.clone()
                             ),
                             params_idx,
-                            run_config
+                            run_config,
+                            mt
                         ).expect("callback_arc failed");
                     });
 
-                    keys_purge(window_1_0.clone(), area_1);//TODO clone
+                    keys_purge(window_1_0, area_1);//TODO clone
 
                     drop(wg_1_clone);
 
@@ -585,16 +591,16 @@ where
     Ok(())
 }
 
-fn collect_dists<'a, F>(
-    chunk_0: &ChunkOfSlicedTensors<'a>,
-    chunk_1: &ChunkOfSlicedTensors<'a>, dist_t:&Tensor,
-    mut listener:F
-) where F:FnMut((TensorSliceIdx<&'a String>, TensorSliceIdx<&'a String>, f64))
-{
+fn collect_dists<'a, F, C>(
+    chunk_0: &'a ChunkOfSlicedTensors,
+    chunk_1: &'a ChunkOfSlicedTensors, dist_t:&Tensor, step: i64,
+    mut listener:F,
+    condition:C
+) where F:FnMut((TensorSliceIdx<String>, TensorSliceIdx<String>, f32)),
+        C:Fn(&f32)->bool{
 
 
-    // let distances: Vec<f64> = Vec::<f64>::from(&dist_t.view(-1));
-    let distances = from::<Vec<f64>>(&dist_t.view(-1));
+    let distances = from::<Vec<f32>>(&dist_t.view(-1));
     let mut distances_i = 0;
 
     chunk_0.sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
@@ -604,13 +610,15 @@ fn collect_dists<'a, F>(
                 for (slice_1_idx, s_1) in (0..*t_size_1).enumerate() {
                     //println!("t_idx_0={t_idx_0} slice_0_idx={slice_0_idx} t_idx_1={t_idx_1} slice_1_idx={slice_1_idx} d={}", distances[distances_i]);
 
-                    listener(
-                        (
-                            TensorSliceIdx(&chunk_0.keys[t_idx_0], slice_0_idx as i64),
-                            TensorSliceIdx(&chunk_1.keys[t_idx_1], slice_1_idx as i64),
-                            distances[distances_i]
-                        ),
-                    );
+                    if chunk_0.keys[t_idx_0].ne(&chunk_1.keys[t_idx_1]) || slice_0_idx != slice_1_idx && condition(&distances[distances_i]) {
+                        listener(
+                            (
+                                TensorSliceIdx(chunk_0.keys[t_idx_0].clone(), slice_0_idx as i64 * step),
+                                TensorSliceIdx(chunk_1.keys[t_idx_1].clone(), slice_1_idx as i64 * step),
+                                distances[distances_i]
+                            ),
+                        );
+                    }
 
                     distances_i += 1;
                 }
@@ -623,52 +631,14 @@ fn collect_dists<'a, F>(
 
 
 pub trait MotifDumper {
-    fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<&String>, TensorSliceIdx<&String>, f32)>) -> Result<(), ThoosaError>;
+    fn dump(&mut self, motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), ThoosaError>;
 }
-/*
-#[derive(Debug)]
-pub struct FileDumper {
-    file: File,
-}
-
-impl FileDumper {
-    pub fn new(path: &str) -> Self {
-        /*match std::fs::remove_file(path) {
-            Ok(_) => {}
-            Err(_) => {}
-        }*/
-
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(true)
-            .open(path)
-            .unwrap();
-
-
-        Self {
-            file
-        }
-    }
-}
-
-impl MotifDumper for FileDumper {
-    fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<&String>, TensorSliceIdx<&String>, f32)>) -> Result<(), ThoosaError> {
-        for motif in motifs.iter() {
-            writeln!(self.file, "{}, {},  {:.3}", motif.0, motif.1, motif.2)?;
-        }
-        self.file.flush()?;
-
-        Ok(())
-    }
-}*/
-
 
 impl MotifDumper for StoreDumper {
-    fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<&String>, TensorSliceIdx<&String>, f32)>) -> Result<(), ThoosaError> {
+    fn dump(&mut self, motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), ThoosaError> {
         debug!("MotifDumper::dump: motifs.len()={:?}, self.run_id={:?}", motifs.len(), self.run_id);
 
-        self.store.lock().save_slices(self.run_id, self.channel as i64, motifs.into_iter().map(|v| ((v.0.0.clone(), v.0.1), (v.1.0.clone(), v.1.1), v.2)).collect::<Vec<_>>())?; //TODO move TensorSliceIdx to shared
+        self.store.lock().save_slices(self.run_id, self.channel as i64, motifs.into_iter().map(|v| ((v.0.0, v.0.1), (v.1.0, v.1.1), v.2)).collect::<Vec<_>>())?; //TODO move TensorSliceIdx to shared
 
         Ok(())
     }
@@ -676,16 +646,16 @@ impl MotifDumper for StoreDumper {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub(crate) struct SimpMotifTracker<'a, D: MotifDumper + Debug> {
+pub(crate) struct SimpMotifTracker<D: MotifDumper + Debug> {
     last:Option<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>,
-    motifs: Vec<(TensorSliceIdx<&'a String>, TensorSliceIdx<&'a String>, f32)>, //i_0, match_0, match_1, dist
+    motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>, //i_0, match_0, match_1, dist
     dumper: D,
     min_step:Option<usize>
 }
 
-impl<'a, D: MotifDumper + Debug> SimpMotifTracker<'a, D> {
+impl<'a, D: MotifDumper + Debug> SimpMotifTracker<D> {
 
-    pub fn new(dumper: D, min_step:Option<usize>) -> SimpMotifTracker<'a, D> {
+    pub fn new(dumper: D, min_step:Option<usize>) -> SimpMotifTracker<D> {
         Self {
             last:None,
             motifs: vec![],
@@ -694,8 +664,8 @@ impl<'a, D: MotifDumper + Debug> SimpMotifTracker<'a, D> {
         }
     }
 
-    pub fn track(&mut self, i_0: TensorSliceIdx<&'a String>, i_1: TensorSliceIdx<&'a String>, dist: f32) {
-        trace!("SimpMotifTracker::track: i_0={i_0} i_1={i_1}");
+    pub fn track(&'a mut self, i_0: TensorSliceIdx<String>, i_1: TensorSliceIdx<String>, dist: f32) {
+        debug!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
 
         match self.min_step {
             None => {
@@ -704,13 +674,13 @@ impl<'a, D: MotifDumper + Debug> SimpMotifTracker<'a, D> {
 
             Some(min_step) => {
 
-                // let last = self.last.take();
-                // if let Some(last) = last {
-                //     if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
-                //         self.motifs.push(last);
-                //     }
-                // }
-                // self.last.replace((i_0, i_1, dist));
+                let last = self.last.take();
+                if let Some(last) = last {
+                    if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
+                        self.motifs.push(last);
+                    }
+                }
+                self.last.replace((i_0, i_1, dist));
             }
         }
 
@@ -718,20 +688,19 @@ impl<'a, D: MotifDumper + Debug> SimpMotifTracker<'a, D> {
 
     fn dump(&mut self) {
         debug!("SimpMotifTracker::dump: self.motifs={}", self.motifs.len());
-        // if let Some(last) = self.last.take(){
-        //     self.motifs.push(last);
-        // }
+        if let Some(last) = self.last.take(){
+            self.motifs.push(last);
+        }
 
         if self.motifs.len() > 0 {
-            self.dumper.dump(&mut self.motifs).expect("dumper");
-            self.motifs.clear();
+            self.dumper.dump(mem::take(&mut self.motifs)).expect("dumper");
         }
     }
 
-    // #[allow(dead_code)]
-    // pub fn motifs(&self) -> &Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)> {
-    //     &self.motifs
-    // }
+    #[cfg(test)]
+    pub fn motifs(&self) -> &Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)> {
+        &self.motifs
+    }
 }
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -1231,7 +1200,7 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item
 
 #[cfg(test)]
 mod motif_find_tests {
-    use std::{fs};
+    use std::{fs, mem};
 
     use std::collections::{HashMap};
 
@@ -1556,7 +1525,6 @@ mod motif_find_tests {
         let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));
 
 
-        /*
         let x = lin_t(n);
         plot_series(
              vec![
@@ -1566,7 +1534,6 @@ mod motif_find_tests {
 
              ], "test_find_motifs_euc", (1000, 500), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         ).unwrap();
-        */
 
 
         let  executor_rc = Arc::new(RwLock::new(LoadRunner::new(
@@ -1886,12 +1853,12 @@ mod motif_find_tests {
 
     #[test]
     pub fn test_simple_motif_tracker() -> Result<(), ThoosaError> {
-       /* #[derive(Debug)]
-        struct DummyDumper<'a> {
-            motifs:  Vec<(TensorSliceIdx<&'a String>, TensorSliceIdx<&'a String>, f32)>
+       #[derive(Debug)]
+        struct DummyDumper {
+            motifs:  Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>
         }
 
-        impl <'a> DummyDumper<'a> {
+        impl DummyDumper {
             pub fn new() -> Self {
                 Self {
                     motifs:vec![]
@@ -1899,16 +1866,16 @@ mod motif_find_tests {
             }
         }
 
-        impl <'a> MotifDumper for DummyDumper<'a> {
-            fn dump(&mut self, motifs: &mut Vec<(TensorSliceIdx<&String>, TensorSliceIdx<&String>, f32)>) -> Result<(), ThoosaError> {
+        impl MotifDumper for DummyDumper {
+            fn dump(&mut self, motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>) -> Result<(), ThoosaError>{
 
-                self.motifs.extend(motifs.drain(..));
+                self.motifs.extend(motifs.clone());
 
                 Ok(())
             }
-        }*/
-/*
-        let mut mt = super::SimpMotifTracker::new(0.9, DummyDumper::new(), None);
+        }
+
+        let mut mt = super::SimpMotifTracker::new(DummyDumper::new(), None);
 
         mt.track(TensorSliceIdx("t_0".to_string(), 10), TensorSliceIdx("t_1".to_string(), 10), 1.0);
         mt.track(TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0);
@@ -1920,17 +1887,17 @@ mod motif_find_tests {
         assert_eq!((TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0), mt.dumper.motifs[1]);
         assert_eq!((TensorSliceIdx("t_0".to_string(), 30), TensorSliceIdx("t_1".to_string(), 30), 1.0), mt.dumper.motifs[2]);
 
-*/
-        // let mut mt = super::SimpMotifTracker::new(DummyDumper::new(), Some(10));
 
-        // mt.track(TensorSliceIdx(&"t_0".to_string(), 10), TensorSliceIdx(&"t_1".to_string(), 10), 1.0);
-        // mt.track(TensorSliceIdx(&"t_0".to_string(), 20), TensorSliceIdx(&"t_1".to_string(), 20), 1.0);
-        // mt.track(TensorSliceIdx(&"t_0".to_string(), 31), TensorSliceIdx(&"t_1".to_string(), 30), 1.0);
+        let mut mt = super::SimpMotifTracker::new(DummyDumper::new(), Some(10));
 
-        // mt.dump();
-        // assert_eq!(mt.dumper.motifs.len(), 2);
-        // assert_eq!((TensorSliceIdx(&"t_0".to_string(), 20), TensorSliceIdx(&"t_1".to_string(), 20), 1.0), mt.dumper.motifs[0]);
-        // assert_eq!((TensorSliceIdx(&"t_0".to_string(), 31), TensorSliceIdx(&"t_1".to_string(), 30), 1.0), mt.dumper.motifs[1]);
+        mt.track(TensorSliceIdx("t_0".to_string(), 10), TensorSliceIdx("t_1".to_string(), 10), 1.0);
+        mt.track(TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0);
+        mt.track(TensorSliceIdx("t_0".to_string(), 31), TensorSliceIdx("t_1".to_string(), 30), 1.0);
+
+        mt.dump();
+        assert_eq!(mt.dumper.motifs.len(), 2);
+        assert_eq!((TensorSliceIdx("t_0".to_string(), 20), TensorSliceIdx("t_1".to_string(), 20), 1.0), mt.dumper.motifs[0]);
+        assert_eq!((TensorSliceIdx("t_0".to_string(), 31), TensorSliceIdx("t_1".to_string(), 30), 1.0), mt.dumper.motifs[1]);
 
         Ok(())
     }
@@ -2224,8 +2191,8 @@ mod motif_find_tests {
         crate::find::chunk_and_slice(
             resources,
             2,
-            vec![FindMotifsRunConfig::new(3, 5, 1.0, "", None)],
-            move |chunk_0, chunk_1, _size, _find_motifs_run_config| {
+            vec![(FindMotifsRunConfig::new(3, 5, 1.0, "", None), vec![])],
+            move |chunk_0, chunk_1, _size, _find_motifs_run_config, _channels_mt| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
                 debug!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
@@ -2365,23 +2332,27 @@ mod motif_find_tests {
         let dist_t = super::dist_d2(&slices_chunk_0, &slices_chunk_1).unwrap();
         // let dist_t =  Tensor::cdist(&slices_chunk_0, &slices_chunk_1, 2.0, 0);
 
-        let keys_aaa_bbb = vec!["aaa".to_string(), "bbb".to_string()];
-        let keys_ccc_ddd = vec!["ccc".to_string(), "ddd".to_string()];
         let mut distance_pairs = Vec::new();
+        let chunk_0 = ChunkOfSlicedTensors::new(
+            vec!["aaa".to_string(), "bbb".to_string()],
+            vec![3, 2],
+            slices_chunk_0
+        );
+        let chunk_1 = ChunkOfSlicedTensors::new(
+            vec!["ccc".to_string(), "ddd".to_string()],
+            vec![1, 2],
+            slices_chunk_1
+        );
         collect_dists(
-            &ChunkOfSlicedTensors::new(
-                &keys_aaa_bbb,
-                vec![3, 2],
-                slices_chunk_0
-            ),
-            &ChunkOfSlicedTensors::new(
-                &keys_ccc_ddd,
-                vec![1, 2],
-                slices_chunk_1
-            ),
+            &chunk_0,
+            &chunk_1,
             &dist_t,
+            1,
             |pair|{
                 distance_pairs.push(pair);
+            },
+            |dist|{
+                true
             }
         );
 
@@ -2390,28 +2361,28 @@ mod motif_find_tests {
         assert_eq!(aaa_bbb_t.len() / 2 * ccc_ddd_t.len() / 2,  distance_pairs.len());
         assert_eq!(
            distance_pairs[0],
-           (TensorSliceIdx(&"aaa".to_string(), 0), TensorSliceIdx(&"ccc".to_string(), 0), test_dist(&aaa_bbb_t[0..2], &ccc_ddd_t[0..2])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
+           (TensorSliceIdx("aaa".to_string(), 0), TensorSliceIdx("ccc".to_string(), 0), test_dist(&aaa_bbb_t[0..2], &ccc_ddd_t[0..2])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
         );
 
         assert_eq!(
            distance_pairs[1],
-           (TensorSliceIdx(&"aaa".to_string(), 0), TensorSliceIdx(&"ddd".to_string(), 0), test_dist(&aaa_bbb_t[0..2], &ccc_ddd_t[2..4])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
+           (TensorSliceIdx("aaa".to_string(), 0), TensorSliceIdx("ddd".to_string(), 0), test_dist(&aaa_bbb_t[0..2], &ccc_ddd_t[2..4])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
         );
 
         assert_eq!(
            distance_pairs[2],
-           (TensorSliceIdx(&"aaa".to_string(), 0), TensorSliceIdx(&"ddd".to_string(), 1), test_dist(&aaa_bbb_t[0..2], &ccc_ddd_t[4..6])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
+           (TensorSliceIdx("aaa".to_string(), 0), TensorSliceIdx("ddd".to_string(), 1), test_dist(&aaa_bbb_t[0..2], &ccc_ddd_t[4..6])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
         );
 
         assert_eq!(
            distance_pairs[3],
-           (TensorSliceIdx(&"aaa".to_string(), 1), TensorSliceIdx(&"ccc".to_string(), 0), test_dist(&aaa_bbb_t[2..4], &ccc_ddd_t[0..2])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
+           (TensorSliceIdx("aaa".to_string(), 1), TensorSliceIdx("ccc".to_string(), 0), test_dist(&aaa_bbb_t[2..4], &ccc_ddd_t[0..2])),// dist between slices 0 and 1 of tensor "aaa" - [0.9000, 1.8000], [2.7000, 3.6000] is 2.5456
         );
 
 
     }
 
-    fn test_dist(x:&[f64], y:&[f64]) -> f64 {
+    fn test_dist(x:&[f32], y:&[f32]) -> f32 {
         ((x[0]-y[0]) * (x[0]-y[0]) + (x[1]-y[1]) * (x[1]-y[1])).sqrt()
     }
 }
