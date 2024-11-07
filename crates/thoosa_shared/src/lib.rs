@@ -780,6 +780,8 @@ mod shared_tests {
    group 2: e, f, g
    group 3: x, y
    */
+    use std::fmt::Display;
+    use std::sync::Arc;
     use std::vec::IntoIter;
     use clap::{Args, Parser};
 

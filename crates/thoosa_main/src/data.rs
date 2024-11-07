@@ -1,3 +1,5 @@
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Add;
 use std::path::Path;
@@ -127,21 +129,22 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 
-pub fn load_to_logits_tensors(group:&str,  device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(String, Vec<f32>)> {
+pub fn load_to_logits_tensors<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(group:&str,  device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(K, Vec<f32>)> {
 
-    let mut store_lock = store.lock();
-
-    store_lock.list_resource_random_in_group(group).expect("list_resource_random_in_group")
-        .into_iter()
-        .map(move |(key, labels_p)|{
-
-                debug!("labels_p={:?}", labels_p);
-                (
-                    key,
-                    labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
-                )
-        })
-        .collect()
+    // let mut store_lock = store.lock();
+    //
+    // store_lock.list_resource_random_in_group(group).expect("list_resource_random_in_group")
+    //     .into_iter()
+    //     .map(move |(key, labels_p)|{
+    //
+    //             debug!("labels_p={:?}", labels_p);
+    //             (
+    //                 key,
+    //                 labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
+    //             )
+    //     })
+    //     .collect()
+    todo!()
 }
 
 pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, ThoosaError> {
@@ -201,7 +204,7 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
 }
 
 // pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<Box<dyn Store>>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
-pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec<String>)>  {
+pub fn labeled_tensors_by_descr<'a, K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec<K>)>  {
     debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock();
@@ -209,12 +212,12 @@ pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, s
     vec![
         (
             1,
-            store_lock.list_resource_set_resources_by_descr(resource_set_descr).expect("list_resource_set_resources_by_descr")
+            vec![]//TODO store_lock.list_resource_set_resources_by_descr(resource_set_descr).expect("list_resource_set_resources_by_descr")
 
         ),
         (
             0,
-            store_lock.list_resource_random_not_label(label.as_str(), 100) .expect("list_resource_random_not_label")//TODO limit
+            vec![]//TODO store_lock.list_resource_random_not_label(label.as_str(), 100) .expect("list_resource_random_not_label")//TODO limit
 
         )
     ]
