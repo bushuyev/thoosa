@@ -149,7 +149,7 @@ where
     _features: Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
     features_sender: SyncSender<Mutex<BoxFuture<'static, ()>>>,
     stop: Arc<AtomicBool>,
-    cache_domains: u64,
+    cache_areas: u64,
     loader: Arc<RwLock<Loader<K, V>>>,
 }
 
@@ -223,7 +223,7 @@ where
             features_sender: tx,
 
             stop: Arc::clone(&stop),
-            cache_domains: 0,
+            cache_areas: 0,
 
             loader: Arc::new(RwLock::new(Loader {
                 loader_pool: rayon::ThreadPoolBuilder::new().num_threads(loader_threads).spawn_handler(|thread_builder| {
@@ -275,9 +275,9 @@ where
         self.loader.read().resources.len()
     }
 
-    pub fn get_available_cache_domain(&mut self) -> u64 {
-        let next = first_free_bit(self.cache_domains);
-        self.cache_domains |= next;
+    pub fn get_available_cache_area(&mut self) -> u64 {
+        let next = first_free_bit(self.cache_areas);
+        self.cache_areas |= next;
 
         next
     }
@@ -416,7 +416,7 @@ impl<V> SyncWrapper<V>
 where
     V: Send + Debug,
 {
-    pub fn new(v: V, shallow_clone_fn: fn(&V) -> V) -> Self {//TODO inline shallow_clone_fn for Tensor
+    pub fn new(v: V, shallow_clone_fn: fn(&V) -> V) -> Self {
         Self {
             v,
             shallow_clone_fn,
@@ -591,7 +591,7 @@ mod tests {
 
         let t_0 = Instant::now();
         pool_0.spawn(move || {
-            let cache_area_0 = exec_0.write().get_available_cache_domain();
+            let cache_area_0 = exec_0.write().get_available_cache_area();
             debug!("cache_area_0={cache_area_0:064b}");
 
             (0..num_items / 10).into_par_iter().for_each(|b| {
@@ -656,7 +656,7 @@ mod tests {
         });
 
         pool_0.spawn(move || {
-            let cache_area_1 = exec_1.write().get_available_cache_domain();
+            let cache_area_1 = exec_1.write().get_available_cache_area();
             debug!("cache_area_1={cache_area_1:064b}");
 
             (0..num_items / 10).into_par_iter().for_each(|b| {

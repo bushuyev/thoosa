@@ -677,7 +677,7 @@ mod tests {
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{init_resources, run_select_motifs, run_step, run_train_final, run_train_label_nodes, Cli, RunAllParams};
-    use thoosa_motifs::find::{find_motifs_by_euc_dist_, FindMotifsParams, SelectMotifsParams};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
     use thoosa_shared::{init_test_logging, ThoosaError};
@@ -927,7 +927,7 @@ mod tests {
         let motifs_run_ids = run_step(
             None,
             &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            find_motifs_by_euc_dist_,
+            find_motifs_by_euc_dist,
             &ws,
             &store,
             &executor_rc,

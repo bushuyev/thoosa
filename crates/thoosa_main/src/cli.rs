@@ -25,7 +25,7 @@ use thoosa_common::runs::{Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{select_motifs_by_ratio, FindMotifsRunConfig, FindMotifsParams, InputFilter, SelectMotifsParams, find_motifs_by_euc_dist_, CommonFindMotifsConfig};
+use thoosa_motifs::find::{select_motifs_by_ratio, FindMotifsRunConfig, FindMotifsParams, InputFilter, SelectMotifsParams, find_motifs_by_euc_dist, CommonFindMotifsConfig};
 use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, Resources, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
@@ -377,7 +377,7 @@ pub fn run_cli<F>(
             let run_ids = run_step(
                 None,
                 find_motifs_params,
-                find_motifs_by_euc_dist_,
+                find_motifs_by_euc_dist,
                 &ws,
                 &store,
                 &loader,
@@ -448,7 +448,7 @@ pub fn run_cli<F>(
             let find_motifs_run_ids = run_step(
                 None,
                 run_all_params,
-                find_motifs_by_euc_dist_,
+                find_motifs_by_euc_dist,
                 &ws,
                 &store,
                 &loader,
@@ -1206,7 +1206,7 @@ mod main_tests {
     use thoosa_common::runs::{Params, ResourcesConfig};
     use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
     use thoosa_common::utils::{cdt_for_dir, from, lin_t, plot_series, vec_f32_from};
-    use thoosa_motifs::find::{ FindMotifsRunConfig, FindMotifsParams, LinearExpander, SelectMotifsParams, find_motifs_by_euc_dist_};
+    use thoosa_motifs::find::{FindMotifsRunConfig, FindMotifsParams, LinearExpander, SelectMotifsParams, find_motifs_by_euc_dist};
     use thoosa_motifs::fragments::PlotMotifSlicesParams;
     use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_two_imp, sig_three_imp, ThoosaError, Resources};
     use thoosa_shared::val::unprefix_properties;
@@ -1353,7 +1353,7 @@ mod main_tests {
                 max_dist: 0.5,
                 input_filter: None,
             },
-            find_motifs_by_euc_dist_,
+            find_motifs_by_euc_dist,
             &ws_rc,
             &store,
             &loader,
@@ -1669,7 +1669,7 @@ mod main_tests {
     }
 
     #[test]
-    fn test_0() -> Result<(), ThoosaError> {
+    fn test_rust_step() -> Result<(), ThoosaError> {
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -1701,7 +1701,7 @@ mod main_tests {
         let run_ids = run_step(
             None,
             &FindMotifsParams::dummy(10, 10..20, "Label_0/4".into(), 10, 0.1, None),
-            find_motifs_by_euc_dist_,
+            find_motifs_by_euc_dist,
             &ws,
             &store,
             &loader,
@@ -1709,6 +1709,8 @@ mod main_tests {
         )?;
 
         println!("run_ids={run_ids:?}");
+
+        assert_eq!(vec![1,2],run_ids);
 
         Ok(())
     }
