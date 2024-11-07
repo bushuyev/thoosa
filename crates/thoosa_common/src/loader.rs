@@ -35,7 +35,7 @@ impl ArcWake for RayonNotify {
 
 pub struct Loader<K, V>
 where
-    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     loader_fn: Arc<Box<dyn Fn(&K) -> SyncWrapper<V> + Sync + Send>>,
@@ -47,7 +47,7 @@ where
 
 impl<K, V> Loader<K, V>
 where
-    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     pub fn preload(self_arc: Arc<RwLock<Loader<K, V>>>, keys: &[K], cache_area: u64) {
@@ -142,7 +142,7 @@ where
 
 pub struct LoadRunner<K, V>
 where
-    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     _futures_pool: ThreadPool,
@@ -155,7 +155,7 @@ where
 
 impl<K, V> LoadRunner<K, V>
 where
-    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     pub fn new<F>(loader: F, loader_threads: usize, futures_channel_bound: usize) -> Self
@@ -345,7 +345,7 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
 
 struct ResourceFuture<K, V>
 where
-    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     key: K,
@@ -354,7 +354,7 @@ where
 
 impl<K, V> ResourceFuture<K, V>
 where
-    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     pub fn new(loader: Arc<RwLock<Loader<K, V>>>, key: K) -> Self {
@@ -367,7 +367,7 @@ where
 
 impl<K, V> Future for ResourceFuture<K, V>
 where
-    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     type Output = V;

@@ -94,7 +94,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor<K: Clone + Hash + Eq + Send + Sync + Debug + Display + 'static>(
+pub fn motifs_to_tensor<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display + 'static>(
     resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>, window: i64, channels: i64, device: Device
 ) -> Result<(Tensor, Vec<Vec<usize>>), ThoosaError> {
 
@@ -114,7 +114,7 @@ pub fn motifs_to_tensor<K: Clone + Hash + Eq + Send + Sync + Debug + Display + '
 
             for (resource_id, motif_slices) in resource_id_motif_slices {
 
-                let t =  Loader::<K, Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
+                let t =  Loader::<K, Box<Tensor>>::load_future(Arc::clone(&loader), resource_id.into(), 0).await;
                 // debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
 
                 for motif_slice in motif_slices {
@@ -261,7 +261,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(channel: i64, widow: i64, slices: Vec<TensorSliceIdx<K>>, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(channel: i64, widow: i64, slices: Vec<TensorSliceIdx<K>>, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
@@ -571,7 +571,7 @@ mod motifs_tests {
 
         let (t, motif_ids) = super::motifs_to_tensor(
             eeg_id_fragments_map,
-            executor_rc,
+            &executor_rc,
             10, 2,
             Device::Cpu
         )?;
@@ -646,7 +646,7 @@ mod motifs_tests {
             0,
             2,
             vec![TensorSliceIdx(123.to_string(), 2)],
-            executor_rc
+            &executor_rc
         );
 
         assert_eq!(vec![("123".to_string(), vec![Box::new(Tensor::from_slice(&[2.0, 3.0]))])], motif_slices);
@@ -674,7 +674,7 @@ mod motifs_tests {
             0,
             5000,
             vec![TensorSliceIdx(123.to_string(), 2)],
-            executor_rc
+            &executor_rc
         );
 
 

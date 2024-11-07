@@ -144,7 +144,7 @@ impl TrainLabelNodeParams {
 /**
 * returns num labels * items_per_label x channels x motifs x motifs batch size
 */
-struct LoadingTensorsDataBatch<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> {
+struct LoadingTensorsDataBatch<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> {
     train: Vec<(i64, Vec<K>)>,
     val: Vec<(i64, Vec<K>)>,
     batch_size: usize,
@@ -153,7 +153,7 @@ struct LoadingTensorsDataBatch<K: Clone + Hash + Eq + Send + Sync + Debug + Disp
     transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>
 }
 
-impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> LoadingTensorsDataBatch<K> {
+impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> LoadingTensorsDataBatch<K> {
 
     pub fn new(
         train: Vec<(i64, Vec<K>)>,
@@ -246,7 +246,7 @@ impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> LoadingTe
     }
 }
 
-impl  <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> DataBatch for LoadingTensorsDataBatch<K> {
+impl  <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> DataBatch for LoadingTensorsDataBatch<K> {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
         tch::no_grad(|| {
@@ -262,7 +262,7 @@ impl  <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> DataBatc
 }
 
 
-struct ClassTensorsLoaderData<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> {
+struct ClassTensorsLoaderData<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> {
     train_resources: Vec<(K, Vec<f32>)>,
     valid_resources: Vec<(K, Vec<f32>)>,
     executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
@@ -271,7 +271,7 @@ struct ClassTensorsLoaderData<K: Clone + Hash + Eq + Send + Sync + Debug + Displ
     transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>
 }
 
-impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> ClassTensorsLoaderData<K>  {
+impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> ClassTensorsLoaderData<K>  {
 
     pub fn new(
         train_loader: Vec<(K, Vec<f32>)>,
@@ -294,7 +294,7 @@ impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> ClassTens
 }
 
 
-impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> DataBatch for ClassTensorsLoaderData<K> {
+impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> DataBatch for ClassTensorsLoaderData<K> {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
         Self::batch(&mut self.train_resources, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
@@ -305,7 +305,7 @@ impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> DataBatch
     }
 }
 
-impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> ClassTensorsLoaderData<K> {
+impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> ClassTensorsLoaderData<K> {
 
     fn batch(resources: &mut Vec<(K, Vec<f32>)>, batch_size: usize, executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
         debug!("ClassTensorsLoaderData.batch: resources={resources:?} batch_size={batch_size}");
@@ -376,7 +376,7 @@ impl <K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static> ClassTens
     }
 }
 
-pub fn train_label_nodes<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(
+pub fn train_label_nodes<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     motif_node_params:&MotifNodeParams,
     label_node_params:&LabelNodeParams,
@@ -467,7 +467,7 @@ fn apply_motifs_to_loaders<I, F>(
 }
 
 //TODO trains on all label models, add param to train on selected run_ids
-pub fn train_final<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(
+pub fn train_final<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     train_final_params: &TrainFinalParams,
     train_resources:Vec<(K, Vec<f32>)>,
@@ -1253,7 +1253,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
 }
 
-pub fn slices_in_all_resources(slices: Vec<(String, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
+pub fn slices_in_all_resources<K>(slices: Vec<(K, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
     slices.into_iter().flat_map(|(_resource_key, slices)| slices.into_iter()).collect::<Vec<Box<Tensor>>>()
 }
 
@@ -1833,7 +1833,7 @@ mod train_tests {
 
             ].into_iter().map(resource_keys).collect::<Vec<_>>(),
             &Cpu,
-            executor_rc,
+            &executor_rc,
             Arc::new(RwLock::new(vec![
                 channel_0_motifs_models,
                 channel_1_motifs_models,
@@ -1936,7 +1936,7 @@ mod train_tests {
             motif_batch_size,
             &Cpu,
             vec!["other", "lpd", "gpd", "lrda", "grda", "seizure"].into_iter().map(|v|v.into()).collect(),
-            executor_rc,
+            &executor_rc,
             label_models,
             labels_channels_motifs_models,
             &final_node_params

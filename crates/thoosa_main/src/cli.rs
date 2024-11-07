@@ -29,7 +29,7 @@ use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{select_motifs_by_ratio, FindMotifsRunConfig, FindMotifsParams, InputFilter, SelectMotifsParams, find_motifs_by_euc_dist, CommonFindMotifsConfig};
 use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
-use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, Resources, ThoosaError};
+use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, Resources, TensorSliceIdx, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_store::{SqlStore, Store};
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
@@ -581,7 +581,7 @@ pub fn run_cli<F>(
     Ok(())
 }
 
-pub fn run_train_final<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, device: &Device, train_final_params: &TrainFinalParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
+pub fn run_train_final<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, device: &Device, train_final_params: &TrainFinalParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
 
     let labels = {store.lock().list_labels()? };
 
@@ -658,7 +658,7 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: 
     (label_models, labels_channels_motifs_models)
 }
 
-pub fn run_train_label_nodes<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, devices: Vec<Device>, train_label_node_params: &TrainLabelNodeParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
+pub fn run_train_label_nodes<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, devices: Vec<Device>, train_label_node_params: &TrainLabelNodeParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
     debug!("run_train_label_nodes: train_on_label_params={:?}", train_label_node_params);
 
 
@@ -774,7 +774,7 @@ pub fn run_train_label_nodes<K: Clone + Hash + Eq + Send + Sync + Debug + Displa
 /**
 returns motif_node_params_selection_run_id
 */
-fn run_train_motif_nodes_on_motif_selection<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(
+fn run_train_motif_nodes_on_motif_selection<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, devices: Vec<Device>, train_on_motif_params: &TrainMotifsNodesParams,
     executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
     let motif_selection_run_ids = &train_on_motif_params.motif_selection_run_id;
@@ -827,7 +827,7 @@ fn run_train_motif_nodes_on_motif_selection<K: Clone + Hash + Eq + Send + Sync +
 }
 
 
-pub fn run_select_motifs<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(
+pub fn run_select_motifs<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
     devices: Vec<Device>,
@@ -856,7 +856,7 @@ pub fn run_select_motifs<K: Clone + Hash + Eq + Send + Sync + Debug + Display  +
                 device_i,
                 &select_motifs_params,
                 *find_motifs_run_id,
-                Arc::clone(&executor)
+                executor
             ).expect("select_motifs_in_class");
 
             motif_selection_run_ids_arc_iter.lock().extend(corr_ids);
@@ -867,7 +867,7 @@ pub fn run_select_motifs<K: Clone + Hash + Eq + Send + Sync + Debug + Display  +
     Ok(motif_selection_run_ids)
 }
 
-fn motifs_to_tensor_cmd<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(cli: &Cli, store: &Arc<Mutex<Box<dyn Store>>>, device: Device, choose_fragments_params: &MotifsToTensorParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
+fn motifs_to_tensor_cmd<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(cli: &Cli, store: &Arc<Mutex<Box<dyn Store>>>, device: Device, choose_fragments_params: &MotifsToTensorParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
     let mut store_guard = store.lock();
 
     let t = motifs_to_tensor(
@@ -923,13 +923,13 @@ pub fn init_resources<F>(store:Arc<Mutex<Box<dyn Store>>>, labels:Vec<&str>, lab
     Ok(())
 }
 
-fn plot_motif_slices<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(cli: &Cli, store: Arc<Mutex<Box<dyn Store>>>, device: Device, plot_motif_slices_params: &PlotMotifSlicesParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
+fn plot_motif_slices<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(cli: &Cli, store: Arc<Mutex<Box<dyn Store>>>, device: Device, plot_motif_slices_params: &PlotMotifSlicesParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
     let mut store_guard = store.lock();
 
     let (channel, _run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
 
 
-    let slices = load_motif_slices(channel, plot_motif_slices_params.window as i64, slices, executor);
+    let slices = load_motif_slices(channel, plot_motif_slices_params.window as i64, slices.into_iter().map(|s|TensorSliceIdx(s.0.into(), s.1)).collect(), executor);//TODO Into for TensorSliceIdx
 
     let all_sices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
@@ -950,7 +950,7 @@ fn plot_motif_slices<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'st
     Ok(())
 }
 
-fn run_train_motif_nodes<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_id: usize, motif_selection_run_id: usize, store:Arc<Mutex<Box<dyn Store>>>, device: Device, train_on_motif_params: &TrainMotifsNodesParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<usize, ThoosaError> {
+fn run_train_motif_nodes<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_id: usize, motif_selection_run_id: usize, store:Arc<Mutex<Box<dyn Store>>>, device: Device, train_on_motif_params: &TrainMotifsNodesParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<usize, ThoosaError> {
     debug!("train_on_motifs: device={device:?}, find_motifs_run_id={find_motifs_run_id} motif_selection_run_id={motif_selection_run_id:?}");
 
     let (motifs, params) = {
@@ -1010,7 +1010,7 @@ fn run_train_motif_nodes<K: Clone + Hash + Eq + Send + Sync + Debug + Display  +
             debug!("train_on_motif: 1. channel={}, find_motifs_run_id={}, slices={}", channel, find_motifs_run_id, slices.len());
 
             let all_sices_1 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, params.window(), slices, Arc::clone(&executor))
+                load_motif_slices(channel, params.window(), slices.into_iter().map(|s|TensorSliceIdx(s.0.into(), s.1)).collect(), executor)//TODO slices
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
@@ -1019,7 +1019,7 @@ fn run_train_motif_nodes<K: Clone + Hash + Eq + Send + Sync + Debug + Display  +
             debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
             let all_sices_0 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, params.window(), slices, Arc::clone(&executor))
+                load_motif_slices(channel, params.window(), slices.into_iter().map(|s|TensorSliceIdx(s.0.into(), s.1)).collect(), executor) //TODO slices
             );
 
             debug!("train_on_motif: 0. run_id={}, done", run_id);
@@ -1074,7 +1074,7 @@ fn run_train_motif_nodes<K: Clone + Hash + Eq + Send + Sync + Debug + Display  +
 /**
 return selected_motif_run_ids
 */
-fn select_motifs_for_label<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, store:Arc<Mutex<Box<dyn Store>>>, device: Device, select_motifs_params: &SelectMotifsParams, find_motifs_run_id:usize, executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
+fn select_motifs_for_label<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(ws: &Arc<RwLock<Box<dyn Workspace>>>, store:Arc<Mutex<Box<dyn Store>>>, device: Device, select_motifs_params: &SelectMotifsParams, find_motifs_run_id:usize, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
     debug!("select_motifs_for_label: device={:?}", device);
 
     let (resource_id_motif_slices, motifs_avg_distances, params) = {
@@ -1093,7 +1093,7 @@ fn select_motifs_for_label<K: Clone + Hash + Eq + Send + Sync + Debug + Display 
     let (motifs, channel_motif_ids) = motifs_to_tensor(
         resource_id_motif_slices,
 
-        Arc::clone(&executor),
+        executor,
         params.window(),
         ws.read().channels() as i64,
         device
@@ -1108,11 +1108,11 @@ fn select_motifs_for_label<K: Clone + Hash + Eq + Send + Sync + Debug + Display 
         select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
             (
                 label_dataset.0.clone(),
-                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap()
+                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(|r|r.into()).collect::<Vec<K>>()
             )
 
         }).collect(),
-        Arc::clone(&executor),
+        executor,
         params.step(),
         device,
         select_motifs_params.min_ratio(),
@@ -1162,7 +1162,7 @@ where
     P:Params<RC, R, CC>,
     RC:RunConfig,
     R:ResourcesConfig,
-    K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static
 {
     let run_configs = params.to_run_configs();
     let resource_config = params.resource_config();
@@ -1328,7 +1328,7 @@ mod main_tests {
         let channels = 3;
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &String| {
+            move |key: &Arc<String>| {
 
                 SyncWrapper::new(
                     Box::new(Tensor::load(ws.read().tensors_path().join(format!("{key}.pt"))).unwrap()),
@@ -1392,7 +1392,7 @@ mod main_tests {
                 ], 0.1
             ),
             run_ids[0],
-            Arc::clone(&loader)
+            &loader
         ).expect("select_motifs_in_class");
 
         debug!("test_motifs_with_tpe: corr_ids={select_motifs_run_ids:?}");
@@ -1574,7 +1574,7 @@ mod main_tests {
                 ],
                 10, 10, 3, 0.4
             ),
-            Arc::clone(&executor_rc),
+            &executor_rc,
         )?;
 
         /////////////////////FINAL
@@ -1583,7 +1583,7 @@ mod main_tests {
             &store,
             &Cpu,
             &TrainFinalParams::dummy(100, 3, "pure group 6".into(), "pure group 4".into(), 10, 10, 10),
-            Arc::clone(&executor_rc),
+            &executor_rc,
         )?;
 
 
