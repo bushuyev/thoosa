@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::{fmt, fs, mem};
+use std::cell::Cell;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::ops::Range;
@@ -34,7 +35,8 @@ use crate::distance::slice_t;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
 use rayon::iter::ParallelIterator;
 use rayon::iter::IndexedParallelIterator;
-use tch::Device::Cpu;
+use tch::Device::{Cpu, Cuda};
+use thoosa_common::loader;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -302,11 +304,11 @@ pub fn find_motifs_by_euc_dist_<'a>(
         resource_keys,
         common_config.chunk_size as usize,
         run_config__trackers,
-        move |chunk_0: ChunkOfSlicedTensors, chunk_1: ChunkOfSlicedTensors, params_idx: usize, find_motifs_run_config, channels_motif_trackers| {
+        move |chunk_0: ChunkOfSlicedTensors, chunk_1: ChunkOfSlicedTensors, params_idx: usize, find_motifs_run_config:&FindMotifsRunConfig, channels_motif_trackers:&mut Vec<SimpMotifTracker<StoreDumper>>| {
             debug!("find_motifs_euc: tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
 
             //TODO spread channels over devices
-            for (channel, mt) in channels_motif_trackers.iter_mut().enumerate() {
+            channels_motif_trackers.iter_mut().enumerate().par_bridge().for_each(|(channel, mt)| {
                 let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
                 let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).squeeze();
                 debug!("find_motifs_euc: tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
@@ -321,8 +323,7 @@ pub fn find_motifs_by_euc_dist_<'a>(
                     &chunk_1,
                     &euc_dist_t,
                     find_motifs_run_config.step as i64,
-                    |(slice_0, slice_1, dist)|{
-
+                    |(slice_0, slice_1, dist)| {
                         if dist < find_motifs_run_config.max_dist {
                             mt.track(
                                 slice_0,
@@ -330,15 +331,14 @@ pub fn find_motifs_by_euc_dist_<'a>(
                                 dist,
                             );
                         }
-
                     },
-                    |dist:&f32|{
+                    |dist: &f32| {
                         dist < &find_motifs_run_config.max_dist
                     }
                 );
                 debug!("find_motifs_euc: channel={channel} done");
                 mt.dump();
-            }
+            });
 
             Ok(())
         },
@@ -365,12 +365,16 @@ pub fn find_motifs_by_euc_dist_<'a>(
 struct ChunkOfSlicedTensors{
     keys:Vec<String>,
     sizes: Vec<i64>,
-    t: Tensor,
+    t: SyncWrapper<Tensor>,
 }
 
 impl  ChunkOfSlicedTensors {
     pub fn new(keys:  Vec<String>, sizes: Vec<i64>, t: Tensor) -> Self {
-        Self { keys, sizes, t }
+        Self {
+            keys,
+            sizes,
+            t:SyncWrapper::new_t(t)
+        }
     }
 
     pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &Vec<SyncWrapper<Box<Tensor>>>, keys: Vec<String>) -> ChunkOfSlicedTensors {
@@ -473,16 +477,13 @@ impl FindMotifsRunConfig {
 fn chunk_and_slice<'a, G>(
     resources_ids: Vec<String>,
     chunk_size: usize,
-    find_motifs_run_configs_trackers: Vec<(FindMotifsRunConfig, Vec<SimpMotifTracker<StoreDumper>>)>,
-    callback: G,
+    mut find_motifs_run_configs_trackers: Vec<(FindMotifsRunConfig, Vec<SimpMotifTracker<StoreDumper>>)>,
+    mut callback: G,
     exec: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>,
 ) -> Result<(), ThoosaError>
 where
-    G: FnMut(ChunkOfSlicedTensors, ChunkOfSlicedTensors, usize, &FindMotifsRunConfig, &mut Vec<SimpMotifTracker<StoreDumper>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
-    'a: 'static
-{
-    let find_motifs_run_configs_locks = Arc::new(RwLock::new(find_motifs_run_configs_trackers));
-    let callback_arc = Arc::new(Mutex::new(callback));
+    G: Fn(ChunkOfSlicedTensors, ChunkOfSlicedTensors, usize, &FindMotifsRunConfig, &mut Vec<SimpMotifTracker<StoreDumper>>) -> Result<(), ThoosaError> + Send + Sync {
+
 
     let mut resources_ids_0 = resources_ids.chunks(chunk_size).map(|v| v.iter().map(|k| k.clone()).collect::<Vec<String>>()).collect::<Vec<Vec<String>>>();
     resources_ids_0.push(vec![]); //to get last window processed
@@ -523,54 +524,33 @@ where
             let window_0_0 = window_0[0].clone();
             let window_1_0 = window_1[0].clone();
 
-            let callback_arc = Arc::clone(&callback_arc);
-            let mut find_motifs_run_configs_locks_rc = Arc::clone(&find_motifs_run_configs_locks);
+            // let callback_arc = Arc::clone(&callback_arc);
+            // let mut find_motifs_run_configs_locks_rc = Arc::clone(&find_motifs_run_configs_locks);
             let wg_1_clone = wg_1.clone();
-            exec.write().exec(move |loader, keys_purge| {
-                let mut find_motifs_run_configs_locks_rc = Arc::clone(&find_motifs_run_configs_locks_rc);
+            let window_0_1_tensors = Arc::new(RwLock::new((vec![], vec![])));
+            let window_0_1_tensors_arc = Arc::clone(&window_0_1_tensors);
+
+            let window_0_0_clone = window_0_0.clone();
+            let window_1_0_clone = window_1_0.clone();
+
+            exec.write().exec(|loader, keys_purge| {
                 async move {
 
-                    let mut window_0_tensors = vec![];
                     for key in &window_0_0 {
                         debug!("0. exec:callback_arc: key={key}");
 
-                        window_0_tensors.push(
-                            SyncWrapper::new_tb(Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await)
-                        );
+                        let sync_wrapper = SyncWrapper::new_tb(Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await);
+                        window_0_1_tensors_arc.write().0.push(sync_wrapper);
                     }
 
-                    let mut window_1_tensors = vec![];
                     for key in &window_1_0 {
                         debug!("1. exec:callback_arc: key={key}");
 
-                        window_1_tensors.push(
-                            SyncWrapper::new_tb(Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await)
-                        );
+                        let sync_wrapper = SyncWrapper::new_tb(Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0 | area_1).await);
+                        window_0_1_tensors_arc.write().1.push(sync_wrapper);
                     }
 
-                    let callback_arc = Arc::clone(&callback_arc);
-                    find_motifs_run_configs_locks_rc.write().iter_mut().enumerate().par_bridge().for_each(|(params_idx, (run_config, mt))| {
-
-                        callback_arc.lock()(
-                            ChunkOfSlicedTensors::slice_tensors_chunk(
-                                run_config.step,
-                                run_config.window,
-                                &window_0_tensors,
-                                window_0_0.clone()
-                            ),
-                            ChunkOfSlicedTensors::slice_tensors_chunk(
-                                run_config.step,
-                                run_config.window,
-                                &window_1_tensors,
-                                window_1_0.clone()
-                            ),
-                            params_idx,
-                            run_config,
-                            mt
-                        ).expect("callback_arc failed");
-                    });
-
-                    keys_purge(window_1_0, area_1);//TODO clone
+                    // keys_purge(window_1_0, area_1);//TODO clone
 
                     drop(wg_1_clone);
 
@@ -579,6 +559,31 @@ where
 
 
             wg_1.wait();
+
+            // let callback_clone = Cell::new(callback_clone.clone());
+            find_motifs_run_configs_trackers
+                .par_iter_mut()
+                .for_each(|(run_config, mt)| {
+
+                    callback(
+                        ChunkOfSlicedTensors::slice_tensors_chunk(
+                            run_config.step,
+                            run_config.window,
+                            &window_0_1_tensors.read().0,
+                            window_0_0_clone.clone()
+                        ),
+                        ChunkOfSlicedTensors::slice_tensors_chunk(
+                            run_config.step,
+                            run_config.window,
+                            &window_0_1_tensors.read().1,
+                            window_1_0_clone.clone()
+                        ),
+                        0,
+                        run_config,
+                        mt
+                    ).expect("callback_arc failed");
+                });
+
             exec.write().purge_cache_keys(window_0[1].clone(), area_0);
             drop(wg_0);
 
@@ -593,7 +598,8 @@ where
 
 fn collect_dists<'a, F, C>(
     chunk_0: &'a ChunkOfSlicedTensors,
-    chunk_1: &'a ChunkOfSlicedTensors, dist_t:&Tensor, step: i64,
+    chunk_1: &'a ChunkOfSlicedTensors,
+    dist_t:&Tensor, step: i64,
     mut listener:F,
     condition:C
 ) where F:FnMut((TensorSliceIdx<String>, TensorSliceIdx<String>, f32)),
@@ -644,7 +650,7 @@ impl MotifDumper for StoreDumper {
     }
 }
 
-#[allow(dead_code)]
+//TODO trait for MotifTracker
 #[derive(Debug)]
 pub(crate) struct SimpMotifTracker<D: MotifDumper + Debug> {
     last:Option<(TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>,
@@ -1209,7 +1215,7 @@ mod motif_find_tests {
     use parking_lot::{Mutex, RawMutex};
 
 
-    use log::debug;
+    use log::{debug, trace};
     use parking_lot::RwLock;
     use rayon::iter::ParallelBridge;
     use rayon::iter::ParallelIterator;
@@ -2192,11 +2198,11 @@ mod motif_find_tests {
             resources,
             2,
             vec![(FindMotifsRunConfig::new(3, 5, 1.0, "", None), vec![])],
-            move |chunk_0, chunk_1, _size, _find_motifs_run_config, _channels_mt| {
+             move |chunk_0, chunk_1, _size, _find_motifs_run_config, _channels_mt| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
-                debug!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
-                debug!("callback: chunk_1.t=\n{}", chunk_1.t.i((.., 0, ..)).squeeze());
+                trace!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
+                trace!("callback: chunk_1.t=\n{}", chunk_1.t.i((.., 0, ..)).squeeze());
 
                 chunks_0_test_rc.lock().push(chunk_0.t.i((.., 0, ..)).squeeze());
                 chunks_1_test_rc.lock().push(chunk_1.t.i((.., 0, ..)).squeeze());
