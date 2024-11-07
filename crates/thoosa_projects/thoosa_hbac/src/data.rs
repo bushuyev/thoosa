@@ -900,7 +900,7 @@ mod tests {
             Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
         )));
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &String| {
+            move |key: &Arc<String>| {
 
                 SyncWrapper::new_tb({
                     debug!("test_run_find_motifs: key={key}");

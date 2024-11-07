@@ -283,7 +283,7 @@ pub fn find_motifs_by_euc_dist<K>(
     loader: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
     devices:Vec<Device>
 ) -> Result<Vec<usize>, ThoosaError>
-where K: Clone + Hash + Eq + Send + Sync + Debug + Display,
+where K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display,
       Vec<K>: FromIterator<Arc<String>>  {
 
     let resource_keys = resource_config_to_keys(store, resource_config)
@@ -366,13 +366,13 @@ where K: Clone + Hash + Eq + Send + Sync + Debug + Display,
 
 
 #[derive(Debug)]
-struct ChunkOfSlicedTensors<K> where K: Clone + Hash + Eq + Send + Sync + Debug + 'static {
+struct ChunkOfSlicedTensors<K> where K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + 'static {
     keys:Vec<K>,
     sizes: Vec<i64>,
     t: SyncWrapper<Tensor>,
 }
 
-impl  <K> ChunkOfSlicedTensors<K> where K: Clone + Hash + Eq + Send + Sync + Debug + 'static {
+impl  <K> ChunkOfSlicedTensors<K> where K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + 'static {
     pub fn new(keys:  Vec<K>, sizes: Vec<i64>, t: Tensor) -> Self {
         Self {
             keys,
@@ -487,28 +487,27 @@ fn chunk_and_slice<G, K>(
 ) -> Result<(), ThoosaError>
 where
     G: Fn(ChunkOfSlicedTensors<K>, ChunkOfSlicedTensors<K>, usize, &FindMotifsRunConfig, &Vec<Arc<RwLock<SimpMotifTracker<StoreDumper, K>>>>) -> Result<(), ThoosaError> + Send + Sync,
-    K: Clone + Hash + Eq + Send + Sync + Display + Debug,
+    K: Clone + Hash + Eq + From<String>+ Send + Sync + Display + Debug,
 {
-    let mut resources_ids_0 = resources_ids.chunks(chunk_size)
+    let mut resources_ids_chunks = resources_ids.chunks(chunk_size)
         .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<K>>())
         .collect::<Vec<Vec<K>>>();
 
-    resources_ids_0.push(vec![]); //to get last window processed
+    resources_ids_chunks.push(vec![]); //to get last window processed
 
-    let mut resources_ids_1 = resources_ids_0.clone();
 
     let area_0 = exec.write().get_available_cache_area();
     let area_1 = exec.write().get_available_cache_area();
 
-    exec.write().preload(&resources_ids_0[0], area_0);
+    exec.write().preload(&resources_ids_chunks[0], area_0);
 
-    if resources_ids_0.len() > chunk_size {
-        exec.write().preload(&resources_ids_0[chunk_size], area_0);
+    if resources_ids_chunks.len() > chunk_size {
+        exec.write().preload(&resources_ids_chunks[chunk_size], area_0);
     }
 
 
     //first element in each window to be loaded and processed, second - preloaded
-    for (chunk_i_0, window_0) in resources_ids_0.windows(2).enumerate() {
+    for (chunk_i_0, window_0) in resources_ids_chunks.windows(2).enumerate() {
         //window_0 - current,preload windows
         debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={window_0:?}");
 
@@ -521,13 +520,14 @@ where
 
 
         let window_0_0 = window_0[0].clone();
+        let window_0_0_clone = window_0_0.clone();
 
         let wg_1_clone = wg_1.clone();
         let window_0_tensors = Arc::new(RwLock::new(vec![]));
         let window_0_tensors_arc = Arc::clone(&window_0_tensors);
 
         // let window_0_0_clone = window_0_0.clone();
-        let window_0_0_clone = window_0_0.clone();
+
         exec.write().exec(|loader, keys_purge| {
             async move {
 
@@ -544,7 +544,7 @@ where
 
         wg_1.wait();
 
-        for (chunk_i_1, window_1) in resources_ids_1.windows(2).into_iter().skip(chunk_i_0).enumerate() {
+        for (chunk_i_1, window_1) in resources_ids_chunks.windows(2).into_iter().skip(chunk_i_0).enumerate() {
             debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={window_1:?}");
 
             if window_1[1].len() > 0 {
@@ -556,12 +556,11 @@ where
 
 
             let window_1_0 = window_1[0].clone();
+            let window_1_0_clone = window_1_0.clone();
 
             let wg_1_clone = wg_1.clone();
             let window_1_tensors = Arc::new(RwLock::new(vec![]));
             let window_1_tensors_arc = Arc::clone(&window_1_tensors);
-
-            let window_1_0_clone = window_1_0.clone();
 
             exec.write().exec(|loader, keys_purge| {
                 async move {
@@ -621,7 +620,7 @@ fn collect_dists<'a, F, C, K>(
     condition:C
 ) where F:FnMut((TensorSliceIdx<K>, TensorSliceIdx<K>, f32)),
         C:Fn(&f32)->bool,
-        K: Clone + Hash + Eq + Send + Sync + Debug + Display + 'static
+        K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display + 'static
 {
 
 
@@ -921,7 +920,7 @@ fn clc_dist_matches(target: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>
     Ok(matches)
 }
 
-fn clc_motifs_matches_for_label<L, K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(
+fn clc_motifs_matches_for_label<L, K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
     motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
     all_zero: SyncWrapper<Box<Tensor>>,
     channels_motifs_matches_labels: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>, //output TODO return it
@@ -1051,7 +1050,7 @@ impl SelectMotifsParams {
     }
 }
 
-pub fn select_motifs_by_ratio<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(motifs: Tensor, labels_resources: Vec<(String, Vec<K>)>, executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
+pub fn select_motifs_by_ratio<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(motifs: Tensor, labels_resources: Vec<(String, Vec<K>)>, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
 
     let mut labels_channels_good_motifs = labels_resources.iter().fold(HashMap::new(), |mut a, v| {
         a.insert(v.0.clone(), (0..motifs.size()[0]).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>()); //motifs.size()[0] - channels_num
@@ -1105,10 +1104,10 @@ pub fn select_motifs_by_ratio<K: Clone + Hash + Eq + Send + Sync + Debug + Displ
     Ok(labels_channels_good_motifs)
 }
 
-pub fn select_motifs_by_corr<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(
+pub fn select_motifs_by_corr<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
     motifs: Tensor,
     labels_loaders: Vec<(i64, Vec<K>)>,
-    executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
+    executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
     step: usize,
     device: Device,
     min_corr: f64,
@@ -1119,7 +1118,8 @@ pub fn select_motifs_by_corr<K: Clone + Hash + Eq + Send + Sync + Debug + Displa
     let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(
         Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs), |e| Box::new(e.shallow_clone())))),
         labels_loaders,
-        executor, step,
+        executor,
+        step,
         &device,
         motifs_distances,
         channel_motif_ids
@@ -1159,10 +1159,10 @@ pub fn select_motifs_by_corr<K: Clone + Hash + Eq + Send + Sync + Debug + Displa
     Ok(channels_good_motifs)
 }
 
-fn clc_channels_motifs_labels<L, K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(
+fn clc_channels_motifs_labels<L, K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
     motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
     labels_resources: Vec<(L, Vec<K>)>,
-    executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
+    executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
     step: usize,
     device: &Device,
     motifs_distances: Arc<RwLock<HashMap<usize, f32>>>,
@@ -1482,7 +1482,7 @@ mod motif_find_tests {
                 (1, vec!["t_0_0.pt".to_string(), "t_0_1.pt".to_string()]),
                 (0, vec!["t_1_0.pt".to_string(), "t_1_1.pt".to_string()]),
             ],
-            Arc::clone(&executor_rc),
+            &executor_rc,
             1,
             Device::Cpu,
             0.1,
@@ -1500,7 +1500,7 @@ mod motif_find_tests {
                 ("yyy".into(), vec!["t_1_0.pt".to_string(), "t_1_1.pt".to_string()]),
                 ("zzz".into(), vec!["t_2_0.pt".to_string(), "t_2_1.pt".to_string()]),
             ],
-            executor_rc,
+            &executor_rc,
             1,
             Device::Cpu,
             0.5,
