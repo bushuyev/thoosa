@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Display};
 use std::fs;
-
+use std::hash::Hash;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -93,8 +94,8 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 /**
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
-pub fn motifs_to_tensor(
-    resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>, window: i64, channels: i64, device: Device
+pub fn motifs_to_tensor<K: Clone + Hash + Eq + Send + Sync + Debug + Display + 'static>(
+    resource_id_motif_slices: HashMap<String, Vec<MotifSlice>>, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>, window: i64, channels: i64, device: Device
 ) -> Result<(Tensor, Vec<Vec<usize>>), ThoosaError> {
 
     debug!("motifs_to_tensor: device={device:?} window={window}");
@@ -113,7 +114,7 @@ pub fn motifs_to_tensor(
 
             for (resource_id, motif_slices) in resource_id_motif_slices {
 
-                let t =  Loader::<String, Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
+                let t =  Loader::<K, Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
                 // debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
 
                 for motif_slice in motif_slices {
@@ -260,7 +261,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices(channel: i64, widow: i64, slices: Vec<TensorSliceIdx<String>>, executor: Arc<RwLock<LoadRunner<String, Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices<K: Clone + Hash + Eq + Send + Sync + Debug + Display  + 'static>(channel: i64, widow: i64, slices: Vec<TensorSliceIdx<K>>, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
@@ -290,7 +291,7 @@ pub fn load_motif_slices(channel: i64, widow: i64, slices: Vec<TensorSliceIdx<St
             executor.write().exec(move |loader, _keys_purge| {
                 async move {
 
-                    let t = LoadRunner::<String, Box<Tensor>>::load_future(loader, tensor_idx.clone(), 0).await;
+                    let t = LoadRunner::<K, Box<Tensor>>::load_future(loader, tensor_idx.clone(), 0).await;
 
                     let take = t.size()[1] / widow;
                     debug!("load_motif_slices: tensor_idx={} slices.len={} t.size={:?} take={}", tensor_idx, slices.len(), t.size(),  take  );

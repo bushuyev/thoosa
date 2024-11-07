@@ -50,7 +50,7 @@ where
     K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
-    pub fn preload(self_arc: Arc<RwLock<Loader<K, V>>>, keys: Vec<K>, cache_area: u64) {
+    pub fn preload(self_arc: Arc<RwLock<Loader<K, V>>>, keys: &[K], cache_area: u64) {
         debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
         let mut self_write_guard = self_arc.write();
 
@@ -107,7 +107,7 @@ where
         loader_arc: Arc<RwLock<Loader<K, V>>>,
         key: &'a K,
     ) {
-        let mut v = loader_fn(&key);
+        let mut v = loader_fn(key);
         debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
 
         let mut loader_guard = loader_arc.write();
@@ -118,7 +118,7 @@ where
         loader_guard.resources.insert(key.clone(), v);
 
 
-        debug!("preload_vec: in loader_pool 1 current_thread={:?} key={:?}", thread::current().id(), key);
+        debug!("preload_vec: in loader_pool 1 current_thread={:?}", thread::current().id());
     }
 
     pub fn purge_resources(loader_arc: Arc<RwLock<Loader<K, V>>>, keys: Vec<K>, cache_area: u64) {
@@ -267,7 +267,7 @@ where
         Loader::load_future(loader, key, cache_area)
     }
 
-    pub fn preload(&mut self, keys: Vec<K>, cache_area: u64) {
+    pub fn preload(&mut self, keys: &[K], cache_area: u64) {
         Loader::preload(Arc::clone(&self.loader), keys, cache_area);
     }
 
@@ -596,7 +596,7 @@ mod tests {
 
             (0..num_items / 10).into_par_iter().for_each(|b| {
                 exec_0.write().preload(
-                    (0..10).flat_map(|j| [
+                    &(0..10).flat_map(|j| [
                         format!("aaa_{}", b * 10 + j),
                         format!("bbb_{}", b * 10 + j)
                     ]).collect::<Vec<String>>(),
@@ -661,7 +661,7 @@ mod tests {
 
             (0..num_items / 10).into_par_iter().for_each(|b| {
                 exec_1.write().preload(
-                    (0..10).flat_map(|j| [
+                    &(0..10).flat_map(|j| [
                         format!("bbb_{}", b * 10 + j),
                         format!("ccc_{}", b * 10 + j)
                     ]).collect::<Vec<String>>(),
