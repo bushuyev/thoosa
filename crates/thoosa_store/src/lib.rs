@@ -94,6 +94,7 @@ impl SetCond {
 
 
 pub trait Store:Sync + Send{
+    fn save_import(&mut self, descr:String)-> Result<usize, ThoosaError>;
     fn save_tree_run(&mut self, input_run_id: Option<&[usize]>, descr:&str, keys:&str, properties_vals:HashMap<String, Val>) -> Result<usize, ThoosaError>;
     fn get_input_run_ids(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError>;
     fn save_resources(&mut self, resource_keys:Vec<String>) -> Result<(), ThoosaError>;
@@ -145,6 +146,9 @@ pub struct SqlStore {
 }
 
 impl Store for SqlStore {
+    fn save_import(&mut self, descr:String) -> Result<usize, ThoosaError> {
+      Ok(1)      //TODO
+    }
 
     fn save_tree_run(&mut self, input_run_ids_op: Option<&[usize]>, descr:&str, resources:&str, properties_vals:HashMap<String, Val>) -> Result<usize, ThoosaError> {
         let mut conn_guard = self.conn.lock();
@@ -1497,7 +1501,7 @@ mod store_tests{
     }
 
     #[test]
-    fn test_group_slices() -> Result<(), ThoosaError> {
+    fn test_group_resources() -> Result<(), ThoosaError> {
         // fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
 
@@ -1549,6 +1553,8 @@ mod store_tests{
 
         let t1 = Instant::now();
         store.save_groups_by_label_cnt(10)?;
+
+        //TODO asserts
 
         debug!("done in {}", t1.elapsed().as_millis());
 
