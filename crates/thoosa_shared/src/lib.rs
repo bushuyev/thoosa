@@ -27,6 +27,7 @@ use num_traits::{Num, PrimInt};
 
 pub mod repeat_iter;
 pub mod val;
+pub mod resource;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>>

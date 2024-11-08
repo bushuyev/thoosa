@@ -29,8 +29,8 @@ fn main()  {
    4208|other
    */
     match run_cli(
-        |base_path|data::labeled_resourses(base_path.as_ref().join("train.csv")),
-        |base_path, key| thoosa_main::data::parquet_to_tensor_by_path(base_path.as_ref().join(key), Cpu),
+        |source_path|data::labeled_resourses(source_path.as_ref().join("train.csv")),
+        |source_path, key| thoosa_main::data::parquet_to_tensor_by_path(source_path.as_ref().join("train_eegs").join(format!("{}.parquet", key)), Cpu),
         vec![
             "seizure",
             "lpd",

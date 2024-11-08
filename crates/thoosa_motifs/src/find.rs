@@ -44,6 +44,7 @@ use thoosa_common::runs::{Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
+use thoosa_shared::resource::Resource;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -256,10 +257,10 @@ impl Expander for LinearExpander {
     }
 }
 
-fn resource_config_to_keys(store:&Arc<Mutex<Box<dyn Store>>>, resource_config:&Simple) -> Vec<String>{
+fn resource_config_to_keys(store:&Arc<Mutex<Box<dyn Store>>>, resource_config:&Simple) -> Vec<Resource>{
     match resource_config.resources() {
         Resources::List(list) => {
-            list.clone()
+            store.lock().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect()).expect("list_resources_by_file_stems")
         }
         Resources::Set(set) => {
             store.lock().list_resource_set_resources_by_descr(set).expect("list_resource_set_resources")
@@ -1252,6 +1253,7 @@ mod motif_find_tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
+    use thoosa_shared::resource::ResourceId;
     use crate::find::{Conv1Params, /*FileDumper, */FindMotifsRunConfig, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper, find_motifs_by_euc_dist, CommonFindMotifsConfig, ChunkOfSlicedTensors, collect_dists};
 
     use crate::find::select_motifs_by_corr;
@@ -1546,7 +1548,7 @@ mod motif_find_tests {
 
 
         let  executor_rc = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &Arc<String>| {
+            move |key: &AsRef<ResourceId>| {
                 let sig = match key.as_str() {
                     "1111" => &sig_0,
                     "2222" => &sig_1,

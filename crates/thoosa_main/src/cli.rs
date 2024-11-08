@@ -1,9 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 use std::sync::Arc;
-use parking_lot::{Mutex};
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use tch::{Device, Tensor};
-use log::{debug, error, info, warn, LevelFilter};
+use log::{debug, error, info, trace, warn, LevelFilter};
 use std::cmp::max;
 use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
@@ -16,7 +16,6 @@ use std::hash::Hash;
 use std::str::FromStr;
 use std::io::Write;
 use futures_util::{AsyncReadExt, StreamExt};
-use parking_lot::RwLock;
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use tch::Device::{Cpu, Cuda};
 use lazy_static::lazy_static;
@@ -27,32 +26,26 @@ use thoosa_common::runs::{Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
 use thoosa_common::utils::{cdt, list_devices, plot_series};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{select_motifs_by_ratio, FindMotifsRunConfig, FindMotifsParams, InputFilter, SelectMotifsParams, find_motifs_by_euc_dist, CommonFindMotifsConfig};
+use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams};
 use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, Resources, TensorSliceIdx, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_store::{SqlStore, Store};
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
 use crate::data;
-use crate::cli::Commands::{FindMotifs, Infer, ImportResources, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, TrainFinal, TrainOnLabel, TrainOnMotifs};
+use crate::cli::Commands::{FindMotifs, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, TrainFinal, TrainOnLabel, TrainOnMotifs};
 use thoosa_shared::parse_range_or_value;
 
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
+use thoosa_shared::resource::Resource;
 
 #[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
-pub struct Cli {//TODO pub
-
+pub struct Cli {
 
     #[arg(long, default_value=".")]
     pub ws_path: String,
-
-    #[arg(long)]
-    pub tensors_path: Option<String>,
-
-    #[arg(long, default_value="thoosa.db3")]
-    pub store_path: String,
 
     #[arg(long, default_value = "INFO")]
     pub term_logger_level: String,
@@ -64,16 +57,10 @@ pub struct Cli {//TODO pub
     pub logfile: String,
 
     #[arg(long)]
-    pub limit: Option<usize>,
-
-    #[arg(long)]
     pub num_threads: Option<usize>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
-
-    #[arg(long)]
-    pub input_filters_kernel: Option<i64>,//TODO all common filters configs
 }
 
 
@@ -128,11 +115,7 @@ impl RunAllParams {
         &self.train_resource_group
     }
 
-    fn find_motifs_params(&self, resource_set: String) -> FindMotifsParams {
-        // FindMotifsParams::dummy(self.step as u32, self.window..self.window, resource_set, self.find_motifs_chunk_size as u32, self.find_motifs_max_dist_k, self.find_motifs_input_filter.as_ref())
-        todo!()
-    }
-    // #[cfg(test)]
+
     pub fn dummy(train_resource_group: &str, valid_resource_group: &str) -> Self {
         Self {
             train_resource_group: train_resource_group.to_string(),
@@ -188,14 +171,17 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
     }
 }
 
+/**
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --release -- \
+--term-logger-level=TRACE --write-logger-level=INFO  --ws-path="/tmp/ws_import_test"  \
+--logfile=/tmp/ws_1/thoosa.log import-resources --source-path=/media/bu/KINGSTON/hbac_orig
 
+*/
 #[derive(Debug, Args, Clone, Default)]
-pub struct InitResourcesParams {
+pub struct ImportResourcesParams {
     #[arg(long)]
     pub source_path: String,
 
-    #[arg(long)]
-    pub resource_pattern: String,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -272,7 +258,7 @@ impl RunConfig for SayHelloRunConfig {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum Commands {
-    ImportResources(InitResourcesParams),
+    ImportResources(ImportResourcesParams),
     FindMotifs (FindMotifsParams),
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
@@ -318,12 +304,11 @@ pub fn run_cli<F,R>(
     let ws = Arc::new(RwLock::new(FsWorkspace::new(
         cli.ws_path.clone(),
         channels,
-        max_input,
-        cli.tensors_path.as_ref().map(|p|p.into()))?
-    ));//TODO channels
+        max_input
+    )?));//TODO channels
 
 
-    let store = Arc::new(Mutex::new(SqlStore::from_path(&cli.store_path)?));//TODO ws
+    let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
 
     let devices  = list_devices();
@@ -332,7 +317,7 @@ pub fn run_cli<F,R>(
     let cpu_num = std::thread::available_parallelism()?;
     let num_threads = cli.num_threads.unwrap_or_else(||max(2, cpu_num.get()/2));
 
-    info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} num_threads={num_threads} limit={:?}",  cli.ws_path, cli.limit);
+    info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} num_threads={num_threads}",  cli.ws_path);
     std::io::stdout().flush()?;
 
     //TODO optional for benchmark
@@ -344,7 +329,7 @@ pub fn run_cli<F,R>(
         move |key: &Arc<String>| {
 
             SyncWrapper::new_tb(
-                Box::new(Tensor::load(tensors_path.join(format!("{}.pt", key))).map_err(|e| ThoosaError::new(e.to_string())).expect(format!("can't load {key}").as_str()))
+                Box::new(Tensor::load(tensors_path.join(format!("1_{}.pt", key))).map_err(|e| ThoosaError::new(e.to_string())).expect(format!("can't load {key}").as_str()))
             )
         }, 4, 100,
     )));
@@ -359,7 +344,8 @@ pub fn run_cli<F,R>(
                 &store,
                 labels,
                 || labeled_resources(&import_resources_params.source_path),
-                Some(|key:String| resource_to_tensor(&import_resources_params.source_path, key.as_str()))
+                Some(|key:String| resource_to_tensor(&import_resources_params.source_path, key.as_str())),
+                true
             )?;
         }
 
@@ -432,7 +418,8 @@ pub fn run_cli<F,R>(
                     &store,
                     labels,
                     || labeled_resources(import_resource_pattern),
-                    Some(|key:String| resource_to_tensor(&import_resource_pattern, key.as_str()))
+                    Some(|key:String| resource_to_tensor(&import_resource_pattern, key.as_str())),
+                    true
                 )?;
             }
 
@@ -882,45 +869,76 @@ pub fn import_resources<F, R>(
     store:&Arc<Mutex<Box<dyn Store>>>,
     labels:Vec<&str>,
     labeled_resources:F,
-    resource_to_tensor_op:Option<R>//None for tests - do not import parquet files
-) -> Result<(), ThoosaError>
+    resource_to_tensor_op:Option<R>, //None for tests - do not import parquet files
+    insert_label: bool
+) -> Result<Vec<Resource>, ThoosaError>
     where F:Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
           R:Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send
 {
     let mut store_guard = store.lock();
+
+    let mut conn_guard = store_guard.conn().lock();
+    let t = conn_guard.transaction()?;
+
+    if insert_label {
+        for label in labels {
+            store_guard.save_label(label, &t)?; //TODO merge with save_resources_labels
+        }
+    }
+
     let labeled_resources_map = labeled_resources()?;
-    let import_id = store_guard.save_import(format!("Import on {}", cdt()))?;
+    let import_id = store_guard.save_import(format!("Import on {}", cdt()), &t)?;
+
+    let resource_ids = store_guard.save_resources_labels(&labeled_resources_map, import_id, &t)?;
+
+    let ws_guard = ws.write();
 
     if let Some(resource_to_tensor) = resource_to_tensor_op {
-        labeled_resources_map.keys().par_bridge().for_each(|resource_key|  {
-            println!("resource_key={resource_key}");
-            match resource_to_tensor(resource_key.clone()){
-                Ok(t) => {
-                    ws.write().import_tensor(t, import_id, resource_key);
+
+        let (imported_tensors, failed_tensors):(Vec<Resource>,Vec<u32>) = labeled_resources_map.keys()
+            .zip(resource_ids.into_iter()).par_bridge()
+            .fold(||(vec![], vec![]),|mut a, (resource_key, resource_id)|  {
+            trace!("import_resources: resource_key={resource_key} ok={} err={}", a.0.len(), a.1.len());
+
+            match resource_to_tensor(resource_key.clone())
+                .and_then(|t|ws_guard.import_tensor(t, import_id, resource_key)) {
+                Ok(_) => {
+                    a.0.push(Resource::new(
+                        resource_id,
+                        import_id,
+                        resource_key.clone()
+                    ));
                 }
                 Err(err) => {
                     error!("Can't load {resource_key}: {err:?}");
+                    a.1.push(resource_id);
                 }
             }
-        });
+
+            a
+        }).reduce_with(|mut v1, v2|{
+            v1.0.extend(v2.0);
+            v1.1.extend(v2.1);
+            v1
+        }).expect("imported_tensors");
+
+        trace!("import_resources: imported_tensors={imported_tensors:?}, failed_tensors={failed_tensors:?}");
+
+        info!("Import id: {}, imported {} tensors to {:?}, failed {}", import_id, imported_tensors.len(), ws_guard.tensors_path(), failed_tensors.len());
+
+
+        store_guard.save_pure_sets(1000, true, &t)?;
+        store_guard.save_pure_sets(100, true, &t)?;
+        store_guard.save_pure_sets(10, true, &t)?;
+        store_guard.save_pure_sets(3, true, &t)?;
+
+        store_guard.save_groups_by_label_cnt(100, &t)?;
+        t.commit()?;
+
+        Ok(imported_tensors)
+    } else {
+        Ok(vec![])
     }
-
-    for label in labels {
-        store_guard.save_label(label)?;//TODO merge with save_resources_labels
-    }
-
-
-    store_guard.save_resources_labels(labeled_resources_map)?;
-
-    store_guard.save_pure_sets(1000, true)?;
-    store_guard.save_pure_sets(100, true)?;
-    store_guard.save_pure_sets(10, true)?;
-    store_guard.save_pure_sets(3, true)?;
-
-    store_guard.save_groups_by_label_cnt(100)?;
-
-
-    Ok(())
 }
 
 fn plot_motif_slices<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(cli: &Cli, store: Arc<Mutex<Box<dyn Store>>>, device: Device, plot_motif_slices_params: &PlotMotifSlicesParams, executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>) -> Result<(), ThoosaError> {
@@ -1217,9 +1235,9 @@ mod main_tests {
     use thoosa_common::runs::{Params, ResourcesConfig};
     use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
     use thoosa_common::utils::{cdt_for_dir, from, lin_t, plot_series, vec_f32_from};
-    use thoosa_motifs::find::{FindMotifsRunConfig, FindMotifsParams, LinearExpander, SelectMotifsParams, find_motifs_by_euc_dist};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, FindMotifsRunConfig, LinearExpander, SelectMotifsParams};
     use thoosa_motifs::fragments::PlotMotifSlicesParams;
-    use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_two_imp, sig_three_imp, ThoosaError, Resources};
+    use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, Resources, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{SqlStore, Store};
     use crate::cli::{import_resources, plot_motif_slices, resource_path, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
@@ -1256,8 +1274,7 @@ mod main_tests {
 
         let n = 1000i64;
 
-        let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, n as usize, tensors_path)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, n as usize)?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
         let sig_0_v = sig_one_imp(n, max_y, None, None);
@@ -1351,7 +1368,8 @@ mod main_tests {
                 ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
                 ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)])
             ])),
-            None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>
+            None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
+            true
         )?;
         let run_ids = run_step(
             None,
@@ -1426,8 +1444,7 @@ mod main_tests {
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
         let n = 1000i64;
 
-        let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, tensors_path)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize)?));
         let ws_runner = Arc::clone(&ws);
 
 
@@ -1579,12 +1596,15 @@ mod main_tests {
         Ok(())
     }
 
-    fn init_test_store(mut store_guard: MutexGuard<RawMutex, Box<dyn Store>>) -> Result<(), ThoosaError>{
+    fn init_test_store(mut store_guard: MutexGuard<RawMutex, Box<dyn Store>>) -> Result<(), ThoosaError> {
+        let mut mutex_guard = store_guard.conn().lock();
+        let t = mutex_guard.transaction()?;
 
-        store_guard.save_label("Label_0")?;
-        store_guard.save_label("Label_1")?;
+        store_guard.save_label("Label_0", &t)?;
+        store_guard.save_label("Label_1", &t)?;
 
-        store_guard.save_resources_labels(HashMap::from([
+
+        store_guard.save_resources_labels(&HashMap::from([
             ("t_0_0".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_1".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_2".into(), vec![("Label_0".into(), 1.0)]),
@@ -1595,7 +1615,6 @@ mod main_tests {
             ("t_0_7".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_8".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_9".into(), vec![("Label_0".into(), 1.0)]),
-
             ("t_1_0".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_1".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_2".into(), vec![("Label_1".into(), 1.0)]),
@@ -1606,11 +1625,15 @@ mod main_tests {
             ("t_1_7".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_8".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_9".into(), vec![("Label_1".into(), 1.0)]),
+        ]),
+                                          0, &t)?;
 
-        ]))?;
 
-        store_guard.save_pure_sets(4, true)?;
-        store_guard.save_pure_sets(6, true)?;
+        store_guard.save_pure_sets(4, true, &t)?;
+        store_guard.save_pure_sets(6, true, &t)?;
+
+        t.commit()?;
+
 
         Ok(())
     }
@@ -1673,8 +1696,7 @@ mod main_tests {
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, tensors_path)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize)?));
         let ws_runner = Arc::clone(&ws);
 
         (0..10).for_each(|i|{
@@ -1725,8 +1747,7 @@ mod main_tests {
     fn test_import_resources() -> Result<(), ThoosaError>{
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, tensors_path)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize)?));
 
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
@@ -1742,7 +1763,8 @@ mod main_tests {
                 ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
                 ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)])
             ])),
-            Some(|_:String|Ok(Tensor::from_slice(&[0.,1.,2.])))
+            Some(|_:String|Ok(Tensor::from_slice(&[0.,1.,2.]))),
+            true
         )?;
 
         Ok(())

@@ -155,7 +155,7 @@ where
 
 impl<K, V> LoadRunner<K, V>
 where
-    K: Clone + Hash + Eq + From<String>+ Send + Sync + 'static + Debug,
+    K: Clone + Hash + Eq + Send + Sync + 'static + Debug,
     V: Send + Debug + 'static,
 {
     pub fn new<F>(loader: F, loader_threads: usize, futures_channel_bound: usize) -> Self
