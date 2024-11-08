@@ -18,6 +18,7 @@ use tch::{Device, IndexOp, Tensor};
 
 use thoosa_common::ResourceLoader;
 use thoosa_common::utils::{from, load_tensor};
+use thoosa_shared::resource::ResourceId;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::TensorSliceIdx;
 use thoosa_store::{SqlStore, Store};
@@ -130,17 +131,17 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 
-pub fn load_to_logits_tensors<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(group:&str,  device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(K, Vec<f32>)> {
+pub fn load_to_logits_tensors (group:&str,  device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(ResourceId, Vec<f32>)> {
 
     let mut store_lock = store.lock();
 
     store_lock.list_resource_random_in_group(group).expect("list_resource_random_in_group")
         .into_iter()
-        .map(move |(key, labels_p)|{
+        .map(move |(resourceId, labels_p)|{
 
                 debug!("labels_p={:?}", labels_p);
                 (
-                    key.into(),
+                    resourceId,
                     labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
                 )
         })
@@ -203,8 +204,7 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
 
 }
 
-// pub fn labeled_tensors_by_descr<'a>(label:&String, resource_set_descr:&String, device: &'a Device, store: Arc<Mutex<Box<dyn Store>>>, loader: Arc<Box<impl ResourceLoader<K=String, V=Tensor> + 'a>>) -> Vec<(i64, impl Iterator<Item=Box<Tensor>> + Send + Sync + 'a)>  {
-pub fn labeled_tensors_by_descr<'a, K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec<K>)>  {
+pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec <ResourceId>)>  {
     debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock();
@@ -212,12 +212,12 @@ pub fn labeled_tensors_by_descr<'a, K: Clone + Hash + Eq + From<String>+ Send + 
     vec![
         (
             1,
-            store_lock.list_resource_set_resources_by_descr(resource_set_descr).expect("list_resource_set_resources_by_descr").into_iter().map(|v|v.into()).collect()
+            store_lock.list_resource_set_resources_by_descr(resource_set_descr).expect("list_resource_set_resources_by_descr")
 
         ),
         (
             0,
-            store_lock.list_resource_random_not_label(label.as_str(), 100).expect("list_resource_random_not_label").into_iter().map(|v|v.into()).collect()//TODO limit
+            store_lock.list_resource_random_not_label(label.as_str(), 100).expect("list_resource_random_not_label")
 
         )
     ]

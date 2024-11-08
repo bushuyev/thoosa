@@ -28,7 +28,7 @@ use thoosa_shared::parse_key_val;
 use thoosa_shared::val::unprefix_properties;
 use thoosa_shared::val::Val;
 use thoosa_shared::parse_range_or_value;
-
+use thoosa_shared::resource::ResourceId;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::apply_channel_motifs;
@@ -144,22 +144,22 @@ impl TrainLabelNodeParams {
 /**
 * returns num labels * items_per_label x channels x motifs x motifs batch size
 */
-struct LoadingTensorsDataBatch<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> {
-    train: Vec<(i64, Vec<K>)>,
-    val: Vec<(i64, Vec<K>)>,
+struct LoadingTensorsDataBatch  {
+    train: Vec<(i64, Vec <ResourceId>)>,
+    val: Vec<(i64, Vec <ResourceId>)>,
     batch_size: usize,
-    executor: Arc<parking_lot::RwLock<LoadRunner<K, Box<Tensor>>>>,
+    executor: Arc<parking_lot::RwLock< LoadRunner<Box<Tensor>>>>,
     device:Device,
     transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>
 }
 
-impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> LoadingTensorsDataBatch<K> {
+impl LoadingTensorsDataBatch {
 
     pub fn new(
-        train: Vec<(i64, Vec<K>)>,
-        val: Vec<(i64, Vec<K>)>,
+        train: Vec<(i64, Vec <ResourceId>)>,
+        val: Vec<(i64, Vec <ResourceId>)>,
         batch_size: usize,
-        executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
+        executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
         device:Device,
         transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>
     ) -> Self {
@@ -175,7 +175,7 @@ impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'sta
         }
     }
 
-    fn choose_for_batch(class_resources: &Vec<(i64, Vec<K>)>, batch_size: usize, executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>, device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
+    fn choose_for_batch(class_resources: &Vec<(i64, Vec<ResourceId>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>, device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
         let per_class_len = batch_size / class_resources.len();
@@ -196,7 +196,7 @@ impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'sta
                 executor.write().exec(move |loader, _keys_purge| {
                     async move {
 
-                        let t =  Loader::<K, Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
+                        let t =  Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
                         let t = if let Some(transform) = transform_fn{
                             transform.read()(t)
                         } else {
@@ -246,7 +246,7 @@ impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'sta
     }
 }
 
-impl  <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> DataBatch for LoadingTensorsDataBatch<K> {
+impl    DataBatch for LoadingTensorsDataBatch {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
         tch::no_grad(|| {
@@ -262,22 +262,22 @@ impl  <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'st
 }
 
 
-struct ClassTensorsLoaderData<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> {
-    train_resources: Vec<(K, Vec<f32>)>,
-    valid_resources: Vec<(K, Vec<f32>)>,
-    executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
+struct ClassTensorsLoaderData  {
+    train_resources: Vec<(ResourceId, Vec<f32>)>,
+    valid_resources: Vec<(ResourceId, Vec<f32>)>,
+    executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     batch_size: usize,
     device:Device,
     transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>
 }
 
-impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> ClassTensorsLoaderData<K>  {
+impl ClassTensorsLoaderData  {
 
     pub fn new(
-        train_loader: Vec<(K, Vec<f32>)>,
-        valid_loader: Vec<(K, Vec<f32>)>,
+        train_loader: Vec<(ResourceId, Vec<f32>)>,
+        valid_loader: Vec<(ResourceId, Vec<f32>)>,
         batch_size: usize,
-        executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
+        executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
         device:Device,
         transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>
     ) -> Self {
@@ -294,7 +294,7 @@ impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'sta
 }
 
 
-impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> DataBatch for ClassTensorsLoaderData<K> {
+impl   DataBatch for ClassTensorsLoaderData {
 
     fn train_batch(&mut self) -> (Tensor, Tensor){
         Self::batch(&mut self.train_resources, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
@@ -305,9 +305,9 @@ impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'sta
     }
 }
 
-impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static> ClassTensorsLoaderData<K> {
+impl   ClassTensorsLoaderData {
 
-    fn batch(resources: &mut Vec<(K, Vec<f32>)>, batch_size: usize, executor: Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
+    fn batch(resources: &mut Vec<(ResourceId, Vec<f32>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
         debug!("ClassTensorsLoaderData.batch: resources={resources:?} batch_size={batch_size}");
         let mut rng = thread_rng();
 
@@ -324,7 +324,7 @@ impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'sta
             executor.write().exec(move |loader, _keys_purge| {
                 async move {
 
-                    let t =  Loader::<K, Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
+                    let t =  Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, 0).await;
                     let t = if let Some(transform) = transform_fn{
                         transform.read()(t)
                     } else {
@@ -376,15 +376,15 @@ impl <K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'sta
     }
 }
 
-pub fn train_label_nodes<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
+pub fn train_label_nodes (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     motif_node_params:&MotifNodeParams,
     label_node_params:&LabelNodeParams,
     train_on_label_params: &TrainLabelNodeParams,
-    train_labels_resources:Vec<(i64, Vec<K>)>,
-    valid_labels_resources: Vec<(i64, Vec<K>)>,
+    train_labels_resources:Vec<(i64, Vec <ResourceId>)>,
+    valid_labels_resources: Vec<(i64, Vec <ResourceId>)>,
     device: &Device,
-    executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
+    executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     channels_motifs_nodes:Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>
 ) -> Result<(f32, (VarStore, LabelNodeParams)), ThoosaError>
     {
@@ -467,13 +467,13 @@ fn apply_motifs_to_loaders<I, F>(
 }
 
 //TODO trains on all label models, add param to train on selected run_ids
-pub fn train_final<K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display  + 'static>(
+pub fn train_final (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     train_final_params: &TrainFinalParams,
-    train_resources:Vec<(K, Vec<f32>)>,
-    valid_resources: Vec<(K, Vec<f32>)>,
+    train_resources:Vec<(ResourceId, Vec<f32>)>,
+    valid_resources: Vec<(ResourceId, Vec<f32>)>,
     step: usize, motif_batch_size: i64, device: &Device, labels: Vec<String>,
-    executor: &Arc<RwLock<LoadRunner<K, Box<Tensor>>>>,
+    executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     label_models: HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>, //TODO Arc<RwLock...
     labels_channels_motifs_models:HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>,
     final_node_params:&FinalNodeParams
@@ -1253,7 +1253,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
 }
 
-pub fn slices_in_all_resources<K>(slices: Vec<(K, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
+pub fn slices_in_all_resources <ResourceId>(slices: Vec<(ResourceId, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
     slices.into_iter().flat_map(|(_resource_key, slices)| slices.into_iter()).collect::<Vec<Box<Tensor>>>()
 }
 
@@ -1638,7 +1638,7 @@ mod train_tests {
 
         SeqBuilder::new(num_features)
             .linear_s_with_conf(1, LinearConfig {
-                ws_init: tch::nn::init::Init::Const(k),//conflicts with ctor's init
+                ws_init: tch::nn::init::Init::Const(ResourceId),//conflicts with ctor's init
                 bs_init: None,
                 bias: false
             })
@@ -1668,8 +1668,8 @@ mod train_tests {
 
 
         let channel_0_motifs = Tensor::stack(&[
-                Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 54950., 64950., 74950., 84950., 94950.]),  //ch 0 net 0 (k=1)
-                Tensor::from_slice(&[9900., 29900., 49900., 69900., 89900., 109900., 129900., 149900., 169900., 189900.]) // ch. 0 net 1 (k=2)
+                Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 54950., 64950., 74950., 84950., 94950.]),  //ch 0 net 0 (ResourceId=1)
+                Tensor::from_slice(&[9900., 29900., 49900., 69900., 89900., 109900., 129900., 149900., 169900., 189900.]) // ch. 0 net 1 (ResourceId=2)
             ], 0
         ).totype(Float).view((2, 1, 10));
         assert_eq!(channel_0_motifs, channel_0_t);
@@ -1679,8 +1679,8 @@ mod train_tests {
         debug!("test_apply_motif_models: max_motif_batches={:?}", max_motif_batches);
 
         let channel_1_motifs = Tensor::stack(&[
-                Tensor::from_slice(&[99000., 299000., 499000., 699000., 899000., 1.099e+06, 1.299e+06, 1.499e+06, 1.699e+06, 1.899e+06]),  //ch 1 net 0 (k=1)
-                Tensor::from_slice(&[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]),  //ch 1 net 0 (k=1)
+                Tensor::from_slice(&[99000., 299000., 499000., 699000., 899000., 1.099e+06, 1.299e+06, 1.499e+06, 1.699e+06, 1.899e+06]),  //ch 1 net 0 (ResourceId=1)
+                Tensor::from_slice(&[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]),  //ch 1 net 0 (ResourceId=1)
             ], 0
         ).totype(Float).view((2, 1, 10));
         assert_eq!(channel_1_motifs, channel_1_t);
@@ -1792,7 +1792,7 @@ mod train_tests {
             move |key: &String| {
 
                 SyncWrapper::new(
-                    load_test_tensor(key, 1000),
+                    load_test_tensor(ResourceIdey, 1000),
                     |e| Box::new(e.shallow_clone())
                 )
             }, 4, 100,
@@ -1918,7 +1918,7 @@ mod train_tests {
             move |key: &String| {
 
                 SyncWrapper::new_tb(
-                    load_test_tensor(key, 1000)
+                    load_test_tensor(ResourceIdey, 1000)
                 )
             }, 4, 100,
         )));
@@ -2052,7 +2052,7 @@ mod train_tests {
             move |key: &String| {
 
                 SyncWrapper::new(
-                    load_test_tensor(key, 1000),
+                    load_test_tensor(ResourceIdey, 1000),
                     |e| Box::new(e.shallow_clone())
                 )
             }, 4, 100,
