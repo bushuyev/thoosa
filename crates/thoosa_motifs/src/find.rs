@@ -284,12 +284,9 @@ pub fn find_motifs_by_euc_dist<K>(
     devices:Vec<Device>
 ) -> Result<Vec<usize>, ThoosaError>
 where K: Clone + Hash + Eq + From<String>+ Send + Sync + Debug + Display,
-      Vec<K>: FromIterator<Arc<String>>  {
+      Vec<K>: FromIterator<String>  {
 
-    let resource_keys = resource_config_to_keys(store, resource_config)
-        .into_iter()
-        .map(|key|Arc::new(key))
-        .collect::<Vec<K>>();
+    let resource_keys = resource_config_to_keys(store, resource_config).into_iter().collect();
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 

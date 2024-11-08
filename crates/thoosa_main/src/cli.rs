@@ -347,11 +347,10 @@ pub fn run_cli<F>(
     );
 
     let loader = Arc::new(RwLock::new(LoadRunner::new(
-        move |key: &Arc<String>| {
+        move |key: &String| {
 
-            SyncWrapper::new(
-                exec_loader.load(key, Device::Cpu),
-                |e| Box::new(e.shallow_clone().to(Cuda(0)))
+            SyncWrapper::new_tb(
+                exec_loader.load(key, Device::Cpu)
             )
         }, 4, 100,
     )));
