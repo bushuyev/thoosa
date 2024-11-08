@@ -6,7 +6,7 @@ use std::num::ParseIntError;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use lazy_static::lazy_static;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use tch::nn::VarStore;
@@ -32,23 +32,25 @@ pub struct FsWorkspace {
 
 impl FsWorkspace {
 
-    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize, tensors_path: Option<PathBuf>) -> Result<Box<dyn Workspace>, ThoosaError> {
+    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Box<dyn Workspace>, ThoosaError> {
         let base_path = base_path.into();
-        if !base_path.exists() {
-            fs::create_dir_all(&base_path)?;
-
-        }
+        fs::create_dir_all(&base_path)?;
 
         let store_path:PathBuf = base_path.join("main_db.db3");
-        let tensors_path:PathBuf = tensors_path.unwrap_or("/media/bu/KINGSTON/all_eegs.pt/all/".into()); // base_path.join("tensors");
-        debug!("FsWorkspace: tensors_path={tensors_path:?}");
-        fs::create_dir_all(&tensors_path)?;
 
         let models_path:PathBuf = base_path.join("models");
+
+        let tensors_path:PathBuf = base_path.join("tensors");
+        fs::create_dir_all(&tensors_path)?;
+
         let motifs_models_path:PathBuf = models_path.join("motifs");
-        let labels_models_path:PathBuf = models_path.join("labels");
-        let final_models_path:PathBuf = models_path.join("final");
         fs::create_dir_all(&motifs_models_path)?;
+
+        let labels_models_path:PathBuf = models_path.join("labels");
+        fs::create_dir_all(&labels_models_path)?;
+
+        let final_models_path:PathBuf = models_path.join("final");
+        fs::create_dir_all(&final_models_path)?;
 
         Ok(Box::new(Self {
             base_path,
@@ -74,8 +76,11 @@ impl FsWorkspace {
 }
 
 impl Workspace for FsWorkspace {
-    fn import_tensor(&self,  t:Tensor, import_id:usize, key:&str){
 
+    fn import_tensor(&self,  t:Tensor, import_id:u32, key:&str)-> Result<(), ThoosaError>{
+        let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
+        trace!("Workspace:import_tensor {path:?}");
+        t.save(path).map_err(|e|ThoosaError::new(e.to_string()))
     }
 
     fn base_path_as_str(&self) -> String {
@@ -229,7 +234,7 @@ impl Workspace for FsWorkspace {
 }
 
 pub trait Workspace:Sync + Send {
-    fn import_tensor(&self, t:Tensor, import_id:usize, key:&str);
+    fn import_tensor(&self, t:Tensor, import_id:u32, key:&str)-> Result<(), ThoosaError>;
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
@@ -268,7 +273,7 @@ impl DummyWorkspace {
 }
 
 impl Workspace for DummyWorkspace {
-    fn import_tensor(&self,  t:Tensor, import_id: usize, key: &str) {
+    fn import_tensor(&self,  t:Tensor, import_id: u32, key: &str) -> Result<(), ThoosaError>{
         todo!()
     }
 

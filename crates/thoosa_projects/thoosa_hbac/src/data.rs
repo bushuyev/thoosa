@@ -908,7 +908,8 @@ mod tests {
             ||{
                 super::labeled_resourses(Path::new("test_data/eeg").join("train_10.csv"))
             },
-            None::<Box<dyn Fn(&String)->Result<Tensor, ThoosaError>>>
+            None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
+            true
         )?;
 
         let motifs_run_ids = run_step(
