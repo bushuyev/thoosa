@@ -74,6 +74,10 @@ impl FsWorkspace {
 }
 
 impl Workspace for FsWorkspace {
+    fn import_tensor(&self,  t:Tensor, import_id:usize, key:&str){
+
+    }
+
     fn base_path_as_str(&self) -> String {
         self.base_path.to_string_lossy().to_string()
     }
@@ -224,8 +228,8 @@ impl Workspace for FsWorkspace {
     }
 }
 
-
 pub trait Workspace:Sync + Send {
+    fn import_tensor(&self, t:Tensor, import_id:usize, key:&str);
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
@@ -264,6 +268,10 @@ impl DummyWorkspace {
 }
 
 impl Workspace for DummyWorkspace {
+    fn import_tensor(&self,  t:Tensor, import_id: usize, key: &str) {
+        todo!()
+    }
+
     fn base_path_as_str(&self) -> String {
         todo!()
     }

@@ -676,7 +676,7 @@ mod tests {
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{init_resources, run_select_motifs, run_step, run_train_final, run_train_label_nodes, Cli, RunAllParams};
+    use thoosa_main::cli::{import_resources, run_select_motifs, run_step, run_train_final, run_train_label_nodes, Cli, RunAllParams};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
@@ -874,21 +874,6 @@ mod tests {
         // let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400, Some(test_dir.join("tensors")))?));
         let ws = Arc::new(RwLock::new(DummyWorkspace::new(3)?));
 
-        let cli = Cli{
-            base_path: "test_data/eeg".to_string(),
-            resource_pattern: "{}/train_eegs/{}.parquet".to_string(),
-            ws_path: "/tmp".to_string(),
-            tensors_path: None,
-            store_path: "".to_string(),
-            term_logger_level: "".to_string(),
-            write_logger_level: "".to_string(),
-            logfile: "".to_string(),
-            limit: None,
-            num_threads: None,
-            command: Some(FindMotifs(FindMotifsParams::dummy(10, 10..10, "xxx".into(), 10, 0.3, None))),
-            input_filters_kernel: None,
-        };
-
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
@@ -909,8 +894,9 @@ mod tests {
             }, 4, 100,
         )));
 
-        init_resources(
-            Arc::clone(&store),
+        import_resources(
+            &ws,
+            &store,
             vec![
                 "seizure",
                 "lpd",
@@ -920,8 +906,9 @@ mod tests {
                 "other"
             ],
             ||{
-                super::labeled_resourses(Path::new(&cli.base_path).join("train_10.csv"))
-            }
+                super::labeled_resourses(Path::new("test_data/eeg").join("train_10.csv"))
+            },
+            None::<Box<dyn Fn(&String)->Result<Tensor, ThoosaError>>>
         )?;
 
         let motifs_run_ids = run_step(
