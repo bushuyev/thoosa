@@ -1028,7 +1028,7 @@ fn run_train_motif_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_
             debug!("train_on_motif: 1. channel={}, find_motifs_run_id={}, slices={}", channel, find_motifs_run_id, slices.len());
 
             let all_sices_1 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, params.window(), slices.into_iter().map(|s|TensorSliceIdx(s.0.into(), s.1)).collect(), executor)//TODO slices
+                load_motif_slices(channel, params.window(), slices, executor)
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
@@ -1037,7 +1037,7 @@ fn run_train_motif_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_
             debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
             let all_sices_0 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, params.window(), slices.into_iter().map(|s|TensorSliceIdx(s.0.into(), s.1)).collect(), executor) //TODO slices
+                load_motif_slices(channel, params.window(), slices, executor)
             );
 
             debug!("train_on_motif: 0. run_id={}, done", run_id);
@@ -1060,7 +1060,6 @@ fn run_train_motif_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_
         }
 
         debug!("train_on_motif:  all_sices_0.len()={:?}, all_sices_0[0].size()={:?}, all_sices_1.len()={:?}, all_sices_1[0].size()={:?}", all_sices_0.len(), all_sices_0[0].size(), all_sices_1.len(), all_sices_1[0].size());
-
 
 
         for (motif_node_params_run_id, node_params) in &motif_node_params_run_ids {
@@ -1355,9 +1354,9 @@ mod main_tests {
             }, 4, 100,
         )));
 
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
+        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
 
         import_resources(
             &ws,
@@ -1454,11 +1453,11 @@ mod main_tests {
 
 
         (0..10).for_each(|i|{
-            label_0_t(n, max_y).save(ws.read().tensors_path().join(format!("t_0_{i}.pt"))).unwrap();
+            label_0_t(n, max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
         });
 
         (0..10).for_each(|i|{
-            label_1_t(n, max_y).save(ws.read().tensors_path().join(format!("t_1_{i}.pt"))).unwrap();
+            label_1_t(n, max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
         });
 
         /*
@@ -1482,15 +1481,15 @@ mod main_tests {
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        init_test_store(store.lock());
+        let resources = init_test_store(&store)?;
 
         ///////////////////////////
 
         let find_motifs_params = FindMotifsParams::dummy(100, 800..800, "test set".into(), 10, 1.0, None);
         let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(1));
 
-        let find_motifs_run_id_0 = save_test_motifs(Arc::clone(&store), find_motifs_params.clone(), param_set.clone(), "t_0_")?;
-        let find_motifs_run_id_1 = save_test_motifs(Arc::clone(&store), find_motifs_params, param_set, "t_1_")?;
+        let find_motifs_run_id_0 = save_test_motifs(&resources, Arc::clone(&store), find_motifs_params.clone(), param_set.clone(), "t_0_")?;
+        let find_motifs_run_id_1 = save_test_motifs(&resources, Arc::clone(&store), find_motifs_params, param_set, "t_1_")?;
 
         let motifs_slices:Vec<Vec<(usize, f64)>> = store.lock().list_motifs_slices(find_motifs_run_id_1)?.into_values().map(|v| v.into_iter().map(|s| (s.motif_id, 1.0f64)).collect()).collect();
         debug!("test_run_train_on_motifs: run_id_1={find_motifs_run_id_1} motifs_slices={motifs_slices:?}");
@@ -1598,15 +1597,17 @@ mod main_tests {
         Ok(())
     }
 
-    fn init_test_store(mut store_guard: MutexGuard<RawMutex, Box<dyn Store>>) -> Result<(), ThoosaError> {
+    fn init_test_store(mut store: &Arc<Mutex<Box<dyn Store>>>) -> Result<Vec<ResourceId>, ThoosaError> {
+        let store_guard = store.lock();
         let mut mutex_guard = store_guard.conn().lock();
         let t = mutex_guard.transaction()?;
 
         store_guard.save_label("Label_0", &t)?;
         store_guard.save_label("Label_1", &t)?;
 
+        let import_id = store_guard.save_import(format!("test on {}", thoosa_common::utils::cdt()), &t)?;
 
-        store_guard.save_resources_labels(&HashMap::from([
+        let resources = store_guard.save_resources_labels(&HashMap::from([
             ("t_0_0".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_1".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_2".into(), vec![("Label_0".into(), 1.0)]),
@@ -1628,7 +1629,7 @@ mod main_tests {
             ("t_1_8".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_9".into(), vec![("Label_1".into(), 1.0)]),
         ]),
-                                          0, &t)?;
+                                          import_id, &t)?;
 
 
         store_guard.save_pure_sets(4, true, &t)?;
@@ -1637,7 +1638,7 @@ mod main_tests {
         t.commit()?;
 
 
-        Ok(())
+        Ok(resources)
     }
 
     fn plot_t(t_0: &Tensor, label:&str) -> Result<(), ThoosaError> {
@@ -1662,8 +1663,8 @@ mod main_tests {
         ])
     }
 
-    fn save_test_motifs(store: Arc<Mutex<Box<dyn Store>>>, find_motifs_params: FindMotifsParams, param_set: Vec<FindMotifsRunConfig>, resource_label_key: &str) -> Result<usize, ThoosaError> {
-        let resource_0_ids:Vec<ResourceId> = (0..10).map(|i| i as ResourceId).collect();
+    fn save_test_motifs(resource_0_ids:&Vec<ResourceId>, store: Arc<Mutex<Box<dyn Store>>>, find_motifs_params: FindMotifsParams, param_set: Vec<FindMotifsRunConfig>, resource_label_key: &str) -> Result<usize, ThoosaError> {
+        // let resource_0_ids:Vec<ResourceId> = (0..10).map(|i| i as ResourceId).collect();
         let run_id = store.lock().save_tree_run(
             None,
             format!("find motifs with params {:?}/{:?}", find_motifs_params, param_set[0]).as_str(),
@@ -1676,10 +1677,10 @@ mod main_tests {
             0i64,
             resource_0_ids.windows(2).into_iter().flat_map(|resource_id| {
                 [
-                    ((resource_id[0].clone(), 100), (resource_id[0].clone(), 1100), 1.0),
-                    ((resource_id[0].clone(), 100), (resource_id[1].clone(), 100), 1.0),
-                    ((resource_id[0].clone(), 100), (resource_id[1].clone(), 1100), 1.0),
-                    ((resource_id[1].clone(), 100), (resource_id[1].clone(), 1100), 1.0)
+                    ((resource_id[0], 100), (resource_id[0], 1100), 1.0),
+                    ((resource_id[0], 100), (resource_id[1], 100), 1.0),
+                    ((resource_id[0], 100), (resource_id[1], 1100), 1.0),
+                    ((resource_id[1], 100), (resource_id[1], 1100), 1.0)
                 ]
             }).collect::<Vec<_>>()
         )?; //all tensors contain two signals - [0-1000) and [1000-2000)
@@ -1694,7 +1695,7 @@ mod main_tests {
     }
 
     #[test]
-    fn test_rust_step() -> Result<(), ThoosaError> {
+    fn test_run_step() -> Result<(), ThoosaError> {
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -1702,20 +1703,20 @@ mod main_tests {
         let ws_runner = Arc::clone(&ws);
 
         (0..10).for_each(|i|{
-            label_0_t(n, 100.).save(ws.read().tensors_path().join(format!("t_0_{i}.pt"))).unwrap();
+            label_0_t(n, 100.).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
         });
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        init_test_store(store.lock());
+        init_test_store(&store)?;
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
                 let path = ws_runner.read().tensor_path(key);
                 debug!("test_run_train_on_motifs: path={path:?}");
                 SyncWrapper::new_tb(
-                    Box::new(Tensor::load(path).unwrap())
+                    Box::new(Tensor::load(&path).expect(format!("can't open {path:?}").as_str()))
                 )
             }, 4, 100,
         )));
