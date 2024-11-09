@@ -681,6 +681,7 @@ mod tests {
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
     use thoosa_shared::{init_test_logging, ThoosaError};
+    use thoosa_shared::resource::Resource;
     use thoosa_store::SqlStore;
     use crate::data::EEGs;
 
@@ -863,7 +864,6 @@ mod tests {
             ),
             t_1);
 
-
     }
 
     #[test]
@@ -885,11 +885,11 @@ mod tests {
             Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
         )));
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &Arc<String>| {
+            move |key: &Resource| {
 
                 SyncWrapper::new_tb({
-                    debug!("test_run_find_motifs: key={key}");
-                    loader.load(key, Device::Cpu)
+                    debug!("test_run_find_motifs: key={key:?}");
+                    loader.load(&key.file_stem().to_string(), Device::Cpu)
                 })
             }, 4, 100,
         )));

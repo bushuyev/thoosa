@@ -130,7 +130,7 @@ pub fn motifs_to_tensor(
                     let  motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
 
 
-                    motif_slices.push(SyncWrapper::new(Box::new(motifslice_t), |e| Box::new(e.shallow_clone())));
+                    motif_slices.push(SyncWrapper::new_tb(Box::new(motifslice_t)));
                     // motifs_slices_map_arc.write().insert(motif_slice.motif_id(), motif_slice);
                 }
             }
@@ -262,7 +262,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<ResourceId>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<Resource>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
@@ -276,7 +276,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<R
 
     debug!("load_motif_slices: tensors_ids_slices.len={}", tensors_ids_slices.len());
 
-    let mut all_slices:Arc<RwLock<Vec<(String, Vec<Box<SyncWrapper<Tensor>>>)>>> = Arc::new(RwLock::new(vec![]));
+    let mut all_slices:Arc<RwLock<Vec<(ResourceId, Vec<Box<SyncWrapper<Tensor>>>)>>> = Arc::new(RwLock::new(vec![]));
     let wg = WaitGroup::new();
 
 
@@ -285,25 +285,26 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<R
         debug!("load_motif_slices: tensor_keys={:?}", tensor_keys);
 
         tensor_keys.iter().map(|v|(*v).clone()).for_each(|tensor_idx| {
-            let slices = tensors_ids_slices.get(&tensor_idx).expect(format!("no {}", tensor_idx).as_str()).clone();
+            let slices = tensors_ids_slices.get(&tensor_idx).expect(format!("no {tensor_idx:?}").as_str()).clone();
 
             let all_slices = Arc::clone(&all_slices);
             let wg = wg.clone();
             executor.write().exec(move |loader, _keys_purge| {
                 async move {
-
-                    let t = LoadRunner::<Box<Tensor>>::load_future(loader, tensor_idx.clone(), 0).await;
+                    let tensor_idx_id = tensor_idx.id();
+                    let t = LoadRunner::<Box<Tensor>>::load_future(loader, tensor_idx, 0).await;
 
                     let take = t.size()[1] / widow;
-                    debug!("load_motif_slices: tensor_idx={} slices.len={} t.size={:?} take={}", tensor_idx, slices.len(), t.size(),  take  );
+                    debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?} take={}", slices.len(), t.size(),  take  );
+
 
                     all_slices.write().push(
-                        (tensor_idx.to_string(),
+                        (tensor_idx_id,
                          slices.into_iter().filter(|slice_idx| {
                              let slice_ok = t.size()[1] >= *slice_idx + widow;
 
                              if !slice_ok {
-                                 warn!("slice doesn't fit into tensor: tensor_idx={:?}, t.size()={:?}, *slice_idx={:?}, widow={:?}", tensor_idx, t.size(), slice_idx, widow)
+                                 warn!("slice doesn't fit into tensor: tensor_idx_id={tensor_idx_id}, t.size()={:?}, *slice_idx={:?}, widow={:?}", t.size(), slice_idx, widow)
                              }
 
                              slice_ok

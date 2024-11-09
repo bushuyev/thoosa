@@ -94,7 +94,7 @@ where T:Hash + Eq + Debug {
 
 
 #[derive(Debug, PartialEq, Hash, Eq, Copy, Clone, PartialOrd, Ord)]
-pub struct TensorSliceIdx<T>(pub T, pub i64) where T:Eq+Display+Debug;
+pub struct TensorSliceIdx<T>(pub T, pub i64) where T:Eq+Debug;
 
 impl From<(String, i64)> for TensorSliceIdx<String> {
     fn from(value: (String, i64)) -> Self {
@@ -156,7 +156,6 @@ impl Debug for ThoosaError {
     }
 }
 
-
 impl<D> From<D> for ThoosaError
 where D: Display {
 
@@ -168,7 +167,7 @@ where D: Display {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct MotifSlice {
-    pub motif_id: usize, //TODO pub
+    pub motif_id: usize,
     pub slise_idx: i64,
     pub channel_idx: u16,
 }

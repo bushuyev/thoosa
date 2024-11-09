@@ -1050,7 +1050,7 @@ pub fn select_motifs_by_ratio (motifs: Tensor, labels_resources: Vec<(String, Ve
     });
 
     let (channels_num, motifs_num, channels_motifs_counts_labels_arc) = clc_channels_motifs_labels(
-        Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs), |e| Box::new(e.shallow_clone())))),
+        Arc::new(RwLock::new(SyncWrapper::new_tb(Box::new(motifs)))),
         labels_resources,
         executor,
         step,
@@ -1511,9 +1511,9 @@ mod motif_find_tests {
     fn test_find_motifs_by_euc_dist() -> Result<(), ThoosaError> {
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
 
-        std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_db.db3")?));
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+        // let mut store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_db.db3")?));
+        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
