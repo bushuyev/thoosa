@@ -19,7 +19,7 @@ use tch::Tensor;
 use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
 use thoosa_common::utils::*;
 use thoosa_shared::*;
-use thoosa_shared::resource::ResourceId;
+use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::TensorSliceIdx;
 
@@ -96,7 +96,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
 pub fn motifs_to_tensor(
-    resource_id_motif_slices: HashMap<ResourceId, Vec<MotifSlice>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device
+    resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device
 ) -> Result<(Tensor, Vec<Vec<usize>>), ThoosaError> {
 
     debug!("motifs_to_tensor: device={device:?} window={window}");
@@ -113,9 +113,9 @@ pub fn motifs_to_tensor(
     executor.write().exec(move |loader, _keys_purge| {
         async move {
 
-            for (resource_id, motif_slices) in resource_id_motif_slices {
+            for (resource, motif_slices) in resource_id_motif_slices {
 
-                let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id.into(), 0).await;
+                let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, 0).await;
                 // debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
 
                 for motif_slice in motif_slices {
@@ -262,7 +262,7 @@ pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
 }
 
 
-pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx <ResourceId>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<ResourceId>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(String, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 

@@ -326,10 +326,10 @@ pub fn run_cli<F,R>(
     let tensors_path = ws.read().tensors_path().clone();
 
     let loader = Arc::new(RwLock::new(LoadRunner::new(
-        move |key: &ResourceId| {
+        move |key: &Resource| {
 
             SyncWrapper::new_tb(
-                Box::new(Tensor::load(tensors_path.join(format!("1_{}.pt", key))).map_err(|e| ThoosaError::new(e.to_string())).expect(format!("can't load {key}").as_str()))
+                Box::new(Tensor::load(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem()))).map_err(|e| ThoosaError::new(e.to_string())).expect(format!("can't load {key:?}").as_str()))
             )
         }, 4, 100,
     )));
@@ -1120,13 +1120,15 @@ fn select_motifs_for_label (ws: &Arc<RwLock<Box<dyn Workspace>>>, store:Arc<Mute
     info!("select_motifs_for_label: motifs tensor built, size={:?}", motifs.size());
 
 
+
+
     let channel_motif_ids = Arc::new(RwLock::new(channel_motif_ids));
     let labels_channels_good_motif_idxs:HashMap<String, Vec<Vec<(i64, f64)>>> = select_motifs_by_ratio(
         motifs,
         select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
             (
                 label_dataset.0.clone(),
-                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap().into_iter().map(|r|r.into()).collect::<Vec <ResourceId>>()
+                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap()
             )
 
         }).collect(),
@@ -1154,7 +1156,6 @@ fn select_motifs_for_label (ws: &Arc<RwLock<Box<dyn Workspace>>>, store:Arc<Mute
 
         store.lock().save_selected_motifs(find_motifs_run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs).expect("save_motifs_corrs")
     }).collect::<Vec<usize>>())
-
 }
 
 
@@ -1245,7 +1246,7 @@ mod main_tests {
     use crate::data::ParquetLoader;
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_common::runs::RunConfig;
-    use thoosa_shared::resource::ResourceId;
+    use thoosa_shared::resource::{Resource, ResourceId};
 
     #[ctor::ctor]
     fn init() {
@@ -1288,14 +1289,14 @@ mod main_tests {
         // let sig_0_v_01 = sig_two_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
         // let sig_0_v_02 = sig_one_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
 
-        plot_series(
+        /*plot_series(
             vec![
                 (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0_v.clone()).collect::<Vec<(f32, f32)>>()),
                 (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(sig_1_v.clone()).collect::<Vec<(f32, f32)>>()),
                 (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2_v.clone()).collect::<Vec<(f32, f32)>>()),
 
             ], "test_find_motifs_euc", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
-        ).unwrap();
+        )?;*/
 
 
         /*
@@ -1308,18 +1309,18 @@ mod main_tests {
         */
 
         let t_0_0 = Tensor::vstack(&[
-            Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
-            Tensor::from_slice([sig_2_v.clone(),          saw(n), saw(n)].concat().as_slice()),
-            Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
+            Tensor::from_slice([sig_0_v.clone(),    saw(n),            saw(n)].concat().as_slice()),
+            Tensor::from_slice([sig_2_v.clone(),    saw(n),            saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n),             sig_2_v.clone(),   saw(n)].concat().as_slice()),
         ]);
         t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
 
         // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
 
         let t_0_1 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n) ].concat().as_slice()),
-            Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
-            Tensor::from_slice([sig_2_v.clone(),          saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n),             sig_0_v.clone(),    saw(n) ].concat().as_slice()),
+            Tensor::from_slice([saw(n),             sig_2_v.clone(),    saw(n)].concat().as_slice()),
+            Tensor::from_slice([sig_2_v.clone(),    saw(n),             saw(n)].concat().as_slice()),
         ]);
         t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
 
@@ -1327,18 +1328,18 @@ mod main_tests {
 
 
         let t_1_0 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
-            Tensor::from_slice([saw(n),          saw(n), sig_2_v.clone()].concat().as_slice()),
-            Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice())
+            Tensor::from_slice([saw(n),             sig_1_v.clone(),    saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n),             saw(n),             sig_2_v.clone()].concat().as_slice()),
+            Tensor::from_slice([saw(n),             sig_2_v.clone(),    saw(n)].concat().as_slice())
         ]);
         t_1_0.save(ws.read().tensors_path().join(format!("t_1_0.pt")))?;
 
         // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
 
         let t_1_1 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n), saw(n), sig_1_v.clone()].concat().as_slice()),
-            Tensor::from_slice([saw(n),          saw(n), sig_2_v.clone()].concat().as_slice()),
-            Tensor::from_slice([sig_2_v.clone(),          sig_2_v.clone(), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n),             saw(n),             sig_1_v.clone()].concat().as_slice()),
+            Tensor::from_slice([saw(n),             saw(n),             sig_2_v.clone()].concat().as_slice()),
+            Tensor::from_slice([sig_2_v.clone(),    sig_2_v.clone(),    saw(n)].concat().as_slice()),
         ]);
         t_1_1.save(ws.read().tensors_path().join(format!("t_1_1.pt")))?;
 
@@ -1347,17 +1348,16 @@ mod main_tests {
         let tensors_path = ws.read().tensors_path().clone();
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &ResourceId| {
-
+            move |key: &Resource| {
                 SyncWrapper::new_tb(
-                    Box::new(Tensor::load(tensors_path.join(format!("{key}.pt"))).unwrap())
+                    Box::new(Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem()))).unwrap())
                 )
             }, 4, 100,
         )));
 
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
+        let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
 
         import_resources(
             &ws,
@@ -1369,7 +1369,8 @@ mod main_tests {
                 ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
                 ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)])
             ])),
-            None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
+            // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
+            Some(|key| Err(ThoosaError::new("xxx"))),
             true
         )?;
         let run_ids = run_step(
@@ -1416,14 +1417,14 @@ mod main_tests {
             &loader
         ).expect("select_motifs_in_class");
 
-        debug!("test_motifs_with_tpe: corr_ids={select_motifs_run_ids:?}");
+        debug!("test_motifs_with_tpe: select_motifs_run_ids={select_motifs_run_ids:?}");
         let motif_selection_id = store.lock().list_input_run_ids(&select_motifs_run_ids)?;
         debug!("test_motifs_with_tpe: motif_selection_id={motif_selection_id:?}");
 
-
+        //
         // store.lock().list_selected_motifs();
 
-        //there are motifs with corr 1.0 for each label
+        // there are motifs with corr 1.0 for each label
         assert!(store.lock().list_selected_motifs(
             select_motifs_run_ids[0]
             // select_motifs_run_ids.iter().find(|(id, run_id)|label.eq("label_0")).expect("label_0").1
@@ -1502,7 +1503,7 @@ mod main_tests {
         debug!("test_run_train_on_motifs: motif_ids={motif_ids:?} motif_selection_run_id={motif_selection_run_id}");
 
         let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &ResourceId| {
+            move |key: &Resource| {
                 let path = ws_runner.read().tensor_path(key);
                 debug!("test_run_train_on_motifs: path={path:?}");
                 SyncWrapper::new_tb(
@@ -1662,7 +1663,7 @@ mod main_tests {
     }
 
     fn save_test_motifs(store: Arc<Mutex<Box<dyn Store>>>, find_motifs_params: FindMotifsParams, param_set: Vec<FindMotifsRunConfig>, resource_label_key: &str) -> Result<usize, ThoosaError> {
-        let resource_0_ids:Vec<String> = (0..10).map(|i| format!("{resource_label_key}{i}")).collect();
+        let resource_0_ids:Vec<ResourceId> = (0..10).map(|i| i as ResourceId).collect();
         let run_id = store.lock().save_tree_run(
             None,
             format!("find motifs with params {:?}/{:?}", find_motifs_params, param_set[0]).as_str(),
@@ -1710,7 +1711,7 @@ mod main_tests {
         init_test_store(store.lock());
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &ResourceId| {
+            move |key: &Resource| {
                 let path = ws_runner.read().tensor_path(key);
                 debug!("test_run_train_on_motifs: path={path:?}");
                 SyncWrapper::new_tb(

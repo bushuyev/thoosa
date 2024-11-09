@@ -1,4 +1,5 @@
-// #![feature(backtrace_frames)]
+#![feature(unboxed_closures)]// #![feature(backtrace_frames)]
+
 
 use std::backtrace::Backtrace;
 use std::cmp::{max, min};

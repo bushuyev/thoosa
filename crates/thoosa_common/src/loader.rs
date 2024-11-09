@@ -21,7 +21,7 @@ use futures::{
     task::{waker_ref, ArcWake},
 };
 use tch::{IndexOp, Tensor};
-use thoosa_shared::resource::ResourceId;
+use thoosa_shared::resource::{Resource, ResourceId};
 
 struct RayonNotify {}
 
@@ -38,18 +38,18 @@ pub struct Loader<V>
 where
     V: Send + Debug + 'static,
 {
-    loader_fn: Arc<Box<dyn Fn(&ResourceId) -> SyncWrapper<V> + Sync + Send>>,
+    loader_fn: Arc<Box<dyn Fn(&Resource) -> SyncWrapper<V> + Sync + Send>>,
     loader_pool: ThreadPool,
 
-    resources: HashMap<ResourceId, SyncWrapper<V>>,
-    resources_being_loaded: HashMap<ResourceId, u64>,
+    resources: HashMap<Resource, SyncWrapper<V>>,
+    resources_being_loaded: HashMap<Resource, u64>,
 }
 
 impl<V> Loader<V>
 where
     V: Send + Debug + 'static,
 {
-    pub fn preload(self_arc: Arc<RwLock<Loader<V>>>, keys: &[ResourceId], cache_area: u64) {
+    pub fn preload(self_arc: Arc<RwLock<Loader<V>>>, keys: &[Resource], cache_area: u64) {
         debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
         let mut self_write_guard = self_arc.write();
 
@@ -81,7 +81,7 @@ where
         };
     }
 
-    pub fn load_future(self_arc: Arc<RwLock<Loader<V>>>, key: ResourceId, cache_area: u64) -> BoxFuture<'static, V> {
+    pub fn load_future(self_arc: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64) -> BoxFuture<'static, V> {
         let mut self_lock = self_arc.write();
 
 
@@ -102,9 +102,9 @@ where
 
     fn loader_task<'a>(
         cache_area: u64,
-        loader_fn: Arc<Box<dyn Fn(&'a ResourceId) -> SyncWrapper<V> + Sync + Send>>,
+        loader_fn: Arc<Box<dyn Fn(&'a Resource) -> SyncWrapper<V> + Sync + Send>>,
         loader_arc: Arc<RwLock<Loader<V>>>,
-        key: &'a ResourceId,
+        key: &'a Resource,
     ) {
         let mut v = loader_fn(key);
         debug!("preload_vec: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
@@ -120,7 +120,7 @@ where
         debug!("preload_vec: in loader_pool 1 current_thread={:?}", thread::current().id());
     }
 
-    pub fn purge_resources(loader_arc: Arc<RwLock<Loader<V>>>, keys: Vec<ResourceId>, cache_area: u64) {
+    pub fn purge_resources(loader_arc: Arc<RwLock<Loader<V>>>, keys: Vec<Resource>, cache_area: u64) {
         let mut loader_guard = loader_arc.write();
 
 
@@ -157,7 +157,7 @@ where
 {
     pub fn new<F>(loader: F, loader_threads: usize, futures_channel_bound: usize) -> Self
     where
-        F: Fn(&ResourceId) -> SyncWrapper<V> + Sync + Send + 'static,
+        F: Fn(&Resource) -> SyncWrapper<V> + Sync + Send + 'static,
     {
         let futures: Arc<RwLock<Vec<Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(vec![]));
         let features_rc = Arc::clone(&futures);
@@ -246,7 +246,7 @@ where
 
     pub fn exec<F>(&mut self, make_future: F)
     where
-        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(Vec<ResourceId>, u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
+        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(Vec<Resource>, u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
 
     {
         let loader_for_purge = Arc::clone(&self.loader);
@@ -260,11 +260,11 @@ where
     }
 
 
-    pub fn load_future(loader: Arc<RwLock<Loader<V>>>, key: ResourceId, cache_area: u64) -> BoxFuture<'static, V> {
+    pub fn load_future(loader: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64) -> BoxFuture<'static, V> {
         Loader::load_future(loader, key, cache_area)
     }
 
-    pub fn preload(&mut self, keys: &[ResourceId], cache_area: u64) {
+    pub fn preload(&mut self, keys: &[Resource], cache_area: u64) {
         Loader::preload(Arc::clone(&self.loader), keys, cache_area);
     }
 
@@ -279,7 +279,7 @@ where
         next
     }
 
-    pub fn purge_cache_keys(&mut self, keys: Vec<ResourceId>, area: u64) {
+    pub fn purge_cache_keys(&mut self, keys: Vec<Resource>, area: u64) {
         let mut loader_guard = self.loader.write();
 
         debug!("purge_cache_keys: 0 {area:064b} resources_guard.len()={}", loader_guard.resources.len());
@@ -344,7 +344,7 @@ struct ResourceFuture<V>
 where
     V: Send + Debug + 'static,
 {
-    key: ResourceId,
+    key: Resource,
     loader: Arc<RwLock<Loader<V>>>,
 }
 
@@ -352,7 +352,7 @@ impl<V> ResourceFuture<V>
 where
     V: Send + Debug + 'static,
 {
-    pub fn new(loader: Arc<RwLock<Loader<V>>>, key: ResourceId) -> Self {
+    pub fn new(loader: Arc<RwLock<Loader<V>>>, key: Resource) -> Self {
         Self {
             key,
             loader,
@@ -445,7 +445,7 @@ mod tests {
 
     use std::pin::Pin;
 
-    use std::sync::atomic::{AtomicU64};
+    use std::sync::atomic::{AtomicU32, AtomicU64};
 
 
     use std::task::{Context, Poll};
@@ -461,7 +461,7 @@ mod tests {
 
 
     use rand::Rng;
-    use thoosa_shared::resource::ResourceId;
+    use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::ThoosaError;
 
 
@@ -473,11 +473,11 @@ mod tests {
 
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct TestEntity {
-        key: ResourceId,
+        key: Resource,
     }
 
     #[allow(dead_code)]
-    fn load_test_entity(key: &ResourceId) -> Box<TestEntity> {
+    fn load_test_entity(key: &Resource) -> Box<TestEntity> {
         thread::sleep(Duration::new(0, 1000));
         Box::new(TestEntity { key: key.clone() })
     }
@@ -521,7 +521,7 @@ mod tests {
     }
 
 
-    fn load_test_entity_sv(key: &ResourceId) -> super::SyncWrapper<TestEntity> {
+    fn load_test_entity_sv(key: &Resource) -> super::SyncWrapper<TestEntity> {
         thread::sleep(Duration::new(0, rand::thread_rng().gen_range(1e7 as u32..3e9 as u32)));
         // thread::sleep(Duration::new(0, 5e8 as u32));
 
@@ -536,202 +536,194 @@ mod tests {
     }
 
 
-    //TODO K Ref
-    // #[test]
-    // fn test_loader() -> Result<(), ThoosaError> {
-    //     use parking_lot::{RwLock};
-    //     use rayon::iter::IntoParallelIterator;
-    //     use rayon::prelude::*;
-    //     use log::{info};
-    //     use std::sync::Arc;
-    //     use super::*;
-    //     use futures::{
-    //         future::{FutureExt},
-    //
-    //     };
-    //
-    //     let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
-    //         let b = std::thread::Builder::new();
-    //         b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
-    //             .spawn(|| thread_builder.run())?;
-    //
-    //         Ok(())
-    //     }).build()?;
-    //
-    //
-    //     let num_items = 10usize;
-    //     let executor = LoadRunner::new(load_test_entity_sv, 4, 100);
-    //     let executor_rc = Arc::new(RwLock::new(executor));
-    //     // let wg_1 = wg.clone();
-    //
-    //
-    //     let exec_0 = Arc::clone(&executor_rc);
-    //     let exec_1 = Arc::clone(&executor_rc);
-    //     let exec_2 = Arc::clone(&executor_rc);
-    //
-    //     let wg = WaitGroup::new();
-    //     let wg_0 = wg.clone();
-    //     let wg_1 = wg.clone();
-    //
-    //     let data_done = Arc::new(RwLock::new(HashSet::<String>::new()));
-    //     let data_done_rc = Arc::clone(&data_done);
-    //     let data_done_rc_0 = Arc::clone(&data_done_rc);
-    //     let data_done_rc_1 = Arc::clone(&data_done_rc);
-    //
-    //     let time_exec = Arc::new(AtomicU64::new(0));
-    //
-    //     let time_exec_rc_0 = Arc::clone(&time_exec);
-    //     let time_exec_rc_1 = Arc::clone(&time_exec);
-    //
-    //
-    //     let t_0 = Instant::now();
-    //     pool_0.spawn(move || {
-    //         let cache_area_0 = exec_0.write().get_available_cache_area();
-    //         debug!("cache_area_0={cache_area_0:064b}");
-    //
-    //         (0..num_items / 10).into_par_iter().for_each(|b| {
-    //             exec_0.write().preload(
-    //                 &(0..10).flat_map(|j| [
-    //                     format!("aaa_{}", b * 10 + j),
-    //                     format!("bbb_{}", b * 10 + j)
-    //                 ]).collect::<Vec<String>>(),
-    //                 cache_area_0,
-    //             );
-    //
-    //             (0..10).for_each(|j| {
-    //                 let i = b * 10 + j;
-    //
-    //                 let wg_0_i = wg_0.clone();
-    //
-    //
-    //                 let data_done_rc = Arc::clone(&data_done_rc_0);
-    //                 let time_exec_rc = Arc::clone(&time_exec_rc_0);
-    //
-    //                 exec_0.write().exec(move |loader_arc, keys_purge| {
-    //                     async move {
-    //                         let t = Instant::now();
-    //                         let key_aaa = format!("aaa_{i}");
-    //                         let _out_a = LoadRunner::<String, TestEntity>::load_future(Arc::clone(&loader_arc), key_aaa.clone(), cache_area_0).await;
-    //
-    //                         let key_bbb = format!("bbb_{i}");
-    //                         let _out_b = LoadRunner::<String, TestEntity>::load_future(loader_arc, key_bbb.clone(), cache_area_0).await;
-    //
-    //                         // let mut waiting_time_guard = waiting_time_rc.lock();
-    //                         let time = t.elapsed().as_millis();
-    //                         // *waiting_time_guard += time;
-    //                         //
-    //                         let mut rw_lock_write_guard = data_done_rc.write();
-    //                         rw_lock_write_guard.insert(key_aaa.clone());
-    //                         rw_lock_write_guard.insert(key_bbb.clone());
-    //                         drop(rw_lock_write_guard);
-    //                         // let n = rw_lock_write_guard.len() as u128;
-    //                         //
-    //                         // let mut waiting_time_avg_guard = waiting_time_avg_rc.lock();
-    //                         //
-    //                         // *waiting_time_avg_guard = (*waiting_time_avg_guard * (n - 1) + time) / n;
-    //
-    //                         let exec_time = rand::thread_rng().gen_range(100..1e9 as u32);
-    //                         time_exec_rc.fetch_add(exec_time.into(), Relaxed);
-    //                         thread::sleep(Duration::new(0, exec_time));
-    //                         // let x: usize = (0..10_000).flat_map(|v| (0..10_000)).sum();
-    //                         // trace!("x={x}");
-    //
-    //                         drop(wg_0_i);
-    //
-    //                         // info!("key_aaa={key_aaa} key_bbb={key_bbb} done, time={time} waiting_time_rc={} waiting_time_avg_guard={}", waiting_time_guard, waiting_time_avg_guard);
-    //                         info!("0: key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}",);
-    //                         (keys_purge)(vec![key_aaa, key_bbb], cache_area_0);
-    //                     }.boxed()
-    //                 });
-    //
-    //                 debug!("item {i} executed");
-    //             });
-    //         });
-    //         drop(wg_0);
-    //     });
-    //
-    //     pool_0.spawn(move || {
-    //         let cache_area_1 = exec_1.write().get_available_cache_area();
-    //         debug!("cache_area_1={cache_area_1:064b}");
-    //
-    //         (0..num_items / 10).into_par_iter().for_each(|b| {
-    //             exec_1.write().preload(
-    //                 &(0..10).flat_map(|j| [
-    //                     format!("bbb_{}", b * 10 + j),
-    //                     format!("ccc_{}", b * 10 + j)
-    //                 ]).collect::<Vec<String>>(),
-    //                 cache_area_1,
-    //             );
-    //
-    //             (0..10).for_each(|j| {
-    //                 let i = b * 10 + j;
-    //
-    //                 let wg_0_i = wg_1.clone();
-    //
-    //                 let data_done_rc = Arc::clone(&data_done_rc_1);
-    //                 let time_exec_rc = Arc::clone(&time_exec_rc_1);
-    //
-    //                 exec_1.write().exec(move |loader, keys_purge| {
-    //                     async move {
-    //                         let t = Instant::now();
-    //                         let key_aaa = format!("bbb_{i}");
-    //                         let _out_a = Loader::<TestEntity>::load_future(Arc::clone(&loader), key_aaa.clone(), cache_area_1).await;
-    //
-    //                         let key_bbb = format!("ccc_{i}");
-    //                         let _out_b = Loader::<TestEntity>::load_future(loader, key_bbb.clone(), cache_area_1).await;
-    //
-    //
-    //                         let time = t.elapsed().as_millis();
-    //
-    //
-    //                         let mut rw_lock_write_guard = data_done_rc.write();
-    //                         rw_lock_write_guard.insert(key_aaa.clone());
-    //                         rw_lock_write_guard.insert(key_bbb.clone());
-    //
-    //
-    //
-    //                         let exec_time = rand::thread_rng().gen_range(100..2e9 as u32);
-    //                         time_exec_rc.fetch_add(exec_time.into(), Relaxed);
-    //                         thread::sleep(Duration::new(0, exec_time));
-    //
-    //
-    //
-    //                         drop(wg_0_i);
-    //
-    //                         info!("1: key_aaa={key_aaa} key_bbb={key_bbb} done, time={time}");
-    //                         (keys_purge)(vec![key_aaa, key_bbb], cache_area_1);
-    //                     }.boxed()
-    //                 });
-    //
-    //                 debug!("item {i} executed");
-    //             });
-    //         });
-    //
-    //         drop(wg_1);
-    //     });
-    //
-    //
-    //     wg.wait();
-    //     println!("data_done_rc.read().len()={}", data_done_rc.read().len());
-    //     // while data_done_rc.read().len() != num_items * 3 {
-    //     //     // println!("data_done={data_done_rc:?}", data_done_rc);
-    //     //     thread::sleep(Duration::new(1, 0));
-    //     // }
-    //     // debug!("data_done={data_done_rc_1:?}");
-    //     // thread::sleep(Duration::new(120, 0));
-    //     let exec_time_mls = time_exec.load(Relaxed) / 1e6 as u64;
-    //     let elapsed = t_0.elapsed().as_millis();
-    //     let r = exec_time_mls as f64 / elapsed as f64;
-    //     info!("all done, {}/{} in elapsed={elapsed} mls exec time={exec_time_mls} r={r}", data_done_rc.read().len(), exec_2.read().resources_len());
-    //
-    //     assert_eq!(data_done_rc.read().len(), num_items * 3);
-    //
-    //     // exec_2.write().stop();
-    //
-    //     // thread::sleep(Duration::new(3, 0));
-    //
-    //     Ok(())
-    // }
+    #[test]
+    fn test_loader() -> Result<(), ThoosaError> {
+        use parking_lot::{RwLock};
+        use rayon::iter::IntoParallelIterator;
+        use rayon::prelude::*;
+        use log::{info};
+        use std::sync::Arc;
+        use super::*;
+        use futures::{
+            future::{FutureExt},
+
+        };
+
+        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
+            let b = std::thread::Builder::new();
+            b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build()?;
+
+
+        let num_items = 10usize;
+        let num_chunks = 1usize;
+        let executor = LoadRunner::new(load_test_entity_sv, 4, 100);
+        let executor_rc = Arc::new(RwLock::new(executor));
+        // let wg_1 = wg.clone();
+
+
+        let exec_0 = Arc::clone(&executor_rc);
+        let exec_1 = Arc::clone(&executor_rc);
+        let exec_2 = Arc::clone(&executor_rc);
+
+        let wg = WaitGroup::new();
+        let wg_0 = wg.clone();
+        let wg_1 = wg.clone();
+
+        let data_done = Arc::new(RwLock::new(HashSet::<Resource>::new()));
+        let data_done_rc = Arc::clone(&data_done);
+        let data_done_rc_0 = Arc::clone(&data_done_rc);
+        let data_done_rc_1 = Arc::clone(&data_done_rc);
+
+        let time_exec = Arc::new(AtomicU64::new(0));
+
+        let time_exec_rc_0 = Arc::clone(&time_exec);
+        let time_exec_rc_1 = Arc::clone(&time_exec);
+
+
+        let t_0 = Instant::now();
+
+        let aaa_resources = (0..num_chunks).map(|c|(0..num_items).map(|i|Resource::new( (c * num_items + i) as u32, 1,format!("aaa_{}", i))).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let bbb_resources = (num_chunks..2*num_chunks).map(|c| (0..num_items).map(|i|Resource::new((c * num_items + i) as u32, 1,format!("bbb_{}", i))).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let ccc_resources = (2*num_chunks..3*num_chunks).map(|c| (0..num_items).map(|i|Resource::new((c * num_items + i) as u32, 1,format!("bbb_{}", i))).collect::<Vec<_>>()).collect::<Vec<_>>();
+
+        println!("aaa_resources={aaa_resources:?}");
+        println!("bbb_resources={bbb_resources:?}");
+        println!("ccc_resources={ccc_resources:?}");
+        let bbb_resources_1= bbb_resources.clone();
+        pool_0.spawn(move || {
+            let cache_area_0 = exec_0.write().get_available_cache_area();
+            debug!("cache_area_0={cache_area_0:064b}");
+
+            (0..num_chunks).into_par_iter().for_each(|b| {
+
+                exec_0.write().preload(&[aaa_resources[b].clone(), bbb_resources[b].clone()].concat(), cache_area_0);
+
+                (0..num_items).for_each(|j| {
+                    let i = b * 10 + j;
+
+                    let wg_0_i = wg_0.clone();
+
+
+                    let data_done_rc = Arc::clone(&data_done_rc_0);
+                    let time_exec_rc = Arc::clone(&time_exec_rc_0);
+
+                    let aaa_resources= aaa_resources.clone();
+                    let bbb_resources= bbb_resources.clone();
+
+                    exec_0.write().exec(move |loader_arc, keys_purge| {
+                        async move {
+                            let t = Instant::now();
+                            let _out_a = LoadRunner::<TestEntity>::load_future(Arc::clone(&loader_arc), aaa_resources[b][j].clone(), cache_area_0).await;
+
+                            let _out_b = LoadRunner::<TestEntity>::load_future(loader_arc, bbb_resources[b][j].clone(), cache_area_0).await;
+
+                            let time = t.elapsed().as_millis();
+                            // *waiting_time_guard += time;
+                            //
+                            let mut rw_lock_write_guard = data_done_rc.write();
+                            rw_lock_write_guard.insert(aaa_resources[b][j].clone());
+                            rw_lock_write_guard.insert(bbb_resources[b][j].clone());
+                            drop(rw_lock_write_guard);
+                            // *waiting_time_avg_guard = (*waiting_time_avg_guard * (n - 1) + time) / n;
+
+                            let exec_time = rand::thread_rng().gen_range(100..1e9 as u32);
+                            time_exec_rc.fetch_add(exec_time.into(), Relaxed);
+                            thread::sleep(Duration::new(0, exec_time));
+
+                            drop(wg_0_i);
+
+                            (keys_purge)(vec![aaa_resources[b][j].clone(), bbb_resources[b][j].clone()], cache_area_0);
+                        }.boxed()
+                    });
+
+                    debug!("item {i} executed");
+                });
+            });
+            drop(wg_0);
+        });
+
+        let bbb_resources = bbb_resources_1.clone();
+        pool_0.spawn(move || {
+            let cache_area_1 = exec_1.write().get_available_cache_area();
+            debug!("cache_area_1={cache_area_1:064b}");
+
+            (0..num_items / 10).into_par_iter().for_each(|b| {
+                exec_1.write().preload(&[bbb_resources[b].clone(), ccc_resources[b].clone()].concat(), cache_area_1);
+
+                (0..10).for_each(|j| {
+                    let i = b * 10 + j;
+
+                    let wg_0_i = wg_1.clone();
+
+                    let data_done_rc = Arc::clone(&data_done_rc_1);
+                    let time_exec_rc = Arc::clone(&time_exec_rc_1);
+
+                    let bbb_resources= bbb_resources.clone();
+                    let ccc_resources= ccc_resources.clone();
+
+                    exec_1.write().exec(move |loader, keys_purge| {
+                        async move {
+                            let t = Instant::now();
+                            let _out_a = Loader::<TestEntity>::load_future(Arc::clone(&loader), bbb_resources[b][j].clone(), cache_area_1).await;
+
+                            let _out_b = Loader::<TestEntity>::load_future(loader, ccc_resources[b][j].clone(), cache_area_1).await;
+
+
+                            let time = t.elapsed().as_millis();
+
+
+                            let mut rw_lock_write_guard = data_done_rc.write();
+                            rw_lock_write_guard.insert(bbb_resources[b][j].clone());
+                            rw_lock_write_guard.insert(ccc_resources[b][j].clone());
+
+
+
+                            let exec_time = rand::thread_rng().gen_range(100..2e9 as u32);
+                            time_exec_rc.fetch_add(exec_time.into(), Relaxed);
+                            thread::sleep(Duration::new(0, exec_time));
+
+
+
+                            drop(wg_0_i);
+
+                            // info!("1: key_aaa={key_bbb:?} key_bbb={key_ccc:?} done, time={time}");
+                            (keys_purge)(vec![bbb_resources[b][j].clone(), ccc_resources[b][j].clone()], cache_area_1);
+                        }.boxed()
+                    });
+
+                    debug!("item {i} executed");
+                });
+            });
+
+            drop(wg_1);
+        });
+
+
+        wg.wait();
+        println!("data_done_rc.read().len()={}", data_done_rc.read().len());
+        // while data_done_rc.read().len() != num_items * 3 {
+        //     // println!("data_done={data_done_rc:?}", data_done_rc);
+        //     thread::sleep(Duration::new(1, 0));
+        // }
+        // debug!("data_done={data_done_rc_1:?}");
+        // thread::sleep(Duration::new(120, 0));
+        let exec_time_mls = time_exec.load(Relaxed) / 1e6 as u64;
+        let elapsed = t_0.elapsed().as_millis();
+        let r = exec_time_mls as f64 / elapsed as f64;
+        info!("all done, {}/{} in elapsed={elapsed} mls exec time={exec_time_mls} r={r}", data_done_rc.read().len(), exec_2.read().resources_len());
+
+        assert_eq!(data_done_rc.read().len(), num_items * 3);
+
+        // exec_2.write().stop();
+
+        // thread::sleep(Duration::new(3, 0));
+
+        Ok(())
+    }
 
     #[test]
     fn test_first_free_bit() {

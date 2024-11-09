@@ -15,7 +15,7 @@ use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
 use thoosa_shared::{recurse_files, ThoosaError};
 use crate::utils::cdt_for_dir;
 use rayon::iter::ParallelIterator;
-
+use thoosa_shared::resource::Resource;
 
 pub struct FsWorkspace {
     base_path:PathBuf,
@@ -95,8 +95,8 @@ impl Workspace for FsWorkspace {
     fn tensors_path(&self) -> &PathBuf {
         &self.tensors_path
     }
-    fn tensor_path(&self, key: &dyn Display) -> PathBuf {
-        self.tensors_path.join(format!("{key}.pt"))
+    fn tensor_path(&self, key: &Resource) -> PathBuf {
+        self.tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem()))
     }
     fn models_path(&self) -> &PathBuf {
         &self.models_path
@@ -239,7 +239,7 @@ pub trait Workspace:Sync + Send {
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
     fn tensors_path(&self) -> &PathBuf;
-    fn tensor_path(&self, key: &dyn Display) -> PathBuf;
+    fn tensor_path(&self, key: &Resource) -> PathBuf;
     fn models_path(&self) -> &PathBuf;
     fn motifs_models_path(&self) -> &PathBuf;
     fn labels_models_path(&self) -> &PathBuf;
@@ -293,7 +293,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn tensor_path(&self, key: &dyn Display) -> PathBuf {
+    fn tensor_path(&self, key: &Resource) -> PathBuf {
         todo!()
     }
 
@@ -371,7 +371,7 @@ mod tests {
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
         let tensors_path = Some(test_dir.join("tensors"));
-        let ws = FsWorkspace::new(test_dir, 2, 684400, tensors_path)?;
+        let ws = FsWorkspace::new(test_dir, 2, 684400)?;
 
 
         debug!("store_path={:?}", ws.store_path());
@@ -406,7 +406,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = FsWorkspace::new(test_dir, 20, 684400, Some("tensors".into()))?;
+        let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
 
         ws.save_label_model(1, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10));

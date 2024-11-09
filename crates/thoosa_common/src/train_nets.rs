@@ -28,7 +28,7 @@ use thoosa_shared::parse_key_val;
 use thoosa_shared::val::unprefix_properties;
 use thoosa_shared::val::Val;
 use thoosa_shared::parse_range_or_value;
-use thoosa_shared::resource::ResourceId;
+use thoosa_shared::resource::{Resource, ResourceId};
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::apply_channel_motifs;
@@ -145,8 +145,8 @@ impl TrainLabelNodeParams {
 * returns num labels * items_per_label x channels x motifs x motifs batch size
 */
 struct LoadingTensorsDataBatch  {
-    train: Vec<(i64, Vec <ResourceId>)>,
-    val: Vec<(i64, Vec <ResourceId>)>,
+    train: Vec<(i64, Vec <Resource>)>,
+    val: Vec<(i64, Vec <Resource>)>,
     batch_size: usize,
     executor: Arc<parking_lot::RwLock< LoadRunner<Box<Tensor>>>>,
     device:Device,
@@ -156,8 +156,8 @@ struct LoadingTensorsDataBatch  {
 impl LoadingTensorsDataBatch {
 
     pub fn new(
-        train: Vec<(i64, Vec <ResourceId>)>,
-        val: Vec<(i64, Vec <ResourceId>)>,
+        train: Vec<(i64, Vec <Resource>)>,
+        val: Vec<(i64, Vec <Resource>)>,
         batch_size: usize,
         executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
         device:Device,
@@ -175,7 +175,7 @@ impl LoadingTensorsDataBatch {
         }
     }
 
-    fn choose_for_batch(class_resources: &Vec<(i64, Vec<ResourceId>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>, device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
+    fn choose_for_batch(class_resources: &Vec<(i64, Vec<Resource>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>, device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
         let per_class_len = batch_size / class_resources.len();
@@ -263,8 +263,8 @@ impl    DataBatch for LoadingTensorsDataBatch {
 
 
 struct ClassTensorsLoaderData  {
-    train_resources: Vec<(ResourceId, Vec<f32>)>,
-    valid_resources: Vec<(ResourceId, Vec<f32>)>,
+    train_resources: Vec<(Resource, Vec<f32>)>,
+    valid_resources: Vec<(Resource, Vec<f32>)>,
     executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     batch_size: usize,
     device:Device,
@@ -274,8 +274,8 @@ struct ClassTensorsLoaderData  {
 impl ClassTensorsLoaderData  {
 
     pub fn new(
-        train_loader: Vec<(ResourceId, Vec<f32>)>,
-        valid_loader: Vec<(ResourceId, Vec<f32>)>,
+        train_loader: Vec<(Resource, Vec<f32>)>,
+        valid_loader: Vec<(Resource, Vec<f32>)>,
         batch_size: usize,
         executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
         device:Device,
@@ -307,7 +307,7 @@ impl   DataBatch for ClassTensorsLoaderData {
 
 impl   ClassTensorsLoaderData {
 
-    fn batch(resources: &mut Vec<(ResourceId, Vec<f32>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
+    fn batch(resources: &mut Vec<(Resource, Vec<f32>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
         debug!("ClassTensorsLoaderData.batch: resources={resources:?} batch_size={batch_size}");
         let mut rng = thread_rng();
 
@@ -381,8 +381,8 @@ pub fn train_label_nodes (
     motif_node_params:&MotifNodeParams,
     label_node_params:&LabelNodeParams,
     train_on_label_params: &TrainLabelNodeParams,
-    train_labels_resources:Vec<(i64, Vec <ResourceId>)>,
-    valid_labels_resources: Vec<(i64, Vec <ResourceId>)>,
+    train_labels_resources:Vec<(i64, Vec <Resource>)>,
+    valid_labels_resources: Vec<(i64, Vec <Resource>)>,
     device: &Device,
     executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     channels_motifs_nodes:Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>
@@ -470,8 +470,8 @@ fn apply_motifs_to_loaders<I, F>(
 pub fn train_final (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     train_final_params: &TrainFinalParams,
-    train_resources:Vec<(ResourceId, Vec<f32>)>,
-    valid_resources: Vec<(ResourceId, Vec<f32>)>,
+    train_resources:Vec<(Resource, Vec<f32>)>,
+    valid_resources: Vec<(Resource, Vec<f32>)>,
     step: usize, motif_batch_size: i64, device: &Device, labels: Vec<String>,
     executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     label_models: HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>, //TODO Arc<RwLock...
@@ -1570,7 +1570,7 @@ mod train_tests {
     use tch::nn::{init, LinearConfig, Module};
 
     use thoosa_shared::{batch_windows, clc_num_batches, ThoosaError};
-
+    use thoosa_shared::resource::Resource;
     use crate::builder::SeqBuilder;
     use crate::loader::{LoadRunner, SyncWrapper};
     use crate::my_tch::apply_channel_motifs;
@@ -1638,7 +1638,7 @@ mod train_tests {
 
         SeqBuilder::new(num_features)
             .linear_s_with_conf(1, LinearConfig {
-                ws_init: tch::nn::init::Init::Const(ResourceId),//conflicts with ctor's init
+                ws_init: tch::nn::init::Init::Const(k),//conflicts with ctor's init
                 bs_init: None,
                 bias: false
             })
@@ -1744,8 +1744,8 @@ mod train_tests {
         ])
     }
 
-    fn load_test_tensor(id:&String, input_n: i64) ->Box<Tensor> {
-        debug!("test_load_tensor: {}", id);
+    fn load_test_tensor(id:&Resource, input_n: i64) ->Box<Tensor> {
+        debug!("test_load_tensor: {id:?}");
 
         Box::new(make_test_tensor(input_n))
     }
@@ -1757,7 +1757,7 @@ mod train_tests {
         debug!("test_train_on_label: test_dir={test_dir:?}");
 
         let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, tensors_path)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000)?));
 
         let params = TrainLabelNodeParams {
             motif_node_params_selection_run_ids: vec![0],
@@ -1784,17 +1784,14 @@ mod train_tests {
 
         let resource_keys = |(label, kind)| {
             (label, (0..13).map(move |id| {
-                format!("{}-{}-{}", label, kind, id)
+                Resource::new(id, 1, format!("{}-{}-{}", label, kind, id))
             }).collect())
         };
 
-        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
-            move |key: &String| {
+        let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
+            move |key: &Resource| {
 
-                SyncWrapper::new(
-                    load_test_tensor(ResourceIdey, 1000),
-                    |e| Box::new(e.shallow_clone())
-                )
+                SyncWrapper::new_tb(load_test_tensor(key, 1000))
             }, 4, 100,
         )));
 
@@ -1855,7 +1852,7 @@ mod train_tests {
         debug!("test_train_on_label: test_dir={test_dir:?}");
         let channels = 5;
         let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 1000, tensors_path)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 1000)?));
 
         let params = TrainFinalParams {
             step:100,
@@ -1915,10 +1912,10 @@ mod train_tests {
         fs::write(&ws.read().models_path().join("unexpected.file"), "lalala")?;
 
         let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
-            move |key: &String| {
+            move |key: &Resource| {
 
                 SyncWrapper::new_tb(
-                    load_test_tensor(ResourceIdey, 1000)
+                    load_test_tensor(key, 1000)
                 )
             }, 4, 100,
         )));
@@ -1928,9 +1925,9 @@ mod train_tests {
             &ws,
             &params,
 
-            (0..13).map(|i|(format!("{i}"), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
+            (0..13).map(|i|(Resource::new(i, 1, format!("{i}")), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
 
-            (0..13).map(|i|(format!("{i}"), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
+            (0..13).map(|i|(Resource::new(i, 1, format!("{i}")), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
 
             100,
             motif_batch_size,
@@ -2021,7 +2018,7 @@ mod train_tests {
         let models_path = Path::new("/tmp/test_infer").join(&cdt);
 
 
-        save_test_models(&Arc::new(RwLock::new(FsWorkspace::new(&cdt, 20, 684400, None)?)), 1, channels, max_motif_batches, motif_batch_size, 1)?;
+        save_test_models(&Arc::new(RwLock::new(FsWorkspace::new(&cdt, 20, 684400)?)), 1, channels, max_motif_batches, motif_batch_size, 1)?;
         save_test_final_model(&models_path, 6)?;
 
         let input_path = Path::new("/tmp/test_infer_input").join(&cdt);
@@ -2045,15 +2042,14 @@ mod train_tests {
             Ok(t)
         }
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 684400, None)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 684400)?));
 
 
         let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
-            move |key: &String| {
+            move |key: &Resource| {
 
-                SyncWrapper::new(
-                    load_test_tensor(ResourceIdey, 1000),
-                    |e| Box::new(e.shallow_clone())
+                SyncWrapper::new_tb(
+                    load_test_tensor(key, 1000)
                 )
             }, 4, 100,
         )));
