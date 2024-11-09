@@ -18,7 +18,7 @@ use tch::{Device, IndexOp, Tensor};
 
 use thoosa_common::ResourceLoader;
 use thoosa_common::utils::{from, load_tensor};
-use thoosa_shared::resource::ResourceId;
+use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::TensorSliceIdx;
 use thoosa_store::{SqlStore, Store};
@@ -131,7 +131,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 
-pub fn load_to_logits_tensors (group:&str,  device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(ResourceId, Vec<f32>)> {
+pub fn load_to_logits_tensors (group:&str,  device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(Resource, Vec<f32>)> {
 
     let mut store_lock = store.lock();
 
@@ -204,7 +204,7 @@ pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
 
 }
 
-pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec <ResourceId>)>  {
+pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec <Resource>)>  {
     debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
     let mut store_lock = store.lock();
