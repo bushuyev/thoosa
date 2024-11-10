@@ -27,7 +27,7 @@ use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_mode
 use thoosa_common::utils::{cdt, list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams};
-use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsToTensorParams, PlotMotifSlicesParams};
+use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams};
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, Resources, TensorSliceIdx, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_store::{SqlStore, Store};
@@ -305,7 +305,7 @@ pub fn run_cli<F,R>(
         cli.ws_path.clone(),
         channels,
         max_input
-    )?));//TODO channels
+    )?));
 
 
     let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
@@ -504,7 +504,7 @@ pub fn run_cli<F,R>(
                 let mut store_guard = store.lock();
                 (
                     store_guard.list_labels().expect("store_guard"),
-                    MotifNodeParams::from_properties_map(store_guard.list_run_params(777, None).expect("list_run_params"))
+                    MotifNodeParams::from_properties_map(store_guard.list_run_params(777).expect("list_run_params"))
                 )
             };
 
@@ -536,7 +536,7 @@ pub fn run_cli<F,R>(
 
         }
         Some(PlotMotifSlices(plot_motif_slices_params)) => {
-            plot_motif_slices(&cli, store, *devices.first().expect("first device"), &plot_motif_slices_params, &loader)?;
+            run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params)?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -689,7 +689,7 @@ pub fn run_train_label_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<
             let motif_node_params_run_ids = store_in_threads.lock().list_output_run_ids(*motif_node_params_selection_run_id).expect("list_output_run_ids")[0]; //TODO motif_node_params_run_ids len > 1
 
             let motif_node_params = {
-                MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store_in_threads.lock().list_run_params(motif_node_params_run_ids, None).expect("list_run_params")))
+                MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store_in_threads.lock().list_run_params(motif_node_params_run_ids).expect("list_run_params")))
             };
 
 
@@ -941,30 +941,52 @@ pub fn import_resources<F, R>(
     }
 }
 
-fn plot_motif_slices (cli: &Cli, store: Arc<Mutex<Box<dyn Store>>>, device: Device, plot_motif_slices_params: &PlotMotifSlicesParams, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Result<(), ThoosaError> {
-    let mut store_guard = store.lock();
+fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, plot_motif_slices_params: &PlotMotifSlicesParams) -> Result<(), ThoosaError> {
+    match plot_motif_slices_params.motifs_by() {
+        MotifsBy::MotifId(motif_id) => {
+            debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
-    let (channel, _run_id, slices) = store_guard.list_motif_slices(plot_motif_slices_params.motif_id(), None, None)?;
+            plot_motif_slices(ws, store, loader, motif_id)?;
+        }
+        MotifsBy::RunId(run_id) => {
+            debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
+            fs::create_dir_all(ws.read().plots_path().join(run_id.to_string()))?;
 
+            let motif_distances = store.lock().list_motifs_distances(run_id)?;
+            for (motif_id, dist) in motif_distances.into_iter() {
+                debug!("run_plot_motif_slices: motif_id={motif_id}");
+                plot_motif_slices(ws, store, loader, motif_id)?;
+            }
+        }
+    }
 
-    let slices = load_motif_slices(channel, plot_motif_slices_params.window as i64, slices.into_iter().map(|s|TensorSliceIdx(s.0.into(), s.1)).collect(), executor);//TODO Into for TensorSliceIdx
+    Ok(())
+}
+
+fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize) -> Result<(), ThoosaError> {
+    let (channel, run_id, slices) = store.lock().list_motif_slices(motif_id, None, None)?;
+    let slices_len = slices.len();
+    if slices_len < 3 {
+        return Ok(())
+    }
+
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(store.lock().list_run_params(run_id)?);
+
+    let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorSliceIdx(s.0.into(), s.1)).collect(), executor); //TODO Into for TensorSliceIdx
 
     let all_sices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
     // check_slices(&all_sices, 0.9);
 
-    let plots_dir = Path::new(cli.ws_path.as_str()).join("plots");
-
-    fs::create_dir_all(&plots_dir)?;
-
     plot_series(
         all_sices.into_iter().map(|t| {
             (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
         }).collect(),
-        format!("Motif {}", plot_motif_slices_params.motif_id()).as_str(),
+        format!("Motif: {motif_id} run id: {run_id} number of slices: {slices_len}").as_str(),
         (2000, 1000),
-        &plots_dir.join(format!("motif_{}.png", plot_motif_slices_params.motif_id()))
-    ).unwrap();
+        &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
+    )?;
+
     Ok(())
 }
 
@@ -981,7 +1003,7 @@ fn run_train_motif_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_
                 .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr)
                 .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>(),
 
-            FindMotifsRunConfig::from_properties_map(store_guard.list_run_params(find_motifs_run_id, None)?)
+            FindMotifsRunConfig::from_properties_map(store_guard.list_run_params(find_motifs_run_id)?)
         )
     };
 
@@ -1100,7 +1122,7 @@ fn select_motifs_for_label (ws: &Arc<RwLock<Box<dyn Workspace>>>, store:Arc<Mute
         (
             store_guard.list_motifs_slices(find_motifs_run_id)?,
             store_guard.list_motifs_distances(find_motifs_run_id)?,
-            FindMotifsRunConfig::from_properties_map(store_guard.list_run_params(find_motifs_run_id, None)?)
+            FindMotifsRunConfig::from_properties_map(store_guard.list_run_params(find_motifs_run_id)?)
         )
     };
 
@@ -1240,7 +1262,7 @@ mod main_tests {
     use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, Resources, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{SqlStore, Store};
-    use crate::cli::{import_resources, plot_motif_slices, resource_path, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
+    use crate::cli::{import_resources, run_plot_motif_slices, resource_path, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
     use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -1382,7 +1404,7 @@ mod main_tests {
                 min_tracker_step: Some(3),
                 max_keys_fifo: 3,
                 chunk_size: 2,
-                max_dist: 0.5,
+                max_dist_k: 0.5,
                 input_filter: None,
             },
             find_motifs_by_euc_dist,
@@ -1486,7 +1508,7 @@ mod main_tests {
         ///////////////////////////
 
         let find_motifs_params = FindMotifsParams::dummy(100, 800..800, "test set".into(), 10, 1.0, None);
-        let param_set = find_motifs_params.to_filter_and_slice_params(&LinearExpander::new(1));
+        let param_set = find_motifs_params.to_run_configs();
 
         let find_motifs_run_id_0 = save_test_motifs(&resources, Arc::clone(&store), find_motifs_params.clone(), param_set.clone(), "t_0_")?;
         let find_motifs_run_id_1 = save_test_motifs(&resources, Arc::clone(&store), find_motifs_params, param_set, "t_1_")?;

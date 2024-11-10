@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use log::{debug, info, warn};
@@ -222,26 +222,35 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
     Ok(())
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum MotifsBy {
+    MotifId(usize),
+    RunId(usize)
+}
+
+impl From<&str> for MotifsBy {
+    fn from(v: &str) -> MotifsBy {
+        if v.starts_with("motif_id:"){
+            MotifsBy::MotifId(v[v.find(":").expect(": not found")+1..].parse().expect("can't parse {v} to motif_id"))
+        } else if v.starts_with("run_id:") {
+            MotifsBy::RunId(v[v.find(":").expect(": not found")+1..].parse().expect("can't parse {v} to run_id"))
+        } else {
+            panic!("unexpected parameter {v}, should be motif:id:nnn or run_id:nnn")
+        }
+    }
+}
+
 #[derive(Debug, Args, Clone)]
 pub struct PlotMotifSlicesParams {
 
-    #[arg(long)]
-    motif_id: usize,
-
-
-    #[arg(long)]
-    pub window: usize,
+    #[arg(value_enum)]
+    motifs_by: MotifsBy,
 
 }
 
 impl PlotMotifSlicesParams {
-
-    pub fn motif_id(&self) -> usize {
-        self.motif_id
-    }
-
-    pub fn new(motif_id: usize, window:usize) -> Self {
-        Self { motif_id, window }
+    pub fn motifs_by(&self) -> MotifsBy {
+        self.motifs_by
     }
 }
 

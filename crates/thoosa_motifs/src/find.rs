@@ -18,7 +18,7 @@ use crossbeam_utils::sync::WaitGroup;
 use futures::{FutureExt, StreamExt};
 use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
-use tch::{Device, IndexOp, Tensor};
+use tch::{Device, IndexOp, Kind, Tensor};
 
 
 use thoosa_common::utils::*;
@@ -38,8 +38,10 @@ use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelB
 use rayon::iter::ParallelIterator;
 use rayon::iter::IndexedParallelIterator;
 use tch::Device::{Cpu, Cuda};
+use tch::kind::FLOAT_CPU;
 use thoosa_common::loader;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
+use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::runs::{Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
@@ -70,7 +72,7 @@ pub struct FindMotifsParams {//TODO pub
     pub chunk_size: u32,
 
     #[arg(long, default_value_t = 0.01)]
-    pub max_dist: f32,
+    pub max_dist_k: f32,
 
     #[command(subcommand)]
     pub input_filter: Option<InputFilter>,
@@ -101,7 +103,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
             self.window.clone().into_iter(),
         ]).into_iter().map(|config_combo|{
             debug!("FindMotifsParams::to_run_configs: config_combo={config_combo:?} ");
-            FindMotifsRunConfig::new(config_combo[0], config_combo[1], 1.0, "".to_string(), None)
+            FindMotifsRunConfig::new(config_combo[0], config_combo[1], self.max_dist_k, "".to_string(), None)
         }).collect()
     }
 
@@ -203,7 +205,7 @@ impl FindMotifsParams {
 
             chunk_size,
 
-            max_dist: max_dist_k,
+            max_dist_k: max_dist_k,
 
             input_filter: input_filter.cloned(),
         }
@@ -219,12 +221,9 @@ impl FindMotifsParams {
         self.max_keys_fifo
     }
     pub fn max_dist_k(&self) -> f32 {
-        self.max_dist
+        self.max_dist_k
     }
 
-    pub fn to_filter_and_slice_params(&self, expander: &dyn Expander<T=FindMotifsRunConfig>) -> Vec<FindMotifsRunConfig> {
-        expander.expand(FindMotifsRunConfig::new(*self.step.expect_value().unwrap(), *self.window.expect_value().unwrap(), 1.0, "no filter", self.input_filter.clone()))
-    }
 }
 
 pub trait Expander {
@@ -319,22 +318,34 @@ pub fn find_motifs_by_euc_dist(
                     &tensor_1.to_device(devices[0])
                 ).expect(format!("dist_d2 on channel={}", channel, ).as_str());
 
+                let euc_dists_flat = euc_dist_t.view(-1);
+
+                let mean = euc_dists_flat.mean(Kind::Float).double_value(&[]) as f32;
+                let mean_k = mean * find_motifs_run_config.max_dist_k;
+
+                debug!("find_motifs_by_euc_dist: euc_dist_t.device={:?} mean={} find_motifs_run_config.max_dist_k={} mean_k={mean_k}", euc_dist_t.device(), mean, find_motifs_run_config.max_dist_k);
+
+                let distances = from::<Vec<f32>>(&euc_dists_flat);
+
+                drop(euc_dist_t);
+                drop(euc_dists_flat);
+
                 collect_dists(
                     &chunk_0,
                     &chunk_1,
-                    &euc_dist_t,
+                    distances,
                     find_motifs_run_config.step as i64,
                     |(slice_0, slice_1, dist)| {
-                        if dist < find_motifs_run_config.max_dist {
-                            mt.write().track(
-                                slice_0,
-                                slice_1,
-                                dist,
-                            );
-                        }
+
+                        mt.write().track(
+                            slice_0,
+                            slice_1,
+                            dist,
+                        );
+
                     },
                     |dist: &f32| {
-                        dist < &find_motifs_run_config.max_dist
+                        dist < &mean_k
                     }
                 );
                 debug!("find_motifs_by_euc_dist: channel={channel} done");
@@ -345,13 +356,14 @@ pub fn find_motifs_by_euc_dist(
         },
         loader,
     )?;
-
+    info!("setting motifs in {} configs", run_config_ids.len());
     for run_config_id in run_config_ids.iter() {
         for channel in 0..ws.read().channels() {
             { store.lock().set_motifs(*run_config_id, channel as i64) }?;
+            print!(".");
         }
-
         { store.lock().delete_slices_without_matches(*run_config_id) }?;
+        println!();
     }
 
     // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
@@ -408,7 +420,7 @@ pub struct FindMotifsRunConfig {
     id:Option<usize>,
     step: u32,
     window: u32,
-    max_dist: f32,
+    max_dist_k: f32,
     min_tracker_step: Option<usize>,
     filter: Option<InputFilter>,
     descr: String,
@@ -419,7 +431,7 @@ impl RunConfig for FindMotifsRunConfig {
         let mut map = HashMap::from([
             ("FilterAndSlicerParams.step".into(), self.step.into()),
             ("FilterAndSlicerParams.window".into(), self.window.into()),
-            ("FilterAndSlicerParams.max_dist".into(), self.max_dist.into()),
+            ("FilterAndSlicerParams.max_dist".into(), self.max_dist_k.into()),
             ("FilterAndSlicerParams.descr".into(), self.descr.as_str().into()),
         ]);
 
@@ -435,7 +447,7 @@ impl RunConfig for FindMotifsRunConfig {
         FindMotifsRunConfig::new(
             properties.get("step").expect("no step").as_usize().expect("step as_usize") as u32,
             properties.get("window").expect("no window").as_i64().expect("window as_i64") as u32,
-            properties.get("max_dist").expect("no max_dist").as_f32().expect("window as_f32") as f32,
+            properties.get("max_dist").expect("no max_dist").as_f32().expect("max_dist as_f32"),
             properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
             InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)).ok(),
         )
@@ -450,7 +462,7 @@ impl FindMotifsRunConfig {
     pub fn new(
         step: u32,
         window: u32,
-        max_dist: f32,
+        max_dist_k: f32, //TODO move to common
         descr: impl Into<String>,
         filter: Option<InputFilter>,
     ) -> Self {
@@ -458,7 +470,7 @@ impl FindMotifsRunConfig {
             id:None,
             step,
             window,
-            max_dist,
+            max_dist_k,
             filter,
             min_tracker_step: None,//TODO
             descr: descr.into(),
@@ -486,7 +498,7 @@ where
     G: Fn(ChunkOfSlicedTensors <ResourceId>, ChunkOfSlicedTensors <ResourceId>, usize, &FindMotifsRunConfig, &Vec<Arc<RwLock<SimpMotifTracker<StoreDumper>>>>) -> Result<(), ThoosaError> + Send + Sync
 {
     let mut resource_chunks = resources.chunks(chunk_size)
-        .map(|v| v.iter().map(|k| k.clone()).collect::<Vec <Resource>>())
+        .map(|v| v.iter().map(|k| k.clone()).collect::<Vec <Resource>>())//TODO k.clone()
         .collect::<Vec<Vec<Resource>>>();//[Resource]
 
     resource_chunks.push(vec![]); //to get last window processed
@@ -600,10 +612,10 @@ where
                 });
 
             exec.write().purge_cache_keys(window_1[0].clone(), area_1);
-
+            print!(".")
         }
         exec.write().purge_cache_keys(window_0[0].clone(), area_0);
-
+        info!("done {chunk_i_0} chunks out of {}", resource_chunks.len());
     }
     Ok(())
 }
@@ -611,7 +623,8 @@ where
 fn collect_dists<'a, F, C>(
     chunk_0: &'a ChunkOfSlicedTensors <ResourceId>,
     chunk_1: &'a ChunkOfSlicedTensors <ResourceId>,
-    dist_t:&Tensor, step: i64,
+    distances:Vec<f32>,
+    step: i64,
     mut listener:F,
     condition:C
 ) where F:FnMut((TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)),
@@ -619,7 +632,7 @@ fn collect_dists<'a, F, C>(
 {
 
 
-    let distances = from::<Vec<f32>>(&dist_t.view(-1));
+
     let mut distances_i = 0;
 
     chunk_0.sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
@@ -629,7 +642,7 @@ fn collect_dists<'a, F, C>(
                 for (slice_1_idx, s_1) in (0..*t_size_1).enumerate() {
                     //println!("t_idx_0={t_idx_0} slice_0_idx={slice_0_idx} t_idx_1={t_idx_1} slice_1_idx={slice_1_idx} d={}", distances[distances_i]);
 
-                    if chunk_0.keys[t_idx_0].ne(&chunk_1.keys[t_idx_1]) || slice_0_idx != slice_1_idx && condition(&distances[distances_i]) {
+                    if condition(&distances[distances_i]) && (chunk_0.keys[t_idx_0].ne(&chunk_1.keys[t_idx_1]) || slice_0_idx != slice_1_idx) {
                         listener(
                             (
                                 TensorSliceIdx(chunk_0.keys[t_idx_0].clone(), slice_0_idx as i64 * step),
@@ -1571,7 +1584,7 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             max_keys_fifo: 3,
             chunk_size: 2,
-            max_dist: 0.0001,
+            max_dist_k: 0.01,
             input_filter: None,
         };
 
@@ -1695,7 +1708,7 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             max_keys_fifo: 3,
             chunk_size: 2,
-            max_dist: 0.0001,
+            max_dist_k: 0.0001,
             input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
         };
 
@@ -1787,7 +1800,7 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             max_keys_fifo: 3,
             chunk_size: 2,
-            max_dist: 0.0001,
+            max_dist_k: 0.0001,
             input_filter: None,
         };
 
@@ -1865,7 +1878,7 @@ mod motif_find_tests {
             min_tracker_step: None,
             max_keys_fifo: 1000,
             chunk_size: 3,
-            max_dist: 0.001,
+            max_dist_k: 0.001,
             input_filter: None,
         };
 
@@ -2393,7 +2406,7 @@ mod motif_find_tests {
         collect_dists(
             &chunk_0,
             &chunk_1,
-            &dist_t,
+            from::<Vec<f32>>(&dist_t.view(-1)),
             1,
             |pair|{
                 distance_pairs.push(pair);
