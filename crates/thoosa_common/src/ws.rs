@@ -22,6 +22,7 @@ pub struct FsWorkspace {
     store_path:PathBuf,
     tensors_path:PathBuf,
     models_path:PathBuf,
+    plots_path:PathBuf,
     motifs_models_path:PathBuf,
     labels_models_path:PathBuf,
     final_models_path:PathBuf,
@@ -40,6 +41,9 @@ impl FsWorkspace {
 
         let models_path:PathBuf = base_path.join("models");
 
+        let plots_path:PathBuf = base_path.join("plots");
+        fs::create_dir_all(&plots_path)?;
+
         let tensors_path:PathBuf = base_path.join("tensors");
         fs::create_dir_all(&tensors_path)?;
 
@@ -57,6 +61,7 @@ impl FsWorkspace {
             store_path,
             tensors_path,
             models_path,
+            plots_path,
             motifs_models_path,
             labels_models_path,
             final_models_path,
@@ -101,6 +106,11 @@ impl Workspace for FsWorkspace {
     fn models_path(&self) -> &PathBuf {
         &self.models_path
     }
+
+    fn plots_path(&self) -> &PathBuf {
+        &self.plots_path
+    }
+
     fn motifs_models_path(&self) -> &PathBuf {
         &self.motifs_models_path
     }
@@ -241,6 +251,7 @@ pub trait Workspace:Sync + Send {
     fn tensors_path(&self) -> &PathBuf;
     fn tensor_path(&self, key: &Resource) -> PathBuf;
     fn models_path(&self) -> &PathBuf;
+    fn plots_path(&self) -> &PathBuf;
     fn motifs_models_path(&self) -> &PathBuf;
     fn labels_models_path(&self) -> &PathBuf;
     fn final_models_path(&self) -> &PathBuf;
@@ -298,6 +309,10 @@ impl Workspace for DummyWorkspace {
     }
 
     fn models_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn plots_path(&self) -> &PathBuf {
         todo!()
     }
 

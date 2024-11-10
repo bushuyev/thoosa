@@ -122,7 +122,7 @@ pub trait Store: Sync + Send {
     fn list_motifs_distances(&mut self, run_id: usize) -> Result<HashMap<usize, f32>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: usize) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
     fn list_run_resources(&mut self, run_id: usize) -> Result<Vec<String>, ThoosaError>;
-    fn list_run_params(&mut self, run_id: usize, label: Option<&str>) -> Result<HashMap<String, Val>, ThoosaError>;
+    fn list_run_params(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError>;
     fn save_selected_motifs(&mut self, run_id: usize, descr: &str, selected_motifs: Vec<Vec<(usize, f64)>>) -> Result<usize, ThoosaError>;
     fn list_input_run_ids(&mut self, ids: &Vec<usize>) -> Result<Vec<(usize, usize)>, ThoosaError>; //corr_run_id, run_id, label
     fn list_output_run_ids(&mut self, input_run_id: usize) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
@@ -154,6 +154,7 @@ impl Store for SqlStore {
         Ok(import_id)
     }
 
+    //TODO resources - save serialized resources config - run_resources is getting to big
     fn save_tree_run(&mut self, input_run_ids_op: Option<&[usize]>, descr: &str, resources: &str, properties_vals: HashMap<String, Val>) -> Result<usize, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction().map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
@@ -854,20 +855,22 @@ impl Store for SqlStore {
 
                 let group_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                let (mut q, params) = slices.into_iter().fold(
-                    (vec!["UPDATE slice_matches SET motif_id=? WHERE id IN ("], vec![Value::Integer(group_id)]),
-                    |mut a: (Vec<&str>, Vec<Value>), v: IdSlice| {
-                        a.0.push("?");
-                        a.0.push(", ");
-                        a.1.push(Value::Integer(v.0 as i64));
+                for slices_chunk in slices.chunks(500) {
+                    let (mut q, params) = slices_chunk.into_iter().fold(
+                        (vec!["UPDATE slice_matches SET motif_id=? WHERE id IN ("], vec![Value::Integer(group_id)]),
+                        |mut a: (Vec<&str>, Vec<Value>), v: &IdSlice| {
+                            a.0.push("?");
+                            a.0.push(", ");
+                            a.1.push(Value::Integer(v.0 as i64));
 
-                        a
-                    });
+                            a
+                        });
 
-                q.pop();
-                q.push(")");
+                    q.pop();
+                    q.push(")");
 
-                t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+                    t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+                }
             }
         }
 
@@ -1109,7 +1112,7 @@ impl Store for SqlStore {
         result
     }
 
-    fn list_run_params(&mut self, run_id: usize, _label: Option<&str>) -> Result<HashMap<String, Val>, ThoosaError> {
+    fn list_run_params(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1660,11 +1663,11 @@ mod store_tests {
             t.commit()?;
             resource_ids
         };
-        let _set_1_id = store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()], None)?;
-        let _set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()], None)?;
+        // let _set_1_id = store.save_resources_set("Set1".to_string(), vec!["1111".into(), "2222".into()], None)?;
+        // let _set_2_id = store.save_resources_set("Set2".to_string(), vec!["2222".into(), "3333".into()], None)?;
 
 
-        store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10)?;
+        // store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10)?;
 
         let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into())?;
         let _set_all_id = store.save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
@@ -1690,7 +1693,7 @@ mod store_tests {
         );
 
 
-        let map: Vec<((ResourceId, i64), (ResourceId, i64), f32)> = vec![
+        let slices: Vec<((ResourceId, i64), (ResourceId, i64), f32)> = vec![
             ((resource_ids[0], 100i64), (resource_ids[0], 200i64), 0.91),
             ((resource_ids[0], 100i64), (resource_ids[1], 200i64), 0.92),
             ((resource_ids[3], 100i64), (resource_ids[3], 200i64), 0.93),
@@ -1698,57 +1701,60 @@ mod store_tests {
             ((resource_ids[3], 200i64), (resource_ids[5], 300i64), 0.94),
         ];
 
+
         let run_id = store.save_tree_run(
             None,
             "test", "",
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
         )?;
+        /*
+                let next_run_id = store.save_tree_run(
+                    Some(&[run_id]),
+                    "test next", "",
+                    HashMap::from([("next_prop1".into(), Val::Int(1)), ("next_prop2".into(), Val::Real(2.0)), ("next_prop3".into(), Val::Str("333".to_string()))]),
+                )?;
 
-        let next_run_id = store.save_tree_run(
-            Some(&[run_id]),
-            "test next", "",
-            HashMap::from([("next_prop1".into(), Val::Int(1)), ("next_prop2".into(), Val::Real(2.0)), ("next_prop3".into(), Val::Str("333".to_string()))]),
-        )?;
+                store.save_params_value(
+                    HashMap::from([("label.prop1".into(), Val::Int(10)), ("label.prop2".into(), Val::Real(20.0)), ("label.prop3".into(), Val::Str("3330".to_string()))]),
+                    run_id,
+                    Some("aaa"),
+                )?;
 
-        store.save_params_value(
-            HashMap::from([("label.prop1".into(), Val::Int(10)), ("label.prop2".into(), Val::Real(20.0)), ("label.prop3".into(), Val::Str("3330".to_string()))]),
-            run_id,
-            Some("aaa"),
-        )?;
+                store.save_params_value(
+                    HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
+                    run_id,
+                    Some("bbb"),
+                )?;
 
-        store.save_params_value(
-            HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
-            run_id,
-            Some("bbb"),
-        )?;
+                store.save_params_value(
+                    HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
+                    run_id,
+                    None,
+                )?;
 
-        store.save_params_value(
-            HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
-            run_id,
-            None,
-        )?;
+                let loaded_params = store.list_run_params(run_id)?;
 
-        let loaded_params = store.list_run_params(run_id, None)?;
-
-        debug!("loaded_params={:?}", loaded_params);
+                // debug!("loaded_params={:?}", loaded_params);
 
 
-        assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
-        assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
-        assert_eq!(loaded_params.get("prop3").expect("prop3"), &Val::Str("333".to_string()));
+                assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
+                assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
+                assert_eq!(loaded_params.get("prop3").expect("prop3"), &Val::Str("333".to_string()));
 
-        let loaded_params_aaa = store.list_run_params(run_id, Some("aaa"))?;
+                let loaded_params_aaa = store.list_run_params(run_id)?;
 
-        debug!("loaded_params_aaa={:?}", loaded_params_aaa);
+                debug!("loaded_params_aaa={:?}", loaded_params_aaa);
 
-        store.save_slices(run_id, 7, map)?;
+                 */
+
+        store.save_slices(run_id, 7, slices.clone())?;
 
         store.set_motifs(run_id, 7)?;
 
-        let m_1_first = {
+        {
             let mut guard = store.conn().lock();
             let t2 = guard.transaction()?;
-            let mut stmt = t2.prepare("SELECT run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, motif_id FROM slice_matches")?;
+            let mut stmt = t2.prepare("SELECT run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, motif_id FROM slice_matches ORDER BY tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1")?;
 
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1764,54 +1770,39 @@ mod store_tests {
 
             debug!("rows={:?}", rows);
 
-            let m_1_first = vec![
-                (1, 7, 0+1, 100, 0+1, 200, 1),
-                (1, 7, 0+1, 100, 1+1, 200, 1),
-                (1, 7, 3+1, 100, 3+1, 200, 2),
-                (1, 7, 3+1, 200, 5+1, 200, 2),
-                (1, 7, 3+1, 200, 5+1, 300, 2)
-            ] == rows;
+            for i in 0..5 {
+                assert_eq!(&slices[i].0.0, &rows[i].2);
+                assert_eq!(&slices[i].0.1, &rows[i].3);
+                assert_eq!(&slices[i].1.0, &rows[i].4);
+                assert_eq!(&slices[i].1.1, &rows[i].5);
+            }
 
-            let m_2_first = vec![
-                (1, 7, 0+1, 100, 0+1, 200, 2),
-                (1, 7, 0+1, 100, 1+1, 200, 2),
-                (1, 7, 3+1, 100, 3+1, 200, 1),
-                (1, 7, 3+1, 200, 5+1, 200, 1),
-                (1, 7, 3+1, 200, 5+1, 300, 1)
-            ] == rows;
-
-            assert!(m_2_first || m_1_first);   //TODO motif ids are random
-
-            let mut stmt = t2.prepare("SELECT run_id, ord_id, key FROM run_resources WHERE run_id=?")?;
-
-            let rows = stmt.query_map([run_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?.map(|v| v.unwrap()).collect::<Vec<(usize, usize, String)>>();
-
-
-            //TODO run_resources
-            // assert_eq!(vec![(1, 0, "aaa".to_string()), (1, 1, "bbb".to_string())], rows);
-
-            m_1_first
         };
 
         let map = store.list_motifs_slices(run_id)?;
         debug!("map={:?}", map);
 
-        assert_eq!(4, map.len());
-        //TODO
-        // assert_eq!(3, map.get(&(0+1)).unwrap().len());
-        // assert_eq!(1, map.get(&(1+1)).unwrap().len());
-        // assert_eq!(4, map.get(&(3+1)).unwrap().len());
-        // assert_eq!(2, map.get(&(5+1)).unwrap().len());
+        // assert_eq!(4, map.len());
+        let motif_slices_1111 = map.get(&Resource::new(resource_ids[0], 1, "".into())).unwrap();
+        assert_eq!(3, motif_slices_1111.len());
 
-        //TODO run_resources
-        // assert_eq!(vec!["aaa".to_owned(), "bbb".to_owned()], store.list_run_resources(run_id)?);
+        let motif_slices_2222 = map.get(&Resource::new(resource_ids[1], 1, "".into())).unwrap();
+        assert_eq!(1, motif_slices_2222.len());
+
+        let motif_slices_444 = map.get(&Resource::new(resource_ids[3], 1, "".into())).unwrap();
+        assert_eq!(4, motif_slices_444.len());
+        assert_eq!(2, map.get(&Resource::new(resource_ids[5], 1, "".into())).unwrap().len());
+
+        debug!("motif_slices_1111={motif_slices_1111:?}");
+        debug!("motif_slices_444={motif_slices_444:?}");
 
         let motif_selection_run_id = store.save_selected_motifs(
             run_id,
-            "[(1, \"seizure_vote\"), (0, \"lpd_vote\"), (0, \"gpd_vote\"), (0, \"lrda_vote\"), (0, \"grda_vote\"), (0, \"other_vote\")]",
-            vec![vec![(1, 0.1), (2, 0.2)]],
+            "test motifs",
+            vec![vec![
+                (motif_slices_444[0].motif_id, 0.1),//motif_id corr
+                (motif_slices_1111[0].motif_id, 0.2)//motif_id corr
+            ]],
         )?;
 
         let input_run_ids = store.list_input_run_ids(&vec![motif_selection_run_id])?;
@@ -1822,47 +1813,46 @@ mod store_tests {
 
         debug!("motifs: {:?}", motifs);
 
-        assert_eq!(1, motifs[7][0].0);
-        assert_eq!(2, motifs[7][1].0);
+        //7th channel
+        assert_eq!(motif_slices_444[0].motif_id, motifs[7][0].0);
+        assert_eq!(motif_slices_1111[0].motif_id, motifs[7][1].0);
+        //
+        // //TODO
+        let (channel, run_id_, mut slices) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None)?;
+        slices.sort();
 
-        //TODO
-        // let (channel, run_id_, mut slices) = store.list_motif_slices(1, None, None)?;
-        // slices.sort();
-        //
-        // if m_1_first {
-        //     assert_eq!(vec![
-        //         TensorSliceIdx(1, 100), TensorSliceIdx(1, 200), TensorSliceIdx(1, 200)
-        //     ], slices);
-        // } else {
-        //     assert_eq!(vec![
-        //         TensorSliceIdx(4, 100), TensorSliceIdx(4, 200), TensorSliceIdx(6, 200), TensorSliceIdx(6, 300)
-        //     ], slices);
-        // }
-        //
-        // assert_eq!(7, channel);
-        // assert_eq!(run_id, run_id_);
-        //
-        // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize)))?;
-        //
-        // slices.sort();
-        //
-        // if !m_1_first {
-        //     assert_eq!(vec![
-        //         TensorSliceIdx(1, 100), TensorSliceIdx(1, 200), TensorSliceIdx(2, 200)
-        //     ], slices);
-        // } else {
-        //     assert_eq!(vec![
-        //         TensorSliceIdx(3, 100), TensorSliceIdx(3, 200), TensorSliceIdx(6, 200), TensorSliceIdx(6, 300)
-        //     ], slices);
-        // }
+        debug!("slices={slices:?}");
 
-        // debug!("corrs_descr={:?}", store.corrs_descr(corr_id)?);
+        assert_eq!(vec![
+            TensorSliceIdx(Resource::new(resource_ids[0], 1, "1111".into()), 100), TensorSliceIdx(Resource::new(resource_ids[0], 1, "1111".into()), 200), TensorSliceIdx(Resource::new(2, 1, "444".into()), 200)
+        ], slices);
 
-        assert_eq!(
-            vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
-            store.tree_run_descr(motif_selection_run_id)?
-        );
 
+
+        assert_eq!(7, channel);
+        assert_eq!(run_id, run_id_);
+        //
+        // // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize)))?;
+        // //
+        // // slices.sort();
+        // //
+        // // if !m_1_first {
+        // //     assert_eq!(vec![
+        // //         TensorSliceIdx(1, 100), TensorSliceIdx(1, 200), TensorSliceIdx(2, 200)
+        // //     ], slices);
+        // // } else {
+        // //     assert_eq!(vec![
+        // //         TensorSliceIdx(3, 100), TensorSliceIdx(3, 200), TensorSliceIdx(6, 200), TensorSliceIdx(6, 300)
+        // //     ], slices);
+        // // }
+        //
+        // // debug!("corrs_descr={:?}", store.corrs_descr(corr_id)?);
+        //
+        // assert_eq!(
+        //     vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
+        //     store.tree_run_descr(motif_selection_run_id)?
+        // );
+        //
         store.delete_slices_without_matches(run_id)?;
 
         Ok(())

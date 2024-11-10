@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use clap::builder::Str;
@@ -50,6 +51,18 @@ impl PartialEq<Self> for Resource {
 
 impl Eq for Resource {
 
+}
+
+impl PartialOrd<Self> for Resource {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.id().partial_cmp(&other.id)
+    }
+}
+
+impl Ord for Resource {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
 }
 
 pub type ResourceId = u32;
