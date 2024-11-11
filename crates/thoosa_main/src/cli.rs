@@ -57,7 +57,10 @@ pub struct Cli {
     pub logfile: String,
 
     #[arg(long)]
-    pub num_threads: Option<usize>,
+    pub loader_threads: Option<usize>,
+
+    #[arg(long, default_value = 100)]
+    pub futures_channel_bound:usize,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -315,13 +318,10 @@ pub fn run_cli<F,R>(
 
 
     let cpu_num = std::thread::available_parallelism()?;
-    let num_threads = cli.num_threads.unwrap_or_else(||max(2, cpu_num.get()/2));
+    let loader_threads = cli.loader_threads.unwrap_or_else(||max(2, cpu_num.get()/8));
 
-    info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} num_threads={num_threads}",  cli.ws_path);
+    info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} loader_threads={loader_threads}",  cli.ws_path);
     std::io::stdout().flush()?;
-
-    //TODO optional for benchmark
-    rayon::ThreadPoolBuilder::new().num_threads(num_threads).build_global()?;
 
     let tensors_path = ws.read().tensors_path().clone();
 
@@ -331,7 +331,7 @@ pub fn run_cli<F,R>(
             SyncWrapper::new_tb(
                 Box::new(Tensor::load(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem()))).map_err(|e| ThoosaError::new(e.to_string())).expect(format!("can't load {key:?}").as_str()))
             )
-        }, 4, 100,
+        }, loader_threads, cli.futures_channel_bound,
     )));
 
 
@@ -952,6 +952,7 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
             fs::create_dir_all(ws.read().plots_path().join(run_id.to_string()))?;
 
+            //TODO add list for  motif_ids only without grouping by  slice_matches
             let motif_distances = store.lock().list_motifs_distances(run_id)?;
             for (motif_id, dist) in motif_distances.into_iter() {
                 debug!("run_plot_motif_slices: motif_id={motif_id}");

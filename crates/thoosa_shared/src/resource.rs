@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use clap::builder::Str;
-use log::debug;
+use log::{debug, trace};
 
 #[derive(Debug, Clone)]
 pub struct Resource {
@@ -13,7 +13,7 @@ pub struct Resource {
 
 impl Resource {
     pub fn new(id: u32, import_id: u32, file_stem: String) -> Self {
-        debug!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");
+        trace!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");
         Self { id, import_id, file_stem }
     }
 
