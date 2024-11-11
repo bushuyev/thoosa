@@ -59,7 +59,7 @@ pub struct Cli {
     #[arg(long)]
     pub loader_threads: Option<usize>,
 
-    #[arg(long, default_value = 100)]
+    #[arg(long, default_value_t = 100)]
     pub futures_channel_bound:usize,
 
     #[command(subcommand)]
