@@ -382,7 +382,7 @@ mod motifs_tests {
     use tch::{Device, Tensor};
 
     use thoosa_common::utils::*;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{cdt_for_dir, ThoosaError};
     use thoosa_shared::MotifSlice;
     use thoosa_shared::TensorSliceIdx;
     use log::debug;

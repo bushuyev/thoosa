@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc};
 use parking_lot::{Mutex, RwLock};
 
@@ -22,24 +22,10 @@ use thoosa_shared::*;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::val::Val;
 
-pub struct SqlMotifTrackerStore {
-    pub run_id: usize,
-    pub channel: usize,
-    conn: Mutex<Connection>,
-}
 
-impl SqlMotifTrackerStore {
-    pub fn new<P: AsRef<Path>>(path: P, run_id: usize, channel: usize) -> Self {
-        Self {
-            run_id,
-            channel,
-            conn: Mutex::new(Connection::open(path).expect("SqlMotifTrackerStore::new: connection"))
-        }
-    }
-}
 
-#[derive(Debug)]
-struct IdSlice(i64, ResourceId, i64); //id, tensor id, slice idx
+#[derive(Debug, Clone)]
+pub struct IdSlice(i64, ResourceId, i64); //id, tensor id, slice idx
 
 impl PartialEq<Self> for IdSlice {
     fn eq(&self, other: &Self) -> bool {
@@ -120,7 +106,7 @@ pub trait Store: Sync + Send {
 
     fn save_resources_labels(&self, resource_labels_probs: &HashMap<String, Vec<(String, f32)>>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
     fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
-    fn set_motifs(&mut self, run_id: usize, channel: i64) -> Result<(), ThoosaError>;
+    fn set_motifs(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, Vec<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
     fn list_motifs_distances(&mut self, run_id: usize) -> Result<HashMap<usize, f32>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: usize) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
     fn list_run_resources(&mut self, run_id: usize) -> Result<Vec<String>, ThoosaError>;
@@ -134,11 +120,6 @@ pub trait Store: Sync + Send {
     fn delete_slices_without_matches(&mut self, run_id: usize) -> Result<(), ThoosaError>;
 
     fn conn(&self) -> &Mutex<Connection>;
-}
-
-pub trait SlicesStore: Sync + Send {
-    fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
-    fn set_motifs(&mut self, run_id: usize, channel: i64) -> Result<(), ThoosaError>;
 }
 
 impl Debug for SqlMotifTrackerStore {
@@ -800,7 +781,7 @@ impl Store for SqlStore {
         }
         Ok(t.commit()?)
     }
-
+    //TODO remove
     fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -832,14 +813,15 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn set_motifs(&mut self, run_id: usize, channel: i64) -> Result<(), ThoosaError> {
+    //TODO remove
+    fn set_motifs(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, Vec<IdSlice>>, path: &dyn AsRef<Path>) -> Result<(), ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        debug!("set_motifs: run_id={:?}, channel={:?}", run_id, channel);
+        debug!("set_motifs: run_id={run_id:?}, channel={channel:?} path={}", path.as_ref().to_string_lossy());
 
         {
-            let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=? AND channel_id=?")?;
+           /* let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches WHERE run_id=? AND channel_id=?")?;
 
             let groups = group_slices(
                 stmt.query_map([run_id, channel as usize], |row| { //TODO move group_slices out, not for store
@@ -850,21 +832,27 @@ impl Store for SqlStore {
                         )
                     )
                 })?.map(|v| v.unwrap())
-            );
+            );*/
 
-            debug!("set_motifs: run_id={:?}, channel={:?} groups={:?}", run_id, channel, groups);
+            t.execute(format!("ATTACH DATABASE '{}' AS slices_{run_id}_{channel}_tmp", path.as_ref().to_string_lossy()).as_str(), [])?;
+
+            let inserted = t.execute(format!("INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) \
+                            SELECT ?, ?, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist FROM slices_{run_id}_{channel}_tmp.slice_matches").as_str(), [run_id, channel as usize])?;
+            debug!("set_motifs: run_id={run_id:?}, channel={channel:?} groups={groups:?} inserted={inserted}");
 
             //TODO sort?
             for (group, slices) in groups {
-                debug!("set_motifs: group={:?}, slices={:?} run_id={:?}", group, slices, run_id);
 
-                t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])?; //TODO group not needed?
 
-                let group_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+                let motifs_inserted = t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])?; //TODO group not needed?
+
+                let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+
+                debug!("set_motifs: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
 
                 for slices_chunk in slices.chunks(500) {
                     let (mut q, params) = slices_chunk.into_iter().fold(
-                        (vec!["UPDATE slice_matches SET motif_id=? WHERE id IN ("], vec![Value::Integer(group_id)]),
+                        (vec!["UPDATE slice_matches SET motif_id=? WHERE id IN ("], vec![Value::Integer(motif_id)]),
                         |mut a: (Vec<&str>, Vec<Value>), v: &IdSlice| {
                             a.0.push("?");
                             a.0.push(", ");
@@ -876,12 +864,19 @@ impl Store for SqlStore {
                     q.pop();
                     q.push(")");
 
-                    t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+                    debug!("set_motifs: params={params:?}");
+
+                    let slice_matches_updated = t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+
+                    debug!("set_motifs: slice_matches_updated={slice_matches_updated}");
                 }
             }
         }
 
         t.commit()?;
+
+        let t = guard.transaction()?;
+        t.execute(format!("DETACH DATABASE slices_{run_id}_{channel}_tmp").as_str(), [])?;
 
         Ok(())
     }
@@ -890,7 +885,7 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
         let tensor_motifs: HashMap<usize, f32> = {
-            let mut stmt = t.prepare("SELECT motif_id, avg(dot) FROM slice_matches GROUP BY motif_id HAVING run_id=?")?;
+            let mut stmt = t.prepare("SELECT motif_id, avg(dot) FROM slice_matches GROUP BY motif_id HAVING motif_id NOT NULL AND run_id=?")?;
 
             let tensor_motifs: HashMap<usize, f32> = stmt.query_map([run_id], |row| {
                 Ok((
@@ -1412,8 +1407,7 @@ impl SqlStore {
                 channel_id      INTEGER NOT NULL
             )", ())?;
 
-            //dot - similarity
-            //TODO!! tensor_id_0 - REFERENCES resource_id
+            //TODO remove
             t.execute(
                 "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
@@ -1545,18 +1539,155 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
 }
 
 
+pub struct SqlMotifTrackerStore {
+    pub run_id: usize,
+    pub channel: usize,
+    conn: Mutex<Connection>,
+    pub path: PathBuf
+}
+
+impl SqlMotifTrackerStore {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: usize, channel: usize) -> Result<SqlMotifTrackerStore, ThoosaError> {
+        let mut conn = Connection::open(&path).expect("SqlMotifTrackerStore::new: connection");
+        {
+            let t = conn.transaction()?;
+
+            debug!("SqlMotifTrackerStore::new: path={path:?}");
+
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS slice_matches (
+                id              INTEGER PRIMARY KEY,
+                tensor_id_0     INTEGER NOT NULL,
+                slice_idx_0     INTEGER NOT NULL,
+                tensor_id_1     INTEGER NOT NULL,
+                slice_idx_1     INTEGER NOT NULL,
+                dist            FLOAT NOT NULL
+            )", ())?;
+
+            t.commit()?;
+
+        }
+        Ok(Self {
+            run_id,
+            channel,
+            conn: Mutex::new(conn),
+            path: path.as_ref().to_path_buf()
+        })
+    }
+}
+
+pub trait MotifTrackerStore:Send + Sync {
+    fn save_slices(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
+    fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError>;
+
+}
+
+impl MotifTrackerStore for SqlMotifTrackerStore {
+
+    fn save_slices(&mut self, slices: Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>) -> Result<(), ThoosaError> {
+        debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_id={:?}", slices.len(), self.run_id);
+
+        // self.store.lock().save_slices(self.run_id, self.channel as i64, motifs)?; //TODO move TensorSliceIdx to shared
+
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
+
+        assert!(slices.len() > 0);
+
+        for slices_chunk in slices.chunks(500) {
+            let (mut q, params) = slices_chunk.into_iter().fold(
+                (vec!["INSERT INTO slice_matches (tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+                    a.0.push("(?, ?, ?, ?, ?)");
+                    a.0.push(", ");
+
+                    a.1.push(Value::Integer(v.0.0 as i64));
+                    a.1.push(Value::Integer(v.0.1));
+                    a.1.push(Value::Integer(v.1.0 as i64));
+                    a.1.push(Value::Integer(v.1.1));
+                    a.1.push(Value::Real(v.2 as f64));
+                    a
+                });
+
+            q.pop();
+
+            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+        }
+        t.commit()?;
+
+        Ok(())
+    }
+
+    fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        debug!("set_motifs: run_id={:?}, channel={:?}", self.run_id, self.channel);
+
+        let groups = {
+            let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches")?;
+
+            let groups = group_slices(
+                stmt.query_map([], |row| { //TODO move group_slices out, not for store
+                    Ok(
+                        (
+                            IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
+                            IdSlice(row.get(0)?, row.get(3)?, row.get(4)?)
+                        )
+                    )
+                })?.map(|v| v.unwrap())
+            );
+
+            debug!("set_motifs: run_id={:?}, channel={:?} groups={:?}", self.run_id, self.channel, groups);
+
+            //TODO sort?
+            /*
+            for (group, slices) in groups {
+                debug!("set_motifs: group={:?}, slices={:?} run_id={:?}", group, slices, self.run_id);
+
+                t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, self.run_id, self.channel as usize])?; //TODO group not needed?
+
+                let group_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+
+                for slices_chunk in slices.chunks(500) {
+                    let (mut q, params) = slices_chunk.into_iter().fold(
+                        (vec!["UPDATE slice_matches SET motif_id=? WHERE id IN ("], vec![Value::Integer(group_id)]),
+                        |mut a: (Vec<&str>, Vec<Value>), v: &IdSlice| {
+                            a.0.push("?");
+                            a.0.push(", ");
+                            a.1.push(Value::Integer(v.0 as i64));
+
+                            a
+                        });
+
+                    q.pop();
+                    q.push(")");
+
+                    t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+                }
+            }
+            */
+            groups
+        };
+        t.commit()?;
+
+
+        Ok(groups)
+    }
+}
+
 #[cfg(test)]
 mod store_tests {
     use std::collections::HashMap;
-
+    use std::fs;
+    use std::path::Path;
     use std::time::Instant;
 
     use log::debug;
     use thoosa_shared::resource::{Resource, ResourceId};
-    use thoosa_shared::TensorSliceIdx;
+    use thoosa_shared::{cdt, cdt_for_dir, TensorSliceIdx};
     use thoosa_shared::val::Val;
 
-    use crate::{ThoosaError, SetCond, SqlStore, Store};
+    use crate::{ThoosaError, SetCond, SqlStore, Store, SqlMotifTrackerStore, MotifTrackerStore};
 
     #[ctor::ctor]
     fn init() {
@@ -1643,8 +1774,10 @@ mod store_tests {
     #[test]
     fn test_save_slices() -> Result<(), ThoosaError> {
         // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
-        let mut store = SqlStore::in_mem()?;
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+        let mut store = SqlStore::from_path(test_dir.join("test_db.db3"))?;
+        // let mut store = SqlStore::in_mem()?;
         let resource_ids= {
             let mut mutex_guard = store.conn().lock();
             let t = mutex_guard.transaction()?;
@@ -1755,9 +1888,18 @@ mod store_tests {
 
                  */
 
-        store.save_slices(run_id, 7, slices.clone())?;
+        let slices_store_path = test_dir.join("test_slices_db.db3");
+        let mut slices_store = SqlMotifTrackerStore::new(
+            &slices_store_path,
+            run_id,
+            7
+        ).expect("can't create tmp sotre");
 
-        store.set_motifs(run_id, 7)?;
+        slices_store.save_slices(slices.clone())?;
+
+        let groups = slices_store.set_motifs()?;
+
+        store.set_motifs(run_id, 7, groups, &slices_store_path)?;
 
         {
             let mut guard = store.conn().lock();

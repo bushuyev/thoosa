@@ -26,7 +26,7 @@ use thoosa_shared::{make_combos, RangeOrValue, Resources, ThoosaError};
 use thoosa_shared::parse_key_val;
 use thoosa_shared::TensorSliceIdx;
 use thoosa_shared::val::Val;
-use thoosa_store::{SqlStore, Store};
+use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 use thoosa_store::SqlMotifTrackerStore;
 
 
@@ -275,7 +275,7 @@ fn resource_config_to_keys(store:&Arc<Mutex<Box<dyn Store>>>, resource_config:&S
 }
 
 pub fn find_motifs_by_euc_dist(
-    run_configs: Vec<FindMotifsRunConfig>,
+    mut run_configs: Vec<FindMotifsRunConfig>,
     resource_config: &Simple,
     common_config: &CommonFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -289,17 +289,17 @@ pub fn find_motifs_by_euc_dist(
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
-    let run_config__channels_trackers: Vec<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>> = run_configs.iter().map(|run_config| {
+    let run_config__channels_trackers: Vec<Vec<SimpleMotifTracker<SqlMotifTrackerStore>>> = run_configs.iter().map(|run_config| {
 
         (0..ws.read().channels()).map(|channel|
-                Arc::new(RwLock::new(SimpleMotifTracker::<SqlMotifTrackerStore>::new(
+                SimpleMotifTracker::<SqlMotifTrackerStore>::new(
                     SqlMotifTrackerStore::new(
                         ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
                         run_config.id.expect("id"),
                         channel
-                    ),
+                    ).expect("can't create tmp sotre"),
                     common_config.min_tracker_step,
-            )))).collect::<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>>()
+            )).collect::<Vec<SimpleMotifTracker<SqlMotifTrackerStore>>>()
 
     }).collect();
 
@@ -307,12 +307,12 @@ pub fn find_motifs_by_euc_dist(
     let mut motif_trackers = chunk_and_slice(
         resource_keys,
         common_config.chunk_size as usize,
-        &run_configs,
+        &mut run_configs,
         run_config__channels_trackers,
-        move |chunk_0: ChunkOfSlicedTensors <ResourceId>, chunk_1: ChunkOfSlicedTensors <ResourceId>, params_idx: usize, find_motifs_run_config:&FindMotifsRunConfig, channels_motif_trackers:&Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>| {
+        move |chunk_0: ChunkOfSlicedTensors <ResourceId>, chunk_1: ChunkOfSlicedTensors <ResourceId>, params_idx: usize, find_motifs_run_config:&FindMotifsRunConfig, channels_motif_trackers:&mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>| {
             debug!("find_motifs_by_euc_dist: tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
 
-            channels_motif_trackers.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
+            channels_motif_trackers.iter_mut().enumerate().par_bridge().for_each(|(channel, mt)| {
                 let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
                 let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).squeeze();
                 debug!("find_motifs_by_euc_dist: tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
@@ -341,7 +341,7 @@ pub fn find_motifs_by_euc_dist(
                     find_motifs_run_config.step as i64,
                     |(slice_0, slice_1, dist)| {
 
-                        mt.write().track(
+                        mt.track(
                             slice_0,
                             slice_1,
                             dist,
@@ -353,7 +353,7 @@ pub fn find_motifs_by_euc_dist(
                     }
                 );
                 debug!("find_motifs_by_euc_dist: channel={channel} done");
-                mt.write().dump();
+                mt.dump();
             });
 
             Ok(())
@@ -362,21 +362,19 @@ pub fn find_motifs_by_euc_dist(
     )?;
 
     info!("setting motifs in {} configs", run_config_ids.len());
-    motif_trackers.into_iter().flat_map(|run_config_trackers|run_config_trackers.into_iter()).par_bridge().for_each(|mt|{
-    //     mt.write().set_motifs();
-        //     { store.lock().set_motifs(*run_config_tracker.read().dumper.run_id, channel as i64) }?;
-        //     print!(".");
-        // { store.lock().delete_slices_without_matches(*run_config_id) }?;
-        // println!();
+    motif_trackers.into_iter().flat_map(|run_config_trackers|run_config_trackers.into_iter()).par_bridge().for_each(|mut mt|{
+
+        match mt.set_motifs() {
+            Ok(groups) => {
+                info!("mt {mt:?} done, {} groups found", groups.len());
+                store.lock().set_motifs(mt.dumper.run_id, mt.dumper.channel as i64, groups, &mt.dumper.path).expect("");
+            }
+            Err(e) => {
+                info!("mt {mt:?} failed with {e:?}");
+            }
+        };
     });
-    // for run_config_id in run_config_ids.iter() {
-    //     for channel in 0..ws.read().channels() {
-    //         { store.lock().set_motifs(*run_config_id, channel as i64) }?;
-    //         print!(".");
-    //     }
-    //     { store.lock().delete_slices_without_matches(*run_config_id) }?;
-    //     println!();
-    // }
+
 
     // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
     // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
@@ -501,16 +499,16 @@ impl FindMotifsRunConfig {
 fn chunk_and_slice<G>(
     resources: Vec <Resource>,
     chunk_size: usize,
-    run_configs:&Vec<FindMotifsRunConfig>,
-    mut find_motifs_run_configs_trackers: Vec<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>>,
+    run_configs:&mut Vec<FindMotifsRunConfig>,
+    mut find_motifs_run_configs_trackers: Vec<Vec<SimpleMotifTracker<SqlMotifTrackerStore>>>,
     mut callback: G,
     exec: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-) -> Result<Vec<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>>, ThoosaError>
+) -> Result<Vec<Vec<SimpleMotifTracker<SqlMotifTrackerStore>>>, ThoosaError>
 where
-    G: Fn(ChunkOfSlicedTensors <ResourceId>, ChunkOfSlicedTensors <ResourceId>, usize, &FindMotifsRunConfig, &Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>) -> Result<(), ThoosaError> + Send + Sync
+    G: Fn(ChunkOfSlicedTensors <ResourceId>, ChunkOfSlicedTensors <ResourceId>, usize, &FindMotifsRunConfig, &mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>) -> Result<(), ThoosaError> + Send + Sync
 {
     let mut resource_chunks = resources.chunks(chunk_size)
-        .map(|v| v.iter().map(|k| k.clone()).collect::<Vec <Resource>>())//TODO k.clone()
+        .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())//TODO k.clone()
         .collect::<Vec<Vec<Resource>>>();//[Resource]
 
     resource_chunks.push(vec![]); //to get last window processed
@@ -599,7 +597,7 @@ where
             wg_1.wait();
 
             // let callback_clone = Cell::new(callback_clone.clone());
-            run_configs.iter().zip(find_motifs_run_configs_trackers.iter())
+            run_configs.iter_mut().zip(find_motifs_run_configs_trackers.iter_mut())
                 .par_bridge()
                 .for_each(|(run_config, mt)| {
 
@@ -673,20 +671,6 @@ fn collect_dists<'a, F, C>(
 
 
 
-pub trait MotifTrackerStore:Send + Sync {
-    fn dump(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
-}
-
-impl MotifTrackerStore for SqlMotifTrackerStore {
-    fn dump(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError> {
-        debug!("MotifDumper::dump: motifs.len()={:?}, self.run_id={:?}", motifs.len(), self.run_id);
-
-        // self.store.lock().save_slices(self.run_id, self.channel as i64, motifs)?; //TODO move TensorSliceIdx to shared
-
-        Ok(())
-    }
-}
-
 //TODO trait for MotifTracker
 #[derive(Debug)]
 pub(crate) struct SimpleMotifTracker<D: MotifTrackerStore + Debug> {
@@ -738,12 +722,12 @@ impl<'a, D: MotifTrackerStore + Debug> SimpleMotifTracker<D> {
         }
 
         if self.motifs.len() > 0 {
-            self.dumper.dump(mem::take(&mut self.motifs)).expect("dumper");
+            self.dumper.save_slices(mem::take(&mut self.motifs)).expect("dumper");
         }
     }
 
-    fn set_motifs(&mut self){
-
+    fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError>{
+        self.dumper.set_motifs()
     }
 
     #[cfg(test)]
@@ -1267,11 +1251,10 @@ mod motif_find_tests {
     use tch::Kind::{Float, Int};
 
     use thoosa_common::utils::*;
-    use thoosa_common::utils::cdt_for_dir;
     use thoosa_shared::*;
 
     use thoosa_shared::val::Val;
-    use thoosa_store::{SqlStore, Store};
+    use thoosa_store::{IdSlice, SqlStore, Store};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
@@ -1543,9 +1526,13 @@ mod motif_find_tests {
 
         // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         // let mut store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_db.db3")?));
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
+        
+        
         let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
@@ -1625,9 +1612,9 @@ mod motif_find_tests {
         // debug!("1: {:?}", eeg_slices.get(&resources[1]));
         // debug!("2: {:?}", eeg_slices.get(&resources[2]));
 
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, slices.get(&resources[0]).and_then(|v| v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 500, channel_idx: 0 }, slices.get(&resources[1]).and_then(|v| v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 800, channel_idx: 0 }, slices.get(&resources[2]).and_then(|v| v.get(0)).unwrap());
+        assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 100)).is_some());
+        assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slise_idx == 500)).is_some());
+        assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slise_idx == 800)).is_some());
 
         Ok(())
     }
@@ -1643,7 +1630,7 @@ mod motif_find_tests {
                 store_guard.save_label(label, &t)?;
             }
 
-            let import_id = store_guard.save_import(format!("test on {}", thoosa_common::utils::cdt()), &t)?;
+            let import_id = store_guard.save_import(format!("test on {}", cdt_for_dir()), &t)?;
 
             store_guard.save_resources_labels(&resources, 1, &t)?;
             t.commit().expect("commit");
@@ -1763,8 +1750,12 @@ mod motif_find_tests {
         let eeg_id_series:Vec<String> = vec!["0000".into(), "1111".into(), "2222".into()];
         // let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist_diff_sizes.db3"))?));
+
+
         let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
@@ -1839,9 +1830,9 @@ mod motif_find_tests {
 
         debug!("eeg_slices={eeg_slices:?}");
         //TODO
-        // assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&resources[0]).and_then(|v| v.get(0)).unwrap());
-        // assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 600, channel_idx: 0 }, eeg_slices.get(&resources[2]).and_then(|v| v.get(0)).unwrap());
-        // assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1000, channel_idx: 0 }, eeg_slices.get(&resources[1]).and_then(|v| v.get(0)).unwrap());
+        // assert!(eeg_slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 100)).is_some());
+        assert!(eeg_slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 600)).is_some());
+        assert!(eeg_slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slise_idx == 1000)).is_some());
 
         Ok(())
     }
@@ -1934,7 +1925,7 @@ mod motif_find_tests {
     }
 
     impl MotifTrackerStore for DummyDumper {
-        fn dump(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>{
+        fn save_slices(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>{
 
             self.motifs.extend(motifs.into_iter().map(|m|{
                 (
@@ -1945,6 +1936,10 @@ mod motif_find_tests {
             }).collect::<Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>>());
 
             Ok(())
+        }
+
+        fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
+            todo!()
         }
     }
 
@@ -2267,7 +2262,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice(
             resources,
             2,
-            &vec![FindMotifsRunConfig::new(3, 5, 1.0, "", None)],
+            &mut vec![FindMotifsRunConfig::new(3, 5, 1.0, "", None)],
             vec![vec![]],
              move |chunk_0, chunk_1, _size, _find_motifs_run_config, _channels_mt| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");

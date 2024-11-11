@@ -1569,14 +1569,14 @@ mod train_tests {
     use tch::Kind::Float;
     use tch::nn::{init, LinearConfig, Module};
 
-    use thoosa_shared::{batch_windows, clc_num_batches, ThoosaError};
+    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, ThoosaError};
     use thoosa_shared::resource::Resource;
     use crate::builder::SeqBuilder;
     use crate::loader::{LoadRunner, SyncWrapper};
     use crate::my_tch::apply_channel_motifs;
     use crate::train_nets::{TensorsDataBatch, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, SyncModule, load_motif_models_ws, load_all_label_models_ws};
     use crate::train_nets;
-    use crate::utils::{cdt_for_dir, from};
+    use crate::utils::{from};
     use crate::utils::DataBatch;
     use crate::train_nets::FinalNodeParams;
     use crate::ws::{FsWorkspace, Workspace};

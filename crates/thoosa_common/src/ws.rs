@@ -12,8 +12,7 @@ use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge}
 use tch::nn::VarStore;
 use tch::{Device, TchError, Tensor};
 use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
-use thoosa_shared::{recurse_files, ThoosaError};
-use crate::utils::cdt_for_dir;
+use thoosa_shared::{cdt_for_dir, recurse_files, ThoosaError};
 use rayon::iter::ParallelIterator;
 use thoosa_shared::resource::Resource;
 
@@ -133,7 +132,7 @@ impl Workspace for FsWorkspace {
     fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError> {
         fs::create_dir_all(&self.final_models_path)?;
 
-        vs.save(&self.final_models_path.join(format!("{run_id}.safetensors")));
+        vs.save(&self.final_models_path.join(format!("{run_id}.safetensors")))?;
 
         fs::write(
             self.final_models_path.join(format!("{run_id}.json")),
@@ -283,13 +282,18 @@ pub trait Workspace:Sync + Send {
 
 #[derive(Debug)]
 pub struct DummyWorkspace {
+    base:PathBuf,
     channels:usize
 }
 
 impl DummyWorkspace {
     pub fn new(channels: usize) ->Result<Box<dyn Workspace>, ThoosaError> {
+        let base = Path::new("/tmp").join(cdt_for_dir());
+        fs::create_dir_all(&base)?;
+
         Ok(Box::new(Self {
-            channels
+            channels,
+            base
         }))
     }
 }
@@ -312,7 +316,7 @@ impl Workspace for DummyWorkspace {
     }
 
     fn tmp_run_store_path(&self, run_id: u32, channel: u32) -> PathBuf {
-        todo!()
+        self.base.join(format!("{run_id}_{channel}.db3"))
     }
 
     fn tensors_path(&self) -> &PathBuf {
@@ -383,8 +387,7 @@ mod tests {
     use log::debug;
     use tch::Device::Cpu;
     use tch::nn::VarStore;
-    use crate::utils::cdt_for_dir;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{cdt_for_dir, ThoosaError};
     use crate::train_nets::{LabelNodeParams, MotifNodeParams};
     use super::{DummyWorkspace, FsWorkspace, Workspace};
 

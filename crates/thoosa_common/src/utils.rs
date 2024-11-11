@@ -20,11 +20,12 @@ use tch::nn::Optimizer;
 use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
 
-use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const};
+use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt};
 
 use crate::my_tch::LossFp;
+use crate::parzen::opt_rng::opt_rnd;
 
-pub fn plot_heatmap(path:&str, _t:&Tensor)  -> Result<(), Box<dyn std::error::Error>> {
+pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
 
     root.fill(&WHITE)?;
@@ -223,14 +224,7 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
     from::<Vec<f64>>(&t.reshape(-1))
 }
 
-//TODO use same from shared
-pub fn cdt() -> String {
-    chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
 
-pub fn cdt_for_dir() ->String {//TODO move to shared
-    cdt().replace(':', "_").replace('+', "_")
-}
 
 pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, ThoosaError>{
     if input.size().len() != to_size.len() {
@@ -288,12 +282,12 @@ pub mod tests {
     use tch::Kind::Float;
     use tch::Tensor;
 
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{cdt_for_dir, ThoosaError};
 
     #[test]
     fn test_cdt_for_dir(){
-        debug!("{}", super::cdt_for_dir() );
-        assert_eq!(false, super::cdt_for_dir().contains(":"))
+        debug!("{}", cdt_for_dir() );
+        assert_eq!(false, cdt_for_dir().contains(":"))
     }
 
     #[test]
@@ -365,7 +359,7 @@ pub mod tests {
     #[test]
     fn test_save_and_load()  -> Result<(), ThoosaError>{
 
-        let base_path = format!("/tmp/test_test_save_and_load/{}", super::cdt_for_dir());
+        let base_path = format!("/tmp/test_test_save_and_load/{}", cdt_for_dir());
         fs::create_dir_all(&base_path)?;
 
         let id = "1000913311";

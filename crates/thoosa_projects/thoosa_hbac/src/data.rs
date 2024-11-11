@@ -672,7 +672,7 @@ mod tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
     use thoosa_common::train_nets::{TrainFinalParams, TrainLabelNodeParams};
-    use thoosa_common::utils::{cdt_for_dir, from, plot_series};
+    use thoosa_common::utils::{from, plot_series};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
@@ -680,7 +680,7 @@ mod tests {
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
-    use thoosa_shared::{init_test_logging, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, init_test_logging, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_store::SqlStore;
     use crate::data::EEGs;
