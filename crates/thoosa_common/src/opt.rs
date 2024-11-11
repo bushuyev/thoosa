@@ -187,7 +187,7 @@ mod opt_tests {
     use crate::argmin::{run_lbfgs, TensorProblem};
     use crate::gaussian::GaussianProcess;
     use crate::opt::{kernel_rbf, rbf_nll};
-    use crate::utils::{cdt_for_dir, plot_series, plot_series_with_points, sin3_pow2, vec_f32_from};
+    use crate::utils::{plot_series, plot_series_with_points, sin3_pow2, vec_f32_from};
     use crate::utils::from;
     use crate::utils::lin_t;
 

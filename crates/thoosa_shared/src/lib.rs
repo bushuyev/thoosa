@@ -662,7 +662,9 @@ pub fn cdt() -> String {
 }
 
 pub fn cdt_for_dir() ->String {//TODO move to shared
-    cdt().replace(':', "_").replace('+', "_")
+    use rand::RngCore;
+    let mut rnd = rand::thread_rng(); //opt_rnd();
+    cdt().replace(':', "_").replace('+', "_") + format!("_{}", rnd.next_u32()).as_str()
 }
 
 pub static LOG_INIT: AtomicBool = AtomicBool::new(false);

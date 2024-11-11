@@ -4,6 +4,7 @@ cargo run -- --term-logger-level=DEBUG --tensors-path=/media/bu/KINGSTON/all_eeg
 thoosa/crates$ cargo run -- --term-logger-level=DEBUG --tensors-path=/media/bu/KINGSTON/all_eegs.pt/all --ws-path="/tmp/ws_1" --store-path=/tmp/ws_1/thoosa.db3 --logfile=/tmp/ws_1/thoosa.log --base-path=/media/bu/KINGSTON/hbac_orig --resource-pattern="*.parquet" init-resources
 
 
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --release --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/tmp/ws_import_test"  --logfile=/tmp/ws_1/thoosa.log import-resources --source-path=/media/bu/KINGSTON/hbac_orig
 
 cargo run -- --term-logger-level=DEBUG --tensors-path=/media/bu/KINGSTON/all_eegs.pt/all --ws-path="/tmp/ws_1" --store-path=/tmp/ws_1/thoosa.db3 --logfile=/tmp/ws_1/thoosa.log \
     find-motifs --resource-set="seizure/100"
