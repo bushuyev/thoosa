@@ -137,7 +137,6 @@ pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)
         .draw()?;
 
 
-
     // let motif_area = |x: i32, dx: i32| {
     //     return EmptyElement::at((x as f32, 10.))
     //         + Rectangle::new([(0, 0), ((dx as f32 *0.963) as i32, w_h.1 as i32 - 80)], &BLUE)//TODO 963?
