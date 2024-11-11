@@ -1,5 +1,7 @@
 #![feature(iter_array_chunks)]
 
+mod test;
+
 use std::array::IntoIter;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
@@ -117,7 +119,7 @@ pub trait Store: Sync + Send {
     fn save_params_value(&mut self, params: HashMap<String, Val>, run_id: usize, label: Option<&str>) -> Result<(), ThoosaError>;
 
     fn save_resources_labels(&self, resource_labels_probs: &HashMap<String, Vec<(String, f32)>>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
-    fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<((ResourceId, i64), (ResourceId, i64), f32)>) -> Result<(), ThoosaError>;
+    fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
     fn set_motifs(&mut self, run_id: usize, channel: i64) -> Result<(), ThoosaError>;
     fn list_motifs_distances(&mut self, run_id: usize) -> Result<HashMap<usize, f32>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: usize) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
@@ -794,7 +796,7 @@ impl Store for SqlStore {
         Ok(t.commit()?)
     }
 
-    fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<((ResourceId, i64), (ResourceId, i64), f32)>) -> Result<(), ThoosaError> {
+    fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
@@ -1692,13 +1694,13 @@ mod store_tests {
             keys_labels_p.into_iter().map(|v|v.1).collect::<Vec<Vec<f32>>>()
         );
 
-
-        let slices: Vec<((ResourceId, i64), (ResourceId, i64), f32)> = vec![
-            ((resource_ids[0], 100i64), (resource_ids[0], 200i64), 0.91),
-            ((resource_ids[0], 100i64), (resource_ids[1], 200i64), 0.92),
-            ((resource_ids[3], 100i64), (resource_ids[3], 200i64), 0.93),
-            ((resource_ids[3], 200i64), (resource_ids[5], 200i64), 0.94),
-            ((resource_ids[3], 200i64), (resource_ids[5], 300i64), 0.94),
+        //Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>
+        let slices: Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>     = vec![
+            (TensorSliceIdx(resource_ids[0], 100i64), TensorSliceIdx(resource_ids[0], 200i64), 0.91),
+            (TensorSliceIdx(resource_ids[0], 100i64), TensorSliceIdx(resource_ids[1], 200i64), 0.92),
+            (TensorSliceIdx(resource_ids[3], 100i64), TensorSliceIdx(resource_ids[3], 200i64), 0.93),
+            (TensorSliceIdx(resource_ids[3], 200i64), TensorSliceIdx(resource_ids[5], 200i64), 0.94),
+            (TensorSliceIdx(resource_ids[3], 200i64), TensorSliceIdx(resource_ids[5], 300i64), 0.94),
         ];
 
 
@@ -1919,5 +1921,8 @@ mod store_tests {
 
         Ok(())
     }
+
+
+
 
 }

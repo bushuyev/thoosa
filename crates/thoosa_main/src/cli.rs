@@ -1259,7 +1259,7 @@ mod main_tests {
     use thoosa_common::utils::{cdt_for_dir, from, lin_t, plot_series, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, FindMotifsRunConfig, LinearExpander, SelectMotifsParams};
     use thoosa_motifs::fragments::PlotMotifSlicesParams;
-    use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, Resources, ThoosaError};
+    use thoosa_shared::{recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, Resources, TensorSliceIdx, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{SqlStore, Store};
     use crate::cli::{import_resources, run_plot_motif_slices, resource_path, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
@@ -1391,7 +1391,7 @@ mod main_tests {
                 ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)])
             ])),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            Some(|key| Err(ThoosaError::new("xxx"))),
+            Some(|key| Ok(Tensor::from_slice(&[0.]))),
             true
         )?;
         let run_ids = run_step(
@@ -1699,10 +1699,10 @@ mod main_tests {
             0i64,
             resource_0_ids.windows(2).into_iter().flat_map(|resource_id| {
                 [
-                    ((resource_id[0], 100), (resource_id[0], 1100), 1.0),
-                    ((resource_id[0], 100), (resource_id[1], 100), 1.0),
-                    ((resource_id[0], 100), (resource_id[1], 1100), 1.0),
-                    ((resource_id[1], 100), (resource_id[1], 1100), 1.0)
+                    (TensorSliceIdx(resource_id[0], 100), TensorSliceIdx(resource_id[0], 1100), 1.0),
+                    (TensorSliceIdx(resource_id[0], 100), TensorSliceIdx(resource_id[1], 100), 1.0),
+                    (TensorSliceIdx(resource_id[0], 100), TensorSliceIdx(resource_id[1], 1100), 1.0),
+                    (TensorSliceIdx(resource_id[1], 100), TensorSliceIdx(resource_id[1], 1100), 1.0)
                 ]
             }).collect::<Vec<_>>()
         )?; //all tensors contain two signals - [0-1000) and [1000-2000)
