@@ -7,3 +7,11 @@ thoosa/crates$ cargo run -- --term-logger-level=DEBUG --tensors-path=/media/bu/K
 
 cargo run -- --term-logger-level=DEBUG --tensors-path=/media/bu/KINGSTON/all_eegs.pt/all --ws-path="/tmp/ws_1" --store-path=/tmp/ws_1/thoosa.db3 --logfile=/tmp/ws_1/thoosa.log \
     find-motifs --resource-set="seizure/100"
+
+
+
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --release -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_import_test/ --logfile=/tmp/ws_import_test/thoosa.log  find-motifs --resources="set:seizure/1000" --chunk-size=20 --window=100..1000:100 --step=200 --max-dist-k=0.01
+15:51:25 [INFO] VERSION: 2024-11-10 15:51:21.691470203 UTC devices=[Cuda(0)], base_path="/tmp/ws_import_test/" cpus=32 num_threads=16
+15:51:25 [INFO] find_motifs_params=FindMotifsParams { step: Value(200), window: Range { range: 100..1000, step: Some((100, 1)) }, min_dot: 0.9, resources: Set("seizure/1000"), min_tracker_step: Some(10), max_keys_fifo: 100, chunk_size: 20, max_dist_k: 0.01, input_filter: None } devices=[Cuda(0)]
+03:11:35 [INFO] run_find_motifs_on_set done, run_id=[101, 102, 103, 104, 105, 106, 107, 108, 109]
+03:11:35 [INFO] All done in 40809642 mls

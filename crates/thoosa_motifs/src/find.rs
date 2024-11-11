@@ -670,7 +670,7 @@ impl MotifDumper for StoreDumper {
     fn dump(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError> {
         debug!("MotifDumper::dump: motifs.len()={:?}, self.run_id={:?}", motifs.len(), self.run_id);
 
-        self.store.lock().save_slices(self.run_id, self.channel as i64, motifs.into_iter().map(|v| ((v.0.0, v.0.1), (v.1.0, v.1.1), v.2)).collect::<Vec<_>>())?; //TODO move TensorSliceIdx to shared
+        self.store.lock().save_slices(self.run_id, self.channel as i64, motifs)?; //TODO move TensorSliceIdx to shared
 
         Ok(())
     }
