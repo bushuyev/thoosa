@@ -27,7 +27,7 @@ use thoosa_shared::parse_key_val;
 use thoosa_shared::TensorSliceIdx;
 use thoosa_shared::val::Val;
 use thoosa_store::{SqlStore, Store};
-use thoosa_store::StoreDumper;
+use thoosa_store::SqlMotifTrackerStore;
 
 
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -289,25 +289,29 @@ pub fn find_motifs_by_euc_dist(
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
-    let run_config__trackers: Vec<Vec<Arc<RwLock<SimpMotifTracker<StoreDumper>>>>> = run_configs.iter().map(|run_config| {
+    let run_config__channels_trackers: Vec<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>> = run_configs.iter().map(|run_config| {
+
         (0..ws.read().channels()).map(|channel|
-                Arc::new(RwLock::new(SimpMotifTracker::<StoreDumper>::new(
-                    StoreDumper::new(Arc::clone(&store), run_config.id.expect("id"), channel),
+                Arc::new(RwLock::new(SimpleMotifTracker::<SqlMotifTrackerStore>::new(
+                    SqlMotifTrackerStore::new(
+                        ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
+                        run_config.id.expect("id"),
+                        channel
+                    ),
                     common_config.min_tracker_step,
-            )))).collect::<Vec<Arc<RwLock<SimpMotifTracker<StoreDumper>>>>>()
+            )))).collect::<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>>()
 
     }).collect();
 
     // debug!("find_motifs_by_euc_dist_: records_num={records_num} resource_keys={resource_keys:?} run_config_ids={run_config_ids:?}");
-    chunk_and_slice(
+    let mut motif_trackers = chunk_and_slice(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs,
-        run_config__trackers,
-        move |chunk_0: ChunkOfSlicedTensors <ResourceId>, chunk_1: ChunkOfSlicedTensors <ResourceId>, params_idx: usize, find_motifs_run_config:&FindMotifsRunConfig, channels_motif_trackers:&Vec<Arc<RwLock<SimpMotifTracker<StoreDumper>>>>| {
+        run_config__channels_trackers,
+        move |chunk_0: ChunkOfSlicedTensors <ResourceId>, chunk_1: ChunkOfSlicedTensors <ResourceId>, params_idx: usize, find_motifs_run_config:&FindMotifsRunConfig, channels_motif_trackers:&Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>| {
             debug!("find_motifs_by_euc_dist: tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
 
-            //TODO spread channels over devices
             channels_motif_trackers.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
                 let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
                 let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).squeeze();
@@ -356,15 +360,23 @@ pub fn find_motifs_by_euc_dist(
         },
         loader,
     )?;
+
     info!("setting motifs in {} configs", run_config_ids.len());
-    for run_config_id in run_config_ids.iter() {
-        for channel in 0..ws.read().channels() {
-            { store.lock().set_motifs(*run_config_id, channel as i64) }?;
-            print!(".");
-        }
-        { store.lock().delete_slices_without_matches(*run_config_id) }?;
-        println!();
-    }
+    motif_trackers.into_iter().flat_map(|run_config_trackers|run_config_trackers.into_iter()).par_bridge().for_each(|mt|{
+    //     mt.write().set_motifs();
+        //     { store.lock().set_motifs(*run_config_tracker.read().dumper.run_id, channel as i64) }?;
+        //     print!(".");
+        // { store.lock().delete_slices_without_matches(*run_config_id) }?;
+        // println!();
+    });
+    // for run_config_id in run_config_ids.iter() {
+    //     for channel in 0..ws.read().channels() {
+    //         { store.lock().set_motifs(*run_config_id, channel as i64) }?;
+    //         print!(".");
+    //     }
+    //     { store.lock().delete_slices_without_matches(*run_config_id) }?;
+    //     println!();
+    // }
 
     // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
     // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
@@ -490,12 +502,12 @@ fn chunk_and_slice<G>(
     resources: Vec <Resource>,
     chunk_size: usize,
     run_configs:&Vec<FindMotifsRunConfig>,
-    mut find_motifs_run_configs_trackers: Vec<Vec<Arc<RwLock<SimpMotifTracker<StoreDumper>>>>>,
+    mut find_motifs_run_configs_trackers: Vec<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>>,
     mut callback: G,
     exec: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-) -> Result<(), ThoosaError>
+) -> Result<Vec<Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>>, ThoosaError>
 where
-    G: Fn(ChunkOfSlicedTensors <ResourceId>, ChunkOfSlicedTensors <ResourceId>, usize, &FindMotifsRunConfig, &Vec<Arc<RwLock<SimpMotifTracker<StoreDumper>>>>) -> Result<(), ThoosaError> + Send + Sync
+    G: Fn(ChunkOfSlicedTensors <ResourceId>, ChunkOfSlicedTensors <ResourceId>, usize, &FindMotifsRunConfig, &Vec<Arc<RwLock<SimpleMotifTracker<SqlMotifTrackerStore>>>>) -> Result<(), ThoosaError> + Send + Sync
 {
     let mut resource_chunks = resources.chunks(chunk_size)
         .map(|v| v.iter().map(|k| k.clone()).collect::<Vec <Resource>>())//TODO k.clone()
@@ -562,7 +574,6 @@ where
 
             let wg_1 = WaitGroup::new();
 
-
             let window_1_0 = window_1[0].clone();
             let window_1_0_clone = window_1_0.iter().map(|r|r.id()).collect::<Vec<ResourceId>>();
 
@@ -617,7 +628,7 @@ where
         exec.write().purge_cache_keys(window_0[0].clone(), area_0);
         info!("done {chunk_i_0} chunks out of {}", resource_chunks.len());
     }
-    Ok(())
+    Ok(find_motifs_run_configs_trackers)
 }
 
 fn collect_dists<'a, F, C>(
@@ -662,15 +673,15 @@ fn collect_dists<'a, F, C>(
 
 
 
-pub trait MotifDumper {
+pub trait MotifTrackerStore:Send + Sync {
     fn dump(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
 }
 
-impl MotifDumper for StoreDumper {
+impl MotifTrackerStore for SqlMotifTrackerStore {
     fn dump(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError> {
         debug!("MotifDumper::dump: motifs.len()={:?}, self.run_id={:?}", motifs.len(), self.run_id);
 
-        self.store.lock().save_slices(self.run_id, self.channel as i64, motifs)?; //TODO move TensorSliceIdx to shared
+        // self.store.lock().save_slices(self.run_id, self.channel as i64, motifs)?; //TODO move TensorSliceIdx to shared
 
         Ok(())
     }
@@ -678,16 +689,18 @@ impl MotifDumper for StoreDumper {
 
 //TODO trait for MotifTracker
 #[derive(Debug)]
-pub(crate) struct SimpMotifTracker<D: MotifDumper + Debug> {
+pub(crate) struct SimpleMotifTracker<D: MotifTrackerStore + Debug> {
     last:Option<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>,
     motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>, //i_0, match_0, match_1, dist
     dumper: D,
     min_step:Option<usize>
 }
 
-impl<'a, D: MotifDumper + Debug> SimpMotifTracker<D> {
+// impl <D> Send for SimpleMotifTracker<D>
 
-    pub fn new(dumper: D, min_step:Option<usize>) -> SimpMotifTracker<D> {
+impl<'a, D: MotifTrackerStore + Debug> SimpleMotifTracker<D> {
+
+    pub fn new(dumper: D, min_step:Option<usize>) -> SimpleMotifTracker<D> {
         Self {
             last:None,
             motifs: vec![],
@@ -727,6 +740,10 @@ impl<'a, D: MotifDumper + Debug> SimpMotifTracker<D> {
         if self.motifs.len() > 0 {
             self.dumper.dump(mem::take(&mut self.motifs)).expect("dumper");
         }
+    }
+
+    fn set_motifs(&mut self){
+
     }
 
     #[cfg(test)]
@@ -1259,7 +1276,7 @@ mod motif_find_tests {
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_shared::resource::{Resource, ResourceId};
-    use crate::find::{Conv1Params, /*FileDumper, */FindMotifsRunConfig, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifDumper, find_motifs_by_euc_dist, CommonFindMotifsConfig, ChunkOfSlicedTensors, collect_dists};
+    use crate::find::{Conv1Params, /*FileDumper, */FindMotifsRunConfig, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifTrackerStore, find_motifs_by_euc_dist, CommonFindMotifsConfig, ChunkOfSlicedTensors, collect_dists};
 
     use crate::find::select_motifs_by_corr;
 
@@ -1916,7 +1933,7 @@ mod motif_find_tests {
         }
     }
 
-    impl MotifDumper for DummyDumper {
+    impl MotifTrackerStore for DummyDumper {
         fn dump(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>{
 
             self.motifs.extend(motifs.into_iter().map(|m|{
@@ -1935,7 +1952,7 @@ mod motif_find_tests {
     pub fn test_simple_motif_tracker() -> Result<(), ThoosaError> {
 
 
-        let mut mt = super::SimpMotifTracker::new(DummyDumper::new(), None);
+        let mut mt = super::SimpleMotifTracker::new(DummyDumper::new(), None);
 
         mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
         mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -1948,7 +1965,7 @@ mod motif_find_tests {
         assert_eq!((TensorSliceIdx(0, 30), TensorSliceIdx(1, 30), 1.0), mt.dumper.motifs[2]);
 
 
-        let mut mt = super::SimpMotifTracker::new(DummyDumper::new(), Some(10));
+        let mut mt = super::SimpleMotifTracker::new(DummyDumper::new(), Some(10));
 
         mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
         mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -1982,7 +1999,7 @@ mod motif_find_tests {
         let step = 100;
 
 
-        let mut mt = super::SimpMotifTracker::new(DummyDumper::new(), None);
+        let mut mt = super::SimpleMotifTracker::new(DummyDumper::new(), None);
 
         let dim = 1;
 

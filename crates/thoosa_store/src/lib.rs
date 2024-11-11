@@ -10,7 +10,7 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use log::{debug, trace};
 use rand::prelude::SliceRandom;
@@ -22,18 +22,18 @@ use thoosa_shared::*;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::val::Val;
 
-pub struct StoreDumper {
-    pub store: Arc<Mutex<Box<dyn Store>>>, //TODO pub
+pub struct SqlMotifTrackerStore {
     pub run_id: usize,
     pub channel: usize,
+    conn: Mutex<Connection>,
 }
 
-impl StoreDumper {
-    pub fn new(store: Arc<Mutex<Box<dyn Store>>>, run_id: usize, channel: usize) -> Self {
+impl SqlMotifTrackerStore {
+    pub fn new<P: AsRef<Path>>(path: P, run_id: usize, channel: usize) -> Self {
         Self {
             run_id,
-            store,
             channel,
+            conn: Mutex::new(Connection::open(path).expect("SqlMotifTrackerStore::new: connection"))
         }
     }
 }
@@ -136,7 +136,12 @@ pub trait Store: Sync + Send {
     fn conn(&self) -> &Mutex<Connection>;
 }
 
-impl Debug for StoreDumper {
+pub trait SlicesStore: Sync + Send {
+    fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
+    fn set_motifs(&mut self, run_id: usize, channel: i64) -> Result<(), ThoosaError>;
+}
+
+impl Debug for SqlMotifTrackerStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("")
             .finish()
@@ -1293,6 +1298,7 @@ impl Store for SqlStore {
 
 
 impl SqlStore {
+
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoosaError> {
         Self::create_tables(Connection::open(path)?)
     }

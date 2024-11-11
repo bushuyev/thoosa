@@ -26,6 +26,7 @@ pub struct FsWorkspace {
     motifs_models_path:PathBuf,
     labels_models_path:PathBuf,
     final_models_path:PathBuf,
+    tmp_path:PathBuf,
 
     channels:usize, //TODO move into input meta
     max_input:usize //TODO move into input meta
@@ -47,6 +48,9 @@ impl FsWorkspace {
         let tensors_path:PathBuf = base_path.join("tensors");
         fs::create_dir_all(&tensors_path)?;
 
+        let tmp_path:PathBuf = base_path.join("tmp");
+        fs::create_dir_all(&tmp_path)?;
+
         let motifs_models_path:PathBuf = models_path.join("motifs");
         fs::create_dir_all(&motifs_models_path)?;
 
@@ -65,6 +69,7 @@ impl FsWorkspace {
             motifs_models_path,
             labels_models_path,
             final_models_path,
+            tmp_path,
             channels,
             max_input
         }))
@@ -97,6 +102,11 @@ impl Workspace for FsWorkspace {
     fn store_path(&self) -> &PathBuf {
         &self.store_path
     }
+
+    fn tmp_run_store_path(&self, run_id: u32, channel: u32) -> PathBuf {
+        self.tmp_path.join(format!("{run_id}_{channel}.db3"))
+    }
+
     fn tensors_path(&self) -> &PathBuf {
         &self.tensors_path
     }
@@ -248,6 +258,7 @@ pub trait Workspace:Sync + Send {
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
+    fn tmp_run_store_path(&self, run_id:u32, channel:u32) -> PathBuf;
     fn tensors_path(&self) -> &PathBuf;
     fn tensor_path(&self, key: &Resource) -> PathBuf;
     fn models_path(&self) -> &PathBuf;
@@ -297,6 +308,10 @@ impl Workspace for DummyWorkspace {
     }
 
     fn store_path(&self) -> &PathBuf {
+        todo!()
+    }
+
+    fn tmp_run_store_path(&self, run_id: u32, channel: u32) -> PathBuf {
         todo!()
     }
 
