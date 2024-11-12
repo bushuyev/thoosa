@@ -22,7 +22,7 @@ use tch::{Device, IndexOp, Kind, Tensor};
 
 
 use thoosa_common::utils::*;
-use thoosa_shared::{make_combos, RangeOrValue, Resources, ThoosaError};
+use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoosaError};
 use thoosa_shared::parse_key_val;
 use thoosa_shared::TensorSliceIdx;
 use thoosa_shared::val::Val;
@@ -42,7 +42,7 @@ use tch::kind::FLOAT_CPU;
 use thoosa_common::loader;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::parzen::optimizer::Primitives::Float;
-use thoosa_common::runs::{Params, ResourcesConfig, RunConfig, Simple};
+use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
@@ -59,8 +59,8 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long, default_value_t = 0.9)]
     pub min_dot: f32,
 
-    #[arg(long,value_parser=parse_resources::<Resources>)]
-    pub resources: Resources,
+    #[arg(long,value_parser=parse_resources)]
+    pub resources: ResourceType,
 
     #[arg(long, default_value = "10")]
     pub min_tracker_step: Option<usize>,
@@ -197,7 +197,7 @@ impl FindMotifsParams {
 
             min_dot: 0.1,
 
-            resources:Resources::Set(resource_set),
+            resources: ResourceType::Set(resource_set),
 
             min_tracker_step: Some(10),
 
@@ -214,7 +214,7 @@ impl FindMotifsParams {
     pub fn min_dot(&self) -> f32 {
         self.min_dot
     }
-    pub fn resources(&self) -> &Resources {
+    pub fn resources(&self) -> &ResourceType {
         &self.resources
     }
     pub fn max_keys_fifo(&self) -> usize {
@@ -226,45 +226,15 @@ impl FindMotifsParams {
 
 }
 
-pub trait Expander {
-    type T: Clone;
-    fn expand(&self, t: Self::T) -> Vec<Self::T>;
-}
-
-pub struct LinearExpander {
-    n: usize,
-}
-
-impl LinearExpander {
-    pub fn new(n: usize) -> Self {
-        Self { n }
-    }
-}
-
-impl Expander for LinearExpander {
-    type T = FindMotifsRunConfig;
-
-    fn expand(&self, t: FindMotifsRunConfig) -> Vec<FindMotifsRunConfig> {
-        (0..self.n as i64).map(|i| {
-            let mut params = t.clone();
-            // t.window * i;
-            // params.filter = Some(InputFilter::Conv1(params.filter.map(|InputFilter::Conv1(f)| {
-            //     Conv1Params::new(f.kernel + f.kernel * i, f.stride, f.padding)
-            // }).unwrap_or(Conv1Params::new(10, 10, 10))));
-            params
-        }).collect()
-    }
-}
-
 fn resource_config_to_keys(store:&Arc<Mutex<Box<dyn Store>>>, resource_config:&Simple) -> Vec<Resource>{
     match resource_config.resources() {
-        Resources::List(list) => {
+        ResourceType::List(list) => {
             store.lock().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect()).expect("list_resources_by_file_stems")
         }
-        Resources::Set(set) => {
+        ResourceType::Set(set) => {
             store.lock().list_resource_set_resources_by_descr(set).expect("list_resource_set_resources")
         }
-        Resources::Group(group) => {
+        ResourceType::Group(group) => {
             let mut store_guard = store.lock();
             //TODO move into store
             store_guard.list_resource_set_group_sets(group).expect("list_resource_set_group_sets").into_iter().flat_map(|v|
@@ -966,16 +936,17 @@ where
 
     let wg = WaitGroup::new();
     let wg_in_loader = wg.clone();
+    let area = executor.write().get_available_cache_area();
 
     executor.write().exec(move |loader, _keys_purge| {
         async move {
-            for resource in resources {
+            for resource in &resources {
                 debug!("clc_motifs_matches_for_label: resource={resource:?}");
 
                 // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
 
                 let matches = clc_dist_matches(
-                    &* Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, 0).await,
+                    &* Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource.clone(), area).await,
                     Arc::clone(&motifs), step, Arc::clone(&motifs_distances), Arc::clone(&channel_motif_ids)
                 ).unwrap();
 
@@ -1007,6 +978,7 @@ where
             };
 
             debug!("clc_motifs_matches_for_label: channels_motifs_classes_guard[channel_i][motif_i]={:?}", channels_motifs_matches_labels.lock());
+            _keys_purge(&resources, area);
             drop(wg_in_loader);
         }.boxed()
     });
@@ -1025,11 +997,8 @@ pub struct SelectMotifsParams {
     #[arg(long)]
     find_motifs_run_ids: Vec<usize>,
 
-    #[arg(long, value_parser = parse_key_val::< String, String >, default_value = "xxx=yyy")]
-    labels_datasets: Vec<(String, String)>,
-
     #[arg(long)]
-    train_resource_group: Option<String>, //TODO enum with labels_datasets?
+    pub resources_group: String,
 
     #[arg(long, default_value_t = 0.5)]
     min_ratio: f32,
@@ -1041,33 +1010,66 @@ impl SelectMotifsParams {
         &self.find_motifs_run_ids
     }
 
-    pub fn dummy(run_ids: Vec<usize>, labels_datasets: Vec<(String, String)>, min_ratio: f32) -> Self {
+    pub fn dummy(run_ids: Vec<usize>, resources_group: String, min_ratio: f32) -> Self {
         SelectMotifsParams {
             find_motifs_run_ids: run_ids,
-            train_resource_group: None,
-            labels_datasets,
+            resources_group,
             min_ratio,
         }
-    }
-    pub fn labels_datasets(&self) -> &Vec<(String, String)> {
-        &self.labels_datasets
-    }
-
-    pub fn with_labels_datasets(&self, labels_datasets: Vec<(String, String)>) -> Self {
-        let mut clone = self.clone();
-        clone.labels_datasets = labels_datasets;
-
-        clone
     }
 
     pub fn min_ratio(&self) -> f32 {
         self.min_ratio
     }
 
-    pub fn train_resource_group(&self) -> Option<&String> {
-        self.train_resource_group.as_ref()
+}
+
+impl Params<SelectMotifsRunConfig, Labeled, CommonFindMotifsConfig> for SelectMotifsParams {
+    fn to_run_configs(&self) -> Vec<SelectMotifsRunConfig> {
+        todo!()
+    }
+
+    fn resource_config(&self) -> Labeled {
+        todo!()
+    }
+
+    fn common_config(&self) -> CommonFindMotifsConfig {
+        todo!()
     }
 }
+
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct SelectMotifsRunConfig{
+
+}
+
+impl SelectMotifsRunConfig {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl RunConfig for SelectMotifsRunConfig {
+    fn from_properties_map(properties: HashMap<String, Val>) -> Self {
+        todo!()
+    }
+}
+
+pub fn select_motifs_for_label_2(
+    mut run_configs: Vec<SelectMotifsRunConfig>,
+    resource_config: &Labeled,
+    common_config: &CommonFindMotifsConfig,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    devices:Vec<Device>
+)  -> Result<Vec<usize>, ThoosaError>{
+
+Ok(vec![])
+}
+
+
 
 pub fn select_motifs_by_ratio (motifs: Tensor, labels_resources: Vec<(String, Vec <Resource>)>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
 
@@ -1212,11 +1214,11 @@ where
 
     let channels_motifs_matches_labels_arc = Arc::new(Mutex::new(channels_motifs_counts_labels));
 
-    //TODO par_bridge
-    labels_resources.into_iter()/*.par_bridge()*/.try_for_each(|(label, resources)| {
+
+    labels_resources.into_iter().par_bridge().try_for_each(|(label, resources)| {
         clc_motifs_matches_for_label(
             Arc::clone(&motifs),
-            SyncWrapper::new(Box::new(Tensor::zeros(slice_len, (tch::Kind::Float, *device))), |e| Box::new(e.shallow_clone())), //TODO
+            SyncWrapper::new_tb(Box::new(Tensor::zeros(slice_len, (tch::Kind::Float, *device)))),
             Arc::clone(&channels_motifs_matches_labels_arc), //output,
             resources,
             Arc::clone(&executor),
@@ -1226,6 +1228,7 @@ where
             Arc::clone(&channel_motif_ids)
         )
     }).unwrap();
+
     (channels_num, motifs_num, channels_motifs_matches_labels_arc)
 }
 
@@ -1597,7 +1600,7 @@ mod motif_find_tests {
             step: 100.into(),
             window: 100.into(),
             min_dot: 0.99,
-            resources: Resources::List(eeg_id_series),
+            resources: ResourceType::List(eeg_id_series),
             min_tracker_step: Some(3),
             max_keys_fifo: 3,
             chunk_size: 2,
@@ -1721,7 +1724,7 @@ mod motif_find_tests {
             step: 100.into(),
             window: 100.into(),
             min_dot: 0.99,
-            resources: Resources::List(eeg_id_series),
+            resources: ResourceType::List(eeg_id_series),
             min_tracker_step: Some(3),
             max_keys_fifo: 3,
             chunk_size: 2,
@@ -1817,7 +1820,7 @@ mod motif_find_tests {
             step: 50.into(),
             window: 100.into(),
             min_dot: 0.99,
-            resources: Resources::List(eeg_id_series),
+            resources: ResourceType::List(eeg_id_series),
             min_tracker_step: Some(3),
             max_keys_fifo: 3,
             chunk_size: 2,
@@ -1895,7 +1898,7 @@ mod motif_find_tests {
             step: 100.into(),
             window: 100.into(),
             min_dot: 0.99,
-            resources: Resources::List((0..tensors_len).map(|v| format!("{}", v)).collect()),
+            resources: ResourceType::List((0..tensors_len).map(|v| format!("{}", v)).collect()),
             min_tracker_step: None,
             max_keys_fifo: 1000,
             chunk_size: 3,

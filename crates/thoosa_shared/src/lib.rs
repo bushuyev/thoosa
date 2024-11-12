@@ -607,23 +607,23 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Resources {
+pub enum ResourceType {
     List(Vec<String>),
     Set(String),
     Group(String)
 }
 
-pub fn parse_resources<'a, V>(s: &str) -> Result<Resources, Box<dyn Error + Send + Sync + 'static>> {
+pub fn parse_resources(s: &str) -> Result<ResourceType, Box<dyn Error + Send + Sync + 'static>> {
     let value_pos = s.find(":").expect("resource specifier should contain ':'") + 1;
 
     if s.starts_with("list") {
-        Ok(Resources::List(s[value_pos..].split(",").map(|v|v.to_string()).collect()))
+        Ok(ResourceType::List(s[value_pos..].split(",").map(|v|v.to_string()).collect()))
 
     } else if s.starts_with("set") {
-        Ok(Resources::Set(s[value_pos..].to_string()))
+        Ok(ResourceType::Set(s[value_pos..].to_string()))
 
     } else if s.starts_with("group") {
-        Ok(Resources::Group(s[value_pos..].to_string()))
+        Ok(ResourceType::Group(s[value_pos..].to_string()))
 
     } else {
         panic!("unexpected param {s}")
@@ -789,7 +789,7 @@ mod shared_tests {
     use clap::{Args, Parser};
 
 
-    use crate::{batch_windows, clc_num_batches, make_combos, group_slices, parse_range_str, RangeOrValue, ThoosaError, Resources};
+    use crate::{batch_windows, clc_num_batches, make_combos, group_slices, parse_range_str, RangeOrValue, ThoosaError, ResourceType};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -961,24 +961,24 @@ mod shared_tests {
         struct TestParams {
 
             #[arg(long,value_parser=parse_resources::<Resources>)]
-            resources: Resources,
+            resources: ResourceType,
         }
 
         let params = TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
 
         assert_eq!(
-            Resources::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
+            ResourceType::List(vec!["aaa".into(), "bbb".into(), "ccc".into()]),
             params.resources
         );
         let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
         assert_eq!(
-            Resources::Set("aaa".into()),
+            ResourceType::Set("aaa".into()),
             params.resources
         );
 
         let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter()).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO error
         assert_eq!(
-            Resources::Group("bbb".into()),
+            ResourceType::Group("bbb".into()),
             params.resources
         );
 
