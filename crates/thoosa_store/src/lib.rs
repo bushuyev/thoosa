@@ -836,13 +836,8 @@ impl Store for SqlStore {
 
             t.execute(format!("ATTACH DATABASE '{}' AS slices_{run_id}_{channel}_tmp", path.as_ref().to_string_lossy()).as_str(), [])?;
 
-            let inserted = t.execute(format!("INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) \
-                            SELECT ?, ?, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist FROM slices_{run_id}_{channel}_tmp.slice_matches").as_str(), [run_id, channel as usize])?;
-            debug!("set_motifs: run_id={run_id:?}, channel={channel:?} groups={groups:?} inserted={inserted}");
-
             //TODO sort?
             for (group, slices) in groups {
-
 
                 let motifs_inserted = t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])?; //TODO group not needed?
 
@@ -851,8 +846,11 @@ impl Store for SqlStore {
                 debug!("set_motifs: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
 
                 for slices_chunk in slices.chunks(500) {
-                    let (mut q, params) = slices_chunk.into_iter().fold(
-                        (vec!["UPDATE slice_matches SET motif_id=? WHERE id IN ("], vec![Value::Integer(motif_id)]),
+
+                    let sql = format!("INSERT INTO slice_matches (motif_id, run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) \
+                            SELECT ?, ?, ?, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist FROM slices_{run_id}_{channel}_tmp.slice_matches WHERE id IN (");
+
+                    let (mut q, params) = slices_chunk.into_iter().fold((vec![sql.as_str()], vec![Value::Integer(motif_id), Value::Integer(run_id as i64), Value::Integer(channel)]),
                         |mut a: (Vec<&str>, Vec<Value>), v: &IdSlice| {
                             a.0.push("?");
                             a.0.push(", ");
