@@ -460,19 +460,16 @@ pub mod tests {
 
 pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
 
-    let mean_t = t.mean_dim(dim, false, Kind::Float);
+    let mean_t = t.mean_dim(dim, false, Float);
     let std_t = t.std(false);
-    // debug!("mean={:?}", vec_f32_from(&mean_t));
-    // debug!("std_t={:?}", vec_f32_from(&std_t));
     let z_t = (t - mean_t) / std_t;
-    // debug!("z_t={:?}", vec_f32_from(&z_t));
     z_t
 }
 
 pub fn z_norm_2(t_0:&Tensor, _dim:i64) -> Result<Tensor, ThoosaError>{
     let std = t_0.std_dim(1, true, true);
     //TODO std - 0
-    Ok((t_0 -t_0.mean_dim(1, true, Kind::Float))/ std)
+    Ok((t_0 -t_0.mean_dim(1, true, Float))/ std)
 }
 
 

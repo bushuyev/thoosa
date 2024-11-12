@@ -315,11 +315,11 @@ pub fn find_motifs_by_euc_dist(
             channels_motif_trackers.iter_mut().enumerate().par_bridge().for_each(|(channel, mt)| {
                 let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
                 let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).squeeze();
-                debug!("find_motifs_by_euc_dist: tensor_0.size={:?} tensor_1.size()={:?}", tensor_0.size(), tensor_1.size());
+                debug!("find_motifs_by_euc_dist: tensor_0.size={:?} tensor_0.device={:?} tensor_1.size()={:?} tensor_1.device={:?}", tensor_0.size(), tensor_0.device(), tensor_1.size(), tensor_1.device());
 
                 let euc_dist_t = dist_d2(
-                    &tensor_0.to_device(devices[0]),
-                    &tensor_1.to_device(devices[0])
+                    &tensor_0,
+                    &tensor_1
                 ).expect(format!("dist_d2 on channel={}", channel, ).as_str());
 
                 let euc_dists_flat = euc_dist_t.view(-1);
@@ -359,6 +359,7 @@ pub fn find_motifs_by_euc_dist(
             Ok(())
         },
         loader,
+        &devices
     )?;
 
     info!("setting motifs in {} configs", run_config_ids.len());
@@ -400,26 +401,38 @@ impl   <ResourceId> ChunkOfSlicedTensors <ResourceId> {
         }
     }
 
-    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &Vec<SyncWrapper<Box<Tensor>>>, keys: Vec <ResourceId>) -> ChunkOfSlicedTensors <ResourceId> {
+    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &Vec<SyncWrapper<Box<Tensor>>>, keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
 
-        let tensors_sliced = tensors_chunk.into_iter().map(|t| {
+        debug!("slice_tensors_chunk: step={step} window={window} tensors_chunk.len()={}", tensors_chunk.len());
 
-            let sliced = slice_t(
-                &t,
-                step,
-                window,
-            );
+        let mut slices = Vec::with_capacity(tensors_chunk.len());
 
-            debug!("slice_tensors_chunk: sliced size={:?}", sliced.size());
+        for tensor in tensors_chunk {
+            let input_length = tensor.size()[1];
 
-            sliced
-        }).collect::<Vec<Tensor>>();
+            if input_length >= window as i64 {
 
+                let unfolded = tensor.to_device_(device, Kind::Float, true, false).unfold(1, window as i64, step as i64);
+                // channels x num_slices x window, transpose  to num_slices x channels x window
+                let unfolded = unfolded.transpose(0, 1);
+                slices.push(unfolded);
+            } else {
+                warn!("skipping tensor")
+            }
+        }
+
+        let tensor= if slices.is_empty() {
+            Tensor::zeros(&[0, tensors_chunk[0].size()[0], window as i64], tch::kind::FLOAT_CPU)
+        } else {
+            //slices x channels x window
+            Tensor::cat(&slices, 0)
+        };
+        debug!("slice_tensors_chunk: final tensor={:?}", tensor.size());
 
         ChunkOfSlicedTensors::new(
             keys,
-            tensors_sliced.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
-            Tensor::vstack(&tensors_sliced),
+            slices.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
+            tensor,
         )
     }
 
@@ -503,6 +516,7 @@ fn chunk_and_slice<G>(
     mut find_motifs_run_configs_trackers: Vec<Vec<SimpleMotifTracker<SqlMotifTrackerStore>>>,
     mut callback: G,
     exec: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    devices:&[Device]
 ) -> Result<Vec<Vec<SimpleMotifTracker<SqlMotifTrackerStore>>>, ThoosaError>
 where
     G: Fn(ChunkOfSlicedTensors <ResourceId>, ChunkOfSlicedTensors <ResourceId>, usize, &FindMotifsRunConfig, &mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>) -> Result<(), ThoosaError> + Send + Sync
@@ -543,8 +557,6 @@ where
         let wg_1_clone = wg_1.clone();
         let window_0_tensors = Arc::new(RwLock::new(vec![]));
         let window_0_tensors_arc = Arc::clone(&window_0_tensors);
-
-        // let window_0_0_clone = window_0_0.clone();
 
         exec.write().exec(|loader, keys_purge| {
             async move {
@@ -596,23 +608,24 @@ where
             });
             wg_1.wait();
 
-            // let callback_clone = Cell::new(callback_clone.clone());
-            run_configs.iter_mut().zip(find_motifs_run_configs_trackers.iter_mut())
+            run_configs.iter_mut().zip(find_motifs_run_configs_trackers.iter_mut()).zip(devices.into_iter().cycle())
                 .par_bridge()
-                .for_each(|(run_config, mt)| {
+                .for_each(|((run_config, mt), device)| {
 
                     callback(
                         ChunkOfSlicedTensors::slice_tensors_chunk(
                             run_config.step,
                             run_config.window,
                             &window_0_tensors.read(),
-                            window_0_0_clone.clone()
+                            window_0_0_clone.clone(),
+                            *device
                         ),
                         ChunkOfSlicedTensors::slice_tensors_chunk(
                             run_config.step,
                             run_config.window,
                             &window_1_tensors.read(),
-                            window_1_0_clone.clone()
+                            window_1_0_clone.clone(),
+                            *device
                         ),
                         0,
                         run_config,
@@ -2237,6 +2250,79 @@ mod motif_find_tests {
     }
 
     #[test]
+    fn test_slice_tensors_chunk(){
+        // ChunkOfSlicedTensors::slice_tensors_chunk()
+
+        // Example tensors
+        let tensor_a = Tensor::from_slice(&[
+            0.00, 0.01, 0.02,
+            0.10, 0.11, 0.12
+        ])
+            .view([2, -1]); // Shape: [2, 3]
+        let tensor_b = Tensor::from_slice(&[
+            1.00, 1.01,
+            1.10, 1.11
+        ])
+            .view([2, -1]); // Shape: [2, 2]
+
+        // let tensors = vec![tensor_a, tensor_b];
+        let tensors = vec![SyncWrapper::new_tb(Box::new(tensor_a)), SyncWrapper::new_tb(Box::new(tensor_b))];
+        let window = 2;
+        let step = 1;
+
+        // let result = process_tensors(&tensors, window, step);
+        let result = ChunkOfSlicedTensors::slice_tensors_chunk(step, window, &tensors, vec!["aaa", "bbb"], Cpu);
+
+        let expected = Tensor::from_slice(&[
+            // Slice 0 from tensor_a
+            0.00, 0.01, // Channel 0
+            0.10, 0.11, // Channel 1
+            // Slice 1 from tensor_a
+            0.01, 0.02, // Channel 0
+            0.11, 0.12, // Channel 1
+            // Slice 0 from tensor_b
+            1.00, 1.01, // Channel 0
+            1.10, 1.11, // Channel 1
+        ])
+            .view([3, 2, 2]).totype(Float);
+
+        assert_eq!(*result.t, expected);
+    }
+
+    #[test]
+    fn test_slice_tensors_chunk_non_multiple_size(){
+
+        let tensor = Tensor::from_slice(&[
+            0.0, 0.1, 0.2, // Channel 0
+            0.3, 0.4, 0.5, // Channel 1
+        ])
+            .view([2, 3]);
+        // let tensors = vec![tensor_a, tensor_b];
+        let tensors = vec![tensor.into()];
+
+
+        let window = 2;
+        let step = 1;
+
+        // let result = process_tensors(&tensors, window, step);
+        let result = ChunkOfSlicedTensors::slice_tensors_chunk(step, window, &tensors, vec!["aaa"], Cpu);
+
+        let expected = Tensor::from_slice(&[
+            // Slice 0
+            0.0, 0.1, // Channel 0
+            0.3, 0.4, // Channel 1
+
+            // Slice 1
+            0.1, 0.2, // Channel 0
+            0.4, 0.5, // Channel 1
+        ])
+            .view([2, 2, 2]).totype(Float);
+
+        assert_eq!(*result.t, expected);
+    }
+
+
+    #[test]
     fn test_chunk_and_slice() -> Result<(), ThoosaError> {
 
         let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555"].into_iter().enumerate().map(|(i, v)| (i as u32, 1u32, v).into()).collect();
@@ -2275,6 +2361,7 @@ mod motif_find_tests {
                 Ok(())
             },
             &executor_rc,
+            &[Cpu]
         )?;
 
         let mut chunks_0 = vec![];
