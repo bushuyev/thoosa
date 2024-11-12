@@ -143,8 +143,8 @@ pub struct LoadRunner<V>
 where
     V: Send + Debug + 'static,
 {
-    _futures_pool: ThreadPool,
-    _features: Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
+    futures_pool: ThreadPool,
+    features: Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
     features_sender: SyncSender<Mutex<BoxFuture<'static, ()>>>,
     stop: Arc<AtomicBool>,
     cache_areas: u64,
@@ -187,20 +187,17 @@ where
 
             // let mut t = Instant::now();
             loop {
-                if stop_arc.load(Ordering::Relaxed) {
+                if stop_arc.load(Relaxed) {
                     break;
                 }
-
 
                 let futures_len = futures.read().len();
                 if futures_len > 0 {
                     if let Some(mut guard) = futures.try_write() {
-                        // if cycle % 10000 == 0 {
-                        //     debug!("futures loop: in guard len={} ", guard.len());
-                        // }
+
                         guard.retain(|fut_mx| {
                             if let Poll::Ready(_t) = fut_mx.lock().as_mut().poll(&mut cx) {
-                                //TODO
+                                //TODO num tries log?
                                 false
                             } else {
                                 true
@@ -214,9 +211,9 @@ where
             }
         });
         Self {
-            _futures_pool: futures_pool,
+            futures_pool,
 
-            _features: features_rc,
+            features: features_rc,
             features_sender: tx,
 
             stop: Arc::clone(&stop),
@@ -224,7 +221,8 @@ where
 
             loader: Arc::new(RwLock::new(Loader {
                 loader_pool: rayon::ThreadPoolBuilder::new().num_threads(loader_threads).spawn_handler(|thread_builder| {
-                    let b = std::thread::Builder::new();
+                    let b = thread::Builder::new();
+
                     b.name(format!("{}/{:?}", "loader_pool", thread_builder.index()))
                         .spawn(|| thread_builder.run())?;
 
@@ -434,6 +432,12 @@ where
     }
 }
 
+impl From<Tensor> for SyncWrapper<Box<Tensor>> {
+    fn from(t: Tensor) -> Self {
+        SyncWrapper::new_tb(Box::new(t))
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -441,25 +445,15 @@ mod tests {
     use std::fmt::Debug;
     use std::future::{Future};
     use std::hash::Hash;
-
-
     use std::pin::Pin;
 
     use std::sync::atomic::{AtomicU32, AtomicU64};
-
-
     use std::task::{Context, Poll};
     use std::{thread};
 
     use std::time::{Duration, Instant};
     use crossbeam_utils::sync::WaitGroup;
-
-
-
-
     use log::debug;
-
-
     use rand::Rng;
     use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::ThoosaError;
