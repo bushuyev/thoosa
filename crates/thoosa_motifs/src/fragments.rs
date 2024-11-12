@@ -102,10 +102,8 @@ pub fn motifs_to_tensor(
     debug!("motifs_to_tensor: device={device:?} window={window}");
 
     let channels_motifs_slices:Arc<RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(RwLock::new(HashMap::new()));
-    // let mut motifs_slices_map:Arc<parking_lot::RwLock<HashMap<usize, MotifSlice>>> = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
     let channels_motifs_slices_arc = Arc::clone(&channels_motifs_slices);
-    // let motifs_slices_map_arc = Arc::clone(&motifs_slices_map);
 
     let wg = WaitGroup::new();
     let wg_1 = wg.clone();
@@ -123,7 +121,7 @@ pub fn motifs_to_tensor(
                     let channel_t = t.get(motif_slice.channel_idx as i64);
                     let channel_t = channel_t.view([1, -1]);
 
-                    let motifslice_t = channel_t.f_slice(1, Some(motif_slice.slise_idx), Some(motif_slice.slise_idx + window), 1).unwrap();//TODO save window when finding motifs
+                    let motifslice_t = channel_t.f_slice(1, Some(motif_slice.slise_idx), Some(motif_slice.slise_idx + window), 1).unwrap();
 
                     let mut write_guard = channels_motifs_slices_arc.write();
                     let  channels_motifs = write_guard.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());

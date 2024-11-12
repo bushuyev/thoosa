@@ -22,13 +22,13 @@ use lazy_static::lazy_static;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{Params, ResourcesConfig, RunConfig, Simple};
+use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams};
+use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label_2, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
 use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams};
-use thoosa_shared::{batch_windows, cdt, clc_num_batches, make_combos, RangeOrValue, Resources, TensorSliceIdx, ThoosaError};
+use thoosa_shared::{batch_windows, cdt, clc_num_batches, make_combos, RangeOrValue, ResourceType, TensorSliceIdx, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_store::{SqlStore, Store};
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
@@ -148,9 +148,6 @@ impl RunAllParams {
 
 impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParams {
     fn to_run_configs(&self) -> Vec<FindMotifsRunConfig> {
-        // vec![
-        //     FindMotifsRunConfig::new(10, 10, "", None)
-        // ]
 
         debug!("FindMotifsParams::to_run_configs: self.step={:?} self.window={:?}", self.step, self.window);
 
@@ -165,7 +162,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
 
     fn resource_config(&self) -> Simple {
         Simple::new(
-            Resources::Group(self.train_resource_group.clone())
+            ResourceType::Group(self.train_resource_group.clone())
         )
     }
 
@@ -173,6 +170,28 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
         CommonFindMotifsConfig::new(Some(100), 100)//TODO
     }
 }
+
+impl Params<SelectMotifsRunConfig, Labeled, CommonFindMotifsConfig> for RunAllParams {
+    fn to_run_configs(&self) -> Vec<SelectMotifsRunConfig> {
+
+        debug!("FindMotifsParams::to_run_configs: self.step={:?} self.window={:?}", self.step, self.window);
+
+        vec![
+            SelectMotifsRunConfig::new()
+        ]
+    }
+
+    fn resource_config(&self) -> Labeled {
+        Labeled::from_group(
+            ResourceType::Group(self.train_resource_group.clone())
+        )
+    }
+
+    fn common_config(&self) -> CommonFindMotifsConfig {
+        CommonFindMotifsConfig::new(Some(100), 100)//TODO
+    }
+}
+
 
 /**
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --release -- \
@@ -229,7 +248,7 @@ impl Params<SayHelloRunConfig, Simple, ()> for SayHelloParams {
     }
 
     fn resource_config(&self) -> Simple {
-        Simple::new(Resources::List(vec![]))
+        Simple::new(ResourceType::List(vec![]))
     }
 
     fn common_config(&self) -> () {
@@ -368,16 +387,16 @@ pub fn run_cli<F,R>(
         Some(SelectMotifs(select_motifs_params)) => {
             info!("select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
 
-            let select_motifs_params = if let Some(train_resource_group) = select_motifs_params.train_resource_group() {
-                let train_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_resource_group.as_str())? };
-                select_motifs_params.with_labels_datasets(train_labels_datasets)
-            } else {
-                select_motifs_params.clone()
-            };
+            // let select_motifs_params = if let Some(train_resource_group) = select_motifs_params.train_resource_group() {
+            //     let train_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_resource_group.as_str())? };
+            //     select_motifs_params.with_labels_datasets(train_labels_datasets)
+            // } else {
+            //     select_motifs_params.clone()
+            // };
+            //
+            // let corr_ids = run_select_motifs(&ws, &store, devices, &select_motifs_params, &loader, channels as i64);
 
-            let corr_ids = run_select_motifs(&ws, &store, devices, &select_motifs_params, &loader, channels as i64);
-
-            info!("run_select_motifs done, corr_ids={:?}", corr_ids);
+            // info!("run_select_motifs done, corr_ids={:?}", corr_ids);
         }
 
         Some(TrainOnMotifs(train_on_motif_params)) => {
@@ -445,13 +464,22 @@ pub fn run_cli<F,R>(
             info!("run all: train_labels_datasets={:?}", train_labels_datasets);
             info!("run all: valid_labels_datasets={:?}", valid_labels_datasets);
 
-            let motif_selection_run_ids = run_select_motifs(
+            // let motif_selection_run_ids = run_select_motifs(
+            //     &ws,
+            //     &store,
+            //     devices.clone(),
+            //     &SelectMotifsParams::dummy(find_motifs_run_ids, train_labels_datasets.clone(), run_all_params.select_motifs_min_ratio),
+            //     &loader,
+            //     ws.read().channels() as i64
+            // )?;
+            let motif_selection_run_ids = run_step(
+                None,
+                run_all_params,
+                select_motifs_for_label_2,
                 &ws,
                 &store,
-                devices.clone(),
-                &SelectMotifsParams::dummy(find_motifs_run_ids, train_labels_datasets.clone(), run_all_params.select_motifs_min_ratio),
                 &loader,
-                ws.read().channels() as i64
+                devices.clone()
             )?;
 
             info!("select_motifs done: motif_selection_run_ids={:?}", motif_selection_run_ids);
@@ -1141,43 +1169,44 @@ fn select_motifs_for_label (ws: &Arc<RwLock<Box<dyn Workspace>>>, store:Arc<Mute
 
     info!("select_motifs_for_label: motifs tensor built, size={:?}", motifs.size());
 
-
-
-
     let channel_motif_ids = Arc::new(RwLock::new(channel_motif_ids));
-    let labels_channels_good_motif_idxs:HashMap<String, Vec<Vec<(i64, f64)>>> = select_motifs_by_ratio(
-        motifs,
-        select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
-            (
-                label_dataset.0.clone(),
-                store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap()
-            )
-
-        }).collect(),
-        executor,
-        params.step(),
-        device,
-        select_motifs_params.min_ratio(),
-        Arc::new(RwLock::new(motifs_avg_distances)), //TODO keeps motif indexes with motif tensors
-        Arc::clone(&channel_motif_ids)
-    )?;
-
-    Ok(labels_channels_good_motif_idxs.into_iter().map(|(label, channels_good_motif_idxs)| {
-
-        let motifs_corrs = channel_motif_ids.read().iter()
-            .zip(channels_good_motif_idxs.into_iter())
-            .map(|(motif_ids, motif_idxs_corss)| {
-
-                motif_idxs_corss.into_iter().map(|(motif_idx, motif_idx_corr)| {
-                    (motif_ids[motif_idx as usize], motif_idx_corr)
-                }).collect::<Vec<(usize, f64)>>()
-
-            }).collect::<Vec<Vec<(usize, f64)>>>();
-
-        debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
-
-        store.lock().save_selected_motifs(find_motifs_run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs).expect("save_motifs_corrs")
-    }).collect::<Vec<usize>>())
+    //TODO SM Ref
+    // let labels_channels_good_motif_idxs:HashMap<String, Vec<Vec<(i64, f64)>>> = select_motifs_by_ratio(
+    //     motifs,
+    //     select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
+    //         (
+    //             label_dataset.0.clone(),
+    //             store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap()
+    //         )
+    //
+    //     }).collect(),
+    //     executor,
+    //     params.step(),
+    //     device,
+    //     select_motifs_params.min_ratio(),
+    //     Arc::new(RwLock::new(motifs_avg_distances)), //TODO keeps motif indexes with motif tensors
+    //     Arc::clone(&channel_motif_ids)
+    // )?;
+    //
+    // Ok(labels_channels_good_motif_idxs.into_iter().map(|(label, channels_good_motif_idxs)| {
+    //
+    //     let motifs_corrs = channel_motif_ids.read().iter()
+    //         .zip(channels_good_motif_idxs.into_iter())
+    //         .map(|(motif_ids, motif_idxs_corss)| {
+    //
+    //             motif_idxs_corss.into_iter().map(|(motif_idx, motif_idx_corr)| {
+    //                 (motif_ids[motif_idx as usize], motif_idx_corr)
+    //             }).collect::<Vec<(usize, f64)>>()
+    //
+    //         }).collect::<Vec<Vec<(usize, f64)>>>();
+    //
+    //     debug!("select_motifs: motifs_corrs={:?}", motifs_corrs);
+    //
+    //     //TODO SM Ref
+    //     // store.lock().save_selected_motifs(find_motifs_run_id, format!("{:?}", select_motifs_params.labels_datasets()).as_str(), motifs_corrs).expect("save_motifs_corrs")
+    //
+    // }).collect::<Vec<usize>>())
+    Ok(vec![])
 }
 
 
@@ -1258,9 +1287,9 @@ mod main_tests {
     use thoosa_common::runs::{Params, ResourcesConfig};
     use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
     use thoosa_common::utils::{from, lin_t, plot_series, vec_f32_from};
-    use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, FindMotifsRunConfig, LinearExpander, SelectMotifsParams};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label_2, FindMotifsParams, FindMotifsRunConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::PlotMotifSlicesParams;
-    use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, Resources, TensorSliceIdx, ThoosaError};
+    use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorSliceIdx, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{MotifTrackerStore, SqlMotifTrackerStore, SqlStore, Store};
     use crate::cli::{import_resources, run_plot_motif_slices, resource_path, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
@@ -1404,7 +1433,7 @@ mod main_tests {
                 step: 100.into(),
                 window: 800.into(),
                 min_dot: 0.0,
-                resources: Resources::List(vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()]),
+                resources: ResourceType::List(vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()]),
                 min_tracker_step: Some(3),
                 max_keys_fifo: 3,
                 chunk_size: 2,
@@ -1433,10 +1462,8 @@ mod main_tests {
             Cpu,
             &SelectMotifsParams::dummy(
                 run_ids.clone(),
-                vec![
-                    ("label_0".to_string(), "1/label_0".to_string()),
-                    ("label_1".to_string(), "1/label_1".to_string())
-                ], 0.1
+                "group".into(),
+                0.1
             ),
             run_ids[0],
             &loader
@@ -1774,7 +1801,17 @@ mod main_tests {
             &ws,
             &store,
             &loader,
-            devices
+            devices.clone()
+        )?;
+
+        let run_ids = run_step(
+            Some(run_ids),
+            &SelectMotifsParams::dummy(vec![], "Label_0/4".into(), 0.1),
+            select_motifs_for_label_2,
+            &ws,
+            &store,
+            &loader,
+            devices.clone()
         )?;
 
         println!("run_ids={run_ids:?}");

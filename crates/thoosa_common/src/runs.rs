@@ -1,28 +1,29 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use thoosa_shared::Resources;
+use std::sync::Arc;
+use parking_lot::Mutex;
+use thoosa_shared::resource::Resource;
+use thoosa_shared::ResourceType;
 use thoosa_shared::val::Val;
 use crate::parzen::optimizer::ConfigurationSpace;
 
 
 type Label = i64;//TODO
 
-
-
 pub trait ResourcesConfig:Display {
-
+    // fn resource_config_to_keys(store:&Arc<Mutex<Box<dyn Store>>>, resource_config:&crate::runs::Simple) -> Vec<Resource>;
 }
 
 pub struct Simple {
-    resources: Resources
+    resources: ResourceType
 }
 
 impl Simple {
-    pub fn new(resources: Resources) -> Self {
+    pub fn new(resources: ResourceType) -> Self {
         Self { resources }
     }
 
-    pub fn resources(&self) -> &Resources {
+    pub fn resources(&self) -> &ResourceType {
         &self.resources
     }
 }
@@ -31,14 +32,46 @@ impl ResourcesConfig for Simple {
 
 }
 
+
 impl Display for Simple{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "xxx")
+        write!(f, "Simple")
     }
 }
 
+pub struct Labeled {
+    resources: HashMap<String, ResourceType>
+}
+
+impl Labeled {
+    pub fn from_group(resources: ResourceType) -> Self {
+       match resources {
+         
+           ResourceType::Group(_) => {
+               Self {
+                   resources: HashMap::new(),//TODO
+               }
+           }
+           _=> {
+               panic!("wrong resources")
+           }
+       }
+    }
+}
+
+impl ResourcesConfig for Labeled {
+
+}
+
+impl Display for Labeled{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Labeled")
+    }
+}
+
+
 pub struct NodeResources {//TODO rename Node to Net
-    resources: Resources
+    resources: ResourceType
 }
 
 impl ResourcesConfig for NodeResources {

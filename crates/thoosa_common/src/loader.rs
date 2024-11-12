@@ -120,16 +120,16 @@ where
         debug!("preload_vec: in loader_pool 1 current_thread={:?}", thread::current().id());
     }
 
-    pub fn purge_resources(loader_arc: Arc<RwLock<Loader<V>>>, keys: Vec<Resource>, cache_area: u64) {
+    pub fn purge_resources(loader_arc: Arc<RwLock<Loader<V>>>, keys: &Vec<Resource>, cache_area: u64) {
         let mut loader_guard = loader_arc.write();
 
 
         for key in keys {
-            if let Some(v) = loader_guard.resources.get_mut(&key) {
+            if let Some(v) = loader_guard.resources.get_mut(key) {
                 debug!("keys_to_purge: cache_area={:064b}", cache_area);
                 v.cache_areas = remove_mask(v.cache_areas, cache_area);
                 if v.cache_areas == 0 {
-                    loader_guard.resources.remove(&key);
+                    loader_guard.resources.remove(key);
                     debug!("keys_to_purge: key={key:?} removed");
                 } else {
                     debug!("keys_to_purge: key={key:?} kept, remaining v.cache_areas={:064b}", v.cache_areas);
@@ -244,7 +244,7 @@ where
 
     pub fn exec<F>(&mut self, make_future: F)
     where
-        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(Vec<Resource>, u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
+        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(&Vec<Resource>, u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
 
     {
         let loader_for_purge = Arc::clone(&self.loader);
