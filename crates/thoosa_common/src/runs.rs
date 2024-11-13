@@ -2,16 +2,18 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use parking_lot::Mutex;
-use thoosa_shared::resource::Resource;
-use thoosa_shared::ResourceType;
+use thoosa_shared::resource::{Resource, ResourceStore};
+use thoosa_shared::{ResourceType, ThoosaError};
 use thoosa_shared::val::Val;
 use crate::parzen::optimizer::ConfigurationSpace;
 
 
 type Label = i64;//TODO
 
+
 pub trait ResourcesConfig:Display {
-    // fn resource_config_to_keys(store:&Arc<Mutex<Box<dyn Store>>>, resource_config:&crate::runs::Simple) -> Vec<Resource>;
+    type Result;
+    fn resource_config_to_keys<S:ResourceStore+ ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError>;
 }
 
 pub struct Simple {
@@ -29,9 +31,25 @@ impl Simple {
 }
 
 impl ResourcesConfig for Simple {
+    type Result = Vec<Resource>;
 
+    fn resource_config_to_keys<S:ResourceStore + ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Vec<Resource>, ThoosaError>{
+        Ok(match self.resources() {
+            ResourceType::List(list) => {
+                store.lock().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect()).expect("list_resources_by_file_stems")
+            }
+            ResourceType::Set(set) => {
+                store.lock().list_resource_set_resources_by_descr(set).expect("list_resource_set_resources")
+            }
+            ResourceType::Group(group) => {
+                let mut store_guard = store.lock();
+                store_guard.list_resource_set_group_sets(group).expect("list_resource_set_group_sets").into_iter().flat_map(|v|
+                    store_guard.list_resource_set_resources_by_descr(&v.1).expect("list_resource_set_resources_by_descr")
+                ).collect()
+            }
+        })
+    }
 }
-
 
 impl Display for Simple{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -40,27 +58,30 @@ impl Display for Simple{
 }
 
 pub struct Labeled {
-    resources: HashMap<String, ResourceType>
+    group: String
 }
 
 impl Labeled {
-    pub fn from_group(resources: ResourceType) -> Self {
-       match resources {
-         
-           ResourceType::Group(_) => {
-               Self {
-                   resources: HashMap::new(),//TODO
-               }
-           }
-           _=> {
-               panic!("wrong resources")
-           }
-       }
+
+    pub fn new(group: String) -> Self {
+        Self{
+            group
+        }
     }
 }
 
 impl ResourcesConfig for Labeled {
+    // (label, resources)
+    type Result = Vec<(String,Vec<Resource>)>;
 
+    fn resource_config_to_keys<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Vec<(String,Vec<Resource>)>, ThoosaError> {
+        let mut store_guard = store.lock();
+
+        store_guard.list_group_labeled_resources_sets(&self.group)?.into_iter().map(|(label, resource_set)| {
+            store_guard.list_resource_set_resources_by_descr(&self.group)
+                .map(|data|(label, data))
+        }).collect()
+    }
 }
 
 impl Display for Labeled{
@@ -69,13 +90,16 @@ impl Display for Labeled{
     }
 }
 
-
 pub struct NodeResources {//TODO rename Node to Net
     resources: ResourceType
 }
 
 impl ResourcesConfig for NodeResources {
+    type Result = (Vec<(String,Vec<Resource>)>, Vec<(String,Vec<Resource>)>);
 
+    fn resource_config_to_keys<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<(Vec<(String,Vec<Resource>)>, Vec<(String,Vec<Resource>)>), ThoosaError> {
+        todo!()
+    }
 }
 
 impl Display for NodeResources {
@@ -83,7 +107,6 @@ impl Display for NodeResources {
         write!(f, "xxx")
     }
 }
-
 
 pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
     fn to_run_configs(&self) ->Vec<C>;

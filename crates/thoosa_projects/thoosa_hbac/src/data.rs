@@ -919,7 +919,8 @@ mod tests {
             &ws,
             &store,
             &executor_rc,
-            vec![Cpu]
+            vec![Cpu],
+            "Test/FindMotifs"
         )?;
 
 

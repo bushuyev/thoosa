@@ -19,7 +19,7 @@ use rusqlite::{Connection, Error, params, Transaction};
 use rusqlite::types::Value;
 
 use thoosa_shared::*;
-use thoosa_shared::resource::{Resource, ResourceId};
+use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_shared::val::Val;
 
 
@@ -80,7 +80,7 @@ impl SetCond {
 }
 
 
-pub trait Store: Sync + Send {
+pub trait Store:ResourceStore + Sync + Send {
     fn save_import(&self, descr: String, t: &Transaction) -> Result<u32, ThoosaError>;
     fn save_tree_run(&mut self, input_run_id: Option<&[usize]>, descr: &str, keys: &str, properties_vals: HashMap<String, Val>) -> Result<usize, ThoosaError>;
     fn get_input_run_ids(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError>;
@@ -90,20 +90,12 @@ pub trait Store: Sync + Send {
     fn save_pure_sets(&self, max_len: usize, only_unused: bool, t: &Transaction) -> Result<(), ThoosaError>;
     fn save_set_by_labels(&mut self, conds: Vec<(String, SetCond)>, only_unused: bool, limit: usize) -> Result<(), ThoosaError>;
     fn save_groups_by_label_cnt(&self, max_resources_in_set: usize, t: &Transaction) -> Result<(), ThoosaError>;
-    fn list_resource_set_group_sets(&mut self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError>;
-    fn list_group_labeled_resources_sets(&mut self, group_decr: &str) -> Result<Vec<(String, String)>, ThoosaError>;
-    fn list_resource_set_resources(&mut self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
-    fn list_resource_set_resources_by_descr(&mut self, descr: &str) -> Result<Vec<Resource>, ThoosaError>;
-    fn list_resources_by_file_stems(&mut self, file_stem: &Vec<&str>) -> Result<Vec<Resource>, ThoosaError>;
     fn list_resources_by_ids(&mut self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoosaError>;
     fn list_resource_random_not_label(&mut self, label: &str, limit: i64) -> Result<Vec<Resource>, ThoosaError>;
     fn list_resource_random_in_group(&mut self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
     fn save_label(&self, label: &str, t: &Transaction) -> Result<u32, ThoosaError>;
     fn list_labels(&mut self) -> Result<Vec<String>, ThoosaError>;
-
-    // fn save_param(&mut self, name:&str, data_type:&str) -> Result<usize, ThoosaError>;
     fn save_params_value(&mut self, params: HashMap<String, Val>, run_id: usize, label: Option<&str>) -> Result<(), ThoosaError>;
-
     fn save_resources_labels(&self, resource_labels_probs: &HashMap<String, Vec<(String, f32)>>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
     fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
     fn set_motifs(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, Vec<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
@@ -131,6 +123,109 @@ impl Debug for SqlMotifTrackerStore {
 
 pub struct SqlStore {
     conn: Mutex<Connection>,
+}
+
+impl ResourceStore for SqlStore {
+    fn list_resource_set_resources_by_descr(&mut self, descr: &str) -> Result<Vec<Resource>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let r = Self::list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
+        debug!("list_resource_set_resources_by_descr: descr={descr} r={r:?}");
+
+        t.commit()?;
+
+        Ok(r)
+    }
+    fn list_resources_by_file_stems(&mut self, file_stems: &Vec<&str>) -> Result<Vec<Resource>, ThoosaError> {
+        let mut conn_guard = self.conn.lock();
+        let t = conn_guard.transaction()?;
+
+        let (mut q, params) = file_stems.into_iter().fold((vec!["SELECT id, import_id, key FROM resources WHERE "], vec![]), |mut a, v| {
+            a.0.push(" key LIKE ?");
+            a.0.push(" OR");
+            a.1.push(*v);
+            a
+        });
+
+        q.pop();
+        q.push(" ORDER BY key");
+
+        let resources = {
+            let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
+
+            debug!("list_resources_by_file_stems: stmt={stmt:?}");
+
+            let r = stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
+                Ok(Resource::new(
+                    row.get::<usize, u32>(0)?,
+                    row.get::<usize, u32>(1)?,
+                    row.get::<usize, String>(2)?,
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            r
+        };
+
+        Ok(resources)
+    }
+
+    fn list_resource_set_group_sets(&mut self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let group_sets = {
+            let mut stmt = t.prepare("SELECT rs.id, rs.descr FROM resource_set rs LEFT JOIN resource_set_group rsg ON rsg.id=rs.group_id WHERE rsg.descr=?")?;
+
+
+            let vec = stmt.query_map([group_descr], |row| { //TODO move group_slices out, not for store
+                Ok((
+                    row.get::<usize, usize>(0).expect("row 0 in list_resource_set_group_sets"),
+                    row.get::<usize, String>(1).expect("row 1 in list_resource_set_group_sets")
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            vec
+        };
+
+        t.commit()?;
+
+        Ok(group_sets)
+    }
+
+    fn list_group_labeled_resources_sets(&mut self, group_descr: &str) -> Result<Vec<(String, String)>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let labeled_resources_sets = {
+            let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
+
+            let vec = stmt.query_map([group_descr], |row| { //TODO move group_slices out, not for store
+                Ok((
+                    row.get::<usize, String>(0).expect("row 0 in list_group_labeled_resources_sets"),
+                    row.get::<usize, String>(1).expect("row 1 in list_group_labeled_resources_sets")
+                ))
+            })?.map(|v| v.unwrap()).collect();
+
+            vec
+        };
+
+        t.commit()?;
+
+        Ok(labeled_resources_sets)
+    }
+
+    fn list_resource_set_resources(&mut self, set_id: usize) -> Result<Vec<Resource>, ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let set_resources = Self::list_resource_set_resources(set_id, &t)?;
+
+        t.commit()?;
+
+        Ok(set_resources)
+    }
+
 }
 
 impl Store for SqlStore {
@@ -542,63 +637,6 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn list_resource_set_group_sets(&mut self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        let group_sets = {
-            let mut stmt = t.prepare("SELECT rs.id, rs.descr FROM resource_set rs LEFT JOIN resource_set_group rsg ON rsg.id=rs.group_id WHERE rsg.descr=?")?;
-
-
-            let vec = stmt.query_map([group_descr], |row| { //TODO move group_slices out, not for store
-                Ok((
-                    row.get::<usize, usize>(0).expect("row 0 in list_resource_set_group_sets"),
-                    row.get::<usize, String>(1).expect("row 1 in list_resource_set_group_sets")
-                ))
-            })?.map(|v| v.unwrap()).collect();
-
-            vec
-        };
-
-        t.commit()?;
-
-        Ok(group_sets)
-    }
-
-    fn list_group_labeled_resources_sets(&mut self, group_descr: &str) -> Result<Vec<(String, String)>, ThoosaError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        let labeled_resources_sets = {
-            let mut stmt = t.prepare("SELECT l.label, rs.descr FROM resource_set_group rsg JOIN resource_set rs ON rs.group_id=rsg.id JOIN labels l ON l.id=rs.label_id WHERE rsg.descr=?")?;
-
-            let vec = stmt.query_map([group_descr], |row| { //TODO move group_slices out, not for store
-                Ok((
-                    row.get::<usize, String>(0).expect("row 0 in list_group_labeled_resources_sets"),
-                    row.get::<usize, String>(1).expect("row 1 in list_group_labeled_resources_sets")
-                ))
-            })?.map(|v| v.unwrap()).collect();
-
-            vec
-        };
-
-        t.commit()?;
-
-        Ok(labeled_resources_sets)
-    }
-
-    fn list_resource_set_resources_by_descr(&mut self, descr: &str) -> Result<Vec<Resource>, ThoosaError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        let r = Self::list_resource_set_resources(t.query_row("SELECT id FROM resource_set WHERE descr=?", [descr], |row| row.get(0))?, &t)?;
-        debug!("list_resource_set_resources_by_descr: descr={descr} r={r:?}");
-
-        t.commit()?;
-
-        Ok(r)
-    }
-
     fn list_resource_random_not_label(&mut self, label: &str, limit: i64) -> Result<Vec<Resource>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -670,50 +708,6 @@ impl Store for SqlStore {
         debug!("list_resource_random_in_group: r.len={:?}", r.len());
 
         Ok(r)
-    }
-
-    fn list_resource_set_resources(&mut self, set_id: usize) -> Result<Vec<Resource>, ThoosaError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        let set_resources = Self::list_resource_set_resources(set_id, &t)?;
-
-        t.commit()?;
-
-        Ok(set_resources)
-    }
-
-    fn list_resources_by_file_stems(&mut self, file_stems: &Vec<&str>) -> Result<Vec<Resource>, ThoosaError> {
-        let mut conn_guard = self.conn.lock();
-        let t = conn_guard.transaction()?;
-
-        let (mut q, params) = file_stems.into_iter().fold((vec!["SELECT id, import_id, key FROM resources WHERE "], vec![]), |mut a, v| {
-            a.0.push(" key LIKE ?");
-            a.0.push(" OR");
-            a.1.push(*v);
-            a
-        });
-
-        q.pop();
-        q.push(" ORDER BY key");
-
-        let resources = {
-            let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
-
-            debug!("list_resources_by_file_stems: stmt={stmt:?}");
-
-            let r = stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
-                Ok(Resource::new(
-                    row.get::<usize, u32>(0)?,
-                    row.get::<usize, u32>(1)?,
-                    row.get::<usize, String>(2)?,
-                ))
-            })?.map(|v| v.unwrap()).collect();
-
-            r
-        };
-
-        Ok(resources)
     }
 
     fn list_resources_by_ids(&mut self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoosaError>{
@@ -994,7 +988,6 @@ impl Store for SqlStore {
         t.commit()?;
 
         Ok(resources_motifs)
-        // Ok(HashMap::new())
     }
 
     /**

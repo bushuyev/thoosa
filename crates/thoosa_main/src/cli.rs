@@ -182,8 +182,8 @@ impl Params<SelectMotifsRunConfig, Labeled, CommonFindMotifsConfig> for RunAllPa
     }
 
     fn resource_config(&self) -> Labeled {
-        Labeled::from_group(
-            ResourceType::Group(self.train_resource_group.clone())
+        Labeled::new(
+            self.train_resource_group.clone()
         )
     }
 
@@ -378,7 +378,8 @@ pub fn run_cli<F,R>(
                 &ws,
                 &store,
                 &loader,
-                devices
+                devices,
+                "FindMotifs"
             )?;
 
             info!("run_find_motifs_on_set done, run_id={:?}", run_ids);
@@ -452,7 +453,8 @@ pub fn run_cli<F,R>(
                 &ws,
                 &store,
                 &loader,
-                devices.clone()
+                devices.clone(),
+                "RunAll/FindMotifs"
             )?;
 
 
@@ -479,7 +481,8 @@ pub fn run_cli<F,R>(
                 &ws,
                 &store,
                 &loader,
-                devices.clone()
+                devices.clone(),
+                "RunAll/SelectMotifs"
             )?;
 
             info!("select_motifs done: motif_selection_run_ids={:?}", motif_selection_run_ids);
@@ -1145,32 +1148,32 @@ return selected_motif_run_ids
 fn select_motifs_for_label (ws: &Arc<RwLock<Box<dyn Workspace>>>, store:Arc<Mutex<Box<dyn Store>>>, device: Device, select_motifs_params: &SelectMotifsParams, find_motifs_run_id:usize, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Result<Vec<usize>, ThoosaError> {
     debug!("select_motifs_for_label: device={:?}", device);
 
-    let (resource_id_motif_slices, motifs_avg_distances, params) = {
-        let mut store_guard = store.lock();
-
-        (
-            store_guard.list_motifs_slices(find_motifs_run_id)?,
-            store_guard.list_motifs_distances(find_motifs_run_id)?,
-            FindMotifsRunConfig::from_properties_map(store_guard.list_run_params(find_motifs_run_id)?)
-        )
-    };
-
-    assert!(resource_id_motif_slices.len() > 0, "FAILED: no slices for run_id={}", find_motifs_run_id);
-
-
-    let (motifs, channel_motif_ids) = motifs_to_tensor(
-        resource_id_motif_slices,
-
-        executor,
-        params.window(),
-        ws.read().channels() as i64,
-        device
-    ).unwrap();
-
-    info!("select_motifs_for_label: motifs tensor built, size={:?}", motifs.size());
-
-    let channel_motif_ids = Arc::new(RwLock::new(channel_motif_ids));
-    //TODO SM Ref
+    // let (resource_id_motif_slices, motifs_avg_distances, params) = {
+    //     let mut store_guard = store.lock();
+    //
+    //     (
+    //         store_guard.list_motifs_slices(find_motifs_run_id)?,
+    //         store_guard.list_motifs_distances(find_motifs_run_id)?,
+    //         FindMotifsRunConfig::from_properties_map(store_guard.list_run_params(find_motifs_run_id)?)
+    //     )
+    // };
+    //
+    // assert!(resource_id_motif_slices.len() > 0, "FAILED: no slices for run_id={}", find_motifs_run_id);
+    //
+    //
+    // let (motifs, channel_motif_ids) = motifs_to_tensor(
+    //     resource_id_motif_slices,
+    //
+    //     executor,
+    //     params.window(),
+    //     ws.read().channels() as i64,
+    //     device
+    // ).unwrap();
+    //
+    // info!("select_motifs_for_label: motifs tensor built, size={:?}", motifs.size());
+    //
+    // let channel_motif_ids = Arc::new(RwLock::new(channel_motif_ids));
+    // //TODO SM Ref
     // let labels_channels_good_motif_idxs:HashMap<String, Vec<Vec<(i64, f64)>>> = select_motifs_by_ratio(
     //     motifs,
     //     select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
@@ -1218,17 +1221,20 @@ fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) ->
 // RC - RunConfig
 //R  - Resources Config
 //CC  - CommonConfig - same for all run configurations
-pub fn run_step<'a, P, RC, R, CC, F>(
+// ST - Step Fn
+// run each own run config with all input run configs
+pub fn run_step<'a, P, RC, R, CC, ST>(
     input_run_ids:Option<Vec<usize>>,
     params:&P,
-    step:F,
+    step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
     exec: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-    devices:Vec<Device>
+    devices:Vec<Device>,
+    descr: &str
 ) -> Result<Vec<usize>, ThoosaError>
 where
-    F:FnOnce(Vec<RC>, &R, &CC, &Arc<RwLock<Box<dyn Workspace>>>, &Arc<Mutex<Box<dyn Store>>>, &Arc<RwLock< LoadRunner<Box<Tensor>>>>, Vec<Device>) -> Result<Vec<usize>, ThoosaError>,
+    ST:FnOnce(Option<&Vec<usize>>, Vec<RC>, &R, &CC, &Arc<RwLock<Box<dyn Workspace>>>, &Arc<Mutex<Box<dyn Store>>>, &Arc<RwLock< LoadRunner<Box<Tensor>>>>, Vec<Device>) -> Result<Vec<usize>, ThoosaError>,
     P:Params<RC, R, CC>,
     RC:RunConfig,
     R:ResourcesConfig,
@@ -1239,11 +1245,12 @@ where
     let resources_serialized = resource_config.to_string();
 
     let ran_ids = step(
-
+        input_run_ids.as_ref(),
         run_configs.into_iter().map(|mut run_config|{
+
             let run_config_id = store.lock().save_tree_run(
                 input_run_ids.as_deref(),
-                "zzz",//TODO
+                descr,
                 &resources_serialized,
                 run_config.to_properties_map()
             ).unwrap();
@@ -1444,7 +1451,8 @@ mod main_tests {
             &ws_rc,
             &store,
             &loader,
-            vec![Cpu]
+            vec![Cpu],
+            "Test/FindMotifs"
         )?;
 
 
@@ -1801,7 +1809,8 @@ mod main_tests {
             &ws,
             &store,
             &loader,
-            devices.clone()
+            devices.clone(),
+            "Test/FindMotifs"
         )?;
 
         let run_ids = run_step(
@@ -1811,7 +1820,8 @@ mod main_tests {
             &ws,
             &store,
             &loader,
-            devices.clone()
+            devices.clone(),
+            "Test/SelectMotifs"
         )?;
 
         println!("run_ids={run_ids:?}");
