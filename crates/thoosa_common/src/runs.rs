@@ -78,7 +78,7 @@ impl ResourcesConfig for Labeled {
         let mut store_guard = store.lock();
 
         store_guard.list_group_labeled_resources_sets(&self.group)?.into_iter().map(|(label, resource_set)| {
-            store_guard.list_resource_set_resources_by_descr(&self.group)
+            store_guard.list_resource_set_resources_by_descr(&resource_set)
                 .map(|data|(label, data))
         }).collect()
     }

@@ -28,6 +28,22 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
     Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
 }
 
+pub fn dist_d2_0(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError> {
+    let slice_0_expanded = slice_0.unsqueeze(2);     // channels x motifs x 1 x motif_len
+    let slice_1_expanded = slice_1.unsqueeze(1);         // channels x 1 x num_slices x motif_len
+
+    debug!("dist_d2_0: slice_0_expanded.size={:?}", slice_0_expanded.size());
+    debug!("dist_d2_0: slice_1_expanded.size={:?}", slice_1_expanded.size());
+
+    // Compute the Euclidean distances
+    let diff = slice_0_expanded - slice_1_expanded;    // [channels x motifs x num_slices x motif_len]
+    let squared_diff = diff.pow_tensor_scalar(2);
+    let squared_distances = squared_diff.sum_dim_intlist(3, false, Kind::Float);
+    let distances = squared_distances.sqrt();
+
+    Ok(distances)
+}
+
 pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
     debug!("slice_t:  t_0.size()={:?} step={step} window={window}", t_0.size());
 
@@ -144,7 +160,9 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
+        // let dist_t_0 = super::dist_d2_0(&slice_0, &slice_1).unwrap();
         debug!("dist_t={dist_t}");
+        // debug!("dist_t_0={dist_t_0}");
 
         assert_eq!(5.0, dist_t.double_value(&[0,0]));
         assert_eq!(5.0, dist_t.double_value(&[1,1]));
