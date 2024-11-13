@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use tch::{Device, Tensor};
+use tch::{Device, Kind, Tensor};
 use log::{debug, error, info, trace, warn, LevelFilter};
 use std::cmp::max;
 use std::fmt::{Debug, Display};
@@ -19,6 +19,8 @@ use futures_util::{AsyncReadExt, StreamExt};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use tch::Device::{Cpu, Cuda};
 use lazy_static::lazy_static;
+use tch::Kind::Float;
+use torch_sys::at_grad_set_enabled;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
@@ -302,6 +304,9 @@ pub fn run_cli<F,R>(
     where F:Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
           R:Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoosaError> + Sync + Send
 {
+    unsafe {
+        at_grad_set_enabled(0);
+    };
 
     let cli = Cli::parse();
 
@@ -346,9 +351,22 @@ pub fn run_cli<F,R>(
 
     let loader = Arc::new(RwLock::new(LoadRunner::new(
         move |key: &Resource| {
-
+            let tensor = Tensor::load_multi_with_device(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())), Cuda(0))
+                .map_err(|e| ThoosaError::new(e.to_string()))
+                .expect(format!("can't load {key:?}").as_str()).pop().unwrap().1
+                .totype(Float);
+            if tensor.requires_grad() || tensor.retains_grad() {
+                warn!("tensor requires grad!");
+            }
             SyncWrapper::new_tb(
-                Box::new(Tensor::load(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem()))).map_err(|e| ThoosaError::new(e.to_string())).expect(format!("can't load {key:?}").as_str()))
+                Box::new(
+                    // Tensor::load(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())))
+                    //     .map_err(|e| ThoosaError::new(e.to_string()))
+                    //     .expect(format!("can't load {key:?}").as_str())
+                    //     .to_device_(Cuda(0), Kind::Float, true, false)
+                    tensor
+                        // .to_device_(Cuda(0), Kind::Float, true, false)
+                )
             )
         }, loader_threads, cli.futures_channel_bound,
     )));

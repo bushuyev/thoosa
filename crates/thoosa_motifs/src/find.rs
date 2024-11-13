@@ -263,8 +263,8 @@ pub fn find_motifs_by_euc_dist(
         common_config.chunk_size as usize,
         &mut run_configs,
         run_config__channels_trackers,
-        move |chunk_0: ChunkOfSlicedTensors <ResourceId>, chunk_1: ChunkOfSlicedTensors <ResourceId>, params_idx: usize, find_motifs_run_config:&FindMotifsRunConfig, channels_motif_trackers:&mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>| {
-            debug!("find_motifs_by_euc_dist: tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?} params_idx={:?}", chunk_0, chunk_1 ,params_idx);
+        move |chunk_0: &ChunkOfSlicedTensors <ResourceId>, chunk_1: &ChunkOfSlicedTensors <ResourceId>, find_motifs_run_config:&FindMotifsRunConfig, channels_motif_trackers:&mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>| {
+            debug!("find_motifs_by_euc_dist: tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?}", chunk_0, chunk_1);
 
             channels_motif_trackers.iter_mut().enumerate().par_bridge().for_each(|(channel, mt)| {
                 let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
@@ -289,8 +289,8 @@ pub fn find_motifs_by_euc_dist(
                 drop(euc_dists_flat);
 
                 collect_dists(
-                    &chunk_0,
-                    &chunk_1,
+                    chunk_0,
+                    chunk_1,
                     distances,
                     find_motifs_run_config.step as i64,
                     |(slice_0, slice_1, dist)| {
@@ -366,7 +366,7 @@ impl   <ResourceId> ChunkOfSlicedTensors <ResourceId> {
 
             if input_length >= window as i64 {
 
-                let unfolded = tensor.to_device_(device, Kind::Float, true, false).unfold(1, window as i64, step as i64);
+                let unfolded = tensor/*.to_device_(device, Kind::Float, true, false)*/.unfold(1, window as i64, step as i64);
                 // channels x num_slices x window, transpose  to num_slices x channels x window
                 let unfolded = unfolded.transpose(0, 1);
                 slices.push(unfolded);
@@ -474,7 +474,7 @@ fn chunk_and_slice<G>(
     devices:&[Device]
 ) -> Result<Vec<Vec<SimpleMotifTracker<SqlMotifTrackerStore>>>, ThoosaError>
 where
-    G: Fn(ChunkOfSlicedTensors <ResourceId>, ChunkOfSlicedTensors <ResourceId>, usize, &FindMotifsRunConfig, &mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>) -> Result<(), ThoosaError> + Send + Sync
+    G: Fn(&ChunkOfSlicedTensors<ResourceId>, &ChunkOfSlicedTensors<ResourceId>, &FindMotifsRunConfig, &mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>) -> Result<(), ThoosaError> + Send + Sync
 {
     let mut resource_chunks = resources.chunks(chunk_size)
         .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())//TODO k.clone()
@@ -491,7 +491,6 @@ where
     if resource_chunks.len() > chunk_size {
         exec.write().preload(&resource_chunks[chunk_size], area_0);
     }
-
 
     //first element in each window to be loaded and processed, second - preloaded
     for (chunk_i_0, window_0) in resource_chunks.windows(2).enumerate() {
@@ -519,7 +518,9 @@ where
                 for key in &window_0_0 {
                     debug!("0. exec:callback_arc: key={key:?}");
 
-                    let sync_wrapper = SyncWrapper::new_tb(Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await);
+                    let sync_wrapper = SyncWrapper::new_tb(
+                        Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
+                    );
                     window_0_tensors_arc.write().push(sync_wrapper);
                 }
                 drop(wg_1_clone);
@@ -529,6 +530,18 @@ where
 
         wg_1.wait();
 
+        let chunk_0_vec = run_configs.par_iter().enumerate()
+            .map(|(i, run_config)| {
+                ChunkOfSlicedTensors::slice_tensors_chunk(
+                    run_config.step,
+                    run_config.window,
+                    &window_0_tensors.read(),
+                    window_0_0_clone.clone(),
+                    Cuda(0)
+                )
+            }).collect::<Vec<_>>();
+
+        let i_1 = Instant::now();
         for (chunk_i_1, window_1) in resource_chunks.windows(2).into_iter().skip(chunk_i_0).enumerate() {
             debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={window_1:?}");
 
@@ -563,36 +576,30 @@ where
             });
             wg_1.wait();
 
-            run_configs.iter_mut().zip(find_motifs_run_configs_trackers.iter_mut()).zip(devices.into_iter().cycle())
+            run_configs.iter_mut().zip(find_motifs_run_configs_trackers.iter_mut()).zip(chunk_0_vec.iter()).zip(devices.into_iter().cycle())
                 .par_bridge()
-                .for_each(|((run_config, mt), device)| {
+                .for_each(|(((run_config, mt), chunk_0), device)| {
 
                     callback(
-                        ChunkOfSlicedTensors::slice_tensors_chunk(
-                            run_config.step,
-                            run_config.window,
-                            &window_0_tensors.read(),
-                            window_0_0_clone.clone(),
-                            *device
-                        ),
-                        ChunkOfSlicedTensors::slice_tensors_chunk(
+                        chunk_0,
+                        &ChunkOfSlicedTensors::slice_tensors_chunk(
                             run_config.step,
                             run_config.window,
                             &window_1_tensors.read(),
                             window_1_0_clone.clone(),
                             *device
                         ),
-                        0,
                         run_config,
                         mt
                     ).expect("callback_arc failed");
                 });
 
             exec.write().purge_cache_keys(window_1[0].clone(), area_1);
-            print!(".")
+            print!(".");
+
         }
         exec.write().purge_cache_keys(window_0[0].clone(), area_0);
-        info!("done {chunk_i_0} chunks out of {}", resource_chunks.len());
+        info!("done {chunk_i_0} chunks out of {} in {} mls", resource_chunks.len(), i_1.elapsed().as_millis());
     }
     Ok(find_motifs_run_configs_trackers)
 }
@@ -662,7 +669,7 @@ impl<'a, D: MotifTrackerStore + Debug> SimpleMotifTracker<D> {
     }
 
     pub fn track(&'a mut self, i_0: TensorSliceIdx <ResourceId>, i_1: TensorSliceIdx <ResourceId>, dist: f32) {
-        debug!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
+        trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
 
         match self.min_step {
             None => {
@@ -2275,12 +2282,12 @@ mod motif_find_tests {
             0.00, 0.01, 0.02,
             0.10, 0.11, 0.12
         ])
-            .view([2, -1]); // Shape: [2, 3]
+            .view([2, -1]).totype(Float); // Shape: [2, 3]
         let tensor_b = Tensor::from_slice(&[
             1.00, 1.01,
             1.10, 1.11
         ])
-            .view([2, -1]); // Shape: [2, 2]
+            .view([2, -1]).totype(Float); // Shape: [2, 2]
 
         // let tensors = vec![tensor_a, tensor_b];
         let tensors = vec![SyncWrapper::new_tb(Box::new(tensor_a)), SyncWrapper::new_tb(Box::new(tensor_b))];
@@ -2313,7 +2320,7 @@ mod motif_find_tests {
             0.0, 0.1, 0.2, // Channel 0
             0.3, 0.4, 0.5, // Channel 1
         ])
-            .view([2, 3]);
+            .view([2, 3]).totype(Float);
         // let tensors = vec![tensor_a, tensor_b];
         let tensors = vec![tensor.into()];
 
@@ -2367,7 +2374,7 @@ mod motif_find_tests {
             2,
             &mut vec![FindMotifsRunConfig::new(3, 5, 1.0, "", None)],
             vec![vec![]],
-             move |chunk_0, chunk_1, _size, _find_motifs_run_config, _channels_mt| {
+             move |chunk_0, chunk_1, _find_motifs_run_config, _channels_mt| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
                 trace!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
