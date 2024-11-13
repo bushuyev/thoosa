@@ -212,6 +212,8 @@ impl ResourceStore for SqlStore {
 
         t.commit()?;
 
+        debug!("list_group_labeled_resources_sets: labeled_resources_sets={labeled_resources_sets:?}");
+
         Ok(labeled_resources_sets)
     }
 
@@ -784,7 +786,7 @@ impl Store for SqlStore {
 
         for slices_chunk in slices.chunks(500) {
             let (mut q, params) = slices_chunk.into_iter().fold(
-                (vec!["INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+                (vec!["INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
                     a.0.push("(?, ?, ?, ?, ?, ?, ?)");
                     a.0.push(", ");
 
@@ -841,7 +843,7 @@ impl Store for SqlStore {
 
                 for slices_chunk in slices.chunks(500) {
 
-                    let sql = format!("INSERT INTO slice_matches (motif_id, run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dot) \
+                    let sql = format!("INSERT INTO slice_matches (motif_id, run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) \
                             SELECT ?, ?, ?, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist FROM slices_{run_id}_{channel}_tmp.slice_matches WHERE id IN (");
 
                     let (mut q, params) = slices_chunk.into_iter().fold((vec![sql.as_str()], vec![Value::Integer(motif_id), Value::Integer(run_id as i64), Value::Integer(channel)]),
@@ -877,7 +879,7 @@ impl Store for SqlStore {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
         let tensor_motifs: HashMap<usize, f32> = {
-            let mut stmt = t.prepare("SELECT motif_id, avg(dot) FROM slice_matches GROUP BY motif_id HAVING motif_id NOT NULL AND run_id=?")?;
+            let mut stmt = t.prepare("SELECT motif_id, avg(dist) FROM slice_matches GROUP BY motif_id HAVING motif_id NOT NULL AND run_id=?")?;
 
             let tensor_motifs: HashMap<usize, f32> = stmt.query_map([run_id], |row| {
                 Ok((
@@ -1351,7 +1353,7 @@ impl SqlStore {
                 PRIMARY KEY (resource_id, label_id)
             )", ())?;
 
-            //descr - dot, dist etc
+            //descr - dist, dist etc
             t.execute(
                 "CREATE TABLE IF NOT EXISTS tree_run (
                 id              INTEGER PRIMARY KEY,
@@ -1408,7 +1410,7 @@ impl SqlStore {
                 slice_idx_0     INTEGER NOT NULL,
                 tensor_id_1     REFERENCES resources(id) ON DELETE CASCADE,
                 slice_idx_1     INTEGER NOT NULL,
-                dot             FLOAT NOT NULL,
+                dist             FLOAT NOT NULL,
                 motif_id        REFERENCES motifs(id) ON DELETE CASCADE DEFAULT NULL
             )", ())?;
 

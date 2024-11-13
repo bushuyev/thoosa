@@ -173,7 +173,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
     }
 }
 
-impl Params<SelectMotifsRunConfig, Labeled, CommonFindMotifsConfig> for RunAllParams {
+impl Params<SelectMotifsRunConfig, Labeled, ()> for RunAllParams {
     fn to_run_configs(&self) -> Vec<SelectMotifsRunConfig> {
 
         debug!("FindMotifsParams::to_run_configs: self.step={:?} self.window={:?}", self.step, self.window);
@@ -189,8 +189,8 @@ impl Params<SelectMotifsRunConfig, Labeled, CommonFindMotifsConfig> for RunAllPa
         )
     }
 
-    fn common_config(&self) -> CommonFindMotifsConfig {
-        CommonFindMotifsConfig::new(Some(100), 100)//TODO
+    fn common_config(&self) -> () {
+        ()
     }
 }
 
@@ -351,7 +351,7 @@ pub fn run_cli<F,R>(
 
     let loader = Arc::new(RwLock::new(LoadRunner::new(
         move |key: &Resource| {
-            let tensor = Tensor::load_multi_with_device(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())), Cuda(0))
+            let tensor = Tensor::load_multi_with_device(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())), Cpu) //Cuda(0))
                 .map_err(|e| ThoosaError::new(e.to_string()))
                 .expect(format!("can't load {key:?}").as_str()).pop().unwrap().1
                 .totype(Float);
@@ -903,7 +903,8 @@ fn motifs_to_tensor_cmd (cli: &Cli, store: &Arc<Mutex<Box<dyn Store>>>, device: 
         executor,
         choose_fragments_params.window(),
         20,
-        device
+        device,
+        0
     )?;
 
     let out = Path::new(&cli.ws_path).join("out");
@@ -1311,7 +1312,7 @@ mod main_tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, ResourcesConfig};
     use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
-    use thoosa_common::utils::{from, lin_t, plot_series, vec_f32_from};
+    use thoosa_common::utils::{from, lin_t, plot_series, three_sigs_tensor, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label_2, FindMotifsParams, FindMotifsRunConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::PlotMotifSlicesParams;
     use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorSliceIdx, ThoosaError};
@@ -1344,7 +1345,7 @@ mod main_tests {
 
 
     #[test]
-    fn test_motifs_corrs() -> Result<(), ThoosaError> {
+    fn test_motifs() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
         fs::create_dir_all(&test_dir)?;
@@ -1355,17 +1356,17 @@ mod main_tests {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, n as usize)?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
+
         let sig_0_v = sig_one_imp(n, max_y, None, None);
         let sig_1_v = sig_two_imp(n, max_y, None, None);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
 
-        let x = lin_t(n);
-        // let sig_0_v_00 = sig_one_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
-        // let sig_0_v_01 = sig_two_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
-        // let sig_0_v_02 = sig_one_imp(n, max_y, Some(10. .. 100.), Some(10. .. 100.));
 
-        /*plot_series(
+
+        /*
+        let x = lin_t(n);
+        plot_series(
             vec![
                 (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0_v.clone()).collect::<Vec<(f32, f32)>>()),
                 (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(sig_1_v.clone()).collect::<Vec<(f32, f32)>>()),
@@ -1384,39 +1385,12 @@ mod main_tests {
 
         */
 
-        let t_0_0 = Tensor::vstack(&[
-            Tensor::from_slice([sig_0_v.clone(),    saw(n),            saw(n)].concat().as_slice()),
-            Tensor::from_slice([sig_2_v.clone(),    saw(n),            saw(n)].concat().as_slice()),
-            Tensor::from_slice([saw(n),             sig_2_v.clone(),   saw(n)].concat().as_slice()),
-        ]);
+
+        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
+
         t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
-
-        // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
-
-        let t_0_1 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n),             sig_0_v.clone(),    saw(n) ].concat().as_slice()),
-            Tensor::from_slice([saw(n),             sig_2_v.clone(),    saw(n)].concat().as_slice()),
-            Tensor::from_slice([sig_2_v.clone(),    saw(n),             saw(n)].concat().as_slice()),
-        ]);
         t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
-
-        // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
-
-
-        let t_1_0 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n),             sig_1_v.clone(),    saw(n)].concat().as_slice()),
-            Tensor::from_slice([saw(n),             saw(n),             sig_2_v.clone()].concat().as_slice()),
-            Tensor::from_slice([saw(n),             sig_2_v.clone(),    saw(n)].concat().as_slice())
-        ]);
         t_1_0.save(ws.read().tensors_path().join(format!("t_1_0.pt")))?;
-
-        // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
-
-        let t_1_1 = Tensor::vstack(&[
-            Tensor::from_slice([saw(n),             saw(n),             sig_1_v.clone()].concat().as_slice()),
-            Tensor::from_slice([saw(n),             saw(n),             sig_2_v.clone()].concat().as_slice()),
-            Tensor::from_slice([sig_2_v.clone(),    sig_2_v.clone(),    saw(n)].concat().as_slice()),
-        ]);
         t_1_1.save(ws.read().tensors_path().join(format!("t_1_1.pt")))?;
 
         // debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
@@ -1438,7 +1412,7 @@ mod main_tests {
         fs::create_dir_all(&test_dir)?;
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_db.db3"))?));
 
-        import_resources(
+        let resources = import_resources(
             &ws,
             &store,
             vec!["label_0", "label_1"],
@@ -1452,17 +1426,22 @@ mod main_tests {
             Some(|key| Ok(Tensor::from_slice(&[0.]))),
             true
         )?;
+
+        let resources_0_0 = resources.iter().find(|r|r.file_stem().eq("t_0_0")).expect("t_0_0");
+        let resources_0_1 = resources.iter().find(|r|r.file_stem().eq("t_0_1")).expect("t_0_1");
+        let resources_1_0 = resources.iter().find(|r|r.file_stem().eq("t_1_0")).expect("t_1_0");
+        let resources_1_1 = resources.iter().find(|r|r.file_stem().eq("t_1_1")).expect("t_1_1");
+
+        debug!("test_motifs: resources_0_0={resources_0_0:?}");
         let run_ids = run_step(
             None,
             &FindMotifsParams {
-                step: 100.into(),
-                window: 800.into(),
-                min_dot: 0.0,
+                step: 200.into(),
+                window: (n as u32).into(),
                 resources: ResourceType::List(vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()]),
                 min_tracker_step: Some(3),
-                max_keys_fifo: 3,
                 chunk_size: 2,
-                max_dist_k: 0.5,
+                max_dist_k: 0.05,
                 input_filter: None,
             },
             find_motifs_by_euc_dist,
@@ -1475,14 +1454,36 @@ mod main_tests {
 
 
         let slices = store.lock().list_motifs_slices(run_ids[0])?;
-        debug!("test_motifs_with_tpe: slices={:?}", slices);
+        debug!("test_motifs: slices_0_0={:?}", slices.get(resources_0_0));
+        debug!("test_motifs: slices_0_1={:?}", slices.get(resources_0_1));
+        debug!("test_motifs: slices_1_0={:?}", slices.get(resources_1_0));
+        debug!("test_motifs: slices_1_1={:?}", slices.get(resources_1_1));
         assert!(slices.len() >= 4);
+
+        let slice_0_0 = slices.get(resources_0_0).unwrap().into_iter().find(|s|s.channel_idx == 0).expect("0_0");
+        assert_eq!(slice_0_0.slise_idx, 0);
+        let slice_0_1 = slices.get(resources_0_1).unwrap().into_iter().find(|s|s.channel_idx == 0).expect("0_1");
+        assert_eq!(slice_0_1.slise_idx, 1000);
+
+
+        let slice_1_0 = slices.get(resources_1_0).unwrap().into_iter().find(|s|s.channel_idx == 1).expect("1_0");
+        assert_eq!(slice_1_0.slise_idx, 1000);
+        let slice_1_1 = slices.get(resources_1_1).unwrap().into_iter().find(|s|s.channel_idx == 1).expect("1_1");
+        assert_eq!(slice_1_1.slise_idx, 2000);
+
+        let motif_dists = store.lock().list_motifs_distances(run_ids[0])?;
+        debug!("test_motifs: motif_dists={motif_dists:?}");
+        //
+        // for motif_id in motif_dists.keys() {
+        //     let (channel, run_id, motif_slice) = store.lock().list_motif_slices(*motif_id, None, None)?;
+        //     debug!("test_motifs: motif_id={motif_id} channel={channel} motif_slice={motif_slice:?}");
+        // }
 
 
         // assert_eq!((110, 0), slices.get(&"t_0".to_string()).and_then(|v| v.get(0).map(|v|(v.slise_idx, v.channel_idx))).unwrap());
         // assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 1100, channel_idx: 0 }, slices.get(&"t_1".to_string()).and_then(|v| v.get(0)).unwrap());
 
-        let select_motifs_run_ids = select_motifs_for_label(
+       /* let select_motifs_run_ids = select_motifs_for_label(
             &ws_rc,
             Arc::clone(&store),
             Cpu,
@@ -1516,11 +1517,12 @@ mod main_tests {
             // corrs.iter().find(|(id, run_id)|label.eq("label_1")).expect("label_1").1
         )?;
         debug!("selected_motifs_1={selected_motifs_1:?}");
-        // assert!(selected_motifs_1[0].iter().find(|(motif_id, corr)|corr == &1.0).is_some());
+        // assert!(selected_motifs_1[0].iter().find(|(motif_id, corr)|corr == &1.0).is_some());*/
 
         Ok(())
 
     }
+
 
     #[test]
     fn test_run_all() -> Result<(), ThoosaError> {
@@ -1736,13 +1738,20 @@ mod main_tests {
 
     fn label_1_t(n: i64, max_y: f32) -> Tensor {
         Tensor::vstack(&[
-            Tensor::from_slice([sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)), sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))].concat().as_slice()),
+            Tensor::from_slice(
+                [
+                    sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)),
+                    sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))
+                ].concat().as_slice()),
         ])
     }
 
     fn label_0_t(n: i64, max_y: f32) -> Tensor {
         Tensor::vstack(&[
-            Tensor::from_slice([sig_three_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)), sig_two_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))].concat().as_slice()),
+            Tensor::from_slice([
+                sig_three_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)),
+                sig_two_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))
+            ].concat().as_slice()),
         ])
     }
 
@@ -1804,6 +1813,10 @@ mod main_tests {
             label_0_t(n, 100.).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
         });
 
+        (0..10).for_each(|i|{
+            label_1_t(n, 100.).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
+        });
+
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -1833,7 +1846,7 @@ mod main_tests {
 
         let run_ids = run_step(
             Some(run_ids),
-            &SelectMotifsParams::dummy(vec![], "Label_0/4".into(), 0.1),
+            &SelectMotifsParams::dummy(vec![], "pure group 4".into(), 0.1),
             select_motifs_for_label_2,
             &ws,
             &store,

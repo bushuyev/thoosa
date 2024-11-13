@@ -20,7 +20,7 @@ use tch::nn::Optimizer;
 use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
 
-use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt};
+use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt, saw};
 
 use crate::my_tch::LossFp;
 use crate::parzen::opt_rng::opt_rnd;
@@ -652,4 +652,39 @@ pub fn gauss_t(μ: f32, σ: f32, n: i64) -> Tensor {
 
 pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
     Tensor::from(pulse_v(μ, σ, n, f).as_slice())
+}
+
+pub fn three_sigs_tensor(n: i64, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> (Tensor, Tensor, Tensor, Tensor) {
+    let t_0_0 = Tensor::vstack(&[
+        Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+    ]);
+
+    // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
+
+    let t_0_1 = Tensor::vstack(&[
+        Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+    ]);
+
+    // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
+
+
+    let t_1_0 = Tensor::vstack(&[
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
+    ]);
+
+
+    // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
+
+    let t_1_1 = Tensor::vstack(&[
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), sig_1_v.clone()].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), sig_2_v.clone()].concat().as_slice()),
+    ]);
+    (t_0_0, t_0_1, t_1_0, t_1_1)
 }
