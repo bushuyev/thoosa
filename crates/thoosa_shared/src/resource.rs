@@ -3,6 +3,15 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use clap::builder::Str;
 use log::{debug, trace};
+use crate::ThoosaError;
+
+pub trait ResourceStore {
+    fn list_resources_by_file_stems(&mut self, file_stem: &Vec<&str>) -> Result<Vec<Resource>, ThoosaError>;
+    fn list_resource_set_resources_by_descr(&mut self, descr: &str) -> Result<Vec<Resource>, ThoosaError>;
+    fn list_resource_set_group_sets(&mut self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError>;
+    fn list_group_labeled_resources_sets(&mut self, group_decr: &str) -> Result<Vec<(String, String)>, ThoosaError>;
+    fn list_resource_set_resources(&mut self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
+}
 
 #[derive(Debug, Clone)]
 pub struct Resource {

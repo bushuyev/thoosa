@@ -213,12 +213,10 @@ pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String
         (
             1,
             store_lock.list_resource_set_resources_by_descr(resource_set_descr).expect("list_resource_set_resources_by_descr")
-
         ),
         (
             0,
             store_lock.list_resource_random_not_label(label.as_str(), 100).expect("list_resource_random_not_label")
-
         )
     ]
 }
