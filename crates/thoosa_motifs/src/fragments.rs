@@ -96,7 +96,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 * returns tensor cahnnels x max motifs in channels x first slice in motifs group. + channels x motif ids + channels x motif max dist Fills with Tensor::zeros when motifs in channel < max
 */
 pub fn motifs_to_tensor(
-    resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device
+    resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device
 ) -> Result<(Tensor, Vec<Vec<usize>>), ThoosaError> {
 
     debug!("motifs_to_tensor: device={device:?} window={window}");
@@ -109,7 +109,7 @@ pub fn motifs_to_tensor(
     let wg_1 = wg.clone();
 
 
-    executor.write().exec(move |loader, _keys_purge| {
+    loader.write().exec(move |loader, _keys_purge| {
         async move {
 
             for (resource, motif_slices) in resource_id_motif_slices {

@@ -26,5 +26,14 @@ export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --rel
 17:57:41 [INFO] All done in 76481518 mls
 
 
-with unfold:
+with unfold, chunk_0
+
+lib=Library@0x5b19802439d0
+08:06:09 [INFO] VERSION: 2024-11-13 08:06:06.775745815 UTC devices=[Cuda(0)], base_path="/tmp/ws_import_test/" cpus=32 loader_threads=4
+08:06:09 [INFO] find_motifs_params=FindMotifsParams { step: Value(100), window: Range { range: 100..1000, step: Some((100, 1)) }, min_dot: 0.9, resources: Group("pure group 1000"), min_tracker_step: Some(10), max_keys_fifo: 100, chunk_size: 20, max_dist_k: 0.01, input_filter: None } devices=[Cuda(0)]
+....................................................................................................................................................................................................................................................................08:25:12 [INFO] done 0 chunks out of 261
+...................................................................................................................................................................................................................................................................08:43:14 [INFO] done 1 chunks out of 261
+^C
+
+
 ---
