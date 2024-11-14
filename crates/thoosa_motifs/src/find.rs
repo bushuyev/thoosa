@@ -275,6 +275,11 @@ pub fn find_motifs_by_euc_dist(
                 let euc_dists_flat = euc_dist_t.view(-1);
                 //
                 let mean = euc_dists_flat.mean(Kind::Float).double_value(&[]) as f32;
+                // let euc_dists_flat_cpu = euc_dists_flat.cop
+                // drop(euc_dists_flat);
+                drop(euc_dist_t);
+                drop(tensor_0);
+                drop(tensor_1);
                 // if mean < 0. {
                 //     debug!("zzz");
                 // }
@@ -283,6 +288,8 @@ pub fn find_motifs_by_euc_dist(
                 //
                 // debug!("find_motifs_by_euc_dist: euc_dist_t.device={:?} find_motifs_run_config.max_dist_k={} mean_k={mean_k}", euc_dist_t.device(), find_motifs_run_config.max_dist_k);
                 //
+                // let buf = copy_cudarc(&euc_dists_flat);
+                let buf = copy_cudarc(&euc_dists_flat);
                 let distances = vec![]; //from::<Vec<f32>>(&euc_dists_flat);
                 //
                 // drop(euc_dist_t);
@@ -306,7 +313,8 @@ pub fn find_motifs_by_euc_dist(
                         dist < &mean_k
                     }
                 );
-                debug!("find_motifs_by_euc_dist: channel={channel} done");
+                free_cudarc(buf);
+                debug!("find_motifs_by_euc_dist: channel={channel} done size={:?} device={:?}", euc_dists_flat.size(), euc_dists_flat.device());
                 mt.dump();
             });
 
@@ -340,10 +348,10 @@ pub fn find_motifs_by_euc_dist(
 
 
 #[derive(Debug)]
-struct ChunkOfSlicedTensors <ResourceId> where {
+pub struct ChunkOfSlicedTensors <ResourceId> where {
     keys:Vec <ResourceId>,
     sizes: Vec<i64>,
-    t: SyncWrapper<Tensor>,
+    pub t: SyncWrapper<Tensor>,
 }
 
 impl   <ResourceId> ChunkOfSlicedTensors <ResourceId> {
@@ -355,7 +363,8 @@ impl   <ResourceId> ChunkOfSlicedTensors <ResourceId> {
         }
     }
 
-    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &Vec<SyncWrapper<Box<Tensor>>>, keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
+    /// returns:  t.size = num slices = 1+(len-window)/step x channels x window
+    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
 
         debug!("slice_tensors_chunk: step={step} window={window} tensors_chunk.len()={}", tensors_chunk.len());
 
@@ -2793,4 +2802,5 @@ mod motif_find_tests {
 
         Ok(())
     }
+
 }

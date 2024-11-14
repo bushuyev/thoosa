@@ -5,4 +5,4 @@ extern crate core;
 mod tensor_iter;
 pub mod fragments;
 pub mod find;
-mod distance;
+pub mod distance;

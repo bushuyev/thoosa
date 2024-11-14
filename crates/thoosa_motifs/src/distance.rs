@@ -1,5 +1,5 @@
 use log::{debug, trace};
-use tch::{IndexOp, Tensor};
+use tch::{IndexOp, TchError, Tensor};
 use tch::Kind;
 
 use thoosa_common::utils::z_norm_2;
@@ -32,12 +32,24 @@ pub fn dist_d2_0(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaErr
     let slice_0_expanded = slice_0.unsqueeze(2);     // channels x motifs x 1 x motif_len
     let slice_1_expanded = slice_1.unsqueeze(1);         // channels x 1 x num_slices x motif_len
 
+    // debug!("dist_d2_0: slice_0_expanded={slice_0_expanded}");
     debug!("dist_d2_0: slice_0_expanded.size={:?}", slice_0_expanded.size());
+
+    // debug!("dist_d2_0: slice_1_expanded={slice_1_expanded}");
     debug!("dist_d2_0: slice_1_expanded.size={:?}", slice_1_expanded.size());
 
     // Compute the Euclidean distances
-    let diff = slice_0_expanded - slice_1_expanded;    // [channels x motifs x num_slices x motif_len]
-    let squared_diff = diff.pow_tensor_scalar(2);
+    let mut diff = match slice_0_expanded.f_subtract(&slice_1_expanded) {
+        Ok(v) => {
+            v
+        }
+        Err(e) => {
+            panic!("e={e:?} {}", e.to_string().contains("CUDA out of memory"));
+        }
+    };
+    // debug!("diff={diff}");
+
+    let squared_diff = diff.f_pow_(2)?;
     let squared_distances = squared_diff.sum_dim_intlist(3, false, Kind::Float);
     let distances = squared_distances.sqrt();
 
@@ -56,13 +68,17 @@ pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
 #[cfg(test)]
 mod distance_tests {
     use log::debug;
+    use sci_rs::na::SimdBool;
+    use tch::Device::Cpu;
     use tch::IndexOp;
     use tch::Kind::Float;
     use tch::Tensor;
 
     use thoosa_shared::ThoosaError;
 
-    use crate::distance::z_normalized_euclidean;
+    use crate::distance::{dist_d2_0, slice_t, z_normalized_euclidean};
+    use crate::find::ChunkOfSlicedTensors;
+
     #[ctor::ctor]
     fn init() {
         thoosa_shared::init_test_logging();
@@ -86,6 +102,70 @@ mod distance_tests {
         assert!(
             Tensor::from_slice(&[4., 4.,]).totype(Float).allclose(&d, 0.01, 0.01, false)
         );
+
+        Ok(())
+    }
+    #[test]
+    fn test_0(){
+        let t_0 = Tensor::from_slice(&[1,2]).view((1,2));
+        let t_1 = Tensor::from_slice(&[3,4]).view((2,1));
+        println!("t_0={t_0} .t_0 size={:?}", t_0.size());
+        println!("t_1={t_1} .t_1 size={:?}", t_1.size());
+
+        let d = t_1 - t_0;
+
+        println!("d={d} size={:?}", d.size());
+
+    }
+
+    #[test]
+    fn test_dist_d2_0_2ch() -> Result<(), ThoosaError>{
+        let d_0_0 = [0.00f32, 0.01, 0.02, 0.03, 0.04, 0.05];
+        let d_0_1 = [0.10f32, 0.11, 0.12, 0.13, 0.14, 0.15];
+
+        let t_0 = Tensor::vstack(&[
+            Tensor::from_slice(&d_0_0),
+            Tensor::from_slice(&d_0_1),
+        ]);
+
+
+
+        let d_1_0 = [1.00f32, 1.01, 1.02, 1.03, 1.04, 1.05];
+        let d_1_1 = [1.10f32, 1.11, 1.12, 1.13, 1.14, 1.15];
+
+
+
+        let t_1 = Tensor::vstack(&[
+            Tensor::from_slice(&d_1_0),
+            Tensor::from_slice(&d_1_1),
+        ]);
+
+
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t.transpose(0,1);
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t.transpose(0,1);
+
+        let dists = dist_d2_0(&t_0_sliced, &t_1_sliced)?;
+
+        // debug!("dists={dists}");
+
+
+        assert_eq!(
+            test_dist(&d_0_0[0..3], &d_1_0[0..3]),
+            dists.i((0, 0, 0)).double_value(&[]) as f32
+        );
+        assert_eq!(
+            test_dist(&d_0_0[0..3], &d_1_0[1..4]),
+            dists.i((0, 0, 1)).double_value(&[]) as f32
+        );
+        assert_eq!(
+            test_dist(&d_0_0[0..3], &d_1_0[2..5]),
+            dists.i((0, 0, 2)).double_value(&[]) as f32
+        );
+
+
+        fn test_dist(p_0:&[f32], p_1:&[f32])->f32 {
+            ((p_0[0] - p_1[0] ).powi(2)+ (p_0[1] - p_1[1] ).powi(2) + (p_0[2] - p_1[2] ).powi(2)).sqrt()
+        }
 
         Ok(())
     }
@@ -117,7 +197,7 @@ mod distance_tests {
         debug!("t_0_sliced=\n{}", t_0_sliced);
 
 
-        let spliced_t = [t_1, t_2, t_3].into_iter().map(|t| super::slice_t(&t, step, window)).collect::<Vec<Tensor>>();
+        let spliced_t = [t_1, t_2, t_3].into_iter().map(|t| slice_t(&t, step, window)).collect::<Vec<Tensor>>();
         let sizes = spliced_t.iter().map(|t|t.size()[0]).collect::<Vec<_>>();
 
         let tensor_ids = vec!["111", "222", "333"];
