@@ -1,4 +1,5 @@
 use std::{fs, mem};
+use std::ffi::c_void;
 use std::io::Write;
 use std::time::Instant;
 
@@ -456,6 +457,7 @@ pub mod tests {
             }
         }
     }
+
 }
 
 pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
@@ -687,4 +689,37 @@ pub fn three_sigs_tensor(n: i64, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v
         Tensor::from_slice([saw(n), saw(n), sig_2_v.clone()].concat().as_slice()),
     ]);
     (t_0_0, t_0_1, t_1_0, t_1_1)
+}
+
+pub fn copy_cudarc(t:&Tensor) -> *mut c_void {
+    use cudarc::driver::sys::CUdeviceptr_v2;
+    unsafe {
+        let mut host_buffer: *mut c_void = std::ptr::null_mut();
+        let size_in_bytes = t.numel() * size_of::<f32>();
+        let cudarc_lib = cudarc::driver::sys::lib();
+        let r = cudarc_lib.cuMemAllocHost_v2(
+            &mut host_buffer,
+            size_in_bytes
+        );
+
+        let device = cudarc::driver::CudaDevice::new(0).expect("cuda 0");
+
+        let r = cudarc_lib.cuMemcpyAsync(
+            host_buffer as CUdeviceptr_v2,
+            t.data_ptr() as CUdeviceptr_v2,
+            size_in_bytes,
+            *device.cu_stream()
+        );
+        cudarc_lib.cuStreamSynchronize(*device.cu_stream());
+
+        host_buffer
+    }
+
+
+}
+
+pub fn free_cudarc(buf :*mut c_void){
+    unsafe {
+        cudarc::driver::sys::lib().cuMemFreeHost(buf);
+    }
 }

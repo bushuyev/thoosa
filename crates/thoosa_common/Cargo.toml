@@ -25,6 +25,7 @@ clap.workspace = true
 rayon.workspace = true
 serde.workspace = true
 lazy_static.workspace = true
+cudarc.workspace = true
 
 thoosa_shared = {path = "../thoosa_shared" }
 plotters = { version = "0.3.5"}

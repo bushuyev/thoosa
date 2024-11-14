@@ -36,4 +36,9 @@ lib=Library@0x5b19802439d0
 ^C
 
 
+
+07:37:31 [INFO] find_motifs_params=FindMotifsParams { step: Value(100), window: Range { range: 100..1000, step: Some((100, 1)) }, resources: Group("pure group 1000"), min_tracker_step: Some(10), chunk_size: 20, max_dist_k: 0.01, input_filter: None } devices=[Cuda(0)]
+....................................................................................................................................................................................................................................................................07:39:37 [INFO] done 0 chunks out of 261 in 122890 mls
+^C
+
 ---

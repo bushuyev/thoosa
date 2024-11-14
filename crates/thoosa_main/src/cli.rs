@@ -344,7 +344,8 @@ pub fn run_cli<F,R>(
     let cpu_num = std::thread::available_parallelism()?;
     let loader_threads = cli.loader_threads.unwrap_or_else(||max(2, cpu_num.get()/8));
 
-    info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} loader_threads={loader_threads}",  cli.ws_path);
+    //TODO torch.backends.cuda.matmul.allow_tf32 = True
+    info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} loader_threads={loader_threads} tch::get_num_interop_threads={}, tch::get_num_threads={}",  cli.ws_path, tch::get_num_interop_threads(), tch::get_num_threads());
     std::io::stdout().flush()?;
 
     let tensors_path = ws.read().tensors_path().clone();

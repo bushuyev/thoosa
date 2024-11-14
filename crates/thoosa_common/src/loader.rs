@@ -455,6 +455,9 @@ mod tests {
     use crossbeam_utils::sync::WaitGroup;
     use log::debug;
     use rand::Rng;
+    use tch::Device::Cuda;
+    use tch::Kind::Float;
+    use tch::Tensor;
     use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::ThoosaError;
 
@@ -630,7 +633,7 @@ mod tests {
 
                             drop(wg_0_i);
 
-                            (keys_purge)(vec![aaa_resources[b][j].clone(), bbb_resources[b][j].clone()], cache_area_0);
+                            (keys_purge)(&vec![aaa_resources[b][j].clone(), bbb_resources[b][j].clone()], cache_area_0);
                         }.boxed()
                     });
 
@@ -685,7 +688,7 @@ mod tests {
                             drop(wg_0_i);
 
                             // info!("1: key_aaa={key_bbb:?} key_bbb={key_ccc:?} done, time={time}");
-                            (keys_purge)(vec![bbb_resources[b][j].clone(), ccc_resources[b][j].clone()], cache_area_1);
+                            (keys_purge)(&vec![bbb_resources[b][j].clone(), ccc_resources[b][j].clone()], cache_area_1);
                         }.boxed()
                     });
 
@@ -771,5 +774,6 @@ mod tests {
             super::remove_mask(0b11111111, 0b000000010)
         );
     }
+
 
 }
