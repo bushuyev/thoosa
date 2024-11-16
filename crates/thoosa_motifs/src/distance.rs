@@ -105,21 +105,81 @@ mod distance_tests {
 
         Ok(())
     }
+
     #[test]
-    fn test_0(){
-        let t_0 = Tensor::from_slice(&[1,2]).view((1,2));
-        let t_1 = Tensor::from_slice(&[3,4]).view((2,1));
-        println!("t_0={t_0} .t_0 size={:?}", t_0.size());
-        println!("t_1={t_1} .t_1 size={:?}", t_1.size());
+    fn test_q(){
+        let t = Tensor::vstack(&[
+            Tensor::from_slice(&[0,1, 2, 3 , 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 3]),
+            Tensor::from_slice(&[0,10,20,30,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60, 90])
+        ]).to_kind(Float);
 
-        let d = t_1 - t_0;
+        let q = t.quantile_scalar(0.1, 1, true, "higher");
 
-        println!("d={d} size={:?}", d.size());
+        let le = t.le_tensor(&q);
+
+        let masked = t.masked_select(&le);
+
+        println!("q={q}");
+        println!("le={le}");
+        println!("masked={masked}");
+        // let sorted = t.sort(1, false).0;
+        // let n = sorted.size()[1] as f64;
+        // let k = (0.5 * (n - 1.0)).round() as i64;
+        //
+        // println!("sorted={sorted} k={k}");
+        //
+        // let threshold = sorted.i((.., k));
+        //
+        // println!("threshold={threshold}");
+
 
     }
 
     #[test]
+    fn test_dist_d2_0_1ch() -> Result<(), ThoosaError>{
+        let t_0 = Tensor::from_slice(&[1,2,3,4,5,6,7]).view((1,7));
+        println!("t_0={t_0} size={:?}", t_0.size());
+        let t_1 = Tensor::from_slice(&[10,20,30,40,50,60,70]).view((1,7));
+
+        //123 345 567
+        let t_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
+                2, 3,
+                &vec![t_0.into(), t_1.into()], vec!["x"],
+                Cpu
+        //transpose - channels x n slices x slice
+        ).t.transpose(0,1);
+
+        println!("t_sliced={t_sliced} size={:?}", t_sliced.size());
+
+
+        let distances = dist_d2_0(&t_sliced, &t_sliced)?;
+        // 1 channel 6 x 6 slices
+
+        println!("distances={distances} size={:?}", distances.size());
+
+        // distances.quan
+
+        let le_distances = distances.le(4.);
+
+        println!("le_distances={le_distances} size={:?}", le_distances.size());
+
+        Ok(())
+    }
+
+    #[test]
     fn test_dist_d2_0_2ch() -> Result<(), ThoosaError>{
+        /*
+           let euc_dist_t_0 = SyncWrapper::new_tb(Box::new(dist_d2_0(
+               &chunk_0.t.transpose(0,1),
+               &chunk_1.t.transpose(0,1)
+           ).expect(format!("dist_d2_0_").as_str())));
+
+           let euc_dist_t_0_means = SyncWrapper::new_tb(Box::new(euc_dist_t_0.mean_dim(&[1i64,2i64][..], false, Kind::Float).multiply_scalar(find_motifs_run_config.max_dist_k as f64)));
+           debug!("find_motifs_by_euc_dist: euc_dist_t_0_means={euc_dist_t_0_means}");
+           debug!("find_motifs_by_euc_dist: euc_dist_t_0.size()={:?} tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?}", euc_dist_t_0.size(), chunk_0, chunk_1);
+
+           */
+
         let d_0_0 = [0.00f32, 0.01, 0.02, 0.03, 0.04, 0.05];
         let d_0_1 = [0.10f32, 0.11, 0.12, 0.13, 0.14, 0.15];
 
@@ -146,7 +206,7 @@ mod distance_tests {
 
         let dists = dist_d2_0(&t_0_sliced, &t_1_sliced)?;
 
-        // debug!("dists={dists}");
+        debug!("dists={dists} size={:?}", dists.size());
 
 
         assert_eq!(

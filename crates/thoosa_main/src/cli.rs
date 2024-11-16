@@ -11,7 +11,7 @@ use tch::nn::Module;
 use std::fs;
 use plotters::prelude::BLACK;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
-use std::fs::File;
+use std::fs::{read_dir, File};
 use std::hash::Hash;
 use std::str::FromStr;
 use std::io::Write;
@@ -19,6 +19,7 @@ use futures_util::{AsyncReadExt, StreamExt};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use tch::Device::{Cpu, Cuda};
 use lazy_static::lazy_static;
+use polars::export::arrow::pushable::Pushable;
 use tch::Kind::Float;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -359,6 +360,7 @@ pub fn run_cli<F,R>(
             if tensor.requires_grad() || tensor.retains_grad() {
                 warn!("tensor requires grad!");
             }
+            debug!("key={key:?} tensor.size={:?}", tensor.size());
             SyncWrapper::new_tb(
                 Box::new(
                     // Tensor::load(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())))
@@ -366,7 +368,6 @@ pub fn run_cli<F,R>(
                     //     .expect(format!("can't load {key:?}").as_str())
                     //     .to_device_(Cuda(0), Kind::Float, true, false)
                     tensor
-                        // .to_device_(Cuda(0), Kind::Float, true, false)
                 )
             )
         }, loader_threads, cli.futures_channel_bound,
@@ -597,8 +598,21 @@ pub fn run_cli<F,R>(
         Some(SayHello(params)) => {
             debug!("params={:?}", params);
             let run_configs = params.to_run_configs();
-
             debug!("run_configs={:?}", run_configs);
+
+            let dir = read_dir(ws.read().tensors_path())?;
+
+            let mut lengths = vec![];
+
+            for tensorfile in dir {
+                let path_buf = tensorfile?.path();
+                let t = Tensor::load(&path_buf);
+                let t_size = t?.size();
+                debug!("path_buf={path_buf:?} size={:?}", t_size);
+                lengths.push(t_size[1]);
+            }
+
+            info!("tensors: {} max={:?} avg={}", lengths.len(), lengths.iter().max(), lengths.iter().sum::<i64>()/lengths.len() as i64);
         }
 
         None => {
