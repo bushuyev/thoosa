@@ -212,7 +212,7 @@ impl FindMotifsParams {
 }
 
 pub fn find_motifs_by_euc_dist(
-    _: Option<&Vec<usize>>,//first step, not input run ids
+    _: Option<&Vec<usize>>,//first step, no input run ids
     mut run_configs: Vec<FindMotifsRunConfig>,
     resource_config: &Simple,
     common_config: &CommonFindMotifsConfig,
@@ -249,51 +249,33 @@ pub fn find_motifs_by_euc_dist(
         run_config__channels_trackers,
         move |chunk_0: &ChunkOfSlicedTensors <ResourceId>, chunk_1: &ChunkOfSlicedTensors <ResourceId>, find_motifs_run_config:&FindMotifsRunConfig, channels_trackers:&mut Vec<SimpleMotifTracker<SqlMotifTrackerStore>>| {
 
-            /*
-            let euc_dist_t_0 = SyncWrapper::new_tb(Box::new(dist_d2_0(
-                &chunk_0.t.transpose(0,1),
-                &chunk_1.t.transpose(0,1)
-            ).expect(format!("dist_d2_0_").as_str())));
-
-            let euc_dist_t_0_means = SyncWrapper::new_tb(Box::new(euc_dist_t_0.mean_dim(&[1i64,2i64][..], false, Kind::Float).multiply_scalar(find_motifs_run_config.max_dist_k as f64)));
-            debug!("find_motifs_by_euc_dist: euc_dist_t_0_means={euc_dist_t_0_means}");
-            debug!("find_motifs_by_euc_dist: euc_dist_t_0.size()={:?} tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?}", euc_dist_t_0.size(), chunk_0, chunk_1);
-            */
+            debug!("find_motifs_by_euc_dist: rayon::current_num_threads()={}", rayon::current_num_threads());
 
             channels_trackers.iter_mut().enumerate().par_bridge().for_each(|(channel, mt)| {
-                let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).to_device_(Cuda(0), Kind::Float, true, true).squeeze();
-                let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).to_device_(Cuda(0), Kind::Float, true, true).squeeze();
+                let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
+                let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).squeeze();
                 debug!("find_motifs_by_euc_dist: tensor_0.size={:?} tensor_0.device={:?} tensor_1.size()={:?} tensor_1.device={:?}", tensor_0.size(), tensor_0.device(), tensor_1.size(), tensor_1.device());
 
                 let euc_dist_t = dist_d2(
                     &tensor_0,
                     &tensor_1
                 ).expect(format!("dist_d2 on channel={}", channel, ).as_str());
-                // let euc_dist_t = euc_dist_t_0.i((channel as i64, .., ..));
-                // let mean_k = euc_dist_t_0_means.i(channel as i64).double_value(&[]) as f32; /
 
                 let euc_dists_flat = euc_dist_t.view(-1);
-                //
                 let mean = euc_dists_flat.mean(Kind::Float).double_value(&[]) as f32;
-                // let euc_dists_flat_cpu = euc_dists_flat.cop
-                // drop(euc_dists_flat);
+
+
+                let mean_k = mean * find_motifs_run_config.max_dist_k;
+
+                // let buf = copy_cudarc(&euc_dists_flat);
+                let distances = from::<Vec<f32>>(&euc_dists_flat);
+
+                debug!("find_motifs_by_euc_dist: distances.len()={}", distances.len());
+
+                drop(euc_dists_flat);
                 drop(euc_dist_t);
                 drop(tensor_0);
                 drop(tensor_1);
-                // if mean < 0. {
-                //     debug!("zzz");
-                // }
-
-                let mean_k = mean * find_motifs_run_config.max_dist_k;
-                //
-                // debug!("find_motifs_by_euc_dist: euc_dist_t.device={:?} find_motifs_run_config.max_dist_k={} mean_k={mean_k}", euc_dist_t.device(), find_motifs_run_config.max_dist_k);
-                //
-                // let buf = copy_cudarc(&euc_dists_flat);
-                let buf = copy_cudarc(&euc_dists_flat);
-                let distances = vec![]; //from::<Vec<f32>>(&euc_dists_flat);
-                //
-                // drop(euc_dist_t);
-                // drop(euc_dists_flat);
 
                 collect_dists(
                     chunk_0,
@@ -302,19 +284,19 @@ pub fn find_motifs_by_euc_dist(
                     find_motifs_run_config.step as i64,
                     |(slice_0, slice_1, dist)| {
 
-                        // mt.track(
-                        //     slice_0,
-                        //     slice_1,
-                        //     dist,
-                        // );
+                        mt.track(
+                            slice_0,
+                            slice_1,
+                            dist,
+                        );
 
                     },
                     |dist: &f32| {
                         dist < &mean_k
                     }
                 );
-                free_cudarc(buf);
-                debug!("find_motifs_by_euc_dist: channel={channel} done size={:?} device={:?}", euc_dists_flat.size(), euc_dists_flat.device());
+                // free_cudarc(buf);
+                debug!("find_motifs_by_euc_dist: channel={channel} done");
                 mt.dump();
             });
 
@@ -678,7 +660,7 @@ where
                 .zip(chunk_0_vec.iter())
                 .zip(devices.into_iter().cycle())
                 .par_bridge()
-                .for_each(|(((run_config, mt), chunk_0), device)| {
+                .for_each(|(((run_config, mt), chunk_0), _device)| {//TODO _device
 
                     callback(
                         chunk_0,
@@ -687,7 +669,7 @@ where
                             run_config.window,
                             &window_1_tensors.read(),
                             window_1_0_clone.clone(),
-                            *device
+                            Cuda(0)
                         ),
                         run_config,
                         mt
@@ -696,7 +678,7 @@ where
 
             exec.write().purge_cache_keys(window_1[0].clone(), area_1);
             print!(".");
-
+            std::io::stdout().flush()?;
         }
         exec.write().purge_cache_keys(window_0[0].clone(), area_0);
         info!("done {chunk_i_0} chunks out of {} in {} mls", resource_chunks.len(), i_1.elapsed().as_millis());
@@ -715,32 +697,30 @@ fn collect_dists<'a, F, C>(
         C:Fn(&f32)->bool,
 {
 
+    let mut distances_i = 0;
 
+    chunk_0.sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
+        for (slice_0_idx, s_0) in (0..*t_size_0).enumerate() {
 
-    // let mut distances_i = 0;
-    //
-    // chunk_0.sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
-    //     for (slice_0_idx, s_0) in (0..*t_size_0).enumerate() {
-    //
-    //         for (t_idx_1, t_size_1) in chunk_1.sizes.iter().enumerate() {
-    //             for (slice_1_idx, s_1) in (0..*t_size_1).enumerate() {
-    //                 //println!("t_idx_0={t_idx_0} slice_0_idx={slice_0_idx} t_idx_1={t_idx_1} slice_1_idx={slice_1_idx} d={}", distances[distances_i]);
-    //
-    //                 if condition(&distances[distances_i]) && (chunk_0.keys[t_idx_0].ne(&chunk_1.keys[t_idx_1]) || slice_0_idx != slice_1_idx) {
-    //                     listener(
-    //                         (
-    //                             TensorSliceIdx(chunk_0.keys[t_idx_0].clone(), slice_0_idx as i64 * step),
-    //                             TensorSliceIdx(chunk_1.keys[t_idx_1].clone(), slice_1_idx as i64 * step),
-    //                             distances[distances_i]
-    //                         ),
-    //                     );
-    //                 }
-    //
-    //                 distances_i += 1;
-    //             }
-    //         }
-    //     }
-    // });
+            for (t_idx_1, t_size_1) in chunk_1.sizes.iter().enumerate() {
+                for (slice_1_idx, s_1) in (0..*t_size_1).enumerate() {
+                    //println!("t_idx_0={t_idx_0} slice_0_idx={slice_0_idx} t_idx_1={t_idx_1} slice_1_idx={slice_1_idx} d={}", distances[distances_i]);
+
+                    if condition(&distances[distances_i]) && (chunk_0.keys[t_idx_0].ne(&chunk_1.keys[t_idx_1]) || slice_0_idx != slice_1_idx) {
+                        listener(
+                            (
+                                TensorSliceIdx(chunk_0.keys[t_idx_0].clone(), slice_0_idx as i64 * step),
+                                TensorSliceIdx(chunk_1.keys[t_idx_1].clone(), slice_1_idx as i64 * step),
+                                distances[distances_i]
+                            ),
+                        );
+                    }
+
+                    distances_i += 1;
+                }
+            }
+        }
+    });
 
 }
 

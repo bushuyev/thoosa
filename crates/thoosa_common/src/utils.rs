@@ -718,8 +718,8 @@ pub fn copy_cudarc(t:&Tensor) -> *mut c_void {
 
 }
 
-pub fn free_cudarc(buf :*mut c_void){
+pub fn free_cudarc(buf : *mut f32){
     unsafe {
-        cudarc::driver::sys::lib().cuMemFreeHost(buf);
+        cudarc::driver::sys::lib().cuMemFreeHost(buf as *mut c_void);
     }
 }
