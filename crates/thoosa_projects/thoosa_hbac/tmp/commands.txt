@@ -42,3 +42,6 @@ lib=Library@0x5b19802439d0
 ^C
 
 ---
+
+
+12:54:44 [INFO] done 0 chunks out of 2596 in 590734 mls

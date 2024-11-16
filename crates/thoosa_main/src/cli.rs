@@ -8,10 +8,10 @@ use std::cmp::max;
 use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use tch::nn::Module;
-use std::fs;
+use std::{fs, process};
 use plotters::prelude::BLACK;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
-use std::fs::{read_dir, File};
+use std::fs::{read_dir, File, OpenOptions};
 use std::hash::Hash;
 use std::str::FromStr;
 use std::io::Write;
@@ -296,6 +296,19 @@ pub enum Commands {
     SayHello(SayHelloParams)
 }
 
+fn set_oom_score_adj(score: i32) {
+    let pid = process::id();
+    let path = format!("/proc/{}/oom_score_adj", pid);
+
+    if let Ok(mut file) = OpenOptions::new().write(true).open(&path) {
+        if let Err(e) = write!(file, "{}", score) {
+            eprintln!("Failed to write to {}: {}", path, e);
+        }
+    } else {
+        eprintln!("Failed to open {}", path);
+    }
+}
+
 pub fn run_cli<F,R>(
     labeled_resources:F,
     resource_to_tensor:R,
@@ -305,6 +318,8 @@ pub fn run_cli<F,R>(
     where F:Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
           R:Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoosaError> + Sync + Send
 {
+    set_oom_score_adj(-1000);
+
     unsafe {
         at_grad_set_enabled(0);
     };
