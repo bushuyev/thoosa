@@ -112,7 +112,8 @@ impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug{
 pub struct ThoosaError {//TODO enum
     msg:String,
     #[allow(dead_code)]
-    backtrace:Backtrace
+    backtrace:Backtrace,
+    is_oom:bool
 }
 
 impl ThoosaError {
@@ -124,7 +125,20 @@ impl ThoosaError {
         debug!("{}", backtrace.to_string());
         Self {
             msg: msg.into(),
-            backtrace
+            backtrace,
+            is_oom: false
+        }
+    }
+
+    pub fn oom() -> Self {
+        error!("ThoosaError::new: oom");
+        let backtrace = Backtrace::capture();
+
+        debug!("{}", backtrace.to_string());
+        Self {
+            msg: "oom".into(),
+            backtrace,
+            is_oom: true
         }
     }
 }

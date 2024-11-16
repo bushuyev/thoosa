@@ -1,5 +1,6 @@
 use log::{debug, trace};
 use tch::{IndexOp, TchError, Tensor};
+use tch::Device::Cpu;
 use tch::Kind;
 
 use thoosa_common::utils::z_norm_2;
@@ -28,32 +29,52 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
     Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
 }
 
-pub fn dist_d2_0(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError> {
-    let slice_0_expanded = slice_0.unsqueeze(2);     // channels x motifs x 1 x motif_len
-    let slice_1_expanded = slice_1.unsqueeze(1);         // channels x 1 x num_slices x motif_len
+/*
+    t_0, t_1 - channels x slices x slice_len
+ */
+pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
+    let t_0 = t_0.unsqueeze(2);     // channels x motifs x 1 x motif_len
+    let t_1 = t_1.unsqueeze(1);         // channels x 1 x num_slices x motif_len
 
     // debug!("dist_d2_0: slice_0_expanded={slice_0_expanded}");
-    debug!("dist_d2_0: slice_0_expanded.size={:?}", slice_0_expanded.size());
+    debug!("dist_d2_0: slice_0_expanded.size={:?}", t_0.size());
 
     // debug!("dist_d2_0: slice_1_expanded={slice_1_expanded}");
-    debug!("dist_d2_0: slice_1_expanded.size={:?}", slice_1_expanded.size());
+    debug!("dist_d2_0: slice_1_expanded.size={:?}", t_1.size());
 
     // Compute the Euclidean distances
-    let mut diff = match slice_0_expanded.f_subtract(&slice_1_expanded) {
+    let mut diff = match t_0.f_subtract(&t_1) {
         Ok(v) => {
             v
         }
         Err(e) => {
-            panic!("e={e:?} {}", e.to_string().contains("CUDA out of memory"));
+            // panic!("e={e:?} {}", e.to_string().contains("CUDA out of memory"));
+            return Err(ThoosaError::oom())
         }
     };
+    drop(t_0);
+    drop(t_1);
     // debug!("diff={diff}");
 
     let squared_diff = diff.f_pow_(2)?;
+    drop(diff);
     let squared_distances = squared_diff.sum_dim_intlist(3, false, Kind::Float);
+    drop(squared_diff);
     let distances = squared_distances.sqrt();
 
-    Ok(distances)
+    let indices = Tensor::randint(distances.size()[1], &[1000], (Kind::Int64, distances.device()));
+    let samples = distances.index_select(1, &indices);
+    drop(indices);
+    // println!("samples.size={:?}", samples.size());
+
+    let q = samples.quantile_scalar(q, 1, true, "higher");
+    // println!("q.size={:?}", q.size());
+    // println!("q={q}");
+
+    let le = distances.le_tensor(&q);
+
+
+    Ok((le, if with_distances {Some(distances)} else {None}))
 }
 
 pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
@@ -152,10 +173,12 @@ mod distance_tests {
         println!("t_sliced={t_sliced} size={:?}", t_sliced.size());
 
 
-        let distances = dist_d2_0(&t_sliced, &t_sliced)?;
         // 1 channel 6 x 6 slices
-
+        let (le, Some(distances)) = dist_d2_0(t_sliced.shallow_clone(), t_sliced, 0.1, true)? else {
+            panic!("no distances")
+        };
         println!("distances={distances} size={:?}", distances.size());
+        println!("le={le} size={:?}", distances.size());
 
         // distances.quan
 
@@ -204,7 +227,9 @@ mod distance_tests {
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t.transpose(0,1);
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t.transpose(0,1);
 
-        let dists = dist_d2_0(&t_0_sliced, &t_1_sliced)?;
+        let (le, Some(dists)) = dist_d2_0(t_0_sliced, t_1_sliced, 0.1, true)? else {
+            panic!("no distances")
+        };
 
         debug!("dists={dists} size={:?}", dists.size());
 
