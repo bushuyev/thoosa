@@ -116,9 +116,9 @@ mod tests {
                 // let masked = t.masked_select(&le);
 
                 // let masked_cpu = masked.to_device(Cpu);
-                let le_cpu = le.to_device(Cpu);
+                let le_cpu = le.to_device(Cpu); //1488 mls
                 // let buf = copy_cudarc(&masked) as *mut f32;
-                // let le_buf = copy_cudarc(&le) as *mut f32;
+                // let le_buf = copy_cudarc(&le) as *mut f32; //8128 mls
                 // free_cudarc(le_buf);
                 // free_cudarc(buf);
 
