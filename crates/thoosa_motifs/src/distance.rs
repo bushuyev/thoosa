@@ -140,9 +140,9 @@ mod distance_tests {
 
         let masked = t.masked_select(&le);
 
-        println!("q={q}");
-        println!("le={le}");
-        println!("masked={masked}");
+        // println!("q={q}");
+        // println!("le={le}");
+        // println!("masked={masked}");
         // let sorted = t.sort(1, false).0;
         // let n = sorted.size()[1] as f64;
         // let k = (0.5 * (n - 1.0)).round() as i64;
@@ -159,7 +159,7 @@ mod distance_tests {
     #[test]
     fn test_dist_d2_0_1ch() -> Result<(), ThoosaError>{
         let t_0 = Tensor::from_slice(&[1,2,3,4,5,6,7]).view((1,7));
-        println!("t_0={t_0} size={:?}", t_0.size());
+        // println!("t_0={t_0} size={:?}", t_0.size());
         let t_1 = Tensor::from_slice(&[10,20,30,40,50,60,70]).view((1,7));
 
         //123 345 567
@@ -170,21 +170,21 @@ mod distance_tests {
         //transpose - channels x n slices x slice
         ).t.transpose(0,1);
 
-        println!("t_sliced={t_sliced} size={:?}", t_sliced.size());
+        // println!("t_sliced={t_sliced} size={:?}", t_sliced.size());
 
 
         // 1 channel 6 x 6 slices
         let (le, Some(distances)) = dist_d2_0(t_sliced.shallow_clone(), t_sliced, 0.1, true)? else {
             panic!("no distances")
         };
-        println!("distances={distances} size={:?}", distances.size());
-        println!("le={le} size={:?}", distances.size());
+        // println!("distances={distances} size={:?}", distances.size());
+        // println!("le={le} size={:?}", distances.size());
 
         // distances.quan
 
         let le_distances = distances.le(4.);
 
-        println!("le_distances={le_distances} size={:?}", le_distances.size());
+        // println!("le_distances={le_distances} size={:?}", le_distances.size());
 
         Ok(())
     }

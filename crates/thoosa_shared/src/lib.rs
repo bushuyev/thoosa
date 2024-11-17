@@ -93,7 +93,7 @@ where T:Hash + Eq + Debug {
 
 
 
-#[derive(Debug, PartialEq, Hash, Eq, Copy, Clone, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
 pub struct TensorSliceIdx<T>(pub T, pub i64) where T:Eq+Debug;
 
 impl From<(String, i64)> for TensorSliceIdx<String> {

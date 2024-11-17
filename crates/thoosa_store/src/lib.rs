@@ -1540,7 +1540,9 @@ pub struct SqlMotifTrackerStore {
 }
 
 impl SqlMotifTrackerStore {
+
     pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: usize, channel: usize) -> Result<SqlMotifTrackerStore, ThoosaError> {
+        debug!("SqlMotifTrackerStore::new path={path:?}");
         let mut conn = Connection::open(&path).expect("SqlMotifTrackerStore::new: connection");
         {
             let t = conn.transaction()?;
@@ -1604,6 +1606,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
             q.pop();
 
             t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+            // t.cache_flush()?; ?
         }
         t.commit()?;
 

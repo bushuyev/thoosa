@@ -231,12 +231,15 @@ pub fn find_motifs_by_euc_dist(
 
         Arc::new((0..ws.read().channels()).map(|channel|
                 Mutex::new(SimpleMotifTracker::<SqlMotifTrackerStore>::new(
+
                     SqlMotifTrackerStore::new(
                         ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
                         run_config.id.expect("id"),
                         channel
-                    ).expect("can't create tmp sotre"),
+                    ).expect("can't create tmp store"),
+
                     common_config.min_tracker_step,
+
             ))).collect::<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>())
 
     }).collect();
@@ -251,13 +254,16 @@ pub fn find_motifs_by_euc_dist(
         common_config.chunk_size as usize,
         &run_configs_arcs,
         run_config__channels_trackers,
-        move |chunk_0: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, chunk_1: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, find_motifs_run_config:Arc<FindMotifsRunConfig>, channels_trackers:&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>| {
+        move |chunk_sliced_0: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, chunk_sliced_1: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, find_motifs_run_config:Arc<FindMotifsRunConfig>, channels_trackers:&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>| {
 
             debug!("find_motifs_by_euc_dist: rayon::current_num_threads()={}", rayon::current_num_threads());
 
+            let chunk_1_sliced_cuda = chunk_sliced_1.read().t.to_device(Cuda(0)).transpose(0, 1);
+            chunk_sliced_1.write().drop_tensor();
+
             let (le, _) = dist_d2_0(
-                chunk_0.read().t.to_device(Cuda(0)).transpose(0,1),
-                chunk_1.read().t.to_device(Cuda(0)).transpose(0,1),
+                chunk_sliced_0.read().t.to_device(Cuda(0)).transpose(0, 1),
+                chunk_1_sliced_cuda,
                 0.1,
                 false
             )?;
@@ -265,18 +271,21 @@ pub fn find_motifs_by_euc_dist(
             let le_cpu = SyncWrapper::new_tb(Box::new(le.to_device(Cpu)));
             drop(le);
 
-            let chunk_0_arc = Arc::clone(&chunk_0);
-            let chunk_1_arc = Arc::clone(&chunk_1);
+            let chunk_0_arc = Arc::clone(&chunk_sliced_0);
+            let chunk_1_arc = Arc::clone(&chunk_sliced_1);
+
+
             let channels_trackers_clone = Arc::clone(channels_trackers);
             rayon::spawn( move ||{
+                debug!("spawning collect job for find_motifs_run_config={find_motifs_run_config:?} ");
+
                 let distances_vec = from::<Vec<f32>>(&le_cpu.view(-1));
-                let s = find_motifs_run_config.step;
-                println!("{:?}", chunk_0_arc);
 
                 channels_trackers_clone.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
                     let chunk_0_arc = Arc::clone(&chunk_0_arc);
                     let chunk_1_arc = Arc::clone(&chunk_1_arc);
 
+                    let mut i = 0;
                     collect_dists(
                         chunk_0_arc,
                         chunk_1_arc,
@@ -284,11 +293,18 @@ pub fn find_motifs_by_euc_dist(
                         find_motifs_run_config.step as i64,
                         |(slice_0, slice_1, dist)| {
 
+                            // let lock = mt.lock();
                             mt.lock().track(
                                 slice_0,
                                 slice_1,
                                 dist,
                             );
+
+                            i+=1;
+                            if i == 1000 {
+                                mt.lock().dump();
+                                i = 0;
+                            }
 
                         },
                         |dist: &f32| {
@@ -401,7 +417,7 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
             assert_eq!(self.sizes.len(), 1);
 
             let split_at_idx = self.sizes[0]/2;
-            info!("ChunkOfSlicedTensors::split: 0 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
+            debug!("ChunkOfSlicedTensors::split: 0 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
             vec![
                 Arc::new(RwLock::new(Self {
                     keys: self.keys.clone(),
@@ -422,7 +438,7 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
 
             let split_at_idx = self.sizes.iter().take(split_at).sum::<i64>();
 
-            info!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
+            debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
 
             vec![
                 Arc::new(RwLock::new(Self {
@@ -439,6 +455,10 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
         }
     }
 
+    pub fn drop_tensor(&mut self) {
+        // mem::swap(&mut self.t, &mut SyncWrapper::new_t(Tensor::from_slice(&[0.0])));
+    }
+
     /// returns:  t.size = num slices = 1+(len-window)/step x channels x window
     pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
 
@@ -451,7 +471,7 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
 
             if input_length >= window as i64 {
 
-                let unfolded = tensor/*.to_device_(device, Kind::Float, true, false)*/.unfold(1, window as i64, step as i64);
+                let unfolded = tensor.unfold(1, window as i64, step as i64);
                 // channels x num_slices x window, transpose  to num_slices x channels x window
                 let unfolded = unfolded.transpose(0, 1);
                 slices.push(unfolded);
@@ -772,7 +792,9 @@ where
                             Arc::clone(&run_config),
                             channel_trackers
                         )  {
-                            Ok(_) => {}
+                            Ok(_) => {
+
+                            }
                             Err(e) => {
                                 warn!("got e={e:?}, splitting");
 
@@ -782,8 +804,6 @@ where
                             }
                         }
                     }
-
-
 
                 });
 
@@ -810,18 +830,27 @@ fn collect_dists<'a, F, C>(
 
     let mut distances_i = 0;
 
-    chunk_0.read().sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
+    let chunk_0_read_guard = chunk_0.read();
+    let chunk_1_read_guard = chunk_1.read();
+
+    chunk_0_read_guard.sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
         for (slice_0_idx, s_0) in (0..*t_size_0).enumerate() {
 
-            for (t_idx_1, t_size_1) in chunk_1.read().sizes.iter().enumerate() {
+            for (t_idx_1, t_size_1) in chunk_1_read_guard.sizes.iter().enumerate() {
                 for (slice_1_idx, s_1) in (0..*t_size_1).enumerate() {
                     //println!("t_idx_0={t_idx_0} slice_0_idx={slice_0_idx} t_idx_1={t_idx_1} slice_1_idx={slice_1_idx} d={}", distances[distances_i]);
 
-                    if condition(&distances[distances_i]) && (chunk_0.read().keys[t_idx_0].ne(&chunk_1.read().keys[t_idx_1]) || slice_0_idx != slice_1_idx) {
+                    if condition(&distances[distances_i])
+                    //if not on diagonal
+                    && (
+                        chunk_0_read_guard.keys.get(t_idx_0).and_then(|k_0| chunk_1_read_guard.keys.get(t_idx_1).map(|k_1| k_1 != k_0)).unwrap_or(false)
+                        ||
+                        slice_0_idx != slice_1_idx
+                    ) {
                         listener(
                             (
-                                TensorSliceIdx(chunk_0.read().keys[t_idx_0].clone(), slice_0_idx as i64 * step),
-                                TensorSliceIdx(chunk_1.read().keys[t_idx_1].clone(), slice_1_idx as i64 * step),
+                                TensorSliceIdx(chunk_0_read_guard.keys[t_idx_0].clone(), slice_0_idx as i64 * step),
+                                TensorSliceIdx(chunk_1_read_guard.keys[t_idx_1].clone(), slice_1_idx as i64 * step),
                                 distances[distances_i]
                             ),
                         );
