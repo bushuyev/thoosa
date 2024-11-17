@@ -678,7 +678,6 @@ where
     resource_chunks.push(vec![]); //to get last window processed
 
 
-
     let area_0 = exec.write().get_available_cache_area();
     let area_1 = exec.write().get_available_cache_area();
 
@@ -712,7 +711,7 @@ where
                 for key in &window_0_0 {
                     debug!("0. exec:callback_arc: key={key:?}");
 
-                    let sync_wrapper = SyncWrapper::new_tb(
+                    let sync_wrapper = SyncWrapper::new_tb(//TODO remove SyncWrapper? it goes only to run_configs_applied_to_chunk_0
                         Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
                     );
                     window_0_tensors_arc.write().push(sync_wrapper);
@@ -734,6 +733,8 @@ where
                     Cpu
                 )))
             }).collect::<Vec<_>>();
+
+        drop(window_0_tensors);
 
         let i_1 = Instant::now();
         for (chunk_i_1, window_1) in resource_chunks.windows(2).into_iter().skip(chunk_i_0).enumerate() {
