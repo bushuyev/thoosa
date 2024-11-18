@@ -231,6 +231,7 @@ mod distance_tests {
             panic!("no distances")
         };
 
+        debug!("le={le} size={:?}", le.size());
         debug!("dists={dists} size={:?}", dists.size());
 
 

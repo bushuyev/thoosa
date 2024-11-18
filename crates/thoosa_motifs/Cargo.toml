@@ -20,6 +20,8 @@ parking_lot.workspace = true
 futures.workspace = true
 clap.workspace = true
 regex.workspace = true
+parking_lot_mpsc.workspace = true
+crossbeam-channel.workspace = true
 
 sci-rs = "0.3.8"
 plotters = { version = "0.3.5"}
@@ -27,6 +29,7 @@ anyhow = "1.0.79"
 ctor = "0.2.6"
 chrono = { version = "0.4.32" }
 rayon = "1.8.1"
+
 
 
 [dev-dependencies]

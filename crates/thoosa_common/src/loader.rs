@@ -169,7 +169,7 @@ where
                 .spawn(|| thread_builder.run())?;
 
             Ok(())
-        }).build().expect("pool_1");
+        }).build().expect("futures_pool");
 
         let notify = Arc::new(RayonNotify::new());
         let p_notify = Arc::clone(&notify);
