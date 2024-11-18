@@ -28,7 +28,7 @@ parking_lot =  "0.12.3"
 parking_lot_mpsc =  "0.1.5"
 crossbeam-utils = "0.8.19"
 crossbeam = "0.8.4"
-crossbeam-channel = "0.5.11"
+crossbeam-channel = "0.5.13"
 futures = "0.3.30"
 clap = { version = "4.5.17", features = ["derive", "cargo"] }
 serde = { version = "1.0.210", features = ["derive"] }

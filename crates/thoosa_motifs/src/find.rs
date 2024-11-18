@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::{fmt, fs, mem};
+use std::{fmt, fs, mem, thread};
 use std::cell::Cell;
 use std::fs::{File, OpenOptions};
 use std::hash::Hash;
@@ -14,9 +14,10 @@ use parking_lot::Mutex;
 use std::time::{Instant};
 
 use clap::clap_derive::{Args, Subcommand};
+use crossbeam_channel::SendError;
 use crossbeam_utils::sync::WaitGroup;
 use futures::{FutureExt, StreamExt};
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use tch::{Device, IndexOp, Kind, Tensor};
 
@@ -227,42 +228,41 @@ pub fn find_motifs_by_euc_dist(
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
-    let run_config__channels_trackers: Vec<Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>> = run_configs.iter().map(|run_config| {
-
-        Arc::new((0..ws.read().channels()).map(|channel|
+    let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
+        assert!(a.insert(
+            run_config.id.expect("id"),
+            (0..ws.read().channels()).map(|channel|
                 Mutex::new(SimpleMotifTracker::<SqlMotifTrackerStore>::new(
-
                     SqlMotifTrackerStore::new(
                         ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
                         run_config.id.expect("id"),
                         channel
                     ).expect("can't create tmp store"),
-
                     common_config.min_tracker_step,
+                ))).collect::<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>()
+        ).is_none());
 
-            ))).collect::<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>())
-
-    }).collect();
+        a
+    });
 
     let run_configs_arcs = run_configs.into_iter()
         .map(|rc|Arc::new(rc))
         .collect::<Vec<_>>();
 
     // debug!("find_motifs_by_euc_dist_: records_num={records_num} resource_keys={resource_keys:?} run_config_ids={run_config_ids:?}");
-    let mut motif_trackers = chunk_and_slice_2x(
+    chunk_and_slice_2x(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        run_config__channels_trackers,
-        move |chunk_sliced_0: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, chunk_sliced_1: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, find_motifs_run_config:Arc<FindMotifsRunConfig>, channels_trackers:&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors<ResourceId>>, chunk_sliced_1: &mut ChunkOfSlicedTensors<ResourceId>, _find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
 
             debug!("find_motifs_by_euc_dist: rayon::current_num_threads()={}", rayon::current_num_threads());
 
-            let chunk_1_sliced_cuda = chunk_sliced_1.read().t.to_device(Cuda(0)).transpose(0, 1);
-            chunk_sliced_1.write().drop_tensor();
+            let chunk_1_sliced_cuda = chunk_sliced_1.t.to_device(Cuda(0)).transpose(0, 1);
+            chunk_sliced_1.drop_tensor();
 
             let (le, _) = dist_d2_0(
-                chunk_sliced_0.read().t.to_device(Cuda(0)).transpose(0, 1),
+                chunk_sliced_0.t.to_device(Cuda(0)).transpose(0, 1),
                 chunk_1_sliced_cuda,
                 0.1,
                 false
@@ -271,126 +271,57 @@ pub fn find_motifs_by_euc_dist(
             let le_cpu = SyncWrapper::new_tb(Box::new(le.to_device(Cpu)));
             drop(le);
 
-            let chunk_0_arc = Arc::clone(&chunk_sliced_0);
-            let chunk_1_arc = Arc::clone(&chunk_sliced_1);
+            Ok(le_cpu)
 
+        },
+        &|run_config_id, le_cpu, chunk_0, chunk_1| {
+            let le_cpu = SyncWrapper::new_t(le_cpu.flatten(1, 2));
+            let mut distances_i = 0;
+            let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
 
-            let channels_trackers_clone = Arc::clone(channels_trackers);
-            rayon::spawn( move ||{
-                debug!("spawning collect job for find_motifs_run_config={find_motifs_run_config:?} ");
+            let run_config = run_configs_arcs.iter().find(|rc| rc.id.expect("id") == run_config_id).expect("rc");
+            let step = run_config.step;
 
-                let distances_vec = from::<Vec<f32>>(&le_cpu.view(-1));
+            chunk_0.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
+                for (slice_0_idx, s_0) in (0..t_size_0.1).enumerate() {
+                    for (t_idx_1, t_size_1) in chunk_1.iter().enumerate() {
+                        for (slice_1_idx, s_1) in (0..t_size_1.1).enumerate() {
+                            channel_trackers.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
 
-                channels_trackers_clone.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
-                    let chunk_0_arc = Arc::clone(&chunk_0_arc);
-                    let chunk_1_arc = Arc::clone(&chunk_1_arc);
-
-                    let mut i = 0;
-                    collect_dists(
-                        chunk_0_arc,
-                        chunk_1_arc,
-                        &distances_vec,
-                        find_motifs_run_config.step as i64,
-                        |(slice_0, slice_1, dist)| {
-
-                            // let lock = mt.lock();
-                            mt.lock().track(
-                                slice_0,
-                                slice_1,
-                                dist,
-                            );
-
-                            i+=1;
-                            if i == 1000 {
-                                mt.lock().dump();
-                                i = 0;
-                            }
-
-                        },
-                        |dist: &f32| {
-                            true
+                                if le_cpu.int64_value(&[channel as i64, distances_i as i64]) == 1
+                                    && (t_size_0.0 != t_size_1.0 || slice_0_idx != slice_1_idx
+                                ) {
+                                    mt.lock().track(
+                                        TensorSliceIdx(chunk_0[t_idx_0].0.clone(), slice_0_idx as i64 * step as i64),
+                                        TensorSliceIdx(chunk_1[t_idx_1].0.clone(), slice_1_idx as i64 * step as i64),
+                                        0.0,
+                                    );
+                                }
+                            });
                         }
-                    );
-                    mt.lock().dump();
-                });
+                        distances_i += 1;
+                    }
+                }
             });
-
-            // debug!("find_motifs_by_euc_dist: euc_dist_t_0_means={euc_dist_t_0_means}");
-            // debug!("find_motifs_by_euc_dist: euc_dist_t_0.size()={:?} tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?}", euc_dist_t_0.size(), chunk_0, chunk_1);
-
-            // channels_trackers.iter_mut().enumerate().par_bridge().for_each(|(channel, mt)| {
-            //     let tensor_0 = chunk_0.t.i((.., channel as i64, ..)).squeeze();
-            //     let tensor_1 = chunk_1.t.i((.., channel as i64, ..)).squeeze();
-            //     debug!("find_motifs_by_euc_dist: tensor_0.size={:?} tensor_0.device={:?} tensor_1.size()={:?} tensor_1.device={:?}", tensor_0.size(), tensor_0.device(), tensor_1.size(), tensor_1.device());
-            //
-            //     let euc_dist_t = dist_d2(
-            //         &tensor_0,
-            //         &tensor_1
-            //     ).expect(format!("dist_d2 on channel={}", channel, ).as_str());
-            //
-            //     let euc_dists_flat = euc_dist_t.view(-1);
-            //     let mean = euc_dists_flat.mean(Kind::Float).double_value(&[]) as f32;
-            //
-            //
-            //     let mean_k = mean * find_motifs_run_config.max_dist_k;
-            //
-            //     // let buf = copy_cudarc(&euc_dists_flat);
-            //     let distances = from::<Vec<f32>>(&euc_dists_flat);
-            //
-            //     debug!("find_motifs_by_euc_dist: distances.len()={}", distances.len());
-            //
-            //     drop(euc_dists_flat);
-            //     drop(euc_dist_t);
-            //     drop(tensor_0);
-            //     drop(tensor_1);
-            //
-            //     collect_dists(
-            //         chunk_0,
-            //         chunk_1,
-            //         distances,
-            //         find_motifs_run_config.step as i64,
-            //         |(slice_0, slice_1, dist)| {
-            //
-            //             mt.track(
-            //                 slice_0,
-            //                 slice_1,
-            //                 dist,
-            //             );
-            //
-            //         },
-            //         |dist: &f32| {
-            //             dist < &mean_k
-            //         }
-            //     );
-            //     // free_cudarc(buf);
-            //     debug!("find_motifs_by_euc_dist: channel={channel} done");
-            //     mt.dump();
-            // });
-
-            Ok(())
         },
         loader,
         &devices
     )?;
 
     info!("setting motifs in {} configs", run_config_ids.len());
-    // motif_trackers.into_iter().flat_map(|run_config_trackers|<Vec<parking_lot::lock_api::Mutex<parking_lot::RawMutex, SimpleMotifTracker<SqlMotifTrackerStore>>> as Clone>::clone(&run_config_trackers).into_iter()).par_bridge().for_each(|mut mt|{
-    //     let mut mt_guard = mt.lock();
-    //     match mt_guard.set_motifs() {
-    //         Ok(groups) => {
-    //             info!("mt {mt:?} done, {} groups found", groups.len());
-    //             store.lock().set_motifs(mt_guard.dumper.run_id, mt_guard.dumper.channel as i64, groups, &mt_guard.dumper.path).expect("");
-    //         }
-    //         Err(e) => {
-    //             info!("mt {mt:?} failed with {e:?}");
-    //         }
-    //     };
-    // });
-
-
-    // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
-    // info!("{} done {}/{}", find_motifs_params.resource_set, slots_to_process, slots_processed);
-
+    run_config__channels_trackers.values().flat_map(|v|v.into_iter()).par_bridge().for_each(|mt|{
+            let mut mt_guard = mt.lock();
+            match mt_guard.set_motifs() {
+                Ok(groups) => {
+                    info!("mt {mt:?} done, {} groups found", groups.len());
+                    store.lock().set_motifs(mt_guard.dumper.run_id, mt_guard.dumper.channel as i64, groups, &mt_guard.dumper.path).expect("");
+                }
+                Err(e) => {
+                    info!("mt {mt:?} failed with {e:?}");
+                }
+            };
+    });
+    info!("done {run_config_ids}");
 
     Ok(run_config_ids)//TODO return only successful run_id (window size check)?
 }
@@ -407,28 +338,32 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
     pub fn new(keys:  Vec <ResourceId>, sizes: Vec<i64>, t: Tensor) -> Self {
         Self {
             keys,
-            sizes,
+            sizes,//number of slices produced from each tensor
             t:SyncWrapper::new_t(t),
         }
     }
 
-    pub fn split(&self) -> Vec<Arc<RwLock<Self>>> {
+    pub fn keys_sizes(&self)->Vec<(ResourceId, i64)>{
+        self.keys.iter().zip(self.sizes.iter()).map(|v|(v.0.clone(), v.1.clone())).collect()
+    }
+
+    pub fn split(&self) -> Vec<Self> {
         if self.keys.len() == 1 {
             assert_eq!(self.sizes.len(), 1);
 
             let split_at_idx = self.sizes[0]/2;
             debug!("ChunkOfSlicedTensors::split: 0 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
             vec![
-                Arc::new(RwLock::new(Self {
+                Self {
                     keys: self.keys.clone(),
                     sizes: vec![split_at_idx],
                     t: SyncWrapper::new_t(self.t.i((..split_at_idx, .., ..))),
-                })),
-                Arc::new(RwLock::new(Self {
+                },
+                Self {
                     keys: self.keys.clone(),
                     sizes: vec![self.sizes[0]-split_at_idx],
                     t: SyncWrapper::new_t(self.t.i((split_at_idx.., .., ..))),
-                }))
+                }
             ]
 
         } else {
@@ -441,16 +376,16 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
             debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
 
             vec![
-                Arc::new(RwLock::new(Self {
+                Self {
                     keys: self.keys[..split_at].to_vec(),
                     sizes: self.sizes[..split_at].to_vec(),
                     t: SyncWrapper::new_t(self.t.i((..split_at_idx, .., ..))),
-                })),
-                Arc::new(RwLock::new(Self {
+                },
+                Self {
                     keys: self.keys[split_at..].to_vec(),
                     sizes: self.sizes[split_at..].to_vec(),
                     t: SyncWrapper::new_t(self.t.i((split_at_idx.., .., ..))),
-                }))
+                }
             ]
         }
     }
@@ -659,17 +594,19 @@ where
 }
 
 
-fn chunk_and_slice_2x<G>(
+fn chunk_and_slice_2x<G, C>(
     resources: Vec <Resource>,
     chunk_size: usize,
     run_configs:&Vec<Arc<FindMotifsRunConfig>>,
-    mut run_config__channels_trackers: Vec<Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>>,
-    mut callback: G,
+    // mut run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    mut gpu_fn: G,
+    mut cpu_fn: &C,
     exec: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     devices:&[Device]
-) -> Result<Vec<Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>>, ThoosaError>
+) -> Result<(), ThoosaError>
 where
-    G: Fn(Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>, Arc<FindMotifsRunConfig>, &mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>) -> Result<(), ThoosaError> + Send + Sync
+    G: Fn(&Arc<ChunkOfSlicedTensors<ResourceId>>, &mut ChunkOfSlicedTensors<ResourceId>, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<(ResourceId, i64)>, Vec<(ResourceId, i64)>) + Send + Sync,
 {
     let mut resource_chunks = resources.chunks(chunk_size)
         .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())//TODO k.clone()
@@ -677,6 +614,14 @@ where
 
     resource_chunks.push(vec![]); //to get last window processed
 
+    let (tx, rx) = crossbeam_channel::unbounded::<Option<(usize, SyncWrapper<Box<Tensor>>, Vec<_>, Vec<_>)>>();
+    let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(11).spawn_handler(|thread_builder| {
+        let b = thread::Builder::new();
+        b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
+            .spawn(|| thread_builder.run())?;
+
+        Ok(())
+    }).build().expect("trackers_pool");
 
     let area_0 = exec.write().get_available_cache_area();
     let area_1 = exec.write().get_available_cache_area();
@@ -725,13 +670,13 @@ where
 
         let run_configs_applied_to_chunk_0 = run_configs.par_iter().enumerate()
             .map(|(i, run_config)| {
-                Arc::new(RwLock::new(ChunkOfSlicedTensors::slice_tensors_chunk(
+                Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
                     run_config.step,
                     run_config.window,
                     &window_0_tensors.read(),
                     window_0_0_clone.clone(),
                     Cpu
-                )))
+                ))
             }).collect::<Vec<_>>();
 
         drop(window_0_tensors);
@@ -758,13 +703,11 @@ where
                 async move {
 
                     for key in &window_1_0 {
-                        debug!("1. exec:callback_arc: key={key:?}");
+                        debug!("chunk_and_slice: 1. exec:callback_arc: key={key:?}");
 
                         let sync_wrapper = SyncWrapper::new_tb(Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_1).await);
                         window_1_tensors_arc.write().push(sync_wrapper);
                     }
-
-
                     drop(wg_1_clone);
 
                 }.boxed()
@@ -772,35 +715,67 @@ where
             wg_1.wait();
 
             run_configs.iter()
-                .zip(run_config__channels_trackers.iter_mut())
+                // .zip(run_config__channels_trackers.iter_mut())
                 .zip(run_configs_applied_to_chunk_0.iter())
-                .for_each(|((run_config, channel_trackers), chunk_0)| {
+                .for_each(|(run_config/*(run_config, channel_trackers)*/, chunk_0)| {
 
-                    let mut chunk_1_vec = vec![Arc::new(RwLock::new(ChunkOfSlicedTensors::slice_tensors_chunk(
+                    let mut chunk_1_vec = Box::new(vec![ChunkOfSlicedTensors::slice_tensors_chunk(
                         run_config.step,
                         run_config.window,
                         &window_1_tensors.read(),
                         window_1_0_clone.clone(),
                         Cpu
-                    )))];
+                    )]);
 
-                    while let Some(chunk_1_split) = chunk_1_vec.pop() {
-                        let chunk_1_split_e = Arc::clone(&chunk_1_split);
+                    while let Some(mut chunk_1_split) = chunk_1_vec.pop() {
+                        // let chunk_1_split_e = Arc::clone(&chunk_1_split);
 
-                        match callback(
-                            Arc::clone(chunk_0),
-                            chunk_1_split,
-                            Arc::clone(&run_config),
-                            channel_trackers
+                        match gpu_fn(
+                            chunk_0,
+                            &mut chunk_1_split,
+                            run_config
                         )  {
-                            Ok(_) => {
-
+                            Ok(le_cpu) => {
+                                match tx.send(Some((run_config.id.expect("id"), le_cpu, chunk_0.keys_sizes(), chunk_1_split.keys_sizes()))){
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        error!("e:{e:?}"); //TODO panic?
+                                    }
+                                }
+                                // // debug!("chunk_and_slice: le_cpu={:?}", le_cpu.size());
+                                // // debug!("chunk_and_slice: le_cpu={le_cpu}");
+                                // let channel_trackers = Arc::clone(channel_trackers);
+                                // let run_config = Arc::clone(run_config);
+                                // let chunk_0 = Arc::clone(chunk_0);
+                                // rayon::spawn(move ||{
+                                //     let le_cpu = SyncWrapper::new_t(le_cpu.flatten(1,2));
+                                //     let mut distances_i = 0;
+                                //     chunk_0.sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
+                                //         for (slice_0_idx, s_0) in (0..*t_size_0).enumerate() {
+                                //             for (t_idx_1, t_size_1) in chunk_1_split.sizes.iter().enumerate() {
+                                //                 for (slice_1_idx, s_1) in (0..*t_size_1).enumerate() {
+                                //
+                                //                     channel_trackers.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
+                                //                         if le_cpu.int64_value(&[channel as i64, distances_i as i64]) == 1 {
+                                //                             mt.lock().track(
+                                //                                 TensorSliceIdx(chunk_0.keys[t_idx_0].clone(), slice_0_idx as i64 * run_config.step as i64),
+                                //                                 TensorSliceIdx(chunk_1_split.keys[t_idx_1].clone(), slice_1_idx as i64 * run_config.step as i64),
+                                //                                 0.0,
+                                //                             );
+                                //                         }
+                                //                     });
+                                //                 }
+                                //                 distances_i += 1;
+                                //             }
+                                //         }
+                                //     });
+                                // });
                             }
                             Err(e) => {
                                 warn!("got e={e:?}, splitting");
 
                                 chunk_1_vec.extend(
-                                    chunk_1_split_e.write().split()
+                                    chunk_1_split.split()
                                 );
                             }
                         }
@@ -815,7 +790,29 @@ where
         exec.write().purge_cache_keys(window_0[0].clone(), area_0);
         info!("done {chunk_i_0} chunks out of {} in {} mls", resource_chunks.len(), i_1.elapsed().as_millis());
     }
-    Ok(run_config__channels_trackers)
+
+    trackers_pool.scope(|s| {
+        for msg in  rx.iter() {
+            match msg {
+                None => {
+                    break
+                }
+                Some((run_config_it, t, chunk_0, chunk_1)) => {
+                    s.spawn( move |scope| {
+                        println!("spawned");
+                        // for channel_trackers in run_config__channels_trackers.iter(){
+                            // tracker.write().track(t);
+                            cpu_fn(run_config_it, t, chunk_0, chunk_1);
+                        // }
+
+                    })
+                }
+            }
+
+        }
+    });
+
+    Ok(())
 }
 
 fn collect_dists<'a, F, C>(
@@ -1545,24 +1542,29 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item
 
 #[cfg(test)]
 mod motif_find_tests {
-    use std::{fs, mem};
+    use std::{fs, mem, thread};
 
     use std::collections::{HashMap};
     use std::fmt::{Debug, Display};
     use std::ops::Deref;
     use std::path::Path;
     use std::sync::{Arc};
+    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::Ordering::Relaxed;
+    use crossbeam_channel::internal::SelectHandle;
+    use crossbeam_utils::sync::WaitGroup;
     use parking_lot::{Mutex, RawMutex};
 
 
     use log::{debug, trace};
     use parking_lot::RwLock;
+    use parking_lot_mpsc::SendError;
     use rayon::iter::ParallelBridge;
     use rayon::iter::ParallelIterator;
     use tch::{Device, IndexOp, Tensor};
     use tch::Device::Cpu;
     use tch::Kind::{Float, Int};
-
+    use tch::kind::DOUBLE_CPU;
     use thoosa_common::utils::*;
     use thoosa_shared::*;
 
@@ -2649,16 +2651,19 @@ mod motif_find_tests {
             resources,
             2,
             &mut vec![Arc::new(FindMotifsRunConfig::new(3, 5, 1.0, "", None))],
-            vec![Arc::new(vec![])],
-             move |chunk_0, chunk_1, _find_motifs_run_config, _channels_mt| {
+            // HashMap::new(),
+             move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
-                trace!("callback: chunk_0.t=\n{}", chunk_0.read().t.i((.., 0, ..)).squeeze());
-                trace!("callback: chunk_1.t=\n{}", chunk_1.read().t.i((.., 0, ..)).squeeze());
+                trace!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
+                trace!("callback: chunk_1.t=\n{}", chunk_1.t.i((.., 0, ..)).squeeze());
 
-                chunks_0_test_rc.lock().push(chunk_0.read().t.i((.., 0, ..)).squeeze());
-                chunks_1_test_rc.lock().push(chunk_1.read().t.i((.., 0, ..)).squeeze());
-                Ok(())
+                chunks_0_test_rc.lock().push(chunk_0.t.i((.., 0, ..)).squeeze());
+                chunks_1_test_rc.lock().push(chunk_1.t.i((.., 0, ..)).squeeze());
+                Ok(SyncWrapper::new_tb(Box::new(Tensor::from_slice(&[0.1]))))
+            },
+            &|run_config_id, t, chunk_0, chunk_1|{
+
             },
             &executor_rc,
             &[Cpu]
@@ -2924,4 +2929,60 @@ mod motif_find_tests {
         Ok(())
     }
 
+    #[test]
+    fn test_xxx(){
+
+
+        #[derive(Debug)]
+        struct TestTracker {
+            count:u32
+        }
+        impl TestTracker {
+
+            pub fn track(&mut self, t:SyncWrapper<Box<Tensor>>){
+                println!("t.size={:?}", t.size());
+                self.count+=1;
+            }
+
+            pub fn new() -> Self {
+                Self {count:0}
+            }
+        }
+        let mut tracker = RwLock::new(TestTracker::new());
+
+        let (tx, rx) = crossbeam_channel::unbounded::<SyncWrapper<Box<Tensor>>>();
+        let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(11).spawn_handler(|thread_builder| {
+            let b = thread::Builder::new();
+            b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build().expect("trackers_pool");
+
+        for i in 0..100 {
+            match tx.send(Tensor::rand(&[10], DOUBLE_CPU).into()) {
+                Ok(_) => {
+                    println!("send ok")
+                }
+                Err(e) => {
+                    println!("e={e:?}");
+                }
+            }
+        }
+        tx.send(Tensor::new().into()).expect("last send");
+
+        trackers_pool.scope(|s| {
+            for t in  rx.iter() {
+                if t.size()[0] == 0 {
+                    break
+                }
+                s.spawn( |scope| {
+                    println!("spawned");
+                    tracker.write().track(t);
+                })
+            }
+        });
+
+        println!("done");
+    }
 }
