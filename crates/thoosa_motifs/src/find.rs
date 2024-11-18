@@ -10,8 +10,10 @@ use std::ops::{Deref, Range};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering::Relaxed;
+use std::thread::current;
 use parking_lot::Mutex;
-use std::time::{Instant};
+use std::time::{Duration, Instant};
 
 use clap::clap_derive::{Args, Subcommand};
 use crossbeam_channel::SendError;
@@ -40,6 +42,7 @@ use rayon::iter::ParallelIterator;
 use rayon::iter::IndexedParallelIterator;
 use tch::Device::{Cpu, Cuda};
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::loader;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::parzen::optimizer::Primitives::Float;
@@ -275,20 +278,21 @@ pub fn find_motifs_by_euc_dist(
 
         },
         &|run_config_id, le_cpu, chunk_0, chunk_1| {
-            let le_cpu = SyncWrapper::new_t(le_cpu.flatten(1, 2));
             let mut distances_i = 0;
             let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
 
             let run_config = run_configs_arcs.iter().find(|rc| rc.id.expect("id") == run_config_id).expect("rc");
             let step = run_config.step;
 
-            chunk_0.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
-                for (slice_0_idx, s_0) in (0..t_size_0.1).enumerate() {
-                    for (t_idx_1, t_size_1) in chunk_1.iter().enumerate() {
-                        for (slice_1_idx, s_1) in (0..t_size_1.1).enumerate() {
-                            channel_trackers.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
+            channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
+                let le_flatten = le_cpu.i((channel as i64, .., ..)).flatten(0, 1);
+                let mut channel_le:BoolTensorIterator = (&le_flatten).into();
 
-                                if le_cpu.int64_value(&[channel as i64, distances_i as i64]) == 1
+                chunk_0.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
+                    for (slice_0_idx, s_0) in (0..t_size_0.1).enumerate() {
+                        for (t_idx_1, t_size_1) in chunk_1.iter().enumerate() {
+                            for (slice_1_idx, s_1) in (0..t_size_1.1).enumerate() {
+                                if channel_le.next().unwrap()
                                     && (t_size_0.0 != t_size_1.0 || slice_0_idx != slice_1_idx
                                 ) {
                                     mt.lock().track(
@@ -297,35 +301,51 @@ pub fn find_motifs_by_euc_dist(
                                         0.0,
                                     );
                                 }
-                            });
+                            }
+                            distances_i += 1;
                         }
-                        distances_i += 1;
                     }
-                }
+                });
+
+                mt.lock().dump();
             });
+
         },
         loader,
         &devices
     )?;
 
     info!("setting motifs in {} configs", run_config_ids.len());
-    run_config__channels_trackers.values().flat_map(|v|v.into_iter()).par_bridge().for_each(|mt|{
-            let mut mt_guard = mt.lock();
-            match mt_guard.set_motifs() {
-                Ok(groups) => {
-                    info!("mt {mt:?} done, {} groups found", groups.len());
-                    store.lock().set_motifs(mt_guard.dumper.run_id, mt_guard.dumper.channel as i64, groups, &mt_guard.dumper.path).expect("");
-                }
-                Err(e) => {
-                    info!("mt {mt:?} failed with {e:?}");
-                }
-            };
-    });
-    info!("done {run_config_ids}");
+    let mut chunks = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).array_chunks::<10>();
+    while let Some(chunk) = chunks.next() {
+        chunk.into_iter().par_bridge().for_each(|mt|{
+            set_motifs(store, mt);
+        });
+    }
+
+
+    if let Some(reminder) = chunks.into_remainder() {
+        reminder.into_iter().par_bridge().for_each(|mt|{
+            set_motifs(store, mt);
+        });
+    }
+
 
     Ok(run_config_ids)//TODO return only successful run_id (window size check)?
 }
 
+fn set_motifs(store: &Arc<Mutex<Box<dyn Store>>>, mt: &Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>) {
+    let mut mt_guard = mt.lock();
+    match mt_guard.set_motifs() {
+        Ok(groups) => {
+            info!("done, {} groups found", groups.len());
+            store.lock().set_motifs(mt_guard.dumper.run_id, mt_guard.dumper.channel as i64, groups, &mt_guard.dumper.path).expect("");
+        }
+        Err(e) => {
+            info!("mt {mt:?} failed with {e:?}");
+        }
+    };
+}
 
 #[derive(Debug)]
 pub struct ChunkOfSlicedTensors <ResourceId> where {
@@ -598,220 +618,194 @@ fn chunk_and_slice_2x<G, C>(
     resources: Vec <Resource>,
     chunk_size: usize,
     run_configs:&Vec<Arc<FindMotifsRunConfig>>,
-    // mut run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     mut gpu_fn: G,
     mut cpu_fn: &C,
-    exec: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
     G: Fn(&Arc<ChunkOfSlicedTensors<ResourceId>>, &mut ChunkOfSlicedTensors<ResourceId>, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<(ResourceId, i64)>, Vec<(ResourceId, i64)>) + Send + Sync,
 {
-    let mut resource_chunks = resources.chunks(chunk_size)
-        .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())//TODO k.clone()
-        .collect::<Vec<Vec<Resource>>>();//[Resource]
+    rayon::scope(|s| {
+        let mut resource_chunks = resources.chunks(chunk_size)
+            .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>()) //TODO k.clone()
+            .collect::<Vec<Vec<Resource>>>(); //[Resource]
 
-    resource_chunks.push(vec![]); //to get last window processed
+        resource_chunks.push(vec![]); //to get last window processed
 
-    let (tx, rx) = crossbeam_channel::unbounded::<Option<(usize, SyncWrapper<Box<Tensor>>, Vec<_>, Vec<_>)>>();
-    let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(11).spawn_handler(|thread_builder| {
-        let b = thread::Builder::new();
-        b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
-            .spawn(|| thread_builder.run())?;
+        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, Vec<_>, Vec<_>)>();
+        let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(32).spawn_handler(|thread_builder| {
+            let b = thread::Builder::new();
+            b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
 
-        Ok(())
-    }).build().expect("trackers_pool");
+            Ok(())
+        }).build().expect("trackers_pool");
 
-    let area_0 = exec.write().get_available_cache_area();
-    let area_1 = exec.write().get_available_cache_area();
+        let area_0 = loader.write().get_available_cache_area();
+        let area_1 = loader.write().get_available_cache_area();
 
-    exec.write().preload(&resource_chunks[0], area_0);
+        loader.write().preload(&resource_chunks[0], area_0);
 
-    if resource_chunks.len() > chunk_size {
-        exec.write().preload(&resource_chunks[chunk_size], area_0);
-    }
-
-    //first element in each window to be loaded and processed, second - preloaded
-    for (chunk_i_0, window_0) in resource_chunks.windows(2).enumerate() {
-        //window_0 - current,preload windows
-        debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={window_0:?}");
-
-        if window_0[1].len() > 0 {
-            exec.write().preload(&window_0[1],  area_0);
+        if resource_chunks.len() > chunk_size {
+            loader.write().preload(&resource_chunks[chunk_size], area_0);
         }
 
-        let wg_0 = WaitGroup::new();
+        let mut sleept_times = Arc::new(AtomicU64::new(0));
+        let mut sleept_times_arc = Arc::clone(&sleept_times);
+        let mut num_tasks = Arc::new(AtomicU64::new(0));
+        let mut num_tasks_arc = Arc::clone(&num_tasks);
 
-        let window_0_0 = window_0[0].clone();
-        let window_0_0_clone = window_0_0.iter().map(|r|r.id()).collect::<Vec<ResourceId>>();
+        s.spawn(move |scope| {
 
-        let wg_0_clone = wg_0.clone();
-        let window_0_tensors = Arc::new(RwLock::new(vec![]));
-        let window_0_tensors_arc = Arc::clone(&window_0_tensors);
+            //first element in each window to be loaded and processed, second - preloaded
 
-        exec.write().exec(|loader, keys_purge| {
-            async move {
+            for (chunk_i_0, window_0) in resource_chunks.windows(2).enumerate() {
+                //window_0 - current,preload windows
+                debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={window_0:?}");
 
-                for key in &window_0_0 {
-                    debug!("0. exec:callback_arc: key={key:?}");
-
-                    let sync_wrapper = SyncWrapper::new_tb(//TODO remove SyncWrapper? it goes only to run_configs_applied_to_chunk_0
-                        Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
-                    );
-                    window_0_tensors_arc.write().push(sync_wrapper);
+                if window_0[1].len() > 0 {
+                    loader.write().preload(&window_0[1], area_0);
                 }
-                drop(wg_0_clone);
 
-            }.boxed()
-        });
+                let wg_0 = WaitGroup::new();
 
-        wg_0.wait();
+                let window_0_0 = window_0[0].clone();
+                let window_0_0_clone = window_0_0.iter().map(|r| r.id()).collect::<Vec<ResourceId>>();
 
-        let run_configs_applied_to_chunk_0 = run_configs.par_iter().enumerate()
-            .map(|(i, run_config)| {
-                Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
-                    run_config.step,
-                    run_config.window,
-                    &window_0_tensors.read(),
-                    window_0_0_clone.clone(),
-                    Cpu
-                ))
-            }).collect::<Vec<_>>();
+                let wg_0_clone = wg_0.clone();
+                let window_0_tensors = Arc::new(RwLock::new(vec![]));
+                let window_0_tensors_arc = Arc::clone(&window_0_tensors);
 
-        drop(window_0_tensors);
+                loader.write().exec(|loader, keys_purge| {
+                    async move {
+                        for key in &window_0_0 {
+                            debug!("0. exec:callback_arc: key={key:?}");
 
-        let i_1 = Instant::now();
-        for (chunk_i_1, window_1) in resource_chunks.windows(2).into_iter().skip(chunk_i_0).enumerate() {
-            debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={window_1:?}");
-
-            if window_1[1].len() > 0 {
-                exec.write().preload(&window_1[1], area_1);
-            }
-            trace!("chunk_and_slice: area_1={area_1:064b}");
-
-            let wg_1 = WaitGroup::new();
-
-            let window_1_0 = window_1[0].clone();
-            let window_1_0_clone = window_1_0.iter().map(|r|r.id()).collect::<Vec<ResourceId>>();
-
-            let wg_1_clone = wg_1.clone();
-            let window_1_tensors = Arc::new(RwLock::new(vec![]));
-            let window_1_tensors_arc = Arc::clone(&window_1_tensors);
-
-            exec.write().exec(|loader, keys_purge| {
-                async move {
-
-                    for key in &window_1_0 {
-                        debug!("chunk_and_slice: 1. exec:callback_arc: key={key:?}");
-
-                        let sync_wrapper = SyncWrapper::new_tb(Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_1).await);
-                        window_1_tensors_arc.write().push(sync_wrapper);
-                    }
-                    drop(wg_1_clone);
-
-                }.boxed()
-            });
-            wg_1.wait();
-
-            run_configs.iter()
-                // .zip(run_config__channels_trackers.iter_mut())
-                .zip(run_configs_applied_to_chunk_0.iter())
-                .for_each(|(run_config/*(run_config, channel_trackers)*/, chunk_0)| {
-
-                    let mut chunk_1_vec = Box::new(vec![ChunkOfSlicedTensors::slice_tensors_chunk(
-                        run_config.step,
-                        run_config.window,
-                        &window_1_tensors.read(),
-                        window_1_0_clone.clone(),
-                        Cpu
-                    )]);
-
-                    while let Some(mut chunk_1_split) = chunk_1_vec.pop() {
-                        // let chunk_1_split_e = Arc::clone(&chunk_1_split);
-
-                        match gpu_fn(
-                            chunk_0,
-                            &mut chunk_1_split,
-                            run_config
-                        )  {
-                            Ok(le_cpu) => {
-                                match tx.send(Some((run_config.id.expect("id"), le_cpu, chunk_0.keys_sizes(), chunk_1_split.keys_sizes()))){
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        error!("e:{e:?}"); //TODO panic?
-                                    }
-                                }
-                                // // debug!("chunk_and_slice: le_cpu={:?}", le_cpu.size());
-                                // // debug!("chunk_and_slice: le_cpu={le_cpu}");
-                                // let channel_trackers = Arc::clone(channel_trackers);
-                                // let run_config = Arc::clone(run_config);
-                                // let chunk_0 = Arc::clone(chunk_0);
-                                // rayon::spawn(move ||{
-                                //     let le_cpu = SyncWrapper::new_t(le_cpu.flatten(1,2));
-                                //     let mut distances_i = 0;
-                                //     chunk_0.sizes.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
-                                //         for (slice_0_idx, s_0) in (0..*t_size_0).enumerate() {
-                                //             for (t_idx_1, t_size_1) in chunk_1_split.sizes.iter().enumerate() {
-                                //                 for (slice_1_idx, s_1) in (0..*t_size_1).enumerate() {
-                                //
-                                //                     channel_trackers.iter().enumerate().par_bridge().for_each(|(channel, mt)| {
-                                //                         if le_cpu.int64_value(&[channel as i64, distances_i as i64]) == 1 {
-                                //                             mt.lock().track(
-                                //                                 TensorSliceIdx(chunk_0.keys[t_idx_0].clone(), slice_0_idx as i64 * run_config.step as i64),
-                                //                                 TensorSliceIdx(chunk_1_split.keys[t_idx_1].clone(), slice_1_idx as i64 * run_config.step as i64),
-                                //                                 0.0,
-                                //                             );
-                                //                         }
-                                //                     });
-                                //                 }
-                                //                 distances_i += 1;
-                                //             }
-                                //         }
-                                //     });
-                                // });
-                            }
-                            Err(e) => {
-                                warn!("got e={e:?}, splitting");
-
-                                chunk_1_vec.extend(
-                                    chunk_1_split.split()
-                                );
-                            }
+                            let sync_wrapper = SyncWrapper::new_tb( //TODO remove SyncWrapper? it goes only to run_configs_applied_to_chunk_0
+                                                                    Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
+                            );
+                            window_0_tensors_arc.write().push(sync_wrapper);
                         }
-                    }
-
+                        drop(wg_0_clone);
+                    }.boxed()
                 });
 
-            exec.write().purge_cache_keys(window_1[0].clone(), area_1);
-            print!(".");
-            std::io::stdout().flush()?;
-        }
-        exec.write().purge_cache_keys(window_0[0].clone(), area_0);
-        info!("done {chunk_i_0} chunks out of {} in {} mls", resource_chunks.len(), i_1.elapsed().as_millis());
-    }
+                wg_0.wait();
 
-    trackers_pool.scope(|s| {
-        for msg in  rx.iter() {
-            match msg {
-                None => {
-                    break
-                }
-                Some((run_config_it, t, chunk_0, chunk_1)) => {
-                    s.spawn( move |scope| {
-                        println!("spawned");
-                        // for channel_trackers in run_config__channels_trackers.iter(){
-                            // tracker.write().track(t);
-                            cpu_fn(run_config_it, t, chunk_0, chunk_1);
-                        // }
+                let run_configs_applied_to_chunk_0 = run_configs.par_iter().enumerate()
+                    .map(|(i, run_config)| {
+                        Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
+                            run_config.step,
+                            run_config.window,
+                            &window_0_tensors.read(),
+                            window_0_0_clone.clone(),
+                            Cpu,
+                        ))
+                    }).collect::<Vec<_>>();
 
-                    })
+                drop(window_0_tensors);
+
+                let i_1 = Instant::now();
+                for (chunk_i_1, window_1) in resource_chunks.windows(2).into_iter().skip(chunk_i_0).enumerate() {
+                    debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={window_1:?}");
+
+                    if window_1[1].len() > 0 {
+                        loader.write().preload(&window_1[1], area_1);
+                    }
+                    trace!("chunk_and_slice: area_1={area_1:064b}");
+
+                    let wg_1 = WaitGroup::new();
+
+                    let window_1_0 = window_1[0].clone();
+                    let window_1_0_clone = window_1_0.iter().map(|r| r.id()).collect::<Vec<ResourceId>>();
+
+                    let wg_1_clone = wg_1.clone();
+                    let window_1_tensors = Arc::new(RwLock::new(vec![]));
+                    let window_1_tensors_arc = Arc::clone(&window_1_tensors);
+
+                    loader.write().exec(|loader, keys_purge| {
+                        async move {
+                            for key in &window_1_0 {
+                                debug!("chunk_and_slice: 1. exec:callback_arc: key={key:?}");
+
+                                let sync_wrapper = SyncWrapper::new_tb(Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_1).await);
+                                window_1_tensors_arc.write().push(sync_wrapper);
+                            }
+                            drop(wg_1_clone);
+                        }.boxed()
+                    });
+                    wg_1.wait();
+
+                    run_configs.iter()
+                        .zip(run_configs_applied_to_chunk_0.iter())
+                        .for_each(|(run_config/*(run_config, channel_trackers)*/, chunk_0)| {
+                            let mut chunk_1_vec = Box::new(vec![ChunkOfSlicedTensors::slice_tensors_chunk(
+                                run_config.step,
+                                run_config.window,
+                                &window_1_tensors.read(),
+                                window_1_0_clone.clone(),
+                                Cpu
+                            )]);
+
+                            while let Some(mut chunk_1_split) = chunk_1_vec.pop() {
+
+                                let num_tasks_v = num_tasks_arc.load(Relaxed);
+
+                                if num_tasks_v > 100 {
+                                    debug!("chunk_and_slice: num_tasks_v={num_tasks_v}");
+                                    sleept_times_arc.fetch_add(1, Relaxed);
+                                    thread::sleep(Duration::from_millis(3000));
+                                }
+                                match gpu_fn(
+                                    chunk_0,
+                                    &mut chunk_1_split,
+                                    run_config,
+                                ) {
+                                    Ok(le_cpu) => {
+                                        match tx.send((run_config.id.expect("id"), le_cpu, chunk_0.keys_sizes(), chunk_1_split.keys_sizes())) {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                error!("e:{e:?}"); //TODO panic?
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("got e={e:?}, splitting");
+
+                                        chunk_1_vec.extend(
+                                            chunk_1_split.split()
+                                        );
+                                    }
+                                }
+                            }
+                        });
+
+                    loader.write().purge_cache_keys(window_1[0].clone(), area_1);
+                    print!(".");
+                    std::io::stdout().flush().unwrap();
                 }
+                loader.write().purge_cache_keys(window_0[0].clone(), area_0);
+                info!("done {chunk_i_0} chunks out of {} in {} mls, slept {sleept_times_arc:?} times", resource_chunks.len(), i_1.elapsed().as_millis());
             }
+            drop(tx);
+        });
 
-        }
+
+        trackers_pool.scope(|s| {
+            for (run_config_it, t, chunk_0, chunk_1) in rx.iter() {
+
+                num_tasks.fetch_add(1, Relaxed);
+                let num_tasks = Arc::clone(&num_tasks);
+                s.spawn(move |scope| {
+                    cpu_fn(run_config_it, t, chunk_0, chunk_1);
+                    num_tasks.fetch_sub(1, Relaxed);
+                });
+            }
+        });
+
     });
-
     Ok(())
 }
 
@@ -889,22 +883,22 @@ impl<'a, D: MotifTrackerStore + Debug> SimpleMotifTracker<D> {
     pub fn track(&'a mut self, i_0: TensorSliceIdx <ResourceId>, i_1: TensorSliceIdx <ResourceId>, dist: f32) {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
 
-        match self.min_step {
-            None => {
+        // match self.min_step {
+        //     None => {
                 self.motifs.push((i_0, i_1, dist));
-            }
-
-            Some(min_step) => {
-
-                let last = self.last.take();
-                if let Some(last) = last {
-                    if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
-                        self.motifs.push(last);
-                    }
-                }
-                self.last.replace((i_0, i_1, dist));
-            }
-        }
+        //     }
+        //
+        //     Some(min_step) => {
+        //
+        //         let last = self.last.take();
+        //         if let Some(last) = last {
+        //             if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
+        //                 self.motifs.push(last);
+        //             }
+        //         }
+        //         self.last.replace((i_0, i_1, dist));
+        //     }
+        // }
 
     }
 
@@ -1549,7 +1543,7 @@ mod motif_find_tests {
     use std::ops::Deref;
     use std::path::Path;
     use std::sync::{Arc};
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
     use std::sync::atomic::Ordering::Relaxed;
     use crossbeam_channel::internal::SelectHandle;
     use crossbeam_utils::sync::WaitGroup;
@@ -2969,7 +2963,7 @@ mod motif_find_tests {
                 }
             }
         }
-        tx.send(Tensor::new().into()).expect("last send");
+        drop(tx);
 
         trackers_pool.scope(|s| {
             for t in  rx.iter() {

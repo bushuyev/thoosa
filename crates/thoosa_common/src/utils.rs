@@ -275,7 +275,7 @@ pub fn clone(from:&Tensor) -> Tensor {
 #[cfg(test)]
 pub mod tests {
     use std::collections::HashSet;
-    use std::fs;
+    use std::{fs, mem};
 
     use clap::{arg, Args, command, Parser, Subcommand};
     use log::debug;
@@ -284,6 +284,7 @@ pub mod tests {
     use tch::Tensor;
 
     use thoosa_shared::{cdt_for_dir, ThoosaError};
+    use crate::bool_iter::BoolTensorIterator;
 
     #[test]
     fn test_cdt_for_dir(){
@@ -456,6 +457,18 @@ pub mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_bool_tensor_iterator(){
+
+        let t = Tensor::from_slice((0..100).map(|v|v % 2 == 0).collect::<Vec<_>>().as_slice());
+
+
+        for (i, b) in (0..100).zip::<BoolTensorIterator>((&t).into()){
+            assert_eq!(i % 2 == 0, b);
+        }
+
     }
 
 }
