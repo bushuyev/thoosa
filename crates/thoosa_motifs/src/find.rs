@@ -21,6 +21,7 @@ use crossbeam_utils::sync::WaitGroup;
 use futures::{FutureExt, StreamExt};
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
+use rand::{thread_rng, Rng};
 use tch::{Device, IndexOp, Kind, Tensor};
 
 

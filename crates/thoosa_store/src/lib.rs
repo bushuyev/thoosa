@@ -5,16 +5,18 @@ mod test;
 use std::array::IntoIter;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::{fmt, io, mem};
 use std::fmt::{Debug, Display};
+use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc};
 use parking_lot::{Mutex, RwLock};
 
 use log::{debug, trace};
 use rand::prelude::SliceRandom;
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use rusqlite::{Connection, Error, params, Transaction};
 use rusqlite::types::Value;
 
@@ -830,7 +832,7 @@ impl Store for SqlStore {
                 })?.map(|v| v.unwrap())
             );*/
 
-            t.execute(format!("ATTACH DATABASE '{}' AS slices_{run_id}_{channel}_tmp", path.as_ref().to_string_lossy()).as_str(), [])?;
+            // t.execute(format!("ATTACH DATABASE '{}' AS slices_{run_id}_{channel}_tmp", path.as_ref().to_string_lossy()).as_str(), [])?;
 
             //TODO sort?
             for (group, slices) in groups {
@@ -846,7 +848,11 @@ impl Store for SqlStore {
                     let sql = format!("INSERT INTO slice_matches (motif_id, run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) \
                             SELECT ?, ?, ?, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist FROM slices_{run_id}_{channel}_tmp.slice_matches WHERE id IN (");
 
-                    let (mut q, params) = slices_chunk.into_iter().fold((vec![sql.as_str()], vec![Value::Integer(motif_id), Value::Integer(run_id as i64), Value::Integer(channel)]),
+                    let (mut q, params) = slices_chunk.into_iter().fold((vec![sql.as_str()], vec![
+                        Value::Integer(motif_id),
+                        Value::Integer(run_id as i64),
+                        Value::Integer(channel)
+                    ]),
                         |mut a: (Vec<&str>, Vec<Value>), v: &IdSlice| {
                             a.0.push("?");
                             a.0.push(", ");
@@ -1535,14 +1541,14 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
 pub struct SqlMotifTrackerStore {
     pub run_id: usize,
     pub channel: usize,
-    conn: Mutex<Connection>,
+    // conn: Mutex<Connection>,
     pub path: PathBuf
 }
 
 impl SqlMotifTrackerStore {
 
     pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: usize, channel: usize) -> Result<SqlMotifTrackerStore, ThoosaError> {
-        debug!("SqlMotifTrackerStore::new path={path:?}");
+        /*debug!("SqlMotifTrackerStore::new path={path:?}");
         let mut conn = Connection::open(&path).expect("SqlMotifTrackerStore::new: connection");
         {
             let t = conn.transaction()?;
@@ -1561,11 +1567,11 @@ impl SqlMotifTrackerStore {
 
             t.commit()?;
 
-        }
+        }*/
         Ok(Self {
             run_id,
             channel,
-            conn: Mutex::new(conn),
+            // conn: Mutex::new(conn),
             path: path.as_ref().to_path_buf()
         })
     }
@@ -1580,57 +1586,120 @@ pub trait MotifTrackerStore:Send + Sync {
 impl MotifTrackerStore for SqlMotifTrackerStore {
 
     fn save_slices(&mut self, slices: Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>) -> Result<(), ThoosaError> {
-        debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_id={:?}", slices.len(), self.run_id);
+        let rnd:(f32, f32, f32, f32) = thread_rng().gen();
 
-        // self.store.lock().save_slices(self.run_id, self.channel as i64, motifs)?; //TODO move TensorSliceIdx to shared
+        let rnd:u32 = (rnd.0 * 10000. + rnd.1 * 1000. + rnd.2 * 100. + rnd.3 * 10.) as u32;
+        let mut file = File::create(&self.path).expect("can't write");
 
-        let mut conn_guard = self.conn.lock();
-        let t = conn_guard.transaction()?;
 
-        assert!(slices.len() > 0);
+        let num_bytes = slices.len() * mem::size_of::<(u32, i64)>();
 
-        for slices_chunk in slices.chunks(500) {
-            let (mut q, params) = slices_chunk.into_iter().fold(
-                (vec!["INSERT INTO slice_matches (tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
-                    a.0.push("(?, ?, ?, ?, ?)");
-                    a.0.push(", ");
+        // Convert the data to a byte slice
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                slices.as_ptr() as *const u8,
+                num_bytes,
+            )
+        };
 
-                    a.1.push(Value::Integer(v.0.0 as i64));
-                    a.1.push(Value::Integer(v.0.1));
-                    a.1.push(Value::Integer(v.1.0 as i64));
-                    a.1.push(Value::Integer(v.1.1));
-                    a.1.push(Value::Real(v.2 as f64));
-                    a
-                });
+        // Write the bytes to the file
+        file.write_all(bytes).map_err(|e|ThoosaError::new(e.to_string()))
 
-            q.pop();
-
-            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-            // t.cache_flush()?; ?
-        }
-        t.commit()?;
-
-        Ok(())
+        // debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_id={:?}", slices.len(), self.run_id);
+        //
+        // // self.store.lock().save_slices(self.run_id, self.channel as i64, motifs)?; //TODO move TensorSliceIdx to shared
+        //
+        // let mut conn_guard = self.conn.lock();
+        // let t = conn_guard.transaction()?;
+        //
+        // assert!(slices.len() > 0);
+        //
+        // for slices_chunk in slices.chunks(500) {
+        //     let (mut q, params) = slices_chunk.into_iter().fold(
+        //         (vec!["INSERT INTO slice_matches (tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+        //             a.0.push("(?, ?, ?, ?, ?)");
+        //             a.0.push(", ");
+        //
+        //             a.1.push(Value::Integer(v.0.0 as i64));
+        //             a.1.push(Value::Integer(v.0.1));
+        //             a.1.push(Value::Integer(v.1.0 as i64));
+        //             a.1.push(Value::Integer(v.1.1));
+        //             a.1.push(Value::Real(v.2 as f64));
+        //             a
+        //         });
+        //
+        //     q.pop();
+        //
+        //     t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+        //     // t.cache_flush()?; ?
+        // }
+        // t.commit()?;
+        //
+        // Ok(())
     }
 
     fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
+        // let mut guard = self.conn.lock();
+        // let t = guard.transaction()?;
 
         debug!("set_motifs: run_id={:?}, channel={:?}", self.run_id, self.channel);
 
-        let groups = {
-            let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches")?;
+        // let groups = {
+            // let mut stmt = t.prepare("SELECT id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1 FROM slice_matches")?;
 
+            // Open the file for reading
+            let mut file = File::open(&self.path)?;
+
+            // Get the file size to determine the number of elements
+            let metadata = file.metadata()?;
+            let file_size = metadata.len() as usize;
+
+            // Calculate the size of one element
+            let elem_size = mem::size_of::<(u32, i64)>();
+
+            // Ensure the file size is a multiple of the element size
+            if file_size % elem_size != 0 {
+                return Err(ThoosaError::new("cant read"))
+            }
+
+            // Calculate the number of elements
+            let num_elems = file_size / elem_size;
+
+            // Allocate a vector with capacity for the required number of elements
+            let mut data_vec: Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)> = Vec::with_capacity(num_elems);
+
+            // SAFETY: We are about to read data from the file directly into the uninitialized memory of the vector.
+            // We must ensure that:
+            // - The vector has sufficient capacity.
+            // - The data read from the file properly initializes the elements.
+            unsafe {
+                // Set the length of the vector to the number of elements
+                data_vec.set_len(num_elems);
+
+                // Get a mutable pointer to the vector's data
+                let data_ptr = data_vec.as_mut_ptr() as *mut u8;
+
+                // Create a mutable slice over the vector's memory
+                let data_slice = std::slice::from_raw_parts_mut(data_ptr, file_size);
+
+                // Read the data from the file into the vector's memory
+                file.read_exact(data_slice)?;
+            }
             let groups = group_slices(
-                stmt.query_map([], |row| { //TODO move group_slices out, not for store
-                    Ok(
-                        (
-                            IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
-                            IdSlice(row.get(0)?, row.get(3)?, row.get(4)?)
-                        )
+                data_vec.into_iter().map(|(slice_0, slice_1, dist)|{
+                    (
+                        IdSlice(0, slice_0.0, slice_0.1),
+                        IdSlice(0, slice_1.0, slice_1.1),
                     )
-                })?.map(|v| v.unwrap())
+                })
+                // stmt.query_map([], |row| { //TODO move group_slices out, not for store
+                //     Ok(
+                //         (
+                //             IdSlice(row.get(0)?, row.get(1)?, row.get(2)?),
+                //             IdSlice(row.get(0)?, row.get(3)?, row.get(4)?)
+                //         )
+                //     )
+                // })?.map(|v| v.unwrap())
             );
 
             debug!("set_motifs: run_id={:?}, channel={:?} groups={:?}", self.run_id, self.channel, groups);
@@ -1662,12 +1731,12 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
                 }
             }
             */
-            groups
-        };
-        t.commit()?;
+            Ok(groups)
+        // };
+        // t.commit()?;
 
 
-        Ok(groups)
+        // Ok(groups)
     }
 }
 
