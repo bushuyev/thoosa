@@ -94,7 +94,7 @@ where T:Hash + Eq + Debug {
 
 
 #[derive(Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
-pub struct TensorSliceIdx<T>(pub T, pub i64) where T:Eq+Debug;
+pub struct TensorSliceIdx<ResourceId>(pub ResourceId, pub i64) where ResourceId:Eq+Debug;
 
 impl From<(String, i64)> for TensorSliceIdx<String> {
     fn from(value: (String, i64)) -> Self {
@@ -131,10 +131,10 @@ impl ThoosaError {
     }
 
     pub fn oom() -> Self {
-        error!("ThoosaError::new: oom");
+        debug!("ThoosaError::new: oom");
         let backtrace = Backtrace::capture();
 
-        debug!("{}", backtrace.to_string());
+        // debug!("{}", backtrace.to_string());
         Self {
             msg: "oom".into(),
             backtrace,

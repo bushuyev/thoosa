@@ -98,7 +98,7 @@ mod distance_tests {
     use thoosa_shared::ThoosaError;
 
     use crate::distance::{dist_d2_0, slice_t, z_normalized_euclidean};
-    use crate::find::ChunkOfSlicedTensors;
+    use crate::chunks::ChunkOfSlicedTensors;
 
     #[ctor::ctor]
     fn init() {
@@ -185,7 +185,7 @@ mod distance_tests {
         let le_distances = distances.le(4.);
 
         // println!("le_distances={le_distances} size={:?}", le_distances.size());
-
+        //TODO
         Ok(())
     }
 
