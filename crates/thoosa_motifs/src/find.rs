@@ -289,32 +289,20 @@ pub fn find_motifs_by_euc_dist(
                 let le_flatten = le_cpu.i((channel as i64, .., ..)).flatten(0, 1);
                 let mut channel_le:BoolTensorIterator = (&le_flatten).into();
 
-                chunk_0.for_each(|slice_0|{
-                    chunk_1.cloned().for_each(|slice_1|{
+                chunk_0.iter().for_each(|slice_0|{
+                    chunk_1.iter().for_each(|slice_1|{
                         debug!("slice_0={slice_0:?} slice_1={slice_1:?}");
+                        if channel_le.next().unwrap()
+                            && (slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1
+                        ) {
+                            mt.lock().track(
+                                slice_0.clone(),
+                                slice_1.clone(),
+                                0.0,
+                            );
+                        }
                     });
                 });
-                // chunk_0.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
-                //     for (slice_0_idx, s_0) in (0..t_size_0.1).enumerate() {
-                //
-                //         for (t_idx_1, t_size_1) in chunk_1.iter().enumerate() {
-                //             for (slice_1_idx, s_1) in (0..t_size_1.1).enumerate() {
-                //
-                //                 if channel_le.next().unwrap()
-                //                     && (t_size_0.0 != t_size_1.0 || slice_0_idx != slice_1_idx
-                //                 ) {
-                //                     mt.lock().track(
-                //                         TensorSliceIdx(chunk_0[t_idx_0].0.clone(), slice_0_idx as i64 * step as i64),
-                //                         TensorSliceIdx(chunk_1[t_idx_1].0.clone(), slice_1_idx as i64 * step as i64),
-                //                         0.0,
-                //                     );
-                //                 }
-                //             }
-                //             distances_i += 1;
-                //         }
-                //     }
-                // });
-
                 mt.lock().dump();
             });
 
@@ -525,7 +513,7 @@ fn chunk_and_slice_2x<G, C>(
 ) -> Result<(), ThoosaError>
 where
     G: Fn(&Arc<ChunkOfSlicedTensors<ResourceId>>, &ChunkOfSlicedTensors<ResourceId>, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
-    C: Fn(usize, SyncWrapper<Box<Tensor>>, ChunkOfSlicedTensorsIter<ResourceId>, ChunkOfSlicedTensorsIter<ResourceId>) + Send + Sync,
+    C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<TensorSliceIdx<ResourceId>>, Vec<TensorSliceIdx<ResourceId>>) + Send + Sync,
 {
     rayon::scope(|s| {
         let mut resource_chunks = resources.chunks(chunk_size)
@@ -534,7 +522,7 @@ where
 
         resource_chunks.push(vec![]); //to get last window processed
 
-        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, ChunkOfSlicedTensorsIter<ResourceId>, ChunkOfSlicedTensorsIter<ResourceId>)>();
+        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, Vec<TensorSliceIdx<ResourceId>>, Vec<TensorSliceIdx<ResourceId>>)>();
         let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(32).spawn_handler(|thread_builder| {
             let b = thread::Builder::new();
             b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
@@ -669,8 +657,8 @@ where
                                         match tx.send((
                                             run_config.id.expect("id"),
                                             le_cpu,
-                                            chunk_0.iter(),
-                                            chunk_1_split.into_iter())
+                                            chunk_0.to_vec(),
+                                            chunk_1_split.to_vec())
                                         ) {
                                             Ok(_) => {}
                                             Err(e) => {
