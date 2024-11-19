@@ -23,40 +23,6 @@ pub struct ChunkOfSlicedTensorsIter<ResourceId:Clone+Debug+Eq> {
     iter:Box<dyn Iterator<Item=TensorSliceIdx<ResourceId>> + Send>
 }
 
-impl <ResourceId:Clone+Debug+Eq> Iterator for ChunkOfSlicedTensorsIter<ResourceId> {
-    type Item = TensorSliceIdx<ResourceId>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
-    }
-
-}
-
-impl <ResourceId:Clone+Debug+Eq+'static + Send>  IntoIterator for ChunkOfSlicedTensors<ResourceId> {
-    type Item = TensorSliceIdx<ResourceId>;
-    type IntoIter = ChunkOfSlicedTensorsIter<ResourceId>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        let step = self.step as i64;
-        let split_at_idx = self.split_at.map(|split_at_idx| split_at_idx * step).unwrap_or(0);
-        let iter =
-            self.sizes.into_iter()
-                .zip(self.keys.into_iter())
-                .flat_map(
-                    |(size, id)|(0..size).map(move |i|(id.clone(), i))
-                )
-                .map(move |v| {
-
-                    TensorSliceIdx(v.0, split_at_idx + step * v.1)
-                });
-
-        ChunkOfSlicedTensorsIter {
-            iter: Box::new(iter)
-        }
-    }
-}
-
-
 
 impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <ResourceId> {
     pub fn new(keys:  Vec <ResourceId>, sizes: Vec<i64>, step:u32, t: Tensor) -> Self {
@@ -70,20 +36,19 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
     }
 
     // //TODO clone
-    pub fn iter(&self) -> ChunkOfSlicedTensorsIter<ResourceId>{
+    pub fn to_vec(&self) -> Vec<TensorSliceIdx<ResourceId>>{
         let step = self.step as i64;
         let split_at_idx = self.split_at.map(|split_at_idx| split_at_idx * step).unwrap_or(0);
-        let iter =
-            self.sizes.clone().into_iter()
-                .zip(self.keys.clone().into_iter())
-                .flat_map(
-                    |(size, id)|(0..size).map(move |i|(id.clone(), i))
-                )
-                .map(move |v|TensorSliceIdx(v.0, split_at_idx + step  * v.1));
 
-        ChunkOfSlicedTensorsIter {
-            iter: Box::new(iter)
-        }
+        self.sizes.clone().into_iter()
+            .zip(self.keys.clone().into_iter())
+            .flat_map(
+                |(size, id)|(0..size).map(move |i|(id.clone(), i))
+            )
+            .map(move |v|TensorSliceIdx(v.0, split_at_idx + step  * v.1))
+            .collect()
+
+
     }
 
     pub fn keys_sizes(&self)->Vec<(ResourceId, i64)>{
@@ -326,7 +291,7 @@ mod tests {
             Cpu
         );
 
-        let slices = chunk.into_iter().collect::<Vec<_>>();
+        let slices = chunk.to_vec().into_iter().collect::<Vec<_>>();
 
         assert_eq!(
             vec![TensorSliceIdx("aaa", 0), TensorSliceIdx("aaa", 10), TensorSliceIdx("aaa", 20), TensorSliceIdx("aaa", 30), TensorSliceIdx("aaa", 40), TensorSliceIdx("aaa", 50), TensorSliceIdx("aaa", 60), TensorSliceIdx("aaa", 70), TensorSliceIdx("aaa", 80)],
@@ -366,7 +331,7 @@ mod tests {
 
             match test_fn(&chunk) {
                 Ok(_) => {
-                    iters.push(chunk.into_iter());
+                    iters.push(chunk.to_vec().into_iter());
                 }
                 Err(_) => {
                     split_queue.split(chunk);
