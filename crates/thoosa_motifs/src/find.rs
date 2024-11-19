@@ -253,20 +253,20 @@ pub fn find_motifs_by_euc_dist(
         .collect::<Vec<_>>();
 
     // debug!("find_motifs_by_euc_dist_: records_num={records_num} resource_keys={resource_keys:?} run_config_ids={run_config_ids:?}");
+    let devices_2x = devices.clone();
     chunk_and_slice_2x(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors<ResourceId>>, chunk_sliced_1: &mut ChunkOfSlicedTensors<ResourceId>, _find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors<ResourceId>>, chunk_sliced_1: &ChunkOfSlicedTensors<ResourceId>, _find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
 
             debug!("find_motifs_by_euc_dist: rayon::current_num_threads()={}", rayon::current_num_threads());
 
-            let chunk_1_sliced_cuda = chunk_sliced_1.t.to_device(Cuda(0)).transpose(0, 1);
-            chunk_sliced_1.drop_tensor();
 
             let (le, _) = dist_d2_0(
-                chunk_sliced_0.t.to_device(Cuda(0)).transpose(0, 1),
-                chunk_1_sliced_cuda,
+                //TODO devices[0], should be in chunk_and_slice_2x
+                chunk_sliced_0.t.to_device(devices_2x[0]),
+                chunk_sliced_1.t.to_device(devices_2x[0]),
                 0.1,
                 false
             )?;
@@ -330,7 +330,6 @@ pub fn find_motifs_by_euc_dist(
         });
     }
 
-
     Ok(run_config_ids)//TODO return only successful run_id (window size check)?
 }
 
@@ -350,7 +349,7 @@ fn set_motifs(store: &Arc<Mutex<Box<dyn Store>>>, mt: &Mutex<SimpleMotifTracker<
 #[derive(Debug)]
 pub struct ChunkOfSlicedTensors <ResourceId> where {
     keys:Vec <ResourceId>,
-    sizes: Vec<i64>,
+    sizes: Vec<i64>,//num splits in a ResourceId
     pub t: SyncWrapper<Tensor>,
 }
 
@@ -368,6 +367,7 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
     }
 
     pub fn split(&self) -> Vec<Self> {
+        //only one tensor in the chunk, splitting tensor
         if self.keys.len() == 1 {
             assert_eq!(self.sizes.len(), 1);
 
@@ -385,7 +385,7 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
                     t: SyncWrapper::new_t(self.t.i((split_at_idx.., .., ..))),
                 }
             ]
-
+        //more than one tensor in the chunk, splitting chunk
         } else {
             let split_at = self.keys.len() / 2;
 
@@ -410,8 +410,9 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
         }
     }
 
+    //TODO Option instead  of [0.0]
     pub fn drop_tensor(&mut self) {
-        // mem::swap(&mut self.t, &mut SyncWrapper::new_t(Tensor::from_slice(&[0.0])));
+        mem::swap(&mut self.t, &mut SyncWrapper::new_t(Tensor::from_slice(&[0.0])));
     }
 
     /// returns:  t.size = num slices = 1+(len-window)/step x channels x window
@@ -439,8 +440,8 @@ impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
                                     //channels
             Tensor::zeros(&[0, tensors_chunk[0].size()[0], window as i64], (Kind::Float, device))
         } else {
-            //slices x channels x window
-            Tensor::cat(&slices, 0)
+            //slices x channels x window -> channels x slices x window
+            Tensor::cat(&slices, 0).transpose(0, 1)
         };
         debug!("slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
 
@@ -533,7 +534,6 @@ fn chunk_and_slice<G, CTX>(
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
-    // C:RunConfig,
     CTX: Send + Sync,
     G: Fn(&ChunkOfSlicedTensors<ResourceId>, &(FindMotifsRunConfig, CTX)) -> Result<(), ThoosaError> + Send + Sync
 {
@@ -624,7 +624,7 @@ fn chunk_and_slice_2x<G, C>(
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
-    G: Fn(&Arc<ChunkOfSlicedTensors<ResourceId>>, &mut ChunkOfSlicedTensors<ResourceId>, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    G: Fn(&Arc<ChunkOfSlicedTensors<ResourceId>>, &ChunkOfSlicedTensors<ResourceId>, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<(ResourceId, i64)>, Vec<(ResourceId, i64)>) + Send + Sync,
 {
     rayon::scope(|s| {
@@ -684,7 +684,7 @@ where
                             debug!("0. exec:callback_arc: key={key:?}");
 
                             let sync_wrapper = SyncWrapper::new_tb( //TODO remove SyncWrapper? it goes only to run_configs_applied_to_chunk_0
-                                                                    Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
+                                Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
                             );
                             window_0_tensors_arc.write().push(sync_wrapper);
                         }
@@ -740,7 +740,8 @@ where
 
                     run_configs.iter()
                         .zip(run_configs_applied_to_chunk_0.iter())
-                        .for_each(|(run_config/*(run_config, channel_trackers)*/, chunk_0)| {
+                        .for_each(|(run_config, chunk_0)| {
+
                             let mut chunk_1_vec = Box::new(vec![ChunkOfSlicedTensors::slice_tensors_chunk(
                                 run_config.step,
                                 run_config.window,
@@ -753,17 +754,19 @@ where
 
                                 let num_tasks_v = num_tasks_arc.load(Relaxed);
 
-                                if num_tasks_v > 100 {
+                                if num_tasks_v > 100 {//TODO config
                                     debug!("chunk_and_slice: num_tasks_v={num_tasks_v}");
                                     sleept_times_arc.fetch_add(1, Relaxed);
-                                    thread::sleep(Duration::from_millis(3000));
+                                    thread::sleep(Duration::from_millis(3000));//TODO config
                                 }
                                 match gpu_fn(
-                                    chunk_0,
-                                    &mut chunk_1_split,
+                                    &chunk_0,
+                                    &chunk_1_split,
                                     run_config,
                                 ) {
                                     Ok(le_cpu) => {
+                                        chunk_1_split.drop_tensor();
+
                                         match tx.send((run_config.id.expect("id"), le_cpu, chunk_0.keys_sizes(), chunk_1_split.keys_sizes())) {
                                             Ok(_) => {}
                                             Err(e) => {
