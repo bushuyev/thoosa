@@ -75,7 +75,7 @@ mod tests {
     use tch::{IndexOp, Kind, Tensor};
     use thoosa_common::utils::{copy_cudarc, free_cudarc, from};
     use thoosa_motifs::distance::{dist_d2, dist_d2_0};
-    use thoosa_motifs::find::ChunkOfSlicedTensors;
+    use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_shared::ThoosaError;
     use polars::export::rayon::iter::ParallelIterator;
     use thoosa_common::loader::SyncWrapper;

@@ -51,6 +51,7 @@ use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
+use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 use crate::fragments::motifs_to_tensor;
 
 #[derive(Debug, Args, Clone)]
@@ -288,24 +289,31 @@ pub fn find_motifs_by_euc_dist(
                 let le_flatten = le_cpu.i((channel as i64, .., ..)).flatten(0, 1);
                 let mut channel_le:BoolTensorIterator = (&le_flatten).into();
 
-                chunk_0.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
-                    for (slice_0_idx, s_0) in (0..t_size_0.1).enumerate() {
-                        for (t_idx_1, t_size_1) in chunk_1.iter().enumerate() {
-                            for (slice_1_idx, s_1) in (0..t_size_1.1).enumerate() {
-                                if channel_le.next().unwrap()
-                                    && (t_size_0.0 != t_size_1.0 || slice_0_idx != slice_1_idx
-                                ) {
-                                    mt.lock().track(
-                                        TensorSliceIdx(chunk_0[t_idx_0].0.clone(), slice_0_idx as i64 * step as i64),
-                                        TensorSliceIdx(chunk_1[t_idx_1].0.clone(), slice_1_idx as i64 * step as i64),
-                                        0.0,
-                                    );
-                                }
-                            }
-                            distances_i += 1;
-                        }
-                    }
+                chunk_0.for_each(|slice_0|{
+                    chunk_1.cloned().for_each(|slice_1|{
+                        debug!("slice_0={slice_0:?} slice_1={slice_1:?}");
+                    });
                 });
+                // chunk_0.iter().enumerate().for_each(|(t_idx_0, t_size_0)| {
+                //     for (slice_0_idx, s_0) in (0..t_size_0.1).enumerate() {
+                //
+                //         for (t_idx_1, t_size_1) in chunk_1.iter().enumerate() {
+                //             for (slice_1_idx, s_1) in (0..t_size_1.1).enumerate() {
+                //
+                //                 if channel_le.next().unwrap()
+                //                     && (t_size_0.0 != t_size_1.0 || slice_0_idx != slice_1_idx
+                //                 ) {
+                //                     mt.lock().track(
+                //                         TensorSliceIdx(chunk_0[t_idx_0].0.clone(), slice_0_idx as i64 * step as i64),
+                //                         TensorSliceIdx(chunk_1[t_idx_1].0.clone(), slice_1_idx as i64 * step as i64),
+                //                         0.0,
+                //                     );
+                //                 }
+                //             }
+                //             distances_i += 1;
+                //         }
+                //     }
+                // });
 
                 mt.lock().dump();
             });
@@ -344,114 +352,6 @@ fn set_motifs(store: &Arc<Mutex<Box<dyn Store>>>, mt: &Mutex<SimpleMotifTracker<
             info!("mt {mt:?} failed with {e:?}");
         }
     };
-}
-
-#[derive(Debug)]
-pub struct ChunkOfSlicedTensors <ResourceId> where {
-    keys:Vec <ResourceId>,
-    sizes: Vec<i64>,//num splits in a ResourceId
-    pub t: SyncWrapper<Tensor>,
-}
-
-impl <ResourceId:Clone+Debug> ChunkOfSlicedTensors <ResourceId> {
-    pub fn new(keys:  Vec <ResourceId>, sizes: Vec<i64>, t: Tensor) -> Self {
-        Self {
-            keys,
-            sizes,//number of slices produced from each tensor
-            t:SyncWrapper::new_t(t),
-        }
-    }
-
-    pub fn keys_sizes(&self)->Vec<(ResourceId, i64)>{
-        self.keys.iter().zip(self.sizes.iter()).map(|v|(v.0.clone(), v.1.clone())).collect()
-    }
-
-    pub fn split(&self) -> Vec<Self> {
-        //only one tensor in the chunk, splitting tensor
-        if self.keys.len() == 1 {
-            assert_eq!(self.sizes.len(), 1);
-
-            let split_at_idx = self.sizes[0]/2;
-            debug!("ChunkOfSlicedTensors::split: 0 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
-            vec![
-                Self {
-                    keys: self.keys.clone(),
-                    sizes: vec![split_at_idx],
-                    t: SyncWrapper::new_t(self.t.i((..split_at_idx, .., ..))),
-                },
-                Self {
-                    keys: self.keys.clone(),
-                    sizes: vec![self.sizes[0]-split_at_idx],
-                    t: SyncWrapper::new_t(self.t.i((split_at_idx.., .., ..))),
-                }
-            ]
-        //more than one tensor in the chunk, splitting chunk
-        } else {
-            let split_at = self.keys.len() / 2;
-
-            assert!(split_at > 0);
-
-            let split_at_idx = self.sizes.iter().take(split_at).sum::<i64>();
-
-            debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
-
-            vec![
-                Self {
-                    keys: self.keys[..split_at].to_vec(),
-                    sizes: self.sizes[..split_at].to_vec(),
-                    t: SyncWrapper::new_t(self.t.i((..split_at_idx, .., ..))),
-                },
-                Self {
-                    keys: self.keys[split_at..].to_vec(),
-                    sizes: self.sizes[split_at..].to_vec(),
-                    t: SyncWrapper::new_t(self.t.i((split_at_idx.., .., ..))),
-                }
-            ]
-        }
-    }
-
-    //TODO Option instead  of [0.0]
-    pub fn drop_tensor(&mut self) {
-        mem::swap(&mut self.t, &mut SyncWrapper::new_t(Tensor::from_slice(&[0.0])));
-    }
-
-    /// returns:  t.size = num slices = 1+(len-window)/step x channels x window
-    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
-
-        debug!("slice_tensors_chunk: step={step} window={window} tensors_chunk.len()={}", tensors_chunk.len());
-
-        let mut slices = Vec::with_capacity(tensors_chunk.len());
-
-        for tensor in tensors_chunk {
-            let input_length = tensor.size()[1];
-
-            if input_length >= window as i64 {
-
-                let unfolded = tensor.unfold(1, window as i64, step as i64);
-                // channels x num_slices x window, transpose  to num_slices x channels x window
-                let unfolded = unfolded.transpose(0, 1);
-                slices.push(unfolded);
-            } else {
-                warn!("skipping tensor")
-            }
-        }
-
-        let tensor= if slices.is_empty() {
-                                    //channels
-            Tensor::zeros(&[0, tensors_chunk[0].size()[0], window as i64], (Kind::Float, device))
-        } else {
-            //slices x channels x window -> channels x slices x window
-            Tensor::cat(&slices, 0).transpose(0, 1)
-        };
-        debug!("slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
-
-        ChunkOfSlicedTensors::new(
-            keys,
-            slices.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
-            tensor,
-        )
-    }
-
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -625,7 +525,7 @@ fn chunk_and_slice_2x<G, C>(
 ) -> Result<(), ThoosaError>
 where
     G: Fn(&Arc<ChunkOfSlicedTensors<ResourceId>>, &ChunkOfSlicedTensors<ResourceId>, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
-    C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<(ResourceId, i64)>, Vec<(ResourceId, i64)>) + Send + Sync,
+    C: Fn(usize, SyncWrapper<Box<Tensor>>, ChunkOfSlicedTensorsIter<ResourceId>, ChunkOfSlicedTensorsIter<ResourceId>) + Send + Sync,
 {
     rayon::scope(|s| {
         let mut resource_chunks = resources.chunks(chunk_size)
@@ -634,7 +534,7 @@ where
 
         resource_chunks.push(vec![]); //to get last window processed
 
-        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, Vec<_>, Vec<_>)>();
+        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, ChunkOfSlicedTensorsIter<ResourceId>, ChunkOfSlicedTensorsIter<ResourceId>)>();
         let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(32).spawn_handler(|thread_builder| {
             let b = thread::Builder::new();
             b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
@@ -694,7 +594,7 @@ where
 
                 wg_0.wait();
 
-                let run_configs_applied_to_chunk_0 = run_configs.par_iter().enumerate()
+                let run_configs_applied_to_chunk_0:Vec<Arc<ChunkOfSlicedTensors<ResourceId>>> = run_configs.par_iter().enumerate()
                     .map(|(i, run_config)| {
                         Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
                             run_config.step,
@@ -702,7 +602,7 @@ where
                             &window_0_tensors.read(),
                             window_0_0_clone.clone(),
                             Cpu,
-                        ))
+                        ))//.into()
                     }).collect::<Vec<_>>();
 
                 drop(window_0_tensors);
@@ -742,23 +642,22 @@ where
                         .zip(run_configs_applied_to_chunk_0.iter())
                         .for_each(|(run_config, chunk_0)| {
 
-                            let mut chunk_1_vec = Box::new(vec![ChunkOfSlicedTensors::slice_tensors_chunk(
+
+                            let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
                                 run_config.step,
                                 run_config.window,
                                 &window_1_tensors.read(),
                                 window_1_0_clone.clone(),
                                 Cpu
-                            )]);
-
-                            while let Some(mut chunk_1_split) = chunk_1_vec.pop() {
-
+                            ));
+                            while let Some(mut chunk_1_split) = split_queue.next() {
                                 let num_tasks_v = num_tasks_arc.load(Relaxed);
-
                                 if num_tasks_v > 100 {//TODO config
                                     debug!("chunk_and_slice: num_tasks_v={num_tasks_v}");
                                     sleept_times_arc.fetch_add(1, Relaxed);
                                     thread::sleep(Duration::from_millis(3000));//TODO config
                                 }
+
                                 match gpu_fn(
                                     &chunk_0,
                                     &chunk_1_split,
@@ -767,7 +666,12 @@ where
                                     Ok(le_cpu) => {
                                         chunk_1_split.drop_tensor();
 
-                                        match tx.send((run_config.id.expect("id"), le_cpu, chunk_0.keys_sizes(), chunk_1_split.keys_sizes())) {
+                                        match tx.send((
+                                            run_config.id.expect("id"),
+                                            le_cpu,
+                                            chunk_0.iter(),
+                                            chunk_1_split.into_iter())
+                                        ) {
                                             Ok(_) => {}
                                             Err(e) => {
                                                 error!("e:{e:?}"); //TODO panic?
@@ -777,12 +681,12 @@ where
                                     Err(e) => {
                                         warn!("got e={e:?}, splitting");
 
-                                        chunk_1_vec.extend(
-                                            chunk_1_split.split()
-                                        );
+                                        split_queue.split(chunk_1_split);
                                     }
                                 }
+                                debug!("split_queue={split_queue:?}");
                             }
+
                         });
 
                     loader.write().purge_cache_keys(window_1[0].clone(), area_1);
@@ -1541,11 +1445,11 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item
 mod motif_find_tests {
     use std::{fs, mem, thread};
 
-    use std::collections::{HashMap};
+    use std::collections::HashMap;
     use std::fmt::{Debug, Display};
     use std::ops::Deref;
     use std::path::Path;
-    use std::sync::{Arc};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, AtomicU64};
     use std::sync::atomic::Ordering::Relaxed;
     use crossbeam_channel::internal::SelectHandle;
@@ -1571,7 +1475,8 @@ mod motif_find_tests {
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_shared::resource::{Resource, ResourceId};
-    use crate::find::{Conv1Params, FindMotifsRunConfig, FindMotifsParams, InputFilter, select_motifs_by_ratio, MotifTrackerStore, find_motifs_by_euc_dist, CommonFindMotifsConfig, ChunkOfSlicedTensors, collect_dists, clc_motif_matches};
+    use crate::chunks::ChunkOfSlicedTensors;
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
 
     use crate::find::select_motifs_by_corr;
 
@@ -2549,79 +2454,6 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_slice_tensors_chunk(){
-        // ChunkOfSlicedTensors::slice_tensors_chunk()
-
-        // Example tensors
-        let tensor_a = Tensor::from_slice(&[
-            0.00, 0.01, 0.02,
-            0.10, 0.11, 0.12
-        ])
-            .view([2, -1]).totype(Float); // Shape: [2, 3]
-        let tensor_b = Tensor::from_slice(&[
-            1.00, 1.01,
-            1.10, 1.11
-        ])
-            .view([2, -1]).totype(Float); // Shape: [2, 2]
-
-        // let tensors = vec![tensor_a, tensor_b];
-        let tensors = vec![SyncWrapper::new_tb(Box::new(tensor_a)), SyncWrapper::new_tb(Box::new(tensor_b))];
-        let window = 2;
-        let step = 1;
-
-        // let result = process_tensors(&tensors, window, step);
-        let result = ChunkOfSlicedTensors::slice_tensors_chunk(step, window, &tensors, vec!["aaa", "bbb"], Cpu);
-
-        let expected = Tensor::from_slice(&[
-            // Slice 0 from tensor_a
-            0.00, 0.01, // Channel 0
-            0.10, 0.11, // Channel 1
-            // Slice 1 from tensor_a
-            0.01, 0.02, // Channel 0
-            0.11, 0.12, // Channel 1
-            // Slice 0 from tensor_b
-            1.00, 1.01, // Channel 0
-            1.10, 1.11, // Channel 1
-        ])
-            .view([3, 2, 2]).totype(Float);
-
-        assert_eq!(*result.t, expected);
-    }
-
-    #[test]
-    fn test_slice_tensors_chunk_non_multiple_size(){
-
-        let tensor = Tensor::from_slice(&[
-            0.0, 0.1, 0.2, // Channel 0
-            0.3, 0.4, 0.5, // Channel 1
-        ])
-            .view([2, 3]).totype(Float);
-        // let tensors = vec![tensor_a, tensor_b];
-        let tensors = vec![tensor.into()];
-
-
-        let window = 2;
-        let step = 1;
-
-        // let result = process_tensors(&tensors, window, step);
-        let result = ChunkOfSlicedTensors::slice_tensors_chunk(step, window, &tensors, vec!["aaa"], Cpu);
-
-        let expected = Tensor::from_slice(&[
-            // Slice 0
-            0.0, 0.1, // Channel 0
-            0.3, 0.4, // Channel 1
-
-            // Slice 1
-            0.1, 0.2, // Channel 0
-            0.4, 0.5, // Channel 1
-        ])
-            .view([2, 2, 2]).totype(Float);
-
-        assert_eq!(*result.t, expected);
-    }
-
-
-    #[test]
     fn test_chunk_and_slice() -> Result<(), ThoosaError> {
 
         let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555"].into_iter().enumerate().map(|(i, v)| (i as u32, 1u32, v).into()).collect();
@@ -2924,62 +2756,5 @@ mod motif_find_tests {
 
 
         Ok(())
-    }
-
-    #[test]
-    fn test_xxx(){
-
-
-        #[derive(Debug)]
-        struct TestTracker {
-            count:u32
-        }
-        impl TestTracker {
-
-            pub fn track(&mut self, t:SyncWrapper<Box<Tensor>>){
-                println!("t.size={:?}", t.size());
-                self.count+=1;
-            }
-
-            pub fn new() -> Self {
-                Self {count:0}
-            }
-        }
-        let mut tracker = RwLock::new(TestTracker::new());
-
-        let (tx, rx) = crossbeam_channel::unbounded::<SyncWrapper<Box<Tensor>>>();
-        let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(11).spawn_handler(|thread_builder| {
-            let b = thread::Builder::new();
-            b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
-                .spawn(|| thread_builder.run())?;
-
-            Ok(())
-        }).build().expect("trackers_pool");
-
-        for i in 0..100 {
-            match tx.send(Tensor::rand(&[10], DOUBLE_CPU).into()) {
-                Ok(_) => {
-                    println!("send ok")
-                }
-                Err(e) => {
-                    println!("e={e:?}");
-                }
-            }
-        }
-        drop(tx);
-
-        trackers_pool.scope(|s| {
-            for t in  rx.iter() {
-                if t.size()[0] == 0 {
-                    break
-                }
-                s.spawn( |scope| {
-                    println!("spawned");
-                    tracker.write().track(t);
-                })
-            }
-        });
-
-        println!("done");
     }
 }
