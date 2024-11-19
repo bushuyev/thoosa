@@ -243,7 +243,7 @@ impl From<&str> for MotifsBy {
 #[derive(Debug, Args, Clone)]
 pub struct PlotMotifSlicesParams {
 
-    #[arg(value_enum)]
+    #[arg(long, value_enum)]
     motifs_by: MotifsBy,
 
 }
