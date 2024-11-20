@@ -1,30 +1,29 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
 use rand::{thread_rng, Rng};
 use thoosa_shared::resource::ResourceId;
-use thoosa_shared::{TensorSliceIdx, ThoosaError};
+use thoosa_shared::{group_slices, TensorSliceIdx, ThoosaError};
 use crate::{IdSlice, MotifTrackerStore};
 
+#[derive(Debug)]
 pub struct FileMotifTrackerStore {
     pub run_id: usize,
     pub channel: usize,
-    // conn: Mutex<Connection>,
     pub path: PathBuf
 }
 
 impl FileMotifTrackerStore {
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: usize, channel: usize) -> Result<FileMotifTrackerStore, ThoosaError> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: usize, channel: usize) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
 
-        Ok(Self {
+        Ok(Box::new(Self {
             run_id,
             channel,
-            // conn: Mutex::new(conn),
             path: path.as_ref().to_path_buf()
-        })
+        }))
     }
 
 }
@@ -39,7 +38,6 @@ impl MotifTrackerStore for FileMotifTrackerStore {
 
         let num_bytes = slices.len() * mem::size_of::<(u32, i64)>();
 
-        // Convert the data to a byte slice
         let bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
                 slices.as_ptr() as *const u8,
@@ -47,11 +45,56 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             )
         };
 
-        // Write the bytes to the file
         file.write_all(bytes).map_err(|e|ThoosaError::new(e.to_string()))
     }
 
-    fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
-        todo!()
+    fn build_groups(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
+        let mut file = File::open("output.dat")?;
+        let metadata = file.metadata()?;
+        let file_size = metadata.len() as usize;
+        let elem_size = mem::size_of::<(u32, i64)>();
+
+        if file_size % elem_size != 0 {
+            // return Err(io::Error::new(
+            //     io::ErrorKind::InvalidData,
+            //     "File size is not a multiple of element size",
+            // ));
+            return Err(ThoosaError::new("can't read"))
+        }
+
+        let num_elems = file_size / elem_size;
+
+        let mut data_vec: Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)> = Vec::with_capacity(num_elems);
+
+        unsafe {
+            data_vec.set_len(num_elems);
+
+            let data_ptr = data_vec.as_mut_ptr() as *mut u8;
+            let data_slice = std::slice::from_raw_parts_mut(data_ptr, file_size);
+
+            file.read_exact(data_slice)?;
+        }
+
+        Ok(group_slices(
+            data_vec.into_iter().map(|v| { //TODO move group_slices out, not for store
+                    (
+                        IdSlice(0, v.0.0, v.0.1),
+                        IdSlice(0, v.1.0, v.1.1)
+                    )
+            })
+        ))
+    }
+
+
+    fn run_id(&self) -> usize {
+        self.run_id
+    }
+
+    fn channel(&self) -> usize {
+        self.channel
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
     }
 }
