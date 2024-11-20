@@ -52,6 +52,7 @@ use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
+use thoosa_store::fs_store::FileMotifTrackerStore;
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 use crate::fragments::motifs_to_tensor;
 
@@ -233,18 +234,29 @@ pub fn find_motifs_by_euc_dist(
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
-    let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
+    let file_motif_tracker = true; //TODO params/ws config?
+
+    let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
         assert!(a.insert(
             run_config.id.expect("id"),
             (0..ws.read().channels()).map(|channel|
-                Mutex::new(SimpleMotifTracker::<SqlMotifTrackerStore>::new(
-                    SqlMotifTrackerStore::new(
-                        ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
-                        run_config.id.expect("id"),
-                        channel
-                    ).expect("can't create tmp store"),
+                Mutex::new(SimpleMotifTracker::new(
+                    if file_motif_tracker {
+                        FileMotifTrackerStore::new(
+                            ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
+                            run_config.id.expect("id"),
+                            channel
+                        ).expect("can't create tmp store")
+                    } else {
+                        SqlMotifTrackerStore::new(
+                            ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
+                            run_config.id.expect("id"),
+                            channel
+                        ).expect("can't create tmp store")
+                    },
+
                     common_config.min_tracker_step,
-                ))).collect::<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>()
+                ))).collect::<Vec<Mutex<SimpleMotifTracker>>>()
         ).is_none());
 
         a
@@ -323,31 +335,32 @@ pub fn find_motifs_by_euc_dist(
     let mut chunks = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).array_chunks::<10>();
     while let Some(chunk) = chunks.next() {
         chunk.into_iter().par_bridge().for_each(|mt|{
-            set_motifs(store, mt);
+            save_motifs(store, mt);
         });
     }
 
 
     if let Some(reminder) = chunks.into_remainder() {
         reminder.into_iter().par_bridge().for_each(|mt|{
-            set_motifs(store, mt);
+            save_motifs(store, mt);
         });
     }
 
     Ok(run_config_ids)//TODO return only successful run_id (window size check)?
 }
 
-fn set_motifs(store: &Arc<Mutex<Box<dyn Store>>>, mt: &Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>) {
-    let mut mt_guard = mt.lock();
-    match mt_guard.set_motifs() {
-        Ok(groups) => {
-            info!("done, {} groups found", groups.len());
-            store.lock().set_motifs(mt_guard.dumper.run_id, mt_guard.dumper.channel as i64, groups, &mt_guard.dumper.path).expect("");
-        }
-        Err(e) => {
-            info!("mt {mt:?} failed with {e:?}");
-        }
-    };
+fn save_motifs(store: &Arc<Mutex<Box<dyn Store>>>, mt: &Mutex<SimpleMotifTracker>) {
+    mt.lock().build_groups(store).expect("build_groups");
+    // let mut mt_guard = mt.lock();
+    // match mt_guard.build_groups(store) {
+    //     Ok(groups) => {
+    //         info!("done, {} groups found", groups.len());
+    //         store.lock().set_motifs_from_tmp_db(mt_guard.dumper.run_id(), mt_guard.dumper.channel() as i64, groups, &mt_guard.dumper.path()).expect("");
+    //     }
+    //     Err(e) => {
+    //         info!("mt {mt:?} failed with {e:?}");
+    //     }
+    // };
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -764,18 +777,18 @@ fn collect_dists<'a, F, C>(
 
 //TODO trait for MotifTracker
 #[derive(Debug)]
-pub(crate) struct SimpleMotifTracker<D: MotifTrackerStore + Debug> {
+pub(crate) struct SimpleMotifTracker {
     last:Option<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>,
     motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>, //i_0, match_0, match_1, dist
-    dumper: D,
+    dumper: Box<dyn MotifTrackerStore>,
     min_step:Option<usize>
 }
 
 // impl <D> Send for SimpleMotifTracker<D>
 
-impl<'a, D: MotifTrackerStore + Debug> SimpleMotifTracker<D> {
+impl<'a> SimpleMotifTracker {
 
-    pub fn new(dumper: D, min_step:Option<usize>) -> SimpleMotifTracker<D> {
+    pub fn new(dumper: Box<dyn MotifTrackerStore>, min_step:Option<usize>) -> SimpleMotifTracker {
         Self {
             last:None,
             motifs: vec![],
@@ -817,8 +830,8 @@ impl<'a, D: MotifTrackerStore + Debug> SimpleMotifTracker<D> {
         }
     }
 
-    fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError>{
-        self.dumper.set_motifs()
+    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError>{
+        self.dumper.build_groups()
     }
 
     #[cfg(test)]
@@ -2153,7 +2166,7 @@ mod motif_find_tests {
             Ok(())
         }
 
-        fn set_motifs(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
+        fn build_groups(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
             todo!()
         }
     }
