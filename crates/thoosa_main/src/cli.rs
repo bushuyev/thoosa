@@ -159,7 +159,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
             self.window.clone().into_iter(),
         ]).into_iter().map(|config_combo|{
             debug!("FindMotifsParams::to_run_configs: config_combo={config_combo:?} ");
-            FindMotifsRunConfig::new(config_combo[0], config_combo[1], 1.0, "".to_string(), None)
+            FindMotifsRunConfig::new(None, config_combo[0], config_combo[1], 1.0, "".to_string(), None)
         }).collect()
     }
 
@@ -1353,6 +1353,7 @@ mod main_tests {
     use crate::data::ParquetLoader;
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_common::runs::RunConfig;
+    use thoosa_motifs::distance::dist_d2_0;
     use thoosa_shared::resource::{Resource, ResourceId};
 
     #[ctor::ctor]
@@ -1373,6 +1374,31 @@ mod main_tests {
         )
     }
 
+    #[test]
+    fn test_dists()-> Result<(), ThoosaError> {
+        let n = 1000i64;
+        let max_y = 30.0;
+
+        let sig_0_v = sig_one_imp(n, max_y, None, None);
+        let sig_1_v = sig_two_imp(n, max_y, None, None);
+        let sig_2_v = sig_three_imp(n, max_y, None, None);
+
+
+        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
+
+        let (mask, Some(dists)) = dist_d2_0(
+            t_0_0.i((0, 0..100)).view((1, 1, -1)),
+            t_0_1.i((0, 0..100)).view((1, 1, -1)),
+            0.0, true, false,
+        )? else {
+            panic!()
+        };
+
+        print!("mask={mask}");
+        print!("dists={dists}");
+
+        Ok(())
+    }
 
     #[test]
     fn test_motifs() -> Result<(), ThoosaError> {
@@ -1406,17 +1432,18 @@ mod main_tests {
         )?;*/
 
 
-        /*
-        let sig_0 = sig_0(n);
-
-        let sig_1 = sig_1(n);
-
-        let sig_2 = sig_2(n);
-
-        */
-
 
         let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
+
+        let x = lin_t(n*3);
+        plot_series(
+            vec![
+                (format!("ch0"), plotters::prelude::RED,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
+                (format!("ch1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((1, ..)))).collect::<Vec<(f32, f32)>>()),
+                (format!("ch2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((2, ..)))).collect::<Vec<(f32, f32)>>()),
+
+            ], "t_0_0", (2000, 1000), &format!("/tmp/plots/t_0_0{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+        )?;
 
         t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
         t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
@@ -1435,12 +1462,8 @@ mod main_tests {
             }, 4, 100,
         )));
 
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
-        fs::create_dir_all(&test_dir)?;
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_db.db3"))?));
+
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
         let resources = import_resources(
             &ws,
@@ -1471,7 +1494,7 @@ mod main_tests {
                 resources: ResourceType::List(vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()]),
                 min_tracker_step: Some(3),
                 chunk_size: 2,
-                max_dist_k: 0.05,
+                max_dist_k: 0.0,
                 input_filter: None,
             },
             find_motifs_by_euc_dist,
@@ -1482,12 +1505,11 @@ mod main_tests {
             "Test/FindMotifs"
         )?;
 
-
         let slices = store.lock().list_motifs_slices(run_ids[0])?;
-        debug!("test_motifs: slices_0_0={:?}", slices.get(resources_0_0));
-        debug!("test_motifs: slices_0_1={:?}", slices.get(resources_0_1));
-        debug!("test_motifs: slices_1_0={:?}", slices.get(resources_1_0));
-        debug!("test_motifs: slices_1_1={:?}", slices.get(resources_1_1));
+        debug!("test_motifs: len={:?} slices_0_0={:?}", slices.get(resources_0_0).map(|v|v.len()), slices.get(resources_0_0));
+        debug!("test_motifs: len={:?} slices_0_1={:?}", slices.get(resources_0_1).map(|v|v.len()), slices.get(resources_0_1));
+        debug!("test_motifs: len={:?} slices_1_0={:?}", slices.get(resources_1_0).map(|v|v.len()), slices.get(resources_1_0));
+        debug!("test_motifs: len={:?} slices_1_1={:?}", slices.get(resources_1_1).map(|v|v.len()), slices.get(resources_1_1));
         assert!(slices.len() >= 4);
 
         let slice_0_0 = slices.get(resources_0_0).unwrap().into_iter().find(|s|s.channel_idx == 0).expect("0_0");

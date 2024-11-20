@@ -104,7 +104,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
             self.window.clone().into_iter(),
         ]).into_iter().map(|config_combo|{
             debug!("FindMotifsParams::to_run_configs: config_combo={config_combo:?} ");
-            FindMotifsRunConfig::new(config_combo[0], config_combo[1], self.max_dist_k, "".to_string(), None)
+            FindMotifsRunConfig::new(None, config_combo[0], config_combo[1], self.max_dist_k, "".to_string(), None)
         }).collect()
     }
 
@@ -260,23 +260,27 @@ pub fn find_motifs_by_euc_dist(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors<ResourceId>>, chunk_sliced_1: &ChunkOfSlicedTensors<ResourceId>, _find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors<ResourceId>>, chunk_sliced_1: &ChunkOfSlicedTensors<ResourceId>, find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
 
             debug!("find_motifs_by_euc_dist: rayon::current_num_threads()={}", rayon::current_num_threads());
 
 
-            let (le, _) = dist_d2_0(
+            let false_diagonal = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]);
+            let (mask, _) = dist_d2_0(
                 //TODO devices[0], should be in chunk_and_slice_2x
                 chunk_sliced_0.t.to_device(devices_2x[0]),
                 chunk_sliced_1.t.to_device(devices_2x[0]),
-                0.1,
-                false
+                find_motifs_run_config.max_dist_k as f64,
+                false,
+                false_diagonal //remove diagonal if same chunk_0 and chunk_1 point to same tensors
             )?;
 
-            let le_cpu = SyncWrapper::new_tb(Box::new(le.to_device(Cpu)));
-            drop(le);
+            let mask_cpu = SyncWrapper::new_tb(Box::new(mask.to_device(Cpu)));
+            drop(mask);
 
-            Ok(le_cpu)
+            debug!("find_motifs_by_euc_dist: mask_cpu={mask_cpu} false_diagonal={false_diagonal} count_nonzero={}", mask_cpu.count_nonzero_dim_intlist([1,2]));
+
+            Ok(mask_cpu)
 
         },
         &|run_config_id, le_cpu, chunk_0, chunk_1| {
@@ -288,12 +292,15 @@ pub fn find_motifs_by_euc_dist(
 
             channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
                 let le_flatten = le_cpu.i((channel as i64, .., ..)).flatten(0, 1);
-                let mut channel_le:BoolTensorIterator = (&le_flatten).into();
+                let mut channel_mask:BoolTensorIterator = (&le_flatten).into();
 
                 chunk_0.iter().for_each(|slice_0|{
                     chunk_1.iter().for_each(|slice_1|{
-                        debug!("slice_0={slice_0:?} slice_1={slice_1:?}");
-                        if channel_le.next().unwrap()
+
+                        let mask = channel_mask.next().unwrap();
+                        debug!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel} mask={mask}");
+
+                        if mask
                             && (slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1
                         ) {
                             mt.lock().track(
@@ -370,14 +377,15 @@ impl RunConfig for FindMotifsRunConfig {
         map
     }
 
+    //TODO set id
     fn from_properties_map(properties: HashMap<String, Val>) -> Self {
         let properties = thoosa_shared::val::unprefix_properties("FindMotifsRunConfig", &properties);
-        FindMotifsRunConfig::new(
-            properties.get("step").expect("no step").as_usize().expect("step as_usize") as u32,
-            properties.get("window").expect("no window").as_i64().expect("window as_i64") as u32,
-            properties.get("max_dist").expect("no max_dist").as_f32().expect("max_dist as_f32"),
-            properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
-            InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)).ok(),
+        FindMotifsRunConfig::new(None,
+                                 properties.get("step").expect("no step").as_usize().expect("step as_usize") as u32,
+                                 properties.get("window").expect("no window").as_i64().expect("window as_i64") as u32,
+                                 properties.get("max_dist").expect("no max_dist").as_f32().expect("max_dist as_f32"),
+                                 properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
+                                 InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)).ok(),
         )
     }
 
@@ -387,15 +395,15 @@ impl RunConfig for FindMotifsRunConfig {
 }
 
 impl FindMotifsRunConfig {
-    pub fn new(
-        step: u32,
-        window: u32,
-        max_dist_k: f32, //TODO move to common
-        descr: impl Into<String>,
-        filter: Option<InputFilter>,
+    pub fn new(id: Option<usize>,
+               step: u32,
+               window: u32,
+               max_dist_k: f32, //TODO move to common
+               descr: impl Into<String>,
+               filter: Option<InputFilter>,
     ) -> Self {
         Self {
-            id:None,
+            id,
             step,
             window,
             max_dist_k,
@@ -779,22 +787,22 @@ impl<'a, D: MotifTrackerStore + Debug> SimpleMotifTracker<D> {
     pub fn track(&'a mut self, i_0: TensorSliceIdx <ResourceId>, i_1: TensorSliceIdx <ResourceId>, dist: f32) {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
 
-        // match self.min_step {
-        //     None => {
+        match self.min_step {
+            None => {
                 self.motifs.push((i_0, i_1, dist));
-        //     }
-        //
-        //     Some(min_step) => {
-        //
-        //         let last = self.last.take();
-        //         if let Some(last) = last {
-        //             if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
-        //                 self.motifs.push(last);
-        //             }
-        //         }
-        //         self.last.replace((i_0, i_1, dist));
-        //     }
-        // }
+            }
+
+            Some(min_step) => {
+
+                let last = self.last.take();
+                if let Some(last) = last {
+                    if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
+                        self.motifs.push(last);
+                    }
+                }
+                self.last.replace((i_0, i_1, dist));
+            }
+        }
 
     }
 
@@ -1813,9 +1821,9 @@ mod motif_find_tests {
         // debug!("{:?}", store.lock().list_run_resources(1)?);
         let slices = store.lock().list_motifs_slices(run_ids[0])?;
 
-        // debug!("0: {:?}", eeg_slices.get(&resources[0]));
-        // debug!("1: {:?}", eeg_slices.get(&resources[1]));
-        // debug!("2: {:?}", eeg_slices.get(&resources[2]));
+        debug!("0: {:?}", slices.get(&resources[0]));
+        debug!("1: {:?}", slices.get(&resources[1]));
+        debug!("2: {:?}", slices.get(&resources[2]));
 
         assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 100)).is_some());
         assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slise_idx == 500)).is_some());
@@ -1936,14 +1944,15 @@ mod motif_find_tests {
         debug!("run_ids={:?}", run_ids);
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
-        let eeg_slices = store.lock().list_motifs_slices(run_ids[0])?;
-        debug!("0: {:?}", eeg_slices.get(&resources[0]));
-        debug!("1: {:?}", eeg_slices.get(&resources[1]));
-        debug!("2: {:?}", eeg_slices.get(&resources[2]));
+        let slices = store.lock().list_motifs_slices(run_ids[0])?;
+        debug!("0: {:?}", slices.get(&resources[0]));
+        debug!("1: {:?}", slices.get(&resources[1]));
+        debug!("2: {:?}", slices.get(&resources[2]));
 
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 100, channel_idx: 0 }, eeg_slices.get(&resources[0]).and_then(|v| v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 500, channel_idx: 0 }, eeg_slices.get(&resources[1]).and_then(|v| v.get(0)).unwrap());
-        assert_eq!(&MotifSlice { motif_id: 1, slise_idx: 800, channel_idx: 0 }, eeg_slices.get(&resources[2]).and_then(|v| v.get(0)).unwrap());
+
+        assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 100)).is_some());
+        assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slise_idx == 500)).is_some());
+        assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slise_idx == 800)).is_some());
 
         Ok(())
     }
@@ -2417,7 +2426,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_filter_and_slicer_params() {
-        let params = FindMotifsRunConfig::new(10, 10, 1.0, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
+        let params = FindMotifsRunConfig::new(None, 10, 10, 1.0, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
 
         let properties: HashMap<String, Val> = params.to_properties_map();
 
@@ -2468,16 +2477,16 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(3, 5, 1.0, "", None))],
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, 1.0, "", None))],
             // HashMap::new(),
-             move |chunk_0, chunk_1, _find_motifs_run_config| {
+            move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
-                trace!("callback: chunk_0.t=\n{}", chunk_0.t.i((.., 0, ..)).squeeze());
-                trace!("callback: chunk_1.t=\n{}", chunk_1.t.i((.., 0, ..)).squeeze());
+                trace!("callback: chunk_0.t=\n{}", chunk_0.t.i((0, .., ..)).squeeze());
+                trace!("callback: chunk_1.t=\n{}", chunk_1.t.i((0, .., ..)).squeeze());
 
-                chunks_0_test_rc.lock().push(chunk_0.t.i((.., 0, ..)).squeeze());
-                chunks_1_test_rc.lock().push(chunk_1.t.i((.., 0, ..)).squeeze());
+                chunks_0_test_rc.lock().push(chunk_0.t.i(( 0, .., ..)).squeeze());
+                chunks_1_test_rc.lock().push(chunk_1.t.i(( 0, .., ..)).squeeze());
                 Ok(SyncWrapper::new_tb(Box::new(Tensor::from_slice(&[0.1]))))
             },
             &|run_config_id, t, chunk_0, chunk_1|{
@@ -2721,7 +2730,7 @@ mod motif_find_tests {
                 &vec![t_0_0.into(), t_0_1.into()],
                     vec!["t_0_0", "t_0_1"],
                     Cpu
-            ).t.transpose(0,1),
+            ).t,
             &Tensor::from_slice(&[1, 1, 1]).view((3, 1)),
             &Tensor::from_slice(&[1.0, 1.0, 1.0]).view((3, 1)),
         );
@@ -2736,13 +2745,13 @@ mod motif_find_tests {
                 &vec![t_1_0.into(), t_1_1.into()],
                 vec!["t_1_0", "t_1_1"],
                 Cpu
-            ).t.transpose(0,1),
+            ).t,
             &Tensor::from_slice(&[1, 1, 1]).view((3, 1)),
             &Tensor::from_slice(&[1.0, 1.0, 1.0]).view((3, 1)),
         );
 
         debug!("t_1={t_1}");
-
+        //TODO
 
         Ok(())
     }

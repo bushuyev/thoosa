@@ -32,7 +32,7 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 /*
     t_0, t_1 - channels x slices x slice_len
  */
-pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
+pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool, false_diag: bool) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
     let t_0 = t_0.unsqueeze(2);     // channels x motifs x 1 x motif_len
     let t_1 = t_1.unsqueeze(1);         // channels x 1 x num_slices x motif_len
 
@@ -42,12 +42,12 @@ pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool) -> Resu
     // debug!("dist_d2_0: slice_1_expanded={slice_1_expanded}");
     debug!("dist_d2_0: slice_1_expanded.size={:?}", t_1.size());
 
-    // Compute the Euclidean distances
+    // euclidean distances
     let mut diff = match t_0.f_subtract(&t_1) {
         Ok(v) => {
             v
         }
-        Err(e) => {
+        Err(e) => {//TODO check if oom
             // panic!("e={e:?} {}", e.to_string().contains("CUDA out of memory"));
             return Err(ThoosaError::oom())
         }
@@ -61,18 +61,22 @@ pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool) -> Resu
     let squared_distances = squared_diff.sum_dim_intlist(3, false, Kind::Float);
     drop(squared_diff);
     let distances = squared_distances.sqrt();
+    drop(squared_distances);
+    debug!("dist_d2_0: size={:?} distances={distances}", distances.size());
 
     let indices = Tensor::randint(distances.size()[1], &[1000], (Kind::Int64, distances.device()));
     let samples = distances.index_select(1, &indices);
     drop(indices);
-    // println!("samples.size={:?}", samples.size());
 
-    let q = samples.quantile_scalar(q, 1, true, "higher");
-    // println!("q.size={:?}", q.size());
-    // println!("q={q}");
+    let q_t = samples.quantile_scalar(q, 1, true, "higher");
 
-    let le = distances.le_tensor(&q);
+    let mut le = distances.le_tensor(&q_t); //.logical_and(&distances.gt(0.));
 
+    if false_diag {
+        let mut le_diagonals = le.diagonal(0, 1, 2);
+        let _ = le_diagonals.fill_(0);
+    }
+    trace!("dist_d2_0: size={:?} le={le}", le.size());
 
     Ok((le, if with_distances {Some(distances)} else {None}))
 }
@@ -91,7 +95,7 @@ mod distance_tests {
     use log::debug;
     use sci_rs::na::SimdBool;
     use tch::Device::Cpu;
-    use tch::IndexOp;
+    use tch::{Device, IndexOp, Kind};
     use tch::Kind::Float;
     use tch::Tensor;
 
@@ -137,22 +141,44 @@ mod distance_tests {
         let q = t.quantile_scalar(0.1, 1, true, "higher");
 
         let le = t.le_tensor(&q);
-
+        // let gt_0 = t.gt(0.);
+        // let le_gt_0 = le.logical_and(&gt_0);
+        //
         let masked = t.masked_select(&le);
-
-        // println!("q={q}");
-        // println!("le={le}");
-        // println!("masked={masked}");
-        // let sorted = t.sort(1, false).0;
-        // let n = sorted.size()[1] as f64;
-        // let k = (0.5 * (n - 1.0)).round() as i64;
+        // let masked_gt0 = masked.masked_select(&masked.gt(0.));
         //
-        // println!("sorted={sorted} k={k}");
+        debug!("size={:?} q={q}", q.size());
+        debug!("le={le} count_nonzero={}", le.count_nonzero_dim_intlist([1]));
+        // debug!("gt_0={gt_0}");
+        // debug!("le_gt_0={le_gt_0}");
+        debug!("masked={masked}");
+        // debug!("masked_gt0={masked_gt0}");
         //
-        // let threshold = sorted.i((.., k));
         //
-        // println!("threshold={threshold}");
-
+        // // let sorted = t.sort(1, false).0;
+        // // let n = sorted.size()[1] as f64;
+        // // let k = (0.5 * (n - 1.0)).round() as i64;
+        // //
+        // // println!("sorted={sorted} k={k}");
+        // //
+        // // let threshold = sorted.i((.., k));
+        // //
+        // // println!("threshold={threshold}");
+        // let n = 2; // Number of tensors along the first dimension
+        // let m = 3; // Size of the square matrices
+        //
+        // // Create a tensor of shape [n, m, m], filled with 'true' (i.e., ones in boolean tensors)
+        // let mut tensor = Tensor::ones(&[n, m, m], (Kind::Bool, Device::Cpu));
+        //
+        // println!("Original tensor:\n{}", tensor);
+        //
+        // // Get a mutable view of the diagonals along dimensions 1 and 2
+        // let mut diagonals = tensor.diagonal(0, 1, 2);
+        //
+        // // Set the diagonal elements to 'false' (i.e., zero)
+        // diagonals.fill_(0);
+        //
+        // println!("Modified tensor:\n{}", tensor);
 
     }
 
@@ -174,7 +200,7 @@ mod distance_tests {
 
 
         // 1 channel 6 x 6 slices
-        let (le, Some(distances)) = dist_d2_0(t_sliced.shallow_clone(), t_sliced, 0.1, true)? else {
+        let (le, Some(distances)) = dist_d2_0(t_sliced.shallow_clone(), t_sliced, 0.1, true, false)? else {
             panic!("no distances")
         };
         // println!("distances={distances} size={:?}", distances.size());
@@ -227,7 +253,7 @@ mod distance_tests {
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t.transpose(0,1);
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t.transpose(0,1);
 
-        let (le, Some(dists)) = dist_d2_0(t_0_sliced, t_1_sliced, 0.1, true)? else {
+        let (le, Some(dists)) = dist_d2_0(t_0_sliced, t_1_sliced, 0.1, true, false)? else {
             panic!("no distances")
         };
 
@@ -320,19 +346,21 @@ mod distance_tests {
     #[test]
     fn test_dist_d2_0(){
 
-        let slice_0 = Tensor::from_slice(&[0., 0., 1., 1., 2., 2.,]).view((3,2));
-        let slice_1 = Tensor::from_slice(&[3., 4., 4., 5., 5., 6.,]).view((3,2));
+        let slice_0 = Tensor::from_slice(&[0., 0., 1., 1., 2., 2.,]).view((1, 3,2));
+        let slice_1 = Tensor::from_slice(&[3., 4., 4., 5., 5., 6.,]).view((1, 3,2));
         debug!("slice_0={slice_0}");
         debug!("slice_1={slice_1}");
 
-        let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        // let dist_t_0 = super::dist_d2_0(&slice_0, &slice_1).unwrap();
-        debug!("dist_t={dist_t}");
+        // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
+        let (le, Some(dist_t)) = super::dist_d2_0(slice_0, slice_1, 0.1, true, false).unwrap() else {
+            panic!("no dists");
+        };
+        // debug!("dist_t={dist_t}");
         // debug!("dist_t_0={dist_t_0}");
 
-        assert_eq!(5.0, dist_t.double_value(&[0,0]));
-        assert_eq!(5.0, dist_t.double_value(&[1,1]));
-        assert_eq!(5.0, dist_t.double_value(&[2,2]));
+        assert_eq!(5.0, dist_t.double_value(&[0,0,0]));
+        assert_eq!(5.0, dist_t.double_value(&[0,1,1]));
+        assert_eq!(5.0, dist_t.double_value(&[0,2,2]));
 
     }
 

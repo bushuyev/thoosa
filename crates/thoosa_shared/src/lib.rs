@@ -974,7 +974,7 @@ mod shared_tests {
         #[derive(Debug, Parser, Clone, PartialEq)]
         struct TestParams {
 
-            #[arg(long,value_parser=parse_resources::<Resources>)]
+            #[arg(long,value_parser=parse_resources)]
             resources: ResourceType,
         }
 
