@@ -100,7 +100,8 @@ pub trait Store:ResourceStore + Sync + Send {
     fn save_params_value(&mut self, params: HashMap<String, Val>, run_id: usize, label: Option<&str>) -> Result<(), ThoosaError>;
     fn save_resources_labels(&self, resource_labels_probs: &HashMap<String, Vec<(String, f32)>>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
     fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
-    fn set_motifs_from_tmp_db(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, Vec<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
+    fn save_groups_as_motifs_with_slices_matches(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
+    fn save_groups_as_motifs(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoosaError>;
     fn list_motifs_distances(&mut self, run_id: usize) -> Result<HashMap<usize, f32>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: usize) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
     fn list_run_resources(&mut self, run_id: usize) -> Result<Vec<String>, ThoosaError>;
@@ -811,54 +812,72 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    //TODO remove
-    fn set_motifs_from_tmp_db(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, Vec<IdSlice>>, path: &dyn AsRef<Path>) -> Result<(), ThoosaError> {
+    fn save_groups_as_motifs(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
-        debug!("set_motifs: run_id={run_id:?}, channel={channel:?} path={}", path.as_ref().to_string_lossy());
+        debug!("save_slices_groups_as_motifs_from_file: run_id={run_id:?}, channel={channel:?}");
+
+        {
+            for (group, slices) in groups {
+                let motifs_inserted = t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])?; //TODO group not needed?
+
+                let motif_id:i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+
+                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
+
+                let mut slices_chunks = slices.into_iter().array_chunks::<500>();
+                while let Some(chunk) = slices_chunks.next() {
+                    Self::insert_slices_matches_chunk_from_tmp(&t, run_id, channel, motif_id, chunk.into_iter())?
+
+                }
+                if let Some(reminder) = slices_chunks.into_remainder() {
+                    if reminder.len() > 0 {
+                        Self::insert_slices_matches_chunk_from_tmp(&t, run_id, channel, motif_id, reminder)?
+                    }
+                }
+            }
+
+        }
+
+        t.commit()?;
+
+        Ok(())
+    }
+
+    fn save_groups_as_motifs_with_slices_matches(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>, path: &dyn AsRef<Path>) -> Result<(), ThoosaError> {
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        debug!("save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}", path.as_ref().to_string_lossy());
 
         {
 
             t.execute(format!("ATTACH DATABASE '{}' AS slices_{run_id}_{channel}_tmp", path.as_ref().to_string_lossy()).as_str(), [])?;
 
-            //TODO sort?
+            //TODO split into insert motifs/insert slice_matches + move  group_slices from tracker store?
             for (group, slices) in groups {
 
                 let motifs_inserted = t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])?; //TODO group not needed?
 
                 let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                debug!("set_motifs: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
+                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
 
                 //each match appears twice in slices but will result in single raw returned from _tmp.slice_matches, should be faster than getting slices into set on slice_matches.id (IdSlice.0)
-                for slices_chunk in slices.chunks(500) {
+                let mut slices_chunks = slices.into_iter().array_chunks::<500>();
 
-                    let sql = format!("INSERT INTO slice_matches (motif_id, run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) \
-                            SELECT ?, ?, ?, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist FROM slices_{run_id}_{channel}_tmp.slice_matches WHERE id IN (");
+                while let Some(chunk) = slices_chunks.next() {
+                    Self::insert_slices_matches_chunk_from_tmp(&t, run_id, channel, motif_id, chunk.into_iter())?
 
-                    let (mut q, params) = slices_chunk.into_iter().fold((vec![sql.as_str()], vec![
-                        Value::Integer(motif_id),
-                        Value::Integer(run_id as i64),
-                        Value::Integer(channel)
-                    ]),
-                        |mut a: (Vec<&str>, Vec<Value>), v: &IdSlice| {
-                            a.0.push("?");
-                            a.0.push(", ");
-                            a.1.push(Value::Integer(v.0));
-
-                            a
-                        });
-
-                    q.pop();
-                    q.push(")");
-
-                    debug!("set_motifs: params={params:?}");
-
-                    let slice_matches_updated = t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-
-                    debug!("set_motifs: slice_matches_updated={slice_matches_updated}");
                 }
+
+                if let Some(reminder) = slices_chunks.into_remainder() {
+                    if reminder.len() > 0 {
+                        Self::insert_slices_matches_chunk_from_tmp(&t, run_id, channel, motif_id, reminder)?
+                    }
+                }
+
             }
         }
 
@@ -915,59 +934,48 @@ impl Store for SqlStore {
 
         let resources_motifs = {
             let mut stmt = t.prepare("\
-                    SELECT sm.id, sm.motif_id, sm.channel_id, \
-                    sm.tensor_id_0, rs_0.import_id, rs_0.key, sm.slice_idx_0, \
-                    sm.tensor_id_1, rs_1.import_id, rs_1.key, sm.slice_idx_1 \
-                    FROM slice_matches sm \
-                    LEFT JOIN resources rs_0 on rs_0.id=sm.tensor_id_0 \
-                    LEFT JOIN resources rs_1 ON rs_1.id=sm.tensor_id_1 \
+                    SELECT m.id, m.channel_id, \
+                    s.resource_id, r.import_id, r.key, s.slice_idx, \
+                    FROM motifs m \
+                    LEFT JOIN slices s ON s.motif_id=m.id \
+                    LEFT JOIN resources r on r.id=s.resource_id \
                     WHERE run_id=?\
             ")?;
 
             let tensor_motifs: (HashMap<ResourceId, Vec<MotifSlice>>,HashMap<ResourceId, Resource>) = stmt.query_map([run_id], |row| {
                 Ok((
-                    row.get(0)?, // id,
-                    row.get::<usize, usize>(1).ok(), // motif_id,
-                    row.get(2)?, // channel_id,
+                    row.get(0)?, // motif_id,
+                    row.get(1)?, // channel_id,
 
-                    row.get(3)?, // tensor_id_0,
-                    row.get(4)?, // import_0,
-                    row.get(5)?, // key_0,
-                    row.get(6)?, // slice_idx_0,
+                    row.get(2)?, // resource_id,
+                    row.get(3)?, // import_0,
+                    row.get(4)?, // key_0,
+                    row.get(5)?, // slice_idx_0,
 
-                    row.get(7)?, // tensor_id_1,
-                    row.get(8)?, // import_1,
-                    row.get(9)?, // key_1,
-                    row.get(10)?,// slice_idx_1
+
                 ))
             })?.fold(
                 Ok((HashMap::new(),HashMap::new())),
                 |a: Result<(HashMap<ResourceId, Vec<MotifSlice>>,HashMap<ResourceId, Resource>), Error>, v: Result<(
-                i64, Option<usize>, i64,//id, motif_id, channel_id
+                    usize, i64,//motif_id, channel_id
 
-                u32, u32, String, i64,//tensor_id_0, import_0, key_0, slice_idx_0
+                    u32, u32, String, i64,//resource_id, import_0, key_0, slice_idx_0
 
-                u32, u32, String, i64//tensor_id_1, import_1, key_1, slice_idx_1
-                ), Error>| {
+                    ), Error>| {
 
                 let v = v?;
-                if let Some(motif_id) = v.1 {
-                    let mut a = a?;
 
-                    a.0.entry(v.3).or_insert_with(|| vec![]).push(MotifSlice::new(motif_id, v.6, v.2 as u16));
-                    a.0.entry(v.7).or_insert_with(|| vec![]).push(MotifSlice::new(motif_id, v.10, v.2 as u16));
+                let mut a = a?;
 
-                    if !a.1.contains_key(&v.3){
-                        a.1.insert(v.3, Resource::new( v.3, v.4, v.5));
-                    }
-                    if !a.1.contains_key(&v.7){
-                        a.1.insert(v.7, Resource::new( v.7, v.8, v.9));
-                    }
+                a.0.entry(v.2).or_insert_with(|| vec![]).push(MotifSlice::new(v.0, v.5, v.1 as u16));
 
-                    Ok(a)
-                } else {
-                    a
+                if !a.1.contains_key(&v.2){
+                    a.1.insert(v.3, Resource::new( v.2, v.3, v.4));
                 }
+
+
+                Ok(a)
+
             })?;
 
             if tensor_motifs.0.len() < 10 {
@@ -996,12 +1004,11 @@ impl Store for SqlStore {
 
         let channel_slices = {
             let mut stmt = t.prepare(&[
-                "SELECT sm.channel_id, sm.run_id, \
-                    sm.tensor_id_0,  rs_0.import_id, rs_0.key, sm.slice_idx_0, \
-                    sm.tensor_id_1,  rs_1.import_id, rs_1.key, sm.slice_idx_1 \
-                    FROM slice_matches sm \
-                    LEFT JOIN resources rs_0 on rs_0.id=sm.tensor_id_0 \
-                    LEFT JOIN resources rs_1 ON rs_1.id=sm.tensor_id_1 \
+                "SELECT m.channel_id, m.run_id, \
+                    r.id,  r.import_id, r.key, s.slice_idx, \
+                    FROM motifs m \
+                    LEFT JOIN slices s on s.motif_id=m.id \
+                    LEFT JOIN resources r on s.resource_id=r.id \
                     WHERE motif_id
                 ",
                 // if all_but_in_run_id.is_none() {"=? AND ? IS NOT NULL AND ? IS NOT NULL "} else {"!=? AND run_id=? AND channel_id=?"}, run_id? //TODO
@@ -1019,30 +1026,24 @@ impl Store for SqlStore {
                     row.get::<usize, i64>(0)?, //channel_id
                     row.get::<usize, i64>(1)?, //run_id
 
-                    row.get(2)?, // tensor_id_0,
-                    row.get(3)?, // import_0,
-                    row.get(4)?, // key_0,
-                    row.get(5)?, // slice_idx_0,
+                    row.get(2)?, // resource_id,
+                    row.get(3)?, // import_id,
+                    row.get(4)?, // key,
+                    row.get(5)?, // slice_idx,
 
-                    row.get(6)?, // tensor_id_1,
-                    row.get(7)?, // import_1,
-                    row.get(8)?, // key_1,
-                    row.get(9)?,// slice_idx_1
 
 
                 ))
             })?.fold(Ok((HashSet::new(), HashSet::new(), None)), |a:Result<(HashSet<TensorSliceIdx<Resource>>, HashSet<i64>, Option<i64>), ThoosaError>, v:Result<(
                 i64, i64,//channel_id, run_id
 
-                u32, u32, String, i64,//tensor_id_0, import_0, key_0, slice_idx_0
+                u32, u32, String, i64,//resource_id, import_id, key, slice_idx
 
-                u32, u32, String, i64//tensor_id_1, import_1, key_1, slice_idx_1
             ), Error>| {
                 let v = v?;
                 let (mut a, mut channel_set,mut run_id) = a?;
 
                 a.insert(TensorSliceIdx(Resource::new(v.2, v.3, v.4), v.5));
-                a.insert(TensorSliceIdx(Resource::new(v.6, v.7, v.8), v.9));
 
                 channel_set.insert(v.0); //TODO replace with Option
 
@@ -1279,7 +1280,7 @@ impl Store for SqlStore {
     }
 }
 
-
+//TODO move all prepare to init
 impl SqlStore {
 
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoosaError> {
@@ -1388,25 +1389,29 @@ impl SqlStore {
             t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_param_values_name_run_id ON run_param_values (run_id, name, label_id);", ())?;
 
             t.execute( //group - ordinal as appeared when grouping, not needed
-                       "CREATE TABLE IF NOT EXISTS motifs (
+               "CREATE TABLE IF NOT EXISTS motifs (
                 id              INTEGER PRIMARY KEY,
                 group_ord       INTEGER NOT NULL,
                 run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL
             )", ())?;
 
-            //TODO remove
+            t.execute(
+            "CREATE TABLE IF NOT EXISTS slices (
+                id              INTEGER PRIMARY KEY,
+                motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
+                resource_id     REFERENCES resources(id) ON DELETE CASCADE,
+                slice_idx       INTEGER NOT NULL,
+                UNIQUE(resource_id, slice_idx)
+            )", ())?;
+
             t.execute(
                 "CREATE TABLE IF NOT EXISTS slice_matches (
                 id              INTEGER PRIMARY KEY,
-                run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
-                channel_id      INTEGER NOT NULL,
-                tensor_id_0     REFERENCES resources(id) ON DELETE CASCADE,
-                slice_idx_0     INTEGER NOT NULL,
-                tensor_id_1     REFERENCES resources(id) ON DELETE CASCADE,
-                slice_idx_1     INTEGER NOT NULL,
-                dist             FLOAT NOT NULL,
-                motif_id        REFERENCES motifs(id) ON DELETE CASCADE DEFAULT NULL
+                motif_id        REFERENCES motifs(id) ON DELETE CASCADE DEFAULT NULL,
+                slice_id_0      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
+                slice_id_1      NOT NULL REFERENCES slices(id) ON DELETE CASCADE,
+                dist            FLOAT NOT NULL
             )", ())?;
 
             //labels_motifs on resource_set
@@ -1515,6 +1520,66 @@ impl SqlStore {
 
         Ok(())
     }
+
+    fn insert_slices(t: &Transaction, run_id: usize, channel: i64, motif_id: i64, chunk: IntoIter<IdSlice, 500>) -> Result<(), ThoosaError> {
+        let sql = "INSERT INTO slices (motif_id, resource_id, slice_idx) VALUES";
+                            // (?,?");
+
+        let (mut q, params) = chunk.into_iter().fold((vec![sql], vec![
+
+        ]), |mut a: (Vec<&str>, Vec<Value>), v: IdSlice| {
+            a.0.push("(?, ?, ?)");
+            a.0.push(", ");
+            a.1.push(motif_id.into());
+            a.1.push(v.1.into());
+            a.1.push(v.2.into());
+
+            a
+        });
+
+        q.pop();
+
+        debug!("insert_slices: params={params:?}");
+
+        let slice_inserted = t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
+        debug!("insert_slices: slice_inserted={slice_inserted}");
+
+        Ok(())
+    }
+
+    fn insert_slices_matches_chunk_from_tmp(t: &Transaction, run_id: usize, channel: i64, motif_id: i64, chunk: IntoIter<IdSlice, 500>) -> Result<(), ThoosaError> {
+
+        Self::insert_slices(t, run_id, channel, motif_id, chunk.clone())?;
+
+
+        let mut stmt = t.prepare("SELECT * FROM slices")?;
+        let mut res = stmt.query([])?;
+        while let Some(r) =  res.next()?{
+            debug!("slices: r={r:?}");
+        }
+
+        let sql = format!("INSERT INTO slice_matches (motif_id, slice_id_0, slice_id_1, dist) \
+                            SELECT s_0.motif_id, s_0.id, s_1.id, dist FROM slices_{run_id}_{channel}_tmp.slice_matches tsm \
+                            JOIN slices s_0 on s_0.resource_id = tsm.tensor_id_0 AND s_0.slice_idx = tsm.slice_idx_0 \
+                            JOIN slices s_1 on s_1.resource_id = tsm.tensor_id_1 AND s_1.slice_idx = tsm.slice_idx_1 \
+                            WHERE s_0.motif_id=? AND s_1.motif_id=?
+                            ");
+
+
+        let slice_matches_updated = t.execute(sql.as_str(), [motif_id, motif_id])?;
+
+        let mut stmt = t.prepare("SELECT * FROM slice_matches")?;
+        let mut res = stmt.query([])?;
+        while let Some(r) =  res.next()?{
+            debug!("slice_matches: r={r:?}");
+        }
+
+        debug!("save_slices_groups_as_motifs_from_tmp_db: slice_matches_updated={slice_matches_updated}");
+
+        Ok(())
+    }
+
+
 }
 
 fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
@@ -1572,7 +1637,7 @@ impl SqlMotifTrackerStore {
 
 pub trait MotifTrackerStore:Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
-    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>;
+    fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>;
 
     fn run_id(&self) -> usize;
     fn channel(&self) -> usize;
@@ -1614,7 +1679,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         Ok(())
     }
 
-    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
+    fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1641,10 +1706,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         };
         t.commit()?;
 
-        store.lock().set_motifs_from_tmp_db(self.run_id, self.channel as i64, groups, &self.path)?;
-
-
-        Ok(())
+        store.lock().save_groups_as_motifs_with_slices_matches(self.run_id, self.channel as i64, groups, &self.path)
 
     }
 
@@ -1666,9 +1728,11 @@ mod store_tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
+    use std::sync::Arc;
     use std::time::Instant;
 
     use log::debug;
+    use parking_lot::Mutex;
     use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::{cdt, cdt_for_dir, TensorSliceIdx};
     use thoosa_shared::val::Val;
@@ -1762,20 +1826,21 @@ mod store_tests {
         // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
-        let mut store = SqlStore::from_path(test_dir.join("test_db.db3"))?;
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_db.db3"))?));
         // let mut store = SqlStore::in_mem()?;
         let resource_ids= {
-            let mut mutex_guard = store.conn().lock();
+            let store_guard = store.lock();
+            let mut mutex_guard = store_guard.conn().lock();
             let t = mutex_guard.transaction()?;
 
-            let import_id = store.save_import("test".to_string(), &t)?;
+            let import_id = store_guard.save_import("test".to_string(), &t)?;
 
-            let _aaa_id = store.save_label("aaa", &t)?;
-            let _bbb_id = store.save_label("bbb", &t)?;
-            let _ccc_id = store.save_label("ccc", &t)?;
+            let _aaa_id = store_guard.save_label("aaa", &t)?;
+            let _bbb_id = store_guard.save_label("bbb", &t)?;
+            let _ccc_id = store_guard.save_label("ccc", &t)?;
 
 
-            let resource_ids = store.save_resources_labels(&HashMap::from([
+            let resource_ids = store_guard.save_resources_labels(&HashMap::from([
                 ("1111".into(), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]),
                 ("2222".into(), vec![("aaa".into(), 1.0)]),
                 ("3333".into(), vec![("ccc".into(), 1.0)]),
@@ -1786,7 +1851,7 @@ mod store_tests {
 
             debug!("resource_ids={resource_ids:?}");
 
-            store.save_pure_sets(10, false, &t)?;
+            store_guard.save_pure_sets(10, false, &t)?;
             t.commit()?;
             resource_ids
         };
@@ -1796,15 +1861,15 @@ mod store_tests {
 
         // store.save_set_by_labels(vec![("aaa".into(), SetCond::Gt(0.9))], true, 10)?;
 
-        let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into())?;
-        let _set_all_id = store.save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
+        let all_group_id = store.lock().save_resource_set_group("group 1 labels/100/100-200".into())?;
+        let _set_all_id = store.lock().save_resources_set("All".to_string(), vec!["1111".into(), "2222".into(), "3333".into()], Some(all_group_id))?;
 
 
-        let group_sets = store.list_resource_set_group_sets("pure group 10")?;
+        let group_sets = store.lock().list_resource_set_group_sets("pure group 10")?;
         assert_eq!(3, group_sets.len());
 
 
-        let mut keys_labels_p = store.list_resource_random_in_group("group 1 labels/100/100-200")?;
+        let mut keys_labels_p = store.lock().list_resource_random_in_group("group 1 labels/100/100-200")?;
 
         keys_labels_p.sort_by(|a, b| ((a.1[0] * 10.) as u32).cmp(&((b.1[0] * 10.) as u32)));
 
@@ -1829,7 +1894,7 @@ mod store_tests {
         ];
 
 
-        let run_id = store.save_tree_run(
+        let run_id = store.lock().save_tree_run(
             None,
             "test", "",
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
@@ -1883,12 +1948,12 @@ mod store_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.build_groups()?;
+        let groups = slices_store.load_slices_into_groups(&store)?;
 
-        store.set_motifs_from_tmp_db(run_id, 7, groups, &slices_store_path)?;
 
         {
-            let mut guard = store.conn().lock();
+            let store_guard = store.lock();
+            let mut guard = store_guard.conn().lock();
             let t2 = guard.transaction()?;
             let mut stmt = t2.prepare("SELECT run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, motif_id FROM slice_matches ORDER BY tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1")?;
 
@@ -1915,7 +1980,7 @@ mod store_tests {
 
         };
 
-        let map = store.list_motifs_slices(run_id)?;
+        let map = store.lock().list_motifs_slices(run_id)?;
         debug!("map={:?}", map);
 
         // assert_eq!(4, map.len());
@@ -1932,7 +1997,7 @@ mod store_tests {
         debug!("motif_slices_1111={motif_slices_1111:?}");
         debug!("motif_slices_444={motif_slices_444:?}");
 
-        let motif_selection_run_id = store.save_selected_motifs(
+        let motif_selection_run_id = store.lock().save_selected_motifs(
             run_id,
             "test motifs",
             vec![vec![
@@ -1941,11 +2006,11 @@ mod store_tests {
             ]],
         )?;
 
-        let input_run_ids = store.list_input_run_ids(&vec![motif_selection_run_id])?;
+        let input_run_ids = store.lock().list_input_run_ids(&vec![motif_selection_run_id])?;
 
         assert_eq!([(motif_selection_run_id, run_id)], input_run_ids.as_slice());
 
-        let motifs = store.list_selected_motifs(motif_selection_run_id)?;
+        let motifs = store.lock().list_selected_motifs(motif_selection_run_id)?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -1954,7 +2019,7 @@ mod store_tests {
         assert_eq!(motif_slices_1111[0].motif_id, motifs[7][1].0);
         //
         // //TODO
-        let (channel, run_id_, mut slices) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None)?;
+        let (channel, run_id_, mut slices) = store.lock().list_motif_slices(motif_slices_1111[0].motif_id, None, None)?;
         slices.sort();
 
         debug!("slices={slices:?}");
@@ -1989,7 +2054,7 @@ mod store_tests {
         //     store.tree_run_descr(motif_selection_run_id)?
         // );
         //
-        store.delete_slices_without_matches(run_id)?;
+        store.lock().delete_slices_without_matches(run_id)?;
 
         Ok(())
     }

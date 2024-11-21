@@ -76,7 +76,7 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long, default_value_t = 0.01)]
     pub max_dist_k: f32,
 
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     pub file_motif_tracker: bool,
 
     #[command(subcommand)]
@@ -248,7 +248,7 @@ pub fn find_motifs_by_euc_dist(
                 Mutex::new(SimpleMotifTracker::new(
                     if common_config.file_motif_tracker {
                         FileMotifTrackerStore::new(
-                            ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
+                            ws.read().tmp_path(),
                             run_config.id.expect("id"),
                             channel
                         ).expect("can't create tmp store")
@@ -339,34 +339,20 @@ pub fn find_motifs_by_euc_dist(
 
     info!("setting motifs in {} configs", run_config_ids.len());
     let mut chunks = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).array_chunks::<10>();
+
     while let Some(chunk) = chunks.next() {
         chunk.into_iter().par_bridge().for_each(|mt|{
-            save_motifs(store, mt);
+            mt.lock().build_groups(store).expect("build_groups");
         });
     }
 
-
     if let Some(reminder) = chunks.into_remainder() {
         reminder.into_iter().par_bridge().for_each(|mt|{
-            save_motifs(store, mt);
+            mt.lock().build_groups(store).expect("build_groups");
         });
     }
 
     Ok(run_config_ids)//TODO return only successful run_id (window size check)?
-}
-
-fn save_motifs(store: &Arc<Mutex<Box<dyn Store>>>, mt: &Mutex<SimpleMotifTracker>) {
-    mt.lock().build_groups(store).expect("build_groups");
-    // let mut mt_guard = mt.lock();
-    // match mt_guard.build_groups(store) {
-    //     Ok(groups) => {
-    //         info!("done, {} groups found", groups.len());
-    //         store.lock().set_motifs_from_tmp_db(mt_guard.dumper.run_id(), mt_guard.dumper.channel() as i64, groups, &mt_guard.dumper.path()).expect("");
-    //     }
-    //     Err(e) => {
-    //         info!("mt {mt:?} failed with {e:?}");
-    //     }
-    // };
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -835,7 +821,7 @@ impl<'a> SimpleMotifTracker<'a> {
     }
 
     fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
-        self.dumper.build_groups(store)
+        self.dumper.load_slices_into_groups(store)
 
     }
 
@@ -2177,7 +2163,7 @@ mod motif_find_tests {
             Ok(())
         }
 
-        fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
+        fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
             todo!()
         }
 
