@@ -1572,7 +1572,7 @@ impl SqlMotifTrackerStore {
 
 pub trait MotifTrackerStore:Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
-    fn build_groups(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError>;
+    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>;
 
     fn run_id(&self) -> usize;
     fn channel(&self) -> usize;
@@ -1614,7 +1614,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         Ok(())
     }
 
-    fn build_groups(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
+    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1641,8 +1641,10 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         };
         t.commit()?;
 
+        store.lock().set_motifs_from_tmp_db(self.run_id, self.channel as i64, groups, &self.path)?;
 
-        Ok(groups)
+
+        Ok(())
 
     }
 

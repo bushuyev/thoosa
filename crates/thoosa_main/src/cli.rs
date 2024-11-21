@@ -1841,7 +1841,7 @@ mod main_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.build_groups()?;
+        let groups = slices_store.build_groups(&store)?;
 
 
         for i in 0..1 { //single channel
