@@ -106,6 +106,10 @@ impl Workspace for FsWorkspace {
         self.tmp_path.join(format!("{run_id}_{channel}.db3"))
     }
 
+    fn tmp_path(&self) -> &PathBuf {
+        &self.tmp_path
+    }
+
     fn tensors_path(&self) -> &PathBuf {
         &self.tensors_path
     }
@@ -257,6 +261,7 @@ pub trait Workspace:Sync + Send {
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
+    fn tmp_path(&self) -> &PathBuf;
     fn tmp_run_store_path(&self, run_id:u32, channel:u32) -> PathBuf;
     fn tensors_path(&self) -> &PathBuf;
     fn tensor_path(&self, key: &Resource) -> PathBuf;
@@ -318,6 +323,11 @@ impl Workspace for DummyWorkspace {
     fn tmp_run_store_path(&self, run_id: u32, channel: u32) -> PathBuf {
         self.base.join(format!("{run_id}_{channel}.db3"))
     }
+
+    fn tmp_path(&self) -> &PathBuf {
+        &self.base
+    }
+
 
     fn tensors_path(&self) -> &PathBuf {
         todo!()

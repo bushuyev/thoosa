@@ -3,7 +3,7 @@
 
 use std::backtrace::Backtrace;
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::f32::consts::PI;
 use std::fmt::{Debug, Display, Formatter};
@@ -31,7 +31,7 @@ pub mod val;
 pub mod resource;
 
 //group of similar slices - motif
-pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, Vec<T>>
+pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
 where T:Hash + Eq + Debug {
 
     let mut pairs_groups: HashMap<T, u16> = HashMap::new();
@@ -70,7 +70,7 @@ where T:Hash + Eq + Debug {
             .fold(HashMap::new(), |mut h, v| {
 
                 for i in v.iter().skip(1) {
-                    h.insert(*i, v[0]);
+                    h.insert(*i, v.iter().next().expect("no group").clone());
                 }
                 h
             });
@@ -80,11 +80,11 @@ where T:Hash + Eq + Debug {
         None
     };
 
-    let mut groups: HashMap<u16, Vec<T>> = HashMap::new();
+    let mut groups: HashMap<u16, HashSet<T>> = HashMap::new();
     for (val, group) in pairs_groups {
         let group= separated_groups_map.as_ref().and_then(|m|m.get(&group)).unwrap_or(&group); //replace separated group pairs with one in pair
-        let gr_vec = groups.entry(*group).or_insert_with(|| vec![]);
-        gr_vec.push(val);
+        let gr_vec = groups.entry(*group).or_insert_with(|| HashSet::new());
+        gr_vec.insert(val);
     }
 
     debug!("group_motifs groups={:?}", groups);
@@ -797,6 +797,7 @@ mod shared_tests {
    group 2: e, f, g
    group 3: x, y
    */
+    use std::collections::HashSet;
     use std::fmt::Display;
     use std::sync::Arc;
     use std::vec::IntoIter;
@@ -836,17 +837,17 @@ mod shared_tests {
 
         let mut groups = group_slices(pairs.into_iter());
 
-        let group_0 = groups.get_mut(&0).unwrap();
+        let mut group_0 = groups.get_mut(&0).unwrap().iter().collect::<Vec<_>>();
         group_0.sort();
-        assert_eq!(&vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()], group_0);
+        assert_eq!(vec!["a", "b", "c", "d"], group_0);
 
-        let group_1 = groups.get_mut(&1).unwrap();
+        let mut group_1 = groups.get_mut(&1).unwrap().iter().collect::<Vec<_>>();
         group_1.sort();
-        assert_eq!(&vec!["e".to_string(), "f".to_string(), "g".to_string()], group_1);
+        assert_eq!(vec!["e", "f", "g"], group_1);
 
-        let group_2 = groups.get_mut(&2).unwrap();
+        let mut group_2 = groups.get_mut(&2).unwrap().iter().collect::<Vec<_>>();
         group_2.sort();
-        assert_eq!(&vec!["x".to_string(), "y".to_string()], group_2);
+        assert_eq!(vec!["x", "y"], group_2);
     }
 
     #[test]
@@ -865,17 +866,17 @@ mod shared_tests {
 
         assert_eq!(groups.len(), 2);
 
-        let mut values:Vec<Vec<String>> = groups.values().into_iter().map(|v|v.clone()).collect();
+        let mut values:Vec<HashSet<String>> = groups.values().into_iter().map(|v|v.clone()).collect();
         values.sort_by(|a, b|b.len().cmp(&a.len()));
 
 
-        let group_0 = values.get_mut(0).unwrap();
+        let mut group_0 = values.get_mut(0).unwrap().iter().collect::<Vec<_>>();;
         group_0.sort();
-        assert_eq!(&vec!["a".to_string(), "b".to_string(), "v".to_string(), "w".to_string(), "x".to_string(), "y".to_string()], group_0);
+        assert_eq!(vec!["a", "b", "v", "w", "x", "y"], group_0);
 
-        let group_1 = values.get_mut(1).unwrap();
+        let mut group_1 = values.get_mut(1).unwrap().iter().collect::<Vec<_>>();;
         group_1.sort();
-        assert_eq!(&vec!["l".to_string(), "m".to_string()], group_1);
+        assert_eq!(vec!["l", "m"], group_1);
 
     }
 

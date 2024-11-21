@@ -46,3 +46,12 @@ lib=Library@0x5b19802439d0
 
 
 12:54:44 [INFO] done 0 chunks out of 2596 in 590734 mls
+
+
+
+ export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_import_test/ --logfile=/tmp/ws_import_test/thoosa.log  find-motifs --resources="group:pure group 100" --chunk-size=2 --window=100..1000:100 --step=100 --max-dist-k=0.01
+10049361
+
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_import_test/ --logfile=/tmp/ws_import_test/thoosa.log  find-motifs --resources="group:pure group 100" --chunk-size=2 --window=100..1000:100 --step=100 --max-dist-k=0.01 --file-motif-tracker
+17:12:50 [INFO] All done in 6699984 mls
+

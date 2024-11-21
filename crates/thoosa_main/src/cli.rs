@@ -1841,12 +1841,12 @@ mod main_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.build_groups(&store)?;
+        let groups = slices_store.load_slices_into_groups(&store)?;
 
 
         for i in 0..1 { //single channel
 
-            { store.lock().set_motifs_from_tmp_db(run_id, i, groups.clone(), &test_db) }?;
+            { store.lock().save_groups_as_motifs_with_slices_matches(run_id, i, groups.clone(), &test_db) }?;
         }
 
         // { store.lock().delete_slices_without_matches(run_id) }?;
