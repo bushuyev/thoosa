@@ -1,19 +1,19 @@
+use parking_lot::Mutex;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::{fmt, fs, mem, thread};
-use std::cell::Cell;
 use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::{Deref, Range};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread::current;
-use parking_lot::Mutex;
 use std::time::{Duration, Instant};
+use std::{fmt, fs, mem, thread};
 
 use clap::clap_derive::{Args, Subcommand};
 use crossbeam_channel::SendError;
@@ -26,35 +26,35 @@ use tch::{Device, IndexOp, Kind, Tensor};
 
 
 use thoosa_common::utils::*;
-use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoosaError};
 use thoosa_shared::parse_key_val;
-use thoosa_shared::TensorSliceIdx;
 use thoosa_shared::val::Val;
-use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
+use thoosa_shared::TensorSliceIdx;
+use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoosaError};
 use thoosa_store::SqlMotifTrackerStore;
+use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 
 
-use thoosa_common::loader::{LoadRunner, SyncWrapper};
-use thoosa_common::loader::Loader;
-use crate::distance::{dist_d2, dist_d2_0};
+use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 use crate::distance::slice_t;
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
-use rayon::iter::ParallelIterator;
+use crate::distance::{dist_d2, dist_d2_0};
+use crate::fragments::motifs_to_tensor;
 use rayon::iter::IndexedParallelIterator;
-use tch::Device::{Cpu, Cuda};
+use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+use tch::Device::{Cpu, Cuda};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::loader;
-use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
+use thoosa_common::loader::Loader;
+use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::Primitives::Float;
+use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_store::fs_store::FileMotifTrackerStore;
-use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
-use crate::fragments::motifs_to_tensor;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -76,6 +76,9 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long, default_value_t = 0.01)]
     pub max_dist_k: f32,
 
+    #[arg(long, default_value_t = true)]
+    pub file_motif_tracker: bool,
+
     #[command(subcommand)]
     pub input_filter: Option<InputFilter>,
 }
@@ -83,12 +86,13 @@ pub struct FindMotifsParams {//TODO pub
 #[derive(Debug)]
 pub struct CommonFindMotifsConfig {
     min_tracker_step:Option<usize>,
-    chunk_size:u32
+    chunk_size:u32,
+    file_motif_tracker:bool//TODO enum
 }
 
 impl CommonFindMotifsConfig {
     pub fn new(min_tracker_step: Option<usize>, chunk_size: u32) -> Self {
-        Self { min_tracker_step, chunk_size }
+        Self { min_tracker_step, chunk_size, file_motif_tracker: true }
     }
 }
 
@@ -119,7 +123,8 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
 
         CommonFindMotifsConfig {
             chunk_size: self.chunk_size,
-            min_tracker_step: self.min_tracker_step
+            min_tracker_step: self.min_tracker_step,
+            file_motif_tracker: self.file_motif_tracker
         }
     }
 }
@@ -203,7 +208,9 @@ impl FindMotifsParams {
 
             chunk_size,
 
-            max_dist_k: max_dist_k,
+            max_dist_k,
+
+            file_motif_tracker: true,
 
             input_filter: input_filter.cloned(),
         }
@@ -234,14 +241,12 @@ pub fn find_motifs_by_euc_dist(
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
-    let file_motif_tracker = true; //TODO params/ws config?
-
     let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
         assert!(a.insert(
             run_config.id.expect("id"),
             (0..ws.read().channels()).map(|channel|
                 Mutex::new(SimpleMotifTracker::new(
-                    if file_motif_tracker {
+                    if common_config.file_motif_tracker {
                         FileMotifTrackerStore::new(
                             ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
                             run_config.id.expect("id"),
@@ -305,6 +310,7 @@ pub fn find_motifs_by_euc_dist(
             channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
                 let le_flatten = le_cpu.i((channel as i64, .., ..)).flatten(0, 1);
                 let mut channel_mask:BoolTensorIterator = (&le_flatten).into();
+
 
                 chunk_0.iter().for_each(|slice_0|{
                     chunk_1.iter().for_each(|slice_1|{
@@ -777,18 +783,16 @@ fn collect_dists<'a, F, C>(
 
 //TODO trait for MotifTracker
 #[derive(Debug)]
-pub(crate) struct SimpleMotifTracker {
+pub(crate) struct SimpleMotifTracker<'a> {
     last:Option<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>,
     motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>, //i_0, match_0, match_1, dist
-    dumper: Box<dyn MotifTrackerStore>,
+    dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
     min_step:Option<usize>
 }
 
-// impl <D> Send for SimpleMotifTracker<D>
+impl<'a> SimpleMotifTracker<'a> {
 
-impl<'a> SimpleMotifTracker {
-
-    pub fn new(dumper: Box<dyn MotifTrackerStore>, min_step:Option<usize>) -> SimpleMotifTracker {
+    pub fn new(dumper: Box<dyn MotifTrackerStore+'a>, min_step:Option<usize>) -> SimpleMotifTracker {
         Self {
             last:None,
             motifs: vec![],
@@ -797,7 +801,7 @@ impl<'a> SimpleMotifTracker {
         }
     }
 
-    pub fn track(&'a mut self, i_0: TensorSliceIdx <ResourceId>, i_1: TensorSliceIdx <ResourceId>, dist: f32) {
+    pub fn track(&mut self, i_0: TensorSliceIdx <ResourceId>, i_1: TensorSliceIdx <ResourceId>, dist: f32) {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
 
         match self.min_step {
@@ -830,8 +834,9 @@ impl<'a> SimpleMotifTracker {
         }
     }
 
-    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError>{
-        self.dumper.build_groups()
+    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
+        self.dumper.build_groups(store)
+
     }
 
     #[cfg(test)]
@@ -1455,16 +1460,16 @@ pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item
 mod motif_find_tests {
     use std::{fs, mem, thread};
 
-    use std::collections::HashMap;
-    use std::fmt::{Debug, Display};
-    use std::ops::Deref;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU32, AtomicU64};
-    use std::sync::atomic::Ordering::Relaxed;
     use crossbeam_channel::internal::SelectHandle;
     use crossbeam_utils::sync::WaitGroup;
     use parking_lot::{Mutex, RawMutex};
+    use std::collections::HashMap;
+    use std::fmt::{Debug, Display};
+    use std::ops::Deref;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::Arc;
 
 
     use log::{debug, trace};
@@ -1472,21 +1477,21 @@ mod motif_find_tests {
     use parking_lot_mpsc::SendError;
     use rayon::iter::ParallelBridge;
     use rayon::iter::ParallelIterator;
-    use tch::{Device, IndexOp, Tensor};
+    use tch::kind::DOUBLE_CPU;
     use tch::Device::Cpu;
     use tch::Kind::{Float, Int};
-    use tch::kind::DOUBLE_CPU;
+    use tch::{Device, IndexOp, Tensor};
     use thoosa_common::utils::*;
     use thoosa_shared::*;
 
-    use thoosa_shared::val::Val;
-    use thoosa_store::{IdSlice, SqlStore, Store};
+    use crate::chunks::ChunkOfSlicedTensors;
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_shared::resource::{Resource, ResourceId};
-    use crate::chunks::ChunkOfSlicedTensors;
-    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
+    use thoosa_shared::val::Val;
+    use thoosa_store::{IdSlice, SqlStore, Store};
 
     use crate::find::select_motifs_by_corr;
 
@@ -1814,10 +1819,11 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             chunk_size: 2,
             max_dist_k: 0.01,
+            file_motif_tracker: false,
             input_filter: None,
         };
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params);
+        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
 
         let run_ids = find_motifs_by_euc_dist(
             None,
@@ -1865,8 +1871,9 @@ mod motif_find_tests {
         store.lock().list_resources_by_file_stems(&vec!["1111", "2222", "3333"])
     }
 
-    fn to_test_run_config(store: &Arc<Mutex<Box<dyn Store>>>, params: &FindMotifsParams) -> (CommonFindMotifsConfig, Vec<FindMotifsRunConfig>) {
-        let common_config = params.common_config();
+    fn to_test_run_config(store: &Arc<Mutex<Box<dyn Store>>>, params: &FindMotifsParams, file_motif_tracker: bool) -> (CommonFindMotifsConfig, Vec<FindMotifsRunConfig>) {
+        let mut common_config = params.common_config();
+        common_config.file_motif_tracker = file_motif_tracker;
         let mut run_configs = params.to_run_configs();
         run_configs.iter_mut().for_each(|c| {
             let id = store.lock().save_tree_run(None, "test", "test", HashMap::new()).unwrap();
@@ -1937,10 +1944,11 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             chunk_size: 2,
             max_dist_k: 0.0001,
+            file_motif_tracker: false,
             input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
         };
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params);
+        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
 
         let run_ids = find_motifs_by_euc_dist(
             None,
@@ -2033,11 +2041,12 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             chunk_size: 2,
             max_dist_k: 0.0001,
+            file_motif_tracker: false,
             input_filter: None,
         };
 
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params);
+        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
 
         let run_ids = find_motifs_by_euc_dist(
             None,
@@ -2114,10 +2123,11 @@ mod motif_find_tests {
             min_tracker_step: Some(10),
             chunk_size: 3,
             max_dist_k: 0.01,
+            file_motif_tracker: false,
             input_filter: None,
         };
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params);
+        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
 
         let run_ids = find_motifs_by_euc_dist(
             None,
@@ -2140,19 +2150,20 @@ mod motif_find_tests {
     }
 
     #[derive(Debug)]
-    struct DummyDumper {
-        motifs:  Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>
+    struct DummyDumper<'a> {
+        motifs:  &'a mut Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>
     }
 
-    impl DummyDumper {
-        pub fn new() -> Self {
+    impl <'a> DummyDumper<'a> {
+        pub fn new(motifs: &'a mut Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>) -> Self {
             Self {
-                motifs:vec![]
+                motifs
             }
         }
     }
 
-    impl MotifTrackerStore for DummyDumper {
+    impl <'a> MotifTrackerStore for DummyDumper<'a> {
+
         fn save_slices(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>{
 
             self.motifs.extend(motifs.into_iter().map(|m|{
@@ -2166,7 +2177,19 @@ mod motif_find_tests {
             Ok(())
         }
 
-        fn build_groups(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
+        fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
+            todo!()
+        }
+
+        fn run_id(&self) -> usize {
+            todo!()
+        }
+
+        fn channel(&self) -> usize {
+            todo!()
+        }
+
+        fn path(&self) -> &PathBuf {
             todo!()
         }
     }
@@ -2174,30 +2197,37 @@ mod motif_find_tests {
     #[test]
     pub fn test_simple_motif_tracker() -> Result<(), ThoosaError> {
 
+        let mut motifs = vec![];
+        {
+            DummyDumper::new(&mut motifs);
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None);
 
-        let mut mt = super::SimpleMotifTracker::new(DummyDumper::new(), None);
+            mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
+            mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
+            mt.track(TensorSliceIdx(0, 30), TensorSliceIdx(1, 30), 1.0);
 
-        mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
-        mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
-        mt.track(TensorSliceIdx(0, 30), TensorSliceIdx(1, 30), 1.0);
+            mt.dump();
+        }
+        assert_eq!(motifs.len(), 3);
+        assert_eq!((TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0), motifs[0]);
+        assert_eq!((TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0), motifs[1]);
+        assert_eq!((TensorSliceIdx(0, 30), TensorSliceIdx(1, 30), 1.0), motifs[2]);
 
-        mt.dump();
-        assert_eq!(mt.dumper.motifs.len(), 3);
-        assert_eq!((TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0), mt.dumper.motifs[0]);
-        assert_eq!((TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0), mt.dumper.motifs[1]);
-        assert_eq!((TensorSliceIdx(0, 30), TensorSliceIdx(1, 30), 1.0), mt.dumper.motifs[2]);
+        let mut motifs = vec![];
+        {
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10));
+
+            mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
+            mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
+            mt.track(TensorSliceIdx(0, 31), TensorSliceIdx(1, 30), 1.0);
+
+            mt.dump();
+        }
 
 
-        let mut mt = super::SimpleMotifTracker::new(DummyDumper::new(), Some(10));
-
-        mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
-        mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
-        mt.track(TensorSliceIdx(0, 31), TensorSliceIdx(1, 30), 1.0);
-
-        mt.dump();
-        assert_eq!(mt.dumper.motifs.len(), 2);
-        assert_eq!((TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0), mt.dumper.motifs[0]);
-        assert_eq!((TensorSliceIdx(0, 31), TensorSliceIdx(1, 30), 1.0), mt.dumper.motifs[1]);
+        assert_eq!(motifs.len(), 2);
+        assert_eq!((TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0), motifs[0]);
+        assert_eq!((TensorSliceIdx(0, 31), TensorSliceIdx(1, 30), 1.0), motifs[1]);
 
         Ok(())
     }
@@ -2221,8 +2251,8 @@ mod motif_find_tests {
         let m = 100;
         let step = 100;
 
-
-        let mut mt = super::SimpleMotifTracker::new(DummyDumper::new(), None);
+        let mut motifs = vec![];
+        let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None);
 
         let dim = 1;
 

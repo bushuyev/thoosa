@@ -4,10 +4,12 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::{group_slices, TensorSliceIdx, ThoosaError};
-use crate::{IdSlice, MotifTrackerStore};
+use crate::{IdSlice, MotifTrackerStore, Store};
 
 #[derive(Debug)]
 pub struct FileMotifTrackerStore {
@@ -48,7 +50,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         file.write_all(bytes).map_err(|e|ThoosaError::new(e.to_string()))
     }
 
-    fn build_groups(&mut self) -> Result<HashMap<u16, Vec<IdSlice>>, ThoosaError> {
+    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
         let mut file = File::open("output.dat")?;
         let metadata = file.metadata()?;
         let file_size = metadata.len() as usize;
@@ -75,14 +77,16 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             file.read_exact(data_slice)?;
         }
 
-        Ok(group_slices(
-            data_vec.into_iter().map(|v| { //TODO move group_slices out, not for store
-                    (
-                        IdSlice(0, v.0.0, v.0.1),
-                        IdSlice(0, v.1.0, v.1.1)
-                    )
-            })
-        ))
+        // Ok(group_slices(
+        //     data_vec.into_iter().map(|v| { //TODO move group_slices out, not for store
+        //             (
+        //                 IdSlice(0, v.0.0, v.0.1),
+        //                 IdSlice(0, v.1.0, v.1.1)
+        //             )
+        //     })
+        // ));
+
+        Ok(())
     }
 
 
