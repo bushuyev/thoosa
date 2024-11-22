@@ -1,3 +1,9 @@
+use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
+use lazy_static::lazy_static;
+use log::{debug, info, trace, warn};
+use parking_lot::RwLock;
+use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs;
@@ -5,16 +11,10 @@ use std::fs::{read_dir, ReadDir};
 use std::num::ParseIntError;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use lazy_static::lazy_static;
-use log::{debug, info, trace, warn};
-use parking_lot::RwLock;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use tch::nn::VarStore;
 use tch::{Device, TchError, Tensor};
-use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
-use thoosa_shared::{cdt_for_dir, recurse_files, ThoosaError};
-use rayon::iter::ParallelIterator;
 use thoosa_shared::resource::Resource;
+use thoosa_shared::{cdt_for_dir, recurse_files, ThoosaError};
 
 pub struct FsWorkspace {
     base_path:PathBuf,
@@ -34,6 +34,7 @@ pub struct FsWorkspace {
 impl FsWorkspace {
 
     pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Box<dyn Workspace>, ThoosaError> {
+
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
 
@@ -392,14 +393,14 @@ impl Workspace for DummyWorkspace {
 
 #[cfg(test)]
 mod tests {
+    use super::{DummyWorkspace, FsWorkspace, Workspace};
+    use crate::train_nets::{LabelNodeParams, MotifNodeParams};
+    use log::debug;
     use std::fs;
     use std::path::Path;
-    use log::debug;
-    use tch::Device::Cpu;
     use tch::nn::VarStore;
+    use tch::Device::Cpu;
     use thoosa_shared::{cdt_for_dir, ThoosaError};
-    use crate::train_nets::{LabelNodeParams, MotifNodeParams};
-    use super::{DummyWorkspace, FsWorkspace, Workspace};
 
     #[ctor::ctor]
     fn init() {

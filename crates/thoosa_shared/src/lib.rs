@@ -183,13 +183,13 @@ where D: Display {
 pub struct MotifSlice {
     pub motif_id: usize,
     pub slise_idx: i64,
-    pub channel_idx: u16,
+    pub channel: u16,
 }
 
 impl MotifSlice {
 
-    pub fn new(motif_id: usize, slise_idx: i64, channel_idx: u16) -> Self {
-        Self { motif_id, slise_idx, channel_idx }
+    pub fn new(motif_id: usize, slise_idx: i64, channel: u16) -> Self {
+        Self { motif_id, slise_idx, channel }
     }
 
     #[inline]
@@ -203,8 +203,8 @@ impl MotifSlice {
     }
 
     #[inline]
-    pub fn channel_idx(&self) -> u16 {
-        self.channel_idx
+    pub fn channel(&self) -> u16 {
+        self.channel
     }
 }
 

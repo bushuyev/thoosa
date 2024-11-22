@@ -316,7 +316,7 @@ pub fn find_motifs_by_euc_dist(
                     chunk_1.iter().for_each(|slice_1|{
 
                         let mask = channel_mask.next().unwrap();
-                        debug!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel} mask={mask}");
+                        trace!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel} mask={mask}");
 
                         if mask
                             && (slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1

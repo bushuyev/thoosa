@@ -124,10 +124,13 @@ mod tests {
     #[test]
     fn test_single_part() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
 
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+
+        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
         let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
 
@@ -138,17 +141,73 @@ mod tests {
         )?;
 
         file_store.save_slices(vec![
-            (TensorSliceIdx(0, 100), TensorSliceIdx(0, 200), 0.1),
-            (TensorSliceIdx(0, 200), TensorSliceIdx(0, 300), 0.2),
-            (TensorSliceIdx(0, 100), TensorSliceIdx(0, 700), 0.3),
-            (TensorSliceIdx(0, 700), TensorSliceIdx(0, 800), 0.4)
+            (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[0], 200), 0.1),
+            (TensorSliceIdx(resource_ids[0], 200), TensorSliceIdx(resource_ids[0], 300), 0.2),
+            (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[0], 700), 0.3),
+            (TensorSliceIdx(resource_ids[0], 700), TensorSliceIdx(resource_ids[0], 800), 0.4)
         ])?;
 
         file_store.load_slices_into_groups(&store)?;
 
-        let motifs_slices = store.lock().list_motifs_slices(run_id)?;
+        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
+        let map = store.lock().list_motifs_slices(run_id)?;
 
-        debug!("motifs_slices={motifs_slices:?}");
+
+        let motifs_slices = map.get(&resources[0]).expect("resource 0");
+        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slise_idx).collect::<Vec<_>>();
+        slise_idxs.sort();
+
+        assert_eq!(
+            vec![100, 200, 300, 700, 800],
+            slise_idxs
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_two_parts() -> Result<(), ThoosaError>{
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        debug!("test_single_part: test_dir={test_dir:?}");
+        fs::create_dir_all(&test_dir)?;
+
+
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+
+        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+
+        let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
+
+        let mut file_store = FileMotifTrackerStore::new(
+            test_dir,
+            run_id,
+            3
+        )?;
+
+        file_store.save_slices(vec![
+            (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[0], 200), 0.1),
+            (TensorSliceIdx(resource_ids[0], 200), TensorSliceIdx(resource_ids[0], 300), 0.2),
+        ])?;
+
+        file_store.save_slices(vec![
+            (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[0], 700), 0.3),
+            (TensorSliceIdx(resource_ids[0], 700), TensorSliceIdx(resource_ids[0], 800), 0.4)
+        ])?;
+
+        file_store.load_slices_into_groups(&store)?;
+
+        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
+        let map = store.lock().list_motifs_slices(run_id)?;
+
+
+        let motifs_slices = map.get(&resources[0]).expect("resource 0");
+        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slise_idx).collect::<Vec<_>>();
+        slise_idxs.sort();
+
+        assert_eq!(
+            vec![100, 200, 300, 700, 800],
+            slise_idxs
+        );
 
         Ok(())
     }
