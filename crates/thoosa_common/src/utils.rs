@@ -679,7 +679,7 @@ pub fn three_sigs_tensor(n: i64, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v
     // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
 
     let t_0_1 = Tensor::vstack(&[
-        Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), sig_0_v.clone()].concat().as_slice()),
         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
         Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
     ]);

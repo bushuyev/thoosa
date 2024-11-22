@@ -1329,7 +1329,7 @@ mod main_tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::vec::IntoIter;
-    use log::debug;
+    use log::{debug, trace, LevelFilter};
     use parking_lot::{Mutex, RawMutex, RwLock};
     use parking_lot::lock_api::MutexGuard;
     use plotters::prelude::{IntoLinspace, BLACK};
@@ -1337,6 +1337,7 @@ mod main_tests {
     use polars::export::chrono;
     use rayon::iter::ParallelIterator;
     use rayon::prelude::IntoParallelIterator;
+    use simplelog::CombinedLogger;
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Device::Cpu;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -1402,6 +1403,11 @@ mod main_tests {
 
     #[test]
     fn test_motifs() -> Result<(), ThoosaError> {
+        //TODO doesn't work:
+        // log::set_max_level(LevelFilter::Trace);
+        // unsafe { log::set_max_level_racy(LevelFilter::Trace); }
+        // trace!("TRACE");
+
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
         fs::create_dir_all(&test_dir)?;
@@ -1416,8 +1422,6 @@ mod main_tests {
         let sig_0_v = sig_one_imp(n, max_y, None, None);
         let sig_1_v = sig_two_imp(n, max_y, None, None);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
-
-
 
 
         /*
@@ -1435,15 +1439,6 @@ mod main_tests {
 
         let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
 
-        let x = lin_t(n*3);
-        plot_series(
-            vec![
-                (format!("ch0"), plotters::prelude::RED,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
-                (format!("ch1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((1, ..)))).collect::<Vec<(f32, f32)>>()),
-                (format!("ch2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((2, ..)))).collect::<Vec<(f32, f32)>>()),
-
-            ], "t_0_0", (2000, 1000), &format!("/tmp/plots/t_0_0{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
-        )?;
 
         t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
         t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
@@ -1495,6 +1490,7 @@ mod main_tests {
                 min_tracker_step: Some(3),
                 chunk_size: 2,
                 max_dist_k: 0.0,
+                file_motif_tracker: false,
                 input_filter: None,
             },
             find_motifs_by_euc_dist,
@@ -1512,15 +1508,15 @@ mod main_tests {
         debug!("test_motifs: len={:?} slices_1_1={:?}", slices.get(resources_1_1).map(|v|v.len()), slices.get(resources_1_1));
         assert!(slices.len() >= 4);
 
-        let slice_0_0 = slices.get(resources_0_0).unwrap().into_iter().find(|s|s.channel_idx == 0).expect("0_0");
+        let slice_0_0 = slices.get(resources_0_0).unwrap().into_iter().find(|s|s.channel == 0).expect("0_0");
         assert_eq!(slice_0_0.slise_idx, 0);
-        let slice_0_1 = slices.get(resources_0_1).unwrap().into_iter().find(|s|s.channel_idx == 0).expect("0_1");
+        let slice_0_1 = slices.get(resources_0_1).unwrap().into_iter().find(|s|s.channel == 0).expect("0_1");
         assert_eq!(slice_0_1.slise_idx, 1000);
 
 
-        let slice_1_0 = slices.get(resources_1_0).unwrap().into_iter().find(|s|s.channel_idx == 1).expect("1_0");
+        let slice_1_0 = slices.get(resources_1_0).unwrap().into_iter().find(|s|s.channel == 1).expect("1_0");
         assert_eq!(slice_1_0.slise_idx, 1000);
-        let slice_1_1 = slices.get(resources_1_1).unwrap().into_iter().find(|s|s.channel_idx == 1).expect("1_1");
+        let slice_1_1 = slices.get(resources_1_1).unwrap().into_iter().find(|s|s.channel == 1).expect("1_1");
         assert_eq!(slice_1_1.slise_idx, 2000);
 
         let motif_dists = store.lock().list_motifs_distances(run_ids[0])?;
@@ -1744,6 +1740,7 @@ mod main_tests {
 
         let import_id = store_guard.save_import(format!("test on {}", cdt()), &t)?;
 
+        //TODO
         let resources = store_guard.save_resources_labels(&HashMap::from([
             ("t_0_0".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_1".into(), vec![("Label_0".into(), 1.0)]),
@@ -1755,6 +1752,7 @@ mod main_tests {
             ("t_0_7".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_8".into(), vec![("Label_0".into(), 1.0)]),
             ("t_0_9".into(), vec![("Label_0".into(), 1.0)]),
+
             ("t_1_0".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_1".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_2".into(), vec![("Label_1".into(), 1.0)]),
@@ -1765,8 +1763,7 @@ mod main_tests {
             ("t_1_7".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_8".into(), vec![("Label_1".into(), 1.0)]),
             ("t_1_9".into(), vec![("Label_1".into(), 1.0)]),
-        ]),
-                                          import_id, &t)?;
+        ]), import_id, &t)?;
 
 
         store_guard.save_pure_sets(4, true, &t)?;
@@ -1844,12 +1841,6 @@ mod main_tests {
         let groups = slices_store.load_slices_into_groups(&store)?;
 
 
-        for i in 0..1 { //single channel
-
-            { store.lock().save_groups_as_motifs_with_slices_matches(run_id, i, groups.clone(), &test_db) }?;
-        }
-
-        // { store.lock().delete_slices_without_matches(run_id) }?;
         Ok(run_id)
     }
 

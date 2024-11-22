@@ -32,7 +32,7 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 /*
     t_0, t_1 - channels x slices x slice_len
  */
-pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool, false_diag: bool) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
+pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool, exclude_diag: bool) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
     let t_0 = t_0.unsqueeze(2);     // channels x motifs x 1 x motif_len
     let t_1 = t_1.unsqueeze(1);         // channels x 1 x num_slices x motif_len
 
@@ -72,7 +72,7 @@ pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool, false_d
 
     let mut le = distances.le_tensor(&q_t); //.logical_and(&distances.gt(0.));
 
-    if false_diag {
+    if exclude_diag {
         let mut le_diagonals = le.diagonal(0, 1, 2);
         let _ = le_diagonals.fill_(0);
     }
@@ -98,8 +98,8 @@ mod distance_tests {
     use tch::{Device, IndexOp, Kind};
     use tch::Kind::Float;
     use tch::Tensor;
-
-    use thoosa_shared::ThoosaError;
+    use thoosa_common::utils::{from, lin_t, plot_series, three_sigs_tensor, vec_f32_from};
+    use thoosa_shared::{sig_one_imp, sig_three_imp, sig_two_imp, ThoosaError};
 
     use crate::distance::{dist_d2_0, slice_t, z_normalized_euclidean};
     use crate::chunks::ChunkOfSlicedTensors;
@@ -183,51 +183,61 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_dist_d2_0_1ch() -> Result<(), ThoosaError>{
-        let t_0 = Tensor::from_slice(&[1,2,3,4,5,6,7]).view((1,7));
-        // println!("t_0={t_0} size={:?}", t_0.size());
-        let t_1 = Tensor::from_slice(&[10,20,30,40,50,60,70]).view((1,7));
+    fn test_dist_d2_0_1ch_with_sig() -> Result<(), ThoosaError>{
+        let n = 1000i64;
+        let max_y = 30.0;
 
-        //123 345 567
-        let t_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-                2, 3,
-                &vec![t_0.into(), t_1.into()], vec!["x"],
-                Cpu
-        //transpose - channels x n slices x slice
-        ).t.transpose(0,1);
+        let sig_0_v = sig_one_imp(n, max_y, None, None);
+        let sig_1_v = sig_two_imp(n, max_y, None, None);
+        let sig_2_v = sig_three_imp(n, max_y, None, None);
 
-        // println!("t_sliced={t_sliced} size={:?}", t_sliced.size());
+        //t_label_tensor
+        //0 label - sig_0 in channel 0
+        //1 label - sig_1 in channel 1
+        //0,1 label - sig_2 in channel 2
+        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
+
+        let x = lin_t(n*3);
+        plot_series(
+            vec![
+                (format!("ch0"), plotters::prelude::RED,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
+                (format!("ch1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((1, ..)))).collect::<Vec<(f32, f32)>>()),
+                (format!("ch2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((2, ..)))).collect::<Vec<(f32, f32)>>()),
+
+            ], "t_0_0", (2000, 1000), &format!("/tmp/plots/t_0_0{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+        )?;
 
 
-        // 1 channel 6 x 6 slices
-        let (le, Some(distances)) = dist_d2_0(t_sliced.shallow_clone(), t_sliced, 0.1, true, false)? else {
+        //t_label_tensor_channel
+        let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
+                10, 100,
+                &vec![t_0_0.i((0, ..)).view((1,-1)).into()],//sig_0 at idx 0
+                vec!["x"], Cpu
+        ).t;
+        let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
+                10, 100,
+                &vec![t_0_1.i((1, ..)).view((1,-1)).into()],//sig_0 at idx 2000
+                vec!["x"], Cpu
+        ).t;
+        let (le, Some(distances)) = dist_d2_0(
+            t_0_0_0_sliced.shallow_clone(),
+            t_0_1_0_sliced.shallow_clone(),
+            1.0,//all distances
+            true, false
+
+        )? else {
             panic!("no distances")
         };
-        // println!("distances={distances} size={:?}", distances.size());
-        // println!("le={le} size={:?}", distances.size());
 
-        // distances.quan
+        debug!("distances={:?}", distances.size());
 
-        let le_distances = distances.le(4.);
 
-        // println!("le_distances={le_distances} size={:?}", le_distances.size());
-        //TODO
         Ok(())
     }
 
     #[test]
     fn test_dist_d2_0_2ch() -> Result<(), ThoosaError>{
-        /*
-           let euc_dist_t_0 = SyncWrapper::new_tb(Box::new(dist_d2_0(
-               &chunk_0.t.transpose(0,1),
-               &chunk_1.t.transpose(0,1)
-           ).expect(format!("dist_d2_0_").as_str())));
 
-           let euc_dist_t_0_means = SyncWrapper::new_tb(Box::new(euc_dist_t_0.mean_dim(&[1i64,2i64][..], false, Kind::Float).multiply_scalar(find_motifs_run_config.max_dist_k as f64)));
-           debug!("find_motifs_by_euc_dist: euc_dist_t_0_means={euc_dist_t_0_means}");
-           debug!("find_motifs_by_euc_dist: euc_dist_t_0.size()={:?} tensor_0.chunk_0={:?} chunk_1={:?} find_motifs_run_config={find_motifs_run_config:?}", euc_dist_t_0.size(), chunk_0, chunk_1);
-
-           */
 
         let d_0_0 = [0.00f32, 0.01, 0.02, 0.03, 0.04, 0.05];
         let d_0_1 = [0.10f32, 0.11, 0.12, 0.13, 0.14, 0.15];
@@ -237,12 +247,8 @@ mod distance_tests {
             Tensor::from_slice(&d_0_1),
         ]);
 
-
-
         let d_1_0 = [1.00f32, 1.01, 1.02, 1.03, 1.04, 1.05];
         let d_1_1 = [1.10f32, 1.11, 1.12, 1.13, 1.14, 1.15];
-
-
 
         let t_1 = Tensor::vstack(&[
             Tensor::from_slice(&d_1_0),
@@ -250,10 +256,10 @@ mod distance_tests {
         ]);
 
 
-        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t.transpose(0,1);
-        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t.transpose(0,1);
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t;
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t;
 
-        let (le, Some(dists)) = dist_d2_0(t_0_sliced, t_1_sliced, 0.1, true, false)? else {
+        let (le, Some(dists)) = dist_d2_0(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), 0.1, true, false)? else {
             panic!("no distances")
         };
 

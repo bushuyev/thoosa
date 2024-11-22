@@ -120,13 +120,13 @@ pub fn motifs_to_tensor(
 
                 for motif_slice in motif_slices {
 
-                    let channel_t = t.get(motif_slice.channel_idx as i64);
+                    let channel_t = t.get(motif_slice.channel as i64);
                     let channel_t = channel_t.view([1, -1]);
 
                     let motif_slice_t = channel_t.narrow(1, motif_slice.slise_idx, window);
 
                     let mut write_guard = channels_motifs_slices_arc.write();
-                    let  channels_motifs = write_guard.entry(motif_slice.channel_idx).or_insert_with(||HashMap::new());
+                    let  channels_motifs = write_guard.entry(motif_slice.channel).or_insert_with(||HashMap::new());
                     let  motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
 
 
@@ -200,11 +200,11 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
         let eeg_t = (read_eeg_to_tensor)(base_path, eeg_id.as_str(), Device::Cpu)?;
 
         for fragment in channels_fragments {
-            let channel_path = output_dir.join(fragment.channel_idx.to_string());
+            let channel_path = output_dir.join(fragment.channel.to_string());
             let motif_path = channel_path.join(fragment.motif_id.to_string());
             fs::create_dir_all(motif_path.clone())?;
 
-            let channel_t = eeg_t.get(fragment.channel_idx as i64);
+            let channel_t = eeg_t.get(fragment.channel as i64);
             let channel_t = channel_t.view([1, -1]);
 
 
