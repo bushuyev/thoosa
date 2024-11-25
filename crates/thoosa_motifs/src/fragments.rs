@@ -123,7 +123,7 @@ pub fn motifs_to_tensor(
                     let channel_t = t.get(motif_slice.channel as i64);
                     let channel_t = channel_t.view([1, -1]);
 
-                    let motif_slice_t = channel_t.narrow(1, motif_slice.slise_idx, window);
+                    let motif_slice_t = channel_t.narrow(1, motif_slice.slice_idx, window);
 
                     let mut write_guard = channels_motifs_slices_arc.write();
                     let  channels_motifs = write_guard.entry(motif_slice.channel).or_insert_with(||HashMap::new());
@@ -208,9 +208,9 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
             let channel_t = channel_t.view([1, -1]);
 
 
-            let fragment_t = channel_t.f_slice(1, Some(fragment.slise_idx), Some(fragment.slise_idx+ window), 1)?;
+            let fragment_t = channel_t.f_slice(1, Some(fragment.slice_idx), Some(fragment.slice_idx + window), 1)?;
 
-            fragment_t.save(motif_path.join(format!("{}_{}.pt", eeg_id, fragment.slise_idx)))?;
+            fragment_t.save(motif_path.join(format!("{}_{}.pt", eeg_id, fragment.slice_idx)))?;
 
             progress.fetch_add(1, Ordering::Relaxed);
             info!("progress: {} out of {} total", progress.load(Ordering::Relaxed), total);

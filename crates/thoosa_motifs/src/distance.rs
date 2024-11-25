@@ -1,9 +1,10 @@
+use core::f32;
 use log::{debug, trace};
 use tch::{IndexOp, TchError, Tensor};
 use tch::Device::Cpu;
 use tch::Kind;
-
-use thoosa_common::utils::z_norm_2;
+use thoosa_common::parzen::optimizer::Primitives::Float;
+use thoosa_common::utils::{skewness_kurtosis_1_dim, tch_to_thoosa_err, z_norm_2};
 use thoosa_shared::ThoosaError;
 
 #[allow(dead_code)]
@@ -32,53 +33,102 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 /*
     t_0, t_1 - channels x slices x slice_len
  */
-pub fn dist_d2_0(t_0: Tensor, t_1: Tensor, q: f64, with_distances: bool, exclude_diag: bool) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
-    let t_0 = t_0.unsqueeze(2);     // channels x motifs x 1 x motif_len
-    let t_1 = t_1.unsqueeze(1);         // channels x 1 x num_slices x motif_len
+pub fn dist_d2_0(
+    t_0: Tensor,
+    t_1: Tensor,
+    q: f64,
+    with_distances: bool,
+    exclude_diag: bool,
+    // K: f64,
+) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
+    //align dimensions for broadcasting
+    let channels = t_0.size()[0];
 
-    // debug!("dist_d2_0: slice_0_expanded={slice_0_expanded}");
-    debug!("dist_d2_0: slice_0_expanded.size={:?}", t_0.size());
+    let t_0 = t_0.unsqueeze(2); // channels x motifs x 1 x motif_len
+    let t_1 = t_1.unsqueeze(1); // channels x 1 x num_slices x motif_len
 
-    // debug!("dist_d2_0: slice_1_expanded={slice_1_expanded}");
-    debug!("dist_d2_0: slice_1_expanded.size={:?}", t_1.size());
+    debug!("dist_d2_0: t_0 size={:?}", t_0.size());
+    debug!("dist_d2_0: t_1 size={:?}", t_1.size());
 
-    // euclidean distances
-    let mut diff = match t_0.f_subtract(&t_1) {
-        Ok(v) => {
-            v
-        }
-        Err(e) => {//TODO check if oom
-            // panic!("e={e:?} {}", e.to_string().contains("CUDA out of memory"));
-            return Err(ThoosaError::oom())
-        }
-    };
+    let mut diff = t_0.f_subtract(&t_1).map_err(tch_to_thoosa_err)?;
     drop(t_0);
     drop(t_1);
-    // debug!("diff={diff}");
 
-    let squared_diff = diff.f_pow_(2)?;
+    let squared_diff = diff.f_pow_(2).map_err(tch_to_thoosa_err)?;
     drop(diff);
+
     let squared_distances = squared_diff.sum_dim_intlist(3, false, Kind::Float);
     drop(squared_diff);
+
     let distances = squared_distances.sqrt();
     drop(squared_distances);
-    debug!("dist_d2_0: size={:?} distances={distances}", distances.size());
 
-    let indices = Tensor::randint(distances.size()[1], &[1000], (Kind::Int64, distances.device()));
-    let samples = distances.index_select(1, &indices);
-    drop(indices);
+    debug!("dist_d2_0: distances size={:?}", distances.size());
+    trace!("dist_d2_0: distances={:?}", distances);
 
-    let q_t = samples.quantile_scalar(q, 1, true, "higher");
+    //distances to channels x (motifs * num_slices) for kurtosis calculation
+    // let distances_flat = distances.view([distances.size()[0], -1]); // [channels x total_distances_per_channel]
 
-    let mut le = distances.le_tensor(&q_t); //.logical_and(&distances.gt(0.));
+    // let (_skewness, kurtosis) = skewness_kurtosis_1_dim(&distances_flat);
+
+    // debug!("dist_d2_0:  kurtosis={kurtosis}");
+
+    // Create a mask for channels with kurtosis <= K
+    // let include_channels = kurtosis.gt(0.0); // [channels]
+    // let include_channels_mask = include_channels.view([-1, 1, 1]); // [channels x 1 x 1]
+
+    // Set distances of excluded channels to a high value (e.g., f64::MAX)
+    // let max_value = f32::MAX;
+    // let distances = distances.masked_fill(&include_channels_mask.logical_not(), max_value as f64);
+
+    // Sample indices along the motifs dimension for quantile calculation
+    let flat_distances = distances.view((channels, -1));
+
+    let samples = if flat_distances.size()[1] > 1000 {
+        debug!("dist_d2_0: flat_distances.size()={:?}", flat_distances.size());
+        let indices = Tensor::randint(
+            flat_distances.size()[1],
+            &[(flat_distances.size()[1] as f64 * 0.1) as i64],
+            (Kind::Int64, distances.device()),
+        );
+
+        let samples = flat_distances.index_select(1, &indices);
+        drop(indices);
+        samples
+    } else {
+        flat_distances
+    };
+
+    let mut q_t = samples.quantile_scalar(q, 1, true, "lower").view((channels, 1, 1));
+    trace!("dist_d2_0: 1. q_t={q_t}");
+    let _ = q_t.multiply_scalar_(0.5);
+
+    debug!("dist_d2_0: samples.size()={:?} q_t={:?}", samples.size(), q_t.size());
+    trace!("dist_d2_0: 2. q_t={q_t}");
+
+    let mut le = distances.le_tensor(&q_t); //channels x motifs x num_slices
+
+    // let le_sum = le.view((channels, -1)).sum_dim_intlist(1, false, Kind::Float);
+    // trace!("dist_d2_0: le_sum={le_sum}");
+    // exclude channels with kurtosis > K from the mask
+    // le = le* &include_channels_mask;
 
     if exclude_diag {
         let mut le_diagonals = le.diagonal(0, 1, 2);
-        let _ = le_diagonals.fill_(0);
+        _= le_diagonals.fill_(0);
     }
-    trace!("dist_d2_0: size={:?} le={le}", le.size());
 
-    Ok((le, if with_distances {Some(distances)} else {None}))
+    trace!("dist_d2_0: le size={:?}", le.size());
+    trace!("dist_d2_0: le={:?}", le);
+
+    Ok((
+        le,
+        if with_distances {
+            Some(distances)
+        } else {
+            None
+        },
+    ))
 }
 
 pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
@@ -93,12 +143,13 @@ pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
 #[cfg(test)]
 mod distance_tests {
     use log::debug;
+    use log::LevelFilter::Trace;
     use sci_rs::na::SimdBool;
     use tch::Device::Cpu;
     use tch::{Device, IndexOp, Kind};
     use tch::Kind::Float;
     use tch::Tensor;
-    use thoosa_common::utils::{from, lin_t, plot_series, three_sigs_tensor, vec_f32_from};
+    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
     use thoosa_shared::{sig_one_imp, sig_three_imp, sig_two_imp, ThoosaError};
 
     use crate::distance::{dist_d2_0, slice_t, z_normalized_euclidean};
@@ -131,59 +182,11 @@ mod distance_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_q(){
-        let t = Tensor::vstack(&[
-            Tensor::from_slice(&[0,1, 2, 3 , 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 3]),
-            Tensor::from_slice(&[0,10,20,30,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60, 90])
-        ]).to_kind(Float);
-
-        let q = t.quantile_scalar(0.1, 1, true, "higher");
-
-        let le = t.le_tensor(&q);
-        // let gt_0 = t.gt(0.);
-        // let le_gt_0 = le.logical_and(&gt_0);
-        //
-        let masked = t.masked_select(&le);
-        // let masked_gt0 = masked.masked_select(&masked.gt(0.));
-        //
-        debug!("size={:?} q={q}", q.size());
-        debug!("le={le} count_nonzero={}", le.count_nonzero_dim_intlist([1]));
-        // debug!("gt_0={gt_0}");
-        // debug!("le_gt_0={le_gt_0}");
-        debug!("masked={masked}");
-        // debug!("masked_gt0={masked_gt0}");
-        //
-        //
-        // // let sorted = t.sort(1, false).0;
-        // // let n = sorted.size()[1] as f64;
-        // // let k = (0.5 * (n - 1.0)).round() as i64;
-        // //
-        // // println!("sorted={sorted} k={k}");
-        // //
-        // // let threshold = sorted.i((.., k));
-        // //
-        // // println!("threshold={threshold}");
-        // let n = 2; // Number of tensors along the first dimension
-        // let m = 3; // Size of the square matrices
-        //
-        // // Create a tensor of shape [n, m, m], filled with 'true' (i.e., ones in boolean tensors)
-        // let mut tensor = Tensor::ones(&[n, m, m], (Kind::Bool, Device::Cpu));
-        //
-        // println!("Original tensor:\n{}", tensor);
-        //
-        // // Get a mutable view of the diagonals along dimensions 1 and 2
-        // let mut diagonals = tensor.diagonal(0, 1, 2);
-        //
-        // // Set the diagonal elements to 'false' (i.e., zero)
-        // diagonals.fill_(0);
-        //
-        // println!("Modified tensor:\n{}", tensor);
-
-    }
 
     #[test]
     fn test_dist_d2_0_1ch_with_sig() -> Result<(), ThoosaError>{
+        log::set_max_level(Trace);
+
         let n = 1000i64;
         let max_y = 30.0;
 
@@ -200,25 +203,27 @@ mod distance_tests {
         let x = lin_t(n*3);
         plot_series(
             vec![
-                (format!("ch0"), plotters::prelude::RED,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
-                (format!("ch1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((1, ..)))).collect::<Vec<(f32, f32)>>()),
-                (format!("ch2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((2, ..)))).collect::<Vec<(f32, f32)>>()),
-
-            ], "t_0_0", (2000, 1000), &format!("/tmp/plots/t_0_0{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+                (format!("t_0_0_0"), plotters::prelude::RED,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
+                (format!("t_0_1_0"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_1.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
+                // (format!("ch2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((2, ..)))).collect::<Vec<(f32, f32)>>()),
+            ], "t_0_0_0 & t_0_1_0", (2000, 1000), &format!("/tmp/plots/t_0_0{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         )?;
 
 
         //t_label_tensor_channel
+        let window = 100;
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-                10, 100,
-                &vec![t_0_0.i((0, ..)).view((1,-1)).into()],//sig_0 at idx 0
-                vec!["x"], Cpu
+            10, window,
+            &vec![t_0_0.into()], //sig_0 at idx 0
+            vec!["x"], Cpu
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-                10, 100,
-                &vec![t_0_1.i((1, ..)).view((1,-1)).into()],//sig_0 at idx 2000
-                vec!["x"], Cpu
+            10, window,
+            &vec![t_0_1.into()], //sig_0 at idx 2000
+            vec!["x"], Cpu
         ).t;
+
+
         let (le, Some(distances)) = dist_d2_0(
             t_0_0_0_sliced.shallow_clone(),
             t_0_1_0_sliced.shallow_clone(),
@@ -228,8 +233,54 @@ mod distance_tests {
         )? else {
             panic!("no distances")
         };
+        let x = lin_t(distances.size()[1]);
+        plot_series(
+            vec![
+                (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((1, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
+                (format!("2ch"), plotters::prelude::BLUE,    vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((2, 100, ..)))).collect::<Vec<(f32, f32)>>()),//sig_2_v match
+            ], "distance", (2000, 1000), &format!("/tmp/plots/distance_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+        )?;
 
-        debug!("distances={:?}", distances.size());
+        debug!("distances={distances:?}");
+
+        let channels_dists_flat = distances.flatten(1,2);
+
+        // let channels_hists = channels_dists_flat.hist
+        debug!("channels_dists_flat={:?}", channels_dists_flat.size());
+        let hists = hist_1_dim(&channels_dists_flat, window);
+        let x = lin_t(window as i64);
+
+        let (skewness, kurtosis) = skewness_kurtosis_1_dim(&hists.totype(Float));
+        debug!("skewness={skewness}");
+        debug!("skewness={kurtosis}");
+
+        plot_series(
+            vec![
+                (format!("0ch"), plotters::prelude::ShapeStyle {
+                    color: plotters::prelude::GREEN.into(),
+                    filled: false,
+                    stroke_width: 2,
+                },   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&hists.i(0))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                (format!("1ch"), plotters::prelude::RED.into(),     vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&hists.i(1))).collect::<Vec<(f32, f32)>>()),//no matches
+                (format!("2ch"), plotters::prelude::BLUE.into(),    vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&hists.i(2))).collect::<Vec<(f32, f32)>>()),//sig_2_v match
+            ], "hists", (2000, 1000), &format!("/tmp/plots/hists_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+        )?;
+
+        // let distances_std_norm = channels_dists_flat.std_dim(1, true, true) / channels_dists_flat.mean_dim(1, true, channels_dists_flat.kind());
+        //
+        // let (skewness, kurtosis) = skewness_kurtosis(&channels_dists_flat);
+        //
+        // let kurtosis_gt = kurtosis.gt(0.0);
+        //
+        // debug!("distances_std_norm={distances_std_norm}");
+        // debug!("skewness={skewness}");
+        // debug!("kurtosis={kurtosis}");
+        // debug!("kurtosis_gt={kurtosis_gt}");
+        //
+        // debug!("le={le}");
+
+
 
 
         Ok(())
@@ -237,7 +288,6 @@ mod distance_tests {
 
     #[test]
     fn test_dist_d2_0_2ch() -> Result<(), ThoosaError>{
-
 
         let d_0_0 = [0.00f32, 0.01, 0.02, 0.03, 0.04, 0.05];
         let d_0_1 = [0.10f32, 0.11, 0.12, 0.13, 0.14, 0.15];
@@ -409,6 +459,39 @@ mod distance_tests {
         let tensor = super::slice_t(&Tensor::from_slice(&[1., 2., 3., 4., 5.]).view((1, -1)), 1, 2);
 
         assert_eq!(Tensor::from_slice(&[1., 2., 2., 3., 3., 4., 4., 5.,]).view((4, 1, 2)), tensor);
+    }
+
+
+    #[test]
+    fn test_q(){
+        // let t = Tensor::from_slice((0..10).map(|v|v as f32).collect::<Vec<_>>().as_slice()).to_kind(Float);
+        let t = Tensor::from_slice(&[0, 1, 2, 3, 4, 5, 6, 4, 5, 6,4, 5, 6,4, 5, 6,4, 5, 6,4, 5, 6,]).to_kind(Float);
+
+        let q = t.f_quantile_scalar(0.5, 0, true, "higher").unwrap();
+
+        debug!("q={q}");
+
+        /*
+         let t = Tensor::vstack(&[
+            Tensor::from_slice(&[0,1, 2, 3 , 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 4, 5, 6, 3]),
+            Tensor::from_slice(&[0,10,20,30,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60,40,50,60, 90])
+        ]).to_kind(Float);
+
+        let q = t.quantile_scalar(0.1, 1, true, "higher");
+
+        let le = t.le_tensor(&q);
+        // let gt_0 = t.gt(0.);
+        // let le_gt_0 = le.logical_and(&gt_0);
+        //
+        let masked = t.masked_select(&le);
+        // let masked_gt0 = masked.masked_select(&masked.gt(0.));
+        //
+        debug!("size={:?} q={q}", q.size());
+        debug!("le={le} count_nonzero={}", le.count_nonzero_dim_intlist([1]));
+        // debug!("gt_0={gt_0}");
+        // debug!("le_gt_0={le_gt_0}");
+        debug!("masked={masked}");
+        */
     }
 
 }

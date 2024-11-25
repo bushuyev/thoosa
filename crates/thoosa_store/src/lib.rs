@@ -102,7 +102,7 @@ pub trait Store:ResourceStore + Sync + Send {
     fn save_slices(&mut self, run_id: usize, channel: i64, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
     fn save_groups_as_motifs_with_slices_matches(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
     fn save_groups_as_motifs(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoosaError>;
-    fn list_motifs_distances(&mut self, run_id: usize) -> Result<HashMap<usize, f32>, ThoosaError>;
+    fn list_motifs(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: usize) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
     fn list_run_resources(&mut self, run_id: usize) -> Result<Vec<String>, ThoosaError>;
     fn list_run_params(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError>;
@@ -888,29 +888,22 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn list_motifs_distances(&mut self, run_id: usize) -> Result<HashMap<usize, f32>, ThoosaError> {
+    fn list_motifs(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
-        let tensor_motifs: HashMap<usize, f32> = {
-            let mut stmt = t.prepare("SELECT motif_id, avg(dist) FROM slice_matches GROUP BY motif_id HAVING motif_id NOT NULL AND run_id=?")?;
+        let motif_ids = {
+            let mut stmt = t.prepare("SELECT id FROM motifs WHERE run_id=?")?;
 
-            let tensor_motifs: HashMap<usize, f32> = stmt.query_map([run_id], |row| {
-                Ok((
-                    row.get::<usize, usize>(0)?, // motif_id,
-                    row.get::<usize, f32>(1)?, // dist
-                ))
-            })?.fold(HashMap::new(), |mut a, v| {
-                let v = v.unwrap();
-                a.insert(v.0, v.1);
-                a
-            });
+            let vec = stmt.query_map([run_id], |row| {
+                Ok(row.get::<usize, usize>(0)?) // motif_id,
+            })?.collect::<Result<Vec<_>, Error>>()?;
 
-            tensor_motifs
+            vec
         };
 
         t.commit()?;
 
-        Ok(tensor_motifs)
+        Ok(motif_ids)
     }
 
     /**
@@ -927,7 +920,7 @@ impl Store for SqlStore {
                     FROM motifs m \
                     LEFT JOIN slices s ON s.motif_id=m.id \
                     LEFT JOIN resources r on r.id=s.resource_id \
-                    WHERE run_id=?\
+                    WHERE m.run_id=?\
             ")?;
 
             let tensor_motifs: (HashMap<ResourceId, Vec<MotifSlice>>,HashMap<ResourceId, Resource>) = stmt.query_map([run_id], |row| {
@@ -1017,8 +1010,6 @@ impl Store for SqlStore {
                     row.get(3)?, // import_id,
                     row.get(4)?, // key,
                     row.get(5)?, // slice_idx,
-
-
 
                 ))
             })?.fold(Ok((HashSet::new(), HashSet::new(), None)), |a:Result<(HashSet<TensorSliceIdx<Resource>>, HashSet<i64>, Option<i64>), ThoosaError>, v:Result<(
@@ -1388,10 +1379,11 @@ impl SqlStore {
             "CREATE TABLE IF NOT EXISTS slices (
                 id              INTEGER PRIMARY KEY,
                 motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
+                run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
                 resource_id     REFERENCES resources(id) ON DELETE CASCADE,
                 slice_idx       INTEGER NOT NULL,
-                UNIQUE(channel_id, resource_id, slice_idx)
+                UNIQUE(channel_id, run_id, resource_id, slice_idx)
             )", ())?;
 
             t.execute(
@@ -1511,14 +1503,14 @@ impl SqlStore {
     }
 
     fn insert_slices(t: &Transaction, run_id: usize, channel: i64, motif_id: i64, chunk: IntoIter<IdSlice, 500>) -> Result<(), ThoosaError> {
-        let sql = "INSERT INTO slices (channel_id, motif_id, resource_id, slice_idx) VALUES";
-                            // (?,?");
+        let sql = "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
 
         let (mut q, params) = chunk.into_iter().fold((vec![sql], vec![
 
         ]), |mut a: (Vec<&str>, Vec<Value>), v: IdSlice| {
-            a.0.push("(?, ?, ?, ?)");
+            a.0.push("(?, ?, ?, ?, ?)");
             a.0.push(", ");
+            a.1.push((run_id as i64).into());
             a.1.push(channel.into());
             a.1.push(motif_id.into());
             a.1.push(v.1.into());
@@ -1542,11 +1534,11 @@ impl SqlStore {
         Self::insert_slices(t, run_id, channel, motif_id, chunk.clone())?;
 
 
-        let mut stmt = t.prepare("SELECT * FROM slices")?;
-        let mut res = stmt.query([])?;
-        while let Some(r) =  res.next()?{
-            debug!("slices: r={r:?}");
-        }
+        // let mut stmt = t.prepare("SELECT * FROM slices")?;
+        // let mut res = stmt.query([])?;
+        // while let Some(r) =  res.next()?{
+        //     debug!("slices: r={r:?}");
+        // }
 
         let sql = format!("INSERT INTO slice_matches (motif_id, slice_id_0, slice_id_1, dist) \
                             SELECT s_0.motif_id, s_0.id, s_1.id, dist FROM slices_{run_id}_{channel}_tmp.slice_matches tsm \

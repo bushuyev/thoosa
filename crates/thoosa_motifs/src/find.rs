@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::ops::{Deref, Range};
 use std::rc::Rc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::current;
 use std::time::{Duration, Instant};
@@ -237,14 +237,16 @@ pub fn find_motifs_by_euc_dist(
 ) -> Result<Vec<usize>, ThoosaError> {
 
     let resource_keys = resource_config.resource_config_to_keys(store)?;
-    debug!("find_motifs_by_euc_dist: resource_keys={resource_keys:?}");
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
+
+    debug!("find_motifs_by_euc_dist: resource_keys={resource_keys:?} run_config_ids={run_config_ids:?} channels={}", ws.read().channels());
 
     let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
         assert!(a.insert(
             run_config.id.expect("id"),
             (0..ws.read().channels()).map(|channel|
+
                 Mutex::new(SimpleMotifTracker::new(
                     if common_config.file_motif_tracker {
                         FileMotifTrackerStore::new(
@@ -295,12 +297,12 @@ pub fn find_motifs_by_euc_dist(
             let mask_cpu = SyncWrapper::new_tb(Box::new(mask.to_device(Cpu)));
             drop(mask);
 
-            debug!("find_motifs_by_euc_dist: mask_cpu={mask_cpu} false_diagonal={false_diagonal} count_nonzero={}", mask_cpu.count_nonzero_dim_intlist([1,2]));
+            trace!("find_motifs_by_euc_dist: mask_cpu={mask_cpu} false_diagonal={false_diagonal} count_nonzero={}", mask_cpu.count_nonzero_dim_intlist([1,2]));
 
             Ok(mask_cpu)
 
         },
-        &|run_config_id, le_cpu, chunk_0, chunk_1| {
+        &|run_config_id, mask_cpu, chunk_0, chunk_1| {
             let mut distances_i = 0;
             let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
 
@@ -308,15 +310,16 @@ pub fn find_motifs_by_euc_dist(
             let step = run_config.step;
 
             channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
-                let le_flatten = le_cpu.i((channel as i64, .., ..)).flatten(0, 1);
-                let mut channel_mask:BoolTensorIterator = (&le_flatten).into();
-
+                let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
+                let mut channel_mask:BoolTensorIterator = (&mask_cpu_flattened).into();
+                debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}", mask_cpu_flattened.size());
+                trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
 
                 chunk_0.iter().for_each(|slice_0|{
                     chunk_1.iter().for_each(|slice_1|{
 
                         let mask = channel_mask.next().unwrap();
-                        trace!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel} mask={mask}");
+                        trace!("find_motifs_by_euc_dist: run_config_id={run_config_id} slice_0={slice_0:?} slice_1={slice_1:?} channel={channel} mask={mask}");
 
                         if mask
                             && (slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1
@@ -338,17 +341,19 @@ pub fn find_motifs_by_euc_dist(
     )?;
 
     info!("setting motifs in {} configs", run_config_ids.len());
-    let mut chunks = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).array_chunks::<10>();
-
+    let mut chunks = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).array_chunks::<10>();//TODO chunk size all trackers / num threads
+    let mut trackers_done = AtomicU32::new(0);
     while let Some(chunk) = chunks.next() {
         chunk.into_iter().par_bridge().for_each(|mt|{
             mt.lock().build_groups(store).expect("build_groups");
+            println!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
         });
     }
 
     if let Some(reminder) = chunks.into_remainder() {
         reminder.into_iter().par_bridge().for_each(|mt|{
             mt.lock().build_groups(store).expect("build_groups");
+            println!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
         });
     }
 
@@ -822,7 +827,6 @@ impl<'a> SimpleMotifTracker<'a> {
 
     fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
         self.dumper.load_slices_into_groups(store)
-
     }
 
     #[cfg(test)]
@@ -1830,9 +1834,9 @@ mod motif_find_tests {
         debug!("1: {:?}", slices.get(&resources[1]));
         debug!("2: {:?}", slices.get(&resources[2]));
 
-        assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 100)).is_some());
-        assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slise_idx == 500)).is_some());
-        assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slise_idx == 800)).is_some());
+        assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slice_idx == 100)).is_some());
+        assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slice_idx == 500)).is_some());
+        assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slice_idx == 800)).is_some());
 
         Ok(())
     }
@@ -1957,9 +1961,9 @@ mod motif_find_tests {
         debug!("2: {:?}", slices.get(&resources[2]));
 
 
-        assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 100)).is_some());
-        assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slise_idx == 500)).is_some());
-        assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slise_idx == 800)).is_some());
+        assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slice_idx == 100)).is_some());
+        assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slice_idx == 500)).is_some());
+        assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slice_idx == 800)).is_some());
 
         Ok(())
     }
@@ -2051,8 +2055,8 @@ mod motif_find_tests {
         debug!("eeg_slices={eeg_slices:?}");
         //TODO
         // assert!(eeg_slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 100)).is_some());
-        assert!(eeg_slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slise_idx == 600)).is_some());
-        assert!(eeg_slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slise_idx == 1000)).is_some());
+        assert!(eeg_slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slice_idx == 600)).is_some());
+        assert!(eeg_slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slice_idx == 1000)).is_some());
 
         Ok(())
     }
