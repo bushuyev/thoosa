@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use log::info;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use thoosa_shared::resource::ResourceId;
@@ -41,6 +42,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
 
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
 
+        //TODO append, new if size > threshold
         let mut file = File::create(self.make_file_path(self.last_file))?;
 
         self.last_file+=1;
@@ -69,7 +71,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
                 let file_size = metadata.len() as usize;
 
                 if file_size % elem_size != 0 {
-                    // return Err(ThoosaError::new("can't read"))
+                    // return Err(ThoosaError::new("can't read"))//TODO
                 }
 
                 let num_elems = file_size / elem_size;
@@ -91,6 +93,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
                 })
             })
         );
+        info!("inserting {} groups {} slices", groups.len(), groups.values().map(|s|s.len()).sum::<usize>());
 
         store.lock().save_groups_as_motifs(self.run_id, self.channel as i64, groups)
     }
@@ -111,7 +114,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -144,7 +147,7 @@ mod tests {
             (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[0], 200), 0.1),
             (TensorSliceIdx(resource_ids[0], 200), TensorSliceIdx(resource_ids[0], 300), 0.2),
             (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[0], 700), 0.3),
-            (TensorSliceIdx(resource_ids[0], 700), TensorSliceIdx(resource_ids[0], 800), 0.4)
+            (TensorSliceIdx(resource_ids[0], 700), TensorSliceIdx(resource_ids[0], 800), 0.4),
         ])?;
 
         file_store.load_slices_into_groups(&store)?;
@@ -154,7 +157,7 @@ mod tests {
 
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slise_idx).collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
         slise_idxs.sort();
 
         assert_eq!(
@@ -164,6 +167,118 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_two_motifs() -> Result<(), ThoosaError>{
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        debug!("test_single_part: test_dir={test_dir:?}");
+        fs::create_dir_all(&test_dir)?;
+
+
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+
+        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+
+        let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
+
+        let mut file_store = FileMotifTrackerStore::new(
+            test_dir,
+            run_id,
+            3
+        )?;
+
+        file_store.save_slices(vec![
+            (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[1], 200), 0.1),
+            (TensorSliceIdx(resource_ids[1], 200), TensorSliceIdx(resource_ids[1], 700), 0.3),
+            (TensorSliceIdx(resource_ids[0], 300), TensorSliceIdx(resource_ids[1], 400), 0.2),
+            (TensorSliceIdx(resource_ids[1], 400), TensorSliceIdx(resource_ids[0], 800), 0.4),
+        ])?;
+
+        file_store.load_slices_into_groups(&store)?;
+
+        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
+        let map = store.lock().list_motifs_slices(run_id)?;
+
+        let motifs_slices = map.get(&resources[0]).expect("resource 0");
+        let resoruce_0_motifs = motifs_slices.iter().map(|ms|ms.motif_id).collect::<HashSet<_>>();
+        assert_eq!(resoruce_0_motifs.len(), 2);
+        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        slise_idxs.sort();
+
+        assert_eq!(
+            vec![100, 300, 800],
+            slise_idxs
+        );
+
+        let motifs_slices = map.get(&resources[1]).expect("resource 0");
+        let resoruce_1_motifs = motifs_slices.iter().map(|ms|ms.motif_id).collect::<HashSet<_>>();
+        assert_eq!(resoruce_1_motifs.len(), 2);
+        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        slise_idxs.sort();
+
+        assert_eq!(
+            vec![200, 400, 700],
+            slise_idxs
+        );
+
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_single_part_with_resources() -> Result<(), ThoosaError>{
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        debug!("test_single_part: test_dir={test_dir:?}");
+        fs::create_dir_all(&test_dir)?;
+
+
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+
+        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+
+        let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
+
+        let mut file_store = FileMotifTrackerStore::new(
+            test_dir,
+            run_id,
+            3
+        )?;
+
+        file_store.save_slices(vec![
+            (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[1], 200), 0.1),
+            (TensorSliceIdx(resource_ids[1], 200), TensorSliceIdx(resource_ids[0], 300), 0.2),
+            (TensorSliceIdx(resource_ids[0], 100), TensorSliceIdx(resource_ids[1], 700), 0.3),
+            (TensorSliceIdx(resource_ids[1], 700), TensorSliceIdx(resource_ids[0], 800), 0.4),
+        ])?;
+
+        file_store.load_slices_into_groups(&store)?;
+
+        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
+        let map = store.lock().list_motifs_slices(run_id)?;
+
+
+        let motifs_slices = map.get(&resources[0]).expect("resource 0");
+        let mut slise_idxs_0 = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        slise_idxs_0.sort();
+
+        assert_eq!(
+            vec![100, 300, 800],
+            slise_idxs_0
+        );
+
+        let motifs_slices = map.get(&resources[1]).expect("resource 0");
+        let mut slise_idxs_1 = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        slise_idxs_1.sort();
+
+        assert_eq!(
+            vec![200,700],
+            slise_idxs_1
+        );
+
+        Ok(())
+    }
+
+
 
     #[test]
     fn test_two_parts() -> Result<(), ThoosaError>{
@@ -201,7 +316,7 @@ mod tests {
 
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slise_idx).collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
         slise_idxs.sort();
 
         assert_eq!(

@@ -1,10 +1,11 @@
 use std::{fs, mem};
 use std::ffi::c_void;
 use std::io::Write;
+use std::ops::{Add, Div, Mul};
 use std::time::Instant;
 
 use chrono::SecondsFormat;
-use log::{debug, info};
+use log::{debug, info, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -13,7 +14,7 @@ use plotters::prelude::*;
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use rand::thread_rng;
-use tch::{Device, Kind, Tensor};
+use tch::{Device, Kind, TchError, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::Module;
@@ -272,6 +273,30 @@ pub fn clone(from:&Tensor) -> Tensor {
     to
 }
 
+pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
+    assert_eq!(tensor.dim(), 2, "Input tensor must have exactly two dimensions.");
+
+
+    let min_vals = tensor.min_dim(1, true).0; //channels x 1
+    let max_vals = tensor.max_dim(1, true).0; //channels x 1
+
+    let norm = (tensor - &min_vals) / &(&max_vals - &min_vals).clamp_min(1e-8);
+
+    trace!("norm={norm}");
+
+    let bin_indices = (norm * bins as f64)
+        .floor()
+        .clamp(0.0, (bins - 1) as f64)
+        .to_kind(Kind::Int64); // channels x dists
+
+    trace!("bin_indices={bin_indices}");
+
+    let one_hot = bin_indices.one_hot(bins as i64);
+    trace!("one_hot={one_hot}");
+
+    one_hot.sum_dim_intlist(1, false, Kind::Int)
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::collections::HashSet;
@@ -279,12 +304,21 @@ pub mod tests {
 
     use clap::{arg, Args, command, Parser, Subcommand};
     use log::debug;
+    use log::LevelFilter::Trace;
     use tch::Device::Cpu;
     use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
     use tch::Tensor;
 
     use thoosa_shared::{cdt_for_dir, ThoosaError};
     use crate::bool_iter::BoolTensorIterator;
+    use crate::utils::hist_1_dim;
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::init_test_logging();
+    }
+
 
     #[test]
     fn test_cdt_for_dir(){
@@ -471,6 +505,30 @@ pub mod tests {
 
     }
 
+    #[test]
+    fn test_hist_1_dim(){
+        // log::set_max_level(Trace);
+        let t = Tensor::vstack(&[
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6., 7., 8., 9.,]),
+            Tensor::from_slice(&[1., 2., 4., 4., 5., 6., 6., 8., 9.,]),
+            Tensor::from_slice(&[1., 1., 1., 1., 1., 1., 1., 1., 1.,]),
+        ]);
+
+        // debug!("t={t}");
+
+        let hist = hist_1_dim(&t, 3);
+        // debug!("hist={hist}");
+
+        assert_eq!(
+            Tensor::from_slice(&[
+               3, 3, 3,
+               2, 5, 2,
+               9, 0, 0
+            ]).view((3,3)),
+            hist
+        )
+    }
+
 }
 
 pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
@@ -485,6 +543,25 @@ pub fn z_norm_2(t_0:&Tensor, _dim:i64) -> Result<Tensor, ThoosaError>{
     let std = t_0.std_dim(1, true, true);
     //TODO std - 0
     Ok((t_0 -t_0.mean_dim(1, true, Float))/ std)
+}
+
+pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
+    let mean = dists.mean_dim(1, true, Kind::Float);
+
+    let std = dists.std_dim(1, true, true);
+
+    let std = &std + 1e-6;
+
+    //z score = (x - mean) / std
+    let z = (dists - &mean) / &std;
+
+    // Compute skewness: skewness = mean(z^3)
+    let skewness = z.pow_tensor_scalar(3).mean_dim(1, false, Float);
+
+    // Compute kurtosis: kurtosis = mean(z^4) - 3
+    let kurtosis = z.pow_tensor_scalar(4).mean_dim(1, false, Float) - 3.0;
+
+    (skewness, kurtosis)
 }
 
 
@@ -671,35 +748,35 @@ pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
 
 pub fn three_sigs_tensor(n: i64, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> (Tensor, Tensor, Tensor, Tensor) {
     let t_0_0 = Tensor::vstack(&[
-        Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_0_v.clone(), saw(n),          saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n),          saw(n),          saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
     ]);
 
     // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
 
     let t_0_1 = Tensor::vstack(&[
-        Tensor::from_slice([saw(n), saw(n), sig_0_v.clone()].concat().as_slice()),
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n),          sig_0_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n),          saw(n),          saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_2_v.clone(), saw(n),          saw(n)].concat().as_slice()),
     ]);
 
     // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
 
 
     let t_1_0 = Tensor::vstack(&[
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
+        Tensor::from_slice([saw(n),         saw(n),          saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n),         sig_1_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n),         sig_2_v.clone(), saw(n)].concat().as_slice())
     ]);
 
 
     // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
 
     let t_1_1 = Tensor::vstack(&[
-        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), saw(n), sig_1_v.clone()].concat().as_slice()),
-        Tensor::from_slice([saw(n), saw(n), sig_2_v.clone()].concat().as_slice()),
+        Tensor::from_slice([saw(n),          saw(n),        saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_1_v.clone(), saw(n),        saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_2_v.clone(), saw(n),        saw(n)].concat().as_slice()),
     ]);
     (t_0_0, t_0_1, t_1_0, t_1_1)
 }
@@ -736,3 +813,13 @@ pub fn free_cudarc(buf : *mut f32){
         cudarc::driver::sys::lib().cuMemFreeHost(buf as *mut c_void);
     }
 }
+
+pub fn tch_to_thoosa_err(tch_err:TchError) -> ThoosaError {
+    if tch_err.to_string().contains("out of memory") {
+        ThoosaError::oom()
+    } else {
+        ThoosaError::new(tch_err.to_string())
+    }
+}
+
+

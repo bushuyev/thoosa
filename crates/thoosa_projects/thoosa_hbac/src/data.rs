@@ -664,15 +664,18 @@ mod tests {
     use std::sync::Arc;
     use std::time::UNIX_EPOCH;
     use log::debug;
+    use log::LevelFilter::Trace;
     use parking_lot::{Mutex, RwLock};
     use plotters::prelude::{BLACK, RED};
+    use polars::export::chrono;
     use polars::prelude::{col, concat_list, count, lit, when, LazyCsvReader, LazyFileListReader, NamedFrom, Series};
-    use tch::{Device, Tensor};
+    use tch::{Device, IndexOp, TchError, Tensor};
     use tch::Device::Cpu;
+    use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
     use thoosa_common::train_nets::{TrainFinalParams, TrainLabelNodeParams};
-    use thoosa_common::utils::{from, plot_series};
+    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
@@ -680,6 +683,8 @@ mod tests {
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
+    use thoosa_motifs::chunks::ChunkOfSlicedTensors;
+    use thoosa_motifs::distance::dist_d2_0;
     use thoosa_shared::{cdt_for_dir, init_test_logging, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_store::SqlStore;
@@ -691,23 +696,82 @@ mod tests {
     }
 
 
-    #[allow(dead_code)]
+    #[test]
     pub fn plot_eeg_tensor() -> Result<(), ThoosaError> {
+        log::set_max_level(Trace);
         // debug!("tensor={:?}", tensor.size());
 
-        let t_0 = parquet_to_tensor("../../data", "1628180742", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
-        let t_1 = parquet_to_tensor("../../data", "1019408895", Device::Cpu)?.f_slice(0, Some(0), Some(1), 1)?;
+        // let t_0 = parquet_to_tensor("../../data", "1628180742", Device::Cpu)?.i((0, ..));
+        // let t_1 = parquet_to_tensor("../../data", "1019408895", Device::Cpu)?.i((0, ..));
+        let t_0_0 = Tensor::load("/tmp/ws_import_test/tensors/1_1628180742.pt")?;
+        let t_1_0 = Tensor::load("test_data/eeg/1513440817.pt")?;
+
+        debug!("t_0.size={:?} t_1.size={:?}", t_0_0.size(), t_1_0.size());
 
         // debug!("tensor={:?}", tensor.size());
 
         //"1628180742".into(), "1019408895"
         plot_series(
             vec![
-                (format!("1628180742"), BLACK, from::<Vec<f32>>(&t_0.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
-                (format!("1019408895"), RED, from::<Vec<f32>>(&t_1.reshape(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
+                (format!("3780250851"), BLACK, from::<Vec<f32>>(&t_0_0.i((0, ..)).view(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
+                (format!("270230280"), RED, from::<Vec<f32>>(&t_1_0.i((0, ..)).view(-1)).iter().enumerate().map(|(i, v)|(i as f32, *v)).collect::<Vec<(f32, f32)>>()),
 
-            ], "EEG", (10_000, 480), &"/tmp/plots/1628180742_1019408895.png"
+            ], "EEG", (10_000, 480), &"/tmp/plots/ttt.png"
         ).unwrap();
+
+        let window = 1000;
+        let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
+            100, window,
+            &vec![t_0_0.into()], //sig_0 at idx 0
+            vec!["x"], Cpu
+        ).t;
+        let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
+            100, window,
+            &vec![t_1_0.into()], //sig_0 at idx 2000
+            vec!["x"], Cpu
+        ).t;
+
+
+        let (le, Some(distances)) = dist_d2_0(
+            t_0_0_0_sliced.shallow_clone(),
+            t_0_1_0_sliced.shallow_clone(),
+            0.1,
+            true, false
+
+        )? else {
+            panic!("no distances")
+        };
+        let x = lin_t(distances.size()[1]);
+        plot_series(
+            vec![
+                (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((1, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
+                (format!("2ch"), plotters::prelude::BLUE,    vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((2, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_2_v match
+            ], "distance", (2000, 1000), &format!("/tmp/plots/distance_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+        )?;
+
+        debug!("distances={distances:?}");
+
+        let channels_dists_flat = distances.flatten(1,2);
+
+        // let channels_hists = channels_dists_flat.hist
+        debug!("channels_dists_flat={:?}", channels_dists_flat.size());
+        let hists = hist_1_dim(&channels_dists_flat, window);
+        let x = lin_t(window as i64);
+
+        // let normal = Tensor::normal_(hists.i(0).mean(Float), hists.std(true))
+
+        let (skewness, kurtosis) = skewness_kurtosis_1_dim(&hists.totype(Float));
+        debug!("skewness={skewness}");
+        debug!("kurtosis={kurtosis}");
+
+        plot_series(
+            vec![
+                (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&hists.i(8))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                // (format!("1ch"), plotters::prelude::RED.into(),     vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&hists.i(1))).collect::<Vec<(f32, f32)>>()),//no matches
+                (format!("2ch"), plotters::prelude::BLUE.into(),    vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&hists.i(5))).collect::<Vec<(f32, f32)>>()),//sig_2_v match
+            ], "hists", (2000, 1000), &format!("/tmp/plots/hists_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+        )?;
 
         Ok(())
     }

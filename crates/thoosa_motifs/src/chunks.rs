@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use tch::{Device, IndexOp, Kind, Tensor};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -14,9 +14,9 @@ use thoosa_shared::TensorSliceIdx;
 pub struct ChunkOfSlicedTensors <ResourceId> where {
     pub(crate)  keys:Vec <ResourceId>,
     pub(crate)  sizes: Vec<i64>,//num splits in a ResourceId
-    pub(crate)  t: SyncWrapper<Tensor>,
+    pub   t: SyncWrapper<Tensor>,
     step:u32,
-    split_at:Option<i64>
+    split_at:Option<i64>//slipt within tensor
 }
 
 pub struct ChunkOfSlicedTensorsIter<ResourceId:Clone+Debug+Eq> {
@@ -42,13 +42,12 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
 
         self.sizes.clone().into_iter()
             .zip(self.keys.clone().into_iter())
+            .enumerate()
             .flat_map(
-                |(size, id)|(0..size).map(move |i|(id.clone(), i))
+                |(t_i, (size, id))|(0..size).map(move |i|(id.clone(), i, if t_i == 0 {split_at_idx} else {0}))
             )
-            .map(move |v|TensorSliceIdx(v.0, split_at_idx + step  * v.1))
+            .map(move |v|TensorSliceIdx(v.0, v.2 + step  * v.1))
             .collect()
-
-
     }
 
     pub fn keys_sizes(&self)->Vec<(ResourceId, i64)>{
@@ -84,16 +83,16 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
 
             assert!(split_at > 0);
 
-            let split_at_idx = self.sizes.iter().take(split_at).sum::<i64>();
+            let split_at_tensors_idx = self.sizes.iter().take(split_at).sum::<i64>();
 
-            debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
+            debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_tensors_idx}", self.sizes, self.keys, self.t.size());
 
             [
                 Self {
                     keys: self.keys[..split_at].to_vec(),
                     sizes: self.sizes[..split_at].to_vec(),
                     step: self.step,
-                    t: SyncWrapper::new_t(self.t.i((.., ..split_at_idx, ..))),
+                    t: SyncWrapper::new_t(self.t.i((.., ..split_at_tensors_idx, ..))),
 
                     split_at: self.split_at,
                 },
@@ -101,8 +100,8 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
                     keys: self.keys[split_at..].to_vec(),
                     sizes: self.sizes[split_at..].to_vec(),
                     step: self.step,
-                    t: SyncWrapper::new_t(self.t.i((.., split_at_idx.., ..))),
-                    split_at: self.split_at.map(|v|Some(v+split_at_idx)).unwrap_or(Some(split_at_idx)),
+                    t: SyncWrapper::new_t(self.t.i((.., split_at_tensors_idx.., ..))),
+                    split_at: None, //self.split_at.map(|v|Some(v+ split_at_tensors_idx)).unwrap_or(Some(split_at_tensors_idx)),
                 }
             ]
         }
@@ -116,7 +115,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
     pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
 
-        debug!("slice_tensors_chunk: step={step} window={window} tensors_chunk.len()={}", tensors_chunk.len());
+        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: step={step} window={window} tensors_chunk.len()={}", tensors_chunk.len());
 
         let mut slices = Vec::with_capacity(tensors_chunk.len());
 
@@ -128,6 +127,8 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
                 let unfolded = tensor.unfold(1, window as i64, step as i64);
                 // channels x num_slices x window, transpose  to num_slices x channels x window
                 let unfolded = unfolded.transpose(0, 1);
+
+                debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size()={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
                 slices.push(unfolded);
             } else {
                 warn!("skipping tensor")
@@ -141,7 +142,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
             //slices x channels x window -> channels x slices x window
             Tensor::cat(&slices, 0).transpose(0, 1)
         };
-        debug!("slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
+        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
 
         ChunkOfSlicedTensors::new(
             keys,
@@ -301,12 +302,14 @@ mod tests {
 
 
     #[test]
-    fn test_split(){
+    fn test_split_single_tensor(){
 
         let tensor = Tensor::stack(&[
             Tensor::from_slice((0..100).map(|i| 0. + i as f32/100.).collect::<Vec<_>>().as_slice()),
             Tensor::from_slice((0..100).map(|i| 1. + i as f32/100.).collect::<Vec<_>>().as_slice()),
         ], 0).view([2, 100]).totype(Float);
+
+        debug!("tensor={tensor}");
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, 20,
@@ -314,23 +317,29 @@ mod tests {
             Cpu
         );
 
-        let test_fn = |chunk:&ChunkOfSlicedTensors<&str>|->Result<(), ThoosaError> {
+        let unsplit_slices = chunk.t.shallow_clone();
+
+        debug!("chunk.t={}", chunk.t);
+
+        let test_fn = |chunk:&ChunkOfSlicedTensors<&str>|->Result<Tensor, ThoosaError> {
             debug!("chunk.t={:?}", chunk.t);
             if chunk.t.size()[1] > 2 {
                 Err(ThoosaError::oom())
             } else {
 
-                Ok(())
+                Ok(chunk.t.shallow_clone())
             }
         };
 
         let mut iters = vec![];
+        let mut split_chunks = vec![];
 
         let mut split_queue = ChunkOfSlicedTensors::start_split_queue(chunk);
         while let Some(chunk) = split_queue.next() {
 
             match test_fn(&chunk) {
-                Ok(_) => {
+                Ok(t) => {
+                    split_chunks.push(t);
                     iters.push(chunk.to_vec().into_iter());
                 }
                 Err(_) => {
@@ -347,13 +356,95 @@ mod tests {
 
         let slices = iters.into_iter().flat_map(|i|i).collect::<Vec<_>>();
 
-        // println!("slices={slices:?}");
+        let glued_chunks = Tensor::cat(split_chunks.as_slice(), 1);
+        debug!("split_chunks={split_chunks:?}");
+        debug!("glued_chunks={glued_chunks}");
 
         assert_eq!(
             vec![TensorSliceIdx("aaa", 0), TensorSliceIdx("aaa", 10), TensorSliceIdx("aaa", 20), TensorSliceIdx("aaa", 30), TensorSliceIdx("aaa", 40), TensorSliceIdx("aaa", 50), TensorSliceIdx("aaa", 60), TensorSliceIdx("aaa", 70), TensorSliceIdx("aaa", 80)],
             slices
         );
 
+        assert_eq!(unsplit_slices, glued_chunks);
+
     }
+
+    #[test]
+    fn test_split_two_tensors(){
+
+        let tensor_aaa = Tensor::stack(&[
+            Tensor::from_slice((0..200).skip(1).step_by(2).map(|i| 0. + i as f32/100.).collect::<Vec<_>>().as_slice()),
+            Tensor::from_slice((0..200).skip(1).step_by(2).map(|i| 1. + i as f32/100.).collect::<Vec<_>>().as_slice()),
+        ], 0).view([2, 100]).totype(Float);
+
+        let tensor_bbb = Tensor::stack(&[
+            Tensor::from_slice((0..200).step_by(2).map(|i| 0. + i as f32/100.).collect::<Vec<_>>().as_slice()),
+            Tensor::from_slice((0..200).step_by(2).map(|i| 1. + i as f32/100.).collect::<Vec<_>>().as_slice()),
+        ], 0).view([2, 100]).totype(Float);
+
+        debug!("tensor_aaa={tensor_aaa}");
+        debug!("tensor_bbb={tensor_bbb}");
+
+        let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
+            10, 20,
+            &vec![tensor_aaa.into(), tensor_bbb.into()], vec!["aaa", "bbb"],
+            Cpu
+        );
+
+        let unsplit_slices = chunk.t.shallow_clone();
+
+        debug!("chunk.t={}", chunk.t);
+
+        let test_fn = |chunk:&ChunkOfSlicedTensors<&str>|->Result<Tensor, ThoosaError> {
+            debug!("chunk.t={:?}", chunk.t);
+            if chunk.t.size()[1] > 2 {
+                Err(ThoosaError::oom())
+            } else {
+
+                Ok(chunk.t.shallow_clone())
+            }
+        };
+
+        let mut iters = vec![];
+        let mut split_chunks = vec![];
+
+        let mut split_queue = ChunkOfSlicedTensors::start_split_queue(chunk);
+        while let Some(chunk) = split_queue.next() {
+
+            match test_fn(&chunk) {
+                Ok(t) => {
+                    split_chunks.push(t);
+                    iters.push(chunk.to_vec().into_iter());
+                }
+                Err(_) => {
+                    split_queue.split(chunk);
+                }
+            }
+            debug!("split_queue={split_queue:?}");
+        }
+
+        assert_eq!(iters.len(), 10);
+        // for iter in iters {
+        //     println!("iter={:?}", iter.collect::<Vec<_>>());
+        // }
+
+        let slices = iters.into_iter().flat_map(|i|i).collect::<Vec<_>>();
+
+        let glued_chunks = Tensor::cat(split_chunks.as_slice(), 1);
+        debug!("split_chunks={split_chunks:?}");
+        debug!("glued_chunks={glued_chunks}");
+
+        assert_eq!(
+            vec![
+                TensorSliceIdx("aaa", 0), TensorSliceIdx("aaa", 10), TensorSliceIdx("aaa", 20), TensorSliceIdx("aaa", 30), TensorSliceIdx("aaa", 40), TensorSliceIdx("aaa", 50), TensorSliceIdx("aaa", 60), TensorSliceIdx("aaa", 70), TensorSliceIdx("aaa", 80),
+                TensorSliceIdx("bbb", 0), TensorSliceIdx("bbb", 10), TensorSliceIdx("bbb", 20), TensorSliceIdx("bbb", 30), TensorSliceIdx("bbb", 40), TensorSliceIdx("bbb", 50), TensorSliceIdx("bbb", 60), TensorSliceIdx("bbb", 70), TensorSliceIdx("bbb", 80)
+            ],
+            slices
+        );
+
+        assert_eq!(unsplit_slices, glued_chunks);
+
+    }
+
 
 }

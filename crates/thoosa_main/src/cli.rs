@@ -1033,8 +1033,8 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
             fs::create_dir_all(ws.read().plots_path().join(run_id.to_string()))?;
 
             //TODO add list for  motif_ids only without grouping by  slice_matches
-            let motif_distances = store.lock().list_motifs_distances(run_id)?;
-            for (motif_id, dist) in motif_distances.into_iter() {
+            let motif_distances = store.lock().list_motifs(run_id)?;
+            for motif_id in motif_distances.into_iter() {
                 debug!("run_plot_motif_slices: motif_id={motif_id}");
                 plot_motif_slices(ws, store, loader, motif_id)?;
             }
@@ -1403,12 +1403,10 @@ mod main_tests {
 
     #[test]
     fn test_motifs() -> Result<(), ThoosaError> {
-        //TODO doesn't work:
-        // log::set_max_level(LevelFilter::Trace);
-        // unsafe { log::set_max_level_racy(LevelFilter::Trace); }
-        // trace!("TRACE");
+        log::set_max_level(LevelFilter::Trace);
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        debug!("test_motifs: test_dir={test_dir:?}");
 
         fs::create_dir_all(&test_dir)?;
         let base_path = test_dir.to_string_lossy().to_string();
@@ -1509,17 +1507,17 @@ mod main_tests {
         assert!(slices.len() >= 4);
 
         let slice_0_0 = slices.get(resources_0_0).unwrap().into_iter().find(|s|s.channel == 0).expect("0_0");
-        assert_eq!(slice_0_0.slise_idx, 0);
+        assert_eq!(slice_0_0.slice_idx, 0);
         let slice_0_1 = slices.get(resources_0_1).unwrap().into_iter().find(|s|s.channel == 0).expect("0_1");
-        assert_eq!(slice_0_1.slise_idx, 1000);
+        assert_eq!(slice_0_1.slice_idx, 1000);
 
 
         let slice_1_0 = slices.get(resources_1_0).unwrap().into_iter().find(|s|s.channel == 1).expect("1_0");
-        assert_eq!(slice_1_0.slise_idx, 1000);
+        assert_eq!(slice_1_0.slice_idx, 1000);
         let slice_1_1 = slices.get(resources_1_1).unwrap().into_iter().find(|s|s.channel == 1).expect("1_1");
-        assert_eq!(slice_1_1.slise_idx, 2000);
+        assert_eq!(slice_1_1.slice_idx, 2000);
 
-        let motif_dists = store.lock().list_motifs_distances(run_ids[0])?;
+        let motif_dists = store.lock().list_motifs(run_ids[0])?;
         debug!("test_motifs: motif_dists={motif_dists:?}");
         //
         // for motif_id in motif_dists.keys() {

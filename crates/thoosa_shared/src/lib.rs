@@ -94,7 +94,7 @@ where T:Hash + Eq + Debug {
 
 
 #[derive(Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
-pub struct TensorSliceIdx<ResourceId>(pub ResourceId, pub i64) where ResourceId:Eq+Debug;
+pub struct TensorSliceIdx<R>(pub R, pub i64) where R:Eq+Debug;
 
 impl From<(String, i64)> for TensorSliceIdx<String> {
     fn from(value: (String, i64)) -> Self {
@@ -108,7 +108,7 @@ impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug{
         write!(f, "{},{}", self.0, self.1)
     }
 }
-// #[derive(Debug)]
+// #[derive(Error, Debug)]
 pub struct ThoosaError {//TODO enum
     msg:String,
     #[allow(dead_code)]
@@ -182,14 +182,14 @@ where D: Display {
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct MotifSlice {
     pub motif_id: usize,
-    pub slise_idx: i64,
+    pub slice_idx: i64,
     pub channel: u16,
 }
 
 impl MotifSlice {
 
     pub fn new(motif_id: usize, slise_idx: i64, channel: u16) -> Self {
-        Self { motif_id, slise_idx, channel }
+        Self { motif_id, slice_idx: slise_idx, channel }
     }
 
     #[inline]
@@ -199,7 +199,7 @@ impl MotifSlice {
 
     #[inline]
     pub fn slise_idx(&self) -> i64 {
-        self.slise_idx
+        self.slice_idx
     }
 
     #[inline]
@@ -689,14 +689,11 @@ pub fn init_test_logging() {
     if !LOG_INIT.load(Ordering::Relaxed) {
 
         LOG_INIT.store(true, Ordering::Relaxed);
-
         CombinedLogger::init(
+
             vec![
                 TermLogger::new(
-                    env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|e| {
-                        println!("Can't find loglevel: {}", e);
-                        VarError::NotPresent
-                    })).unwrap_or(LevelFilter::Debug),
+                    LevelFilter::Trace,//to let set trace level from tests with set_max_level
                     Config::default(),
                     TerminalMode::Mixed,
                     ColorChoice::Auto
@@ -706,9 +703,16 @@ pub fn init_test_logging() {
             debug!("CombinedLogger::init failed: {:?}", e);
         });
 
+        log::set_max_level(
+            env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|e| {
+                println!("Can't find loglevel: {}", e);
+                VarError::NotPresent
+            })).unwrap_or(LevelFilter::Debug)
+        );
 
-        std::env::set_var("POLARS_FMT_MAX_COLS", "100");
-        std::env::set_var("POLARS_FMT_MAX_ROWS", "100");
+
+        env::set_var("POLARS_FMT_MAX_COLS", "100");
+        env::set_var("POLARS_FMT_MAX_ROWS", "100");
     }
 }
 
