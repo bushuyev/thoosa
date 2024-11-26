@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use clap::{Args, ValueEnum};
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
 use regex::Regex;
 use tch::Device;
@@ -22,6 +22,7 @@ use thoosa_shared::*;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::TensorSliceIdx;
+use crate::distance::{average_euclidean_distance, clc_dist_d2};
 
 #[derive(Debug, Args)]
 pub struct MotifsToFragmentsParams {
@@ -98,7 +99,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 pub fn motifs_to_tensor(
     resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device,
     area: u64
-) -> Result<(SyncWrapper<Box<Tensor>>, Vec<Vec<usize>>), ThoosaError> {
+) -> Result<(SyncWrapper<Box<Tensor>>, Vec<Vec<(usize, f32)>>), ThoosaError> {
 
     debug!("motifs_to_tensor: device={device:?} window={window}");
 
@@ -124,6 +125,7 @@ pub fn motifs_to_tensor(
                     let channel_t = channel_t.view([1, -1]);
 
                     let motif_slice_t = channel_t.narrow(1, motif_slice.slice_idx, window);
+                    // let motif_slice_t = t.copy((channel_t, motif_slice.slice_idx..motif_slice.slice_idx+window));
 
                     let mut write_guard = channels_motifs_slices_arc.write();
                     let  channels_motifs = write_guard.entry(motif_slice.channel).or_insert_with(||HashMap::new());
@@ -137,7 +139,6 @@ pub fn motifs_to_tensor(
 
             drop(wg_1);
 
-
         }.boxed()
     });
 
@@ -148,7 +149,7 @@ pub fn motifs_to_tensor(
 
     let motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
 
-    let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::with_capacity(motifs_num as usize)).collect();
+    let mut channel_motif_ids:Vec<Vec<(usize, f32)>> = (0..channels).into_iter().map(|_|Vec::with_capacity(motifs_num as usize)).collect();
 
 
     let tensor = Tensor::vstack(
@@ -156,15 +157,23 @@ pub fn motifs_to_tensor(
             let motif_slices =  channels_motifs_slices.write().remove(&(channel as u16)).unwrap_or(HashMap::new());
 
             let mut motifs = motif_slices.into_iter().map(|(motif_id, slices)| {
+                let slices_t = Tensor::vstack(slices.into_iter().map(|s|*s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
+                debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
+                trace!("motifs_to_tensor: slices_t={slices_t}");
 
-                channel_motif_ids[channel as usize].push(motif_id);
-                // choose_slice(&mut slices).shallow_clone()
-                *slices[0].shallow_clone()
+                let motif_avg_dist = average_euclidean_distance(&slices_t);
+
+                trace!("motifs_to_tensor: motif_avg_dist={motif_avg_dist}");
+
+                channel_motif_ids[channel as usize].push((motif_id, motif_avg_dist));
+                // TODO avg
+                slices_t.i((0, ..)).shallow_clone()
 
             }).collect::<Vec<Tensor>>();
 
 
             if (motifs.len() as i64) < motifs_num {
+                debug!("motifs_to_tensor: padding channel={channel} {} to {motifs_num} ", motifs.len());
                 motifs.extend((0..motifs_num - motifs.len() as i64).map(|_|Tensor::zeros(window, (tch::Kind::Float, device))))
             }
 

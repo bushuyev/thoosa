@@ -14,7 +14,7 @@ use futures::task::Context;
 use std::{fmt, thread};
 use std::pin::Pin;
 use futures::task::Poll;
-use std::ops::Deref;
+use std::ops::{Add, AddAssign, Deref, DerefMut};
 use futures::Future;
 use futures::{
     future::{BoxFuture, FutureExt},
@@ -432,9 +432,24 @@ where
     }
 }
 
+impl<V> DerefMut for SyncWrapper<V>
+where
+    V: Send + Debug,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.v
+    }
+}
+
 impl From<Tensor> for SyncWrapper<Box<Tensor>> {
     fn from(t: Tensor) -> Self {
         SyncWrapper::new_tb(Box::new(t))
+    }
+}
+
+impl AddAssign for SyncWrapper<Box<Tensor>> {
+    fn add_assign(&mut self, rhs: Self) {
+       *self.v+=*rhs.v;
     }
 }
 

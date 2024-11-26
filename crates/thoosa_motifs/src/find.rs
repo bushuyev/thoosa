@@ -6,7 +6,7 @@ use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::Write;
 use std::marker::PhantomData;
-use std::ops::{Deref, Range};
+use std::ops::{Add, AddAssign, Deref, Range};
 use std::rc::Rc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -20,6 +20,7 @@ use crossbeam_channel::SendError;
 use crossbeam_utils::sync::WaitGroup;
 use futures::{FutureExt, StreamExt};
 use log::{debug, error, info, trace, warn};
+use log::*;
 use parking_lot::RwLock;
 use rand::{thread_rng, Rng};
 use tch::{Device, IndexOp, Kind, Tensor};
@@ -36,12 +37,12 @@ use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 use crate::distance::slice_t;
-use crate::distance::{dist_d2, dist_d2_0};
+use crate::distance::{dist_d2, clc_dist_d2_and_mask};
 use crate::fragments::motifs_to_tensor;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
-use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use tch::Device::{Cpu, Cuda};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::loader;
@@ -285,7 +286,7 @@ pub fn find_motifs_by_euc_dist(
 
 
             let false_diagonal = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]);
-            let (mask, _) = dist_d2_0(
+            let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
                 chunk_sliced_0.t.to_device(devices_2x[0]),
                 chunk_sliced_1.t.to_device(devices_2x[0]),
@@ -442,7 +443,7 @@ fn chunk_and_slice<G, CTX>(
 ) -> Result<(), ThoosaError>
 where
     CTX: Send + Sync,
-    G: Fn(&ChunkOfSlicedTensors<ResourceId>, &(FindMotifsRunConfig, CTX)) -> Result<(), ThoosaError> + Send + Sync
+    G: Fn(&ChunkOfSlicedTensors<ResourceId>, &mut (FindMotifsRunConfig, CTX)) -> Result<(), ThoosaError> + Send + Sync
 {
     let mut resource_chunks = resources.chunks(chunk_size)
         .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())//TODO k.clone()
@@ -481,7 +482,7 @@ where
             async move {
 
                 for key in &window_0_0 {
-                    debug!("0. exec:callback_arc: key={key:?}");
+                    debug!("chunk_and_slice:  exec:callback_arc: key={key:?}");
 
                     let sync_wrapper = SyncWrapper::new_tb(
                         Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
@@ -496,7 +497,7 @@ where
         wg_0.wait();
 
         run_configs.iter_mut().zip(devices.into_iter().cycle())
-            .par_bridge()
+            // .par_bridge() //TODO spread among devices
             .for_each(|(run_config_with_ctx, device)| {
 
                 callback(
@@ -647,8 +648,8 @@ where
 
                     run_configs.iter()
                         .zip(run_configs_applied_to_chunk_0.iter())
+                        // .par_bridge() //TODO spread among devices
                         .for_each(|(run_config, chunk_0)| {
-
 
                             let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
                                 run_config.step,
@@ -1187,11 +1188,12 @@ pub fn select_motifs_for_label_2(
 )  -> Result<Vec<usize>, ThoosaError>{
 
     let motifs_area = loader.write().get_available_cache_area();
+    let labels_resources = resource_config.resource_config_to_keys(store)?;
 
     let mut find_motifs_run_config_motifs_tensors = input_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
 
         let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
-        debug!("select_motifs_for_label_2: resource_id_motif_slices={resource_id_motif_slices:?}");
+        trace!("select_motifs_for_label_2: resource_id_motif_slices={resource_id_motif_slices:?}");
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(store.lock().list_run_params(*find_motif_run_id)?);
 
@@ -1201,24 +1203,62 @@ pub fn select_motifs_for_label_2(
             find_motifs_run_config.window(),
             ws.read().channels() as i64,
             Cpu,
-            motifs_area
-        ).map(|v|(find_motifs_run_config, v ))
+            motifs_area,
+        ).map(|(motifs_tensor, channels_motifs_ids)| {
+            let size = &motifs_tensor.size()[0..=1];//channels x motifs for motif sums
 
-    }).collect::<Result<Vec<(FindMotifsRunConfig, (SyncWrapper<Box<Tensor>>, Vec<Vec<usize>>))>, ThoosaError>>()?;
+            debug!("select_motifs_for_label_2: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensor.size());
+            (
+                find_motifs_run_config,
+                (
+                    motifs_tensor,//channels x motifs x slice
+                    channels_motifs_ids,
+                    HashMap::from_iter(
+                        labels_resources
+                            .iter()
+                            .map(|(label, _)|
+                                (
+                                    label.clone(),
+                                    SyncWrapper::new_tb(Box::new(Tensor::zeros(size.clone(), INT64_CPU)))//motif counts
+                                )
+                            )
+                    )
+                )
+            )
+        })
 
-    debug!("select_motifs_for_label_2: motifs_tensors={find_motifs_run_config_motifs_tensors:?}");
+    }).collect::<Result<Vec<(FindMotifsRunConfig, (SyncWrapper<Box<Tensor>>, Vec<Vec<(usize, f32)>>, HashMap<String, SyncWrapper<Box<Tensor>>>))>, ThoosaError>>()?;
+    loader.write().purge_cache(motifs_area);
 
-    let labels_resources = resource_config.resource_config_to_keys(store)?;
+    trace!("select_motifs_for_label_2: motifs_tensors={find_motifs_run_config_motifs_tensors:?}");
 
     // let mut find_motifs_run_configs = find_motifs_run_config_motifs_tensors.iter().map(|v|v.0.clone()).collect::<Vec<_>>();
+
     for (label, resources) in labels_resources {
         debug!("select_motifs_for_label_2: label={label:?} resources={resources:?}");
         chunk_and_slice(
             resources,
-            10,
+            1,//TODO params
             &mut find_motifs_run_config_motifs_tensors,
-            |chunk, (cfg, motifs)|{
-                debug!("select_motifs_for_label_2: resources cfg={cfg:?} t.size={:?}  motifs.0.size()={:?}", chunk.t.size(), motifs.0.size()); //chunk.t
+
+            |chunk, (cfg, (channels_motifs, channels_motif_ids, label_motif_matches_sums))|{
+                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs.0.size()={:?}", chunk.t.size(), channels_motifs.size()); //chunk.t
+
+                let (mask, _) = clc_dist_d2_and_mask(chunk.t.shallow_clone(), *channels_motifs.shallow_clone(), 0.1, false, false)?;
+                trace!("select_motifs_for_label_2: label={label} mask={mask}");
+
+                let sums = mask.sum_dim_intlist(1, false, Kind::Int64);//channels x motif matches
+                trace!("select_motifs_for_label_2:  label={label} sums={sums}");
+
+
+                label_motif_matches_sums.get_mut(&label).expect(format!("no motif sums tensor for {label}").as_str()).add_assign(sums.into());
+
+                if log_enabled!(Level::Trace) {
+                    for (label, motif_sums) in label_motif_matches_sums.iter() {
+                        trace!("select_motifs_for_label_2: label={label} motif_sums={motif_sums}");
+                    }
+                }
+
                 Ok(())
             },
             loader,
@@ -1226,7 +1266,32 @@ pub fn select_motifs_for_label_2(
         )?;
     }
 
-    loader.write().purge_cache(motifs_area);
+    for (cfg, (channels_motifs, channels_motif_ids, label_motif_matches_sums)) in find_motifs_run_config_motifs_tensors.iter(){
+        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids={channels_motif_ids:?}", cfg.window);
+        for (label, motif_sums) in label_motif_matches_sums.iter() {
+            debug!("select_motifs_for_label_2: label={label} final motif_sums={motif_sums}");
+        }
+
+        // store.lock().save_selected_motifs(cfg.id.unwrap(), motifs_corrs).expect("save_motifs_corrs");
+    }
+
+
+    // let labels_channels_good_motif_idxs:HashMap<String, Vec<Vec<(i64, f64)>>> = select_motifs_by_ratio(
+    //     motifs,
+    //     select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
+    //         (
+    //             label_dataset.0.clone(),
+    //             store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap()
+    //         )
+    //
+    //     }).collect(),
+    //     executor,
+    //     params.step(),
+    //     device,
+    //     select_motifs_params.min_ratio(),
+    //     Arc::new(RwLock::new(motifs_avg_distances)), //TODO keeps motif indexes with motif tensors
+    //     Arc::clone(&channel_motif_ids)
+    // )?;
 
     Ok(vec![])
 }
@@ -1455,7 +1520,7 @@ mod motif_find_tests {
     use parking_lot::{Mutex, RawMutex};
     use std::collections::HashMap;
     use std::fmt::{Debug, Display};
-    use std::ops::Deref;
+    use std::ops::{Add, AddAssign, Deref};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::atomic::{AtomicU32, AtomicU64};
@@ -2787,5 +2852,15 @@ mod motif_find_tests {
         //TODO
 
         Ok(())
+    }
+
+    #[test]
+    fn test_0(){
+        let mut t_0 = Tensor::from_slice(&[0,1,2]);
+        let t_1 = Tensor::from_slice(&[10,11,12]);
+
+        t_0+=t_1;
+
+        println!("t_0 = {t_0}");
     }
 }

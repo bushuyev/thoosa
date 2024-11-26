@@ -747,39 +747,56 @@ pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
 }
 
 pub fn three_sigs_tensor(n: i64, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> (Tensor, Tensor, Tensor, Tensor) {
-    let t_0_0 = Tensor::vstack(&[
-        Tensor::from_slice([sig_0_v.clone(), saw(n),          saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n),          saw(n),          saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
-    ]);
+    let t_0_0 = t_0_0(n, sig_0_v, sig_2_v);
 
     // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
 
-    let t_0_1 = Tensor::vstack(&[
-        Tensor::from_slice([saw(n),          sig_0_v.clone(), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n),          saw(n),          saw(n)].concat().as_slice()),
-        Tensor::from_slice([sig_2_v.clone(), saw(n),          saw(n)].concat().as_slice()),
-    ]);
+    let t_0_1 = t_0_1(n, sig_0_v, sig_2_v);
 
     // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
 
 
-    let t_1_0 = Tensor::vstack(&[
-        Tensor::from_slice([saw(n),         saw(n),          saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n),         sig_1_v.clone(), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n),         sig_2_v.clone(), saw(n)].concat().as_slice())
-    ]);
+    let t_1_0 = t_1_0(n, sig_1_v, sig_2_v);
 
 
     // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
 
-    let t_1_1 = Tensor::vstack(&[
-        Tensor::from_slice([saw(n),          saw(n),        saw(n)].concat().as_slice()),
-        Tensor::from_slice([sig_1_v.clone(), saw(n),        saw(n)].concat().as_slice()),
-        Tensor::from_slice([sig_2_v.clone(), saw(n),        saw(n)].concat().as_slice()),
-    ]);
+    let t_1_1 = t_1_1(n, sig_1_v, sig_2_v);
     (t_0_0, t_0_1, t_1_0, t_1_1)
 }
+
+pub fn t_0_0(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+    ])
+}
+
+pub fn t_0_1(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+    ])
+}
+
+pub fn t_1_0(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
+        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
+    ])
+}
+
+pub fn t_1_1(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+    Tensor::vstack(&[
+        Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),
+        Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+    ])
+}
+
 
 pub fn copy_cudarc(t:&Tensor) -> *mut c_void {
     use cudarc::driver::sys::CUdeviceptr_v2;
