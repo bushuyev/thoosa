@@ -3,6 +3,7 @@ use log::{debug, trace};
 use tch::{IndexOp, TchError, Tensor};
 use tch::Device::Cpu;
 use tch::Kind;
+use tch::kind::{FLOAT_CPU, INT64_CPU};
 use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tch_to_thoosa_err, z_norm_2};
 use thoosa_shared::ThoosaError;
@@ -30,58 +31,59 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
     Ok(Tensor::cdist(slice_0, slice_1, 2.0, 0))
 }
 
+//TODO use distance's histogram kurtosis and skew to scale down q_t? If histogram flat - prob. of useful patterns lower
+pub enum MaskMaker {
+    Quantile{q:f64},
+    Diagonal,
+    Threshold{v:f64}
+}
+
 /*
     t_0, t_1 - channels x slices x slice_len
+
  */
-pub fn dist_d2_0(
+pub fn clc_dist_d2_and_mask(
     t_0: Tensor,
     t_1: Tensor,
     q: f64,
     with_distances: bool,
     exclude_diag: bool,
-    // K: f64,
 ) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
-    //align dimensions for broadcasting
     let channels = t_0.size()[0];
 
-    let t_0 = t_0.unsqueeze(2); // channels x motifs x 1 x motif_len
-    let t_1 = t_1.unsqueeze(1); // channels x 1 x num_slices x motif_len
-
-    debug!("dist_d2_0: t_0 size={:?}", t_0.size());
-    debug!("dist_d2_0: t_1 size={:?}", t_1.size());
-
-    let mut diff = t_0.f_subtract(&t_1).map_err(tch_to_thoosa_err)?;
-    drop(t_0);
-    drop(t_1);
-
-    let squared_diff = diff.f_pow_(2).map_err(tch_to_thoosa_err)?;
-    drop(diff);
-
-    let squared_distances = squared_diff.sum_dim_intlist(3, false, Kind::Float);
-    drop(squared_diff);
-
-    let distances = squared_distances.sqrt();
-    drop(squared_distances);
+    let distances = clc_dist_d2(t_0, t_1, 1)?;
 
     debug!("dist_d2_0: distances size={:?}", distances.size());
     trace!("dist_d2_0: distances={:?}", distances);
 
-    //distances to channels x (motifs * num_slices) for kurtosis calculation
-    // let distances_flat = distances.view([distances.size()[0], -1]); // [channels x total_distances_per_channel]
 
-    // let (_skewness, kurtosis) = skewness_kurtosis_1_dim(&distances_flat);
+    //channels x motifs x num_slices
+    let mut mask = quantile_mask(q, &distances);
 
-    // debug!("dist_d2_0:  kurtosis={kurtosis}");
+    if exclude_diag {
+        diag_mask(&mut mask);
+    }
 
-    // Create a mask for channels with kurtosis <= K
-    // let include_channels = kurtosis.gt(0.0); // [channels]
-    // let include_channels_mask = include_channels.view([-1, 1, 1]); // [channels x 1 x 1]
+    trace!("dist_d2_0: le size={:?}", mask.size());
+    trace!("dist_d2_0: le={:?}", mask);
 
-    // Set distances of excluded channels to a high value (e.g., f64::MAX)
-    // let max_value = f32::MAX;
-    // let distances = distances.masked_fill(&include_channels_mask.logical_not(), max_value as f64);
+    Ok((
+        mask,
+        if with_distances {
+            Some(distances)
+        } else {
+            None
+        },
+    ))
+}
 
-    // Sample indices along the motifs dimension for quantile calculation
+fn diag_mask(mask: &mut Tensor) {
+    let mut le_diagonals = mask.diagonal(0, 1, 2);
+    _ = le_diagonals.fill_(0);
+}
+
+fn quantile_mask(q: f64, distances: &Tensor) -> Tensor {
+    let channels= distances.size()[0];
     let flat_distances = distances.view((channels, -1));
 
     let samples = if flat_distances.size()[1] > 1000 {
@@ -101,34 +103,36 @@ pub fn dist_d2_0(
 
     let mut q_t = samples.quantile_scalar(q, 1, true, "lower").view((channels, 1, 1));
     trace!("dist_d2_0: 1. q_t={q_t}");
-    let _ = q_t.multiply_scalar_(0.5);
+    // let _ = q_t.multiply_scalar_(0.5);
 
     debug!("dist_d2_0: samples.size()={:?} q_t={:?}", samples.size(), q_t.size());
     trace!("dist_d2_0: 2. q_t={q_t}");
 
     let mut le = distances.le_tensor(&q_t); //channels x motifs x num_slices
+    le
+}
 
-    // let le_sum = le.view((channels, -1)).sum_dim_intlist(1, false, Kind::Float);
-    // trace!("dist_d2_0: le_sum={le_sum}");
-    // exclude channels with kurtosis > K from the mask
-    // le = le* &include_channels_mask;
+pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
 
-    if exclude_diag {
-        let mut le_diagonals = le.diagonal(0, 1, 2);
-        _= le_diagonals.fill_(0);
-    }
 
-    trace!("dist_d2_0: le size={:?}", le.size());
-    trace!("dist_d2_0: le={:?}", le);
+    let t_0 = t_0.unsqueeze(dim+1); // channels x motifs x 1 x motif_len
+    let t_1 = t_1.unsqueeze(dim); // channels x 1 x num_slices x motif_len
 
-    Ok((
-        le,
-        if with_distances {
-            Some(distances)
-        } else {
-            None
-        },
-    ))
+    debug!("clc_dist_d2: t_0 size={:?}", t_0.size());
+    debug!("clc_dist_d2: t_1 size={:?}", t_1.size());
+
+    let mut diff = t_0.f_subtract(&t_1).map_err(tch_to_thoosa_err)?;
+    drop(t_0);
+    drop(t_1);
+
+    let squared_diff = diff.f_pow_(2).map_err(tch_to_thoosa_err)?;
+    drop(diff);
+    debug!("clc_dist_d2: squared_diff size={:?}", squared_diff.size());
+
+    let squared_distances = squared_diff.sum_dim_intlist(dim+2, false, Kind::Float);
+    drop(squared_diff);
+
+    Ok(squared_distances.sqrt())
 }
 
 pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
@@ -139,6 +143,34 @@ pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
     Tensor::stack(&tensors_vec, 0)
 }
 
+
+pub fn average_euclidean_distance(x: &Tensor) -> f32 {
+    let n = x.size()[0] as i64;
+
+    // Step 1: Compute the Gram matrix (dot products between vectors)
+    let gram = x.mm(&x.transpose(0, 1)); // Shape: [n, n]
+
+    // Step 2: Compute squared norms of each vector
+    let squared_norms = x.pow_tensor_scalar(2).sum_dim_intlist(1, true, Kind::Float); // Shape: [n, 1]
+
+    // Step 3: Compute squared distances matrix D
+    let dists_squared:Tensor = &squared_norms + &squared_norms.transpose(0, 1) - 2.0 * &gram; // Shape: [n, n]
+
+    // Step 4: Extract upper triangle without diagonal
+    let triu_indices = Tensor::triu_indices(n, n, 1, INT64_CPU); // Indices of upper triangle without diagonal
+    let i = triu_indices.get(0);
+    let j = triu_indices.get(1);
+
+    let pairwise_squared_dists = dists_squared.index_select(0, &i).gather(1, &j.unsqueeze(1), false).squeeze();
+
+    // Step 5: Compute square roots to get Euclidean distances
+    let pairwise_dists = pairwise_squared_dists.sqrt();
+
+    // Step 6: Compute the mean of the distances
+    let mean_distance = pairwise_dists.mean(Kind::Float);
+
+    mean_distance.double_value(&[]) as f32
+}
 
 #[cfg(test)]
 mod distance_tests {
@@ -152,7 +184,7 @@ mod distance_tests {
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
     use thoosa_shared::{sig_one_imp, sig_three_imp, sig_two_imp, ThoosaError};
 
-    use crate::distance::{dist_d2_0, slice_t, z_normalized_euclidean};
+    use crate::distance::{average_euclidean_distance, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean};
     use crate::chunks::ChunkOfSlicedTensors;
 
     #[ctor::ctor]
@@ -224,7 +256,7 @@ mod distance_tests {
         ).t;
 
 
-        let (le, Some(distances)) = dist_d2_0(
+        let (le, Some(distances)) = clc_dist_d2_and_mask(
             t_0_0_0_sliced.shallow_clone(),
             t_0_1_0_sliced.shallow_clone(),
             1.0,//all distances
@@ -309,7 +341,7 @@ mod distance_tests {
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t;
 
-        let (le, Some(dists)) = dist_d2_0(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), 0.1, true, false)? else {
+        let (le, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), 0.1, true, false)? else {
             panic!("no distances")
         };
 
@@ -331,12 +363,14 @@ mod distance_tests {
         );
 
 
-        fn test_dist(p_0:&[f32], p_1:&[f32])->f32 {
-            ((p_0[0] - p_1[0] ).powi(2)+ (p_0[1] - p_1[1] ).powi(2) + (p_0[2] - p_1[2] ).powi(2)).sqrt()
-        }
 
         Ok(())
     }
+
+    fn test_dist(p_0:&[f32], p_1:&[f32])->f32 {
+        ((p_0[0] - p_1[0] ).powi(2)+ (p_0[1] - p_1[1] ).powi(2) + (p_0[2] - p_1[2] ).powi(2)).sqrt()
+    }
+
 
     #[test]
     fn test_dist_d2() -> Result<(), ThoosaError>{
@@ -381,7 +415,7 @@ mod distance_tests {
             let tensor1 = t_1_2_3_sliced.i((.., c, ..)).squeeze();
             debug!("tensor.size()={:?} tensor1.size()={:?}", tensor.size(), tensor1.size());
             debug!("tensor=\n{} tensor1=\n{}", tensor, tensor1);
-            let t = super::dist_d2(&tensor, &tensor1)?;
+            let t = super::clc_dist_d2(tensor, tensor1, 0)?;
 
 
             //first slice in t_0  & last slice in t_3 - 0.00, 0.01
@@ -408,7 +442,7 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        let (le, Some(dist_t)) = super::dist_d2_0(slice_0, slice_1, 0.1, true, false).unwrap() else {
+        let (le, Some(dist_t)) = super::clc_dist_d2_and_mask(slice_0, slice_1, 0.1, true, false).unwrap() else {
             panic!("no dists");
         };
         // debug!("dist_t={dist_t}");
@@ -450,8 +484,6 @@ mod distance_tests {
         // // assert_eq!(5.0, dist_t.double_value(&[1,1]));
         // // assert_eq!(5.0, dist_t.double_value(&[2,2]));
 
-
-
     }
 
     #[test]
@@ -464,10 +496,10 @@ mod distance_tests {
 
     #[test]
     fn test_q(){
-        // let t = Tensor::from_slice((0..10).map(|v|v as f32).collect::<Vec<_>>().as_slice()).to_kind(Float);
-        let t = Tensor::from_slice(&[0, 1, 2, 3, 4, 5, 6, 4, 5, 6,4, 5, 6,4, 5, 6,4, 5, 6,4, 5, 6,]).to_kind(Float);
+        let t = Tensor::from_slice((0..10).map(|v|v as f32).collect::<Vec<_>>().as_slice()).to_kind(Float);
+        // let t = Tensor::from_slice(&[0, 1, 2, 3, 4, 5, 6, 4, 5, 6,4, 5, 6,4, 5, 6,4, 5, 6,4, 5, 6,]).to_kind(Float);
 
-        let q = t.f_quantile_scalar(0.5, 0, true, "higher").unwrap();
+        let q = t.f_quantile_scalar(0.9, 0, true, "higher").unwrap();
 
         debug!("q={q}");
 
@@ -494,4 +526,34 @@ mod distance_tests {
         */
     }
 
+    #[test]
+    fn test_average_euclidean_distance(){
+        let d = [
+            1., 2., 3.,
+            4., 5., 6.,
+            7., 8., 9.
+        ];
+        let ab = test_dist(&d[0..3], &d[3..6]);
+        let ac = test_dist(&d[0..3], &d[6..9]);
+        let bc = test_dist(&d[3..6], &d[6..9]);
+
+        println!("ab={ab} ac={ac} bc={bc}");
+
+        let test_avg = (
+            ab + ac + bc
+        ) / 3.;
+
+        println!("test_avg={test_avg}");
+
+
+        let x = Tensor::from_slice(&d).view((3, 3));
+        println!("x={x}");
+        let avg_dist = average_euclidean_distance(&x);
+        assert_eq!(
+            test_avg,
+            avg_dist
+        );
+
+
+    }
 }

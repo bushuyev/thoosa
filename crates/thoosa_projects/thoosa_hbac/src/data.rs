@@ -684,7 +684,7 @@ mod tests {
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
-    use thoosa_motifs::distance::dist_d2_0;
+    use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_shared::{cdt_for_dir, init_test_logging, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_store::SqlStore;
@@ -732,7 +732,7 @@ mod tests {
         ).t;
 
 
-        let (le, Some(distances)) = dist_d2_0(
+        let (le, Some(distances)) = clc_dist_d2_and_mask(
             t_0_0_0_sliced.shallow_clone(),
             t_0_1_0_sliced.shallow_clone(),
             0.1,

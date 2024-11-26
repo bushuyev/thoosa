@@ -74,7 +74,7 @@ mod tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{IndexOp, Kind, Tensor};
     use thoosa_common::utils::{copy_cudarc, free_cudarc, from};
-    use thoosa_motifs::distance::{dist_d2, dist_d2_0};
+    use thoosa_motifs::distance::{dist_d2, clc_dist_d2_and_mask};
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_shared::ThoosaError;
     use polars::export::rayon::iter::ParallelIterator;
