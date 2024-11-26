@@ -91,8 +91,6 @@ where T:Hash + Eq + Debug {
     groups
 }
 
-
-
 #[derive(Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
 pub struct TensorSliceIdx<R>(pub R, pub i64) where R:Eq+Debug;
 
@@ -101,7 +99,6 @@ impl From<(String, i64)> for TensorSliceIdx<String> {
         TensorSliceIdx(value.0, value.1)
     }
 }
-
 
 impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

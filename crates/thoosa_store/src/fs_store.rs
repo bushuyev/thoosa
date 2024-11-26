@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use log::info;
+use log::{debug, info};
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use thoosa_shared::resource::ResourceId;
@@ -41,6 +41,7 @@ impl FileMotifTrackerStore {
 impl MotifTrackerStore for FileMotifTrackerStore {
 
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
+        debug!("MotifTrackerStore::save_slices: slices_pairs.len()={}", slices_pairs.len());
 
         //TODO append, new if size > threshold
         let mut file = File::create(self.make_file_path(self.last_file))?;

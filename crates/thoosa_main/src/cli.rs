@@ -30,7 +30,7 @@ use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_mode
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label_2, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
-use thoosa_motifs::fragments::{check_slices, load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams};
+use thoosa_motifs::fragments::{load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams};
 use thoosa_shared::{batch_windows, cdt, clc_num_batches, make_combos, RangeOrValue, ResourceType, TensorSliceIdx, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_store::{SqlStore, Store};
@@ -1356,6 +1356,7 @@ mod main_tests {
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_common::runs::RunConfig;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
+    use thoosa_motifs::distance::MaskMaker::Quantile;
     use thoosa_shared::resource::{Resource, ResourceId};
 
     #[ctor::ctor]
@@ -1391,7 +1392,7 @@ mod main_tests {
         let (mask, Some(dists)) = clc_dist_d2_and_mask(
             t_0_0.i((0, 0..100)).view((1, 1, -1)),
             t_0_1.i((0, 0..100)).view((1, 1, -1)),
-            0.0, true, false,
+            true, &[Quantile {q:0.0}],
         )? else {
             panic!()
         };
@@ -1907,6 +1908,8 @@ mod main_tests {
         )));
 
         let devices = vec![Cpu, Cpu];
+        log::set_max_level(Trace);
+
         let run_ids = run_step(
             None,
             &FindMotifsParams::dummy(200, 800..1000, "Label_0/4".into(), 10, 0.1, None),
@@ -1917,8 +1920,6 @@ mod main_tests {
             devices.clone(),
             "Test/FindMotifs"
         )?;
-
-        log::set_max_level(Trace);
 
         let run_ids = run_step(
             Some(run_ids),

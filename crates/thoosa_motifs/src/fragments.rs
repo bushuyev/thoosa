@@ -101,7 +101,7 @@ pub fn motifs_to_tensor(
     area: u64
 ) -> Result<(SyncWrapper<Box<Tensor>>, Vec<Vec<(usize, f32)>>), ThoosaError> {
 
-    debug!("motifs_to_tensor: device={device:?} window={window}");
+    debug!("motifs_to_tensor: resource_id_motif_slices={resource_id_motif_slices:?} device={device:?} window={window}");
 
     let channels_motifs_slices:Arc<RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(RwLock::new(HashMap::new()));
 
@@ -117,7 +117,7 @@ pub fn motifs_to_tensor(
             for (resource, motif_slices) in resource_id_motif_slices {
 
                 let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, area).await;
-                // debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
+                debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
 
                 for motif_slice in motif_slices {
 
@@ -263,21 +263,6 @@ impl PlotMotifSlicesParams {
     }
 }
 
-pub fn check_slices(slices: &Vec<&Box<Tensor>>, min_dot:f32) {
-
-    slices.iter().enumerate().for_each(|(i, s_0)| {
-        slices.iter().skip(i).for_each(|s_1| {
-            let dp = dot_norm(1, &s_0.view((1, -1)), &s_1.view((1, -1))).unwrap().double_value(&[0]) as f32;
-
-            if dp < min_dot {
-                warn!("dot: {}", dp);
-            } else {
-                debug!("dot: {}", dp);
-            }
-
-        });
-    });
-}
 
 
 pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<Resource>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
@@ -314,7 +299,6 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<R
 
                     let take = t.size()[1] / widow;
                     debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?} take={}", slices.len(), t.size(),  take  );
-
 
                     all_slices.write().push(
                         (tensor_idx_id,
@@ -396,8 +380,10 @@ mod motifs_tests {
     use thoosa_shared::TensorSliceIdx;
     use log::debug;
     use parking_lot::RwLock;
+    use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_shared::resource::ResourceId;
+    use thoosa_shared::resource::{Resource, ResourceId};
 
     #[ctor::ctor]
     fn init() {
@@ -541,73 +527,73 @@ mod motifs_tests {
         Ok(())
     }
 
-    //TODO K ref
-    // #[test]
-    // fn test_motifs_to_tensor() -> Result<(), ThoosaError>{
-    //     let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
-    //     debug!("dir={}", dir);
-    //
-    //     let mut eeg_id_fragments_map: HashMap<String, Vec<MotifSlice>> = HashMap::new();
-    //
-    //     eeg_id_fragments_map.insert("111".to_string(), vec![
-    //         MotifSlice::new(7, 100, 0),
-    //         MotifSlice::new(7, 301, 1),
-    //         MotifSlice::new(9, 500, 0),
-    //         MotifSlice::new(9, 701, 1)
-    //     ]);
-    //
-    //     eeg_id_fragments_map.insert("222".to_string(), vec![
-    //         MotifSlice::new(7, 200, 0),
-    //         MotifSlice::new(7, 401, 1),
-    //         MotifSlice::new(9, 600, 0),
-    //         MotifSlice::new(9, 801, 1)
-    //     ]);
-    //
-    //     fn test_eeg_to_t(eeg_id:&ResourceId) -> Box<Tensor> {
-    //         let data = (0..1000).map(|i| i as f64).collect::<Vec<f64>>();
-    //         match eeg_id {
-    //             1=>Box::new(Tensor::vstack(&[
-    //                 Tensor::from_slice(data.as_slice()),//ch 0
-    //                 Tensor::from_slice(data.as_slice()) //ch 1
-    //             ])),
-    //
-    //             2=>Box::new(Tensor::vstack(&[
-    //                 Tensor::from_slice(data.as_slice()),//ch 0
-    //                 Tensor::from_slice(data.as_slice()) //ch 1
-    //             ])),
-    //
-    //             _=>panic!("eeg_id={}", eeg_id)
-    //
-    //         }
-    //     }
-    //
-    //     let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
-    //         move |key: &ResourceId| {
-    //             SyncWrapper::new_tb(
-    //                 test_eeg_to_t(key)
-    //             )
-    //         }, 4, 100,
-    //     )));
-    //
-    //
-    //     let (t, motif_ids) = super::motifs_to_tensor(
-    //         eeg_id_fragments_map,
-    //         &executor_rc,
-    //         10, 2,
-    //         Device::Cpu
-    //     )?;
-    //
-    //     debug!("motif_ids={:?}", motif_ids);
-    //
-    //     //16 = 7+9
-    //     assert_eq!(vec![16, 16], motif_ids.into_iter().map(|v|v.into_iter().sum::<usize>()).collect::<Vec<usize>>());
-    //
-    //     assert_eq!(from::<Vec<f32>>(&t.get(0).get(0))[0] as i64 % 100, 0);//ch0, group/slice random
-    //     assert_eq!(from::<Vec<f32>>(&t.get(1).get(0))[0] as i64 % 100, 1);//ch1, group/slice random
-    //
-    //
-    //     Ok(())
-    // }
+    #[test]
+    fn test_motifs_to_tensor() -> Result<(), ThoosaError>{
+        let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
+        debug!("dir={}", dir);
+
+        let mut eeg_id_fragments_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
+
+        eeg_id_fragments_map.insert(Resource::new(1, 1, "111".into()), vec![
+            MotifSlice::new(7, 100, 0),
+            MotifSlice::new(7, 301, 1),
+            MotifSlice::new(9, 500, 0),
+            MotifSlice::new(9, 701, 1)
+        ]);
+
+        eeg_id_fragments_map.insert(Resource::new(2, 2, "222".into()), vec![
+            MotifSlice::new(7, 200, 0),
+            MotifSlice::new(7, 401, 1),
+            MotifSlice::new(9, 600, 0),
+            MotifSlice::new(9, 801, 1)
+        ]);
+
+        fn test_eeg_to_t(eeg_id:&Resource) -> Box<Tensor> {
+            let data = (0..1000).map(|i| i as f64).collect::<Vec<f64>>();
+            match eeg_id.file_stem() {
+                "111"=>Box::new(Tensor::vstack(&[
+                    Tensor::from_slice(data.as_slice()),//ch 0
+                    Tensor::from_slice(data.as_slice()) //ch 1
+                ])),
+
+                "222"=>Box::new(Tensor::vstack(&[
+                    Tensor::from_slice(data.as_slice()),//ch 0
+                    Tensor::from_slice(data.as_slice()) //ch 1
+                ])),
+
+                _=>panic!("eeg_id={:?}", eeg_id)
+
+            }
+        }
+
+        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+            move |key: &Resource| {
+                SyncWrapper::new_tb(
+                    test_eeg_to_t(key)
+                )
+            }, 4, 100,
+        )));
+
+
+        let (t, motif_ids) = super::motifs_to_tensor(
+            eeg_id_fragments_map,
+            &executor_rc,
+            10, 2,
+            Device::Cpu,
+            1
+        )?;
+
+        debug!("motif_ids={:?}", motif_ids);
+
+        //16 = 7+9
+        assert_eq!(vec![16, 16], motif_ids.into_iter().map(|v|v.into_iter().map(|v|v.0).sum::<usize>()).collect::<Vec<usize>>());
+
+        assert_eq!(from::<Vec<f32>>(&t.get(0).get(0))[0] as i64 % 100, 0);//ch0, group/slice random
+        assert_eq!(from::<Vec<f32>>(&t.get(1).get(0))[0] as i64 % 100, 1);//ch1, group/slice random
+
+
+        Ok(())
+    }
 
     #[test]
     fn test_write_motifs_slices() -> Result<(), ThoosaError>{
@@ -648,80 +634,64 @@ mod motifs_tests {
     }
 
 
-    //TODO K Ref
-    // #[test]
-    // fn test_load_motif_slices()-> Result<(), ThoosaError>{
-    //
-    //     fn test_eeg_to_t(_eeg_id:&String) -> SyncWrapper<Box<Tensor>> {
-    //         let t = Tensor::vstack(&[
-    //             Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
-    //             Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
-    //         ]);
-    //
-    //         SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
-    //     }
-    //
-    //     let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
-    //     let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
-    //
-    //     let motif_slices = super::load_motif_slices(
-    //         0,
-    //         2,
-    //         vec![TensorSliceIdx(123.to_string(), 2)],
-    //         &executor_rc
-    //     );
-    //
-    //     assert_eq!(vec![("123".to_string(), vec![Box::new(Tensor::from_slice(&[2.0, 3.0]))])], motif_slices);
-    //
-    //     debug!("motif_slices={:?}", motif_slices);
-    //
-    //     Ok(())
-    // }
-
-    //TODO K Ref
-    // #[test]
-    // fn test_load_motif_slices_5000()-> Result<(), ThoosaError>{
-    //     fn test_eeg_to_t(_eeg_id:&String) -> SyncWrapper<Box<Tensor>> {
-    //
-    //         let t = Tensor::vstack(&[
-    //             Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
-    //         ]);
-    //
-    //         SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
-    //     }
-    //
-    //     let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
-    //     let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
-    //
-    //     let motif_slices = super::load_motif_slices(
-    //         0,
-    //         5000,
-    //         vec![TensorSliceIdx(123.to_string(), 2)],
-    //         &executor_rc
-    //     );
-    //
-    //
-    //     assert_eq!("123", motif_slices[0].0);
-    //     assert_eq!(5000, motif_slices[0].1[0].size()[0]);
-    //
-    //     Ok(())
-    // }
-
-
     #[test]
-    fn test_check_slices()-> Result<(), ThoosaError> {
+    fn test_load_motif_slices()-> Result<(), ThoosaError>{
 
-        super::check_slices(
-            &vec![
-                &Box::new(Tensor::from_slice(&[1., 1., 1.])),
-                &Box::new(Tensor::from_slice(&[1., 1., 1.])),
-                &Box::new(Tensor::from_slice(&[0., 1., 1.])),
-            ],
-            0.99
+        fn test_eeg_to_t(_eeg_id:&Resource) -> SyncWrapper<Box<Tensor>> {
+            let t = Tensor::vstack(&[
+                Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
+                Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
+            ]);
+
+            SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
+        }
+
+        let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
+        let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
+
+        let motif_slices = super::load_motif_slices(
+            0,
+            2,
+            vec![TensorSliceIdx(Resource::new(1, 1, "aaa".into()), 2)],
+            &executor_rc
         );
+
+        assert_eq!(vec![(1, vec![Box::new(Tensor::from_slice(&[2.0, 3.0]))])], motif_slices);
+
+        debug!("motif_slices={:?}", motif_slices);
 
         Ok(())
     }
+
+    #[test]
+    fn test_load_motif_slices_5000()-> Result<(), ThoosaError>{
+        fn test_eeg_to_t(_eeg_id:&Resource) -> SyncWrapper<Box<Tensor>> {
+
+            let t = Tensor::vstack(&[
+                Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
+            ]);
+
+            SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
+        }
+
+        let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
+        let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
+
+        let motif_slices = super::load_motif_slices(
+            0,
+            5000,
+            vec![TensorSliceIdx(Resource::new(123, 1, "aaa".into()), 2)],
+            &executor_rc
+        );
+
+
+        assert_eq!(123, motif_slices[0].0);
+        assert_eq!(5000, motif_slices[0].1[0].size()[0]);
+
+        Ok(())
+    }
+
+
 
 }
 
