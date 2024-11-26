@@ -54,6 +54,10 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
         self.keys.iter().zip(self.sizes.iter()).map(|v|(v.0.clone(), v.1.clone())).collect()
     }
 
+    pub fn is_split(&self) -> bool {
+        self.split_at.is_some()
+    }
+
     pub fn split(&self) -> [Self;2] {
         //only one tensor in the chunk, splitting tensor
         if self.keys.len() == 1 {

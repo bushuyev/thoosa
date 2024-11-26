@@ -56,6 +56,7 @@ use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_store::fs_store::FileMotifTrackerStore;
+use crate::distance::MaskMaker::{Diagonal, Quantile};
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -285,20 +286,28 @@ pub fn find_motifs_by_euc_dist(
             debug!("find_motifs_by_euc_dist: rayon::current_num_threads()={}", rayon::current_num_threads());
 
 
-            let false_diagonal = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]);
+            let mask_diagonal = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]) && !chunk_sliced_1.is_split();
+            let mask_makers = if mask_diagonal {
+                &[Quantile { q: find_motifs_run_config.max_dist_k }, Diagonal][..]
+            } else {
+                &[Quantile { q: find_motifs_run_config.max_dist_k }][..]
+            };
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
                 chunk_sliced_0.t.to_device(devices_2x[0]),
                 chunk_sliced_1.t.to_device(devices_2x[0]),
-                find_motifs_run_config.max_dist_k as f64,
                 false,
-                false_diagonal //remove diagonal if same chunk_0 and chunk_1 point to same tensors
+                mask_makers,
+                //remove diagonal if same chunk_0 and chunk_1 point to same tensors
             )?;
 
             let mask_cpu = SyncWrapper::new_tb(Box::new(mask.to_device(Cpu)));
             drop(mask);
 
-            trace!("find_motifs_by_euc_dist: mask_cpu={mask_cpu} false_diagonal={false_diagonal} count_nonzero={}", mask_cpu.count_nonzero_dim_intlist([1,2]));
+            trace!("find_motifs_by_euc_dist: mask_cpu={mask_cpu} false_diagonal={mask_diagonal}");
+            if log_enabled!(Level::Debug) {
+                debug!("find_motifs_by_euc_dist: count_nonzero={}", mask_cpu.count_nonzero_dim_intlist([1,2]));
+            }
 
             Ok(mask_cpu)
 
@@ -347,14 +356,14 @@ pub fn find_motifs_by_euc_dist(
     while let Some(chunk) = chunks.next() {
         chunk.into_iter().par_bridge().for_each(|mt|{
             mt.lock().build_groups(store).expect("build_groups");
-            println!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
+            info!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
         });
     }
 
     if let Some(reminder) = chunks.into_remainder() {
         reminder.into_iter().par_bridge().for_each(|mt|{
             mt.lock().build_groups(store).expect("build_groups");
-            println!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
+            info!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
         });
     }
 
@@ -1244,7 +1253,7 @@ pub fn select_motifs_for_label_2(
             |chunk, (cfg, (channels_motifs, channels_motif_ids, label_motif_matches_sums))|{
                 debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs.0.size()={:?}", chunk.t.size(), channels_motifs.size()); //chunk.t
 
-                let (mask, _) = clc_dist_d2_and_mask(chunk.t.shallow_clone(), *channels_motifs.shallow_clone(), 0.1, false, false)?;
+                let (mask, _) = clc_dist_d2_and_mask(chunk.t.shallow_clone(), *channels_motifs.shallow_clone(), false, &[Quantile {q:0.1}])?;
                 trace!("select_motifs_for_label_2: label={label} mask={mask}");
 
                 let sums = mask.sum_dim_intlist(1, false, Kind::Int64);//channels x motif matches

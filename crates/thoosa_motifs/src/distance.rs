@@ -1,9 +1,11 @@
 use core::f32;
-use log::{debug, trace};
+use log::{debug, log_enabled, trace};
+use log::Level::Trace;
 use tch::{IndexOp, TchError, Tensor};
 use tch::Device::Cpu;
 use tch::Kind;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
+use tch::Kind::Bool;
 use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tch_to_thoosa_err, z_norm_2};
 use thoosa_shared::ThoosaError;
@@ -33,11 +35,51 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 
 //TODO use distance's histogram kurtosis and skew to scale down q_t? If histogram flat - prob. of useful patterns lower
 pub enum MaskMaker {
-    Quantile{q:f64},
+    Quantile{q:f32},
     Diagonal,
-    Threshold{v:f64}
+    LE {v:Tensor},//channels x thresholds
+    GT {v:Tensor} //channels x thresholds
 }
 
+impl MaskMaker {
+    pub fn make_mask(&self, perv_mask:Option<Tensor>, dists:&Tensor) -> Tensor {
+        match self {
+            MaskMaker::Quantile { q } => {
+                Self::apply_prev(&perv_mask,  quantile_mask(*q as f64, dists))
+            }
+            MaskMaker::Diagonal => {
+                let has_prev = perv_mask.is_some();
+                if log_enabled!(Trace) && has_prev {
+                    trace!("MaskMaker::make_mask Diagonal: perv_mask={}", perv_mask.as_ref().map(|v|v.shallow_clone()).unwrap());
+                }
+
+                let prev = perv_mask.unwrap_or(Tensor::ones(dists.size(), (Bool, dists.device())));
+                _ = prev.diagonal(0, 1, 2).fill_(0);
+
+                trace!("MaskMaker::make_mask Diagonal: 2. perv_mask.is_some()={has_prev} prev={prev}");
+
+                prev
+            }
+            MaskMaker::LE { v } => {
+                Self::apply_prev(&perv_mask,  dists.le_tensor(v))
+            }
+            MaskMaker::GT { v } => {
+                Self::apply_prev(&perv_mask,  dists.gt_tensor(v))
+            }
+        }
+    }
+
+    fn apply_prev(perv_mask: &Option<Tensor>, mask: Tensor) -> Tensor {
+        match perv_mask {
+            None => {
+                mask
+            }
+            Some(prev) => {
+                prev.logical_and(&mask)
+            }
+        }
+    }
+}
 /*
     t_0, t_1 - channels x slices x slice_len
 
@@ -45,30 +87,21 @@ pub enum MaskMaker {
 pub fn clc_dist_d2_and_mask(
     t_0: Tensor,
     t_1: Tensor,
-    q: f64,
     with_distances: bool,
-    exclude_diag: bool,
+    mask_makers:&[MaskMaker],
 ) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
-    let channels = t_0.size()[0];
 
     let distances = clc_dist_d2(t_0, t_1, 1)?;
 
     debug!("dist_d2_0: distances size={:?}", distances.size());
     trace!("dist_d2_0: distances={:?}", distances);
 
-
-    //channels x motifs x num_slices
-    let mut mask = quantile_mask(q, &distances);
-
-    if exclude_diag {
-        diag_mask(&mut mask);
-    }
-
-    trace!("dist_d2_0: le size={:?}", mask.size());
-    trace!("dist_d2_0: le={:?}", mask);
-
     Ok((
-        mask,
+        mask_makers.into_iter().fold(None::<Tensor>, |mask, mask_maker|{
+            debug!("dist_d2_0: mask={mask:?}");
+            Some(mask_maker.make_mask(mask, &distances))
+        }).unwrap_or(Tensor::ones(distances.size(), (Bool, Cpu))),
+
         if with_distances {
             Some(distances)
         } else {
@@ -77,10 +110,6 @@ pub fn clc_dist_d2_and_mask(
     ))
 }
 
-fn diag_mask(mask: &mut Tensor) {
-    let mut le_diagonals = mask.diagonal(0, 1, 2);
-    _ = le_diagonals.fill_(0);
-}
 
 fn quantile_mask(q: f64, distances: &Tensor) -> Tensor {
     let channels= distances.size()[0];
@@ -109,6 +138,9 @@ fn quantile_mask(q: f64, distances: &Tensor) -> Tensor {
     trace!("dist_d2_0: 2. q_t={q_t}");
 
     let mut le = distances.le_tensor(&q_t); //channels x motifs x num_slices
+
+    trace!("dist_d2_0:  le={le}");
+
     le
 }
 
@@ -174,7 +206,8 @@ pub fn average_euclidean_distance(x: &Tensor) -> f32 {
 
 #[cfg(test)]
 mod distance_tests {
-    use log::debug;
+    use log::__private_api::enabled;
+    use log::{debug, set_max_level};
     use log::LevelFilter::Trace;
     use sci_rs::na::SimdBool;
     use tch::Device::Cpu;
@@ -186,6 +219,7 @@ mod distance_tests {
 
     use crate::distance::{average_euclidean_distance, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean};
     use crate::chunks::ChunkOfSlicedTensors;
+    use crate::distance::MaskMaker::{Diagonal, Quantile};
 
     #[ctor::ctor]
     fn init() {
@@ -259,8 +293,8 @@ mod distance_tests {
         let (le, Some(distances)) = clc_dist_d2_and_mask(
             t_0_0_0_sliced.shallow_clone(),
             t_0_1_0_sliced.shallow_clone(),
-            1.0,//all distances
-            true, false
+
+            true, &[Quantile {q:1.}]
 
         )? else {
             panic!("no distances")
@@ -341,7 +375,7 @@ mod distance_tests {
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t;
 
-        let (le, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), 0.1, true, false)? else {
+        let (le, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &[Quantile {q:0.1}])? else {
             panic!("no distances")
         };
 
@@ -442,15 +476,57 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        let (le, Some(dist_t)) = super::clc_dist_d2_and_mask(slice_0, slice_1, 0.1, true, false).unwrap() else {
+        let (mask, Some(dist_t)) = super::clc_dist_d2_and_mask(slice_0, slice_1, true, &[Quantile {q:0.0}]).unwrap() else {
             panic!("no dists");
         };
+        // debug!("mask={mask}");
         // debug!("dist_t={dist_t}");
-        // debug!("dist_t_0={dist_t_0}");
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, false, false,
+                false, false, false,
+                true,  false, false
+            ]).view((1, 3,3)),
+            mask
+        );
 
         assert_eq!(5.0, dist_t.double_value(&[0,0,0]));
         assert_eq!(5.0, dist_t.double_value(&[0,1,1]));
         assert_eq!(5.0, dist_t.double_value(&[0,2,2]));
+
+
+    }
+
+    #[test]
+    fn test_dist_d2_0_diag(){
+
+        let slice_0 = Tensor::from_slice(&[0., 0., 1., 1., 2., 2.,]).view((1, 3,2));
+        let slice_1 = Tensor::from_slice(&[3., 4., 4., 5., 5., 6.,]).view((1, 3,2));
+        debug!("slice_0={slice_0}");
+        debug!("slice_1={slice_1}");
+
+        // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
+        set_max_level(Trace);
+        let (mask, Some(dist_t)) = clc_dist_d2_and_mask(slice_0, slice_1, true, &[Quantile {q:1.0}, Diagonal]).unwrap() else {
+            panic!("no dists");
+        };
+        debug!("mask={mask}");
+        // debug!("dist_t={dist_t}");
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, true,  true,
+                true,  false, true,
+                true,  true,  false
+            ]).view((1, 3,3)),
+            mask
+        );
+        //
+        // assert_eq!(5.0, dist_t.double_value(&[0,0,0]));
+        // assert_eq!(5.0, dist_t.double_value(&[0,1,1]));
+        // assert_eq!(5.0, dist_t.double_value(&[0,2,2]));
+
 
     }
 
