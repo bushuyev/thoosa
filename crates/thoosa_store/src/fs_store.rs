@@ -68,18 +68,17 @@ impl MotifTrackerStore for FileMotifTrackerStore {
     }
 
     fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
-        let elem_size = size_of::<SlicesMatch>();
+        // let elem_size = size_of::<SlicesMatch>();
         let mut slice_id = 0;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str())?;
+        // let file = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .append(true)
+        //     .open(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str())?;
 
-        let chunk_reader:ChunkReader< crate::fs_store::SlicesMatch > = ChunkReader::new(&self.path.join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()))?;
         let groups:HashMap<u16, HashSet<IdSlice>> = group_slices(
 
-            chunk_reader.flat_map(|slices|{
-                slices.unwrap().into_iter().map(move |slices|{
+            ChunkReader::new(&self.path.join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()))?.flat_map(|slices|{
+                slices.unwrap().into_iter().map(move |slices:SlicesMatch|{
                     slice_id+=1;
                     (IdSlice(slice_id, slices.0.0, slices.0.1), IdSlice(slice_id, slices.1.0, slices.1.1))
                 })
@@ -124,10 +123,11 @@ impl<T> Iterator for ChunkReader<T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let current_position = self.reader.stream_position().ok()?;
-        let mut buffer = Vec::new();
+
 
         match zstd::stream::read::Decoder::new(&mut self.reader) {
             Ok(mut decoder) => {
+                let mut buffer = Vec::new();
                 match decoder.read_to_end(&mut buffer) {
                     Ok(_) => {
                         // Ensure the buffer size matches a multiple of the size of T
@@ -180,12 +180,12 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::io::{Read, Seek, SeekFrom, Write};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use log::debug;
     use parking_lot::{Mutex, RwLock};
     use thoosa_shared::{cdt_for_dir, TensorSliceIdx, ThoosaError};
-    use crate::fs_store::FileMotifTrackerStore;
+    use crate::fs_store::{ChunkReader, FileMotifTrackerStore, SlicesMatch};
     use crate::SqlStore;
 
     #[test]
@@ -391,80 +391,20 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_z() {
-        use zstd::stream::write::Encoder;
-
-        fs::remove_file("/tmp/test.zstd").unwrap();
-
-        fn write_chunks(file_path: &str, data_chunks: &[&[u8]]) -> std::io::Result<()> {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(file_path)?;
-
-            for chunk in data_chunks {
-                // Create a new encoder for each chunk (independent frame)
-                let mut encoder = Encoder::new(std::io::BufWriter::new(&file), 3)?; // Compression level 3
-                encoder.write_all(chunk)?;
-                encoder.finish()?; // Finalize the frame
-            }
-
-            Ok(())
-        }
-
-        fn read_chunks(file_path: &str) -> std::io::Result<()> {
-            let file = std::fs::File::open(file_path)?;
-            let mut reader = std::io::BufReader::new(file);
-
-            let mut buffer = Vec::new();
-
-            loop {
-                // Remember the current position before attempting to read
-                let current_position = reader.stream_position()?;
-
-                match zstd::stream::read::Decoder::new(&mut reader){
-                    Ok(mut decoder) => {
-                        buffer.clear();
-
-                        match decoder.read_to_end(&mut buffer) {
-                            Ok(_) => {
-                                println!("Read chunk: {}", String::from_utf8_lossy(&buffer));
-                            }
-                            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                                // We've reached the end of the file while reading this frame
-                                break;
-                            }
-                            Err(e) => return Err(e), // Propagate other errors
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                        // We've reached the end of the file while attempting to initialize a new frame
-                        break;
-                    }
-                    Err(_) => {
-                        // Seek back to the position before the failed attempt
-                        reader.seek(SeekFrom::Start(current_position))?;
-                        break;
-                    }
-                }
-            }
-
-            Ok(())
-        }
-
-
-        let data_chunks = vec![
-            "Chunk 1: This is the first chunk of data.".as_bytes(),
-            "Chunk 2: This is the second chunk of data.".as_bytes(),
-            "Chunk 3: This is the third chunk of data.".as_bytes(),
-        ];
-
-        write_chunks("/tmp/test.zstd", data_chunks.as_slice()).unwrap();
-        println!("Data chunks written to 'data.zst'!");
-
-        read_chunks("/tmp/test.zstd").unwrap();
-
-    }
+    // #[test]
+    // fn test_z() -> Result<(), ThoosaError>{
+    //     let mut num = 0;
+    //     let mut chunks = 0;
+    //     for chunk in ChunkReader::new(PathBuf::from("/tmp/ws_import_test/tmp/689_0_slices.zstd").as_path())?{
+    //         let chunk:Vec<SlicesMatch> = chunk?;
+    //         num+=chunk.len();
+    //         chunks+=1;
+    //     }
+    //
+    //     println!("num={num} chunks={chunks}");
+    //
+    //     Ok(())
+    //
+    // }
 
 }
