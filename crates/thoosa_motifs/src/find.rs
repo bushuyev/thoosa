@@ -198,13 +198,13 @@ impl Conv1Params {
 
 impl FindMotifsParams {
     // #[cfg(test)]
-    pub fn dummy(step: u32, window: Range<u32>, resource_set: String, chunk_size: u32, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
+    pub fn dummy(step: u32, window: Range<u32>, group: String, chunk_size: u32, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
         FindMotifsParams {
             step:step.into(),
 
             window:window.into(),
 
-            resources: ResourceType::Set(resource_set),
+            resources: ResourceType::Group(group),
 
             min_tracker_step: Some(10),
 
@@ -1213,7 +1213,7 @@ pub fn select_motifs_for_label_2(
             ws.read().channels() as i64,
             Cpu,
             motifs_area,
-        ).map(|(motifs_tensor, channels_motifs_ids_dists)| {
+        ).map(|(motifs_tensor, avg_dists_t, channels_motifs_ids)| {
             let size = &motifs_tensor.size()[0..=1];//channels x motifs for motif sums
 
             debug!("select_motifs_for_label_2: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensor.size());
@@ -1221,7 +1221,8 @@ pub fn select_motifs_for_label_2(
                 find_motifs_run_config,
                 (
                     motifs_tensor, //channels x motifs x slice
-                    channels_motifs_ids_dists,
+                    avg_dists_t,
+                    channels_motifs_ids,
                     HashMap::from_iter(
                         labels_resources
                             .iter()
@@ -1236,7 +1237,7 @@ pub fn select_motifs_for_label_2(
             )
         })
 
-    }).collect::<Result<Vec<(FindMotifsRunConfig, (SyncWrapper<Box<Tensor>>, Vec<Vec<(usize, f32)>>, HashMap<String, SyncWrapper<Box<Tensor>>>))>, ThoosaError>>()?;
+    }).collect::<Result<Vec<(FindMotifsRunConfig, (SyncWrapper<Box<Tensor>>, SyncWrapper<Box<Tensor>>, Vec<Vec<usize>>, HashMap<String, SyncWrapper<Box<Tensor>>>))>, ThoosaError>>()?;
     loader.write().purge_cache(motifs_area);
 
     trace!("select_motifs_for_label_2: motifs_tensors={find_motifs_run_config_motifs_tensors:?}");
@@ -1247,19 +1248,17 @@ pub fn select_motifs_for_label_2(
         debug!("select_motifs_for_label_2: label={label:?} resources={resources:?}");
         chunk_and_slice(
             resources,
-            1,//TODO params
+            10,//TODO params
             &mut find_motifs_run_config_motifs_tensors,
 
-            |chunk, (cfg, (channels_motifs, channels_motif_ids, label_motif_matches_sums))|{
+            |chunk, (cfg, (channels_motifs, avg_dists_t, channels_motif_ids, label_motif_matches_sums))|{
 
-
-                let thresholds_t = Tensor::rand(&channels_motifs.size()[0..=1], (channels_motifs.kind(), channels_motifs.device()));
                 let broadcast_to_size = [channels_motifs.size()[0], channels_motifs.size()[1], chunk.t.size()[1]];
 
-                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs.0.size()={:?}  thresholds_t.size()={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), channels_motifs.size(), thresholds_t.size()); //chunk.t
+                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs.0.size()={:?}  avg_dists_t.size()={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), channels_motifs.size(), avg_dists_t.size()); //chunk.t
 
 
-                let (mask, _) = clc_dist_d2_and_mask(*channels_motifs.shallow_clone(), chunk.t.shallow_clone(), false, &[LE {v:thresholds_t.unsqueeze(2).broadcast_to(broadcast_to_size)}])?;
+                let (mask, _) = clc_dist_d2_and_mask(*channels_motifs.shallow_clone(), chunk.t.shallow_clone(), false, &[LE {v:avg_dists_t.unsqueeze(2).broadcast_to(broadcast_to_size)}])?;
                 trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
 
                 let sums = mask.sum_dim_intlist(2, false, Kind::Int64);//channels x motif matches
@@ -1281,10 +1280,12 @@ pub fn select_motifs_for_label_2(
         )?;
     }
 
-    for (cfg, (channels_motifs, channels_motif_ids, label_motif_matches_sums)) in find_motifs_run_config_motifs_tensors.iter(){
-        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids={channels_motif_ids:?}", cfg.window);
+    for (cfg, (channels_motifs, avg_dists_t, channels_motif_ids, label_motif_matches_sums)) in find_motifs_run_config_motifs_tensors.iter(){
+
+        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids=\n{channels_motif_ids:?}", cfg.window);
+        trace!("select_motifs_for_label_2:  avg_dists_t=\n{avg_dists_t}");
         for (label, motif_sums) in label_motif_matches_sums.iter() {
-            debug!("select_motifs_for_label_2: label={label} final motif_sums={motif_sums}");
+            trace!("select_motifs_for_label_2: label={label} final motif_sums=\n{motif_sums}");
         }
 
         // store.lock().save_selected_motifs(cfg.id.unwrap(), motifs_corrs).expect("save_motifs_corrs");

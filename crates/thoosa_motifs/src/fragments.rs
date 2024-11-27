@@ -101,7 +101,7 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 pub fn motifs_to_tensor(
     resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device,
     area: u64
-) -> Result<(SyncWrapper<Box<Tensor>>, Vec<Vec<(usize, f32)>>), ThoosaError> {
+) -> Result<(SyncWrapper<Box<Tensor>>, SyncWrapper<Box<Tensor>>, Vec<Vec<usize>>), ThoosaError> {
 
     debug!("motifs_to_tensor: resource_id_motif_slices={resource_id_motif_slices:?} device={device:?} window={window}");
 
@@ -150,47 +150,58 @@ pub fn motifs_to_tensor(
 
     debug!("motifs_to_tensor: channels_motifs_slices={:?}", channels_motifs_slices);
 
-    let motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
+    let max_motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
 
-    let mut channel_motif_ids:Vec<Vec<(usize, f32)>> = (0..channels).into_iter().map(|_|Vec::with_capacity(motifs_num as usize)).collect();
+    let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::with_capacity(max_motifs_num as usize)).collect();
     let zeros_t = Tensor::zeros(window, (Float, device));
 
-    let tensor = Tensor::vstack(
-        (0..channels).map(|channel| {
-            let motif_slices =  channels_motifs_slices.write().remove(&(channel as u16)).unwrap_or(HashMap::new());
-
-            let mut motifs = motif_slices.into_iter().map(|(motif_id, slices)| {
-                let slices_t = Tensor::vstack(slices.into_iter().map(|s|*s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
-                debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
-                trace!("motifs_to_tensor: slices_t={slices_t}");
-
-                let motif_avg_dist = average_euclidean_distance(&slices_t);
-
-                trace!("motifs_to_tensor: motif_avg_dist={motif_avg_dist}");
-
-                channel_motif_ids[channel as usize].push((motif_id, motif_avg_dist));
-
-                slices_t.mean_dim(0, false, Float).copy()
-
-            }).collect::<Vec<Tensor>>();
+    let mut channels_motifs_slices_t = Vec::with_capacity(channels as usize);
+    let mut channels_motifs_avg_dists_t = Vec::with_capacity(channels as usize);
 
 
-            if (motifs.len() as i64) < motifs_num {
-                debug!("motifs_to_tensor: padding channel={channel} {} to {motifs_num} ", motifs.len());
-                motifs.extend((0..motifs_num - motifs.len() as i64).map(|_| zeros_t.shallow_clone()))
-            }
+    for channel in 0..channels {
+        let motif_slices = channels_motifs_slices.write().remove(&(channel as u16)).unwrap_or(HashMap::new());
+        let mut motifs_avg_dists = Vec::with_capacity(motif_slices.len());
 
-            let t = Tensor::vstack(motifs.as_slice());
 
-            t.view((motifs_num, window))
+        let mut motifs = motif_slices.into_iter().map(|(motif_id, slices)| {
+            let slices_t = Tensor::vstack(slices.into_iter().map(|s| *s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
+            debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
+            trace!("motifs_to_tensor: slices_t={slices_t}");
 
-        }).collect::<Vec<Tensor>>().as_slice()
-    );
+            let motif_avg_dist = average_euclidean_distance(&slices_t);
 
-    let tensor = tensor.view((channels, motifs_num, -1));
+            trace!("motifs_to_tensor: motif_avg_dist={motif_avg_dist}");
+            motifs_avg_dists.push(motif_avg_dist);
+            channel_motif_ids[channel as usize].push(motif_id);
+
+            slices_t.mean_dim(0, false, Float).copy()
+        }).collect::<Vec<Tensor>>();
+
+
+        if (motifs.len() as i64) < max_motifs_num {
+            debug!("motifs_to_tensor: padding channel={channel} {} to {max_motifs_num} ", motifs.len());
+            motifs.extend((0..max_motifs_num - motifs.len() as i64).map(|_| zeros_t.shallow_clone()));
+            motifs_avg_dists.extend((0..max_motifs_num - motifs_avg_dists.len() as i64).map(|_| f32::MIN));
+        }
+        channels_motifs_avg_dists_t.push(Tensor::from_slice(motifs_avg_dists.as_slice()));
+        channels_motifs_slices_t.push(Tensor::vstack(motifs.as_slice()).view((max_motifs_num, window)))
+    }
+
+    debug!("motifs_to_tensor: channels_motifs_avg_dists_t={channels_motifs_avg_dists_t:?}");
     debug!("motifs_to_tensor: channel_motif_ids={channel_motif_ids:?}");
 
-    Ok((SyncWrapper::new_tb(Box::new(tensor)), channel_motif_ids))
+    Ok((
+        SyncWrapper::new_tb(Box::new(Tensor::vstack(
+            channels_motifs_slices_t.as_slice()
+        ).view((channels, max_motifs_num, -1)))),
+
+        SyncWrapper::new_tb(Box::new(Tensor::vstack(
+            channels_motifs_avg_dists_t.as_slice()
+        ).view((channels, max_motifs_num)))),
+
+        channel_motif_ids
+    ))
 }
 
 pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64) -> Result<(), ThoosaError>
@@ -578,7 +589,7 @@ mod motifs_tests {
         )));
 
 
-        let (t, motif_ids) = super::motifs_to_tensor(
+        let (slices_t, avg_dists_t,motif_ids) = super::motifs_to_tensor(
             eeg_id_fragments_map,
             &executor_rc,
             10, 2,
@@ -586,12 +597,13 @@ mod motifs_tests {
             1
         )?;
 
-        debug!("motif_ids={t}");
+        debug!("slices_t={slices_t}");
+        debug!("avg_dists_t={avg_dists_t}");
         debug!("motif_ids={:?}", motif_ids);
 
         //16 = 7+9
         let motif_ids = motif_ids.into_iter()
-            .flat_map(|v| v.into_iter().map(|v| v.0))
+            .flat_map(|v| v.into_iter())
             .collect::<Vec<usize>>();
 
         let mut motif_ids_sorted = motif_ids.clone();
@@ -611,7 +623,7 @@ mod motifs_tests {
         debug!("motif_10_test={motif_10_test}");
         let motif_10_idx = motif_ids.iter().enumerate().find(|(i, v)|v == &&10).map(|v|v.0).expect("motif 10");
 
-        let motif_10 = t.i((0, motif_10_idx as i64));
+        let motif_10 = slices_t.i((0, motif_10_idx as i64));
 
         debug!("motif_10={motif_10}");
 
