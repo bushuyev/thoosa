@@ -350,6 +350,10 @@ pub fn find_motifs_by_euc_dist(
         &devices
     )?;
 
+    // for tr in run_config__channels_trackers.iter().flat_map(|(_, v)|v.iter()){
+    //     // tr.lock().finish();
+    // }
+
     info!("setting motifs in {} configs", run_config_ids.len());
     let mut chunks = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).array_chunks::<10>();//TODO chunk size all trackers / num threads
     let mut trackers_done = AtomicU32::new(0);
