@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use regex::Regex;
 use tch::Device;
 use tch::IndexOp;
-
+use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
 use thoosa_common::utils::*;
@@ -53,6 +53,7 @@ impl MotifsToFragmentsParams {
 
 
 /**
+TODO remove?
 * returns map tensor_id - MotifSlice(motif_group, tensor slice idx, channel)
 */
 pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loader:fn(&str) -> Result<Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>)>, ThoosaError>) -> Result<HashMap<String, Vec<MotifSlice>>, ThoosaError>{
@@ -94,7 +95,8 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 
 
 /**
-* returns tensor channels x max motifs in channels x first slice in motifs group. + channels x motif ids
+* returns tensor channels x max motifs in channels x first slice in motifs group. + channels x motif ids + dists
+* motifs order is random because of iterating over hashmap entries but always consistent between tensor and vec
 */
 pub fn motifs_to_tensor(
     resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device,
@@ -125,6 +127,7 @@ pub fn motifs_to_tensor(
                     let channel_t = channel_t.view([1, -1]);
 
                     let motif_slice_t = channel_t.narrow(1, motif_slice.slice_idx, window);
+                    // let motif_slice_t = t.i((motif_slice.channel, motif_slice.slice_idx..motif_slice.slice_idx+window));
                     // let motif_slice_t = t.copy((channel_t, motif_slice.slice_idx..motif_slice.slice_idx+window));
 
                     let mut write_guard = channels_motifs_slices_arc.write();
@@ -150,7 +153,7 @@ pub fn motifs_to_tensor(
     let motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
 
     let mut channel_motif_ids:Vec<Vec<(usize, f32)>> = (0..channels).into_iter().map(|_|Vec::with_capacity(motifs_num as usize)).collect();
-
+    let zeros_t = Tensor::zeros(window, (Float, device));
 
     let tensor = Tensor::vstack(
         (0..channels).map(|channel| {
@@ -166,15 +169,15 @@ pub fn motifs_to_tensor(
                 trace!("motifs_to_tensor: motif_avg_dist={motif_avg_dist}");
 
                 channel_motif_ids[channel as usize].push((motif_id, motif_avg_dist));
-                // TODO avg
-                slices_t.i((0, ..)).shallow_clone()
+
+                slices_t.mean_dim(0, false, Float).copy()
 
             }).collect::<Vec<Tensor>>();
 
 
             if (motifs.len() as i64) < motifs_num {
                 debug!("motifs_to_tensor: padding channel={channel} {} to {motifs_num} ", motifs.len());
-                motifs.extend((0..motifs_num - motifs.len() as i64).map(|_|Tensor::zeros(window, (tch::Kind::Float, device))))
+                motifs.extend((0..motifs_num - motifs.len() as i64).map(|_| zeros_t.shallow_clone()))
             }
 
             let t = Tensor::vstack(motifs.as_slice());
@@ -189,7 +192,6 @@ pub fn motifs_to_tensor(
 
     Ok((SyncWrapper::new_tb(Box::new(tensor)), channel_motif_ids))
 }
-
 
 pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_map: HashMap<usize, Vec<MotifSlice>>, eegs:Vec<String>, read_eeg_to_tensor:F, window: i64) -> Result<(), ThoosaError>
     where F:Fn(&str, &str, Device) -> Result<Tensor, ThoosaError> + Sync {
@@ -265,7 +267,7 @@ impl PlotMotifSlicesParams {
 
 
 
-pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<Resource>>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<Resource>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
 
@@ -292,7 +294,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorSliceIdx<R
 
             let all_slices = Arc::clone(&all_slices);
             let wg = wg.clone();
-            executor.write().exec(move |loader, _keys_purge| {
+            loader.write().exec(move |loader, _keys_purge| {//TODO purge
                 async move {
                     let tensor_idx_id = tensor_idx.id();
                     let t = LoadRunner::<Box<Tensor>>::load_future(loader, tensor_idx, 0).await;
@@ -366,13 +368,14 @@ impl MotifsToTensorParams {
 mod motifs_tests {
     use std::collections::{HashMap, HashSet};
     use std::fs;
+    use std::ops::Index;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::UNIX_EPOCH;
 
 
 
-    use tch::{Device, Tensor};
+    use tch::{Device, IndexOp, Tensor};
 
     use thoosa_common::utils::*;
     use thoosa_shared::{cdt_for_dir, ThoosaError};
@@ -535,17 +538,17 @@ mod motifs_tests {
         let mut eeg_id_fragments_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
         eeg_id_fragments_map.insert(Resource::new(1, 1, "111".into()), vec![
-            MotifSlice::new(7, 100, 0),
-            MotifSlice::new(7, 301, 1),
-            MotifSlice::new(9, 500, 0),
-            MotifSlice::new(9, 701, 1)
+            MotifSlice::new(10, 100, 0),
+            MotifSlice::new(11, 301, 1),
+            MotifSlice::new(20, 500, 0),
+            MotifSlice::new(21, 701, 1)
         ]);
 
         eeg_id_fragments_map.insert(Resource::new(2, 2, "222".into()), vec![
-            MotifSlice::new(7, 200, 0),
-            MotifSlice::new(7, 401, 1),
-            MotifSlice::new(9, 600, 0),
-            MotifSlice::new(9, 801, 1)
+            MotifSlice::new(10, 200, 0),
+            MotifSlice::new(11, 401, 1),
+            MotifSlice::new(20, 600, 0),
+            MotifSlice::new(21, 801, 1)
         ]);
 
         fn test_eeg_to_t(eeg_id:&Resource) -> Box<Tensor> {
@@ -583,14 +586,38 @@ mod motifs_tests {
             1
         )?;
 
+        debug!("motif_ids={t}");
         debug!("motif_ids={:?}", motif_ids);
 
         //16 = 7+9
-        assert_eq!(vec![16, 16], motif_ids.into_iter().map(|v|v.into_iter().map(|v|v.0).sum::<usize>()).collect::<Vec<usize>>());
+        let motif_ids = motif_ids.into_iter()
+            .flat_map(|v| v.into_iter().map(|v| v.0))
+            .collect::<Vec<usize>>();
 
-        assert_eq!(from::<Vec<f32>>(&t.get(0).get(0))[0] as i64 % 100, 0);//ch0, group/slice random
-        assert_eq!(from::<Vec<f32>>(&t.get(1).get(0))[0] as i64 % 100, 1);//ch1, group/slice random
+        let mut motif_ids_sorted = motif_ids.clone();
+        motif_ids_sorted.sort();
 
+        assert_eq!(
+            vec![10, 11, 20, 21],
+            motif_ids_sorted
+        );
+        //10 motif slices: 100-110, 200-210
+        let motif_10_test = Tensor::stack(&[
+            Tensor::from_slice((100..110).map(|v|v as f32).collect::<Vec<_>>().as_slice()),
+            Tensor::from_slice((200..210).map(|v|v as f32).collect::<Vec<_>>().as_slice())
+            ], 0
+        ).mean_dim(0, false, Float);
+
+        debug!("motif_10_test={motif_10_test}");
+        let motif_10_idx = motif_ids.iter().enumerate().find(|(i, v)|v == &&10).map(|v|v.0).expect("motif 10");
+
+        let motif_10 = t.i((0, motif_10_idx as i64));
+
+        debug!("motif_10={motif_10}");
+
+        assert_eq!(motif_10_test, motif_10);
+
+        //TODO other motifs
 
         Ok(())
     }
@@ -692,6 +719,17 @@ mod motifs_tests {
     }
 
 
+    #[test]
+    fn test_0(){
+        let t = Tensor::from_slice(&[
+            2., 4., 1.,
+            1., 3., 2.,
+            3., 2., 3.,
+        ]).view((3,3)).mean_dim(0, true, Float);
+
+
+        println!("t={t}");
+    }
 
 }
 

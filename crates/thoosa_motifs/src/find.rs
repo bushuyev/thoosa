@@ -56,7 +56,7 @@ use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_store::fs_store::FileMotifTrackerStore;
-use crate::distance::MaskMaker::{Diagonal, Quantile};
+use crate::distance::MaskMaker::{Diagonal, Quantile, LE};
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -1213,15 +1213,15 @@ pub fn select_motifs_for_label_2(
             ws.read().channels() as i64,
             Cpu,
             motifs_area,
-        ).map(|(motifs_tensor, channels_motifs_ids)| {
+        ).map(|(motifs_tensor, channels_motifs_ids_dists)| {
             let size = &motifs_tensor.size()[0..=1];//channels x motifs for motif sums
 
             debug!("select_motifs_for_label_2: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensor.size());
             (
                 find_motifs_run_config,
                 (
-                    motifs_tensor,//channels x motifs x slice
-                    channels_motifs_ids,
+                    motifs_tensor, //channels x motifs x slice
+                    channels_motifs_ids_dists,
                     HashMap::from_iter(
                         labels_resources
                             .iter()
@@ -1251,20 +1251,26 @@ pub fn select_motifs_for_label_2(
             &mut find_motifs_run_config_motifs_tensors,
 
             |chunk, (cfg, (channels_motifs, channels_motif_ids, label_motif_matches_sums))|{
-                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs.0.size()={:?}", chunk.t.size(), channels_motifs.size()); //chunk.t
 
-                let (mask, _) = clc_dist_d2_and_mask(chunk.t.shallow_clone(), *channels_motifs.shallow_clone(), false, &[Quantile {q:0.1}])?;
-                trace!("select_motifs_for_label_2: label={label} mask={mask}");
 
-                let sums = mask.sum_dim_intlist(1, false, Kind::Int64);//channels x motif matches
-                trace!("select_motifs_for_label_2:  label={label} sums={sums}");
+                let thresholds_t = Tensor::rand(&channels_motifs.size()[0..=1], (channels_motifs.kind(), channels_motifs.device()));
+                let broadcast_to_size = [channels_motifs.size()[0], channels_motifs.size()[1], chunk.t.size()[1]];
+
+                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs.0.size()={:?}  thresholds_t.size()={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), channels_motifs.size(), thresholds_t.size()); //chunk.t
+
+
+                let (mask, _) = clc_dist_d2_and_mask(*channels_motifs.shallow_clone(), chunk.t.shallow_clone(), false, &[LE {v:thresholds_t.unsqueeze(2).broadcast_to(broadcast_to_size)}])?;
+                trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
+
+                let sums = mask.sum_dim_intlist(2, false, Kind::Int64);//channels x motif matches
+                trace!("select_motifs_for_label_2:  label={label} sums=\n{sums}");
 
 
                 label_motif_matches_sums.get_mut(&label).expect(format!("no motif sums tensor for {label}").as_str()).add_assign(sums.into());
 
                 if log_enabled!(Level::Trace) {
                     for (label, motif_sums) in label_motif_matches_sums.iter() {
-                        trace!("select_motifs_for_label_2: label={label} motif_sums={motif_sums}");
+                        trace!("select_motifs_for_label_2: label={label} motif_sums=\n{motif_sums}");
                     }
                 }
 

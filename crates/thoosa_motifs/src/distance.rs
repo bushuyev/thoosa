@@ -213,13 +213,14 @@ mod distance_tests {
     use tch::Device::Cpu;
     use tch::{Device, IndexOp, Kind};
     use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
     use thoosa_shared::{sig_one_imp, sig_three_imp, sig_two_imp, ThoosaError};
 
     use crate::distance::{average_euclidean_distance, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean};
     use crate::chunks::ChunkOfSlicedTensors;
-    use crate::distance::MaskMaker::{Diagonal, Quantile};
+    use crate::distance::MaskMaker::{Diagonal, Quantile, LE};
 
     #[ctor::ctor]
     fn init() {
@@ -507,7 +508,7 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        set_max_level(Trace);
+        //set_max_level(Trace);
         let (mask, Some(dist_t)) = clc_dist_d2_and_mask(slice_0, slice_1, true, &[Quantile {q:1.0}, Diagonal]).unwrap() else {
             panic!("no dists");
         };
@@ -527,6 +528,70 @@ mod distance_tests {
         // assert_eq!(5.0, dist_t.double_value(&[0,1,1]));
         // assert_eq!(5.0, dist_t.double_value(&[0,2,2]));
 
+    }
+
+    #[test]
+    fn test_dist_le_mask(){
+        // let slices = Tensor::from_slice(&[0., 0., 1., 1., 2., 2., ]).view((1, 3, 2));
+        // let motif_means = Tensor::from_slice(&[3., 4., 4., 5., 7., 8., 9., 10.,]).view((1, 4, 2));
+        // let motif_avg_distances = Tensor::from_slice(&[3., 4., 5., 6., ]).view((1, 4));
+        // debug!("slices={slices}");
+        // debug!("motif_means={motif_means}");
+        // debug!("motif_avg_distances={motif_avg_distances}");
+        //
+        //
+        // // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
+        // set_max_level(Trace);
+        // let (mask, Some(dist_t)) = clc_dist_d2_and_mask(slices, motif_means, true, &[LE {v:motif_avg_distances}]).unwrap() else {
+        //     panic!("no dists");
+        // };
+        // debug!("mask={mask}");
+        // debug!("dist_t={dist_t}");
+
+        //5 motifs 7 slices
+        let dists_t = Tensor::from_slice(&[
+            0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06,
+            0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16,
+            0.20, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26,
+            0.30, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36,
+            0.40, 0.41, 0.42, 0.43, 0.44, 0.45, 0.46,
+
+            1.00, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06,
+            1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 1.16,
+            1.20, 1.21, 1.22, 1.23, 1.24, 1.25, 1.26,
+            1.30, 1.31, 1.32, 1.33, 1.34, 1.35, 1.36,
+            1.40, 1.41, 1.42, 1.43, 1.44, 1.45, 1.46,
+
+            2.00, 2.01, 2.02, 2.03, 2.04, 2.05, 2.06,
+            2.10, 2.11, 2.12, 2.13, 2.14, 2.15, 2.16,
+            2.20, 2.21, 2.22, 2.23, 2.24, 2.25, 2.26,
+            2.30, 2.31, 2.32, 2.33, 2.34, 2.35, 2.36,
+            2.40, 2.41, 2.42, 2.43, 2.44, 2.45, 2.46,
+
+        ]).view((3, 5, 7));
+
+        let thresholds_t = Tensor::from_slice(&[
+            0.01,
+            0.11,
+            0.21,
+            0.31,
+            0.41,
+
+            1.01,
+            1.11,
+            1.21,
+            1.31,
+            1.41,
+
+            2.01,
+            2.11,
+            2.21,
+            2.31,
+            2.41,
+
+        ]).view((3, 5));
+
+        let thresholds_t_broadcasted = thresholds_t.unsqueeze(2).broadcast_to(&[3,5,7]);
 
     }
 
