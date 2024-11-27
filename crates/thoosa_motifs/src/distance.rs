@@ -187,7 +187,7 @@ pub fn average_euclidean_distance(x: &Tensor) -> f32 {
 
     // Step 3: Compute squared distances matrix D
     let dists_squared:Tensor = &squared_norms + &squared_norms.transpose(0, 1) - 2.0 * &gram; // Shape: [n, n]
-
+    let dists_squared = dists_squared.clamp_min(0.0); // Replace negative values with 0
     // Step 4: Extract upper triangle without diagonal
     let triu_indices = Tensor::triu_indices(n, n, 1, INT64_CPU); // Indices of upper triangle without diagonal
     let i = triu_indices.get(0);
@@ -200,6 +200,8 @@ pub fn average_euclidean_distance(x: &Tensor) -> f32 {
 
     // Step 6: Compute the mean of the distances
     let mean_distance = pairwise_dists.mean(Kind::Float);
+
+    trace!("average_euclidean_distance: pairwise_squared_dists=\n{pairwise_squared_dists} pairwise_dists=\n{pairwise_dists} mean_distance=\n{mean_distance}");
 
     mean_distance.double_value(&[]) as f32
 }

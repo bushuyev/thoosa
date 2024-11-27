@@ -1047,9 +1047,9 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
 fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize) -> Result<(), ThoosaError> {
     let (channel, run_id, slices) = store.lock().list_motif_slices(motif_id, None, None)?;
     let slices_len = slices.len();
-    if slices_len < 3 {
-        return Ok(())
-    }
+    // if slices_len < 3 {
+    //     return Ok(())
+    // }
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(store.lock().list_run_params(run_id)?);
 
@@ -1322,6 +1322,7 @@ where
 
 
 
+
 #[cfg(test)]
 mod main_tests {
     use std::collections::{HashMap, HashSet};
@@ -1330,7 +1331,7 @@ mod main_tests {
     use std::sync::Arc;
     use std::vec::IntoIter;
     use log::{debug, trace, LevelFilter};
-    use log::LevelFilter::Trace;
+    use log::LevelFilter::{Debug, Trace};
     use parking_lot::{Mutex, RawMutex, RwLock};
     use parking_lot::lock_api::MutexGuard;
     use plotters::prelude::{IntoLinspace, BLACK};
@@ -1341,6 +1342,7 @@ mod main_tests {
     use simplelog::CombinedLogger;
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Device::Cpu;
+    use tch::display::{set_print_options, PrinterOptions};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, ResourcesConfig};
     use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
@@ -1362,6 +1364,7 @@ mod main_tests {
     #[ctor::ctor]
     fn init() {
         thoosa_shared::init_test_logging();
+
     }
 
 
@@ -1849,7 +1852,8 @@ mod main_tests {
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 3 * n as usize)?));
+        debug!("test_run_step: test_dir={test_dir:?}");
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, 3 * n as usize)?));
         let ws_runner = Arc::clone(&ws);
 
         let sig_0_v = sig_one_imp(n, 30.0, None, None);
@@ -1866,7 +1870,7 @@ mod main_tests {
                     Tensor::from_slice([sig_0_v.clone(), sig_2_v.clone(), saw(n)].concat().as_slice()),
                     Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
                     Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
-                ]).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
+                ]).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
             } else {
                 Tensor::vstack(&[
                     Tensor::from_slice([sig_2_v.clone(), sig_0_v.clone(), saw(n)].concat().as_slice()),
@@ -1892,6 +1896,33 @@ mod main_tests {
             }
         });
 
+        let x = lin_t(3*n);
+        plot_series(
+            (0..10).map(|i| {
+                let t = Tensor::load(&ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).expect(format!("can't open 1_t_0_{i}.pt").as_str());
+                if i % 2 == 0 {
+                    (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
+                } else {
+                    (format!("Sig1"), plotters::prelude::BLUE, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
+                }
+
+            }).collect::<Vec<_>>(),
+            "test_find_motifs_by_euc_dist", (1000, 500), &test_dir.clone().join("plots/0.png").to_path_buf(),
+        )?;
+        plot_series(
+            (0..10).map(|i| {
+                let t = Tensor::load(&ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).expect(format!("can't open 1_t_1_{i}.pt").as_str());
+                if i % 2 == 0 {
+                    (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
+                } else {
+                    (format!("Sig1"), plotters::prelude::BLUE, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
+                }
+
+            }).collect::<Vec<_>>(),
+            "test_find_motifs_by_euc_dist", (1000, 500), &test_dir.clone().join("plots/1.png").to_path_buf(),
+        )?;
+
+
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -1908,11 +1939,11 @@ mod main_tests {
         )));
 
         let devices = vec![Cpu, Cpu];
-        log::set_max_level(Trace);
+
 
         let run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(200, 800..1000, "Label_0/4".into(), 10, 0.1, None),
+            &FindMotifsParams::dummy(50, 800..850, "pure group 4".into(), 10, 0.1, None),
             find_motifs_by_euc_dist,
             &ws,
             &store,
@@ -1920,6 +1951,8 @@ mod main_tests {
             devices.clone(),
             "Test/FindMotifs"
         )?;
+
+        log::set_max_level(Trace);
 
         let run_ids = run_step(
             Some(run_ids),
@@ -1971,6 +2004,13 @@ mod main_tests {
         )?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_po(){
+        let po = PrinterOptions::default();
+
+       // println!("po={po}");
     }
 
 }
