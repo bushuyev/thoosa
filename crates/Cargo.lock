@@ -2896,6 +2896,7 @@ dependencies = [
  "rusqlite",
  "simplelog",
  "thoosa_shared",
+ "zstd 0.13.2",
 ]
 
 [[package]]

@@ -16,3 +16,4 @@ parking_lot.workspace = true
 
 ctor = "0.2.7"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
+zstd = "0.13.2"
