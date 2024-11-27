@@ -341,6 +341,7 @@ pub fn find_motifs_by_euc_dist(
                             );
                         }
                     });
+                    mt.lock().dump();
                 });
                 mt.lock().dump();
             });
