@@ -93,6 +93,12 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 }
 
 
+struct MotifsTensors {
+    channels_motifs_slices:Tensor,
+    channels_motifs_avg_dists:Tensor,
+    channels_motifs_mask:Tensor,
+    channels_motifs_ids:Tensor,
+}
 
 /**
 * returns tensor channels x max motifs in channels x first slice in motifs group. + channels x motif ids + dists

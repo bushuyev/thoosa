@@ -341,7 +341,6 @@ pub fn find_motifs_by_euc_dist(
                             );
                         }
                     });
-                    mt.lock().dump();
                 });
                 mt.lock().dump();
             });
@@ -1190,6 +1189,33 @@ impl RunConfig for SelectMotifsRunConfig {
     }
 }
 
+fn select_motifs_by_label_variance(labels_channels_motifs_counts:Tensor, mask: &Tensor) ->Tensor{
+    debug!("select_motifs_by_label_variance: labels_channels_motifs_counts={:?}", labels_channels_motifs_counts.size());
+
+    let var = labels_channels_motifs_counts.var_dim(0, true, false);
+    let mean =labels_channels_motifs_counts.mean_dim(0, false, Kind::Float).f_add_scalar(1e-7).unwrap();
+
+    trace!("labels_channels_motifs_counts=\n{labels_channels_motifs_counts}");
+    trace!("var=\n{var}");
+    trace!("mean=\n{mean}");
+    let idx_dispersion= var/mean;
+
+    trace!("select_motifs_by_label_variance: idx_dispersion=\n{idx_dispersion}");
+
+    //idx_dispersion has 0 where mask 0 cause counts dists filled with -f32::MIN so no need to
+    //let idx_dispersion_masked = &idx_dispersion * &mask_float;
+    let idx_dispersion_sums = idx_dispersion.sum_dim_intlist(1, false, Kind::Float);
+    let counts = mask.sum_dim_intlist(1, false, Kind::Float);
+
+    let idx_dispersion_mean = (idx_dispersion_sums/counts)
+        .unsqueeze(1)//by channel
+        .clamp_min(1.); //under-dispersed
+
+    trace!("select_motifs_by_label_variance: idx_dispersion_mean=\n{idx_dispersion_mean}");
+
+    idx_dispersion.ge_tensor(&idx_dispersion_mean)
+}
+
 pub fn select_motifs_for_label_2(
     input_run_ids:Option<&Vec<usize>>,
     mut run_configs: Vec<SelectMotifsRunConfig>,
@@ -1278,6 +1304,8 @@ pub fn select_motifs_for_label_2(
                     }
                 }
 
+
+
                 Ok(())
             },
             loader,
@@ -1289,9 +1317,21 @@ pub fn select_motifs_for_label_2(
 
         debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids=\n{channels_motif_ids:?}", cfg.window);
         trace!("select_motifs_for_label_2:  avg_dists_t=\n{avg_dists_t}");
-        for (label, motif_sums) in label_motif_matches_sums.iter() {
-            trace!("select_motifs_for_label_2: label={label} final motif_sums=\n{motif_sums}");
+        if log_enabled!(Level::Trace) {
+            for (label, motif_sums) in label_motif_matches_sums.iter() {
+                trace!("select_motifs_for_label_2: label={label} final motif_sums=\n{motif_sums}");
+            }
         }
+
+        let good_motifs = select_motifs_by_label_variance(
+            Tensor::stack(
+                label_motif_matches_sums.into_iter().map(|t|&***t.1).collect::<Vec<_>>().as_slice(),
+                0
+            ).totype(Kind::Float),
+            &Tensor::rand(&[1], (Kind::Bool, Cpu))//TODO
+        );
+
+        trace!("select_motifs_for_label_2: good_motifs=\n{good_motifs}");
 
         // store.lock().save_selected_motifs(cfg.id.unwrap(), motifs_corrs).expect("save_motifs_corrs");
     }
@@ -1549,19 +1589,20 @@ mod motif_find_tests {
 
 
     use log::{debug, trace};
+    use log::LevelFilter::Trace;
     use parking_lot::RwLock;
     use parking_lot_mpsc::SendError;
     use rayon::iter::ParallelBridge;
     use rayon::iter::ParallelIterator;
     use tch::kind::DOUBLE_CPU;
     use tch::Device::Cpu;
-    use tch::Kind::{Float, Int};
-    use tch::{Device, IndexOp, Tensor};
+    use tch::Kind::{Bool, Float, Int};
+    use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_common::utils::*;
     use thoosa_shared::*;
 
     use crate::chunks::ChunkOfSlicedTensors;
-    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_for_label_2, select_motifs_by_label_variance, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
@@ -2876,12 +2917,38 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_0(){
-        let mut t_0 = Tensor::from_slice(&[0,1,2]);
-        let t_1 = Tensor::from_slice(&[10,11,12]);
+    fn test_select_motifs_by_label_variance(){
+        let mask = Tensor::from_slice(&[
+            1, 1, 1, 1, 1, 1, 1, // channel_0
+            1, 1, 1, 0, 0, 0, 0, // channel_1
+            1, 0, 0, 0, 0, 0, 0, // channel_2
+        ]).totype(Bool).view([3, 7]);
 
-        t_0+=t_1;
+        log::set_max_level(Trace);
+        let matches = Tensor::from_slice(&[
+            0, 0, 0, 0, 131, 0, 0, // label_0, channel_0
+            180, 0, 0, 0, 0, 0, 0, // label_0, channel_1
+            114, 0, 0, 0, 0, 0, 0, // label_0, channel_2
 
-        println!("t_0 = {t_0}");
+            2, 2, 3, 2, 128, 2, 2, // label_1, channel_0
+            180, 0, 0, 0, 0, 0, 0, // label_1, channel_1
+            135, 0, 0, 0, 0, 0, 0, // label_1, channel_2
+        ]).totype(Float).view([2, 3, 7]); // 2 labels x 3 channels x 7 motifs
+
+        // let mean =matches.mean_dim(0, false, Kind::Float);
+        //
+        // // Define a high threshold to exclude noisy motifs
+        // let high_threshold = 150;
+        //
+        // // Get the good motifs tensor
+        let good_motifs = select_motifs_by_label_variance(matches, &mask);
+        //
+        // println!("Good Motifs Tensor: {:?}", good_motifs);
+
+        // let matches = Tensor::from_slice(&[0.,2.]).view((2,1)); //.unsqueeze(0).view((1,1));
+
+
+        println!("good_motifs=\n{good_motifs}");
+
     }
 }
