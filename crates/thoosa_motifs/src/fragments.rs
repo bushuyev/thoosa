@@ -93,11 +93,25 @@ pub fn motifs_to_eeg_slices(all_channels_motifs: Vec<(u16, String)>, motif_loade
 }
 
 
-struct MotifsTensors {
-    channels_motifs_slices:Tensor,
-    channels_motifs_avg_dists:Tensor,
-    channels_motifs_mask:Tensor,
-    channels_motifs_ids:Tensor,
+#[derive(Debug)]
+pub struct MotifsTensors {
+    pub channels_motifs_slices:Box<Tensor>,
+    pub channels_motifs_avg_dists:Box<Tensor>,
+    pub channels_motifs_mask:Box<Tensor>,
+    pub channels_motifs_ids:Box<Tensor>,
+}
+//should be read-only
+unsafe  impl Sync for MotifsTensors {}
+
+impl MotifsTensors {
+    pub fn new(channels_motifs_slices: Box<Tensor>, channels_motifs_avg_dists: Box<Tensor>, channels_motifs_ids: Box<Tensor>) -> Self {
+        Self {
+            channels_motifs_slices,
+            channels_motifs_mask: Box::new(channels_motifs_avg_dists.gt(0.)),
+            channels_motifs_avg_dists,
+            channels_motifs_ids
+        }
+    }
 }
 
 /**
@@ -107,7 +121,7 @@ struct MotifsTensors {
 pub fn motifs_to_tensor(
     resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device,
     area: u64
-) -> Result<(SyncWrapper<Box<Tensor>>, SyncWrapper<Box<Tensor>>, Vec<Vec<usize>>), ThoosaError> {
+) -> Result<MotifsTensors, ThoosaError> {
 
     debug!("motifs_to_tensor: resource_id_motif_slices={resource_id_motif_slices:?} device={device:?} window={window}");
 
@@ -165,6 +179,7 @@ pub fn motifs_to_tensor(
     let mut channels_motifs_avg_dists_t = Vec::with_capacity(channels as usize);
 
 
+
     for channel in 0..channels {
         let motif_slices = channels_motifs_slices.write().remove(&(channel as u16)).unwrap_or(HashMap::new());
         let mut motifs_avg_dists = Vec::with_capacity(motif_slices.len());
@@ -187,8 +202,12 @@ pub fn motifs_to_tensor(
 
         if (motifs.len() as i64) < max_motifs_num {
             debug!("motifs_to_tensor: padding channel={channel} {} to {max_motifs_num} ", motifs.len());
+
             motifs.extend((0..max_motifs_num - motifs.len() as i64).map(|_| zeros_t.shallow_clone()));
-            motifs_avg_dists.extend((0..max_motifs_num - motifs_avg_dists.len() as i64).map(|_| f32::MIN));
+            motifs_avg_dists.extend(vec![f32::MIN; max_motifs_num as usize - motifs_avg_dists.len()]);
+
+            let channel_motif_ids_len = channel_motif_ids[channel as usize].len();
+            channel_motif_ids[channel as usize].extend(vec![0; max_motifs_num as usize - channel_motif_ids_len]);
         }
         channels_motifs_avg_dists_t.push(Tensor::from_slice(motifs_avg_dists.as_slice()));
         channels_motifs_slices_t.push(Tensor::vstack(motifs.as_slice()).view((max_motifs_num, window)))
@@ -197,16 +216,22 @@ pub fn motifs_to_tensor(
     debug!("motifs_to_tensor: channels_motifs_avg_dists_t={channels_motifs_avg_dists_t:?}");
     debug!("motifs_to_tensor: channel_motif_ids={channel_motif_ids:?}");
 
-    Ok((
-        SyncWrapper::new_tb(Box::new(Tensor::vstack(
+    Ok(crate::fragments::MotifsTensors::new(
+        Box::new(Tensor::vstack(
             channels_motifs_slices_t.as_slice()
-        ).view((channels, max_motifs_num, -1)))),
+        ).view((channels, max_motifs_num, -1))),
 
-        SyncWrapper::new_tb(Box::new(Tensor::vstack(
-            channels_motifs_avg_dists_t.as_slice()
-        ).view((channels, max_motifs_num)))),
+        Box::new(Tensor::vstack(
+             channels_motifs_avg_dists_t.as_slice()
+         ).view((channels, max_motifs_num))),
 
-        channel_motif_ids
+        Box::new(Tensor::from_slice(
+            channel_motif_ids
+                .into_iter()
+                .flat_map(|channel_motif_ids|channel_motif_ids.into_iter())
+                .map(|v|v as i32).collect::<Vec<_>>()
+                .as_slice()
+        ).view((channels, -1)))
     ))
 }
 
@@ -595,7 +620,7 @@ mod motifs_tests {
         )));
 
 
-        let (slices_t, avg_dists_t,motif_ids) = super::motifs_to_tensor(
+        let motifs_tensors = super::motifs_to_tensor(
             eeg_id_fragments_map,
             &executor_rc,
             10, 2,
@@ -603,13 +628,13 @@ mod motifs_tests {
             1
         )?;
 
-        debug!("slices_t={slices_t}");
-        debug!("avg_dists_t={avg_dists_t}");
-        debug!("motif_ids={:?}", motif_ids);
+        debug!("slices_t={}", motifs_tensors.channels_motifs_slices);
+        debug!("avg_dists_t={}", motifs_tensors.channels_motifs_avg_dists);
+        debug!("motif_ids={:?}", motifs_tensors.channels_motifs_ids);
 
         //16 = 7+9
-        let motif_ids = motif_ids.into_iter()
-            .flat_map(|v| v.into_iter())
+        let motif_ids = from::<Vec<Vec<i64>>>(&motifs_tensors.channels_motifs_ids).into_iter()
+            .flat_map(|v| v.into_iter().map(|v|v as usize))
             .collect::<Vec<usize>>();
 
         let mut motif_ids_sorted = motif_ids.clone();
@@ -629,7 +654,7 @@ mod motifs_tests {
         debug!("motif_10_test={motif_10_test}");
         let motif_10_idx = motif_ids.iter().enumerate().find(|(i, v)|v == &&10).map(|v|v.0).expect("motif 10");
 
-        let motif_10 = slices_t.i((0, motif_10_idx as i64));
+        let motif_10 = motifs_tensors.channels_motifs_slices.i((0, motif_10_idx as i64));
 
         debug!("motif_10={motif_10}");
 

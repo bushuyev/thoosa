@@ -423,6 +423,17 @@ pub fn run_cli<F,R>(
         Some(SelectMotifs(select_motifs_params)) => {
             info!("select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
 
+            let run_ids = run_step(
+                Some(select_motifs_params.find_motifs_run_ids().clone()),
+                select_motifs_params,
+                select_motifs_for_label_2,
+                &ws,
+                &store,
+                &loader,
+                devices.clone(),
+                "SelectMotifs"
+            )?;
+
             // let select_motifs_params = if let Some(train_resource_group) = select_motifs_params.train_resource_group() {
             //     let train_labels_datasets = { store.lock().list_group_labeled_resources_sets(train_resource_group.as_str())? };
             //     select_motifs_params.with_labels_datasets(train_labels_datasets)
@@ -939,7 +950,7 @@ fn motifs_to_tensor_cmd (cli: &Cli, store: &Arc<Mutex<Box<dyn Store>>>, device: 
 
     let out = Path::new(&cli.ws_path).join("out");
     fs::create_dir_all(&out)?;
-    t.0.save(out.join(format!("motifs_in_{}", choose_fragments_params.run_id())))?;
+    t.channels_motifs_slices.save(out.join(format!("motifs_in_{}", choose_fragments_params.run_id())))?;
 
     Ok(())
 }

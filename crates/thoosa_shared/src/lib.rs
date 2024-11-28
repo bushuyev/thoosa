@@ -178,7 +178,7 @@ where D: Display {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct MotifSlice {
-    pub motif_id: usize,
+    pub motif_id: usize,//TODO u32
     pub slice_idx: i64,
     pub channel: u16,
 }
