@@ -38,7 +38,7 @@ use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 use crate::distance::slice_t;
 use crate::distance::{dist_d2, clc_dist_d2_and_mask};
-use crate::fragments::motifs_to_tensor;
+use crate::fragments::{motifs_to_tensor, MotifsTensors};
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
@@ -1195,9 +1195,10 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts:Tensor, mask: &
     let var = labels_channels_motifs_counts.var_dim(0, true, false);
     let mean =labels_channels_motifs_counts.mean_dim(0, false, Kind::Float).f_add_scalar(1e-7).unwrap();
 
-    trace!("labels_channels_motifs_counts=\n{labels_channels_motifs_counts}");
-    trace!("var=\n{var}");
-    trace!("mean=\n{mean}");
+    trace!("select_motifs_by_label_variance: mask=\n{mask}");
+    trace!("select_motifs_by_label_variance: labels_channels_motifs_counts=\n{labels_channels_motifs_counts}");
+    trace!("select_motifs_by_label_variance: var=\n{var}");
+    trace!("select_motifs_by_label_variance: mean=\n{mean}");
     let idx_dispersion= var/mean;
 
     trace!("select_motifs_by_label_variance: idx_dispersion=\n{idx_dispersion}");
@@ -1244,16 +1245,14 @@ pub fn select_motifs_for_label_2(
             ws.read().channels() as i64,
             Cpu,
             motifs_area,
-        ).map(|(motifs_tensor, avg_dists_t, channels_motifs_ids)| {
-            let size = &motifs_tensor.size()[0..=1];//channels x motifs for motif sums
+        ).map(|motifs_tensors| {
+            let size = &motifs_tensors.channels_motifs_slices.size()[0..=1];//channels x motifs for motif sums
 
-            debug!("select_motifs_for_label_2: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensor.size());
+            debug!("select_motifs_for_label_2: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensors.channels_motifs_slices.size());
             (
                 find_motifs_run_config,
                 (
-                    motifs_tensor, //channels x motifs x slice
-                    avg_dists_t,
-                    channels_motifs_ids,
+                    motifs_tensors,
                     HashMap::from_iter(
                         labels_resources
                             .iter()
@@ -1268,7 +1267,7 @@ pub fn select_motifs_for_label_2(
             )
         })
 
-    }).collect::<Result<Vec<(FindMotifsRunConfig, (SyncWrapper<Box<Tensor>>, SyncWrapper<Box<Tensor>>, Vec<Vec<usize>>, HashMap<String, SyncWrapper<Box<Tensor>>>))>, ThoosaError>>()?;
+    }).collect::<Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Box<Tensor>>>))>, ThoosaError>>()?;
     loader.write().purge_cache(motifs_area);
 
     trace!("select_motifs_for_label_2: motifs_tensors={find_motifs_run_config_motifs_tensors:?}");
@@ -1282,14 +1281,15 @@ pub fn select_motifs_for_label_2(
             10,//TODO params
             &mut find_motifs_run_config_motifs_tensors,
 
-            |chunk, (cfg, (channels_motifs, avg_dists_t, channels_motif_ids, label_motif_matches_sums))|{
+            |chunk, (cfg, (motfs_tensors, label_motif_matches_sums))|{
 
-                let broadcast_to_size = [channels_motifs.size()[0], channels_motifs.size()[1], chunk.t.size()[1]];
+                let broadcast_to_size = [motfs_tensors.channels_motifs_slices.size()[0], motfs_tensors.channels_motifs_slices.size()[1], chunk.t.size()[1]];
 
-                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs.0.size()={:?}  avg_dists_t.size()={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), channels_motifs.size(), avg_dists_t.size()); //chunk.t
+                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motfs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motfs_tensors); //chunk.t
 
 
-                let (mask, _) = clc_dist_d2_and_mask(*channels_motifs.shallow_clone(), chunk.t.shallow_clone(), false, &[LE {v:avg_dists_t.unsqueeze(2).broadcast_to(broadcast_to_size)}])?;
+                let (mask, _) = clc_dist_d2_and_mask(motfs_tensors.channels_motifs_slices.to_device(Cuda(0)), chunk.t.to_device(Cuda(0)), false, &[LE {v:motfs_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(Cuda(0))}])?;
+                let mask = mask.to_device(Cpu);
                 trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
 
                 let sums = mask.sum_dim_intlist(2, false, Kind::Int64);//channels x motif matches
@@ -1304,8 +1304,6 @@ pub fn select_motifs_for_label_2(
                     }
                 }
 
-
-
                 Ok(())
             },
             loader,
@@ -1313,10 +1311,10 @@ pub fn select_motifs_for_label_2(
         )?;
     }
 
-    for (cfg, (channels_motifs, avg_dists_t, channels_motif_ids, label_motif_matches_sums)) in find_motifs_run_config_motifs_tensors.iter(){
+    for (cfg, (motifs_tensors, label_motif_matches_sums)) in find_motifs_run_config_motifs_tensors.iter(){
 
-        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids=\n{channels_motif_ids:?}", cfg.window);
-        trace!("select_motifs_for_label_2:  avg_dists_t=\n{avg_dists_t}");
+        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids=\n{:?}", cfg.window, motifs_tensors.channels_motifs_ids);
+        trace!("select_motifs_for_label_2:  avg_dists_t=\n{}", motifs_tensors.channels_motifs_avg_dists);
         if log_enabled!(Level::Trace) {
             for (label, motif_sums) in label_motif_matches_sums.iter() {
                 trace!("select_motifs_for_label_2: label={label} final motif_sums=\n{motif_sums}");
@@ -1328,10 +1326,10 @@ pub fn select_motifs_for_label_2(
                 label_motif_matches_sums.into_iter().map(|t|&***t.1).collect::<Vec<_>>().as_slice(),
                 0
             ).totype(Kind::Float),
-            &Tensor::rand(&[1], (Kind::Bool, Cpu))//TODO
+            &motifs_tensors.channels_motifs_mask
         );
 
-        trace!("select_motifs_for_label_2: good_motifs=\n{good_motifs}");
+        trace!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
 
         // store.lock().save_selected_motifs(cfg.id.unwrap(), motifs_corrs).expect("save_motifs_corrs");
     }
