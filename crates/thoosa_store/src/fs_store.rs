@@ -1,27 +1,34 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
-use std::mem;
+use std::{io, mem};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use log::{debug, info};
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
-use zstd::Encoder;
+use zstd_framed::{ZstdReader, ZstdWriter};
+use zstd_framed::table::{ZstdFrame, ZstdSeekTable};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::{group_slices, TensorSliceIdx, ThoosaError};
 use crate::{IdSlice, MotifTrackerStore, Store};
 
+
 type SlicesMatch = (TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32);
 
-#[derive(Debug)]
 pub struct FileMotifTrackerStore {
     run_id: usize,
     channel: usize,
-    file: File,
+    writer: ZstdWriter<'static, File>,
     path: PathBuf,
+}
+
+impl Debug for FileMotifTrackerStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
 }
 
 impl FileMotifTrackerStore {
@@ -33,10 +40,16 @@ impl FileMotifTrackerStore {
             .append(true)
             .open(path.as_ref().join(format!("{}_{}_slices.zstd", run_id, channel).as_str()))?;
 
+        let mut writer = zstd_framed::ZstdWriter::builder(file)
+            .with_compression_level(3) // Set compression level
+            .with_seek_table(100_000)
+            .build()?;
+
+
         Ok(Box::new(Self {
             run_id,
             channel,
-            file,
+            writer,
             path: path.as_ref().to_path_buf(),
 
         }))
@@ -51,7 +64,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
 
         //TODO append, new if size > threshold
 
-        let mut encoder = Encoder::new(std::io::BufWriter::new(&self.file), 3)?; // Compression level 3
+        // let mut encoder = zstd::Encoder::new(std::io::BufWriter::new(&self.file), 3)?; // Compression level 3
 
         // Convert the entire Vec<T> into a byte slice
         let data_bytes = unsafe {
@@ -61,14 +74,16 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             )
         };
 
-        encoder.write_all(data_bytes)?;
-        encoder.finish()?;
+        self.writer.write_all(data_bytes)?;
+        self.writer.finish_frame()?;
+        self.writer.flush()?;
 
         Ok(())
     }
 
     fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
         // let elem_size = size_of::<SlicesMatch>();
+        self.writer.shutdown()?;
         let mut slice_id = 0;
         // let file = std::fs::OpenOptions::new()
         //     .create(true)
@@ -104,88 +119,75 @@ impl MotifTrackerStore for FileMotifTrackerStore {
 }
 
 pub struct ChunkReader<T> {
-    reader: BufReader<File>,
+    reader: ZstdReader<'static, BufReader<File>>,
+    frames:Vec<ZstdFrame>,
     _phantom: PhantomData<T>,
+    frame_i:usize
 }
 
 impl<T> ChunkReader<T> {
+
     pub fn new(file_path: &Path) -> std::io::Result<Self> {
         let file = File::open(file_path)?;
+
+        let mut reader = File::open(file_path)?;
+        let table = zstd_framed::table::read_seek_table(&mut reader)?.unwrap();
+
+
         Ok(Self {
-            reader: BufReader::new(file),
+            reader: zstd_framed::ZstdReader::builder(reader).build()?,
+            frames:table.frames().collect(),
+            frame_i: 0,
             _phantom: PhantomData,
         })
     }
 }
 
 impl<T> Iterator for ChunkReader<T> {
-    type Item = std::io::Result<Vec<T>>;
+    type Item = io::Result<Vec<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let current_position = self.reader.stream_position().ok()?;
+        if self.frame_i < self.frames.len() {
+            let mut buff = vec![0; self.frames[self.frame_i].decompressed_size() as usize];
+            self.reader.read_exact(&mut buff).unwrap();
 
+            self.frame_i+=1;
 
-        match zstd::stream::read::Decoder::new(&mut self.reader) {
-            Ok(mut decoder) => {
-                let mut buffer = Vec::new();
-                match decoder.read_to_end(&mut buffer) {
-                    Ok(_) => {
-                        // Ensure the buffer size matches a multiple of the size of T
-                        let elem_size = std::mem::size_of::<T>();
-                        if buffer.len() % elem_size != 0 {
-                            return Some(Err(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!(
-                                    "Buffer size ({}) is not a multiple of type size ({})",
-                                    buffer.len(),
-                                    elem_size
-                                ),
-                            )));
-                        }
+            Some(Ok(deserialize_buff(size_of::<T>(), &mut buff)))
 
-                        // Convert the buffer into a Vec<T>
-                        let num_elements = buffer.len() / elem_size;
-                        let mut result = Vec::with_capacity(num_elements);
-
-                        unsafe {
-                            let ptr = buffer.as_ptr() as *const T;
-                            for i in 0..num_elements {
-                                result.push(ptr.add(i).read_unaligned());
-                            }
-                        }
-
-                        Some(Ok(result))
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                        None // End of file
-                    }
-                    Err(e) => Some(Err(e)), // Propagate other errors
-                }
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    None // End of file
-                } else {
-                    self.reader.seek(SeekFrom::Start(current_position)).ok(); // Rewind on error
-                    Some(Err(e)) // Propagate other errors
-                }
-            }
+        } else {
+            None
         }
     }
 }
+
+fn deserialize_buff<T>(elem_size: usize, buff: &mut Vec<u8>) -> Vec<T> {
+    let num_elements = buff.len() / elem_size;
+    let mut result = Vec::with_capacity(num_elements);
+
+    unsafe {
+        let ptr = buff.as_ptr() as *const T;
+        for i in 0..num_elements {
+            result.push(ptr.add(i).read_unaligned());
+        }
+    }
+    result
+}
+
 
 
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs;
+    use std::fs::File;
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use log::debug;
     use parking_lot::{Mutex, RwLock};
     use thoosa_shared::{cdt_for_dir, TensorSliceIdx, ThoosaError};
-    use crate::fs_store::{ChunkReader, FileMotifTrackerStore, SlicesMatch};
+    use crate::fs_store::{deserialize_buff, ChunkReader, FileMotifTrackerStore, SlicesMatch};
     use crate::SqlStore;
 
     #[test]
@@ -391,20 +393,134 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn test_z() -> Result<(), ThoosaError>{
-    //     let mut num = 0;
-    //     let mut chunks = 0;
-    //     for chunk in ChunkReader::new(PathBuf::from("/tmp/ws_import_test/tmp/689_0_slices.zstd").as_path())?{
-    //         let chunk:Vec<SlicesMatch> = chunk?;
-    //         num+=chunk.len();
-    //         chunks+=1;
-    //     }
-    //
-    //     println!("num={num} chunks={chunks}");
-    //
-    //     Ok(())
-    //
-    // }
+    #[test]
+    fn test_z() -> Result<(), ThoosaError>{
+        // #[repr(C)]
+        // #[derive(Debug)]
+        // struct MyStruct {
+        //     x: i32,
+        //     y: f64,
+        //     z: u8,
+        // }
+        //
+        //
+        // pub fn write_structs<T>(file_path: &str, structs: &[T], writer: &mut zstd_framed::ZstdWriter<File>) -> std::io::Result<()> {
+        //     use std::mem;
+        //
+        //     let data_bytes = unsafe {
+        //         std::slice::from_raw_parts(
+        //             structs.as_ptr() as *const u8,
+        //             structs.len() * mem::size_of::<T>(),
+        //         )
+        //     };
+        //
+        //     writer.write_all(data_bytes)?;
+        //     writer.finish_frame()?;
+        //     writer.flush()?; // Ensure all data is flushed and the frame is finalized
+        //     Ok(())
+        // }
+        // let file_path = "/tmp/test_structs.zstd";
+        // fs::remove_file(file_path)?;
+        //
+        // let structs_0 = vec![
+        //     MyStruct { x: 1, y: 1.1, z: 10 },
+        //     MyStruct { x: 2, y: 2.2, z: 20 },
+        //     MyStruct { x: 3, y: 3.3, z: 30 },
+        //     MyStruct { x: 4, y: 4.3, z: 40 },
+        // ];
+        //
+        // let file = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .append(true)
+        //     .open(file_path)?;
+        //
+        // let mut writer = zstd_framed::ZstdWriter::builder(file)
+        //     .with_compression_level(3) // Set compression level
+        //     .with_seek_table(100_000)
+        //     .build()?;
+        //
+        // write_structs(file_path, &structs_0, &mut writer)?;
+        //
+        // let structs_1 = vec![
+        //     MyStruct { x: 10, y: 10.1, z: 100 },
+        //     MyStruct { x: 20, y: 20.2, z: 200 },
+        //     MyStruct { x: 30, y: 30.3, z: 255 },
+        // ];
+        //
+        // write_structs(file_path, &structs_1, &mut writer)?;
+        // writer.shutdown()?;
+        //
+        // println!("Data written to '{}'.", file_path);
+        //
+        // let file_path = "/tmp/test_structs.zstd";
+        //
+        // let mut reader = File::open(file_path)?;
+        // let table = zstd_framed::table::read_seek_table(&mut reader)?.unwrap();
+        // println!("table={table:?}");
+        //
+        // // let mut structs_num = 0;let result: Vec<T> =
+        // // let mut chunks = 0;
+        //
+        //
+        // let mut reader = zstd_framed::ZstdReader::builder(reader).build().unwrap();
+        // let elem_size= size_of::<MyStruct>();
+        //
+        // for frame in table.frames() {
+        //     let mut buff = vec![0; frame.decompressed_size() as usize];
+        //     reader.read_exact(&mut buff)?;
+        //
+        //     let result: Vec<MyStruct> = deserialize_buff(elem_size, &mut buff);
+        //
+        //     println!("buff.len={} result={result:?}", buff.len());
+        // }
 
+        // let mut buff = vec![0;72];
+        // reader.read_exact(&mut buff)?;
+        // let result:Vec<MyStruct> = deserialize_buff(elem_size, &mut buff);
+        // println!("buff.len={} result={result:?}", buff.len());
+
+        // let chunk_reader: ChunkReader<MyStruct> = ChunkReader::new(PathBuf::from(file_path).as_path())?;
+        // for chunk_result in chunk_reader {
+        //     match chunk_result {
+        //         Ok(vec) => {
+        //             for struct_data in vec {
+        //                 structs_num += 1;
+        //                 println!("Read struct: {:?}", struct_data);
+        //             }
+        //         }
+        //         Err(e) => eprintln!("Error reading chunk: {}", e),
+        //     }
+        //     chunks += 1;
+        // }
+
+        // println!("chunks = {}, structs_num = {}", chunks, structs_num);
+
+
+
+        // println!("Data written to '{}'.", file_path);
+
+        // println!("MyStruct size:{}", size_of::<MyStruct>());
+
+        // let mut structs_num = 0;
+        // let mut chunks = 0;
+        // // Read data back
+        // let chunk_reader: ChunkReader<MyStruct> = ChunkReader::new(PathBuf::from(file_path).as_path())?;
+        // for chunk_result in chunk_reader {
+        //     match chunk_result {
+        //         Ok(vec) => {
+        //             for struct_data in vec {
+        //                 structs_num +=1;
+        //                 println!("Read struct: {:?}", struct_data);
+        //             }
+        //         }
+        //         Err(e) => eprintln!("Error reading chunk: {}", e),
+        //     }
+        //     chunks+=1;
+        // }
+        //
+        // println!("chunks={chunks} structs_num={structs_num}");
+
+        Ok(())
+
+    }
 }
