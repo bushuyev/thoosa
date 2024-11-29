@@ -1231,6 +1231,8 @@ pub fn select_motifs_for_label_2(
     let motifs_area = loader.write().get_available_cache_area();
     let labels_resources = resource_config.resource_config_to_keys(store)?;
 
+    trace!("select_motifs_for_label_2: labels_resources={labels_resources:?}");
+
     let mut find_motifs_run_config_motifs_tensors = input_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
 
         let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
@@ -1322,15 +1324,21 @@ pub fn select_motifs_for_label_2(
             }
         }
 
-        let good_motifs = select_motifs_by_label_variance(
-            Tensor::stack(
-                label_motif_matches_sums.into_iter().map(|t|&***t.1).collect::<Vec<_>>().as_slice(),
-                0
-            ).totype(Kind::Float),
-            &motifs_tensors.channels_motifs_mask
-        );
+        if label_motif_matches_sums.len() > 0 {
+            let good_motifs = select_motifs_by_label_variance(
+                Tensor::f_stack(
+                    label_motif_matches_sums.into_iter().map(|t| &***t.1).collect::<Vec<_>>().as_slice(),
+                    0
+                )?.totype(Kind::Float),
+                &motifs_tensors.channels_motifs_mask
+            );
+            trace!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
 
-        trace!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+        } else {
+            warn!("no label motif matches for cfg={cfg:?}");
+        }
+
+
 
         // store.lock().save_selected_motifs(cfg.id.unwrap(), motifs_corrs).expect("save_motifs_corrs");
     }
