@@ -41,7 +41,7 @@ use thoosa_shared::parse_range_or_value;
 
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
-use thoosa_shared::resource::{Resource, ResourceId};
+use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
 
 #[derive(Parser, Clone)]
 #[command(version, about, long_about = None)]
@@ -397,7 +397,7 @@ pub fn run_cli<F,R>(
                 &store,
                 labels,
                 || labeled_resources(&import_resources_params.source_path),
-                Some(|key:String| resource_to_tensor(&import_resources_params.source_path, key.as_str())),
+                |key:String| resource_to_tensor(&import_resources_params.source_path, key.as_str()),
                 true
             )?;
         }
@@ -483,7 +483,7 @@ pub fn run_cli<F,R>(
                     &store,
                     labels,
                     || labeled_resources(import_resource_pattern),
-                    Some(|key:String| resource_to_tensor(&import_resource_pattern, key.as_str())),
+                    |key:String| resource_to_tensor(&import_resource_pattern, key.as_str()),
                     true
                 )?;
             }
@@ -959,7 +959,7 @@ pub fn import_resources<F, R>(
     store:&Arc<Mutex<Box<dyn Store>>>,
     labels:Vec<&str>,
     labeled_resources:F,
-    resource_to_tensor_op:Option<R>, //None for tests - do not import parquet files
+    resource_to_tensor:R, //None for tests - do not import parquet files
     insert_label: bool
 ) -> Result<Vec<Resource>, ThoosaError>
     where F:Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
@@ -977,58 +977,61 @@ pub fn import_resources<F, R>(
     }
 
     let labeled_resources_map = labeled_resources()?;
+    let ws_guard = ws.write();
     let import_id = store_guard.save_import(format!("Import on {}", cdt()), &t)?;
 
-    let resource_ids = store_guard.save_resources_labels(&labeled_resources_map, import_id, &t)?;
 
-    let ws_guard = ws.write();
+    let (imported_tensors_stats, failed_tensors):(HashMap<String, (ResourceStats, Vec<(String, f32)>)>, Vec<String>) = labeled_resources_map.into_iter()
+        .par_bridge()
+        .fold(||(HashMap::new(), vec![]),|mut a, (resource_key, probs)|  {
 
-    if let Some(resource_to_tensor) = resource_to_tensor_op {
-
-        let (imported_tensors, failed_tensors):(Vec<Resource>,Vec<u32>) = labeled_resources_map.keys()
-            .zip(resource_ids.into_iter()).par_bridge()
-            .fold(||(vec![], vec![]),|mut a, (resource_key, resource_id)|  {
             trace!("import_resources: resource_key={resource_key} ok={} err={}", a.0.len(), a.1.len());
 
             match resource_to_tensor(resource_key.clone())
-                .and_then(|t|ws_guard.import_tensor(t, import_id, resource_key)) {
-                Ok(_) => {
-                    a.0.push(Resource::new(
-                        resource_id,
-                        import_id,
-                        resource_key.clone()
-                    ));
+                .and_then(|t|ws_guard.import_tensor(t, import_id, resource_key.as_str())) {
+                Ok(stats) => {
+                    assert!(a.0.insert(resource_key.clone(), (stats, probs)).is_none());//resource key should not repeat
                 }
                 Err(err) => {
                     error!("Can't load {resource_key}: {err:?}");
-                    a.1.push(resource_id);
+                    a.1.push(resource_key.clone());
                 }
             }
 
             a
         }).reduce_with(|mut v1, v2|{
-            v1.0.extend(v2.0);
+            v1.0.extend(v2.0);//TODO assert no keys overlaps
             v1.1.extend(v2.1);
-            v1
-        }).expect("imported_tensors");
+        v1
+    }).expect("imported_tensors");
 
-        trace!("import_resources: imported_tensors={imported_tensors:?}, failed_tensors={failed_tensors:?}");
+    let resource_ids = store_guard.save_resources_labels(&imported_tensors_stats, import_id, &t)?;
 
-        info!("Import id: {}, imported {} tensors to {:?}, failed {}", import_id, imported_tensors.len(), ws_guard.tensors_path(), failed_tensors.len());
+    let imported_resources:Vec<Resource> = imported_tensors_stats.keys()
+        .zip(resource_ids.into_iter())
+        .map(| (resource_key, resource_id)|  {
+            Resource::new(
+                resource_id,
+                import_id,
+                resource_key.clone()
+            )
+    }).collect();
+
+    trace!("import_resources: imported_resources={imported_resources:?}, failed_tensors={failed_tensors:?}");
+
+    info!("Import id: {}, imported {} tensors to {:?}, failed {}", import_id, imported_resources.len(), ws_guard.tensors_path(), failed_tensors.len());
 
 
-        store_guard.save_pure_sets(1000, true, &t)?;
-        store_guard.save_pure_sets(100, true, &t)?;
-        store_guard.save_pure_sets(10, true, &t)?;
-        store_guard.save_pure_sets(3, true, &t)?;
+    store_guard.save_pure_sets(1000, true, &t)?;
+    store_guard.save_pure_sets(100, true, &t)?;
+    store_guard.save_pure_sets(10, true, &t)?;
+    store_guard.save_pure_sets(3, true, &t)?;
 
-        store_guard.save_groups_by_label_cnt(100, &t)?;
-        t.commit()?;
+    store_guard.save_groups_by_label_cnt(100, &t)?;
+    t.commit()?;
 
-        Ok(imported_tensors)
-    } else {
-        Ok(vec![])
-    }
+    Ok(imported_resources)//for tests
+
 }
 
 fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, plot_motif_slices_params: &PlotMotifSlicesParams) -> Result<(), ThoosaError> {
@@ -1362,14 +1365,14 @@ mod main_tests {
     use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorSliceIdx, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{MotifTrackerStore, SqlMotifTrackerStore, SqlStore, Store};
-    use crate::cli::{import_resources, run_plot_motif_slices, resource_path, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
+    use crate::cli::{import_resources, resource_path, run_plot_motif_slices, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, select_motifs_for_label, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_common::runs::RunConfig;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::distance::MaskMaker::Quantile;
-    use thoosa_shared::resource::{Resource, ResourceId};
+    use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
 
     #[ctor::ctor]
     fn init() {
@@ -1484,7 +1487,7 @@ mod main_tests {
                 ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)])
             ])),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            Some(|key| Ok(Tensor::from_slice(&[0.]))),
+            |key| Ok(Tensor::from_slice(&[0.])),
             true
         )?;
 
@@ -1755,28 +1758,28 @@ mod main_tests {
 
         //TODO
         let resources = store_guard.save_resources_labels(&HashMap::from([
-            ("t_0_0".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_1".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_2".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_3".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_4".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_5".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_6".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_7".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_8".into(), vec![("Label_0".into(), 1.0)]),
-            ("t_0_9".into(), vec![("Label_0".into(), 1.0)]),
+                            ("t_0_0".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_1".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_2".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_3".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_4".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_5".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_6".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_7".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_8".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_9".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
 
-            ("t_1_0".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_1".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_2".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_3".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_4".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_5".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_6".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_7".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_8".into(), vec![("Label_1".into(), 1.0)]),
-            ("t_1_9".into(), vec![("Label_1".into(), 1.0)]),
-        ]), import_id, &t)?;
+                            ("t_1_0".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_1".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_2".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_3".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_4".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_5".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_6".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_7".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_8".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_9".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                        ]), import_id, &t)?;
 
 
         store_guard.save_pure_sets(4, true, &t)?;
@@ -1999,7 +2002,7 @@ mod main_tests {
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
 
-        import_resources(
+        let imported = import_resources(
             &ws,
             &store,
             vec!["label_0", "label_1"],
@@ -2009,9 +2012,23 @@ mod main_tests {
                 ("t_1_0".to_string(), vec![("label_1".to_string(), 1.0)]),
                 ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)])
             ])),
-            Some(|_:String|Ok(Tensor::from_slice(&[0.,1.,2.]))),
+            |_:String|Ok(Tensor::from_slice(&[0.,1.,2., 0.,10.,20.]).view((2,-1))),
             true
         )?;
+
+        debug!("imported={imported:?}");
+        let mut imported_keys = imported.into_iter().map(|r|r.file_stem().to_string()).collect::<Vec<_>>();
+        imported_keys.sort();
+
+        assert_eq!(
+            vec![
+                "t_0_0",
+                "t_0_1",
+                "t_1_0",
+                "t_1_1",
+             ] ,
+            imported_keys
+        );
 
         Ok(())
     }
