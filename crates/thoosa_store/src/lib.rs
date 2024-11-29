@@ -919,8 +919,8 @@ impl Store for SqlStore {
                     SELECT m.id, m.channel_id, \
                     s.resource_id, r.import_id, r.key, s.slice_idx \
                     FROM motifs m \
-                    LEFT JOIN slices s ON s.motif_id=m.id \
-                    LEFT JOIN resources r on r.id=s.resource_id \
+                    JOIN slices s ON s.motif_id=m.id \
+                    JOIN resources r on r.id=s.resource_id \
                     WHERE m.run_id=?\
             ")?;
 

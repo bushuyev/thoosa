@@ -31,7 +31,7 @@ use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label_2, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
 use thoosa_motifs::fragments::{load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams};
-use thoosa_shared::{batch_windows, cdt, clc_num_batches, make_combos, RangeOrValue, ResourceType, TensorSliceIdx, ThoosaError};
+use thoosa_shared::{batch_windows, cdt, cdt_for_dir, clc_num_batches, make_combos, RangeOrValue, ResourceType, TensorSliceIdx, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_store::{SqlStore, Store};
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
@@ -55,9 +55,6 @@ pub struct Cli {
 
     #[arg(long, default_value = "INFO")]
     pub write_logger_level: String,
-
-    #[arg(long, default_value = "thoosa.log")]
-    pub logfile: String,
 
     #[arg(long)]
     pub loader_threads: Option<usize>,
@@ -326,14 +323,20 @@ pub fn run_cli<F,R>(
 
     let cli = Cli::parse();
 
+    let ws = Arc::new(RwLock::new(FsWorkspace::new(
+        cli.ws_path.clone(),
+        channels,
+        max_input
+    )?));
+
 
     //TODO make optional
-    let logfile = match File::create(&cli.logfile){
+    let logfile = match File::create(ws.read().log_path().join(format!("thoosa_{}.log", cdt_for_dir()).to_owned())){
         Ok(file) => {
             file
         }
         Err(err) => {
-            panic!("Can't crreate logfile {:?}", cli.logfile);
+            panic!("Can't create logfile in {:?}", cli.ws_path);
         }
     };
     CombinedLogger::init(
@@ -344,11 +347,7 @@ pub fn run_cli<F,R>(
     ).expect("failed to init logging");
 
 
-    let ws = Arc::new(RwLock::new(FsWorkspace::new(
-        cli.ws_path.clone(),
-        channels,
-        max_input
-    )?));
+
 
 
     let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));

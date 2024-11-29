@@ -1271,6 +1271,7 @@ pub fn select_motifs_for_label_2(
     loader.write().purge_cache(motifs_area);
 
     trace!("select_motifs_for_label_2: motifs_tensors={find_motifs_run_config_motifs_tensors:?}");
+    debug!("select_motifs_for_label_2: motifs_tensors loaded");
 
     // let mut find_motifs_run_configs = find_motifs_run_config_motifs_tensors.iter().map(|v|v.0.clone()).collect::<Vec<_>>();
 

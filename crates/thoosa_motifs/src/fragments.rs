@@ -123,7 +123,8 @@ pub fn motifs_to_tensor(
     area: u64
 ) -> Result<MotifsTensors, ThoosaError> {
 
-    debug!("motifs_to_tensor: resource_id_motif_slices={resource_id_motif_slices:?} device={device:?} window={window}");
+    debug!("motifs_to_tensor: resource_id_motif_slices.len={} device={device:?} window={window}", resource_id_motif_slices.len());
+    trace!("motifs_to_tensor: resource_id_motif_slices={resource_id_motif_slices:?}");
 
     let channels_motifs_slices:Arc<RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(RwLock::new(HashMap::new()));
 
@@ -168,7 +169,8 @@ pub fn motifs_to_tensor(
     wg.wait();
 
 
-    debug!("motifs_to_tensor: channels_motifs_slices={:?}", channels_motifs_slices);
+    debug!("motifs_to_tensor: channels_motifs_slices.len={:?}", channels_motifs_slices.read().len());
+    trace!("motifs_to_tensor: channels_motifs_slices={:?}", channels_motifs_slices);
 
     let max_motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
 

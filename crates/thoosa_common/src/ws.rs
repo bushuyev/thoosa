@@ -25,6 +25,7 @@ pub struct FsWorkspace {
     motifs_models_path:PathBuf,
     labels_models_path:PathBuf,
     final_models_path:PathBuf,
+    log_path:PathBuf,
     tmp_path:PathBuf,
 
     channels:usize, //TODO move into input meta
@@ -51,6 +52,10 @@ impl FsWorkspace {
         let tmp_path:PathBuf = base_path.join("tmp");
         fs::create_dir_all(&tmp_path)?;
 
+        let log_path:PathBuf = base_path.join("log");
+        fs::create_dir_all(&tmp_path)?;
+
+
         let motifs_models_path:PathBuf = models_path.join("motifs");
         fs::create_dir_all(&motifs_models_path)?;
 
@@ -59,6 +64,8 @@ impl FsWorkspace {
 
         let final_models_path:PathBuf = models_path.join("final");
         fs::create_dir_all(&final_models_path)?;
+
+
 
         Ok(Box::new(Self {
             base_path,
@@ -69,6 +76,7 @@ impl FsWorkspace {
             motifs_models_path,
             labels_models_path,
             final_models_path,
+            log_path,
             tmp_path,
             channels,
             max_input
@@ -255,6 +263,10 @@ impl Workspace for FsWorkspace {
             })
             .sum())
     }
+
+    fn log_path(&self) -> &PathBuf {
+        &self.log_path
+    }
 }
 
 pub trait Workspace:Sync + Send {
@@ -262,6 +274,7 @@ pub trait Workspace:Sync + Send {
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
+    fn log_path(&self) -> &PathBuf;
     fn tmp_path(&self) -> &PathBuf;
     fn tmp_run_store_path(&self, run_id:u32, channel:u32) -> PathBuf;
     fn tensors_path(&self) -> &PathBuf;
@@ -388,6 +401,10 @@ impl Workspace for DummyWorkspace {
 
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
         Ok(1000)
+    }
+
+    fn log_path(&self) -> &PathBuf {
+        todo!()
     }
 }
 
