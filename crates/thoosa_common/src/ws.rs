@@ -53,8 +53,7 @@ impl FsWorkspace {
         fs::create_dir_all(&tmp_path)?;
 
         let log_path:PathBuf = base_path.join("log");
-        fs::create_dir_all(&tmp_path)?;
-
+        fs::create_dir_all(&log_path)?;
 
         let motifs_models_path:PathBuf = models_path.join("motifs");
         fs::create_dir_all(&motifs_models_path)?;
