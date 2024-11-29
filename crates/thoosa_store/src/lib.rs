@@ -143,7 +143,7 @@ impl ResourceStore for SqlStore {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
-        let (mut q, params) = file_stems.into_iter().fold((vec!["SELECT id, import_id, key FROM resources WHERE "], vec![]), |mut a, v| {
+        let (mut q, params) = file_stems.into_iter().fold((vec!["SELECT id, import_id, key, length FROM resources WHERE "], vec![]), |mut a, v| {
             a.0.push(" key LIKE ?");
             a.0.push(" OR");
             a.1.push(*v);
@@ -163,6 +163,7 @@ impl ResourceStore for SqlStore {
                     row.get::<usize, u32>(0)?,
                     row.get::<usize, u32>(1)?,
                     row.get::<usize, String>(2)?,
+                    row.get::<usize, u32>(3)?,
                 ))
             })?.map(|v| v.unwrap()).collect();
 
@@ -623,12 +624,13 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         let r = t.prepare(
-            "SELECT r.id, r.import_id, r.key FROM resources r INNER JOIN labeled_resources lr ON r.id=lr.resource_id INNER JOIN labels l ON l.id=lr.label_id WHERE l.label != ? ORDER BY RANDOM() limit ?;"
+            "SELECT r.id, r.import_id, r.key, r.length FROM resources r INNER JOIN labeled_resources lr ON r.id=lr.resource_id INNER JOIN labels l ON l.id=lr.label_id WHERE l.label != ? ORDER BY RANDOM() limit ?;"
         )?.query_map([Value::Text(label.to_string()), Value::Integer(limit)], |row| { //TODO move group_slices out, not for store
             Ok(Resource::new(
                 row.get::<usize, u32>(0)?,
                 row.get::<usize, u32>(1)?,
                 row.get::<usize, String>(2)?,
+                row.get::<usize, u32>(3)?,
             ))
         })?.map(|v| v.unwrap()).collect();
 
@@ -646,7 +648,7 @@ impl Store for SqlStore {
         debug!("list_resource_random_in_group: group_descr={:?} labels={:?}", group_descr, labels);
 
         let r: Vec<(Resource, Vec<f32>)> = t.prepare(
-            "SELECT r.id, r.import_id, r.key, GROUP_CONCAT(l.label || '/' || lr.p, ',') FROM resource_set_group rsg \
+            "SELECT r.id, r.import_id, r.key, GROUP_CONCAT(l.label || '/' || lr.p, ','), r.length FROM resource_set_group rsg \
             JOIN resource_set rs ON rs.group_id=rsg.id \
             JOIN resource_resources_set rrs ON rrs.set_id=rs.id \
             JOIN resources r ON r.id=rrs.resource_id \
@@ -675,9 +677,10 @@ impl Store for SqlStore {
             Ok(
                 (
                     Resource::new(
-                    row.get::<usize, u32>(0)?,
-                    row.get::<usize, u32>(1)?,
-                    row.get::<usize, String>(2)?
+                        row.get::<usize, u32>(0)?,
+                        row.get::<usize, u32>(1)?,
+                        row.get::<usize, String>(2)?,
+                        row.get::<usize, u32>(4)?
                     ),
                     labels.iter().map(|(_label_id, label)| *labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>()
                 )
@@ -695,7 +698,7 @@ impl Store for SqlStore {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
-        let (mut q, params) = file_stem.into_iter().fold((vec!["SELECT id, import_id, key FROM resources WHERE id IN ("], vec![]), |mut a, v| {
+        let (mut q, params) = file_stem.into_iter().fold((vec!["SELECT id, import_id, key, length FROM resources WHERE id IN ("], vec![]), |mut a, v| {
             a.0.push("?");
             a.0.push(",");
             a.1.push(*v);
@@ -713,6 +716,7 @@ impl Store for SqlStore {
                     row.get::<usize, u32>(0)?,
                     row.get::<usize, u32>(1)?,
                     row.get::<usize, String>(2)?,
+                    row.get::<usize, u32>(3)?,
                 ))
             })?.map(|v| v.unwrap()).collect();
 
@@ -893,7 +897,7 @@ impl Store for SqlStore {
         let resources_motifs = {
             let mut stmt = t.prepare("\
                     SELECT m.id, m.channel_id, \
-                    s.resource_id, r.import_id, r.key, s.slice_idx \
+                    s.resource_id, r.import_id, r.key, s.slice_idx, r.length \
                     FROM motifs m \
                     JOIN slices s ON s.motif_id=m.id \
                     JOIN resources r on r.id=s.resource_id \
@@ -909,6 +913,7 @@ impl Store for SqlStore {
                     row.get(3)?, // import_0,
                     row.get(4)?, // key_0,
                     row.get(5)?, // slice_idx_0,
+                    row.get(6)?, // length,
 
 
                 ))
@@ -919,6 +924,7 @@ impl Store for SqlStore {
 
                     u32, u32, String, i64,//resource_id, import_0, key_0, slice_idx_0
 
+                    u32 //length
                     ), Error>| {
 
                 let v = v?;
@@ -928,7 +934,7 @@ impl Store for SqlStore {
                 a.0.entry(v.2).or_insert_with(|| vec![]).push(MotifSlice::new(v.0, v.5, v.1 as u16));
 
                 if !a.1.contains_key(&v.2){
-                    a.1.insert(v.2, Resource::new( v.2, v.3, v.4));
+                    a.1.insert(v.2, Resource::new(v.2, v.3, v.4, v.6));
                 }
 
                 Ok(a)
@@ -998,7 +1004,7 @@ impl Store for SqlStore {
                 let v = v?;
                 let (mut a, mut channel_set,mut run_id) = a?;
 
-                a.insert(TensorSliceIdx(Resource::new(v.2, v.3, v.4), v.5));
+                a.insert(TensorSliceIdx(Resource::new(v.2, v.3, v.4, 0), v.5));
 
                 channel_set.insert(v.0); //TODO replace with Option
 
@@ -1389,15 +1395,16 @@ impl SqlStore {
 
     fn list_resource_set_resources(set_id: usize, t: &Transaction) -> Result<Vec<Resource>, ThoosaError> {
         let set_resources = {
-            let mut stmt = t.prepare("SELECT rs.id, rs.import_id, rs.key FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=?")?;
+            let mut stmt = t.prepare("SELECT rs.id, rs.import_id, rs.key, rs.length FROM resource_resources_set rrs LEFT JOIN resources rs ON rs.id=rrs.resource_id WHERE rrs.set_id=?")?;
 
 
             let vec = stmt.query_map([set_id], |row| {
                 Ok(Resource::new(
-                        row.get::<usize, u32>(0)?,
-                        row.get::<usize, u32>(1)?,
-                        row.get::<usize, String>(2)?,
-                 ))
+                    row.get::<usize, u32>(0)?,
+                    row.get::<usize, u32>(1)?,
+                    row.get::<usize, String>(2)?,
+                    row.get::<usize, u32>(3)?,
+                ))
                 // row.get::<usize, u32>(0)
             })?.map(|v| v.unwrap()).collect();
 
@@ -1594,7 +1601,7 @@ impl SqlMotifTrackerStore {
 
 pub trait MotifTrackerStore:Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>;
-    fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>;
+    fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError>;
 
     fn run_id(&self) -> usize;
     fn channel(&self) -> usize;
@@ -1636,7 +1643,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
+    fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1835,7 +1842,7 @@ mod store_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.load_slices_into_groups(&store)?;
+        let groups = slices_store.load_slices_into_groups(&store, None)?;
 
 
         {
@@ -1873,15 +1880,15 @@ mod store_tests {
         debug!("motif_slices_map={:?}", motif_slices_map);
 
         // assert_eq!(4, map.len());
-        let motif_slices_1111 = motif_slices_map.get(&Resource::new(resource_ids[0], 1, "".into())).unwrap();
+        let motif_slices_1111 = motif_slices_map.get(&Resource::new(resource_ids[0], 1, "".into(), 0)).unwrap();
         assert_eq!(2, motif_slices_1111.len());//100, 200
 
-        let motif_slices_2222 = motif_slices_map.get(&Resource::new(resource_ids[1], 1, "".into())).unwrap();
+        let motif_slices_2222 = motif_slices_map.get(&Resource::new(resource_ids[1], 1, "".into(), 0)).unwrap();
         assert_eq!(1, motif_slices_2222.len());
 
-        let motif_slices_444 = motif_slices_map.get(&Resource::new(resource_ids[3], 1, "".into())).unwrap();
+        let motif_slices_444 = motif_slices_map.get(&Resource::new(resource_ids[3], 1, "".into(), 0)).unwrap();
         assert_eq!(2, motif_slices_444.len());//100, 200
-        assert_eq!(2, motif_slices_map.get(&Resource::new(resource_ids[5], 1, "".into())).unwrap().len());//200,300
+        assert_eq!(2, motif_slices_map.get(&Resource::new(resource_ids[5], 1, "".into(), 0)).unwrap().len());//200,300
 
         debug!("motif_slices_1111={motif_slices_1111:?}");
         debug!("motif_slices_444={motif_slices_444:?}");
@@ -1913,7 +1920,7 @@ mod store_tests {
         debug!("slices={slices:?}");
 
         assert_eq!(vec![
-            TensorSliceIdx(Resource::new(resource_ids[0], 1, "1111".into()), 100), TensorSliceIdx(Resource::new(resource_ids[0], 1, "1111".into()), 200), TensorSliceIdx(Resource::new(2, 1, "444".into()), 200)
+            TensorSliceIdx(Resource::new(resource_ids[0], 1, "1111".into(), 0), 100), TensorSliceIdx(Resource::new(resource_ids[0], 1, "1111".into(), 0), 200), TensorSliceIdx(Resource::new(2, 1, "444".into(), 0), 200)
         ], slices);
 
 

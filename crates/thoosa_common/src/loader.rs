@@ -598,9 +598,9 @@ mod tests {
 
         let t_0 = Instant::now();
 
-        let aaa_resources = (0..num_chunks).map(|c|(0..num_items).map(|i|Resource::new( (c * num_items + i) as u32, 1,format!("aaa_{}", i))).collect::<Vec<_>>()).collect::<Vec<_>>();
-        let bbb_resources = (num_chunks..2*num_chunks).map(|c| (0..num_items).map(|i|Resource::new((c * num_items + i) as u32, 1,format!("bbb_{}", i))).collect::<Vec<_>>()).collect::<Vec<_>>();
-        let ccc_resources = (2*num_chunks..3*num_chunks).map(|c| (0..num_items).map(|i|Resource::new((c * num_items + i) as u32, 1,format!("bbb_{}", i))).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let aaa_resources = (0..num_chunks).map(|c|(0..num_items).map(|i|Resource::new((c * num_items + i) as u32, 1, format!("aaa_{}", i), 0)).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let bbb_resources = (num_chunks..2*num_chunks).map(|c| (0..num_items).map(|i|Resource::new((c * num_items + i) as u32, 1, format!("bbb_{}", i), 0)).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let ccc_resources = (2*num_chunks..3*num_chunks).map(|c| (0..num_items).map(|i|Resource::new((c * num_items + i) as u32, 1, format!("bbb_{}", i), 0)).collect::<Vec<_>>()).collect::<Vec<_>>();
 
         println!("aaa_resources={aaa_resources:?}");
         println!("bbb_resources={bbb_resources:?}");
