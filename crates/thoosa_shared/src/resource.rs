@@ -82,3 +82,22 @@ impl AsRef<ResourceId> for Resource {
     }
 }
 
+//TODO mean, std per channel
+pub struct ResourceStats {
+    size:Vec<u32>,
+    length_dim:usize
+}
+
+impl ResourceStats {
+    pub fn new(size: Vec<u32>) -> Self {
+        assert!(size.len()>1);
+        Self {
+            size,
+            length_dim:1//TODO param
+        }
+    }
+
+    pub fn length(&self)->u32 {
+        self.size[self.length_dim]
+    }
+}

@@ -13,7 +13,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use tch::nn::VarStore;
 use tch::{Device, TchError, Tensor};
-use thoosa_shared::resource::Resource;
+use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::{cdt_for_dir, recurse_files, ThoosaError};
 
 pub struct FsWorkspace {
@@ -95,10 +95,12 @@ impl FsWorkspace {
 
 impl Workspace for FsWorkspace {
 
-    fn import_tensor(&self,  t:Tensor, import_id:u32, key:&str)-> Result<(), ThoosaError>{
+    fn import_tensor(&self,  t:Tensor, import_id:u32, key:&str)-> Result<ResourceStats, ThoosaError>{
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
         trace!("Workspace:import_tensor {path:?}");
-        t.save(path).map_err(|e|ThoosaError::new(e.to_string()))
+        t.save(path).map_err(|e|ThoosaError::new(e.to_string()));
+
+        Ok(ResourceStats::new(t.size().into_iter().map(|v|v as u32).collect::<Vec<_>>()))
     }
 
     fn base_path_as_str(&self) -> String {
@@ -270,7 +272,7 @@ impl Workspace for FsWorkspace {
 }
 
 pub trait Workspace:Sync + Send {
-    fn import_tensor(&self, t:Tensor, import_id:u32, key:&str)-> Result<(), ThoosaError>;
+    fn import_tensor(&self, t:Tensor, import_id:u32, key:&str)-> Result<ResourceStats, ThoosaError>;
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
@@ -318,7 +320,7 @@ impl DummyWorkspace {
 }
 
 impl Workspace for DummyWorkspace {
-    fn import_tensor(&self,  t:Tensor, import_id: u32, key: &str) -> Result<(), ThoosaError>{
+    fn import_tensor(&self,  t:Tensor, import_id: u32, key: &str) -> Result<ResourceStats, ThoosaError>{
         todo!()
     }
 

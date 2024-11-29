@@ -22,7 +22,7 @@ use rusqlite::{Connection, Error, params, Transaction};
 use rusqlite::types::Value;
 
 use thoosa_shared::*;
-use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
+use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
 use thoosa_shared::val::Val;
 
 
@@ -87,10 +87,9 @@ pub trait Store:ResourceStore + Sync + Send {
     fn save_import(&self, descr: String, t: &Transaction) -> Result<u32, ThoosaError>;
     fn save_tree_run(&mut self, input_run_id: Option<&[usize]>, descr: &str, keys: &str, properties_vals: HashMap<String, Val>) -> Result<usize, ThoosaError>;
     fn get_input_run_ids(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError>;
-    fn save_resources(&mut self, resource_keys: Vec<String>) -> Result<(), ThoosaError>;
     fn save_resources_set(&mut self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoosaError>;
     fn save_resource_set_group(&mut self, descr: String) -> Result<usize, ThoosaError>;
-    fn save_resources_labels(&self, resource_labels_probs: &HashMap<String, Vec<(String, f32)>>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
+    fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
     fn save_pure_sets(&self, max_len: usize, only_unused: bool, t: &Transaction) -> Result<(), ThoosaError>;
     fn save_set_by_labels(&mut self, conds: Vec<(String, SetCond)>, only_unused: bool, limit: usize) -> Result<(), ThoosaError>;
     fn save_groups_by_label_cnt(&self, max_resources_in_set: usize, t: &Transaction) -> Result<(), ThoosaError>;
@@ -334,30 +333,6 @@ impl Store for SqlStore {
         Ok(())
     }
 
-    fn save_resources(&mut self, resources: Vec<String>) -> Result<(), ThoosaError> {
-        let mut conn_guard = self.conn.lock();
-        let t = conn_guard.transaction()?;
-
-        for resources_chunk in resources.chunks(500) {
-            let (mut q, params) = resources_chunk.into_iter().fold(
-                (vec!["INSERT INTO resources (key) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
-                    a.0.push("(?)");
-                    a.0.push(", ");
-
-                    a.1.push(Value::Text(v.clone()));
-                    a
-                });
-
-            q.pop();
-
-            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-        }
-        t.commit()?;
-
-        Ok(())
-    }
-
-
     fn save_label(&self, label: &str, t: &Transaction) -> Result<u32, ThoosaError> {
         t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
 
@@ -378,12 +353,12 @@ impl Store for SqlStore {
     }
 
     //TODO folds to util fn
-    fn save_resources_labels(&self, resource_labels_probs: &HashMap<String, Vec<(String, f32)>>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError> {
-        debug!("save_resources_labels: resource_labels_probs.len()={}", resource_labels_probs.len());
+    fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError> {
+        debug!("save_resources_labels: resource_labels_probs.len()={}", resource_stats_labels_probs.len());
 
-        let resources_len = resource_labels_probs.len();
+        let resources_len = resource_stats_labels_probs.len();
 
-        let mut resource_labels_iter = resource_labels_probs.into_iter().array_chunks::<500>();
+        let mut resource_labels_iter = resource_stats_labels_probs.into_iter().array_chunks::<500>();
 
 
         let mut resource_ids = Vec::with_capacity(resources_len);
@@ -402,18 +377,19 @@ impl Store for SqlStore {
             }
         }
 
-        fn do_insert(resource_keys_iter: IntoIter<(&String, &Vec<(String, f32)>), 500>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError> {
+        fn do_insert(resource_keys_iter: IntoIter<(&String, &(ResourceStats, Vec<(String, f32)>)), 500>, import_id: u32,  t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError> {
             let (mut insert_resources_q, insert_resources_params, insert_labeled_resources_params) = resource_keys_iter
                 .fold(
                     (
-                        vec!["INSERT INTO resources (key, import_id) VALUES"],
+                        vec!["INSERT INTO resources (key, length, import_id) VALUES"],
                         vec![],
                         vec![]
                     ), |(mut insert_resources_q, mut insert_resources_params, mut insert_labeled_resources_params),
-                        (resource_key, labels)| {
+                        (resource_key, (stats, labels))| {
                         insert_resources_params.push(Value::Text(resource_key.clone()));
+                        insert_resources_params.push(Value::Integer(stats.length() as i64));
                         insert_resources_params.push(Value::Integer(import_id as i64));
-                        insert_resources_q.push("(?, ?)");
+                        insert_resources_q.push("(?, ?, ?)");
                         insert_resources_q.push(",");
 
 
@@ -1284,6 +1260,7 @@ impl SqlStore {
                        "CREATE TABLE IF NOT EXISTS resources (
                 id          INTEGER PRIMARY KEY,
                 key         VARCHAR(256),
+                length      INTEGER NOT NULL,
                 import_id   NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
                 UNIQUE(key) )", ())?;
 
@@ -1713,7 +1690,7 @@ mod store_tests {
 
     use log::debug;
     use parking_lot::{Mutex, RawMutex};
-    use thoosa_shared::resource::{Resource, ResourceId};
+    use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::{cdt, cdt_for_dir, TensorSliceIdx};
     use thoosa_shared::val::Val;
 
@@ -1743,49 +1720,49 @@ mod store_tests {
 
         //pure resources
         let n = 100;
-        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, Vec<(String, f32)>>, i| {
-            a.insert(format!("{:3}_aaa", i), vec![("aaa".into(), 1.0)]);
-            a
-        }),
+        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
+                            a.insert(format!("{:3}_aaa", i), (ResourceStats::new(vec![1,100]), vec![("aaa".into(), 1.0)]));
+                            a
+                        }),
+        import_id, &t)?;
+
+        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
+                            a.insert(format!("{:3}_bbb", i), (ResourceStats::new(vec![1,100]), vec![("bbb".into(), 1.0)]));
+                            a
+                        }),
                                     import_id, &t)?;
 
-        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, Vec<(String, f32)>>, i| {
-            a.insert(format!("{:3}_bbb", i), vec![("bbb".into(), 1.0)]);
-            a
-        }),
-                                    import_id, &t)?;
-
-        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, Vec<(String, f32)>>, i| {
-            a.insert(format!("{:3}_ccc", i), vec![("ccc".into(), 1.0)]);
-            a
-        }),
+        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
+                            a.insert(format!("{:3}_ccc", i), (ResourceStats::new(vec![1,100]), vec![("ccc".into(), 1.0)]));
+                            a
+                        }),
                                     import_id, &t)?;
 
 
         //two labels resources
-        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, Vec<(String, f32)>>, i| {
-            a.insert(format!("{:3}_ab", i), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]);
-            a
-        }),
+        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
+                            a.insert(format!("{:3}_ab", i), (ResourceStats::new(vec![1,100]), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]));
+                            a
+                        }),
                                     import_id, &t)?;
 
-        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, Vec<(String, f32)>>, i| {
-            a.insert(format!("{:3}_bc", i), vec![("bbb".into(), 0.5), ("ccc".into(), 0.5)]);
-            a
-        }),
+        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
+                            a.insert(format!("{:3}_bc", i), (ResourceStats::new(vec![1,100]), vec![("bbb".into(), 0.5), ("ccc".into(), 0.5)]));
+                            a
+                        }),
                                     import_id, &t)?;
 
-        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, Vec<(String, f32)>>, i| {
-            a.insert(format!("{:3}_ca", i), vec![("ccc".into(), 0.5), ("aaa".into(), 0.5)]);
-            a
-        }),
+        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
+                            a.insert(format!("{:3}_ca", i), (ResourceStats::new(vec![1,100]), vec![("ccc".into(), 0.5), ("aaa".into(), 0.5)]));
+                            a
+                        }),
                                     import_id, &t)?;
 
         //three labels resources
-        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, Vec<(String, f32)>>, i| {
-            a.insert(format!("{:3}_abc", i), vec![("aaa".into(), 0.3), ("bbb".into(), 0.3), ("ccc".into(), 0.4)]);
-            a
-        }),
+        store.save_resources_labels(&(0..n).fold(HashMap::new(), |mut a: HashMap<String, (ResourceStats, Vec<(String, f32)>)>, i| {
+                            a.insert(format!("{:3}_abc", i), (ResourceStats::new(vec![1,100]), vec![("aaa".into(), 0.3), ("bbb".into(), 0.3), ("ccc".into(), 0.4)]));
+                            a
+                        }),
                                     import_id, &t)?;
 
 
@@ -1984,13 +1961,13 @@ mod store_tests {
 
 
         let resource_ids = store_guard.save_resources_labels(&HashMap::from([
-            ("1111".into(), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)]),
-            ("2222".into(), vec![("aaa".into(), 1.0)]),
-            ("3333".into(), vec![("ccc".into(), 1.0)]),
-            ("444".into(), vec![]),
-            ("555".into(), vec![]),
-            ("666".into(), vec![]),
-        ]), import_id, &t)?;
+                            ("1111".into(), (ResourceStats::new(vec![1,100]), vec![("aaa".into(), 0.5), ("bbb".into(), 0.5)])),
+                            ("2222".into(), (ResourceStats::new(vec![1,100]), vec![("aaa".into(), 1.0)])),
+                            ("3333".into(), (ResourceStats::new(vec![1,100]), vec![("ccc".into(), 1.0)])),
+                            ("444".into(), (ResourceStats::new(vec![1,100]), vec![])),
+                            ("555".into(), (ResourceStats::new(vec![1,100]), vec![])),
+                            ("666".into(), (ResourceStats::new(vec![1,100]), vec![])),
+                        ]), import_id, &t)?;
 
         debug!("resource_ids={resource_ids:?}");
 
@@ -2081,12 +2058,12 @@ mod store_tests {
             let import_id = store.save_import("test".to_string(), &t)?;
 
             store.save_resources_labels(&HashMap::from([
-                ("resource_aaa_0".to_string(), vec![]),
-                ("resource_aaa_1".to_string(), vec![]),
-                ("resource_bbb_0".to_string(), vec![]),
-                ("resource_bbb_1".to_string(), vec![]),
+                ("resource_aaa_0".to_string(), (ResourceStats::new(vec![1,100]), vec![])),
+                ("resource_aaa_1".to_string(), (ResourceStats::new(vec![1,100]), vec![])),
+                ("resource_bbb_0".to_string(), (ResourceStats::new(vec![1,100]), vec![])),
+                ("resource_bbb_1".to_string(), (ResourceStats::new(vec![1,100]), vec![])),
             ]),
-                                        1, &t)?;
+                1, &t)?;
 
             t.commit()?;
         }
