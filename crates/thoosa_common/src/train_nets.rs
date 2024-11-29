@@ -1784,7 +1784,7 @@ mod train_tests {
 
         let resource_keys = |(label, kind)| {
             (label, (0..13).map(move |id| {
-                Resource::new(id, 1, format!("{}-{}-{}", label, kind, id))
+                Resource::new(id, 1, format!("{}-{}-{}", label, kind, id), 0)
             }).collect())
         };
 
@@ -1925,9 +1925,9 @@ mod train_tests {
             &ws,
             &params,
 
-            (0..13).map(|i|(Resource::new(i, 1, format!("{i}")), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
+            (0..13).map(|i|(Resource::new(i, 1, format!("{i}"), 0), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
 
-            (0..13).map(|i|(Resource::new(i, 1, format!("{i}")), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
+            (0..13).map(|i|(Resource::new(i, 1, format!("{i}"), 0), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
 
             100,
             motif_batch_size,

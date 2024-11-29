@@ -1013,7 +1013,8 @@ pub fn import_resources<F, R>(
             Resource::new(
                 resource_id,
                 import_id,
-                resource_key.clone()
+                resource_key.clone(),
+                0
             )
     }).collect();
 
@@ -1758,27 +1759,27 @@ mod main_tests {
 
         //TODO
         let resources = store_guard.save_resources_labels(&HashMap::from([
-                            ("t_0_0".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_1".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_2".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_3".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_4".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_5".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_6".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_7".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_8".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_9".into(), (ResourceStats::new(vec![1,100]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_0".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_1".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_2".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_3".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_4".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_5".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_6".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_7".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_8".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+                            ("t_0_9".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
 
-                            ("t_1_0".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_1".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_2".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_3".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_4".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_5".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_6".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_7".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_8".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_9".into(), (ResourceStats::new(vec![1,100]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_0".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_1".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_2".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_3".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_4".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_5".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_6".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_7".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_8".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
+                            ("t_1_9".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
                         ]), import_id, &t)?;
 
 
@@ -1854,7 +1855,7 @@ mod main_tests {
 
         slices_store.save_slices(slices.clone())?;
 
-        let groups = slices_store.load_slices_into_groups(&store)?;
+        let groups = slices_store.load_slices_into_groups(&store, None)?;
 
 
         Ok(run_id)

@@ -18,12 +18,13 @@ pub struct Resource {
     id:ResourceId,
     import_id:u32,
     file_stem:String,
+    length:u32
 }
 
 impl Resource {
-    pub fn new(id: u32, import_id: u32, file_stem: String) -> Self {
+    pub fn new(id: u32, import_id: u32, file_stem: String, length: u32) -> Self {
         trace!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");
-        Self { id, import_id, file_stem }
+        Self { id, import_id, file_stem, length}
     }
 
     pub fn id(&self) -> ResourceId {
@@ -38,11 +39,14 @@ impl Resource {
         self.file_stem.as_str()
     }
 
+    pub fn length(&self) -> u32 {
+        self.length
+    }
 }
 
-impl From<(u32, u32, &str)> for Resource {
-    fn from(value: (u32, u32, &str)) -> Self {
-        Resource::new(value.0, value.1, value.2.to_string())
+impl From<(u32, u32, &str, u32)> for Resource {
+    fn from(value: (u32, u32, &str, u32)) -> Self {
+        Resource::new(value.0, value.1, value.2.to_string(), value.3)
     }
 }
 

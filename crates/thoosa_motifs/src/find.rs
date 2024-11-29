@@ -245,6 +245,11 @@ pub fn find_motifs_by_euc_dist(
     debug!("find_motifs_by_euc_dist: resource_keys={resource_keys:?} run_config_ids={run_config_ids:?} channels={}", ws.read().channels());
 
     let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
+
+        let slices_counts = resource_keys.iter().map(|r|(r.length()-run_config.window)/run_config.step + 1).sum::<u32>();
+
+        debug!("find_motifs_by_euc_dist: run_config={run_config:?} slices_counts={slices_counts}");
+
         assert!(a.insert(
             run_config.id.expect("id"),
             (0..ws.read().channels()).map(|channel|
@@ -265,6 +270,7 @@ pub fn find_motifs_by_euc_dist(
                     },
 
                     common_config.min_tracker_step,
+                    slices_counts
                 ))).collect::<Vec<Mutex<SimpleMotifTracker>>>()
         ).is_none());
 
@@ -792,17 +798,19 @@ pub(crate) struct SimpleMotifTracker<'a> {
     last:Option<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>,
     motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>, //i_0, match_0, match_1, dist
     dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
-    min_step:Option<usize>
+    min_step:Option<usize>,
+    max_slices_counts: u32,
 }
 
 impl<'a> SimpleMotifTracker<'a> {
 
-    pub fn new(dumper: Box<dyn MotifTrackerStore+'a>, min_step:Option<usize>) -> SimpleMotifTracker {
+    pub fn new(dumper: Box<dyn MotifTrackerStore+'a>, min_step:Option<usize>, max_slices_counts: u32) -> SimpleMotifTracker {
         Self {
             last:None,
             motifs: vec![],
             dumper,
-            min_step
+            min_step,
+            max_slices_counts
         }
     }
 
@@ -840,7 +848,7 @@ impl<'a> SimpleMotifTracker<'a> {
     }
 
     fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
-        self.dumper.load_slices_into_groups(store)
+        self.dumper.load_slices_into_groups(store, Some(self.max_slices_counts))
     }
 
     #[cfg(test)]
@@ -1288,10 +1296,15 @@ pub fn select_motifs_for_label_2(
 
                 let broadcast_to_size = [motfs_tensors.channels_motifs_slices.size()[0], motfs_tensors.channels_motifs_slices.size()[1], chunk.t.size()[1]];
 
-                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motfs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motfs_tensors); //chunk.t
+                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motfs_tensors); //chunk.t
 
 
-                let (mask, _) = clc_dist_d2_and_mask(motfs_tensors.channels_motifs_slices.to_device(Cuda(0)), chunk.t.to_device(Cuda(0)), false, &[LE {v:motfs_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(Cuda(0))}])?;
+                let (mask, _) = clc_dist_d2_and_mask(
+                    motfs_tensors.channels_motifs_slices.to_device(devices[0]),
+                    chunk.t.to_device(devices[0]),
+                    false,
+                    &[LE {v:motfs_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
+                )?;
                 let mask = mask.to_device(Cpu);
                 trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
 
@@ -2301,7 +2314,7 @@ mod motif_find_tests {
             Ok(())
         }
 
-        fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError> {
+        fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
             todo!()
         }
 
@@ -2324,7 +2337,7 @@ mod motif_find_tests {
         let mut motifs = vec![];
         {
             DummyDumper::new(&mut motifs);
-            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None);
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, );
 
             mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
             mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -2339,7 +2352,7 @@ mod motif_find_tests {
 
         let mut motifs = vec![];
         {
-            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10));
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10), );
 
             mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
             mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -2376,7 +2389,7 @@ mod motif_find_tests {
         let step = 100;
 
         let mut motifs = vec![];
-        let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None);
+        let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, );
 
         let dim = 1;
 

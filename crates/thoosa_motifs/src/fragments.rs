@@ -581,14 +581,14 @@ mod motifs_tests {
 
         let mut eeg_id_fragments_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
-        eeg_id_fragments_map.insert(Resource::new(1, 1, "111".into()), vec![
+        eeg_id_fragments_map.insert(Resource::new(1, 1, "111".into(), 0), vec![
             MotifSlice::new(10, 100, 0),
             MotifSlice::new(11, 301, 1),
             MotifSlice::new(20, 500, 0),
             MotifSlice::new(21, 701, 1)
         ]);
 
-        eeg_id_fragments_map.insert(Resource::new(2, 2, "222".into()), vec![
+        eeg_id_fragments_map.insert(Resource::new(2, 2, "222".into(), 0), vec![
             MotifSlice::new(10, 200, 0),
             MotifSlice::new(11, 401, 1),
             MotifSlice::new(20, 600, 0),
@@ -724,7 +724,7 @@ mod motifs_tests {
         let motif_slices = super::load_motif_slices(
             0,
             2,
-            vec![TensorSliceIdx(Resource::new(1, 1, "aaa".into()), 2)],
+            vec![TensorSliceIdx(Resource::new(1, 1, "aaa".into(), 0), 2)],
             &executor_rc
         );
 
@@ -752,7 +752,7 @@ mod motifs_tests {
         let motif_slices = super::load_motif_slices(
             0,
             5000,
-            vec![TensorSliceIdx(Resource::new(123, 1, "aaa".into()), 2)],
+            vec![TensorSliceIdx(Resource::new(123, 1, "aaa".into(), 0), 2)],
             &executor_rc
         );
 
