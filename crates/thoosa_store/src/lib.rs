@@ -1504,7 +1504,7 @@ impl SqlStore {
 
         q.pop();
 
-        debug!("insert_slices: params={params:?}");
+        trace!("insert_slices: params={params:?}");
 
         let slice_inserted = t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
         debug!("insert_slices: slice_inserted={slice_inserted}");

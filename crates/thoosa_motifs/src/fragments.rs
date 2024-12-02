@@ -304,8 +304,13 @@ pub struct PlotMotifSlicesParams {
 }
 
 impl PlotMotifSlicesParams {
+
     pub fn motifs_by(&self) -> MotifsBy {
         self.motifs_by
+    }
+
+    pub fn new(motifs_by: MotifsBy) -> Self {
+        Self { motifs_by }
     }
 }
 

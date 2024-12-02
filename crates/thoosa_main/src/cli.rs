@@ -1340,7 +1340,7 @@ where
 #[cfg(test)]
 mod main_tests {
     use std::collections::{HashMap, HashSet};
-    use std::fs;
+    use std::{fs, ptr};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::vec::IntoIter;
@@ -1357,12 +1357,13 @@ mod main_tests {
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Device::Cpu;
     use tch::display::{set_print_options, PrinterOptions};
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, ResourcesConfig};
     use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
-    use thoosa_common::utils::{from, lin_t, plot_series, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, vec_f32_from};
+    use thoosa_common::utils::{from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label_2, FindMotifsParams, FindMotifsRunConfig, SelectMotifsParams};
-    use thoosa_motifs::fragments::PlotMotifSlicesParams;
+    use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesParams};
     use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorSliceIdx, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{MotifTrackerStore, SqlMotifTrackerStore, SqlStore, Store};
@@ -1506,7 +1507,7 @@ mod main_tests {
                 resources: ResourceType::List(vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()]),
                 min_tracker_step: Some(3),
                 chunk_size: 2,
-                max_dist_k: 0.0,
+                dist_quantile: 0.0,
                 file_motif_tracker: false,
                 input_filter: None,
             },
@@ -1862,7 +1863,20 @@ mod main_tests {
     }
 
     #[test]
+    fn test_print_opts(){
+
+
+
+        let t = Tensor::rand(&[3,100,10], FLOAT_CPU);
+        log::set_max_level(Trace);
+
+        trace!("t=\n{t}");
+
+    }
+
+    #[test]
     fn test_run_step() -> Result<(), ThoosaError> {
+        reset_print_options();
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -1879,35 +1893,35 @@ mod main_tests {
         //1 label - sig_1 in channel 1
         //0,1 label - sig_2 in channel 2
         (0..10).for_each(|i|{
-            if i % 2 == 0 {
+            // if i % 2 == 0 {
                 Tensor::vstack(&[
-                    Tensor::from_slice([sig_0_v.clone(), sig_2_v.clone(), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+                    Tensor::from_slice([sig_0_v.clone(), sig_0_v.clone(),   sig_0_v.clone()].concat().as_slice()),
+                    Tensor::from_slice([saw(n),          saw(n),            saw(n)].concat().as_slice()),
+                    Tensor::from_slice([saw(n),          sig_2_v.clone(),   saw(n)].concat().as_slice()),
                 ]).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
-            } else {
-                Tensor::vstack(&[
-                    Tensor::from_slice([sig_2_v.clone(), sig_0_v.clone(), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
-                ]).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
-            }
+            // } else {
+            //     Tensor::vstack(&[
+            //         Tensor::from_slice([sig_2_v.clone(), sig_0_v.clone(), sig_2_v.clone()].concat().as_slice()),
+            //         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+            //         Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+            //     ]).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
+            // }
         });
 
         (0..10).for_each(|i|{
-            if i % 2 == 0 {
+            // if i % 2 == 0 {
                 Tensor::vstack(&[
-                    Tensor::from_slice([sig_2_v.clone(), sig_1_v.clone(), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
+                    Tensor::from_slice([sig_1_v.clone(), sig_1_v.clone(), sig_1_v.clone()].concat().as_slice()),
+                    Tensor::from_slice([saw(n),          saw(n),          saw(n)].concat().as_slice()),
+                    Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice())
                 ]).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
-            } else {
-                Tensor::vstack(&[
-                    Tensor::from_slice([sig_1_v.clone(), sig_2_v.clone(), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
-                ]).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
-            }
+            // } else {
+            //     Tensor::vstack(&[
+            //         Tensor::from_slice([sig_1_v.clone(), sig_2_v.clone(), sig_1_v.clone()].concat().as_slice()),
+            //         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+            //         Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
+            //     ]).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
+            // }
         });
 
         let x = lin_t(3*n);
@@ -1954,10 +1968,10 @@ mod main_tests {
 
         let devices = vec![Cpu, Cpu];
 
-
+        log::set_max_level(Trace);
         let run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(50, 800..850, "pure group 4".into(), 10, 0.1, None),
+            &FindMotifsParams::dummy(1000, 1000, "pure group 4".into(), 10, 0.1, None),
             find_motifs_by_euc_dist,
             &ws,
             &store,
@@ -1966,11 +1980,14 @@ mod main_tests {
             "Test/FindMotifs"
         )?;
 
-        log::set_max_level(Trace);
+        debug!("test_run_step: run_ids={run_ids:?}");
+
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesParams::new(MotifsBy::RunId(run_ids[0])))?;
+
 
         let run_ids = run_step(
             Some(run_ids),
-            &SelectMotifsParams::dummy(vec![], "pure group 4".into(), 0.1),
+            &SelectMotifsParams::dummy(vec![], "pure group 4".into()),
             select_motifs_for_label_2,
             &ws,
             &store,
