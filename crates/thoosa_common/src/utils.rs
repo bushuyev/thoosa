@@ -1,4 +1,4 @@
-use std::{fs, mem};
+use std::{fs, mem, ptr};
 use std::ffi::c_void;
 use std::io::Write;
 use std::ops::{Add, Div, Mul};
@@ -15,6 +15,7 @@ use rand::prelude::ThreadRng;
 use rand::Rng;
 use rand::thread_rng;
 use tch::{Device, Kind, TchError, Tensor};
+use tch::display::PrinterOptions;
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::Module;
@@ -839,4 +840,17 @@ pub fn tch_to_thoosa_err(tch_err:TchError) -> ThoosaError {
     }
 }
 
+pub fn reset_print_options(){
+    let mut printer_options = PrinterOptions::default();
 
+    unsafe {
+        let printer_options_ptr: *mut PrinterOptions = &mut printer_options;
+
+        let threshold_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>()*1) as *mut usize;
+        let line_width_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>()*3) as *mut usize;
+
+        ptr::write(threshold_ptr, 10000);
+        ptr::write(line_width_ptr, 1000);
+    }
+    tch::display::set_print_options(printer_options);
+}

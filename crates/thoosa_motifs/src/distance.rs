@@ -34,9 +34,11 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 }
 
 //TODO use distance's histogram kurtosis and skew to scale down q_t? If histogram flat - prob. of useful patterns lower
+#[derive(Debug)]
 pub enum MaskMaker {
     Quantile{q:f32},
     Diagonal,
+    Tril,
     LE {v:Tensor},//channels x thresholds
     GT {v:Tensor} //channels x thresholds
 }
@@ -60,12 +62,18 @@ impl MaskMaker {
 
                 prev
             }
+            MaskMaker::Tril => {
+                let prev = perv_mask.unwrap_or(Tensor::ones(dists.size(), (Bool, dists.device())));
+
+                prev.triu(1)
+            }
             MaskMaker::LE { v } => {
                 Self::apply_prev(&perv_mask,  dists.le_tensor(v))
             }
             MaskMaker::GT { v } => {
                 Self::apply_prev(&perv_mask,  dists.gt_tensor(v))
             }
+
         }
     }
 
@@ -93,8 +101,8 @@ pub fn clc_dist_d2_and_mask(
 
     let distances = clc_dist_d2(t_0, t_1, 1)?;
 
-    debug!("dist_d2_0: distances size={:?}", distances.size());
-    trace!("dist_d2_0: distances={:?}", distances);
+    debug!("clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}", distances.size());
+    trace!("clc_dist_d2_and_mask: distances=\n{distances}");
 
     Ok((
         mask_makers.into_iter().fold(None::<Tensor>, |mask, mask_maker|{
@@ -131,15 +139,15 @@ fn quantile_mask(q: f64, distances: &Tensor) -> Tensor {
     };
 
     let mut q_t = samples.quantile_scalar(q, 1, true, "lower").view((channels, 1, 1));
-    trace!("dist_d2_0: 1. q_t={q_t}");
+    trace!("quantile_mask: 1. q_t=\n{q_t}");
     // let _ = q_t.multiply_scalar_(0.5);
 
-    debug!("dist_d2_0: samples.size()={:?} q_t={:?}", samples.size(), q_t.size());
-    trace!("dist_d2_0: 2. q_t={q_t}");
+    debug!("quantile_mask: samples.size={:?} q_t.size={:?}", samples.size(), q_t.size());
+    trace!("quantile_mask: 2. q_t=\n{q_t}");
 
     let mut le = distances.le_tensor(&q_t); //channels x motifs x num_slices
 
-    trace!("dist_d2_0:  le={le}");
+    trace!("quantile_mask:  le=\n{le}");
 
     le
 }
@@ -214,15 +222,15 @@ mod distance_tests {
     use sci_rs::na::SimdBool;
     use tch::Device::Cpu;
     use tch::{Device, IndexOp, Kind};
-    use tch::Kind::Float;
+    use tch::Kind::{Bool, Float};
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
     use thoosa_shared::{sig_one_imp, sig_three_imp, sig_two_imp, ThoosaError};
 
-    use crate::distance::{average_euclidean_distance, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean};
+    use crate::distance::{average_euclidean_distance, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
     use crate::chunks::ChunkOfSlicedTensors;
-    use crate::distance::MaskMaker::{Diagonal, Quantile, LE};
+    use crate::distance::MaskMaker::{Diagonal, Quantile, Tril, LE};
 
     #[ctor::ctor]
     fn init() {
@@ -699,4 +707,48 @@ mod distance_tests {
 
 
     }
+
+    #[test]
+    fn test_mask_maker_diag(){
+        let mask = Diagonal.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu)));
+
+        assert_eq!(Tensor::from_slice(
+            &[
+                false, true , true ,
+                true , false, true,
+                true , true , false,
+
+                false, true , true,
+                true , false, true,
+                true , true , false
+            ]
+        ).view((2, 3, 3)),
+            mask
+        );
+
+        // debug!("mask=\n{mask}");
+    }
+
+    #[test]
+    fn test_mask_maker_tril(){
+        let mask = Tril.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu)));
+        debug!("mask=\n{mask}");
+
+        assert_eq!(Tensor::from_slice(
+            &[
+                false, true , true ,
+                false, false, true,
+                false, false, false,
+
+                false, true , true,
+                false, false, true,
+                false, false, false
+            ]
+        ).view((2, 3, 3)),
+                   mask
+        );
+
+        debug!("mask=\n{mask}");
+    }
+
 }

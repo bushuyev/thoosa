@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::thread::current;
 use std::time::{Duration, Instant};
 use std::{fmt, fs, mem, thread};
-
+use std::cmp::max;
 use clap::clap_derive::{Args, Subcommand};
 use crossbeam_channel::SendError;
 use crossbeam_utils::sync::WaitGroup;
@@ -56,7 +56,7 @@ use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_store::fs_store::FileMotifTrackerStore;
-use crate::distance::MaskMaker::{Diagonal, Quantile, LE};
+use crate::distance::MaskMaker::{Diagonal, Quantile, LE, Tril};
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -76,7 +76,7 @@ pub struct FindMotifsParams {//TODO pub
     pub chunk_size: u32,
 
     #[arg(long, default_value_t = 0.01)]
-    pub max_dist_k: f32,
+    pub dist_quantile: f32,
 
     #[arg(long, default_value_t = false)]
     pub file_motif_tracker: bool,
@@ -111,7 +111,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
             self.window.clone().into_iter(),
         ]).into_iter().map(|config_combo|{
             debug!("FindMotifsParams::to_run_configs: config_combo={config_combo:?} ");
-            FindMotifsRunConfig::new(None, config_combo[0], config_combo[1], self.max_dist_k, "".to_string(), None)
+            FindMotifsRunConfig::new(None, config_combo[0], config_combo[1], self.dist_quantile, "".to_string(), None)
         }).collect()
     }
 
@@ -160,14 +160,14 @@ impl InputFilter {
         }
     }
 
-    pub fn from_properties_map(properties: &HashMap<String, Val>) -> Result<Self, ThoosaError> {
+    pub fn from_properties_map(properties: &HashMap<String, Val>) -> Option<Self> {
         let conv_1_props = thoosa_shared::val::unprefix_properties("conv_1", &properties);
         if conv_1_props.len() > 0 {
             assert!(conv_1_props.len() == 3);
-            return Ok(InputFilter::Conv1(Conv1Params::from_properties_map(conv_1_props)?));
+            Conv1Params::from_properties_map(conv_1_props).map(|props| InputFilter::Conv1(props)).ok()
+        } else {
+            None
         }
-
-        Err(ThoosaError::new(format!("can't build InputFilter from {:?}", properties)))
     }
 }
 
@@ -198,7 +198,7 @@ impl Conv1Params {
 
 impl FindMotifsParams {
     // #[cfg(test)]
-    pub fn dummy(step: u32, window: Range<u32>, group: String, chunk_size: u32, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
+    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
         FindMotifsParams {
             step:step.into(),
 
@@ -210,7 +210,7 @@ impl FindMotifsParams {
 
             chunk_size,
 
-            max_dist_k,
+            dist_quantile: max_dist_k,
 
             file_motif_tracker: true,
 
@@ -222,7 +222,7 @@ impl FindMotifsParams {
         &self.resources
     }
     pub fn max_dist_k(&self) -> f32 {
-        self.max_dist_k
+        self.dist_quantile
     }
 
 }
@@ -247,8 +247,9 @@ pub fn find_motifs_by_euc_dist(
     let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
 
         let slices_counts = resource_keys.iter().map(|r|(r.length()-run_config.window)/run_config.step + 1).sum::<u32>();
+        let max_slices_counts = (slices_counts as f32 * 0.5) as u32;
 
-        debug!("find_motifs_by_euc_dist: run_config={run_config:?} slices_counts={slices_counts}");
+        debug!("find_motifs_by_euc_dist: run_config={run_config:?} slices_counts={slices_counts} max_slices_counts={max_slices_counts}");
 
         assert!(a.insert(
             run_config.id.expect("id"),
@@ -270,7 +271,7 @@ pub fn find_motifs_by_euc_dist(
                     },
 
                     common_config.min_tracker_step,
-                    slices_counts
+                    max_slices_counts
                 ))).collect::<Vec<Mutex<SimpleMotifTracker>>>()
         ).is_none());
 
@@ -294,9 +295,9 @@ pub fn find_motifs_by_euc_dist(
 
             let mask_diagonal = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]) && !chunk_sliced_1.is_split();
             let mask_makers = if mask_diagonal {
-                &[Quantile { q: find_motifs_run_config.max_dist_k }, Diagonal][..]
+                &[Quantile { q: find_motifs_run_config.dist_quantile }, Tril][..]
             } else {
-                &[Quantile { q: find_motifs_run_config.max_dist_k }][..]
+                &[Quantile { q: find_motifs_run_config.dist_quantile }][..]
             };
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
@@ -360,22 +361,18 @@ pub fn find_motifs_by_euc_dist(
     //     // tr.lock().finish();
     // }
 
-    info!("setting motifs in {} configs", run_config_ids.len());
-    let mut chunks = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).array_chunks::<10>();//TODO chunk size all trackers / num threads
-    let mut trackers_done = AtomicU32::new(0);
-    while let Some(chunk) = chunks.next() {
-        chunk.into_iter().par_bridge().for_each(|mt|{
-            mt.lock().build_groups(store).expect("build_groups");
-            info!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
-        });
-    }
+    let total_trackers  = run_config__channels_trackers.values().map(|v| v.len()).sum::<usize>();
+    info!("setting motifs in {} configs,  {total_trackers} trackers", run_config_ids.len());
+    let num_trackers_per_thread = max(1, total_trackers/rayon::current_num_threads());
+    let run_config__channels_trackers_vec = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).collect::<Vec<_>>();
 
-    if let Some(reminder) = chunks.into_remainder() {
-        reminder.into_iter().par_bridge().for_each(|mt|{
+    let mut trackers_done = AtomicU32::new(0);
+    run_config__channels_trackers_vec.chunks(num_trackers_per_thread).par_bridge().for_each(|chunk| {
+        for mt in chunk {
             mt.lock().build_groups(store).expect("build_groups");
             info!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
-        });
-    }
+        }
+    });
 
     Ok(run_config_ids)//TODO return only successful run_id (window size check)?
 }
@@ -385,7 +382,7 @@ pub struct FindMotifsRunConfig {
     id:Option<usize>,
     step: u32,
     window: u32,
-    max_dist_k: f32,
+    dist_quantile: f32,
     min_tracker_step: Option<usize>,
     filter: Option<InputFilter>,
     descr: String,
@@ -396,7 +393,7 @@ impl RunConfig for FindMotifsRunConfig {
         let mut map = HashMap::from([
             ("FindMotifsRunConfig.step".into(), self.step.into()),
             ("FindMotifsRunConfig.window".into(), self.window.into()),
-            ("FindMotifsRunConfig.max_dist".into(), self.max_dist_k.into()),
+            ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
             ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
         ]);
 
@@ -413,9 +410,9 @@ impl RunConfig for FindMotifsRunConfig {
         FindMotifsRunConfig::new(None,
                                  properties.get("step").expect("no step").as_usize().expect("step as_usize") as u32,
                                  properties.get("window").expect("no window").as_i64().expect("window as_i64") as u32,
-                                 properties.get("max_dist").expect("no max_dist").as_f32().expect("max_dist as_f32"),
+                                 properties.get("dist_quantile").expect("no dist_quantile").as_f32().expect("dist_quantile as_f32"),
                                  properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
-                                 InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)).ok(),
+                                 InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
         )
     }
 
@@ -428,7 +425,7 @@ impl FindMotifsRunConfig {
     pub fn new(id: Option<usize>,
                step: u32,
                window: u32,
-               max_dist_k: f32, //TODO move to common
+               dist_quantile: f32, //TODO move to common
                descr: impl Into<String>,
                filter: Option<InputFilter>,
     ) -> Self {
@@ -436,7 +433,7 @@ impl FindMotifsRunConfig {
             id,
             step,
             window,
-            max_dist_k,
+            dist_quantile,
             filter,
             min_tracker_step: None,//TODO
             descr: descr.into(),
@@ -1139,8 +1136,6 @@ pub struct SelectMotifsParams {
     #[arg(long)]
     pub resources_group: String,
 
-    #[arg(long, default_value_t = 0.5)]
-    min_ratio: f32,
 }
 
 impl SelectMotifsParams {
@@ -1149,17 +1144,13 @@ impl SelectMotifsParams {
         &self.find_motifs_run_ids
     }
 
-    pub fn dummy(run_ids: Vec<usize>, resources_group: String, min_ratio: f32) -> Self {
+    pub fn dummy(run_ids: Vec<usize>, resources_group: String) -> Self {
         SelectMotifsParams {
             find_motifs_run_ids: run_ids,
             resources_group,
-            min_ratio,
         }
     }
 
-    pub fn min_ratio(&self) -> f32 {
-        self.min_ratio
-    }
 
 }
 
@@ -1292,18 +1283,17 @@ pub fn select_motifs_for_label_2(
             10,//TODO params
             &mut find_motifs_run_config_motifs_tensors,
 
-            |chunk, (cfg, (motfs_tensors, label_motif_matches_sums))|{
+            |chunk, (cfg, (motif_tensors, label_motif_matches_sums))|{
 
-                let broadcast_to_size = [motfs_tensors.channels_motifs_slices.size()[0], motfs_tensors.channels_motifs_slices.size()[1], chunk.t.size()[1]];
+                let broadcast_to_size = [motif_tensors.channels_motifs_slices.size()[0], motif_tensors.channels_motifs_slices.size()[1], chunk.t.size()[1]];
 
-                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motfs_tensors); //chunk.t
-
+                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motif_tensors); //chunk.t
 
                 let (mask, _) = clc_dist_d2_and_mask(
-                    motfs_tensors.channels_motifs_slices.to_device(devices[0]),
+                    motif_tensors.channels_motifs_slices.to_device(devices[0]),
                     chunk.t.to_device(devices[0]),
                     false,
-                    &[LE {v:motfs_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
+                    &[LE {v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
                 )?;
                 let mask = mask.to_device(Cpu);
                 trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
@@ -1345,8 +1335,9 @@ pub fn select_motifs_for_label_2(
                 )?.totype(Kind::Float),
                 &motifs_tensors.channels_motifs_mask
             );
-            trace!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+            info!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
 
+            info!("num good motifs: {}", good_motifs.sum(Kind::Int));
         } else {
             warn!("no label motif matches for cfg={cfg:?}");
         }
@@ -1626,7 +1617,7 @@ mod motif_find_tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
-    use thoosa_shared::resource::{Resource, ResourceId};
+    use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::val::Val;
     use thoosa_store::{IdSlice, SqlStore, Store};
 
@@ -1851,8 +1842,8 @@ mod motif_find_tests {
         let channels_good_motifs = select_motifs_by_corr(
             motifs_tensor.shallow_clone(),
             vec![
-                (1, vec![(1,1,"t_0_0.pt").into(), (2,1,"t_0_1.pt").into()]),
-                (0, vec![(3,1,"t_1_0.pt").into(), (4,1,"t_1_1.pt").into()]),
+                (1, vec![(1,1,"t_0_0.pt",6).into(), (2,1,"t_0_1.pt",6).into()]),
+                (0, vec![(3,1,"t_1_0.pt",6).into(), (4,1,"t_1_1.pt",6).into()]),
             ],
             &executor_rc,
             1,
@@ -1868,9 +1859,9 @@ mod motif_find_tests {
         let labels_channels_good_motifs = select_motifs_by_ratio(
             motifs_tensor,
             vec![
-                ("xxx".into(), vec![(1,1,"t_0_0.pt").into(), (2,1,"t_0_1.pt").into()]),
-                ("yyy".into(), vec![(3,1, "t_1_0.pt").into(), (4,1, "t_1_1.pt").into()]),
-                ("zzz".into(), vec![(5,1, "t_2_0.pt").into(), (6,1, "t_2_1.pt").into()]),
+                ("xxx".into(), vec![(1,1, "t_0_0.pt",6).into(), (2,1, "t_0_1.pt",6).into()]),
+                ("yyy".into(), vec![(3,1, "t_1_0.pt",6).into(), (4,1, "t_1_1.pt",6).into()]),
+                ("zzz".into(), vec![(5,1, "t_2_0.pt",6).into(), (6,1, "t_2_1.pt",6).into()]),
             ],
             &executor_rc,
             1,
@@ -1879,6 +1870,7 @@ mod motif_find_tests {
             Arc::clone(&motifs_avg_distances_arc),
             Arc::clone(&channel_motif_ids_arc),
         )?;
+
 
         debug!("2. t={:?}", labels_channels_good_motifs);
         let channels_good_motifs = labels_channels_good_motifs.get(&String::from("xxx")).unwrap();
@@ -1943,9 +1935,9 @@ mod motif_find_tests {
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
-            ("1111".to_string(), vec![("label_0".to_string(), 1.0)]),
-            ("2222".to_string(), vec![("label_0".to_string(), 1.0)]),
-            ("3333".to_string(), vec![("label_0".to_string(), 1.0)]),
+            ("1111".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
 
 
@@ -1955,7 +1947,7 @@ mod motif_find_tests {
             resources: ResourceType::List(eeg_id_series),
             min_tracker_step: Some(3),
             chunk_size: 2,
-            max_dist_k: 0.01,
+            dist_quantile: 0.01,
             file_motif_tracker: false,
             input_filter: None,
         };
@@ -1973,7 +1965,6 @@ mod motif_find_tests {
             vec![Cpu]
         )?;
 
-
         // debug!("{:?}", store.lock().list_run_resources(1)?);
         let slices = store.lock().list_motifs_slices(run_ids[0])?;
 
@@ -1988,7 +1979,7 @@ mod motif_find_tests {
         Ok(())
     }
 
-    fn test_init_store(store: &Arc<Mutex<Box<dyn Store>>>, labels: &[&str], resources: HashMap<String, Vec<(String, f32)>>) -> Result<Vec<Resource>, ThoosaError> {
+    fn test_init_store(store: &Arc<Mutex<Box<dyn Store>>>, labels: &[&str], resources: HashMap<String, (ResourceStats, Vec<(String, f32)>)>) -> Result<Vec<Resource>, ThoosaError> {
         {
             let mut store_guard = store.lock();
 
@@ -2069,9 +2060,9 @@ mod motif_find_tests {
 
 
         let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
-            ("1111".to_string(), vec![("label_0".to_string(), 1.0)]),
-            ("2222".to_string(), vec![("label_0".to_string(), 1.0)]),
-            ("3333".to_string(), vec![("label_0".to_string(), 1.0)]),
+            ("1111".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
 
         let params = FindMotifsParams {
@@ -2080,7 +2071,7 @@ mod motif_find_tests {
             resources: ResourceType::List(eeg_id_series),
             min_tracker_step: Some(3),
             chunk_size: 2,
-            max_dist_k: 0.0001,
+            dist_quantile: 0.0001,
             file_motif_tracker: false,
             input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
         };
@@ -2166,9 +2157,9 @@ mod motif_find_tests {
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
-            ("1111".to_string(), vec![("label_0".to_string(), 1.0)]),
-            ("2222".to_string(), vec![("label_0".to_string(), 1.0)]),
-            ("3333".to_string(), vec![("label_0".to_string(), 1.0)]),
+            ("1111".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
 
         let params = FindMotifsParams {
@@ -2177,7 +2168,7 @@ mod motif_find_tests {
             resources: ResourceType::List(eeg_id_series),
             min_tracker_step: Some(3),
             chunk_size: 2,
-            max_dist_k: 0.0001,
+            dist_quantile: 0.0001,
             file_motif_tracker: false,
             input_filter: None,
         };
@@ -2249,7 +2240,7 @@ mod motif_find_tests {
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], (0..tensors_len).fold(HashMap::new(), |mut a, v |{
-            a.insert(format!("{}", v), vec![]);
+            a.insert(format!("{}", v), (ResourceStats::new(vec![1,n as u32]), vec![]));
             a
         }))?;
 
@@ -2259,7 +2250,7 @@ mod motif_find_tests {
             resources: ResourceType::List((0..tensors_len).map(|v| format!("{}", v)).collect()),
             min_tracker_step: Some(10),
             chunk_size: 3,
-            max_dist_k: 0.01,
+            dist_quantile: 0.01,
             file_motif_tracker: false,
             input_filter: None,
         };
@@ -2337,7 +2328,7 @@ mod motif_find_tests {
         let mut motifs = vec![];
         {
             DummyDumper::new(&mut motifs);
-            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, );
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, 100);
 
             mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
             mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -2352,7 +2343,7 @@ mod motif_find_tests {
 
         let mut motifs = vec![];
         {
-            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10), );
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10), 100);
 
             mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
             mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -2389,7 +2380,7 @@ mod motif_find_tests {
         let step = 100;
 
         let mut motifs = vec![];
-        let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, );
+        let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, 100);
 
         let dim = 1;
 
@@ -2615,7 +2606,7 @@ mod motif_find_tests {
         let sample_properties: HashMap<String, Val> = HashMap::from([
             ("FindMotifsRunConfig.window".into(), 10.into()),
             ("FindMotifsRunConfig.step".into(), 10.into()),
-            ("FindMotifsRunConfig.max_dist".into(), 1.0.into()),
+            ("FindMotifsRunConfig.dist_quantile".into(), 1.0.into()),
             ("FindMotifsRunConfig.descr".into(), "test".into()),
             ("FindMotifsRunConfig.filter.conv_1.Conv1Params.padding".into(), 1.into()),
             ("FindMotifsRunConfig.filter.conv_1.Conv1Params.stride".into(), 1.into()),
@@ -2634,7 +2625,7 @@ mod motif_find_tests {
     #[test]
     fn test_chunk_and_slice() -> Result<(), ThoosaError> {
 
-        let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555"].into_iter().enumerate().map(|(i, v)| (i as u32, 1u32, v).into()).collect();
+        let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555"].into_iter().enumerate().map(|(i, v)| (i as u32, 1u32, v, 10).into()).collect();
         let resources_to_move = resources.clone();
 
         let chunks_0_test: Arc<Mutex<Vec<Tensor>>> = Arc::new(Mutex::new(vec![]));

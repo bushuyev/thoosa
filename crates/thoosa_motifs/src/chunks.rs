@@ -119,7 +119,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
     pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
 
-        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: step={step} window={window} tensors_chunk.len()={}", tensors_chunk.len());
+        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: step={step} window={window} tensors_chunk.len={}", tensors_chunk.len());
 
         let mut slices = Vec::with_capacity(tensors_chunk.len());
 
@@ -132,7 +132,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
                 // channels x num_slices x window, transpose  to num_slices x channels x window
                 let unfolded = unfolded.transpose(0, 1);
 
-                debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size()={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
+                debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
                 slices.push(unfolded);
             } else {
                 warn!("skipping tensor")
