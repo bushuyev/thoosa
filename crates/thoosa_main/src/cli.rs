@@ -265,6 +265,10 @@ impl RunConfig for SayHelloRunConfig {
         todo!()
     }
 
+    fn set_id(&mut self, id: usize) {
+
+    }
+
     // fn to_config_space(&self) -> Option<ConfigurationSpace> {
     //     [
     //         (&self.lr).try_into().ok(),
@@ -713,7 +717,7 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: 
 
 
             let channels_motifs_models = store.lock()
-                .list_selected_motifs(motif_selection_run_ids[0]).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+                .list_selected_motifs(motif_selection_run_ids[0], 20).expect("list_selected_motifs").into_iter().enumerate().flat_map(
                 |(channel, channels_motifs)| {
                     let ws_moved = Arc::clone(&ws);
                     channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, &device).expect("load_motif_models"))
@@ -760,7 +764,7 @@ pub fn run_train_label_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<
             let motif_selection_run_ids = store_in_threads.lock().get_input_run_ids(*motif_node_params_selection_run_id).expect("get_input_run_id(*motif_node_selection_run_id)"); //TODO format err
             assert_eq!(motif_selection_run_ids.len(), 1);
 
-            let channels_motifs_models = store_in_threads.lock().list_selected_motifs(motif_selection_run_ids[0]).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+            let channels_motifs_models = store_in_threads.lock().list_selected_motifs(motif_selection_run_ids[0], 20).expect("list_selected_motifs").into_iter().enumerate().flat_map(
 
                 |(channel, channels_motifs)| {
                     let ws_moved = Arc::clone(&ws);
@@ -1092,7 +1096,7 @@ fn run_train_motif_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_
         let mut store_guard = store.lock();
 
         (
-            store_guard.list_selected_motifs(motif_selection_run_id)?//TODO param
+            store_guard.list_selected_motifs(motif_selection_run_id, 20)?//TODO param
                 .into_iter()
                 .flat_map(|channel_motifs| channel_motifs.into_iter())
                 .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr)
@@ -1319,6 +1323,8 @@ where
             ).unwrap();
 
             run_config.set_id(run_config_id);
+
+            debug!("run_step: saved run_config={run_config:?}");
 
             run_config
         }).collect::<Vec<RC>>(),
@@ -1966,9 +1972,10 @@ mod main_tests {
             "Test/FindMotifs"
         )?;
 
-        debug!("test_run_step: run_ids={run_ids:?}");
+
 
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesParams::new(MotifsBy::RunId(run_ids[0])))?;
+        debug!("test_run_step: run_ids={run_ids:?}");
 
         let run_ids = run_step(
             Some(run_ids),
@@ -1981,9 +1988,19 @@ mod main_tests {
             "Test/SelectMotifs"
         )?;
 
-        println!("run_ids={run_ids:?}");
+        assert_eq!(run_ids.len(), 1);
 
-        assert_eq!(vec![1,2],run_ids);
+        let selected_motifs = store.lock().list_selected_motifs(run_ids[0], ws.read().channels() as u32)?;
+
+        assert_eq!(selected_motifs[0].len(), 2);
+        //no motifs in channels 1 and 1
+        assert!(selected_motifs[1].is_empty());
+        assert!(selected_motifs[2].is_empty());
+
+
+        println!("selected_motifs={selected_motifs:?}");
+
+
 
         Ok(())
     }

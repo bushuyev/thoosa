@@ -1167,7 +1167,7 @@ impl SelectMotifsParams {
 
 impl Params<SelectMotifsRunConfig, Labeled, ()> for SelectMotifsParams {
     fn to_run_configs(&self) -> Vec<SelectMotifsRunConfig> {
-        vec![]
+        vec![SelectMotifsRunConfig::new()]
     }
 
     fn resource_config(&self) -> Labeled {
@@ -1207,6 +1207,10 @@ impl RunConfig for SelectMotifsRunConfig {
             motif_selector: MotifSelector::ByLabelVariance,
         }
     }
+
+    fn set_id(&mut self, id: usize) {
+        assert!(self.id.replace(id).is_none());
+    }
 }
 
 fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask: &Tensor) -> (Tensor, Tensor) {
@@ -1240,7 +1244,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
     (idx_dispersion.ge_tensor(&idx_dispersion_mean), idx_dispersion/ max)
 }
 
-pub fn select_motifs_for_label_2(
+ pub fn select_motifs_for_label_2(
     input_run_ids:Option<&Vec<usize>>,
     run_configs: Vec<SelectMotifsRunConfig>,
     resource_config: &Labeled,
@@ -1254,7 +1258,8 @@ pub fn select_motifs_for_label_2(
     let motifs_area = loader.write().get_available_cache_area();
     let labels_resources = resource_config.resource_config_to_keys(store)?;
 
-    trace!("select_motifs_for_label_2: run_configs={run_configs:?} labels_resources={labels_resources:?}");
+    debug!("select_motifs_for_label_2: run_configs={run_configs:?}");
+    trace!("select_motifs_for_label_2: labels_resources={labels_resources:?}");
 
     let mut find_motifs_run_config_motifs_tensors = input_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
 

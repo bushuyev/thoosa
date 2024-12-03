@@ -125,7 +125,5 @@ pub trait RunConfig:Debug {
 
     fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self;
 
-    fn set_id(&mut self, id:usize) {
-        todo!()
-    }
+    fn set_id(&mut self, id:usize);
 }
