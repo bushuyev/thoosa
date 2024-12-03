@@ -123,7 +123,7 @@ fn quantile_mask(q: f64, distances: &Tensor) -> Tensor {
     let channels= distances.size()[0];
     let flat_distances = distances.view((channels, -1));
 
-    let samples = if flat_distances.size()[1] > 1000 {
+    let samples = if flat_distances.size()[1] > 1000 {//TODO 1000 to config
         debug!("dist_d2_0: flat_distances.size()={:?}", flat_distances.size());
         let indices = Tensor::randint(
             flat_distances.size()[1],

@@ -13,7 +13,7 @@ use zstd_framed::{ZstdReader, ZstdWriter};
 use zstd_framed::table::{ZstdFrame, ZstdSeekTable};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::{group_slices, TensorSliceIdx, ThoosaError};
-use crate::{IdSlice, MotifTrackerStore, Store};
+use crate::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, Store};
 
 
 type SlicesMatch = (TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32);
@@ -62,11 +62,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
         debug!("MotifTrackerStore::save_slices: slices_pairs.len()={}", slices_pairs.len());
 
-        //TODO append, new if size > threshold
 
-        // let mut encoder = zstd::Encoder::new(std::io::BufWriter::new(&self.file), 3)?; // Compression level 3
-
-        // Convert the entire Vec<T> into a byte slice
         let data_bytes = unsafe {
             std::slice::from_raw_parts(
                 slices_pairs.as_ptr() as *const u8,
@@ -90,29 +86,19 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             ChunkReader::new(&self.path.join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()))?.flat_map(|slices|{
                 slices.unwrap().into_iter().map(move |slices:SlicesMatch|{
                     slice_id+=1;
-                    (IdSlice(slice_id, slices.0.0, slices.0.1), IdSlice(slice_id, slices.1.0, slices.1.1))
+                    (
+                        IdSlice(slice_id, slices.0.0, slices.0.1),
+                        IdSlice(slice_id, slices.1.0, slices.1.1)
+                    )
                 })
             })
         );
         info!("inserting {} groups {} slices", groups.len(), groups.values().map(|s|s.len()).sum::<usize>());
 
-        let groups= match max_slices_counts {
-            None => {
-                groups
-            }
-            Some(max_slices_counts) => {
-                 groups.into_iter().fold(HashMap::new(), |mut a, v|{
-                     if v.1.len() < max_slices_counts as usize {
-                         a.insert(v.0, v.1);
-                     } else {
-                         debug!("load_slices_into_groups: skipping group with {} slices", v.1.len());
-                     }
-                    a
-                })
-            }
-        };
-
-        store.lock().save_groups_as_motifs(self.run_id, self.channel as i64, groups)
+        store.lock().save_groups_as_motifs(
+            self.run_id, self.channel as i64,
+            filter_groups_by_slices_count(max_slices_counts, groups)
+        )
     }
 
 

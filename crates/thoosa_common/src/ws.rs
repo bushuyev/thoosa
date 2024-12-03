@@ -96,8 +96,8 @@ impl Workspace for FsWorkspace {
 
     fn import_tensor(&self,  t:Tensor, import_id:u32, key:&str)-> Result<ResourceStats, ThoosaError>{
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
-        trace!("Workspace:import_tensor {path:?}");
-        t.save(path).map_err(|e|ThoosaError::new(e.to_string()));
+        trace!("Workspace:import_tensor {path:?} t.size={:?}", t.size());
+        t.save(path).map_err(|e|ThoosaError::new(e.to_string()))?;
 
         Ok(ResourceStats::new(t.size().into_iter().map(|v|v as u32).collect::<Vec<_>>()))
     }

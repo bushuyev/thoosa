@@ -126,6 +126,8 @@ pub fn motifs_to_tensor(
     debug!("motifs_to_tensor: resource_id_motif_slices.len={} device={device:?} window={window}", resource_id_motif_slices.len());
     trace!("motifs_to_tensor: resource_id_motif_slices={resource_id_motif_slices:?}");
 
+    assert!(resource_id_motif_slices.len() > 0, "resource_id_motif_slices is empty in motifs_to_tensor");
+
     let channels_motifs_slices:Arc<RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(RwLock::new(HashMap::new()));
 
     let channels_motifs_slices_arc = Arc::clone(&channels_motifs_slices);
@@ -172,7 +174,7 @@ pub fn motifs_to_tensor(
     debug!("motifs_to_tensor: channels_motifs_slices.len={:?}", channels_motifs_slices.read().len());
     trace!("motifs_to_tensor: channels_motifs_slices={:?}", channels_motifs_slices);
 
-    let max_motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("motifs_num") as i64;
+    let max_motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("No motifs") as i64;
 
     let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::with_capacity(max_motifs_num as usize)).collect();
     let zeros_t = Tensor::zeros(window, (Float, device));
