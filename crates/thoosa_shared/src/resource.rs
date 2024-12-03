@@ -94,7 +94,7 @@ pub struct ResourceStats {
 
 impl ResourceStats {
     pub fn new(size: Vec<u32>) -> Self {
-        assert!(size.len()>1);
+        assert!(size.len()>1, "should be two dimensions at least: channels x values, was {size:?}");
         Self {
             size,
             length_dim:1//TODO param

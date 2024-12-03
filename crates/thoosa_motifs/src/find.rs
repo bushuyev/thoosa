@@ -79,7 +79,10 @@ pub struct FindMotifsParams {//TODO pub
     pub dist_quantile: f32,
 
     #[arg(long, default_value_t = false)]
-    pub file_motif_tracker: bool,
+    pub keep_slice_matches: bool,
+
+    #[arg(long)]
+    pub max_slices_k: Option<f32>,
 
     #[command(subcommand)]
     pub input_filter: Option<InputFilter>,
@@ -89,12 +92,18 @@ pub struct FindMotifsParams {//TODO pub
 pub struct CommonFindMotifsConfig {
     min_tracker_step:Option<usize>,
     chunk_size:u32,
-    file_motif_tracker:bool//TODO enum
+    keep_slice_matches:bool, //sql
+    max_slices_k:Option<f32>
 }
 
 impl CommonFindMotifsConfig {
-    pub fn new(min_tracker_step: Option<usize>, chunk_size: u32) -> Self {
-        Self { min_tracker_step, chunk_size, file_motif_tracker: true }
+    pub fn new(min_tracker_step: Option<usize>, chunk_size: u32, keep_slice_matches: bool, max_slices_k: Option<f32>) -> Self {
+        Self {
+            min_tracker_step,
+            chunk_size,
+            keep_slice_matches,
+            max_slices_k
+        }
     }
 }
 
@@ -126,7 +135,8 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
         CommonFindMotifsConfig {
             chunk_size: self.chunk_size,
             min_tracker_step: self.min_tracker_step,
-            file_motif_tracker: self.file_motif_tracker
+            keep_slice_matches: self.keep_slice_matches,
+            max_slices_k: None,
         }
     }
 }
@@ -198,7 +208,7 @@ impl Conv1Params {
 
 impl FindMotifsParams {
     // #[cfg(test)]
-    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, max_dist_k: f32, input_filter: Option<&InputFilter>) -> Self {
+    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, dist_quantile: f32, input_filter: Option<&InputFilter>, min_tracker_step: Option<usize>, keep_slice_matches: bool) -> Self {
         FindMotifsParams {
             step:step.into(),
 
@@ -206,13 +216,15 @@ impl FindMotifsParams {
 
             resources: ResourceType::Group(group),
 
-            min_tracker_step: Some(10),
+            min_tracker_step,
 
             chunk_size,
 
-            dist_quantile: max_dist_k,
+            dist_quantile,
 
-            file_motif_tracker: true,
+            keep_slice_matches,
+
+            max_slices_k: None,
 
             input_filter: input_filter.cloned(),
         }
@@ -247,32 +259,31 @@ pub fn find_motifs_by_euc_dist(
     let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
 
         let slices_counts = resource_keys.iter().map(|r|(r.length()-run_config.window)/run_config.step + 1).sum::<u32>();
-        let max_slices_counts = (slices_counts as f32 * 0.5) as u32;
+        let max_slices_counts = common_config.max_slices_k.map(|k| (k * slices_counts as f32) as u32);
 
-        debug!("find_motifs_by_euc_dist: run_config={run_config:?} slices_counts={slices_counts} max_slices_counts={max_slices_counts}");
+        debug!("find_motifs_by_euc_dist: run_config={run_config:?} slices_counts={slices_counts} max_slices_counts={max_slices_counts:?}");
 
         assert!(a.insert(
             run_config.id.expect("id"),
-            (0..ws.read().channels()).map(|channel|
-
+            (0..ws.read().channels()).map(|channel| {
                 Mutex::new(SimpleMotifTracker::new(
-                    if common_config.file_motif_tracker {
-                        FileMotifTrackerStore::new(
-                            ws.read().tmp_path(),
-                            run_config.id.expect("id"),
-                            channel
-                        ).expect("can't create tmp store")
-                    } else {
+                    if common_config.keep_slice_matches {
                         SqlMotifTrackerStore::new(
                             ws.read().tmp_run_store_path(run_config.id.expect("id") as u32, channel as u32),
                             run_config.id.expect("id"),
                             channel
                         ).expect("can't create tmp store")
+                    } else {
+                        FileMotifTrackerStore::new(
+                            ws.read().tmp_path(),
+                            run_config.id.expect("id"),
+                            channel
+                        ).expect("can't create tmp store")
                     },
-
                     common_config.min_tracker_step,
                     max_slices_counts
-                ))).collect::<Vec<Mutex<SimpleMotifTracker>>>()
+                ))
+            }).collect::<Vec<Mutex<SimpleMotifTracker>>>()
         ).is_none());
 
         a
@@ -290,11 +301,11 @@ pub fn find_motifs_by_euc_dist(
         &run_configs_arcs,
         move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors<ResourceId>>, chunk_sliced_1: &ChunkOfSlicedTensors<ResourceId>, find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
 
-            debug!("find_motifs_by_euc_dist: rayon::current_num_threads()={}", rayon::current_num_threads());
+            debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
 
-            let mask_diagonal = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]) && !chunk_sliced_1.is_split();
-            let mask_makers = if mask_diagonal {
+            let mask_tril = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]) && !chunk_sliced_1.is_split();
+            let mask_makers = if mask_tril {
                 &[Quantile { q: find_motifs_run_config.dist_quantile }, Tril][..]
             } else {
                 &[Quantile { q: find_motifs_run_config.dist_quantile }][..]
@@ -311,7 +322,7 @@ pub fn find_motifs_by_euc_dist(
             let mask_cpu = SyncWrapper::new_tb(Box::new(mask.to_device(Cpu)));
             drop(mask);
 
-            trace!("find_motifs_by_euc_dist: mask_cpu={mask_cpu} false_diagonal={mask_diagonal}");
+            trace!("find_motifs_by_euc_dist: mask_cpu=\n{mask_cpu} mask_tril=\n{mask_tril}");
             if log_enabled!(Level::Debug) {
                 debug!("find_motifs_by_euc_dist: count_nonzero={}", mask_cpu.count_nonzero_dim_intlist([1,2]));
             }
@@ -796,12 +807,12 @@ pub(crate) struct SimpleMotifTracker<'a> {
     motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>, //i_0, match_0, match_1, dist
     dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
     min_step:Option<usize>,
-    max_slices_counts: u32,
+    max_slices_counts: Option<u32>,
 }
 
 impl<'a> SimpleMotifTracker<'a> {
 
-    pub fn new(dumper: Box<dyn MotifTrackerStore+'a>, min_step:Option<usize>, max_slices_counts: u32) -> SimpleMotifTracker {
+    pub fn new(dumper: Box<dyn MotifTrackerStore+'a>, min_step:Option<usize>, max_slices_counts: Option<u32>) -> SimpleMotifTracker {
         Self {
             last:None,
             motifs: vec![],
@@ -845,7 +856,7 @@ impl<'a> SimpleMotifTracker<'a> {
     }
 
     fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
-        self.dumper.load_slices_into_groups(store, Some(self.max_slices_counts))
+        self.dumper.load_slices_into_groups(store, self.max_slices_counts)
     }
 
     #[cfg(test)]
@@ -1948,7 +1959,7 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             chunk_size: 2,
             dist_quantile: 0.01,
-            file_motif_tracker: false,
+            keep_slice_matches: false,
             input_filter: None,
         };
 
@@ -2001,7 +2012,7 @@ mod motif_find_tests {
 
     fn to_test_run_config(store: &Arc<Mutex<Box<dyn Store>>>, params: &FindMotifsParams, file_motif_tracker: bool) -> (CommonFindMotifsConfig, Vec<FindMotifsRunConfig>) {
         let mut common_config = params.common_config();
-        common_config.file_motif_tracker = file_motif_tracker;
+        common_config.keep_slice_matches = file_motif_tracker;
         let mut run_configs = params.to_run_configs();
         run_configs.iter_mut().for_each(|c| {
             let id = store.lock().save_tree_run(None, "test", "test", HashMap::new()).unwrap();
@@ -2072,7 +2083,7 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             chunk_size: 2,
             dist_quantile: 0.0001,
-            file_motif_tracker: false,
+            keep_slice_matches: false,
             input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
         };
 
@@ -2169,7 +2180,7 @@ mod motif_find_tests {
             min_tracker_step: Some(3),
             chunk_size: 2,
             dist_quantile: 0.0001,
-            file_motif_tracker: false,
+            keep_slice_matches: false,
             input_filter: None,
         };
 
@@ -2251,7 +2262,7 @@ mod motif_find_tests {
             min_tracker_step: Some(10),
             chunk_size: 3,
             dist_quantile: 0.01,
-            file_motif_tracker: false,
+            keep_slice_matches: false,
             input_filter: None,
         };
 

@@ -16,7 +16,7 @@ pub struct ChunkOfSlicedTensors <ResourceId> where {
     pub(crate)  sizes: Vec<i64>,//num splits in a ResourceId
     pub   t: SyncWrapper<Tensor>,
     step:u32,
-    split_at:Option<i64>//slipt within tensor
+    split_at:Option<i64>//split within tensor
 }
 
 pub struct ChunkOfSlicedTensorsIter<ResourceId:Clone+Debug+Eq> {

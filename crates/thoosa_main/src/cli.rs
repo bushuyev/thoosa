@@ -167,7 +167,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
     }
 
     fn common_config(&self) -> CommonFindMotifsConfig {
-        CommonFindMotifsConfig::new(Some(100), 100)//TODO
+        CommonFindMotifsConfig::new(Some(100), 100, true, None)//TODO
     }
 }
 
@@ -1456,7 +1456,7 @@ mod main_tests {
 
 
         let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
-
+        debug!("t_0_0.size()={:?}, t_0_1.size()={:?}, t_1_0.size()={:?}, t_1_1.size()={:?}", t_0_0.size(), t_0_1.size(), t_1_0.size(), t_1_1.size());
 
         t_0_0.save(ws.read().tensors_path().join(format!("t_0_0.pt")))?;
         t_0_1.save(ws.read().tensors_path().join(format!("t_0_1.pt")))?;
@@ -1466,6 +1466,7 @@ mod main_tests {
         // debug!("t_1_1 mean={} max-min={}", t_1_1.mean(None).double_value(&[]), t_1_1.max() - t_1_1.min());
         let channels = 3;
         let tensors_path = ws.read().tensors_path().clone();
+        let tensors_path_for_import = ws.read().tensors_path().clone();
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
@@ -1489,7 +1490,7 @@ mod main_tests {
                 ("t_1_1".to_string(), vec![("label_1".to_string(), 1.0)])
             ])),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            |key| Ok(Tensor::from_slice(&[0.])),
+            |key| Tensor::load(tensors_path_for_import.join(format!("{}.pt", key))).map_err(|e|ThoosaError::new(e.to_string())),
             true
         )?;
 
@@ -1507,8 +1508,9 @@ mod main_tests {
                 resources: ResourceType::List(vec!["t_0_0".into(), "t_0_1".into(), "t_1_0".into(), "t_1_1".into()]),
                 min_tracker_step: Some(3),
                 chunk_size: 2,
-                dist_quantile: 0.0,
-                file_motif_tracker: false,
+                dist_quantile: 0.1,
+                keep_slice_matches: false,
+                max_slices_k: None,
                 input_filter: None,
             },
             find_motifs_by_euc_dist,
@@ -1636,7 +1638,7 @@ mod main_tests {
 
         ///////////////////////////
 
-        let find_motifs_params = FindMotifsParams::dummy(100, 800..800, "test set".into(), 10, 1.0, None);
+        let find_motifs_params = FindMotifsParams::dummy(100, 800..800, "test set".into(), 10, 1.0, None, Some(10), true);
         let param_set = find_motifs_params.to_run_configs();
 
         let find_motifs_run_id_0 = save_test_motifs(&resources, Arc::clone(&store), find_motifs_params.clone(), param_set.clone(), "t_0_")?;
@@ -1971,7 +1973,7 @@ mod main_tests {
         log::set_max_level(Trace);
         let run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(1000, 1000, "pure group 4".into(), 10, 0.1, None),
+            &FindMotifsParams::dummy(1000, 1000, "pure group 4".into(), 10, 0.1, None, None, false),
             find_motifs_by_euc_dist,
             &ws,
             &store,
