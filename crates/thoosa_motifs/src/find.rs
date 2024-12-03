@@ -416,7 +416,7 @@ impl RunConfig for FindMotifsRunConfig {
     }
 
     //TODO set id
-    fn from_properties_map(properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
         let properties = thoosa_shared::val::unprefix_properties("FindMotifsRunConfig", &properties);
         FindMotifsRunConfig::new(None,
                                  properties.get("step").expect("no step").as_usize().expect("step as_usize") as u32,
@@ -1179,27 +1179,37 @@ impl Params<SelectMotifsRunConfig, Labeled, ()> for SelectMotifsParams {
     }
 }
 
+#[derive(Clone, PartialEq, Debug)]
+enum MotifSelector {
+    ByLabelVariance//TODO
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct SelectMotifsRunConfig{
+    id:Option<usize>,
+    motif_selector: MotifSelector
 }
 
 impl SelectMotifsRunConfig {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            id:None,
+            motif_selector: MotifSelector::ByLabelVariance
+        }
     }
 }
 
 impl RunConfig for SelectMotifsRunConfig {
 
-    fn from_properties_map(properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
         Self {
-
+            id: Some(run_id),
+            motif_selector: MotifSelector::ByLabelVariance,
         }
     }
 }
 
-fn select_motifs_by_label_variance(labels_channels_motifs_counts:Tensor, mask: &Tensor) ->Tensor{
+fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask: &Tensor) -> (Tensor, Tensor) {
     debug!("select_motifs_by_label_variance: labels_channels_motifs_counts={:?}", labels_channels_motifs_counts.size());
 
     let var = labels_channels_motifs_counts.var_dim(0, true, false);
@@ -1224,12 +1234,15 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts:Tensor, mask: &
 
     trace!("select_motifs_by_label_variance: idx_dispersion_mean=\n{idx_dispersion_mean}");
 
-    idx_dispersion.ge_tensor(&idx_dispersion_mean)
+    let max = idx_dispersion.amax(1, true);//per channel
+    trace!("select_motifs_by_label_variance: max=\n{max}");
+
+    (idx_dispersion.ge_tensor(&idx_dispersion_mean), idx_dispersion/ max)
 }
 
 pub fn select_motifs_for_label_2(
     input_run_ids:Option<&Vec<usize>>,
-    mut run_configs: Vec<SelectMotifsRunConfig>,
+    run_configs: Vec<SelectMotifsRunConfig>,
     resource_config: &Labeled,
     common_config: &(),
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1241,14 +1254,14 @@ pub fn select_motifs_for_label_2(
     let motifs_area = loader.write().get_available_cache_area();
     let labels_resources = resource_config.resource_config_to_keys(store)?;
 
-    trace!("select_motifs_for_label_2: labels_resources={labels_resources:?}");
+    trace!("select_motifs_for_label_2: run_configs={run_configs:?} labels_resources={labels_resources:?}");
 
     let mut find_motifs_run_config_motifs_tensors = input_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
 
         let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
         trace!("select_motifs_for_label_2: resource_id_motif_slices={resource_id_motif_slices:?}");
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(store.lock().list_run_params(*find_motif_run_id)?);
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(*find_motif_run_id, store.lock().list_run_params(*find_motif_run_id)?);
 
         motifs_to_tensor(
             resource_id_motif_slices,
@@ -1261,6 +1274,8 @@ pub fn select_motifs_for_label_2(
             let size = &motifs_tensors.channels_motifs_slices.size()[0..=1];//channels x motifs for motif sums
 
             debug!("select_motifs_for_label_2: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensors.channels_motifs_slices.size());
+            trace!("select_motifs_for_label_2: motifs_tensors.channels_motifs_ids=\n{} channels_motifs_mask=\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_mask, motifs_tensors.channels_motifs_avg_dists);
+
             (
                 find_motifs_run_config,
                 (
@@ -1282,7 +1297,7 @@ pub fn select_motifs_for_label_2(
     }).collect::<Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Box<Tensor>>>))>, ThoosaError>>()?;
     loader.write().purge_cache(motifs_area);
 
-    trace!("select_motifs_for_label_2: motifs_tensors={find_motifs_run_config_motifs_tensors:?}");
+
     debug!("select_motifs_for_label_2: motifs_tensors loaded");
 
     // let mut find_motifs_run_configs = find_motifs_run_config_motifs_tensors.iter().map(|v|v.0.clone()).collect::<Vec<_>>();
@@ -1298,19 +1313,20 @@ pub fn select_motifs_for_label_2(
 
                 let broadcast_to_size = [motif_tensors.channels_motifs_slices.size()[0], motif_tensors.channels_motifs_slices.size()[1], chunk.t.size()[1]];
 
-                debug!("select_motifs_for_label_2:  label={label} resources cfg={cfg:?} chunk.t.size={:?}  motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motif_tensors); //chunk.t
+                debug!("select_motifs_for_label_2: label={label} resources cfg={cfg:?} chunk.t.size={:?} motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motif_tensors); //chunk.t
 
                 let (mask, _) = clc_dist_d2_and_mask(
                     motif_tensors.channels_motifs_slices.to_device(devices[0]),
                     chunk.t.to_device(devices[0]),
                     false,
+                    //compare distances between tensor and motifs to motif's average distance
                     &[LE {v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
                 )?;
                 let mask = mask.to_device(Cpu);
                 trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
 
                 let sums = mask.sum_dim_intlist(2, false, Kind::Int64);//channels x motif matches
-                trace!("select_motifs_for_label_2:  label={label} sums=\n{sums}");
+                trace!("select_motifs_for_label_2: label={label} sums=\n{sums}");
 
 
                 label_motif_matches_sums.get_mut(&label).expect(format!("no motif sums tensor for {label}").as_str()).add_assign(sums.into());
@@ -1328,55 +1344,50 @@ pub fn select_motifs_for_label_2(
         )?;
     }
 
-    for (cfg, (motifs_tensors, label_motif_matches_sums)) in find_motifs_run_config_motifs_tensors.iter(){
-
-        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids=\n{:?}", cfg.window, motifs_tensors.channels_motifs_ids);
+    find_motifs_run_config_motifs_tensors.iter().try_fold(vec![],  |mut a, (find_motif_run_cfg, (motifs_tensors, label_motif_matches_sums))|{
+        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids=\n{:?}", find_motif_run_cfg.window, motifs_tensors.channels_motifs_ids);
         trace!("select_motifs_for_label_2:  avg_dists_t=\n{}", motifs_tensors.channels_motifs_avg_dists);
         if log_enabled!(Level::Trace) {
             for (label, motif_sums) in label_motif_matches_sums.iter() {
                 trace!("select_motifs_for_label_2: label={label} final motif_sums=\n{motif_sums}");
             }
         }
-
         if label_motif_matches_sums.len() > 0 {
-            let good_motifs = select_motifs_by_label_variance(
-                Tensor::f_stack(
-                    label_motif_matches_sums.into_iter().map(|t| &***t.1).collect::<Vec<_>>().as_slice(),
-                    0
-                )?.totype(Kind::Float),
-                &motifs_tensors.channels_motifs_mask
-            );
-            info!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+            let labels_channels_motifs_counts = Tensor::f_stack(
+                label_motif_matches_sums.into_iter().map(|t| &***t.1).collect::<Vec<_>>().as_slice(),
+                0,
+            )?.totype(Kind::Float);
 
-            info!("num good motifs: {}", good_motifs.sum(Kind::Int));
+            for run_config in &run_configs {
+
+                match run_config.motif_selector {
+                    //TODO
+                    MotifSelector::ByLabelVariance => {
+
+                        let (good_motifs, motifs_rates) = select_motifs_by_label_variance(&labels_channels_motifs_counts, &motifs_tensors.channels_motifs_mask);
+                        info!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+
+                        let good_motif_ids_rates = from::<Vec<Vec<i64>>>(&motifs_tensors.channels_motifs_ids).into_iter().flat_map(|v| v.into_iter()).zip(
+                            from::<Vec<Vec<bool>>>(&good_motifs)
+                                .into_iter()
+                                .flat_map(|v| v.into_iter())
+                                .zip(from::<Vec<Vec<f32>>>(&motifs_rates).into_iter().flat_map(|v| v.into_iter())))
+                            .filter_map(|(id, (b, r))| if b { Some((id as usize, r as f64)) } else { None })
+                            .collect::<Vec<(usize, f64)>>();
+
+                        info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
+                        a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
+                    }
+                }
+
+
+            }
         } else {
-            warn!("no label motif matches for cfg={cfg:?}");
+            warn!("no label motif matches for cfg={find_motif_run_cfg:?}");
         }
+        Ok(a)
+    })
 
-
-
-        // store.lock().save_selected_motifs(cfg.id.unwrap(), motifs_corrs).expect("save_motifs_corrs");
-    }
-
-
-    // let labels_channels_good_motif_idxs:HashMap<String, Vec<Vec<(i64, f64)>>> = select_motifs_by_ratio(
-    //     motifs,
-    //     select_motifs_params.labels_datasets().into_iter().map(|label_dataset|{
-    //         (
-    //             label_dataset.0.clone(),
-    //             store.lock().list_resource_set_resources_by_descr(label_dataset.1.as_str()).unwrap()
-    //         )
-    //
-    //     }).collect(),
-    //     executor,
-    //     params.step(),
-    //     device,
-    //     select_motifs_params.min_ratio(),
-    //     Arc::new(RwLock::new(motifs_avg_distances)), //TODO keeps motif indexes with motif tensors
-    //     Arc::clone(&channel_motif_ids)
-    // )?;
-
-    Ok(vec![])
 }
 
 fn clc_motif_matches(
@@ -1960,6 +1971,7 @@ mod motif_find_tests {
             chunk_size: 2,
             dist_quantile: 0.01,
             keep_slice_matches: false,
+            max_slices_k: None,
             input_filter: None,
         };
 
@@ -2084,6 +2096,7 @@ mod motif_find_tests {
             chunk_size: 2,
             dist_quantile: 0.0001,
             keep_slice_matches: false,
+            max_slices_k: None,
             input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
         };
 
@@ -2181,6 +2194,7 @@ mod motif_find_tests {
             chunk_size: 2,
             dist_quantile: 0.0001,
             keep_slice_matches: false,
+            max_slices_k: None,
             input_filter: None,
         };
 
@@ -2263,6 +2277,7 @@ mod motif_find_tests {
             chunk_size: 3,
             dist_quantile: 0.01,
             keep_slice_matches: false,
+            max_slices_k: None,
             input_filter: None,
         };
 
@@ -2339,7 +2354,7 @@ mod motif_find_tests {
         let mut motifs = vec![];
         {
             DummyDumper::new(&mut motifs);
-            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, 100);
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, Some(100));
 
             mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
             mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -2354,7 +2369,7 @@ mod motif_find_tests {
 
         let mut motifs = vec![];
         {
-            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10), 100);
+            let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10), Some(100));
 
             mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
             mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
@@ -2391,7 +2406,7 @@ mod motif_find_tests {
         let step = 100;
 
         let mut motifs = vec![];
-        let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, 100);
+        let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, Some(100));
 
         let dim = 1;
 
@@ -2626,7 +2641,7 @@ mod motif_find_tests {
 
         assert_eq!(sample_properties, properties);
 
-        let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map(properties);
+        let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map(0, properties);
 
         debug!("loaded_params={:?}", loaded_params);
 
@@ -2942,35 +2957,46 @@ mod motif_find_tests {
     fn test_select_motifs_by_label_variance(){
         let mask = Tensor::from_slice(&[
             1, 1, 1, 1, 1, 1, 1, // channel_0
-            1, 1, 1, 0, 0, 0, 0, // channel_1
-            1, 0, 0, 0, 0, 0, 0, // channel_2
+            0, 0, 0, 0, 0, 0, 0, // channel_1
+            1, 1, 1, 1, 1, 1, 1, // channel_2
         ]).totype(Bool).view([3, 7]);
 
         log::set_max_level(Trace);
         let matches = Tensor::from_slice(&[
-            0, 0, 0, 0, 131, 0, 0, // label_0, channel_0
-            180, 0, 0, 0, 0, 0, 0, // label_0, channel_1
-            114, 0, 0, 0, 0, 0, 0, // label_0, channel_2
+            0,   0,   0,   0,  0,  0,  0, // label_1, channel_0
+            0,   0,   0,   0,  0,  0,  0, // label_1, channel_0
+            11,  12,  13,  14, 15, 16, 17, // label_1, channel_1
 
-            2, 2, 3, 2, 128, 2, 2, // label_1, channel_0
-            180, 0, 0, 0, 0, 0, 0, // label_1, channel_1
-            135, 0, 0, 0, 0, 0, 0, // label_1, channel_2
+            1,   2,   3,   4,  5,  6,  7, // label_1, channel_0
+            1,   2,   3,   4,  5,  6,  7, // label_1, channel_0
+            11,  12,  13,  14, 15, 16, 17, // label_1, channel_1
         ]).totype(Float).view([2, 3, 7]); // 2 labels x 3 channels x 7 motifs
 
-        // let mean =matches.mean_dim(0, false, Kind::Float);
-        //
-        // // Define a high threshold to exclude noisy motifs
-        // let high_threshold = 150;
-        //
-        // // Get the good motifs tensor
-        let good_motifs = select_motifs_by_label_variance(matches, &mask);
-        //
-        // println!("Good Motifs Tensor: {:?}", good_motifs);
 
-        // let matches = Tensor::from_slice(&[0.,2.]).view((2,1)); //.unsqueeze(0).view((1,1));
+        let (good_motifs, motifs_rates) = select_motifs_by_label_variance(&matches, &mask);
+        assert_eq!(
+            Tensor::from_slice(&[
+                // idx_dispersion_mean = 4
+                false, false, false, true , true , true , true,
+                //masked
+                false, false, false, false, false, false, false,
+                // idx_dispersion_mean = 1
+                false, false, false, false, false, false, false
+            ]).view((3,7)),
+            good_motifs
+        );
 
+        let good_rates = from::<Vec<Vec<bool>>>(&good_motifs)
+            .into_iter()
+            .flat_map(|v|v.into_iter())
+            .zip(from::<Vec<Vec<f32>>>(&motifs_rates).into_iter().flat_map(|v|v.into_iter()))
+            .filter(|(b, r)|*b)
+            .map(|(b, r)|r).collect::<Vec<_>>();
 
-        println!("good_motifs=\n{good_motifs}");
+        debug!("motifs_rates=\n{motifs_rates}");
+        debug!("good_rates=\n{good_rates:?}");
+
+        assert_eq!(good_rates, vec![0.5714286, 0.71428573, 0.85714287, 1.0]);
 
     }
 }

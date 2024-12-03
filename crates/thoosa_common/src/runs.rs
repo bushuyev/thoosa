@@ -123,7 +123,7 @@ pub trait RunConfig:Debug {
         HashMap::new()//TODO
     }
 
-    fn from_properties_map(properties: HashMap<String, Val>) -> Self;
+    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self;
 
     fn set_id(&mut self, id:usize) {
         todo!()

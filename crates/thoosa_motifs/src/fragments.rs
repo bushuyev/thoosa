@@ -107,7 +107,7 @@ impl MotifsTensors {
     pub fn new(channels_motifs_slices: Box<Tensor>, channels_motifs_avg_dists: Box<Tensor>, channels_motifs_ids: Box<Tensor>) -> Self {
         Self {
             channels_motifs_slices,
-            channels_motifs_mask: Box::new(channels_motifs_avg_dists.gt(0.)),
+            channels_motifs_mask: Box::new(channels_motifs_avg_dists.ge(0.)),//avg dists padded with f32::MIN
             channels_motifs_avg_dists,
             channels_motifs_ids
         }
@@ -192,7 +192,7 @@ pub fn motifs_to_tensor(
         let mut motifs = motif_slices.into_iter().map(|(motif_id, slices)| {
             let slices_t = Tensor::vstack(slices.into_iter().map(|s| *s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
             debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
-            trace!("motifs_to_tensor: slices_t={slices_t}");
+            trace!("motifs_to_tensor: slices_t=\n{slices_t}");
 
             let motif_avg_dist = average_euclidean_distance(&slices_t);
 
@@ -204,6 +204,7 @@ pub fn motifs_to_tensor(
         }).collect::<Vec<Tensor>>();
 
 
+        //make all motifs same length
         if (motifs.len() as i64) < max_motifs_num {
             debug!("motifs_to_tensor: padding channel={channel} {} to {max_motifs_num} ", motifs.len());
 
@@ -217,17 +218,19 @@ pub fn motifs_to_tensor(
         channels_motifs_slices_t.push(Tensor::vstack(motifs.as_slice()).view((max_motifs_num, window)))
     }
 
+
+
     debug!("motifs_to_tensor: channels_motifs_avg_dists_t={channels_motifs_avg_dists_t:?}");
     debug!("motifs_to_tensor: channel_motif_ids={channel_motif_ids:?}");
 
-    Ok(crate::fragments::MotifsTensors::new(
+    Ok(MotifsTensors::new(
         Box::new(Tensor::vstack(
             channels_motifs_slices_t.as_slice()
         ).view((channels, max_motifs_num, -1))),
 
         Box::new(Tensor::vstack(
              channels_motifs_avg_dists_t.as_slice()
-         ).view((channels, max_motifs_num))),
+         ).view((channels, max_motifs_num)) + 1e-2), //+ 1e-2 if motif avg is 0 (in tests) there will be no matches with tensors where dists close to 0 but not equal
 
         Box::new(Tensor::from_slice(
             channel_motif_ids
@@ -263,7 +266,6 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 
             let channel_t = eeg_t.get(fragment.channel as i64);
             let channel_t = channel_t.view([1, -1]);
-
 
             let fragment_t = channel_t.f_slice(1, Some(fragment.slice_idx), Some(fragment.slice_idx + window), 1)?;
 

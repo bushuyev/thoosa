@@ -261,7 +261,7 @@ impl RunConfig for SayHelloRunConfig {
         self.cs.as_ref()
     }
 
-    fn from_properties_map(properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
 
@@ -1065,7 +1065,7 @@ fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box
     //     return Ok(())
     // }
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(store.lock().list_run_params(run_id)?);
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(run_id, store.lock().list_run_params(run_id)?);
 
     let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorSliceIdx(s.0.into(), s.1)).collect(), executor); //TODO Into for TensorSliceIdx
 
@@ -1098,7 +1098,7 @@ fn run_train_motif_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_
                 .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr)
                 .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>(),
 
-            FindMotifsRunConfig::from_properties_map(store_guard.list_run_params(find_motifs_run_id)?)
+            FindMotifsRunConfig::from_properties_map(find_motifs_run_id, store_guard.list_run_params(find_motifs_run_id)?)
         )
     };
 
@@ -1453,8 +1453,6 @@ mod main_tests {
             ], "test_find_motifs_euc", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         )?;*/
 
-
-
         let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
         debug!("t_0_0.size()={:?}, t_0_1.size()={:?}, t_1_0.size()={:?}, t_1_1.size()={:?}", t_0_0.size(), t_0_1.size(), t_1_0.size(), t_1_1.size());
 
@@ -1644,10 +1642,10 @@ mod main_tests {
         let find_motifs_run_id_0 = save_test_motifs(&resources, Arc::clone(&store), find_motifs_params.clone(), param_set.clone(), "t_0_")?;
         let find_motifs_run_id_1 = save_test_motifs(&resources, Arc::clone(&store), find_motifs_params, param_set, "t_1_")?;
 
-        let motifs_slices:Vec<Vec<(usize, f64)>> = store.lock().list_motifs_slices(find_motifs_run_id_1)?.into_values().map(|v| v.into_iter().map(|s| (s.motif_id, 1.0f64)).collect()).collect();
+        let motifs_slices:Vec<(usize, f64)> = store.lock().list_motifs_slices(find_motifs_run_id_1)?.into_values().flat_map(|v| v.into_iter().map(|s| (s.motif_id, 1.0f64))).collect();
         debug!("test_run_train_on_motifs: find_motifs_run_id_1={find_motifs_run_id_1} motifs_slices={motifs_slices:?}");
         //0 channel
-        let motif_ids = motifs_slices[0].iter().map(|(motif, corr)| *motif).collect::<HashSet<usize>>();
+        let motif_ids = motifs_slices.iter().map(|(motif, corr)| *motif).collect::<HashSet<usize>>();
 
         let motif_selection_run_id=  store.lock().save_tree_run(Some(&[find_motifs_run_id_1]), "test", "test", HashMap::new())?;
         let motif_selection_run_id = store.lock().save_selected_motifs(motif_selection_run_id, motifs_slices)?;
@@ -1878,7 +1876,7 @@ mod main_tests {
 
     #[test]
     fn test_run_step() -> Result<(), ThoosaError> {
-        reset_print_options();
+
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -1895,35 +1893,20 @@ mod main_tests {
         //1 label - sig_1 in channel 1
         //0,1 label - sig_2 in channel 2
         (0..10).for_each(|i|{
-            // if i % 2 == 0 {
                 Tensor::vstack(&[
-                    Tensor::from_slice([sig_0_v.clone(), sig_0_v.clone(),   sig_0_v.clone()].concat().as_slice()),
-                    Tensor::from_slice([saw(n),          saw(n),            saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n),          sig_2_v.clone(),   saw(n)].concat().as_slice()),
+                    Tensor::from_slice([sig_0_v.clone(),        sig_0_v.clone(),   sig_0_v.clone()].concat().as_slice()),
+                    Tensor::from_slice([sig_2_v.clone(),        saw(n),            sig_2_v.clone()].concat().as_slice()),
+                    Tensor::from_slice([saw(n),                 sig_2_v.clone(),   saw(n)].concat().as_slice()),
                 ]).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
-            // } else {
-            //     Tensor::vstack(&[
-            //         Tensor::from_slice([sig_2_v.clone(), sig_0_v.clone(), sig_2_v.clone()].concat().as_slice()),
-            //         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-            //         Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
-            //     ]).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
-            // }
+
         });
 
         (0..10).for_each(|i|{
-            // if i % 2 == 0 {
-                Tensor::vstack(&[
-                    Tensor::from_slice([sig_1_v.clone(), sig_1_v.clone(), sig_1_v.clone()].concat().as_slice()),
-                    Tensor::from_slice([saw(n),          saw(n),          saw(n)].concat().as_slice()),
-                    Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice())
-                ]).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
-            // } else {
-            //     Tensor::vstack(&[
-            //         Tensor::from_slice([sig_1_v.clone(), sig_2_v.clone(), sig_1_v.clone()].concat().as_slice()),
-            //         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
-            //         Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
-            //     ]).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
-            // }
+            Tensor::vstack(&[
+                Tensor::from_slice([sig_1_v.clone(), sig_1_v.clone(), sig_1_v.clone()].concat().as_slice()),
+                Tensor::from_slice([sig_2_v.clone(), saw(n),          sig_2_v.clone()].concat().as_slice()),
+                Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice())
+            ]).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
         });
 
         let x = lin_t(3*n);
@@ -1971,6 +1954,7 @@ mod main_tests {
         let devices = vec![Cpu, Cpu];
 
         log::set_max_level(Trace);
+        reset_print_options();
         let run_ids = run_step(
             None,
             &FindMotifsParams::dummy(1000, 1000, "pure group 4".into(), 10, 0.1, None, None, false),
@@ -1985,7 +1969,6 @@ mod main_tests {
         debug!("test_run_step: run_ids={run_ids:?}");
 
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesParams::new(MotifsBy::RunId(run_ids[0])))?;
-
 
         let run_ids = run_step(
             Some(run_ids),
