@@ -106,7 +106,7 @@ pub trait Store:ResourceStore + Sync + Send {
     fn list_motifs_slices(&mut self, run_id: usize) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
     fn list_run_resources(&mut self, run_id: usize) -> Result<Vec<String>, ThoosaError>;
     fn list_run_params(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError>;
-    fn save_selected_motifs(&mut self, run_id: usize, selected_motifs: Vec<Vec<(usize, f64)>>) -> Result<usize, ThoosaError>;
+    fn save_selected_motifs(&mut self, run_id: usize, selected_motifs: Vec<(usize, f64)>) -> Result<usize, ThoosaError>;
     fn list_input_run_ids(&mut self, ids: &Vec<usize>) -> Result<Vec<(usize, usize)>, ThoosaError>; //corr_run_id, run_id, label
     fn list_output_run_ids(&mut self, input_run_id: usize) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
     fn list_selected_motifs(&mut self, motif_selection_id: usize) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
@@ -1101,40 +1101,34 @@ impl Store for SqlStore {
         Ok(result)
     }
 
-    fn save_selected_motifs(&mut self, run_id: usize, selected_motifs: Vec<Vec<(usize, f64)>>) -> Result<usize, ThoosaError> {
+    fn save_selected_motifs(&mut self, run_id: usize, selected_motifs: Vec<(usize, f64)>) -> Result<usize, ThoosaError> {
         debug!("save_selected_motifs: selected_motifs={:?}", selected_motifs);
 
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
+        for selected_motifs_chunk in selected_motifs.chunks(500) {
+            let (mut q, params) = selected_motifs_chunk
+                .into_iter()
+                .fold(
 
-        let selected_motifs = selected_motifs.into_iter().filter(|selected_motif| selected_motif.len() > 0).collect::<Vec<Vec<(usize, f64)>>>();
-        debug!("save_selected_motifs: filtered selected_motifs={:?}", selected_motifs);
+                (vec!["INSERT INTO selected_motifs (tree_run_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
+                |mut a: (Vec<&str>, Vec<Value>), (motif_id, rate)| {
+                    a.0.push("(?, ?, ?)");
+                    a.0.push(", ");
+                    a.1.push(Value::Integer(run_id as i64));
+                    a.1.push(Value::Integer(*motif_id as i64));
+                    a.1.push(Value::Real(*rate));
 
-        if selected_motifs.len() > 0 {
-            for selected_motifs_chunk in selected_motifs.chunks(500) {
-                let (mut q, params) = selected_motifs_chunk
-                    .into_iter()
-                    .flat_map(|channel_motif_corrs| channel_motif_corrs.into_iter())
-                    .fold(
+                    a
+                });
 
-                    (vec!["INSERT INTO selected_motifs (tree_run_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
-                    |mut a: (Vec<&str>, Vec<Value>), (motif_id, rate)| {
-                        a.0.push("(?, ?, ?)");
-                        a.0.push(", ");
-                        a.1.push(Value::Integer(run_id as i64));
-                        a.1.push(Value::Integer(*motif_id as i64));
-                        a.1.push(Value::Real(*rate));
-
-                        a
-                    });
-
-                q.pop();
+            q.pop();
 
 
-                t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-            }
+            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
         }
+
         t.commit()?;
 
         Ok(run_id)//TODO remove, used in tests only
@@ -1917,10 +1911,10 @@ mod store_tests {
 
         let motif_selection_run_id = store.lock().save_selected_motifs(
             run_id,
-            vec![vec![
+            vec![
                 (motif_slices_444[0].motif_id, 0.1),//motif_id corr
                 (motif_slices_1111[0].motif_id, 0.2)//motif_id corr
-            ]],
+            ],
         )?;
 
         let input_run_ids = store.lock().list_input_run_ids(&vec![motif_selection_run_id])?;

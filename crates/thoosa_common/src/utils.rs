@@ -849,8 +849,8 @@ pub fn reset_print_options(){
         let threshold_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>()*1) as *mut usize;
         let line_width_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>()*3) as *mut usize;
 
-        ptr::write(threshold_ptr, 10000);
-        ptr::write(line_width_ptr, 1000);
+        ptr::write(threshold_ptr, 100_000);
+        ptr::write(line_width_ptr, 10_000);
     }
     tch::display::set_print_options(printer_options);
 }
