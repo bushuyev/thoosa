@@ -11,9 +11,12 @@ use crate::parzen::optimizer::ConfigurationSpace;
 type Label = i64;//TODO
 
 
-pub trait ResourcesConfig:Display {
+pub trait ResourcesConfig {
     type Result;
     fn resource_config_to_keys<S:ResourceStore+ ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError>;
+    fn serialize(&self) -> String {
+        "TODO".to_string()
+    }
 }
 
 pub struct Simple {
@@ -48,6 +51,16 @@ impl ResourcesConfig for Simple {
                 ).collect()
             }
         })
+    }
+}
+
+pub struct  Empty  {}
+
+impl ResourcesConfig for Empty {
+    type Result = ();
+
+    fn resource_config_to_keys<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError> {
+        Ok(())
     }
 }
 
@@ -113,6 +126,7 @@ pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
     fn resource_config(&self) -> R;
     fn common_config(&self) -> CommonConfig;
 }
+
 
 pub trait RunConfig:Debug {
     fn config_space(&self) -> Option<&ConfigurationSpace> {

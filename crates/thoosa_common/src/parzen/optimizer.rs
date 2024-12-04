@@ -704,7 +704,6 @@ pub enum Hyperparameter {
 
 impl Hyperparameter {
 
-
     pub fn random_sample(&self) -> Primitives {
         match self {
             Hyperparameter::UniformFloat { name, lower, upper } => {
@@ -762,6 +761,23 @@ impl TryFrom<&RangeOrValue<i32>> for Hyperparameter {
         }
     }
 }
+
+impl TryFrom<&RangeOrValue<u32>> for Hyperparameter {
+    type Error = ();
+
+    fn try_from(value: &RangeOrValue<u32>) -> Result<Self, Self::Error> {
+        if let RangeOrValue::Range{range, ..} = value {
+            Ok(Hyperparameter::UniformInt {
+                name: "param_0".into(),
+                lower: range.start as i64, //TODO as i64
+                upper: range.end as i64
+            })
+        } else {
+            Err(())
+        }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct ConfigurationSpace {

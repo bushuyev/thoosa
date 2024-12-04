@@ -248,7 +248,7 @@ pub fn find_motifs_by_euc_dist(
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     devices:Vec<Device>
-) -> Result<Vec<usize>, ThoosaError> {
+) -> Result<Option<Vec<FindMotifsRunConfig>>, ThoosaError> {
 
     let resource_keys = resource_config.resource_config_to_keys(store)?;
 
@@ -385,7 +385,7 @@ pub fn find_motifs_by_euc_dist(
         }
     });
 
-    Ok(run_config_ids)//TODO return only successful run_id (window size check)?
+    Ok(None)
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -1245,20 +1245,20 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 }
 
  pub fn select_motifs_for_label(
-    input_run_ids:Option<&Vec<usize>>,
-    run_configs: Vec<SelectMotifsRunConfig>,
-    resource_config: &Labeled,
-    common_config: &(),
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-    devices:Vec<Device>
-)  -> Result<Vec<usize>, ThoosaError>{
+     input_run_ids:Option<&Vec<usize>>,
+     select_motif_run_configs: Vec<SelectMotifsRunConfig>,
+     resource_config: &Labeled,
+     common_config: &(),
+     ws: &Arc<RwLock<Box<dyn Workspace>>>,
+     store: &Arc<Mutex<Box<dyn Store>>>,
+     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+     devices:Vec<Device>
+) -> Result<Option<Vec<SelectMotifsRunConfig>>, ThoosaError>{
 
     let motifs_area = loader.write().get_available_cache_area();
     let labels_resources = resource_config.resource_config_to_keys(store)?;
 
-    debug!("select_motifs_for_label_2: run_configs={run_configs:?}");
+    debug!("select_motifs_for_label_2: select_motif_run_configs={select_motif_run_configs:?}");
     trace!("select_motifs_for_label_2: labels_resources={labels_resources:?}");
 
     let mut find_motifs_run_config_motifs_tensors = input_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
@@ -1363,7 +1363,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                 0,
             )?.totype(Kind::Float);
 
-            for run_config in &run_configs {
+            for run_config in &select_motif_run_configs {
 
                 match run_config.motif_selector {
                     //TODO
@@ -1390,8 +1390,10 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
         } else {
             warn!("no label motif matches for cfg={find_motif_run_cfg:?}");
         }
-        Ok(a)
-    })
+        Ok::<Vec<usize>, ThoosaError>(a)
+    })?;
+
+    Ok(None)
 
 }
 
