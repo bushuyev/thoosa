@@ -972,10 +972,10 @@ impl Store for SqlStore {
                     FROM motifs m \
                     LEFT JOIN slices s on s.motif_id=m.id \
                     LEFT JOIN resources r on s.resource_id=r.id \
-                    WHERE motif_id
+                    WHERE s.motif_id
                 ",
                 // if all_but_in_run_id.is_none() {"=? AND ? IS NOT NULL AND ? IS NOT NULL "} else {"!=? AND run_id=? AND channel_id=?"}, run_id? //TODO
-                if all_but_in_run_id.is_none() { "=? AND ? IS NOT NULL " } else { "!=? AND channel_id=?" },
+                if all_but_in_run_id.is_none() { "=? AND ? IS NOT NULL " } else { "!=? AND m.channel_id=?" },
                 &limit.map(|limit| format!("LIMIT {}", limit)).unwrap_or("".to_owned())
             ].join(""))?;
 
@@ -1431,6 +1431,9 @@ impl SqlStore {
                 t.execute("INSERT INTO run_param_values (run_id, label_id, name, real_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::Int(v) => {
+                t.execute("INSERT INTO run_param_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+            }
+            Val::UInt(v) => {
                 t.execute("INSERT INTO run_param_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::Str(v) => {

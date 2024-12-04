@@ -472,7 +472,7 @@ impl IntoIterator for RangeOrValue<i32> {
                             .step_by(step as usize)
                     )
                 } else {
-                    Box::new(std::iter::empty())
+                    Box::new([range.start, range.end].into_iter())
                 }
             }
             RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
@@ -495,13 +495,15 @@ impl IntoIterator for RangeOrValue<f64> {
                             .map(move |v|<i32 as Into<f64>>::into(v)/<u32 as Into<f64>>::into(mul))
                     )
                 } else {
-                    Box::new(std::iter::empty())
+                    Box::new([range.start, range.end].into_iter())
                 }
             }
             RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
         }
     }
 }
+
+
 
 
 
@@ -780,6 +782,25 @@ pub fn make_combos<V:Clone>(iters: Vec<impl Iterator<Item=V>>) -> Vec<Vec<V>> {
 
     combos
 }
+
+// pub fn make_combos<V: Clone>(mut iters: Vec<impl Iterator<Item=V>>) -> Vec<Vec<V>> {
+//     if let Some(first_iter) = iters.pop() {
+//         let rest_combos = make_combos(iters);
+//         first_iter
+//             .flat_map(|item| {
+//                 rest_combos
+//                     .iter()
+//                     .map(move |combo| {
+//                         let mut new_combo = combo.clone();
+//                         new_combo.push(item.clone());
+//                         new_combo
+//                     })
+//             })
+//             .collect()
+//     } else {
+//         vec![vec![]]
+//     }
+// }
 
 
 #[cfg(test)]

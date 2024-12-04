@@ -23,7 +23,7 @@ use tch::Kind::Float;
 use tch::nn::{ConvConfig, Module, OptimizerConfig, VarStore};
 use futures::FutureExt;
 
-use thoosa_shared::{batch_windows, clc_num_batches, RangeOrValue, ThoosaError};
+use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, ThoosaError};
 use thoosa_shared::parse_key_val;
 use thoosa_shared::val::unprefix_properties;
 use thoosa_shared::val::Val;
@@ -33,6 +33,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::apply_channel_motifs;
 use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
+use crate::runs::{Empty, Params, RunConfig, Simple};
 use crate::train_nets;
 use crate::utils::{DataBatch, train, plot_series, TrainListener, ListenerResponse, pad_to};
 use crate::utils::from;
@@ -738,7 +739,6 @@ pub fn load_all_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, device: &De
         Ok(a)
 
     })
-
 }
 
 
@@ -757,19 +757,135 @@ pub struct TrainMotifsNodesParams {
     #[arg(long, value_parser=parse_range_or_value::<f64>)]//default_value_t = 1.0e-5
     pub lr: RangeOrValue<f64>,
 
-    #[arg(long, value_parser=parse_range_or_value::<i32>)]
-    pub num_layers: RangeOrValue<i32>,
+    #[arg(long, value_parser=parse_range_or_value::<u32>)]
+    pub num_layers: RangeOrValue<u32>,
 
     #[arg(long, default_value_t = 0.2)]
     pub max_loss: f32,
 
-    #[arg(long, default_value_t = 0.05)]
-    pub min_corr: f64,
+}
+
+#[derive(Debug, Clone)]
+pub enum RunConfigOrOptSpace {
+    RunConfig{lr: f64, num_layers: u32},
+    OptSpace(ConfigurationSpace)
+}
+
+#[derive(Clone, Debug)]
+pub struct TrainMotifsNodesRunConfig {
+    id:Option<usize>,
+
+    run_config_or_opt_space:RunConfigOrOptSpace
+
+}
+
+#[derive(Debug)]
+pub struct CommonTrainMotifsNodesRunConfig {
+    pub batch_size: usize,
+    pub cycles: usize,
+    pub max_loss:f32
+}
+
+impl TrainMotifsNodesRunConfig {
+    pub fn from_values(id: Option<usize>, lr: f64, num_layers: u32) -> Self {
+        Self {
+            id,
+            run_config_or_opt_space: RunConfigOrOptSpace::RunConfig {lr, num_layers},
+        }
+    }
+
+    pub fn from_opt_space(id: Option<usize>, config_space:ConfigurationSpace) -> Self {
+        Self {
+            id,
+            run_config_or_opt_space: RunConfigOrOptSpace::OptSpace (config_space),
+        }
+    }
+}
+
+impl RunConfig for TrainMotifsNodesRunConfig{
+
+    fn to_properties_map(&self) -> HashMap<String, Val> {
+        match &self.run_config_or_opt_space {
+            RunConfigOrOptSpace::RunConfig { lr, num_layers } => {
+                 HashMap::from([
+                    ("TrainMotifsNodesRunConfig.lr".into(), (*lr).into()),
+                    ("FindMotifsRunConfig.window".into(), (*num_layers).into()),
+                ])
+            }
+            RunConfigOrOptSpace::OptSpace(opt_config_space) => {
+                HashMap::from([
+                    // ("FindMotifsRunConfig.opt_config_space".into(), opt_config_space), //TODO
+                ])
+            }
+        }
+    }
+
+    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+        let properties = thoosa_shared::val::unprefix_properties("TrainMotifsNodesRunConfig", &properties);
+
+        // TrainMotifsNodesRunConfig {
+        //     id:Some(run_id),
+        //     lr: properties.get("lr").expect("no lr").as_f32().expect("lr as_f32") as f64,
+        //     num_layers: properties.get("num_layers").expect("no num_layers").as_usize().expect("num_layers as usize") as u32,
+        //     opt_config_space: None,
+        // }
+        todo!()
+    }
+
+    fn set_id(&mut self, id: usize) {
+        self.id.replace(id);
+    }
+}
+
+impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> for TrainMotifsNodesParams {
+
+    fn to_run_configs(&self) -> Vec<TrainMotifsNodesRunConfig> {
+
+        if let Some(config_space) = self.to_config_space() {
+
+            debug!("TrainMotifsNodesParams::to_run_configs: config_space={config_space:?}");
+            vec![
+                TrainMotifsNodesRunConfig::from_opt_space(None, config_space)
+            ]
+
+        } else {
+            //TODO avoid collecting
+            let v = make_combos(vec![
+                self.lr.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
+                self.num_layers.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
+            ]).into_iter().map(|mut config_combo:Vec<Val>|{
+                debug!("TrainMotifsNodesParams::to_run_configs: config_combo={config_combo:?} ");
+                let num_layers = config_combo.pop().unwrap().try_into().unwrap();
+                let lr = config_combo.pop().unwrap().try_into().unwrap();
+                TrainMotifsNodesRunConfig::from_values(
+                    None,
+                    lr,
+                    num_layers,
+                )
+            }).collect();
+
+            debug!("TrainMotifsNodesParams::to_run_configs: self.lr={:?} self.num_layers={:?} v={v:?}", self.lr, self.num_layers);
+
+            v
+        }
+    }
+
+    fn resource_config(&self) -> Empty {
+        Empty{}
+    }
+
+    fn common_config(&self) -> CommonTrainMotifsNodesRunConfig {
+        CommonTrainMotifsNodesRunConfig {
+            batch_size: self.batch_size,
+            cycles: self.cycles,
+            max_loss: self.max_loss,
+        }
+    }
 }
 
 impl TrainMotifsNodesParams {
 
-    pub fn dummy(motif_selection_run_id:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<i32>>) ->Self{
+    pub fn dummy(motif_selection_run_id:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>) ->Self{
 
         let lr = lr.into();
 
@@ -790,7 +906,6 @@ impl TrainMotifsNodesParams {
 
             batch_size,
 
-            min_corr: 0.05,
         }
     }
 
@@ -801,8 +916,6 @@ impl TrainMotifsNodesParams {
         ].into_iter()
             .collect::<Option<Vec<Hyperparameter>>>()
             .map(|v|ConfigurationSpace::new(v))
-
-
     }
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1069,7 +1182,50 @@ pub fn final_node(params:&FinalNodeParams) -> Node {
         .end_seq()
 }
 
-pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainMotifsNodesParams, device: Device, node_params: &MotifNodeParams, batch_size: usize) -> Result<(f32, (VarStore, MotifNodeParams)), ThoosaError> {
+struct PlotVecf32 {
+    id:String,
+    data:Vec<f32>
+}
+
+impl PlotVecf32 {
+    pub fn new(id:&str) -> Self {
+        Self {id: id.into(), data: vec![] }
+    }
+
+    fn plot(&self){
+        plot_series(
+            vec![
+                (
+                    self.id.clone(),
+                    BLACK, self.
+                    data.iter().enumerate().map(|(i, v)| (i as f32, *v as f32)).collect::<Vec<(f32, f32)>>()
+                )
+            ],
+            self.id.clone().as_str(),
+            (2000, 1000),
+            &format!("/tmp/plots/motif_train_{}.png", self.id)
+        ).unwrap();
+    }
+}
+
+impl TrainListener for PlotVecf32 {
+    fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
+        self.data.push(loss);
+
+        //TODO move into another listener
+        if self.data.len() > 10 {
+            let len_half = self.data.len() / 2;
+            if self.data[0..len_half].iter().sum::<f32>() < self.data[len_half..].iter().sum::<f32>()  {
+                debug!("TrainListener for PlotVecf32::on_valid_cycle stopping self.data={:?}", self.data);
+                return ListenerResponse::Stop;
+            }
+        }
+
+        ListenerResponse::Nope
+    }
+}
+
+pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainMotifsNodesRunConfig, device: Device, node_params: &MotifNodeParams, batch_size: usize, common_config: &CommonTrainMotifsNodesRunConfig) -> Result<(f32, (VarStore, MotifNodeParams)), ThoosaError> {
     info!("train_on_motif: device={:?} training on {} slices_0 {} slices_1", device, all_slices_0.len(), all_slices_1.len());
 
     assert!(all_slices_0.len() > 0, "all_slices_0 len");
@@ -1107,80 +1263,16 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
         device
     );
 
-    struct PlotVecf32 {
-        id:String,
-        data:Vec<f32>
-    }
-
-    impl PlotVecf32 {
-        pub fn new(id:&str) -> Self {
-            Self {id: id.into(), data: vec![] }
-        }
-
-        fn plot(&self){
-            plot_series(
-                 vec![
-                     (
-                      self.id.clone(),
-                      BLACK, self.
-                         data.iter().enumerate().map(|(i, v)| (i as f32, *v as f32)).collect::<Vec<(f32, f32)>>()
-                     )
-                 ],
-                self.id.clone().as_str(),
-                (2000, 1000),
-                &format!("/tmp/plots/motif_train_{}.png", self.id)
-            ).unwrap();
-        }
-    }
-
-    impl TrainListener for PlotVecf32 {
-        fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
-            self.data.push(loss);
-
-            //TODO move into another listener
-            if self.data.len() > 10 {
-                let len_half = self.data.len() / 2;
-                if self.data[0..len_half].iter().sum::<f32>() < self.data[len_half..].iter().sum::<f32>()  {
-                    debug!("TrainListener for PlotVecf32::on_valid_cycle stopping self.data={:?}", self.data);
-                    return ListenerResponse::Stop;
-                }
-            }
-
-            ListenerResponse::Nope
-        }
-    }
-
-
-    match train_on_motif_params.to_config_space() {
-        None => {
+    match &train_on_motif_params.run_config_or_opt_space {
+        RunConfigOrOptSpace::RunConfig{lr , num_layers } => {
             let vs = VarStore::new(device);
-            let lr = *train_on_motif_params.lr.expect_value()?;
-            let node_params = node_params.with_num_layer(*train_on_motif_params.num_layers.expect_value()? as i64);
+            let node_params = node_params.with_num_layer(*num_layers as i64);
 
             debug!("train_on_motif no opt: train_on_motif_params={train_on_motif_params:?}");
 
             let mut listener = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, train_on_motif_params).as_str());
 
-            let loss = train(
-                &device,
-                &mut batch as &mut dyn DataBatch,
-
-                &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
-
-                |pred: &Tensor, target: &Tensor| {
-                    let pred_y = pred.i((.., 0));
-
-                    let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
-                    debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
-
-                    loss
-                },
-                train_on_motif_params.cycles,
-                nn::AdamW::default().build(&vs, lr).unwrap(),
-                |t| t,
-                Some(&mut listener),
-
-            ).unwrap();
+            let loss = run_train_motif(common_config.cycles, &device, &mut batch, &vs, *lr, &node_params, &mut listener);
 
             listener.plot();
 
@@ -1195,7 +1287,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
             Ok((min_loss, min_var_store.expect("min_var_store")))
         }
-        Some(cs) => {
+        RunConfigOrOptSpace::OptSpace(cs) => {
             let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
                 |params| {
                     let vs = VarStore::new(device);
@@ -1207,27 +1299,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
                     let mut listener = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, params).as_str());
 
-                    let loss = train(
-                        &device,
-                        &mut batch as &mut dyn DataBatch,
-
-                        &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
-
-                        |pred: &Tensor, target: &Tensor| {
-                            let pred_y = pred.i((.., 0));
-
-                            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
-                            debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
-
-                            loss
-                        },
-                        train_on_motif_params.cycles,
-                        nn::AdamW::default().build(&vs, lr).unwrap(),
-                        |t| t,
-                        Some(&mut listener),
-
-                    ).unwrap();
-
+                    let loss = run_train_motif(common_config.cycles, &device, &mut batch, &vs, lr, &node_params, &mut listener);
                     listener.plot();
 
                     debug!("train_on_motif: params={params:?} loss={loss}");
@@ -1238,12 +1310,12 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
                     loss
                 },
-                cs,
+                cs.clone(),
                 100,
                 10,
             );
             let best_config = opt.optimize();
-            println!("train_on_motif: best_config={best_config:?} min_loss={min_loss}");
+            debug!("train_on_motif: best_config={best_config:?} min_loss={min_loss}");
             // let best_config = opt.optimize();
 
 
@@ -1251,6 +1323,26 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
         }
     }
 
+}
+
+fn run_train_motif(cycles: usize, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, lr: f64, node_params: &MotifNodeParams, mut listener: &mut PlotVecf32) -> f32 {
+    train(
+        &device,
+        batch as &mut dyn DataBatch,
+        &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
+        |pred: &Tensor, target: &Tensor| {
+            let pred_y = pred.i((.., 0));
+
+            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+            debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
+
+            loss
+        },
+        cycles,
+        nn::AdamW::default().build(&vs, lr).unwrap(),
+        |t| t,
+        Some(listener),
+    ).unwrap()
 }
 
 pub fn slices_in_all_resources <ResourceId>(slices: Vec<(ResourceId, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {

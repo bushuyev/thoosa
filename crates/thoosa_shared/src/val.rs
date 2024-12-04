@@ -7,9 +7,11 @@ use crate::ThoosaError;
 pub enum Val {
     Real(f64),
     Int(i64),
+    UInt(u32),
     Str(String)
 }
 
+//TODO remove
 impl Val {
 
     pub fn as_usize(&self) -> Result<usize, ThoosaError> {
@@ -33,12 +35,39 @@ impl Val {
         }
     }
 
-
     pub fn as_str(&self) -> Result<String, ThoosaError> {
         match self {
             Self::Str(v)=> Ok(v.clone()),
-            Self::Int(v)=> Ok(format!("{}", v)),
+            Self::Int(v)  => Ok(format!("{}", v)),
+            Self::UInt(v)=> Ok(format!("{}", v)),
             Self::Real(v)=> Ok(format!("{}", v))
+        }
+    }
+}
+
+//TODO
+impl TryFrom<Val> for f64 {
+    type Error = ThoosaError;
+
+    fn try_from(value: Val) -> Result<f64, ThoosaError> {
+        match value {
+            Val::UInt(v)=> v.try_into().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            Val::Real(v)=> v.try_into().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            _ => Err(ThoosaError::new(format!("can't convert {value:?}")))
+        }
+    }
+}
+
+//TODO
+impl TryFrom<Val> for u32 {
+    type Error = ThoosaError;
+
+    fn try_from(value: Val) -> Result<u32, ThoosaError> {
+        match value {
+            Val::UInt(v)=> v.try_into().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            _ => Err(ThoosaError::new(format!("can't convert {value:?}")))
         }
     }
 }
@@ -69,7 +98,14 @@ impl From<i32> for Val {
 
 impl From<u32> for Val {
     fn from(v: u32) -> Self {
-        Val::Int(v as i64)
+        Val::UInt(v)
+    }
+}
+
+
+impl From<&u32> for Val {
+    fn from(v: &u32) -> Self {
+        Val::Int(*v as i64)
     }
 }
 
