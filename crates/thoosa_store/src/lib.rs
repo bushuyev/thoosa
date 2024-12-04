@@ -107,7 +107,7 @@ pub trait Store:ResourceStore + Sync + Send {
     fn list_run_resources(&mut self, run_id: usize) -> Result<Vec<String>, ThoosaError>;
     fn list_run_params(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError>;
     fn save_selected_motifs(&mut self, run_id: usize, selected_motifs: Vec<(usize, f64)>) -> Result<usize, ThoosaError>;
-    fn list_input_run_ids(&mut self, ids: &Vec<usize>) -> Result<Vec<(usize, usize)>, ThoosaError>; //corr_run_id, run_id, label
+    fn list_input_run_ids(&mut self, ids: &[usize]) -> Result<Vec<(usize, usize)>, ThoosaError>; //corr_run_id, run_id, label
     fn list_output_run_ids(&mut self, input_run_id: usize) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
     fn list_selected_motifs(&mut self, motif_selection_id: usize, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
     fn list_motif_slices(&mut self, motif_id: usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<Resource>>), ThoosaError>;
@@ -531,7 +531,7 @@ impl Store for SqlStore {
                 labels_cnt_labels_resources
             };
 
-            debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len()={:?}", labels_cnt_labels_resources.len());
+            debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len={:?}", labels_cnt_labels_resources.len());
             let mut rng = thread_rng();
 
             let labels_ids: HashMap<String, usize> = Self::list_labels(&t)?.into_iter().fold(HashMap::new(), |mut a, v| {
@@ -1134,10 +1134,8 @@ impl Store for SqlStore {
         Ok(run_id)//TODO remove, used in tests only
     }
 
-    /*
-     returns - Vec<id, input_run_id>
-     */
-    fn list_input_run_ids(&mut self, run_ids: &Vec<usize>) -> Result<Vec<(usize, usize)>, ThoosaError> {
+    /// returns - Vec<run_id, input_run_id>
+    fn list_input_run_ids(&mut self, run_ids: &[usize]) -> Result<Vec<(usize, usize)>, ThoosaError> {
         assert!(!run_ids.is_empty());
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -1842,9 +1840,9 @@ mod store_tests {
         ];
 
 
-        let run_id = store.lock().save_tree_run(
+        let find_motifs_run_id = store.lock().save_tree_run(
             None,
-            "test", "",
+            "find_motifs", "",
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
         )?;
 
@@ -1852,7 +1850,7 @@ mod store_tests {
         let slices_store_path = test_dir.join("test_slices_db.db3");
         let mut slices_store = SqlMotifTrackerStore::new(
             &slices_store_path,
-            run_id,
+            find_motifs_run_id,
             7
         ).expect("can't create tmp sotre");
 
@@ -1892,7 +1890,7 @@ mod store_tests {
 
         };
 
-        let motif_slices_map = store.lock().list_motifs_slices(run_id)?;
+        let motif_slices_map = store.lock().list_motifs_slices(find_motifs_run_id)?;
         debug!("motif_slices_map={:?}", motif_slices_map);
 
         // assert_eq!(4, map.len());
@@ -1909,17 +1907,23 @@ mod store_tests {
         debug!("motif_slices_1111={motif_slices_1111:?}");
         debug!("motif_slices_444={motif_slices_444:?}");
 
+        let select_motifs_run_id = store.lock().save_tree_run(
+            Some(&[find_motifs_run_id]),
+            "find_motifs", "",
+            HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
+        )?;
+
         let motif_selection_run_id = store.lock().save_selected_motifs(
-            run_id,
+            find_motifs_run_id,
             vec![
                 (motif_slices_444[0].motif_id, 0.1),//motif_id corr
                 (motif_slices_1111[0].motif_id, 0.2)//motif_id corr
             ],
         )?;
 
-        let input_run_ids = store.lock().list_input_run_ids(&vec![motif_selection_run_id])?;
+        let input_run_ids = store.lock().list_input_run_ids(&[select_motifs_run_id])?;
 
-        assert_eq!([(motif_selection_run_id, run_id)], input_run_ids.as_slice());
+        assert_eq!(vec![(select_motifs_run_id, find_motifs_run_id)], input_run_ids);
 
         let motifs = store.lock().list_selected_motifs(motif_selection_run_id, 20)?;
 
@@ -1940,9 +1944,8 @@ mod store_tests {
         ], slices);
 
 
-
         assert_eq!(7, channel);
-        assert_eq!(run_id, run_id_);
+        assert_eq!(find_motifs_run_id, run_id_);
         //
         // // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize)))?;
         // //

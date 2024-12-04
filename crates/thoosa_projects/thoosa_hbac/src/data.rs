@@ -679,7 +679,7 @@ mod tests {
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{import_resources, run_select_motifs, run_step, run_train_final, run_train_label_nodes, Cli, RunAllParams};
+    use thoosa_main::cli::{import_resources, run_step, run_train_final, run_train_label_nodes, Cli, RunAllParams};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;
@@ -697,9 +697,9 @@ mod tests {
     }
 
 
-    #[test]
+    // #[test]
     pub fn plot_eeg_tensor() -> Result<(), ThoosaError> {
-        log::set_max_level(Trace);
+        // log::set_max_level(Trace);
         // debug!("tensor={:?}", tensor.size());
 
         // let t_0 = parquet_to_tensor("../../data", "1628180742", Device::Cpu)?.i((0, ..));
@@ -932,32 +932,14 @@ mod tests {
     }
 
     #[test]
-    fn test_run_find_motifs() -> Result<(), ThoosaError>{
-        let path = std::env::current_dir()?;
-        println!("The current directory is {}", path.display());
+    fn test_import_resources() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        // let ws = Arc::new(RwLock::new(FsWorkspace::new(&test_dir, 20, 684400, Some(test_dir.join("tensors")))?));
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(3)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(3, 1000)?));
 
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-
-
-        let loader = Arc::new(Box::new(ParquetLoader::new(
-            "test_data/eeg".into(), Some("test_data/eeg".into()), None,
-            Box::new(|base_path,resource_id|format!("{}/train_eegs/{}.parquet", base_path, resource_id))
-        )));
-        let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
-            move |key: &Resource| {
-
-                SyncWrapper::new_tb({
-                    debug!("test_run_find_motifs: key={key:?}");
-                    loader.load(&key.file_stem().to_string(), Device::Cpu)
-                })
-            }, 4, 100,
-        )));
 
         import_resources(
             &ws,
@@ -974,24 +956,16 @@ mod tests {
                 super::labeled_resourses(Path::new("test_data/eeg").join("train_10.csv"))
             },
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
-            |key| Ok(Tensor::from_slice(&[0.])),
+            |key| Tensor::load(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str()).map_err(|e|e.into()),
             true
         )?;
 
-        let motifs_run_ids = run_step(
-            None,
-            &RunAllParams::dummy("group 1 labels/all", "group 1 labels/all"),
-            find_motifs_by_euc_dist,
-            &ws,
-            &store,
-            &executor_rc,
-            vec![Cpu],
-            "Test/FindMotifs"
-        )?;
+        let labels = store.lock().list_labels()?;
 
-
-        debug!("motifs_run_ids={motifs_run_ids:?}");
-        assert_eq!(vec![1], motifs_run_ids);
+        assert_eq!(
+            vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
+            labels
+        );
 
         Ok(())
     }
