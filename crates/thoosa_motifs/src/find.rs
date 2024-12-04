@@ -714,7 +714,7 @@ where
                                         }
                                     }
                                     Err(e) => {
-                                        warn!("got e={e:?}, splitting");
+                                        debug!("got e={e:?}, splitting");
 
                                         split_queue.split(chunk_1_split);
                                     }
@@ -1244,7 +1244,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
     (idx_dispersion.ge_tensor(&idx_dispersion_mean), idx_dispersion/ max)
 }
 
- pub fn select_motifs_for_label_2(
+ pub fn select_motifs_for_label(
     input_run_ids:Option<&Vec<usize>>,
     run_configs: Vec<SelectMotifsRunConfig>,
     resource_config: &Labeled,
@@ -1640,7 +1640,7 @@ mod motif_find_tests {
     use thoosa_shared::*;
 
     use crate::chunks::ChunkOfSlicedTensors;
-    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_for_label_2, select_motifs_by_label_variance, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_for_label, select_motifs_by_label_variance, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
@@ -1921,7 +1921,7 @@ mod motif_find_tests {
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
         
         
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -2041,7 +2041,7 @@ mod motif_find_tests {
     #[test]
     fn test_find_motifs_by_euc_dist_with_smooth_kernel() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
 
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -2147,7 +2147,7 @@ mod motif_find_tests {
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist_diff_sizes.db3"))?));
 
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2236,7 +2236,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2247,7 +2247,7 @@ mod motif_find_tests {
         ];
 
         let tensors = tensor_sizes.into_iter()
-            .map(|s| join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(s as usize)))
+            .map(|size| join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(size as usize)))
             .collect::<Vec<Vec<f32>>>();
 
         let n = 684400i64;
@@ -2278,7 +2278,7 @@ mod motif_find_tests {
             step: 100.into(),
             window: 100.into(),
             resources: ResourceType::List((0..tensors_len).map(|v| format!("{}", v)).collect()),
-            min_tracker_step: Some(10),
+            min_tracker_step: None,
             chunk_size: 3,
             dist_quantile: 0.01,
             keep_slice_matches: false,
@@ -3004,4 +3004,6 @@ mod motif_find_tests {
         assert_eq!(good_rates, vec![0.5714286, 0.71428573, 0.85714287, 1.0]);
 
     }
+
+
 }

@@ -303,24 +303,26 @@ pub trait Workspace:Sync + Send {
 #[derive(Debug)]
 pub struct DummyWorkspace {
     base:PathBuf,
-    channels:usize
+    channels:usize,
+    n:usize
 }
 
 impl DummyWorkspace {
-    pub fn new(channels: usize) ->Result<Box<dyn Workspace>, ThoosaError> {
+    pub fn new(channels: usize, n: usize) ->Result<Box<dyn Workspace>, ThoosaError> {
         let base = Path::new("/tmp").join(cdt_for_dir());
         fs::create_dir_all(&base)?;
 
         Ok(Box::new(Self {
             channels,
-            base
+            base,
+            n
         }))
     }
 }
 
 impl Workspace for DummyWorkspace {
     fn import_tensor(&self,  t:Tensor, import_id: u32, key: &str) -> Result<ResourceStats, ThoosaError>{
-        todo!()
+        Ok(ResourceStats::new(vec![self.channels as u32, self.n as u32]))
     }
 
     fn base_path_as_str(&self) -> String {
@@ -345,7 +347,7 @@ impl Workspace for DummyWorkspace {
 
 
     fn tensors_path(&self) -> &PathBuf {
-        todo!()
+        &self.base
     }
 
     fn tensor_path(&self, key: &Resource) -> PathBuf {
