@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
+use tch::nn::VarStore;
 use thoosa_shared::resource::{Resource, ResourceStore};
 use thoosa_shared::{ResourceType, ThoosaError};
 use thoosa_shared::val::Val;
+use thoosa_store::Store;
 use crate::parzen::optimizer::ConfigurationSpace;
-
+use crate::ws::Workspace;
 
 type Label = i64;//TODO
 
@@ -141,3 +143,10 @@ pub trait RunConfig:Debug {
 
     fn set_id(&mut self, id:usize);
 }
+
+
+pub trait SavableOptResult:Sync+Send{
+    fn value(&self)->f32;
+    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>);
+}
+

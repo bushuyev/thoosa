@@ -2778,6 +2778,7 @@ dependencies = [
  "statrs",
  "tch",
  "thoosa_shared",
+ "thoosa_store",
  "torch-sys",
 ]
 
