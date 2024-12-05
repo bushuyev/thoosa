@@ -156,7 +156,7 @@ impl Workspace for FsWorkspace {
 
         Ok(())
     }
-    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: VarStore, params: MotifNodeParams) -> Result<(), ThoosaError> {
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError> {
         let channel_models = self.motifs_models_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
@@ -164,7 +164,7 @@ impl Workspace for FsWorkspace {
 
         info!("train_on_motif:  motif_id={motif_id} motif_model_run_id={motif_node_params_run_id} saved to {vs_path:?}");
 
-        vs.save(vs_path);
+        vs.save(vs_path)?;
 
         fs::write(
             channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.json")),
@@ -286,7 +286,7 @@ pub trait Workspace:Sync + Send {
     fn labels_models_path(&self) -> &PathBuf;
     fn final_models_path(&self) -> &PathBuf;
     fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError>;
-    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: VarStore, params: MotifNodeParams) -> Result<(), ThoosaError>;
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError>;
     /**
     returns Vec<safetensors_path, config jsonpath>
      */
@@ -378,7 +378,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: VarStore, params: MotifNodeParams) -> Result<(), ThoosaError> {
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError> {
         todo!()
     }
 
@@ -443,14 +443,14 @@ mod tests {
         assert!(ws.store_path().ends_with("main_db.db3"));
 
 
-        ws.save_motif_model(&0, &0, &0, VarStore::new(Cpu), MotifNodeParams::new(10, 1));
-        ws.save_motif_model(&1, &1, &0, VarStore::new(Cpu), MotifNodeParams::new(20, 1));
+        ws.save_motif_model(&0, &0, &0, &VarStore::new(Cpu), &MotifNodeParams::new(10, 1))?;
+        ws.save_motif_model(&1, &1, &0, &VarStore::new(Cpu), &MotifNodeParams::new(20, 1))?;
 
-        ws.save_motif_model(&1, &2, &2, VarStore::new(Cpu), MotifNodeParams::new(30, 1));
-        ws.save_motif_model(&1, &3, &2, VarStore::new(Cpu), MotifNodeParams::new(40, 1));
-        ws.save_motif_model(&1, &4, &2, VarStore::new(Cpu), MotifNodeParams::new(50, 1));
+        ws.save_motif_model(&1, &2, &2, &VarStore::new(Cpu), &MotifNodeParams::new(30, 1))?;
+        ws.save_motif_model(&1, &3, &2, &VarStore::new(Cpu), &MotifNodeParams::new(40, 1))?;
+        ws.save_motif_model(&1, &4, &2, &VarStore::new(Cpu), &MotifNodeParams::new(50, 1))?;
 
-        ws.save_motif_model(&1, &3, &4, VarStore::new(Cpu), MotifNodeParams::new(50, 1));
+        ws.save_motif_model(&1, &3, &4, &VarStore::new(Cpu), &MotifNodeParams::new(50, 1))?;
 
 
         let models = ws.motif_models(&0, 0)?;
@@ -473,10 +473,10 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
 
-        ws.save_label_model(1, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10));
-        ws.save_label_model(2, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10));
-        ws.save_label_model(3, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(30, 4, 3, 10));
-        ws.save_label_model(4, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(40, 4, 3, 10));
+        ws.save_label_model(1, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10))?;
+        ws.save_label_model(2, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10))?;
+        ws.save_label_model(3, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(30, 4, 3, 10))?;
+        ws.save_label_model(4, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(40, 4, 3, 10))?;
 
         let models =  ws.label_models()?;
         for mm in &models{

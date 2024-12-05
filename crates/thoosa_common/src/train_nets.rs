@@ -1250,14 +1250,17 @@ impl TrainListener for PlotVecf32 {
 
 pub struct TrainMotifsNodesRunConfigResult {
     loss:f32,
+    channel:u32,
+    motif_id:usize,
     vs:VarStore,
     params:MotifNodeParams,
     run_config_values:TrainMotifsNodesValues,
+    train_motifs_nodes_run_config_id:usize
 }
 
 impl TrainMotifsNodesRunConfigResult {
-    pub fn new(loss:f32, vs: VarStore, params: MotifNodeParams, run_config_values: TrainMotifsNodesValues) -> Self {
-        Self { loss, vs, params, run_config_values }
+    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, train_motifs_nodes_run_config_id:usize, params: MotifNodeParams, run_config_values: TrainMotifsNodesValues) -> Self {
+        Self { loss, channel, motif_id, vs, params, run_config_values,train_motifs_nodes_run_config_id }
     }
 }
 
@@ -1266,18 +1269,23 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult {
         self.loss
     }
 
-    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) {
-        // let run_config_id = self.store.lock().save_tree_run(
-        //     input_run_ids.as_deref(),
-        //     descr,
-        //     &resources_serialized,
-        //     opt_run_config.to_properties_map()
-        // )?;
+    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<(), ThoosaError> {
+        let run_config_id = store.lock().save_tree_run(
+            Some(&[self.train_motifs_nodes_run_config_id]),
+            "descr",
+            "todo",
+            crate::train_nets::TrainMotifsNodesRunConfig::from_values(Some(self.train_motifs_nodes_run_config_id), self.run_config_values.lr, self.run_config_values.num_layers).to_properties_map()
+        )?;
+
+        ws.read().save_motif_model(&self.channel, &run_config_id, &self.motif_id, &self.vs, &self.params)?;
+
+        Ok(())
     }
 }
 
 pub fn train_motif_nodes(
     motif_id:usize,
+    channel: u32,
     all_slices_0:Vec<Box<Tensor>>,
     all_slices_1:Vec<Box<Tensor>>,
     train_on_motif_params: &TrainMotifsNodesRunConfig,
@@ -1385,8 +1393,8 @@ pub fn train_motif_nodes(
         None => {
             Err(ThoosaError::new("nothing trained"))
         }
-        Some((vars_tore, motif_node_params, train_motifs_nodes_values)) => {
-            Ok(Box::new(TrainMotifsNodesRunConfigResult::new(min_loss, vars_tore, motif_node_params, train_motifs_nodes_values)))
+        Some((var_store, motif_node_params, train_motifs_nodes_values)) => {
+            Ok(Box::new(TrainMotifsNodesRunConfigResult::new(min_loss, channel, motif_id, var_store, train_on_motif_params.id.expect("id"), motif_node_params, train_motifs_nodes_values)))
         }
     }
 }
@@ -2283,7 +2291,7 @@ mod train_tests {
 
         vs_0.freeze();
         debug!("save_test_motif_model: channel={channel} vs_0.variables()={:?}", vs_0.variables());
-        ws.write().save_motif_model(&channel, &motif_node_params_run_id, &motif_id, vs_0, MotifNodeParams::new(100, 1));
+        ws.write().save_motif_model(&channel, &motif_node_params_run_id, &motif_id, &vs_0, &MotifNodeParams::new(100, 1))?;
         Ok(())
     }
 

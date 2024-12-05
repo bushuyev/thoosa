@@ -907,7 +907,7 @@ fn run_train_motif_nodes_on_motif_selection (
         }).collect::<Result<Vec<Vec<Box<dyn SavableOptResult>>>, ThoosaError>>()
 
     })
-    .collect()
+    .collect::<Result<Vec<Vec<Vec<Box<dyn SavableOptResult>>>>, ThoosaError>>()
     .map(|v| v.into_iter()
             .flat_map(|v|v.into_iter()
                 .flat_map(|v|v.into_iter()))
@@ -1129,12 +1129,13 @@ fn run_train_motif_nodes (
 
         train_nets::train_motif_nodes(
             *motif_id,
+            channel as u32,
             all_slices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(), //TODO change ClassTensorsDataBatch to accept refs
             all_slices_1.iter().map(|v|Box::new(v.shallow_clone())).collect(),
             train_on_motif_run_config,
             find_motifs_run_config.window(),
             common_config,
-            device
+            device,
         )/*?;
 
         debug!("train_on_motif: motif_id={motif_id} loss={loss}");

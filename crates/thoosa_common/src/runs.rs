@@ -147,6 +147,6 @@ pub trait RunConfig:Debug {
 
 pub trait SavableOptResult:Sync+Send{
     fn value(&self)->f32;
-    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>);
+    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<(), ThoosaError>;
 }
 
