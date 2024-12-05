@@ -25,14 +25,14 @@ use futures::FutureExt;
 
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, ThoosaError};
 use thoosa_shared::parse_key_val;
-use thoosa_shared::val::unprefix_properties;
+use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_shared::val::Val;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::resource::{Resource, ResourceId};
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::apply_channel_motifs;
-use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
+use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives};
 use crate::runs::{Empty, Params, RunConfig, Simple};
 use crate::train_nets;
 use crate::utils::{DataBatch, train, plot_series, TrainListener, ListenerResponse, pad_to};
@@ -766,8 +766,8 @@ pub struct TrainMotifsNodesParams {
 }
 
 #[derive(Debug, Clone)]
-pub enum RunConfigOrOptSpace {
-    RunConfig{lr: f64, num_layers: u32},
+pub enum ValuesOrOptSpace<V> {
+    Values (V),
     OptSpace(ConfigurationSpace)
 }
 
@@ -775,8 +775,24 @@ pub enum RunConfigOrOptSpace {
 pub struct TrainMotifsNodesRunConfig {
     id:Option<usize>,
 
-    run_config_or_opt_space:RunConfigOrOptSpace
+    run_config_or_opt_space: ValuesOrOptSpace<TrainMotifsNodesValues>
 
+}
+
+#[derive(Debug, Clone)]
+pub struct TrainMotifsNodesValues {
+    lr: f64, num_layers: u32
+}
+
+impl TryFrom<&Vec<Primitives>> for TrainMotifsNodesValues {
+    type Error =ThoosaError;
+
+    fn try_from(value: &Vec<Primitives>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            lr: value[0].try_into()?,
+            num_layers: value[1].try_into()?
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -790,14 +806,14 @@ impl TrainMotifsNodesRunConfig {
     pub fn from_values(id: Option<usize>, lr: f64, num_layers: u32) -> Self {
         Self {
             id,
-            run_config_or_opt_space: RunConfigOrOptSpace::RunConfig {lr, num_layers},
+            run_config_or_opt_space: ValuesOrOptSpace::Values(TrainMotifsNodesValues{lr, num_layers}),
         }
     }
 
     pub fn from_opt_space(id: Option<usize>, config_space:ConfigurationSpace) -> Self {
         Self {
             id,
-            run_config_or_opt_space: RunConfigOrOptSpace::OptSpace (config_space),
+            run_config_or_opt_space: ValuesOrOptSpace::OptSpace (config_space),
         }
     }
 }
@@ -806,30 +822,33 @@ impl RunConfig for TrainMotifsNodesRunConfig{
 
     fn to_properties_map(&self) -> HashMap<String, Val> {
         match &self.run_config_or_opt_space {
-            RunConfigOrOptSpace::RunConfig { lr, num_layers } => {
+            ValuesOrOptSpace::Values(TrainMotifsNodesValues { lr, num_layers }) => {
                  HashMap::from([
                     ("TrainMotifsNodesRunConfig.lr".into(), (*lr).into()),
-                    ("FindMotifsRunConfig.window".into(), (*num_layers).into()),
+                    ("TrainMotifsNodesRunConfig.num_layers".into(), (*num_layers).into()),
                 ])
             }
-            RunConfigOrOptSpace::OptSpace(opt_config_space) => {
-                HashMap::from([
-                    // ("FindMotifsRunConfig.opt_config_space".into(), opt_config_space), //TODO
-                ])
+            ValuesOrOptSpace::OptSpace(opt_config_space) => {
+                prefix_properties("TrainMotifsNodesRunConfig", opt_config_space.into())
             }
         }
     }
 
     fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
-        let properties = thoosa_shared::val::unprefix_properties("TrainMotifsNodesRunConfig", &properties);
+        let properties = unprefix_properties("TrainMotifsNodesRunConfig", &properties);
 
-        // TrainMotifsNodesRunConfig {
-        //     id:Some(run_id),
-        //     lr: properties.get("lr").expect("no lr").as_f32().expect("lr as_f32") as f64,
-        //     num_layers: properties.get("num_layers").expect("no num_layers").as_usize().expect("num_layers as usize") as u32,
-        //     opt_config_space: None,
-        // }
-        todo!()
+        if properties.contains_key("config_space") {
+            todo!()
+        } else {
+            TrainMotifsNodesRunConfig {
+                id:Some(run_id),
+
+                run_config_or_opt_space: ValuesOrOptSpace::Values(TrainMotifsNodesValues{
+                    lr: properties.get("lr").expect("no lr").as_f32().expect("lr as_f32") as f64,
+                    num_layers: properties.get("num_layers").expect("no num_layers").as_usize().expect("num_layers as usize") as u32,
+                }),
+            }
+        }
     }
 
     fn set_id(&mut self, id: usize) {
@@ -926,10 +945,10 @@ pub struct MotifNodeParams {
 
 impl MotifNodeParams {
 
-    pub fn new(num_features: i64) -> Self {
+    pub fn new(num_features: i64, num_layers: i64) -> Self {
         Self {
             num_features,
-            num_layers: 1
+            num_layers
         }
     }
 
@@ -942,7 +961,7 @@ impl MotifNodeParams {
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
 
         MotifNodeParams::new(
-            properties.get("num_features").expect(format !("no num_features in {:?}", properties).as_str()).as_i64().expect("num_features as_i64"),
+            properties.get("num_features").expect(format !("no num_features in {:?}", properties).as_str()).as_i64().expect("num_features as_i64"), 1,
         )
     }
 
@@ -1225,7 +1244,15 @@ impl TrainListener for PlotVecf32 {
     }
 }
 
-pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slices_1:Vec<Box<Tensor>>, train_on_motif_params: &TrainMotifsNodesRunConfig, device: Device, node_params: &MotifNodeParams, batch_size: usize, common_config: &CommonTrainMotifsNodesRunConfig) -> Result<(f32, (VarStore, MotifNodeParams)), ThoosaError> {
+pub fn train_motif_nodes(
+    motif_id:usize,
+    all_slices_0:Vec<Box<Tensor>>,
+    all_slices_1:Vec<Box<Tensor>>,
+    train_on_motif_params: &TrainMotifsNodesRunConfig,
+    motif_width: i64,
+    common_config: &CommonTrainMotifsNodesRunConfig,
+    device: Device
+) -> Result<(f32, (VarStore, MotifNodeParams, TrainMotifsNodesValues)), ThoosaError> {
     info!("train_on_motif: device={:?} training on {} slices_0 {} slices_1", device, all_slices_0.len(), all_slices_1.len());
 
     assert!(all_slices_0.len() > 0, "all_slices_0 len");
@@ -1252,21 +1279,22 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
 
     let mut min_loss = f32::MAX;
-    let mut min_var_store : Option<(VarStore, MotifNodeParams)> = None;
+    let mut min_var_store : Option<(VarStore, MotifNodeParams, TrainMotifsNodesValues)> = None;
     let mut batch = TensorsDataBatch::new(
         vec![
             all_slices_0,
             all_slices_1
         ],
-        batch_size,
+        common_config.batch_size,
         0.8,
         device
     );
 
     match &train_on_motif_params.run_config_or_opt_space {
-        RunConfigOrOptSpace::RunConfig{lr , num_layers } => {
+        ValuesOrOptSpace::Values(TrainMotifsNodesValues {lr , num_layers }) => {
             let vs = VarStore::new(device);
-            let node_params = node_params.with_num_layer(*num_layers as i64);
+            let node_params = MotifNodeParams::new(motif_width, *num_layers as i64);
+            // let node_params = node_params.with_num_layer(*num_layers as i64);
 
             debug!("train_on_motif no opt: train_on_motif_params={train_on_motif_params:?}");
 
@@ -1278,7 +1306,7 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
             if loss < min_loss {
                 min_loss = loss;
-                min_var_store.replace((vs, node_params));
+                min_var_store.replace((vs, node_params, TrainMotifsNodesValues {lr:*lr , num_layers:*num_layers }));
             }
 
             println!("train_on_motif:  min_loss={min_loss}");
@@ -1287,25 +1315,26 @@ pub fn train_motif_nodes(motif_id:usize, all_slices_0:Vec<Box<Tensor>>, all_slic
 
             Ok((min_loss, min_var_store.expect("min_var_store")))
         }
-        RunConfigOrOptSpace::OptSpace(cs) => {
+
+        ValuesOrOptSpace::OptSpace(cs) => {
             let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
                 |params| {
-                    let vs = VarStore::new(device);
-                    // let lr = 1. / 10_f64.powf(params[0].into());
-                    let lr = params[0].into();
-                    let node_params = node_params.with_num_layer(params[1].into());
+                    let run_config_values:TrainMotifsNodesValues = params.try_into().expect("can't convert params into TrainMotifsNodesValues");//TODO handle
+
+                    let node_params = MotifNodeParams::new(motif_width, run_config_values.num_layers as i64);
 
                     debug!("train_on_motif in opt: params={params:?}");
 
                     let mut listener = PlotVecf32::new(format!("_motif_{}_params_{:?}", motif_id, params).as_str());
+                    let vs = VarStore::new(device);
 
-                    let loss = run_train_motif(common_config.cycles, &device, &mut batch, &vs, lr, &node_params, &mut listener);
+                    let loss = run_train_motif(common_config.cycles, &device, &mut batch, &vs, run_config_values.lr, &node_params, &mut listener);
                     listener.plot();
 
                     debug!("train_on_motif: params={params:?} loss={loss}");
                     if loss < min_loss {
                         min_loss = loss;
-                        min_var_store.replace((vs, node_params));
+                        min_var_store.replace((vs, node_params, run_config_values));
                     }
 
                     loss
@@ -1747,8 +1776,8 @@ mod train_tests {
         let t = make_test_tensor(input_n);
 
         let motif_nets = vec![
-            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 1. )?)), (MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 2. )?))], //channel 0 nets
-            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 10.)?))] //channel 1 nets
+            vec![(MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 1. )?)), (MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 2. )?))], //channel 0 nets
+            vec![(MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 10.)?))] //channel 1 nets
         ];
 
         let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0);
@@ -1800,8 +1829,8 @@ mod train_tests {
         let motif_batch_size = 13;
 
         let motif_nets = Arc::new(RwLock::new(vec![
-            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 1.)?)), (MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 1.)?))], //channel 0 nets
-            vec![(MotifNodeParams::new(motif_width), SyncModule::new(test_net(motif_width, 10.)?))], //channel 1 nets
+            vec![(MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 1.)?)), (MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 1.)?))], //channel 0 nets
+            vec![(MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 10.)?))], //channel 1 nets
             vec![]
         ]));
 
@@ -1900,7 +1929,7 @@ mod train_tests {
 
         super::train_label_nodes(
             &ws,
-            &MotifNodeParams::new(100), //TODO take window/num_features from saved motif model or motif run id
+            &MotifNodeParams::new(100, 1), //TODO take window/num_features from saved motif model or motif run id
             &LabelNodeParams::new(3, 4, clc_num_batches(1000, 100, 100, 7) as i64, 7), //max motif nets - 2 for seizure
             &params,
             vec![
@@ -2204,7 +2233,7 @@ mod train_tests {
     fn save_test_motif_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, channel: &str, motif_id: usize, window: i64, motif_node_params_run_id: usize) -> Result<(), ThoosaError> {
 
         let mut vs_0 = nn::VarStore::new(Device::Cpu);
-        let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window)).build_tch_module(&vs_0.root())?;
+        let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window, 1)).build_tch_module(&vs_0.root())?;
 
         let test_motif_model = SeqBuilder::new(100)
             .linear_s_with_conf(1, LinearConfig {
@@ -2217,7 +2246,7 @@ mod train_tests {
 
         vs_0.freeze();
         debug!("save_test_motif_model: channel={channel} vs_0.variables()={:?}", vs_0.variables());
-        ws.write().save_motif_model(&channel, &motif_node_params_run_id, &motif_id, vs_0, MotifNodeParams::new(100));
+        ws.write().save_motif_model(&channel, &motif_node_params_run_id, &motif_id, vs_0, MotifNodeParams::new(100, 1));
         Ok(())
     }
 

@@ -6,7 +6,8 @@ use log::{debug, trace};
 use rand::distributions::Uniform;
 use rand::Rng;
 use tch::{IndexOp, Tensor};
-use thoosa_shared::RangeOrValue;
+use thoosa_shared::{RangeOrValue, ThoosaError};
+use thoosa_shared::val::Val;
 use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
@@ -16,6 +17,7 @@ use super::opt_rng::opt_rnd;
 
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
 
+//TODO merge with shared::Val ?
 #[derive(Debug, Copy, Clone, PartialOrd, PartialEq)]
 pub enum Primitives {
     Integer(i32),
@@ -36,6 +38,13 @@ impl From<i32> for Primitives {
     }
 }
 
+impl From<u32> for Primitives {
+    fn from(value: u32) -> Self {
+        Primitives::Integer(value.try_into().expect(format!("can't fit u32 {value} into i32").as_str()))
+    }
+}
+
+
 impl From<i64> for Primitives {
     fn from(value: i64) -> Self {
         Primitives::Long(value)
@@ -53,7 +62,7 @@ impl From<Primitives> for f32 {
                 v as f32
             }
             Primitives::Float(v) => {
-                v as f32
+                v
             }
             Primitives::Double(v) => {
                 v as f32
@@ -92,7 +101,7 @@ impl From<&Primitives> for f32 {
                 *v as f32
             }
             Primitives::Float(v) => {
-                *v as f32
+                *v
             }
             Primitives::Double(v) => {
                 *v as f32
@@ -108,7 +117,7 @@ impl From<Primitives> for i64 {
                 v as i64
             }
             Primitives::Long(v) => {
-                v as i64
+                v
             }
             Primitives::Float(v) => {
                 v as i64
@@ -120,6 +129,26 @@ impl From<Primitives> for i64 {
     }
 }
 
+impl TryFrom<Primitives> for u32 {
+
+    type Error = ThoosaError;
+
+    fn try_from(value: Primitives) -> Result<Self, Self::Error> {
+        match value {
+            Primitives::Integer(v) => {
+                v.try_into().map_err(|e|ThoosaError::from(e))
+            }
+            Primitives::Long(v) => {
+                v.try_into().map_err(|e|ThoosaError::from(e))
+            }
+            _=>{
+                Err(ThoosaError::new("can't convert non-integer to float "))
+            }
+        }
+    }
+}
+
+
 //TODO remove
 impl From<Vec<Primitives>> for ArgmTensor {
     fn from(vals: Vec<Primitives>) -> Self {
@@ -127,11 +156,6 @@ impl From<Vec<Primitives>> for ArgmTensor {
     }
 }
 
-// impl From<&Vec<Primitives>> for &ArgmTensor {
-//     fn from(vals: &Vec<Primitives>) -> Self {
-//         &ArgmTensor(Tensor::from_slice(vals.into_iter().map(|v|(*v).into()).collect::<Vec<f64>>().as_slice()))
-//     }
-// }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -782,6 +806,32 @@ impl TryFrom<&RangeOrValue<u32>> for Hyperparameter {
 #[derive(Debug, Clone)]
 pub struct ConfigurationSpace {
     hyperparameters:Vec<Hyperparameter>
+}
+
+impl From<&ConfigurationSpace> for HashMap<String, Val> {
+    fn from(value: &ConfigurationSpace) -> Self {
+        let mut map = HashMap::new();
+        map.insert("config_space".into(), Val::Int(1));
+
+        for hp in &value.hyperparameters {
+            match hp {
+                Hyperparameter::UniformFloat { name, lower, upper } => {
+                    map.insert(format!("lower_{}", name), (*lower).into());
+                    map.insert(format!("upper_{}", name), (*upper).into());
+                }
+                Hyperparameter::UniformInt { name, lower, upper } => {
+                    map.insert(format!("lower_{}", name), (*lower).into());
+                    map.insert(format!("upper_{}", name), (*upper).into());
+                }
+                Hyperparameter::Categorical { name, values } => {
+                    for (i, val) in values.iter().enumerate() {
+                        map.insert(format!("{i}_{}", name), val.clone().into());
+                    }
+                }
+            }
+        }
+        map
+    }
 }
 
 #[allow(dead_code)]

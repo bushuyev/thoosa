@@ -834,11 +834,16 @@ impl<'a> SimpleMotifTracker<'a> {
 
                 let last = self.last.take();
                 if let Some(last) = last {
-                    if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
+                    if last.2 > dist {
+                        self.last.replace((i_0, i_1, dist));
+
+                    } else if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
                         self.motifs.push(last);
+                        self.last.replace((i_0, i_1, dist));
                     }
+                } else {
+                    self.last.replace((i_0, i_1, dist));
                 }
-                self.last.replace((i_0, i_1, dist));
             }
         }
 
@@ -1993,10 +1998,10 @@ mod motif_find_tests {
             &store,
             &executor_rc,
             vec![Cpu]
-        )?;
+        )?.expect("run_ids");
 
         // debug!("{:?}", store.lock().list_run_resources(1)?);
-        let slices = store.lock().list_motifs_slices(run_ids[0])?;
+        let slices = store.lock().list_motifs_slices(run_ids[0].id.unwrap())?;
 
         debug!("0: {:?}", slices.get(&resources[0]));
         debug!("1: {:?}", slices.get(&resources[1]));
@@ -2118,13 +2123,13 @@ mod motif_find_tests {
             &store,
             &executor_rc,
             vec![Cpu]
-        )?;
+        )?.expect("run_ids");
 
 
         debug!("run_ids={:?}", run_ids);
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
-        let slices = store.lock().list_motifs_slices(run_ids[0])?;
+        let slices = store.lock().list_motifs_slices(run_ids[0].id.unwrap())?;
         debug!("0: {:?}", slices.get(&resources[0]));
         debug!("1: {:?}", slices.get(&resources[1]));
         debug!("2: {:?}", slices.get(&resources[2]));
