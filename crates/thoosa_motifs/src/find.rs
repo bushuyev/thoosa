@@ -50,7 +50,7 @@ use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, Simple};
+use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
@@ -248,7 +248,7 @@ pub fn find_motifs_by_euc_dist(
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     devices:Vec<Device>
-) -> Result<Option<Vec<FindMotifsRunConfig>>, ThoosaError> {
+) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
 
     let resource_keys = resource_config.resource_config_to_keys(store)?;
 
@@ -1258,7 +1258,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
      store: &Arc<Mutex<Box<dyn Store>>>,
      loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
      devices:Vec<Device>
-) -> Result<Option<Vec<SelectMotifsRunConfig>>, ThoosaError>{
+) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError>{
 
     let motifs_area = loader.write().get_available_cache_area();
     let labels_resources = resource_config.resource_config_to_keys(store)?;

@@ -113,6 +113,8 @@ pub struct ThoosaError {//TODO enum
     is_oom:bool
 }
 
+unsafe impl Send for ThoosaError {}
+
 impl ThoosaError {
 
     pub fn new(msg:impl Into<String> + Display) -> Self {

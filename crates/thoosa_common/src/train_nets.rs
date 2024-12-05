@@ -29,11 +29,12 @@ use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_shared::val::Val;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::resource::{Resource, ResourceId};
+use thoosa_store::Store;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::apply_channel_motifs;
 use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives};
-use crate::runs::{Empty, Params, RunConfig, Simple};
+use crate::runs::{Empty, Params, RunConfig, SavableOptResult, Simple};
 use crate::train_nets;
 use crate::utils::{DataBatch, train, plot_series, TrainListener, ListenerResponse, pad_to};
 use crate::utils::from;
@@ -779,6 +780,8 @@ pub struct TrainMotifsNodesRunConfig {
 
 }
 
+unsafe impl Sync for TrainMotifsNodesRunConfig{}
+
 #[derive(Debug, Clone)]
 pub struct TrainMotifsNodesValues {
     lr: f64, num_layers: u32
@@ -1244,6 +1247,35 @@ impl TrainListener for PlotVecf32 {
     }
 }
 
+
+pub struct TrainMotifsNodesRunConfigResult {
+    loss:f32,
+    vs:VarStore,
+    params:MotifNodeParams,
+    run_config_values:TrainMotifsNodesValues,
+}
+
+impl TrainMotifsNodesRunConfigResult {
+    pub fn new(loss:f32, vs: VarStore, params: MotifNodeParams, run_config_values: TrainMotifsNodesValues) -> Self {
+        Self { loss, vs, params, run_config_values }
+    }
+}
+
+impl SavableOptResult for TrainMotifsNodesRunConfigResult {
+    fn value(&self) -> f32 {
+        self.loss
+    }
+
+    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) {
+        // let run_config_id = self.store.lock().save_tree_run(
+        //     input_run_ids.as_deref(),
+        //     descr,
+        //     &resources_serialized,
+        //     opt_run_config.to_properties_map()
+        // )?;
+    }
+}
+
 pub fn train_motif_nodes(
     motif_id:usize,
     all_slices_0:Vec<Box<Tensor>>,
@@ -1252,7 +1284,7 @@ pub fn train_motif_nodes(
     motif_width: i64,
     common_config: &CommonTrainMotifsNodesRunConfig,
     device: Device
-) -> Result<(f32, (VarStore, MotifNodeParams, TrainMotifsNodesValues)), ThoosaError> {
+) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
     info!("train_on_motif: device={:?} training on {} slices_0 {} slices_1", device, all_slices_0.len(), all_slices_1.len());
 
     assert!(all_slices_0.len() > 0, "all_slices_0 len");
@@ -1313,7 +1345,7 @@ pub fn train_motif_nodes(
             // let best_config = opt.optimize();
 
 
-            Ok((min_loss, min_var_store.expect("min_var_store")))
+
         }
 
         ValuesOrOptSpace::OptSpace(cs) => {
@@ -1346,12 +1378,17 @@ pub fn train_motif_nodes(
             let best_config = opt.optimize();
             debug!("train_on_motif: best_config={best_config:?} min_loss={min_loss}");
             // let best_config = opt.optimize();
+        }
+    };
 
-
-            Ok((min_loss, min_var_store.expect("min_var_store")))
+    match min_var_store{
+        None => {
+            Err(ThoosaError::new("nothing trained"))
+        }
+        Some((vars_tore, motif_node_params, train_motifs_nodes_values)) => {
+            Ok(Box::new(TrainMotifsNodesRunConfigResult::new(min_loss, vars_tore, motif_node_params, train_motifs_nodes_values)))
         }
     }
-
 }
 
 fn run_train_motif(cycles: usize, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, lr: f64, node_params: &MotifNodeParams, mut listener: &mut PlotVecf32) -> f32 {
