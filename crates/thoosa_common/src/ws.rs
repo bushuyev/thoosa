@@ -443,14 +443,14 @@ mod tests {
         assert!(ws.store_path().ends_with("main_db.db3"));
 
 
-        ws.save_motif_model(&0, &0, &0, VarStore::new(Cpu), MotifNodeParams::new(10));
-        ws.save_motif_model(&1, &1, &0, VarStore::new(Cpu), MotifNodeParams::new(20));
+        ws.save_motif_model(&0, &0, &0, VarStore::new(Cpu), MotifNodeParams::new(10, 1));
+        ws.save_motif_model(&1, &1, &0, VarStore::new(Cpu), MotifNodeParams::new(20, 1));
 
-        ws.save_motif_model(&1, &2, &2, VarStore::new(Cpu), MotifNodeParams::new(30));
-        ws.save_motif_model(&1, &3, &2, VarStore::new(Cpu), MotifNodeParams::new(40));
-        ws.save_motif_model(&1, &4, &2, VarStore::new(Cpu), MotifNodeParams::new(50));
+        ws.save_motif_model(&1, &2, &2, VarStore::new(Cpu), MotifNodeParams::new(30, 1));
+        ws.save_motif_model(&1, &3, &2, VarStore::new(Cpu), MotifNodeParams::new(40, 1));
+        ws.save_motif_model(&1, &4, &2, VarStore::new(Cpu), MotifNodeParams::new(50, 1));
 
-        ws.save_motif_model(&1, &3, &4, VarStore::new(Cpu), MotifNodeParams::new(50));
+        ws.save_motif_model(&1, &3, &4, VarStore::new(Cpu), MotifNodeParams::new(50, 1));
 
 
         let models = ws.motif_models(&0, 0)?;

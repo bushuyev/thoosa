@@ -696,7 +696,7 @@ mod tch_tests {
         let step = (motif_width / 4) as usize;
 
 
-        let nets = vec![(MotifNodeParams::new(motif_width), SyncModule::new(net_0)), (MotifNodeParams::new(motif_width), SyncModule::new(net_1))];
+        let nets = vec![(MotifNodeParams::new(motif_width, 1), SyncModule::new(net_0)), (MotifNodeParams::new(motif_width, 1), SyncModule::new(net_1))];
 
 
         let tensors = vec![motif_0_t, motif_1_t];

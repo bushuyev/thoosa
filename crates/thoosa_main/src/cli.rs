@@ -763,7 +763,8 @@ pub fn run_train_label_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<
             let motif_selection_run_ids = store_in_threads.lock().get_input_run_ids(*motif_node_params_selection_run_id).expect("get_input_run_id(*motif_node_selection_run_id)"); //TODO format err
             assert_eq!(motif_selection_run_ids.len(), 1);
 
-            let channels_motifs_models = store_in_threads.lock().list_selected_motifs(motif_selection_run_ids[0], 20).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+            let channels_motifs_models = store_in_threads.lock().list_selected_motifs(motif_selection_run_ids[0], 20).expect("list_selected_motifs")
+                .into_iter().enumerate().flat_map(
 
                 |(channel, channels_motifs)| {
                     let ws_moved = Arc::clone(&ws);
@@ -781,6 +782,7 @@ pub fn run_train_label_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<
             let motif_node_params_run_ids = store_in_threads.lock().list_output_run_ids(*motif_node_params_selection_run_id).expect("list_output_run_ids")[0]; //TODO motif_node_params_run_ids len > 1
 
             let motif_node_params = {
+                //TODO "motifs_node" - removed from tain_motif_nodes, to be replaced with load_motif_models_ws - from ws file
                 MotifNodeParams::from_properties_map(unprefix_properties("motifs_node", &store_in_threads.lock().list_run_params(motif_node_params_run_ids).expect("list_run_params")))
             };
 
@@ -850,9 +852,10 @@ fn run_train_motif_nodes_on_motif_selection (
     train_motifs_nodes_run_configs: Vec<TrainMotifsNodesRunConfig>,
     resource_config: &Empty,
     common_config: &CommonTrainMotifsNodesRunConfig,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>,
-    executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, devices: Vec<Device>) -> Result<Option<Vec<TrainMotifsNodesRunConfig>>, ThoosaError> {
-    // let motif_selection_run_ids = &train_on_motif_params.motif_selection_run_id;
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, devices: Vec<Device>
+) -> Result<Option<Vec<TrainMotifsNodesRunConfig>>, ThoosaError> {
 
     let motif_selection_run_ids: &Vec<usize> =  motif_selection_run_ids.expect("motif_selection_run_ids");
 
@@ -872,21 +875,34 @@ fn run_train_motif_nodes_on_motif_selection (
     let run_ids_for_threads = Arc::clone(&run_ids);
 
     devices_motif_selection.into_par_iter().for_each( |(device_i, motif_selection_run_ids_chunk)| {
+
         for (motif_selection_run_id) in motif_selection_run_ids_chunk {
+
+            let find_motifs_run_ids = store.lock().get_input_run_ids(*motif_selection_run_id).expect("motif_selection_id failed");
+            assert_eq!(find_motifs_run_ids.len(), 1);//selection has single input
+            let find_motifs_run_id = find_motifs_run_ids[0];
+
+            let motifs = store.lock().list_selected_motifs(*motif_selection_run_id, ws.read().channels() as u32).expect("list_selected_motifs")
+                .into_iter()
+                .flat_map(|channel_motifs| channel_motifs.into_iter())
+                .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>();
+
+            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(find_motifs_run_id, store.lock().list_run_params(find_motifs_run_id).expect("list_run_params"));
+
             for train_motifs_nodes_run_config in &train_motifs_nodes_run_configs {
-                let find_motifs_run_ids = store.lock().get_input_run_ids(*motif_selection_run_id).expect("motif_selection_id failed");
-                assert_eq!(find_motifs_run_ids.len(), 1);
+
                 debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
 
                 let motif_node_params_selection_run_id = run_train_motif_nodes(
-                    ws,
+                    &motifs,
                     find_motifs_run_ids[0],
-                    *motif_selection_run_id,
-                    Arc::clone(store),
-                    device_i,
                     train_motifs_nodes_run_config,
-                    executor,
-                    common_config
+                    common_config,
+                    &find_motifs_run_config,
+                    ws,
+                    Arc::clone(store),
+                    loader,
+                    device_i
                 ).expect("train_on_motifs");
 
                 run_ids_for_threads.lock().push(motif_node_params_selection_run_id);
@@ -894,7 +910,6 @@ fn run_train_motif_nodes_on_motif_selection (
                 info!("TrainOnMotifs: motif_node_params_selection_run_id={motif_node_params_selection_run_id} done ");
             }
         }
-
 
     });
 
@@ -1055,125 +1070,85 @@ fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box
     Ok(())
 }
 
-fn run_train_motif_nodes (ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_id: usize, motif_selection_run_id: usize, store:Arc<Mutex<Box<dyn Store>>>, device: Device, train_on_motif_params: &TrainMotifsNodesRunConfig, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, common_config: &CommonTrainMotifsNodesRunConfig) -> Result<usize, ThoosaError> {
-    debug!("train_on_motifs: device={device:?}, find_motifs_run_id={find_motifs_run_id} motif_selection_run_id={motif_selection_run_id:?}");
-
-    let (motifs, params) = {
-        let mut store_guard = store.lock();
-
-        (
-            store_guard.list_selected_motifs(motif_selection_run_id, ws.read().channels() as u32)?
-                .into_iter()
-                .flat_map(|channel_motifs| channel_motifs.into_iter())
-                // .filter(|(_motif_id, corr)| *corr > train_on_motif_params.min_corr)
-                .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>(),
-
-            FindMotifsRunConfig::from_properties_map(find_motifs_run_id, store_guard.list_run_params(find_motifs_run_id)?)
-        )
-    };
-
-    debug!("train_on_motifs: motifs={motifs:?}");
-
-    // let filter_and_slice:FilterAndSlicer = params.into();
+fn run_train_motif_nodes (
+    motifs:&Vec<usize>,
+    find_motifs_run_id: usize,
+    train_on_motif_run_config: &TrainMotifsNodesRunConfig,
+    common_config: &CommonTrainMotifsNodesRunConfig,
+    find_motifs_run_config:&FindMotifsRunConfig,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store:Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    device: Device
+) -> Result<usize, ThoosaError> {
+    debug!("train_on_motifs: device={device:?}, find_motifs_run_id={find_motifs_run_id}");
 
 
-    let (motif_node_params_run_ids, motif_node_params_selection_run_id) = {
-        let mut store_guard = store.lock();
-
-        let motif_node_selection_run_id =  store_guard
-            //TODO motif_node_selection params - max error
-            .save_tree_run(Some(&[motif_selection_run_id]), "motifs_node", "".into(), prefix_properties("motifs_node", HashMap::new()))
-            .expect("motif_node_selection_run_id");
-
-        ((0..1).fold((vec![]), |mut a, _| {//TODO expand grid search params
-            let node_params = MotifNodeParams::new(params.window());
-
-            a.push(
-                (
-                 store_guard
-                     .save_tree_run(Some(&[motif_node_selection_run_id]), "todo", "".into(), prefix_properties("motifs_node", node_params.to_properties_map()))
-                     .expect("save_tree_run"),
-                 node_params
-                )
-            );
-
-            a
-        }), motif_node_selection_run_id)
-
-    };
-
-
-    for motif_id in motifs.iter() {
-        let (all_sices_0, all_sices_1, channel) = {
+    for motif_id in motifs {
+        let (all_slices_0, all_slices_1, channel) = {
             let mut store_guard = store.lock();
 
             let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, None, None)?;
 
             assert_eq!(run_id, find_motifs_run_id);
 
-            //TODO move load to DataBatch to avoid preload?
             debug!("train_on_motif: 1. channel={}, find_motifs_run_id={}, slices={}", channel, find_motifs_run_id, slices.len());
 
-            let all_sices_1 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, params.window(), slices, executor)
+            let all_slices_1 = train_nets::slices_in_all_resources(
+                load_motif_slices(channel, find_motifs_run_config.window(), slices, loader)
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
-            let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, Some(all_sices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
+            let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
 
             debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
-            let all_sices_0 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, params.window(), slices, executor)
+            let all_slices_0 = train_nets::slices_in_all_resources(
+                load_motif_slices(channel, find_motifs_run_config.window(), slices, loader)
             );
 
             debug!("train_on_motif: 0. run_id={}, done", run_id);
 
-            (all_sices_0, all_sices_1, channel)
+            (all_slices_0, all_slices_1, channel)
         };
 
-        assert!(all_sices_1.len() > 0, "all_sices_1.len(), motif={motif_id}");
-        assert!(all_sices_0.len() > 0, "all_sices_0.len(), motif={motif_id}");
+        assert!(all_slices_1.len() > 0, "all_slices_1.len(), motif={motif_id}");
+        assert!(all_slices_0.len() > 0, "all_slices_0.len(), motif={motif_id}");
 
         let batch_size = common_config.batch_size; //TODO, purge small motifs
-        if all_sices_1.len() < batch_size {
-            warn!("num of motif_id {motif_id} all_sices_1.len()={} in channel {channel} is less than {batch_size}", all_sices_1.len());
+        if all_slices_1.len() < batch_size {
+            warn!("num of motif_id {motif_id} all_slices_1.len()={} in channel {channel} is less than {batch_size}", all_slices_1.len());
             continue;
         }
 
-        if all_sices_0.len() < batch_size {
-            warn!("num of not motif_id {motif_id} all_sices_0.len()={} in channel {channel} is less than {batch_size}", all_sices_0.len());
+        if all_slices_0.len() < batch_size {
+            warn!("num of not motif_id {motif_id} all_slices_0.len()={} in channel {channel} is less than {batch_size}", all_slices_0.len());
             continue;
         }
 
-        debug!("train_on_motif:  all_sices_0.len()={:?}, all_sices_0[0].size()={:?}, all_sices_1.len()={:?}, all_sices_1[0].size()={:?}", all_sices_0.len(), all_sices_0[0].size(), all_sices_1.len(), all_sices_1[0].size());
+        debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
 
 
-        for (motif_node_params_run_id, node_params) in &motif_node_params_run_ids {
-            debug!("train_on_motif: node_params={node_params:?}");
+        let (loss,  (vs, params, run_config_values)) = train_nets::train_motif_nodes(
+            *motif_id,
+            all_slices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(), //TODO change ClassTensorsDataBatch to accept refs
+            all_slices_1.iter().map(|v|Box::new(v.shallow_clone())).collect(),
+            train_on_motif_run_config,
+            find_motifs_run_config.window(),
+            common_config,
+            device
+        )?;
 
-            let (loss,  (vs, params)) = train_nets::train_motif_nodes(
-                *motif_id,
-                all_sices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(), //TODO change ClassTensorsDataBatch to accept refs
-                all_sices_1.iter().map(|v|Box::new(v.shallow_clone())).collect(),
-                train_on_motif_params,
-                device,
-                node_params,
-                batch_size,
-                common_config
-            )?;
+        debug!("train_on_motif: motif_id={motif_id} loss={loss}");
 
-            debug!("train_on_motif: motif_id={motif_id} loss={loss}");
+        if loss < common_config.max_loss {
+            //TODO save to run_id <<<<<<<<<<<<<<<<<<<<<<
+            ws.read().save_motif_model(&channel, &0, motif_id, vs, params)?;
 
-            if loss < common_config.max_loss {
-                //TODO save to run_id <<<<<<<<<<<<<<<<<<<<<<
-                ws.read().save_motif_model(&channel, motif_node_params_run_id, motif_id, vs, params)?;
-
-            }
         }
     }
 
-    Ok(motif_node_params_selection_run_id)
+    Ok(0)
 }
 
 fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) -> String { //TODO change to impl AsRef<Path> + in ParquetLoader
