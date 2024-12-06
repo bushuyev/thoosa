@@ -5,7 +5,7 @@ use std::ops::{Add, Div, Mul};
 use std::time::Instant;
 
 use chrono::SecondsFormat;
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -244,8 +244,10 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, ThoosaError>{
     )
         .enumerate()
         .flat_map(|(i, (from, to))| {
+            debug!("pad_to: i={i} from={from} to={to}");
             if from > to {
-                panic!("from {} > to {} at {}", from, to, i);
+                error!("from {from} > to {to} at {i}");//panic doesn't show up in test
+                panic!("from {from} > to {to} at {i}");
             } else {
                 [0, to - from]
             }

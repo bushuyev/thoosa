@@ -16,6 +16,7 @@ type Label = i64;//TODO
 pub trait ResourcesConfig {
     type Result;
     fn resource_config_to_keys<S:ResourceStore+ ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError>;
+
     fn serialize(&self) -> String {
         "TODO".to_string()
     }
@@ -72,6 +73,7 @@ impl Display for Simple{
     }
 }
 
+#[derive(Debug)]
 pub struct Labeled {
     group: String
 }
@@ -105,15 +107,26 @@ impl Display for Labeled{
     }
 }
 
+#[derive(Debug)]
 pub struct NodeResources {//TODO rename Node to Net
-    resources: ResourceType
+    train_resources: Labeled,
+    valid_resources: Labeled
+}
+
+impl NodeResources {
+    pub fn new(train_group: String, valid_group: String) -> Self {
+        Self {
+            train_resources: Labeled::new(train_group),
+            valid_resources : Labeled::new(valid_group)
+        }
+    }
 }
 
 impl ResourcesConfig for NodeResources {
     type Result = (Vec<(String,Vec<Resource>)>, Vec<(String,Vec<Resource>)>);
 
     fn resource_config_to_keys<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<(Vec<(String,Vec<Resource>)>, Vec<(String,Vec<Resource>)>), ThoosaError> {
-        todo!()
+        self.train_resources.resource_config_to_keys(store).and_then(|train|self.valid_resources.resource_config_to_keys(store).map(|valid|(train, valid)))
     }
 }
 

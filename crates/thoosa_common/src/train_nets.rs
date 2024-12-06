@@ -4,6 +4,7 @@ use std::fs;
 use std::hash::Hash;
 use std::iter::Map;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc};
 use parking_lot::{Mutex, RwLock};
 
@@ -34,7 +35,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::apply_channel_motifs;
 use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives};
-use crate::runs::{Empty, Params, RunConfig, SavableOptResult, Simple};
+use crate::runs::{Empty, Labeled, NodeResources, Params, RunConfig, SavableOptResult, Simple};
 use crate::train_nets;
 use crate::utils::{DataBatch, train, plot_series, TrainListener, ListenerResponse, pad_to};
 use crate::utils::from;
@@ -44,21 +45,15 @@ use crate::ws::{FsWorkspace, Workspace};
 #[derive(Debug, Args, Clone)]
 pub struct TrainLabelNodeParams {
 
-    #[arg(long)]
-    motif_node_params_selection_run_ids: Vec<usize>,
 
     #[arg(long)]
-    train_resource_group: Option<String>,
+    motif_node_params_selection_run_ids: Vec<usize>,//TODO enum to run either on all previous input - find motifs or motif selection
 
     #[arg(long)]
-    valid_resource_group: Option<String>,
+    train_resource_group: String,
 
-
-    #[arg(long, value_parser=parse_key_val::<String, String>)]
-    train_labels_datasets: Vec<(String, String)>,
-
-    #[arg(long, value_parser=parse_key_val::<String, String>)]
-    valid_labels_datasets: Vec<(String, String)>,
+    #[arg(long)]
+    valid_resource_group: String,
 
     #[arg(long,  default_value_t = 1000)]
     input_slice_step: usize,
@@ -67,7 +62,7 @@ pub struct TrainLabelNodeParams {
     cycles: usize,
 
     #[arg(long, default_value_t = 1.0e-5)]
-    lr: f64,
+    lr: f32,
 
     #[arg(long, default_value_t = 10)]
     motif_batch_size:i64,
@@ -78,77 +73,92 @@ pub struct TrainLabelNodeParams {
 
 impl TrainLabelNodeParams {
 
-    pub fn cycles(&self) -> usize {
-        self.cycles
-    }
-    pub fn lr(&self) -> f64 {
-        self.lr
-    }
 
-    #[allow(dead_code)]
-    pub fn dummy(step: usize, motif_node_params_selection_run_ids: Vec<usize>, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>, motif_batch_size: i64, label_batch_size: usize, cycles: usize, lr: f64) ->Self {
+    pub fn dummy(step: usize, motif_node_params_selection_run_ids: Vec<usize>, train_resource_group: String, valid_resource_group: String, motif_batch_size: i64, label_batch_size: usize, cycles: usize, lr: f32) ->Self {
         TrainLabelNodeParams {
             motif_node_params_selection_run_ids,
             input_slice_step: step,
             cycles,
             lr,
-            train_labels_datasets,
-            valid_labels_datasets,
-            train_resource_group: None,
-            valid_resource_group: None,
+
+            train_resource_group,
+            valid_resource_group,
             motif_batch_size,
             label_batch_size
         }
     }
-
-    pub fn train_labels_datasets(&self) -> &Vec<(String, String)> {
-        &self.train_labels_datasets
-    }
-
-    pub fn valid_labels_datasets(&self) -> &Vec<(String, String)> {
-        &self.valid_labels_datasets
-    }
-
-    pub fn with_labels_datasets(&self, train_labels_datasets: Vec<(String, String)>, valid_labels_datasets: Vec<(String, String)>) -> Self {
-        let mut clone = self.clone();
-        clone.train_labels_datasets = train_labels_datasets;
-        clone.valid_labels_datasets = valid_labels_datasets;
-
-        clone
-    }
-
-    pub fn train_resource_group(&self) -> Option<&String> {
-        self.train_resource_group.as_ref()
-    }
-
-    pub fn valid_resource_group(&self) -> Option<&String> {
-        self.valid_resource_group.as_ref()
-    }
-
-    pub fn motif_batch_size(&self) -> i64 {
-        self.motif_batch_size
-    }
+}
 
 
-    pub fn input_slice_step(&self) -> usize {
-        self.input_slice_step
-    }
+#[derive(Debug)]
+pub struct TrainLabelNodeRunConfig {
+    id:Option<usize>,
+    pub lr:f32
+}
 
-    pub fn dsp_filter(&self) ->Box<impl Fn(Tensor)->Tensor> {
-        Box::new(|t:Tensor|t)
-    }
-
-    pub fn motif_node_params_selection_run_ids(&self) -> &Vec<usize> {
-        &self.motif_node_params_selection_run_ids
+impl TrainLabelNodeRunConfig {
+    pub fn new(lr:f32) -> Self {
+        Self {
+            id: None,
+            lr
+        }
     }
 }
 
+impl RunConfig for TrainLabelNodeRunConfig {
+    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+        todo!()
+    }
+
+    fn set_id(&mut self, id: usize) {
+        self.id.replace(id);
+    }
+}
+
+pub struct CommonTrainLabelNodeRunConfig {
+    pub input_slice_step:usize,
+    pub motif_batch_size:usize,
+    pub label_batch_size:usize,
+    pub cycles:usize,
+}
+
+impl CommonTrainLabelNodeRunConfig {
+
+    pub fn new(input_slice_step: usize, motif_batch_size: usize,  label_batch_size:usize, cycles:usize) -> Self {
+        Self { input_slice_step, motif_batch_size, label_batch_size, cycles}
+    }
+}
+
+impl Params<TrainLabelNodeRunConfig, NodeResources, CommonTrainLabelNodeRunConfig> for TrainLabelNodeParams {
+
+    fn to_run_configs(&self) -> Vec<TrainLabelNodeRunConfig> {
+        vec![
+            TrainLabelNodeRunConfig::new(self.lr as f32)
+        ]
+    }
+
+    fn resource_config(&self) -> NodeResources {
+        NodeResources::new(
+            self.train_resource_group.clone(),
+            self.valid_resource_group.clone()
+        )
+    }
+
+    fn common_config(&self) -> CommonTrainLabelNodeRunConfig {
+        CommonTrainLabelNodeRunConfig::new(
+            self.input_slice_step,
+            self.motif_batch_size as usize,
+            self.label_batch_size,
+            self.cycles
+        )
+    }
+}
 /**
 * returns num labels * items_per_label x channels x motifs x motifs batch size
 */
 struct LoadingTensorsDataBatch  {
-    train: Vec<(i64, Vec <Resource>)>,
-    val: Vec<(i64, Vec <Resource>)>,
+    train: Rc<Vec<(i64, Vec <Resource>)>>,
+    val: Rc<Vec<(i64, Vec <Resource>)>>,
     batch_size: usize,
     executor: Arc<parking_lot::RwLock< LoadRunner<Box<Tensor>>>>,
     device:Device,
@@ -158,8 +168,8 @@ struct LoadingTensorsDataBatch  {
 impl LoadingTensorsDataBatch {
 
     pub fn new(
-        train: Vec<(i64, Vec <Resource>)>,
-        val: Vec<(i64, Vec <Resource>)>,
+        train: Rc<Vec<(i64, Vec <Resource>)>>,
+        val: Rc<Vec<(i64, Vec <Resource>)>>,
         batch_size: usize,
         executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
         device:Device,
@@ -380,38 +390,39 @@ impl   ClassTensorsLoaderData {
 
 pub fn train_label_nodes (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    motif_node_params:&MotifNodeParams,
-    label_node_params:&LabelNodeParams,
-    train_on_label_params: &TrainLabelNodeParams,
-    train_labels_resources:Vec<(i64, Vec <Resource>)>,
-    valid_labels_resources: Vec<(i64, Vec <Resource>)>,
+    run_config:&TrainLabelNodeRunConfig,
+    comon_label_node_params:&CommonTrainLabelNodeRunConfig,
+    label_node_params: &LabelNodeParams,
+    train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>,
+    valid_labels_resources: Rc<Vec<(i64, Vec <Resource>)>>,
     device: &Device,
     executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-    channels_motifs_nodes:Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>
-) -> Result<(f32, (VarStore, LabelNodeParams)), ThoosaError>
-    {
+    channels_motifs_nodes:Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>,
+    max_motif_batches:usize
+) ->  Result<Vec<Box<dyn SavableOptResult>>, ThoosaError> {
 
-    debug!("train_on_motif_nodes: motif_node_params={motif_node_params:?} label_node_params={label_node_params:?}");
+    debug!("train_on_motif_nodes: label_node_params={label_node_params:?}");
 
     let vs_0 = nn::VarStore::new(device.clone());
 
     // let apply_motifs = |t:Box<Tensor>| Box::new(apply_label_motifs(motif_node_params.num_features, step, &t, &motif_nets, label_node_params.motif_batch_size, label_node_params.max_motif_batches as usize, device));
     //TODO pass params to LoadingTensorsDataBatch ?
 
-    let motif_batch_size = label_node_params.motif_batch_size;
-    let max_motif_batches = label_node_params.max_motif_batches as usize;
+    let motif_batch_size = comon_label_node_params.motif_batch_size;
+    let max_motif_batches = max_motif_batches;
 
     let device = device.clone();
-    let input_slice_step = train_on_label_params.input_slice_step();
+    let input_slice_step = comon_label_node_params.input_slice_step;
     let channels = ws.read().channels();
 
+    let motif_batch_size = comon_label_node_params.motif_batch_size as i64;
     let loss = train(
         &device,
         &mut LoadingTensorsDataBatch::new(
             train_labels_resources,
             valid_labels_resources,
 
-            train_on_label_params.label_batch_size,
+            comon_label_node_params.label_batch_size,
             Arc::clone(&executor),
             device.clone(),
             Some( Box::new(move |t:Box<Tensor>| Box::new(apply_motif_nets(input_slice_step, &t, Arc::clone(&channels_motifs_nodes), motif_batch_size, max_motif_batches, &device))))
@@ -425,31 +436,31 @@ pub fn train_label_nodes (
             debug!("train_on_label: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
         },
-        train_on_label_params.cycles,
-        nn::AdamW::default().build(&vs_0, train_on_label_params.lr)?,
+        comon_label_node_params.cycles,
+        nn::AdamW::default().build(&vs_0, run_config.lr as f64)?,
 
         |t: Tensor| {
             debug!("train_on_label: t.size()={:?} ", t.size());
             //merge max_motif_batches * motif_batch_size
             let t_out = view_for_label_model(t, channels as i64, label_node_params.max_motif_nodes, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
             //t.size()[0] - batch size
-            debug!("train_on_label: t_out.size()={:?}",  t_out.size());
+            debug!("train_on_label: t_out.size={:?}",  t_out.size());
             t_out
         },
         None,
     )?;
 
-    Ok((loss, (vs_0, label_node_params.clone())))
+    // Ok((loss, (vs_0, label_node_params.clone())))
+    Ok(vec![])
 }
 
 //t - input tensors batch size x channels x nets x motif batches x motif match size
 fn view_for_label_model(t: Tensor, channels: i64, max_nodes: i64, motif_batch_size: i64, max_motif_batches: usize) -> Tensor {
-    assert!(t.size().len()==5, "view_for_label_model: t.size()={:?}, should be 5 dims", t.size());
+    assert_eq!(t.size().len(), 5, "view_for_label_model: t.size()={:?}, should be 5 dims", t.size());
+
     debug!("view_for_label_model: t.size()={:?} channels={channels}, max_nodes={max_nodes}, max_motif_batches={max_motif_batches} motif_batch_size={motif_batch_size} max_motif_batches as i64 * motif_batch_size={}", t.size(), max_motif_batches as i64 * motif_batch_size);
+
     t.view([-1/*items_per_label as i64 * 2*/, channels, max_nodes, max_motif_batches as i64 * motif_batch_size])
-    // let t_f= t.flatten(3,4);
-    // debug!("view_for_label_model: t_f.size()={:?}", t_f.size());
-    // t_f
 }
 
 fn apply_motifs_to_loaders<I, F>(
@@ -1351,9 +1362,6 @@ pub fn train_motif_nodes(
 
             println!("train_on_motif:  min_loss={min_loss}");
             // let best_config = opt.optimize();
-
-
-
         }
 
         ValuesOrOptSpace::OptSpace(cs) => {
@@ -1725,6 +1733,7 @@ mod train_tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::rc::Rc;
     use std::sync::{Arc};
     use parking_lot::{Mutex, RwLock};
 
@@ -1740,7 +1749,7 @@ mod train_tests {
     use crate::builder::SeqBuilder;
     use crate::loader::{LoadRunner, SyncWrapper};
     use crate::my_tch::apply_channel_motifs;
-    use crate::train_nets::{TensorsDataBatch, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, SyncModule, load_motif_models_ws, load_all_label_models_ws};
+    use crate::train_nets::{TensorsDataBatch, InferParams, LabelNodeParams, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, SyncModule, load_motif_models_ws, load_all_label_models_ws, TrainLabelNodeRunConfig, CommonTrainLabelNodeRunConfig};
     use crate::train_nets;
     use crate::utils::{from};
     use crate::utils::DataBatch;
@@ -1930,10 +1939,8 @@ mod train_tests {
             input_slice_step: 100,
             cycles: 3,
             lr: 1.0e-5,
-            train_labels_datasets: vec![],
-            valid_labels_datasets: vec![],
-            train_resource_group: None,
-            valid_resource_group: None,
+            train_resource_group: "aaa".into(),
+            valid_resource_group: "bbb".into(),
             label_batch_size: 13,
             motif_batch_size: 7
         };
@@ -1972,12 +1979,17 @@ mod train_tests {
         debug!("test_train_on_label: channel 1 models={}", channel_1_motifs_models.len());
         debug!("test_train_on_label: channel 2 models={}", channel_2_motifs_models.len());
 
+
+        let max_motif_batches = clc_num_batches(1000, 100, 100, 7) as i64;
+
+        debug!("test_train_on_label: max_motif_batches={max_motif_batches}");
+
         super::train_label_nodes(
-            &ws,
-            &MotifNodeParams::new(100, 1), //TODO take window/num_features from saved motif model or motif run id
-            &LabelNodeParams::new(3, 4, clc_num_batches(1000, 100, 100, 7) as i64, 7), //max motif nets - 2 for seizure
-            &params,
-            vec![
+            &ws, //TODO take window/num_features from saved motif model or motif run id
+            &TrainLabelNodeRunConfig::new(1e-5), //max motif nets - 2 for seizure
+            &CommonTrainLabelNodeRunConfig::new(3,  7, 10, 10),
+            &LabelNodeParams::new(3, 4, max_motif_batches, 7),
+            Rc::new(vec![
                 (1, "seizure_vote".to_string()),
                 (0, "other".to_string()),
                 (0, "gpd_vote".to_string()),
@@ -1985,8 +1997,8 @@ mod train_tests {
                 (0, "grda_vote".to_string()),
                 (0, "other_vote".to_string())
 
-            ].into_iter().map(resource_keys).collect::<Vec<_>>(),
-            vec![
+            ].into_iter().map(resource_keys).collect::<Vec<_>>()),
+            Rc::new(vec![
                 (1, "seizure_vote".to_string()),
                 (0, "other".to_string()),
                 (0, "gpd_vote".to_string()),
@@ -1994,14 +2006,15 @@ mod train_tests {
                 (0, "grda_vote".to_string()),
                 (0, "other_vote".to_string())
 
-            ].into_iter().map(resource_keys).collect::<Vec<_>>(),
+            ].into_iter().map(resource_keys).collect::<Vec<_>>()),
             &Cpu,
             &executor_rc,
             Arc::new(RwLock::new(vec![
                 channel_0_motifs_models,
                 channel_1_motifs_models,
                 channel_2_motifs_models
-            ]))
+            ])),
+            max_motif_batches as usize
         )?;
 
         Ok(())
@@ -2305,78 +2318,5 @@ mod train_tests {
         Ok(())
     }
 
-    #[test]
-    fn test_test() -> Result<(), ThoosaError> {
-        let t_1 = Tensor::stack(&[Tensor::from_slice(&[0., 0., 0.]), Tensor::from_slice(&[0., 0., 0.])], 0);
-
-
-        debug!("size={:?} t={}", t_1.size(), super::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
-
-        // debug!("t={}", t.is_nonzero());
-
-        // let mut vs_0 = nn::VarStore::new(Cpu);
-        //
-        // let batch_len = 11;
-        // let d_0 = 3;
-        // let d_1 = 7;
-        // let d_2 = 5;
-        //
-        // let mut builder = SeqBuilder::new(d_2);
-        //
-        //
-        // super::build_multidim(&mut builder, &[d_2, d_1, d_0, 1]);
-        //
-        //
-        // let net = builder.end_seq().build_tch_module(&vs_0.root())?;
-        //
-        // let tensor = Tensor::zeros(&[batch_len, d_0, d_1, d_2], (Float, Cpu));
-        // let out = net.forward(&tensor);
-        //
-        // debug!("out.size={:?}", out.size());
-
-
-        // let t =
-        //     Tensor::stack(&[
-        //         Tensor::vstack(&[
-        //             Tensor::from_slice(&[1., 1., 1.]),
-        //             Tensor::from_slice(&[2., 2., 2.]),
-        //             Tensor::from_slice(&[3., 3., 3.])
-        //         ]),
-        //         Tensor::vstack(&[
-        //             Tensor::from_slice(&[4., 4., 4.]),
-        //             Tensor::from_slice(&[5., 5., 5.]),
-        //             Tensor::from_slice(&[6., 6., 6.])
-        //         ])
-        //     ], 0);
-
-
-        // let t1 = Instant::now();
-        //
-        // let mut t = Tensor::stack((0..2).map(|_|
-        //     Tensor::stack((0..10).map(|_|
-        //         Tensor::stack((0..100).map(|_|
-        //                          Tensor::zeros(&[1000], (Double, Cpu)) //batches
-        //         ).collect::<Vec<Tensor>>().as_slice(), 0)
-        //     ).collect::<Vec<Tensor>>().as_slice(), 0)
-        // ).collect::<Vec<Tensor>>().as_slice(), 0);
-        //
-        //
-        // debug!("t.size()={:?} elapsed={}", t.size(), t1.elapsed().as_millis());
-        // let t1 = Instant::now();
-        // for c in 0..2 {
-        //     for n in 0..10 {
-        //         for b in 0..100 {
-        //             t = t.index_put(&[Some(Tensor::from_slice(&[c])), Some(Tensor::from_slice(&[n])), Some(Tensor::from_slice(&[b]))], &Tensor::ones(&[1000], (Double, Cpu)), false);
-        //         }
-        //     }
-        // }
-
-        // debug!("t.size()={:?} elapsed={}", t.size(), t1.elapsed().as_millis());
-
-        // t.index_put(&[Some(Tensor::from_slice(&[1])), Some(Tensor::from_slice(&[2]))], &Tensor::ones(&[3], (Double, Cpu)), false).print();
-
-
-        Ok(())
-    }
 
 }
