@@ -784,14 +784,15 @@ pub fn run_train_label_nodes(
                     assert_eq!(find_motifs_run_ids.len(), 1); //selection has single input
 
 
-
-
-                    let channels_motifs_models = store.lock().list_selected_motifs(*motif_selection_run_id, channels).expect("list_selected_motifs")
+                    let channels_motifs_models:Vec<Vec<(MotifNodeParams, SyncModule)>> = store.lock().list_selected_motifs(*motif_selection_run_id, channels).expect("list_selected_motifs")
                         .into_iter().enumerate()
-                        .flat_map(|(channel, channels_motifs)| {
+                        .map(|(channel, channels_motifs)| {
                             let ws_moved = Arc::clone(&ws);
-                            channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, &device_i).expect("load_motif_models"))
+                            channels_motifs.into_iter().flat_map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, &device_i).expect("load_motif_models")).collect()
                         }).collect();
+
+                    debug!("run_train_label_nodes:  channels={channels} channels_motifs_models.len={}", channels_motifs_models.len());
+                    trace!("run_train_label_nodes:  channels_motifs_models={channels_motifs_models:?}");
 
                     let channels_motifs_models: Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>> = Arc::new(RwLock::new(channels_motifs_models)); //channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
                     let channels_motifs_models_arc = Arc::clone(&channels_motifs_models);
@@ -816,7 +817,6 @@ pub fn run_train_label_nodes(
                     for run_config in run_configs_cl.iter() {
                         debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
                         let label_node_param = LabelNodeParams::new(channels as i64, max_nets, max_motif_batches as i64, common_config.motif_batch_size as i64);
-
 
                         let result = train_label_nodes(
                             ws,
@@ -1905,7 +1905,6 @@ mod main_tests {
 
     #[test]
     fn test_run_step() -> Result<(), ThoosaError> {
-
 
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
