@@ -405,11 +405,6 @@ pub fn train_label_nodes (
 
     let vs_0 = nn::VarStore::new(device.clone());
 
-    // let apply_motifs = |t:Box<Tensor>| Box::new(apply_label_motifs(motif_node_params.num_features, step, &t, &motif_nets, label_node_params.motif_batch_size, label_node_params.max_motif_batches as usize, device));
-    //TODO pass params to LoadingTensorsDataBatch ?
-
-    let motif_batch_size = comon_label_node_params.motif_batch_size;
-    let max_motif_batches = max_motif_batches;
 
     let device = device.clone();
     let input_slice_step = comon_label_node_params.input_slice_step;
@@ -425,7 +420,7 @@ pub fn train_label_nodes (
             comon_label_node_params.label_batch_size,
             Arc::clone(&executor),
             device.clone(),
-            Some( Box::new(move |t:Box<Tensor>| Box::new(apply_motif_nets(input_slice_step, &t, Arc::clone(&channels_motifs_nodes), motif_batch_size, max_motif_batches, &device))))
+            Some( Box::new(move |t:Box<Tensor>| Box::new(apply_motif_nets(&t, Arc::clone(&channels_motifs_nodes), input_slice_step, motif_batch_size, max_motif_batches, &device))))
 
         ) as &mut dyn DataBatch,
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
@@ -440,7 +435,7 @@ pub fn train_label_nodes (
         nn::AdamW::default().build(&vs_0, run_config.lr as f64)?,
 
         |t: Tensor| {
-            debug!("train_on_label: t.size()={:?} ", t.size());
+            debug!("train_on_label: t.size={:?} ", t.size());
             //merge max_motif_batches * motif_batch_size
             let t_out = view_for_label_model(t, channels as i64, label_node_params.max_motif_nodes, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
             //t.size()[0] - batch size
@@ -463,21 +458,6 @@ fn view_for_label_model(t: Tensor, channels: i64, max_nodes: i64, motif_batch_si
     t.view([-1/*items_per_label as i64 * 2*/, channels, max_nodes, max_motif_batches as i64 * motif_batch_size])
 }
 
-fn apply_motifs_to_loaders<I, F>(
-    mut labels_loaders: HashMap<i64, Vec<I>>,
-    labels: &mut Vec<i64>,
-    apply_motifs:F
-) -> Vec<Vec<Map<I, F>>> where I: Iterator<Item=Box<Tensor>> + Send + Sync, F: Fn(Box<Tensor>) -> Box<Tensor> + Copy {
-
-    labels.into_iter()
-        .map(
-            |label| labels_loaders
-                .remove(&label).expect(format!("no {}", label).as_str())
-                .into_iter()
-                .map( |l| l.map(apply_motifs))
-                .collect::<Vec<_>>())
-        .collect::<Vec<Vec<_>>>()
-}
 
 //TODO trains on all label models, add param to train on selected run_ids
 pub fn train_final (
@@ -524,7 +504,7 @@ pub fn train_final (
                     debug!("train_final: len={} channels_motifs_models={channels_motifs_models:?}", channels_motifs_models.read().len());
 
                     //TODO keep common conifg for motif nets used to build label
-                    let t_net = apply_motif_nets(step, &t, Arc::clone(channels_motifs_models), label_nodes[0].1.motif_batch_size, label_nodes[0].1.max_motif_batches as usize, &device);
+                    let t_net = apply_motif_nets(&t, Arc::clone(channels_motifs_models), step, label_nodes[0].1.motif_batch_size, label_nodes[0].1.max_motif_batches as usize, &device);
 
                     for (label_node_run_id, label_node_params, label_node) in label_nodes{
 
@@ -1548,9 +1528,9 @@ fn split_train_val<T>(classes_tensors: Vec<Vec<T>>, train_valid_split: f32) -> (
 
 /// returns Tensor channels x nets x batches x batch size
 fn apply_motif_nets(
-    input_slice_step: usize,
     input_t: &Tensor,
     channels_motifs_nodes: Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>,
+    input_slice_step: usize,
     input_slices_motif_batch_size: i64,
     max_motif_batches: usize,
     device: &Device
@@ -1862,7 +1842,7 @@ mod train_tests {
 
         debug!("test_apply_motif_models: channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
-        let channels_motifs = super::apply_motif_nets(step, &t, Arc::new(RwLock::new(motif_nets)), batch_size as i64, max_motif_batches, &Cpu);
+        let channels_motifs = super::apply_motif_nets(&t, Arc::new(RwLock::new(motif_nets)), step, batch_size as i64, max_motif_batches, &Cpu);
 
         assert_eq!(
             Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
@@ -1895,11 +1875,11 @@ mod train_tests {
 
         debug!("max_motif_batches={}", max_motif_batches);
 
-        let channels_motifs_0 = super::apply_motif_nets(step, &t_0, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_0 = super::apply_motif_nets(&t_0, Arc::clone(&motif_nets), step, motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_0.size={:?}", channels_motifs_0.size());
 
-        let channels_motifs_1 = super::apply_motif_nets(step, &t_1, Arc::clone(&motif_nets), motif_batch_size, max_motif_batches, &Cpu);
+        let channels_motifs_1 = super::apply_motif_nets(&t_1, Arc::clone(&motif_nets), step, motif_batch_size, max_motif_batches, &Cpu);
 
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
@@ -1987,7 +1967,7 @@ mod train_tests {
         super::train_label_nodes(
             &ws, //TODO take window/num_features from saved motif model or motif run id
             &TrainLabelNodeRunConfig::new(1e-5), //max motif nets - 2 for seizure
-            &CommonTrainLabelNodeRunConfig::new(3,  7, 10, 10),
+            &CommonTrainLabelNodeRunConfig::new(100,  7, 10, 10),
             &LabelNodeParams::new(3, 4, max_motif_batches, 7),
             Rc::new(vec![
                 (1, "seizure_vote".to_string()),

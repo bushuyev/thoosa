@@ -1197,6 +1197,7 @@ impl Store for SqlStore {
     fn list_selected_motifs(&mut self, motif_selection_id: usize, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
         let mut channels_motifs = (0..channels).into_iter().map(|_| Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
 
+
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1204,12 +1205,21 @@ impl Store for SqlStore {
             let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.tree_run_id=?")?;
 
             stmt.query_map([motif_selection_id], |row| {
-                Ok((row.get::<usize, usize>(0)?, row.get::<usize, f32>(1)?, row.get::<usize, usize>(2)?))
-            })?.map(|v| v.unwrap()).for_each(|(motif_id, corr, channel_id)| {
+                Ok((
+                    row.get::<usize, usize>(0)?,
+                    row.get::<usize, f32>(1)?,
+                    row.get::<usize, usize>(2)?
+                ))
+
+            })?.map(|v| v.unwrap())
+                .for_each(|(motif_id, corr, channel_id)| {
+
                 channels_motifs[channel_id].push((motif_id, corr as f64))
             });
         }
         t.commit()?;
+
+        debug!("list_selected_motifs: channels_motifs={channels_motifs:?}");
 
         Ok(channels_motifs)
     }
