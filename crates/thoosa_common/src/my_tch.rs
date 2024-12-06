@@ -325,7 +325,7 @@ pub fn apply_channel_motifs(
     let motif_width = motif_nodes[0].0.num_features();//TODO different window lengths in same selection?
 
     let input_t_size = channel.size();
-    debug!("apply_channel_motifs: channel.size()={:?} input_t_size={:?} nodes.len()={:?} motif_width={motif_width}", channel.size(), input_t_size, motif_nodes.len());
+    debug!("apply_channel_motifs: channel.size={:?} input_t_size={:?} nodes.len={:?} motif_width={motif_width} input_slices_motif_batch_size={input_slices_motif_batch_size}", channel.size(), input_t_size, motif_nodes.len());
 
     assert!(input_t_size.len() == 1);
 
@@ -334,7 +334,7 @@ pub fn apply_channel_motifs(
 
     let folds = batch_windows(input_n as usize, motif_width as usize, input_slice_step, input_slices_motif_batch_size as usize);
 
-    debug!("apply_channel_motifs: input_n={:?}, folds.0.len()={:?}, folds.1.len()={:?}", input_n, folds.0.len(), folds.1.len());
+    debug!("apply_channel_motifs: input_n={:?}, folds.0.len={:?}, folds.1.len={:?}", input_n, folds.0.len(), folds.1.len());
 
     let nodes_len = motif_nodes.len();
     let mut node_batches = (0..nodes_len).map(|_| Vec::with_capacity(((input_n - motif_width) as usize) / input_slice_step)).collect::<Vec<Vec<Tensor>>>();
@@ -343,7 +343,7 @@ pub fn apply_channel_motifs(
     for slice_0_idx in folds.0 {
         debug!("apply_channel_motifs: slice_0_idx={:?}", slice_0_idx);
 
-        let input_slices_batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);
+        let input_slices_batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);//TODO unfold?
         debug!("apply_channel_motifs: input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
 
@@ -389,9 +389,9 @@ pub fn apply_channel_motifs(
         0
     );
     debug!("apply_channel_motifs: 2.2 nodes_t.size={:?}", nodes_t.size());
-    debug!("apply_channel_motifs: 1. nodes_t={:?} max_nodes={}, max_motif_batches={} motif_batch_size={}", nodes_t.size(), max_motif_nodes, max_motif_batches, input_slices_motif_batch_size);
+    debug!("apply_channel_motifs: 1. nodes_t.size={:?} max_motif_nodes={max_motif_nodes}, max_motif_batches={max_motif_batches} motif_batch_size={input_slices_motif_batch_size}", nodes_t.size());
 
-    //pad_motifs_to- to have num motifs in all channels same
+    //pad_motifs_to- to have same num motifs in all channels
     let nodes_t = pad_to(&nodes_t, &[max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size]).unwrap();
 
     debug!("apply_channel_motifs: 2. nodes_t={:?}", nodes_t.size());
