@@ -142,7 +142,7 @@ impl TryFrom<Primitives> for u32 {
                 v.try_into().map_err(|e|ThoosaError::from(e))
             }
             _=>{
-                Err(ThoosaError::new("can't convert non-integer to float "))
+                Err(ThoosaError::new(format!("can't convert non-integer {value:?} to u32")))
             }
         }
     }
