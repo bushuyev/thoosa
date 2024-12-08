@@ -2023,7 +2023,7 @@ mod main_tests {
 
         let train_motif_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids.clone()),
-            &TrainMotifsNodesParams::dummy(vec![], 100, 0.01, 10, 1e-5..1e-3, 3),
+            &TrainMotifsNodesParams::dummy(vec![], 100, 0.01, 10, 1e-5..1e-3, 3..4, 10, 3),
             run_train_motif_nodes_on_motif_selection,
             &ws,
             &store,
