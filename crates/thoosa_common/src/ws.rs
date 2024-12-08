@@ -199,7 +199,7 @@ impl Workspace for FsWorkspace {
             Ok(a)
         })
     }
-    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: VarStore, params: LabelNodeParams) -> Result<(), ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
         let label_models_path = self.labels_models_path.join(format!("{}", label));
 
         fs::create_dir_all(&label_models_path)?;
@@ -208,11 +208,11 @@ impl Workspace for FsWorkspace {
 
         info!("save_label_model:  run_id={label_node_run_id} label={label} saved to {vs_path:?}");
 
-        vs.save(vs_path);
+        vs.save(vs_path)?;
 
         fs::write(
             label_models_path.join(format!("{}.json", label_node_run_id)),
-            serde_json::to_string(&params)?
+            serde_json::to_string(params)?
         )?;
 
         Ok(())
@@ -291,7 +291,7 @@ pub trait Workspace:Sync + Send {
     returns Vec<safetensors_path, config jsonpath>
      */
     fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
-    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: VarStore, params: LabelNodeParams) -> Result<(), ThoosaError>;
+    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
     #[inline]
     fn channels(&self) -> usize;
@@ -386,7 +386,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: VarStore, params: LabelNodeParams) -> Result<(), ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
         todo!()
     }
 
@@ -473,10 +473,10 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
 
-        ws.save_label_model(1, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(10, 4, 3, 10))?;
-        ws.save_label_model(2, &"label_0", VarStore::new(Cpu), LabelNodeParams::new(20, 4, 3, 10))?;
-        ws.save_label_model(3, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(30, 4, 3, 10))?;
-        ws.save_label_model(4, &"label_1", VarStore::new(Cpu), LabelNodeParams::new(40, 4, 3, 10))?;
+        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 3, 10))?;
+        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 3, 10))?;
+        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 3, 10))?;
+        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 3, 10))?;
 
         let models =  ws.label_models()?;
         for mm in &models{
