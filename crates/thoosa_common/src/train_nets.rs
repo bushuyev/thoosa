@@ -145,6 +145,7 @@ impl RunConfig for TrainLabelNodeRunConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct CommonTrainLabelNodeRunConfig {
     pub input_slice_step:usize,
     pub motif_batch_size:usize,
@@ -501,6 +502,7 @@ pub fn run_opt_train_label_nodes (
     let input_slices_motif_batch_size = comon_label_node_params.motif_batch_size as i64;
     let channels = channels_motifs_nodes.read().len() as i64;
     let device = device.clone();
+
     let mut batch = LoadingTensorsDataBatch::new(
         train_labels_resources,
         valid_labels_resources,
@@ -515,6 +517,8 @@ pub fn run_opt_train_label_nodes (
 
     );
 
+    debug!("run_opt_train_label_nodes: label={label:?} run_config={run_config:?} comon_label_node_params={comon_label_node_params:?} channels={channels} ");
+
     opt_train(
         |vs:&VarStore, run_config_values:&TrainNodesValues, listener: &mut PlotVecf32|{
             train_label_nodes(
@@ -522,7 +526,8 @@ pub fn run_opt_train_label_nodes (
             )
         },
         &run_config.run_config_or_opt_space,
-        device
+        device,
+        "label"
     ).map(|(var_store, motif_node_params, train_motifs_nodes_values, min_loss)| {
         Box::new(TrainLabelNodesRunConfigResult::new(run_config.id.expect("run_config.id."), label.clone(), min_loss, motif_node_params, train_motifs_nodes_values, var_store)) as Box<dyn SavableOptResult>
     })
@@ -1489,7 +1494,8 @@ pub fn run_opt_train_motif(
             run_train_motif(motif_id, motif_width, common_config, &device, &mut batch, vs, run_config_values, listener)
         },
         &train_motifs_run_config.run_config_or_opt_space,
-        device
+        device,
+        "motifs"
     ).map(|(var_store, motif_node_params, train_motifs_nodes_values, min_loss)|{
         Box::new(TrainMotifsNodesRunConfigResult::new(min_loss, channel, motif_id, var_store, train_motifs_run_config.id.expect("id"), motif_node_params, train_motifs_nodes_values)) as Box<dyn SavableOptResult>
     })
@@ -1497,7 +1503,7 @@ pub fn run_opt_train_motif(
 }
 
 
-pub fn opt_train<F, V, N>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device) -> Result<(VarStore, N, V, f32), ThoosaError>
+pub fn opt_train<F, V, N:Debug>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, V, f32), ThoosaError>
 where
     F: FnMut(&VarStore, &V, &mut PlotVecf32) -> Result<(f32, N), ThoosaError>,
     for<'a> <V as TryFrom<&'a Vec<Primitives>>>::Error: Debug,
@@ -1513,7 +1519,7 @@ where
             let (loss, node_params) = train(&vs, v, &mut listener)?;
             listener.plot();
 
-            debug!("opt_train:  loss={loss}");
+            debug!("opt_train: descr={descr} loss={loss}");
             Ok((vs, node_params, v.clone(), loss))
         }
 
@@ -1523,7 +1529,7 @@ where
 
             let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
                 |params| {
-                    let run_config_values: V = params.try_into().expect("can't convert params into TrainMotifsNodesValues"); //TODO handle
+                    let run_config_values: V = params.try_into().expect("can't convert params into TrainNodesValues"); //TODO handle
 
                     let vs = VarStore::new(device);
 
@@ -1531,7 +1537,7 @@ where
                     let (loss, node_params) = train(&vs, &run_config_values, &mut listener).expect("tain failed");
                     listener.plot();
 
-                    debug!("opt_train: params={params:?} loss={loss}");
+                    debug!("opt_train: descr={descr} params={params:?} loss={loss}");
                     if loss < min_loss {
                         min_loss = loss;
                         min_var_store.replace((vs, node_params, run_config_values, min_loss));
@@ -1543,12 +1549,11 @@ where
                 opt_config.n_init as usize, //common_config.opt_n_init as usize,
             );
             let best_config = opt.optimize();
-            debug!("opt_train: best_config={best_config:?} min_loss={min_loss}");
+            debug!("opt_train: descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
 
-            min_var_store.ok_or(ThoosaError::new("opt was not run"))
+            min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
         }
     }
-
 
 }
 
