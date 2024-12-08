@@ -27,7 +27,7 @@ use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Empty, Labeled, NodeResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, train_final, train_label_nodes, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainMotifsNodesValues};
+use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
@@ -816,19 +816,20 @@ pub fn run_train_label_nodes(
                     let mut results = Vec::with_capacity(run_configs_cl.len());
                     for run_config in run_configs_cl.iter() {
                         debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
-                        let label_node_param = LabelNodeParams::new(channels as i64, max_nets, max_motif_batches as i64, common_config.motif_batch_size as i64);
 
-                        let result = train_label_nodes(
+
+                        let result = run_opt_train_label_nodes(
                             ws,
                             &run_config,
                             common_config,
-                            &label_node_param,
                             Rc::clone(&train_labels_resources_clone),
                             Rc::clone(&valid_labels_resources_clone),
                             &device_i,
                             &loader,
                             Arc::clone(&channels_motifs_models_arc),
                             max_motif_batches,
+                            max_nets,
+                            label
                         );
                         results.push(result);
 
@@ -837,11 +838,9 @@ pub fn run_train_label_nodes(
                 })
             }).collect::<Result<Vec<_>, ThoosaError>>()
         })
-        .collect::<Result<Vec<Vec<Vec<Box<dyn SavableOptResult>>>>, ThoosaError>>();
-    // .collect::<Result<Vec<Vec<usize>>, ThoosaError>>();
+        .collect::<Result<Vec<Vec<Box<dyn SavableOptResult>>>, ThoosaError>>();
     let r = r.map(|v| v.into_iter()
-        .flat_map(|v|v.into_iter()
-            .flat_map(|v|v.into_iter()))
+        .flat_map(|v|v.into_iter())
         .collect::<Vec<Box<dyn SavableOptResult>>>()).map(|v|Some(v));
     // );
 
@@ -1241,7 +1240,7 @@ fn run_train_motif_nodes (
         debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
 
 
-        train_nets::train_motif_nodes(
+        train_nets::run_opt_train_motif(
             *motif_id,
             channel as u32,
             all_slices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(), //TODO change ClassTensorsDataBatch to accept refs
@@ -2038,7 +2037,7 @@ mod main_tests {
 
         let train_label_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids),
-            &TrainLabelNodeParams::dummy(100, vec![], "pure group 4".into(), "pure group 4".into(), 10, 5, 100,1e-5),
+            &TrainLabelNodeParams::dummy(100, vec![], "pure group 4".into(), "pure group 4".into(), 10, 5, 100,1e-5, 3),
             run_train_label_nodes,
             &ws,
             &store,

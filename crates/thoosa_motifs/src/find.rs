@@ -1988,8 +1988,8 @@ mod motif_find_tests {
         };
 
         let (common_config, run_configs) = to_test_run_config(&store, &params, false);
-
-        let run_ids = find_motifs_by_euc_dist(
+        let run_ids = run_configs.iter().map(|run_config|run_config.id.expect("id")).collect::<Vec<_>>();
+        find_motifs_by_euc_dist(
             None,
             run_configs,
             &Simple::new(params.resources),
@@ -1998,11 +1998,12 @@ mod motif_find_tests {
             &store,
             &executor_rc,
             vec![Cpu]
-        )?.expect("run_ids");
+        )?;
 
         // debug!("{:?}", store.lock().list_run_resources(1)?);
-        let slices = store.lock().list_motifs_slices(run_ids[0].id.unwrap())?;
+        let slices = store.lock().list_motifs_slices(run_ids[0])?;
 
+        debug!("run_ids={run_ids:?} slices: {slices:?}");
         debug!("0: {:?}", slices.get(&resources[0]));
         debug!("1: {:?}", slices.get(&resources[1]));
         debug!("2: {:?}", slices.get(&resources[2]));
@@ -2114,7 +2115,9 @@ mod motif_find_tests {
 
         let (common_config, run_configs) = to_test_run_config(&store, &params, false);
 
-        let run_ids = find_motifs_by_euc_dist(
+        let run_ids = run_configs.iter().map(|run_config|run_config.id.expect("id")).collect::<Vec<_>>();
+
+        find_motifs_by_euc_dist(
             None,
             run_configs,
             &Simple::new(params.resources),
@@ -2129,7 +2132,7 @@ mod motif_find_tests {
         debug!("run_ids={:?}", run_ids);
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
-        let slices = store.lock().list_motifs_slices(run_ids[0].id.unwrap())?;
+        let slices = store.lock().list_motifs_slices(run_ids[0])?;
         debug!("0: {:?}", slices.get(&resources[0]));
         debug!("1: {:?}", slices.get(&resources[1]));
         debug!("2: {:?}", slices.get(&resources[2]));
