@@ -2022,7 +2022,7 @@ mod main_tests {
 
         let train_motif_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids.clone()),
-            &TrainMotifsNodesParams::dummy(vec![], 100, 0.01, 10, 1e-5..1e-3, 3..4, 10, 3),
+            &TrainMotifsNodesParams::dummy(vec![], 30, 0.01, 10, 1e-5..1e-3, 3..4, 10, 3),
             run_train_motif_nodes_on_motif_selection,
             &ws,
             &store,
@@ -2037,7 +2037,7 @@ mod main_tests {
 
         let train_label_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids),
-            &TrainLabelNodeParams::dummy(100, vec![], "pure group 4".into(), "pure group 4".into(), 10, 5, 100,1e-5, 3),
+            &TrainLabelNodeParams::dummy(100, vec![], "pure group 4".into(), "pure group 4".into(), 10, 5, 30,1e-5..1e-3, 3..4),
             run_train_label_nodes,
             &ws,
             &store,
