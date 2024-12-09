@@ -27,7 +27,7 @@ use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Empty, Labeled, NodeResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalParams, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
+use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalNodeRunConfig, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
@@ -292,7 +292,7 @@ pub enum Commands {
     SelectMotifs(SelectMotifsParams),
     TrainOnMotifs(TrainMotifsNodesParams),
     TrainOnLabel(TrainLabelNodeParams),
-    TrainFinal(TrainFinalParams),
+    TrainFinal(TrainFinalNodeParams),
     RunAll(RunAllParams),
     Infer(InferParams),
     SayHello(SayHelloParams)
@@ -554,7 +554,7 @@ pub fn run_cli<F,R>(
                 &ws,
                 &store,
                 &devices[0],
-                &TrainFinalParams::dummy(
+                &TrainFinalNodeParams::dummy(
                     *run_all_params.step.expect_value().unwrap() as usize,
                     *run_all_params.window.expect_value().unwrap() as usize, //FIXME not batch size
                     run_all_params.train_resource_group.clone(),
@@ -644,7 +644,21 @@ pub fn run_cli<F,R>(
     Ok(())
 }
 
-pub fn run_train_final (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, device: &Device, train_final_params: &TrainFinalParams, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Result<(), ThoosaError> {
+
+pub fn run_train_final_node(
+    motif_selection_run_ids: Option<&Vec<usize>>, //first step, no input run ids
+    run_configs: Vec<TrainFinalNodeRunConfig>,
+    resource_config: &NodeResources,
+    common_config: &CommonTrainFinalNodeRunConfig,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    devices: Vec<Device>,
+) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
+    Ok(None)
+}
+
+pub fn run_train_final (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, device: &Device, train_final_params: &TrainFinalNodeParams, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Result<(), ThoosaError> {
 
     let labels = {store.lock().list_labels()? };
 
@@ -683,8 +697,7 @@ pub fn run_train_final (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<
         &final_node_params
     )?;
 
-
-    ws.read().save_final_model(final_run_id, vs, final_node_params);
+    ws.read().save_final_model(final_run_id, vs, final_node_params)?;
 
     Ok(())
 }
@@ -733,7 +746,7 @@ pub fn run_train_label_nodes(
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
     debug!("run_train_label_nodes: run_configs={run_configs:?} resource_config={resource_config:?}");
 
-    let (train_resource_keys, valid_resource_keys) = resource_config.resource_config_to_keys(store)?;
+    let (train_resource_keys, valid_resource_keys) = resource_config.to_resources(store)?;
 
     let valid_datasets_map = valid_resource_keys.into_iter().fold(HashMap::new(), |mut a, v| {
         a.insert(v.0.clone(), v.1.clone());
@@ -1368,14 +1381,14 @@ mod main_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, ResourcesConfig};
-    use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalParams, TrainLabelNodeParams, TrainMotifsNodesParams};
+    use thoosa_common::train_nets::{motif_node, MotifNodeParams, TrainFinalNodeParams, TrainLabelNodeParams, TrainMotifsNodesParams};
     use thoosa_common::utils::{from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, FindMotifsParams, FindMotifsRunConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesParams};
     use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorSliceIdx, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{MotifTrackerStore, SqlMotifTrackerStore, SqlStore, Store};
-    use crate::cli::{import_resources, resource_path, run_plot_motif_slices, run_step, run_train_final, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, Cli, RunAllParams};
+    use crate::cli::{import_resources, resource_path, run_plot_motif_slices, run_step, run_train_final, run_train_final_node, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
     use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -1768,7 +1781,7 @@ mod main_tests {
             &ws,
             &store,
             &Cpu,
-            &TrainFinalParams::dummy(100, 3, "pure group 6".into(), "pure group 4".into(), 10, 10, 10),
+            &TrainFinalNodeParams::dummy(100, 3, "pure group 6".into(), "pure group 4".into(), 10, 10, 10),
             &executor_rc,
         )?;
 
@@ -2047,6 +2060,19 @@ mod main_tests {
         )?;
 
         debug!("train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
+
+        let train_label_nodes_run_ids = run_step(
+            Some(train_label_nodes_run_ids),
+            &TrainFinalNodeParams::dummy(100, 10, "pure group 4".into(), "pure group 4".into(), 10, 5, 30),
+            run_train_final_node,
+            &ws,
+            &store,
+            &loader,
+            devices.clone(),
+            "Test/TrainFinalNode"
+        )?;
+
+        debug!("train_final_nodes_run_ids={train_label_nodes_run_ids:?}");
 
         Ok(())
     }

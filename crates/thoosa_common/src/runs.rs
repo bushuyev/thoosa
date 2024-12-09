@@ -15,7 +15,7 @@ type Label = i64;//TODO
 
 pub trait ResourcesConfig {
     type Result;
-    fn resource_config_to_keys<S:ResourceStore+ ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError>;
+    fn to_resources<S:ResourceStore+ ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError>;
 
     fn serialize(&self) -> String {
         "TODO".to_string()
@@ -39,7 +39,7 @@ impl Simple {
 impl ResourcesConfig for Simple {
     type Result = Vec<Resource>;
 
-    fn resource_config_to_keys<S:ResourceStore + ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Vec<Resource>, ThoosaError>{
+    fn to_resources<S:ResourceStore + ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Vec<Resource>, ThoosaError>{
         Ok(match self.resources() {
             ResourceType::List(list) => {
                 store.lock().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect()).expect("list_resources_by_file_stems")
@@ -62,7 +62,7 @@ pub struct  Empty  {}
 impl ResourcesConfig for Empty {
     type Result = ();
 
-    fn resource_config_to_keys<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError> {
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError> {
         Ok(())
     }
 }
@@ -91,7 +91,7 @@ impl ResourcesConfig for Labeled {
     // (label, resources)
     type Result = Vec<(String,Vec<Resource>)>;
 
-    fn resource_config_to_keys<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Vec<(String,Vec<Resource>)>, ThoosaError> {
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Vec<(String, Vec<Resource>)>, ThoosaError> {
         let mut store_guard = store.lock();
 
         store_guard.list_group_labeled_resources_sets(&self.group)?.into_iter().map(|(label, resource_set)| {
@@ -117,7 +117,7 @@ impl NodeResources {
     pub fn new(train_group: String, valid_group: String) -> Self {
         Self {
             train_resources: Labeled::new(train_group),
-            valid_resources : Labeled::new(valid_group)
+            valid_resources: Labeled::new(valid_group)
         }
     }
 }
@@ -125,8 +125,8 @@ impl NodeResources {
 impl ResourcesConfig for NodeResources {
     type Result = (Vec<(String,Vec<Resource>)>, Vec<(String,Vec<Resource>)>);
 
-    fn resource_config_to_keys<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<(Vec<(String,Vec<Resource>)>, Vec<(String,Vec<Resource>)>), ThoosaError> {
-        self.train_resources.resource_config_to_keys(store).and_then(|train|self.valid_resources.resource_config_to_keys(store).map(|valid|(train, valid)))
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<(Vec<(String, Vec<Resource>)>, Vec<(String, Vec<Resource>)>), ThoosaError> {
+        self.train_resources.to_resources(store).and_then(|train|self.valid_resources.to_resources(store).map(|valid|(train, valid)))
     }
 }
 
