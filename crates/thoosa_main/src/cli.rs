@@ -26,8 +26,8 @@ use torch_sys::at_grad_set_enabled;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{Empty, Labeled, NodeResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalNodeRunConfig, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
+use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
+use thoosa_common::train_nets::{infer, load_all_label_models_ws, load_motif_models_ws, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalNodeRunConfig, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues, run_opt_train_final};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
@@ -646,15 +646,37 @@ pub fn run_cli<F,R>(
 
 
 pub fn run_train_final_node(
-    motif_selection_run_ids: Option<&Vec<usize>>, //first step, no input run ids
+    train_label_nodes_run_ids: Option<&Vec<usize>>, //TODO use to filter label nets
     run_configs: Vec<TrainFinalNodeRunConfig>,
-    resource_config: &NodeResources,
+    resource_config: &NetResources<Logits>,
     common_config: &CommonTrainFinalNodeRunConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
+    let (train_resource_keys, valid_resource_keys) = resource_config.to_resources(store)?;
+
+
+    let r = run_configs.into_iter().map(|train_final_run_config|{
+        //TODO should be filtered by train_final_run_config param
+        let (label_models, labels_channels_motifs_models) = load_all_label_and_motif_models(&ws, store, &devices[0]);
+
+        run_opt_train_final(
+            ws,
+            &train_final_run_config,
+            &common_config,
+            train_resource_keys.clone(),
+            valid_resource_keys.clone(),
+            &devices[0],
+            loader,
+            label_models,
+            labels_channels_motifs_models
+
+        )
+    }).collect::<Vec<_>>();
+
+
     Ok(None)
 }
 
@@ -671,21 +693,16 @@ pub fn run_train_final (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<
 
     debug!("run_train_final: labels={:?}", labels);
 
-
-
     let vs = train_final(
         &ws,
         train_final_params,
         load_to_logits_tensors(
             train_final_params.train_resource_group(),
-            &device,
             Arc::clone(&store),
         ),
         load_to_logits_tensors(
             train_final_params.valid_resource_group(),
-            &device,
             Arc::clone(&store),
-
         ),
         train_final_params.step(),
         train_final_params.motif_batch_size(),
@@ -697,12 +714,12 @@ pub fn run_train_final (ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<
         &final_node_params
     )?;
 
-    ws.read().save_final_model(final_run_id, vs, final_node_params)?;
+    ws.read().save_final_model(final_run_id, &vs, &final_node_params)?;
 
     Ok(())
 }
 
-fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, device: &&Device) -> (
+fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, device: &Device) -> (
     HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>,
     HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>>
 ) {
@@ -714,6 +731,7 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: 
         for (label_run_id, label_node_params, node) in label_run_id_nodes {
 
             let motif_node_params_selection_run_ids = store.lock().get_input_run_ids(*label_run_id).expect("get_input_run_id(label_run_id)");
+            debug!("load_all_label_and_motif_models: label_run_id={label_run_id:?} motif_node_params_selection_run_ids={motif_node_params_selection_run_ids:?}");
             assert_eq!(motif_node_params_selection_run_ids.len(), 1);
 
             let motif_selection_run_ids = store.lock().get_input_run_ids(motif_node_params_selection_run_ids[0]).expect("get_input_run_ids(motif_node_params_selection_run_ids");
@@ -721,10 +739,11 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: 
 
 
             let channels_motifs_models = store.lock()
-                .list_selected_motifs(motif_selection_run_ids[0], 20).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+                .list_selected_motifs(motif_selection_run_ids[0], ws.read().channels() as u32).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+
                 |(channel, channels_motifs)| {
                     let ws_moved = Arc::clone(&ws);
-                    channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, &device).expect("load_motif_models"))
+                    channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, device).expect("load_motif_models"))
                 }).collect();
 
 
@@ -737,7 +756,7 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: 
 pub fn run_train_label_nodes(
     motif_selection_run_ids: Option<&Vec<usize>>, //first step, no input run ids
     run_configs: Vec<TrainLabelNodeRunConfig>,
-    resource_config: &NodeResources,
+    resource_config: &NetResources<Labeled>,
     common_config: &CommonTrainLabelNodeRunConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
@@ -759,7 +778,7 @@ pub fn run_train_label_nodes(
 
     debug!("run_train_label_nodes: motif_selection_run_ids={motif_selection_run_ids:?} run_configs={run_configs:?} devices={devices:?} chunk_len={chunk_len}");
 
-    let devices_motif_selection = devices
+    let devices__resources = devices
         .into_iter()
         .cycle()
         .zip(
@@ -769,7 +788,7 @@ pub fn run_train_label_nodes(
     let channels = ws.read().channels() as u32;
     let run_configs_rc = Arc::new(run_configs); //.into_iter().map(|c|Arc::new(c)).collect::<Vec<_>>());
 
-    let r = devices_motif_selection
+    let r = devices__resources
         .into_par_iter()
         .map(move |(device_i, train_resource_keys_chunk)| {
 
@@ -1341,7 +1360,7 @@ where
     if let Some(mut opt_run_configs) = opt_run_configs_opt {
         for mut opt_run_config in opt_run_configs {
             // opt_run_config.value()
-            opt_run_config.save(store, ws);
+            opt_run_config.save(store, ws)?;
 
             // let run_config_id = store.lock().save_tree_run(
             //     input_run_ids.as_deref(),

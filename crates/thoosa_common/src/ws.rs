@@ -143,14 +143,14 @@ impl Workspace for FsWorkspace {
     fn final_models_path(&self) -> &PathBuf {
         &self.final_models_path
     }
-    fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError> {
+    fn save_final_model(&self, run_id: usize, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
         fs::create_dir_all(&self.final_models_path)?;
 
         vs.save(&self.final_models_path.join(format!("{run_id}.safetensors")))?;
 
         fs::write(
             self.final_models_path.join(format!("{run_id}.json")),
-            serde_json::to_string(&params)?
+            serde_json::to_string(params)?
         )?;
 
 
@@ -285,7 +285,7 @@ pub trait Workspace:Sync + Send {
     fn motifs_models_path(&self) -> &PathBuf;
     fn labels_models_path(&self) -> &PathBuf;
     fn final_models_path(&self) -> &PathBuf;
-    fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError>;
+    fn save_final_model(&self, run_id: usize, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError>;
     fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError>;
     /**
     returns Vec<safetensors_path, config jsonpath>
@@ -374,7 +374,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_final_model(&self, run_id: usize, vs: VarStore, params: FinalNodeParams) -> Result<(), ThoosaError> {
+    fn save_final_model(&self, run_id: usize, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
         todo!()
     }
 

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
+use log::debug;
 use parking_lot::{Mutex, RwLock};
 use tch::nn::VarStore;
 use thoosa_shared::resource::{Resource, ResourceStore};
@@ -108,31 +109,72 @@ impl Display for Labeled{
 }
 
 #[derive(Debug)]
-pub struct NodeResources {//TODO rename Node to Net
-    train_resources: Labeled,
-    valid_resources: Labeled
+pub struct Logits {
+    group: String
 }
 
-impl NodeResources {
-    pub fn new(train_group: String, valid_group: String) -> Self {
-        Self {
-            train_resources: Labeled::new(train_group),
-            valid_resources: Labeled::new(valid_group)
+impl Logits {
+
+    pub fn new(group: String) -> Self {
+        Self{
+            group
         }
     }
 }
 
-impl ResourcesConfig for NodeResources {
-    type Result = (Vec<(String,Vec<Resource>)>, Vec<(String,Vec<Resource>)>);
+impl ResourcesConfig for Logits {
+    // (label, resources)
+    type Result = Vec<(Resource,Vec<f32>)>;
 
-    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<(Vec<(String, Vec<Resource>)>, Vec<(String, Vec<Resource>)>), ThoosaError> {
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Vec<(Resource,Vec<f32>)>, ThoosaError> {
+        store.lock().list_resource_random_in_group(&self.group)?
+            .into_iter()
+            .map(move |(resourceId, labels_p)| {
+                debug!("labels_p={:?}", labels_p);
+                Ok((
+                    resourceId,
+                    labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
+                ))
+            })
+            .collect()
+
+    }
+}
+
+impl Display for Logits {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Logits")//TODO
+    }
+}
+
+
+
+#[derive(Debug)]
+pub struct NetResources<RC:ResourcesConfig> {//TODO rename Node to Net
+    train_resources: RC,
+    valid_resources: RC
+}
+
+impl <RC:ResourcesConfig> NetResources<RC> {
+    pub fn new(train_resources:RC, valid_resources:RC) -> Self {
+        Self {
+            train_resources,
+            valid_resources
+        }
+    }
+}
+
+impl <RC:ResourcesConfig> ResourcesConfig for NetResources<RC> {
+    type Result = (RC::Result, RC::Result);
+
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<(RC::Result, RC::Result), ThoosaError> {
         self.train_resources.to_resources(store).and_then(|train|self.valid_resources.to_resources(store).map(|valid|(train, valid)))
     }
 }
 
-impl Display for NodeResources {
+impl <R:ResourcesConfig> Display for NetResources<R> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "xxx")
+        write!(f, "xxx")//TODO
     }
 }
 

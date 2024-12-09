@@ -131,7 +131,7 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 }
 
 
-pub fn load_to_logits_tensors(group: &str, device: &Device, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(Resource, Vec<f32>)> {
+pub fn load_to_logits_tensors(group: &str, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(Resource, Vec<f32>)> {
     store.lock().list_resource_random_in_group(group).expect("list_resource_random_in_group")
         .into_iter()
         .map(move |(resourceId, labels_p)| {
