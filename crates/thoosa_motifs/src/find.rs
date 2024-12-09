@@ -430,6 +430,10 @@ impl RunConfig for FindMotifsRunConfig {
     fn set_id(&mut self, id:usize) {
         self.id.replace(id);
     }
+
+    fn type_name() -> &'static str {
+        "FindMotifs"
+    }
 }
 
 impl FindMotifsRunConfig {
@@ -1216,6 +1220,10 @@ impl RunConfig for SelectMotifsRunConfig {
     fn set_id(&mut self, id: usize) {
         assert!(self.id.replace(id).is_none());
     }
+
+    fn type_name() -> &'static str {
+        "SelectMotifs"
+    }
 }
 
 fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask: &Tensor) -> (Tensor, Tensor) {
@@ -1271,7 +1279,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
         let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
         trace!("select_motifs_for_label_2: resource_id_motif_slices={resource_id_motif_slices:?}");
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(*find_motif_run_id, store.lock().list_run_params(*find_motif_run_id)?);
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(*find_motif_run_id, store.lock().list_run_config_values(*find_motif_run_id)?);
 
         motifs_to_tensor(
             resource_id_motif_slices,
@@ -2040,7 +2048,7 @@ mod motif_find_tests {
         common_config.keep_slice_matches = file_motif_tracker;
         let mut run_configs = params.to_run_configs();
         run_configs.iter_mut().for_each(|c| {
-            let id = store.lock().save_tree_run(None, "test", "test", HashMap::new()).unwrap();
+            let id = store.lock().save_run_config(None, &"todo", "test", "test", HashMap::new()).unwrap();
             c.set_id(id);
         });
         (common_config, run_configs)

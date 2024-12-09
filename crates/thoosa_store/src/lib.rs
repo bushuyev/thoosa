@@ -82,11 +82,10 @@ impl SetCond {
     }
 }
 
-
 pub trait Store:ResourceStore + Sync + Send {
     fn save_import(&self, descr: String, t: &Transaction) -> Result<u32, ThoosaError>;
-    fn save_tree_run(&mut self, input_run_id: Option<&[usize]>, descr: &str, keys: &str, properties_vals: HashMap<String, Val>) -> Result<usize, ThoosaError>;
-    fn get_input_run_ids(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError>;
+    fn save_run_config(&mut self, input_run_id: Option<&[usize]>, run_config_type: &dyn Display, descr: &str, keys: &str, properties_vals: HashMap<String, Val>) -> Result<usize, ThoosaError>;
+    fn get_input_run_ids(&mut self, run_id: usize, input_type: Option<&dyn Display>) -> Result<Vec<usize>, ThoosaError>;
     fn save_resources_set(&mut self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoosaError>;
     fn save_resource_set_group(&mut self, descr: String) -> Result<usize, ThoosaError>;
     fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
@@ -104,13 +103,13 @@ pub trait Store:ResourceStore + Sync + Send {
     fn list_motifs(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: usize) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
     fn list_run_resources(&mut self, run_id: usize) -> Result<Vec<String>, ThoosaError>;
-    fn list_run_params(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError>;
+    fn list_run_config_values(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError>;
     fn save_selected_motifs(&mut self, run_id: usize, selected_motifs: Vec<(usize, f64)>) -> Result<usize, ThoosaError>;
     fn list_input_run_ids(&mut self, ids: &[usize]) -> Result<Vec<(usize, usize)>, ThoosaError>; //corr_run_id, run_id, label
     fn list_output_run_ids(&mut self, input_run_id: usize) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
     fn list_selected_motifs(&mut self, motif_selection_id: usize, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
     fn list_motif_slices(&mut self, motif_id: usize, limit: Option<usize>, all_but_in_run_id: Option<(usize, usize)>) -> Result<(i64, usize, Vec<TensorSliceIdx<Resource>>), ThoosaError>;
-    fn tree_run_descr(&mut self, corr_run_id: usize) -> Result<Vec<(i64, String)>, ThoosaError>;
+    fn run_config_descr(&mut self, corr_run_id: usize) -> Result<Vec<(i64, String)>, ThoosaError>;
 
     fn conn(&self) -> &Mutex<Connection>;
 }
@@ -285,6 +284,7 @@ impl ResourceStore for SqlStore {
         Ok(r)
     }
 
+
 }
 
 impl Store for SqlStore {
@@ -297,11 +297,11 @@ impl Store for SqlStore {
     }
 
     //TODO resources - save serialized resources config - run_resources is getting to big
-    fn save_tree_run(&mut self, input_run_ids_op: Option<&[usize]>, descr: &str, resources: &str, properties_vals: HashMap<String, Val>) -> Result<usize, ThoosaError> {
+    fn save_run_config(&mut self, input_run_id: Option<&[usize]>, run_config_type: &dyn Display, descr: &str, keys: &str, properties_vals: HashMap<String, Val>) -> Result<usize, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction().map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
 
-        t.execute("INSERT INTO tree_run (descr) VALUES (?)", params![ descr])?;
+        t.execute("INSERT INTO run_configs (type, descr) VALUES (?, ?)", params![run_config_type.to_string(), descr])?;
 
         let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
@@ -322,8 +322,8 @@ impl Store for SqlStore {
             t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
         }*/
 
-        if let Some(input_run_ids) = input_run_ids_op {
-            let (mut q, params) = input_run_ids.into_iter().fold((vec!["INSERT INTO tree_run_input (run_id, input_run_id) VALUES"], vec![]), |(mut q, mut params): (Vec<&str>, Vec<Value>), v| {
+        if let Some(input_run_ids) = input_run_id {
+            let (mut q, params) = input_run_ids.into_iter().fold((vec!["INSERT INTO run_configs_input (run_id, input_run_id) VALUES"], vec![]), |(mut q, mut params): (Vec<&str>, Vec<Value>), v| {
                 q.push("(?, ?)");
                 q.push(",");
 
@@ -353,22 +353,16 @@ impl Store for SqlStore {
         Ok(run_id as usize)
     }
 
-    fn get_input_run_ids(&mut self, run_id: usize) -> Result<Vec<usize>, ThoosaError> {
+    fn get_input_run_ids(&mut self, run_id: usize, input_type: Option<&dyn Display>) -> Result<Vec<usize>, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
-        //
-        //
-        // t.query_row("SELECT input_run_id FROM tree_run WHERE id=?", [run_id], |row| row.get(0)).map_err(|e|ThoosaError::new(e.to_string()))
 
         let input_run_ids = {
-            let mut stmt = t.prepare("SELECT input_run_id FROM tree_run_input WHERE run_id=?")?;
-
-            let vec = stmt.query_map([run_id], |row| {
-                row.get::<usize, usize>(0)
-            })?.collect::<Result<Vec<usize>, Error>>()?;
-
-            vec
+            Self::get_input_run_ids_(&t, run_id, input_type)?
         };
+
+        t.commit()?;
+
         Ok(input_run_ids)
     }
 
@@ -1063,12 +1057,12 @@ impl Store for SqlStore {
         result
     }
 
-    fn list_run_params(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError> {
+    fn list_run_config_values(&mut self, run_id: usize) -> Result<HashMap<String, Val>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         let result = {
-            let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value FROM run_param_values WHERE run_id=?")?;
+            let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value FROM run_config_values WHERE run_id=?")?;
 
 
             let result = stmt.query_map([run_id], |row| {
@@ -1080,7 +1074,7 @@ impl Store for SqlStore {
                         row.get::<usize, String>(3).ok()
                     )
                 )
-            })?.map(|v| v.expect(format!("can't get run_param_values for {}", run_id).as_str())).fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value)| {
+            })?.map(|v| v.expect(format!("can't get run_config_values for {}", run_id).as_str())).fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value)| {
                 a.insert(
                     name.clone(),
                     real_value.map(|v| v.into())
@@ -1111,7 +1105,7 @@ impl Store for SqlStore {
                 .into_iter()
                 .fold(
 
-                (vec!["INSERT INTO selected_motifs (tree_run_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
+                (vec!["INSERT INTO selected_motifs (run_configs_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
                 |mut a: (Vec<&str>, Vec<Value>), (motif_id, rate)| {
                     a.0.push("(?, ?, ?)");
                     a.0.push(", ");
@@ -1140,7 +1134,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
 
-        let (mut q, params) = run_ids.into_iter().fold((vec!["SELECT run_id, input_run_id FROM tree_run_input WHERE run_id IN ("], vec![]), |mut a, v| {
+        let (mut q, params) = run_ids.into_iter().fold((vec!["SELECT run_id, input_run_id FROM run_configs_input WHERE run_id IN ("], vec![]), |mut a, v| {
             a.0.push("?");
             a.0.push(",");
             a.1.push(*v);
@@ -1173,7 +1167,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
 
-        let q = "SELECT run_id FROM tree_run_input WHERE input_run_id=?";
+        let q = "SELECT run_id FROM run_configs_input WHERE input_run_id=?";
 
         let id__input_id = {
             let mut stmt = t.prepare(q)?;
@@ -1201,7 +1195,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         {
-            let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.tree_run_id=?")?;
+            let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.run_configs_id=?")?;
 
             stmt.query_map([motif_selection_id], |row| {
                 Ok((
@@ -1224,11 +1218,11 @@ impl Store for SqlStore {
     }
 
 
-    fn tree_run_descr(&mut self, run_id: usize) -> Result<Vec<(i64, String)>, ThoosaError> {
+    fn run_config_descr(&mut self, run_id: usize) -> Result<Vec<(i64, String)>, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
-        let descr: String = t.query_row("SELECT descr FROM tree_run WHERE id=?", [run_id], |row| row.get(0))?;
+        let descr: String = t.query_row("SELECT descr FROM run_configs WHERE id=?", [run_id], |row| row.get(0))?;
 
         debug!("descr={:?}", descr);
 
@@ -1313,16 +1307,17 @@ impl SqlStore {
 
             //descr - dist, dist etc
             t.execute(
-                "CREATE TABLE IF NOT EXISTS tree_run (
+                "CREATE TABLE IF NOT EXISTS run_configs (
                 id              INTEGER PRIMARY KEY,
+                type            VARCHAR(256),
                 descr           VARCHAR(256),
                 run_on          DATETIME DEFAULT CURRENT_TIMESTAMP
             )", ())?;
 
             t.execute(
-                "CREATE TABLE IF NOT EXISTS tree_run_input (
-                input_run_id     NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
-                run_id     NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
+                "CREATE TABLE IF NOT EXISTS run_configs_input (
+                input_run_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
 
                 PRIMARY KEY (input_run_id, run_id)
             )", ())?;
@@ -1330,16 +1325,16 @@ impl SqlStore {
             //key - resource id  //TODO remove ord_id?
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
-                run_id     NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
+                run_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 ord_id     INTEGER NOT NULL,
                 key        VARCHAR(256),
                 PRIMARY KEY (run_id, ord_id)
             )", ())?;
 
             t.execute(
-                "CREATE TABLE IF NOT EXISTS run_param_values (
+                "CREATE TABLE IF NOT EXISTS run_config_values (
                 id          INTEGER PRIMARY KEY,
-                run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
+                run_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 name        VARCHAR(256),
                 real_value  REAL,
                 int_value   INTEGER,
@@ -1348,13 +1343,13 @@ impl SqlStore {
                 )",
                 (),
             )?;
-            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_param_values_name_run_id ON run_param_values (run_id, name, label_id);", ())?;
+            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_config_values_name_run_id ON run_config_values (run_id, name, label_id);", ())?;
 
             t.execute( //group - ordinal as appeared when grouping, not needed
                "CREATE TABLE IF NOT EXISTS motifs (
                 id              INTEGER PRIMARY KEY,
                 group_ord       INTEGER NOT NULL,
-                run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
+                run_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL
             )", ())?;
 
@@ -1362,7 +1357,7 @@ impl SqlStore {
             "CREATE TABLE IF NOT EXISTS slices (
                 id              INTEGER PRIMARY KEY,
                 motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
-                run_id          NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
+                run_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
                 resource_id     REFERENCES resources(id) ON DELETE CASCADE,
                 slice_idx       INTEGER NOT NULL,
@@ -1382,7 +1377,7 @@ impl SqlStore {
             t.execute( //todo label
                        "CREATE TABLE IF NOT EXISTS selected_motifs (
                 motif_id   REFERENCES motifs(id),
-                tree_run_id      NOT NULL REFERENCES tree_run(id) ON DELETE CASCADE,
+                run_configs_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 rate    FLOAT NOT NULL
             )", ())?;
 
@@ -1437,16 +1432,16 @@ impl SqlStore {
     fn save_param_value(t: &Transaction, run_id: usize, param_name: &str, value: Val, label_id: Option<usize>) -> Result<(), ThoosaError> {
         match value {
             Val::Real(v) => {
-                t.execute("INSERT INTO run_param_values (run_id, label_id, name, real_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_id, label_id, name, real_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::Int(v) => {
-                t.execute("INSERT INTO run_param_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::UInt(v) => {
-                t.execute("INSERT INTO run_param_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::Str(v) => {
-                t.execute("INSERT INTO run_param_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
         }
 
@@ -1546,6 +1541,30 @@ impl SqlStore {
         debug!("save_slices_groups_as_motifs_from_tmp_db: slice_matches_updated={slice_matches_updated}");
 
         Ok(())
+    }
+
+
+    fn get_input_run_ids_(t:&Transaction, run_id: usize, input_type: Option<&dyn Display>) -> Result<Vec<usize>, ThoosaError> {
+        let mut stmt = t.prepare("SELECT rci.input_run_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_id WHERE run_id=?")?;
+
+        let vec = stmt.query_map([run_id], |row| {
+            Ok((
+                row.get::<usize, usize>(0)?,
+                row.get::<usize, String>(1)?
+            ))
+
+        })?.flat_map(|v|{
+            let (run_id, config_type) = v.expect("no run_id, config_type");
+
+            if input_type.map(|input_type|input_type.to_string().ne(&config_type)).unwrap_or(false){
+                Box::new(Self::get_input_run_ids_(t, run_id, input_type).unwrap().into_iter()) as Box<dyn Iterator<Item=usize>>
+            } else {
+                Box::new(std::iter::once(run_id)) as Box<dyn Iterator<Item=usize>>
+            }
+
+        }).collect::<Vec<usize>>();
+
+        Ok(vec)
     }
 
 }
@@ -1716,6 +1735,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
 #[cfg(test)]
 mod store_tests {
     use std::collections::HashMap;
+    use std::fmt::{Display, Formatter};
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -1852,8 +1872,9 @@ mod store_tests {
         ];
 
 
-        let find_motifs_run_id = store.lock().save_tree_run(
+        let find_motifs_run_id = store.lock().save_run_config(
             None,
+            &"todo",
             "find_motifs", "",
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
         )?;
@@ -1919,8 +1940,9 @@ mod store_tests {
         debug!("motif_slices_1111={motif_slices_1111:?}");
         debug!("motif_slices_444={motif_slices_444:?}");
 
-        let select_motifs_run_id = store.lock().save_tree_run(
+        let select_motifs_run_id = store.lock().save_run_config(
             Some(&[find_motifs_run_id]),
+            &"todo",
             "find_motifs", "",
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
         )?;
@@ -1977,7 +1999,7 @@ mod store_tests {
         //
         // assert_eq!(
         //     vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
-        //     store.tree_run_descr(motif_selection_run_id)?
+        //     store.run_configs_descr(motif_selection_run_id)?
         // );
         //
         // store.lock().delete_slices_without_matches(run_id)?;
@@ -2015,19 +2037,21 @@ mod store_tests {
     }
 
     #[test]
-    fn test_save_tree_run() -> Result<(), ThoosaError>{
+    fn test_save_run_config() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_db.db3"))?));
 
-        let run_id = store.lock().save_tree_run(
+        let run_id = store.lock().save_run_config(
             None,
+            &"todo",
             "test", "",
             HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
         )?;
 
-        let next_run_id = store.lock().save_tree_run(
+        let next_run_id = store.lock().save_run_config(
             Some(&[run_id]),
+            &"todo",
             "test next", "",
             HashMap::from([("next_prop1".into(), Val::Int(1)), ("next_prop2".into(), Val::Real(2.0)), ("next_prop3".into(), Val::Str("333".to_string()))]),
         )?;
@@ -2050,13 +2074,13 @@ mod store_tests {
             None,
         )?;
 
-        let loaded_params = store.lock().list_run_params(run_id)?;
+        let loaded_params = store.lock().list_run_config_values(run_id)?;
 
         assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
         assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
         assert_eq!(loaded_params.get("prop3").expect("prop3"), &Val::Str("333".to_string()));
 
-        let loaded_params_aaa = store.lock().list_run_params(run_id)?;
+        let loaded_params_aaa = store.lock().list_run_config_values(run_id)?;
 
         debug!("loaded_params_aaa={:?}", loaded_params_aaa);
 
@@ -2074,14 +2098,19 @@ mod store_tests {
     #[test]
     fn test_get_prev_run_id() -> Result<(), ThoosaError> {
 
-        // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        // let mut store = SqlStore::from_path("/tmp/test_db.db3")?;
         let mut store = SqlStore::in_mem()?;
 
-        let input_run_id = store.save_tree_run(None, "test 0", "", HashMap::new())?;
-        let run_id = store.save_tree_run(Some(&[input_run_id]), "test 1", "", HashMap::new())?;
+        let input_run_id = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new())?;
+        let run_id = store.save_run_config(Some(&[input_run_id]), &"aaa", "test 1", "", HashMap::new())?;
 
-        assert_eq!(store.get_input_run_ids(run_id)?[0], input_run_id);
+        assert_eq!(store.get_input_run_ids(run_id, None)?[0], input_run_id);
+
+
+        let input_run_id_0 = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new())?;
+        let input_run_id_1 = store.save_run_config(Some(&[input_run_id_0]), &"bbb", "test 1", "", HashMap::new())?;
+        let run_id = store.save_run_config(Some(&[input_run_id_1]), &"ccc", "test 1", "", HashMap::new())?;
+
+        assert_eq!(store.get_input_run_ids(run_id, Some(&"aaa"))?[0], input_run_id_0);
 
         Ok(())
     }
@@ -2124,7 +2153,6 @@ mod store_tests {
 
         Ok(())
     }
-
 
 
 
