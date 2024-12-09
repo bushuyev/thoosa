@@ -11,6 +11,7 @@ pub trait ResourceStore {
     fn list_resource_set_group_sets(&mut self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError>;
     fn list_group_labeled_resources_sets(&mut self, group_decr: &str) -> Result<Vec<(String, String)>, ThoosaError>;
     fn list_resource_set_resources(&mut self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
+    fn list_resource_random_in_group(&mut self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
 }
 
 #[derive(Debug, Clone)]

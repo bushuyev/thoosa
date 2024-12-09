@@ -95,7 +95,6 @@ pub trait Store:ResourceStore + Sync + Send {
     fn save_groups_by_label_cnt(&self, max_resources_in_set: usize, t: &Transaction) -> Result<(), ThoosaError>;
     fn list_resources_by_ids(&mut self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoosaError>;
     fn list_resource_random_not_label(&mut self, label: &str, limit: i64) -> Result<Vec<Resource>, ThoosaError>;
-    fn list_resource_random_in_group(&mut self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
     fn save_label(&self, label: &str, t: &Transaction) -> Result<u32, ThoosaError>;
     fn list_labels(&mut self) -> Result<Vec<String>, ThoosaError>;
     fn save_params_value(&mut self, params: HashMap<String, Val>, run_id: usize, label: Option<&str>) -> Result<(), ThoosaError>;
@@ -229,6 +228,61 @@ impl ResourceStore for SqlStore {
         t.commit()?;
 
         Ok(set_resources)
+    }
+
+    fn list_resource_random_in_group(&mut self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError> { //vec<(key, vec<(lablel, p)>>
+        let mut guard = self.conn.lock();
+        let t = guard.transaction()?;
+
+        let labels = Self::list_labels(&t)?;
+
+        debug!("list_resource_random_in_group: group_descr={:?} labels={:?}", group_descr, labels);
+
+        let r: Vec<(Resource, Vec<f32>)> = t.prepare(
+            "SELECT r.id, r.import_id, r.key, GROUP_CONCAT(l.label || '/' || lr.p, ','), r.length FROM resource_set_group rsg \
+            JOIN resource_set rs ON rs.group_id=rsg.id \
+            JOIN resource_resources_set rrs ON rrs.set_id=rs.id \
+            JOIN resources r ON r.id=rrs.resource_id \
+            JOIN labeled_resources lr ON lr.resource_id=r.id \
+            JOIN labels l ON l.id=lr.label_id \
+            WHERE rsg.descr=? GROUP BY r.key ORDER BY RANDOM()"
+        )?.query_map([Value::Text(group_descr.to_string())], |row| {
+            let key = row.get::<usize, u32>(0)?;
+            let labels_p = row.get::<usize, String>(3)?;
+
+            let labels_p_vec = labels_p.split(",")
+                .map(|label_p| {
+                    let mut label_p_v = label_p.split("/");
+                    (
+                        label_p_v.next().expect("label").into(),
+                        label_p_v.next().expect("p").parse::<f32>().expect("parse")
+                    )
+                }
+                ).fold(HashMap::new(), |mut a: HashMap<String, f32>, v| {
+                a.insert(v.0, v.1);
+                a
+            });
+
+            trace!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
+
+            Ok(
+                (
+                    Resource::new(
+                        row.get::<usize, u32>(0)?,
+                        row.get::<usize, u32>(1)?,
+                        row.get::<usize, String>(2)?,
+                        row.get::<usize, u32>(4)?
+                    ),
+                    labels.iter().map(|(_label_id, label)| *labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>()
+                )
+            )
+        })?.map(|v| v.unwrap()).collect();
+
+        t.commit()?;
+
+        debug!("list_resource_random_in_group: r.len={:?}", r.len());
+
+        Ok(r)
     }
 
 }
@@ -635,61 +689,6 @@ impl Store for SqlStore {
         })?.map(|v| v.unwrap()).collect();
 
         t.commit()?;
-
-        Ok(r)
-    }
-
-    fn list_resource_random_in_group(&mut self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError> { //vec<(key, vec<(lablel, p)>>
-        let mut guard = self.conn.lock();
-        let t = guard.transaction()?;
-
-        let labels = Self::list_labels(&t)?;
-
-        debug!("list_resource_random_in_group: group_descr={:?} labels={:?}", group_descr, labels);
-
-        let r: Vec<(Resource, Vec<f32>)> = t.prepare(
-            "SELECT r.id, r.import_id, r.key, GROUP_CONCAT(l.label || '/' || lr.p, ','), r.length FROM resource_set_group rsg \
-            JOIN resource_set rs ON rs.group_id=rsg.id \
-            JOIN resource_resources_set rrs ON rrs.set_id=rs.id \
-            JOIN resources r ON r.id=rrs.resource_id \
-            JOIN labeled_resources lr ON lr.resource_id=r.id \
-            JOIN labels l ON l.id=lr.label_id \
-            WHERE rsg.descr=? GROUP BY r.key ORDER BY RANDOM()"
-        )?.query_map([Value::Text(group_descr.to_string())], |row| {
-            let key = row.get::<usize, u32>(0)?;
-            let labels_p = row.get::<usize, String>(3)?;
-
-            let labels_p_vec = labels_p.split(",")
-                .map(|label_p| {
-                    let mut label_p_v = label_p.split("/");
-                    (
-                        label_p_v.next().expect("label").into(),
-                        label_p_v.next().expect("p").parse::<f32>().expect("parse")
-                    )
-                }
-                ).fold(HashMap::new(), |mut a: HashMap<String, f32>, v| {
-                a.insert(v.0, v.1);
-                a
-            });
-
-            trace!("list_resource_random_in_group: key={} labels_p={} labels_p_vec={:?}", key, labels_p, labels_p_vec);
-
-            Ok(
-                (
-                    Resource::new(
-                        row.get::<usize, u32>(0)?,
-                        row.get::<usize, u32>(1)?,
-                        row.get::<usize, String>(2)?,
-                        row.get::<usize, u32>(4)?
-                    ),
-                    labels.iter().map(|(_label_id, label)| *labels_p_vec.get(label).unwrap_or(&0.0)).collect::<Vec<f32>>()
-                )
-            )
-        })?.map(|v| v.unwrap()).collect();
-
-        t.commit()?;
-
-        debug!("list_resource_random_in_group: r.len={:?}", r.len());
 
         Ok(r)
     }
