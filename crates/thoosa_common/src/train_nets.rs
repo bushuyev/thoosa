@@ -143,6 +143,10 @@ impl RunConfig for TrainLabelNodeRunConfig {
     fn set_id(&mut self, id: usize) {
         self.id.replace(id);
     }
+
+    fn type_name() -> &'static str {
+        "LabelNode"
+    }
 }
 
 #[derive(Debug)]
@@ -477,8 +481,9 @@ impl SavableOptResult for TrainLabelNodesRunConfigResult {
             None => self.train_label_nodes_run_config_id,
 
             Some(train_motifs_nodes_values) => {
-                store.lock().save_tree_run(
+                store.lock().save_run_config(
                     Some(&[self.train_label_nodes_run_config_id]),
+                    &TrainLabelNodeRunConfig::type_name(),
                     "descr",
                     "todo",
                     TrainLabelNodeRunConfig::from_values(Some(self.train_label_nodes_run_config_id), train_motifs_nodes_values.lr, train_motifs_nodes_values.num_layers).to_properties_map()
@@ -717,8 +722,9 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
             None => self.train_final_nodes_run_config_id,
 
             Some(train_final_nodes_values) => {
-                store.lock().save_tree_run(
+                store.lock().save_run_config(
                     Some(&[self.train_final_nodes_run_config_id]),
+                    &TrainLabelNodeRunConfig::type_name(),
                     "descr",
                     "todo",
                     TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers).to_properties_map()
@@ -1172,6 +1178,10 @@ impl RunConfig for TrainMotifsNodesRunConfig{
     fn set_id(&mut self, id: usize) {
         self.id.replace(id);
     }
+
+    fn type_name() -> &'static str {
+        "MotifNode"
+    }
 }
 
 impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> for TrainMotifsNodesParams {
@@ -1597,8 +1607,9 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult {
         let run_config_id = match self.run_config_values.as_ref() {
             None => self.train_motifs_nodes_run_config_id,
             Some(run_config_values) => {
-                store.lock().save_tree_run(
+                store.lock().save_run_config(
                     Some(&[self.train_motifs_nodes_run_config_id]),
+                    &TrainMotifsNodesRunConfig::type_name(),
                     "descr",
                     "todo",
                     TrainMotifsNodesRunConfig::from_values(Some(self.train_motifs_nodes_run_config_id), run_config_values.lr, run_config_values.num_layers).to_properties_map()
@@ -2014,6 +2025,10 @@ impl RunConfig for crate::train_nets::TrainFinalNodeRunConfig {
 
     fn set_id(&mut self, id: usize) {
         self.id.replace(id);
+    }
+
+    fn type_name() -> &'static str {
+        "FinalNode"
     }
 }
 

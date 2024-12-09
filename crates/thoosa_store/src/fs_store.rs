@@ -198,7 +198,7 @@ mod tests {
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
+        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -242,7 +242,7 @@ mod tests {
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
+        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -299,7 +299,7 @@ mod tests {
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
+        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -354,7 +354,7 @@ mod tests {
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_tree_run(None, "test", "keys", HashMap::new())?;
+        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
