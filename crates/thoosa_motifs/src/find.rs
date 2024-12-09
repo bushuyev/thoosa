@@ -250,7 +250,7 @@ pub fn find_motifs_by_euc_dist(
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
 
-    let resource_keys = resource_config.resource_config_to_keys(store)?;
+    let resource_keys = resource_config.to_resources(store)?;
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
@@ -1261,7 +1261,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError>{
 
     let motifs_area = loader.write().get_available_cache_area();
-    let labels_resources = resource_config.resource_config_to_keys(store)?;
+    let labels_resources = resource_config.to_resources(store)?;
 
     debug!("select_motifs_for_label_2: select_motif_run_configs={select_motif_run_configs:?}");
     trace!("select_motifs_for_label_2: labels_resources={labels_resources:?}");

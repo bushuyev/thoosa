@@ -489,7 +489,7 @@ pub fn run_opt_train_label_nodes (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     run_config:&TrainLabelNodeRunConfig,
     comon_label_node_params:&CommonTrainLabelNodeRunConfig,
-    train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>,
+    train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>,//TODO i64 to 1/0 enum for binary class
     valid_labels_resources: Rc<Vec<(i64, Vec <Resource>)>>,
     device: &Device,
     executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
@@ -593,11 +593,70 @@ fn view_for_label_model(t: Tensor, channels: i64, max_nodes: i64, motif_batch_si
     t.view([-1/*items_per_label as i64 * 2*/, channels, max_nodes, max_motif_batches as i64 * motif_batch_size])
 }
 
+pub fn run_opt_train_final (
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    train_final_params: &crate::train_nets::TrainFinalNodeRunConfig,
+    train_resources:Vec<(Resource, Vec<f32>)>,
+    valid_resources: Vec<(Resource, Vec<f32>)>,
+    step: usize, motif_batch_size: i64, device: &Device, labels: Vec<String>,
+    executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    label_models: HashMap<String, Vec<(usize, crate::train_nets::LabelNodeParams, crate::train_nets::SyncModule)>>, //TODO Arc<RwLock...
+    labels_channels_motifs_models:HashMap<String, Vec<Vec<(crate::train_nets::MotifNodeParams, crate::train_nets::SyncModule)>>>,
+    final_node_params:&crate::train_nets::FinalNodeParams
+) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
+    let mut batch = ClassTensorsLoaderData::new(
+        train_resources,
+        valid_resources,
+
+        train_final_params.batch_size,
+        Arc::clone(&executor),
+        device.clone(),
+        Some( Box::new(move |t:Box<Tensor>| {
+
+            let mut labels_tensors = vec![];
+            for (label, label_nodes) in &label_models {
+                debug!("train_final: label={label} label_nodes.len={:?} label_nodes[0].1={:?} t.size()={:?}", label_nodes.len(), label_nodes[0].1, t.size());
+
+                let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("no {label} label in labels_channels_motifs_models").as_str());
+                debug!("train_final: len={} channels_motifs_models={channels_motifs_models:?}", channels_motifs_models.read().len());
+
+                //TODO keep common conifg for motif nets used to build label
+                let motif_nets_t = apply_motif_nets(&t, Arc::clone(channels_motifs_models), step, label_nodes[0].1.motif_batch_size, label_nodes[0].1.max_motif_batches as usize, &device);
+
+                for (label_node_run_id, label_node_params, label_node) in label_nodes{
+
+                    debug!("train_final: label_node_params={label_node_params:?} label_node_run_id={:?} t_net.size()={:?}",  label_node_run_id, motif_nets_t.size());
+
+
+                    let t_net_view = view_for_label_model(motif_nets_t.unsqueeze(0), label_nodes[0].1.channels, label_node_params.max_motif_nodes, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
+
+                    debug!("train_final: label_node_run_id={:?} t_net_view.size()={:?}", label_node_run_id, t_net_view.size());
+
+                    let t_out = label_node.forward(&t_net_view);
+                    debug!("train_final: label={label} label_node.forward t_out.size()={:?}", t_out.size());
+
+                    labels_tensors.push(t_out);
+
+                }
+
+            }
+            // Box::new(apply_label_motifs(num_features, step, &t, Arc::clone(&channels_motifs_models), motif_batch_size, max_motif_batches, &device))
+            let final_input_t = Tensor::stack(labels_tensors.as_slice(), 0);
+            debug!("train_final: final_input_t.size()={:?}", final_input_t.size());
+
+            Box::new(final_input_t)
+
+        }))
+        // None
+
+    );
+    todo!()
+}
 
 //TODO trains on all label models, add param to train on selected run_ids
 pub fn train_final (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    train_final_params: &TrainFinalParams,
+    train_final_params: &TrainFinalNodeParams,
     train_resources:Vec<(Resource, Vec<f32>)>,
     valid_resources: Vec<(Resource, Vec<f32>)>,
     step: usize, motif_batch_size: i64, device: &Device, labels: Vec<String>,
@@ -613,7 +672,6 @@ pub fn train_final (
         a.insert(v.0, Arc::new(RwLock::new(v.1)));
         a
     });
-
 
 
     let device =device.clone();
@@ -639,14 +697,14 @@ pub fn train_final (
                     debug!("train_final: len={} channels_motifs_models={channels_motifs_models:?}", channels_motifs_models.read().len());
 
                     //TODO keep common conifg for motif nets used to build label
-                    let t_net = apply_motif_nets(&t, Arc::clone(channels_motifs_models), step, label_nodes[0].1.motif_batch_size, label_nodes[0].1.max_motif_batches as usize, &device);
+                    let motif_nets_t = apply_motif_nets(&t, Arc::clone(channels_motifs_models), step, label_nodes[0].1.motif_batch_size, label_nodes[0].1.max_motif_batches as usize, &device);
 
                     for (label_node_run_id, label_node_params, label_node) in label_nodes{
 
-                        debug!("train_final: label_node_params={label_node_params:?} label_node_run_id={:?} t_net.size()={:?}",  label_node_run_id, t_net.size());
+                        debug!("train_final: label_node_params={label_node_params:?} label_node_run_id={:?} t_net.size()={:?}",  label_node_run_id, motif_nets_t.size());
 
 
-                        let t_net_view = view_for_label_model(t_net.unsqueeze(0), label_nodes[0].1.channels, label_node_params.max_motif_nodes, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
+                        let t_net_view = view_for_label_model(motif_nets_t.unsqueeze(0), label_nodes[0].1.channels, label_node_params.max_motif_nodes, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
 
                         debug!("train_final: label_node_run_id={:?} t_net_view.size()={:?}", label_node_run_id, t_net_view.size());
 
@@ -679,7 +737,7 @@ pub fn train_final (
 
         },
         train_final_params.cycles,
-        nn::AdamW::default().build(&vs_0, train_final_params.lr)?,
+        nn::AdamW::default().build(&vs_0, 0.1)?,
         |t:Tensor|{
             debug!("train_final: t.size()={:?} ", t.size());
 
@@ -1742,7 +1800,7 @@ fn apply_motif_nets(
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct TrainFinalParams {
+pub struct TrainFinalNodeParams {
     #[arg(long,  default_value_t = 1000)]
     step: usize,
 
@@ -1755,9 +1813,11 @@ pub struct TrainFinalParams {
     #[arg(long, default_value_t = 1000)]
     cycles: usize,
 
-    #[arg(long, default_value_t = 1.0e-5)]
-    lr: f64,
+    #[arg(long, value_parser=parse_range_or_value::<f64>)]
+    pub lr: RangeOrValue<f64>,
 
+    #[arg(long, value_parser=parse_range_or_value::<u32>)]
+    pub num_layers: RangeOrValue<u32>,
 
     #[arg(long)]
     train_resource_group: String,
@@ -1766,38 +1826,50 @@ pub struct TrainFinalParams {
     valid_resource_group: String,
 
     #[arg(long, default_value_t = 5)]
-    items_per_label:usize //TODO eeg batch size?
+    items_per_label:usize, //TODO eeg batch size?
+
+    #[arg(long, default_value_t = 10)]
+    pub opt_max_evals: u32,
+
+    #[arg(long, default_value_t = 3)] //TODO validate opt_n_init < opt_max_evals
+    pub opt_n_init: u32,
 }
 
-impl TrainFinalParams {
-
-    pub fn cycles(&self) -> usize {
-        self.cycles
-    }
-
-    pub fn lr(&self) -> f64 {
-        self.lr
-    }
+impl TrainFinalNodeParams {
 
     pub fn dummy(step: usize, batch_size: usize, train_resource_group:String, valid_resource_group:String, cycles: usize, motif_batch_size: i64, items_per_label: usize) ->Self {
-        TrainFinalParams {
+        TrainFinalNodeParams {
             step,
             cycles,
             batch_size,
-            lr: 1.0e-5,
+            lr: 1.0e-5.into(),
+            num_layers: 1.into(),
             train_resource_group,
             valid_resource_group,
             motif_batch_size,
-            items_per_label
+            items_per_label,
+            opt_max_evals: 10,
+            opt_n_init: 3,
         }
     }
+
+    //TODO add explicit flag to enable optimization
+    pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
+        [
+            (&self.lr).try_into().ok(),
+            (&self.num_layers).try_into().ok(),
+        ].into_iter()
+            .collect::<Option<Vec<Hyperparameter>>>()
+            .map(|v|ConfigurationSpace::new(v))
+    }
+
     pub fn train_resource_group(&self) -> &str {
         &self.train_resource_group
     }
+
     pub fn valid_resource_group(&self) -> &str {
         &self.valid_resource_group
     }
-
 
     pub fn step(&self) -> usize {
         self.step
@@ -1806,11 +1878,101 @@ impl TrainFinalParams {
     pub fn motif_batch_size(&self) -> i64 {
         self.motif_batch_size
     }
+}
 
-    pub fn items_per_label(&self) -> usize {
-        self.items_per_label
+#[derive(Debug)]
+pub struct TrainFinalNodeRunConfig {
+    id:Option<usize>,
+    run_config_or_opt_space: ValuesOrOptSpace<TrainNodesValues>
+}
+
+impl TrainFinalNodeRunConfig {
+
+    pub fn from_values(id: Option<usize>, lr: f64, num_layers: u32) -> Self {
+        Self {
+            id,
+            run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {lr, num_layers}),
+        }
+    }
+
+    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace, opt_config: OptConfig) -> Self {
+        Self {
+            id,
+            run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
+        }
     }
 }
+
+impl RunConfig for crate::train_nets::TrainFinalNodeRunConfig {
+    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+        todo!()
+    }
+
+    fn set_id(&mut self, id: usize) {
+        self.id.replace(id);
+    }
+}
+
+
+#[derive(Debug)]
+pub struct CommonTrainFinalNodeRunConfig {
+    pub cycles:usize,
+}
+
+impl CommonTrainFinalNodeRunConfig {
+    pub fn new(cycles: usize) -> Self {
+        Self { cycles }
+    }
+}
+
+
+impl Params<TrainFinalNodeRunConfig, NodeResources, CommonTrainFinalNodeRunConfig> for TrainFinalNodeParams {
+
+    fn to_run_configs(&self) -> Vec<TrainFinalNodeRunConfig> {
+
+        if let Some(config_space) = self.to_config_space() {
+
+            debug!("TrainMotifsNodesParams::to_run_configs: config_space={config_space:?}");
+            vec![
+                TrainFinalNodeRunConfig::from_opt_space(None, config_space, OptConfig::new(self.opt_max_evals, self.opt_n_init))
+            ]
+
+        } else {
+            //TODO avoid collecting
+            let v = make_combos(vec![
+                self.lr.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
+                self.num_layers.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
+            ]).into_iter().map(|mut config_combo:Vec<Val>|{
+                debug!("TrainMotifsNodesParams::to_run_configs: config_combo={config_combo:?} ");
+                let num_layers = config_combo.pop().unwrap().try_into().unwrap();
+                let lr = config_combo.pop().unwrap().try_into().unwrap();
+                TrainFinalNodeRunConfig::from_values(
+                    None,
+                    lr,
+                    num_layers,
+                )
+            }).collect();
+
+            debug!("TrainMotifsNodesParams::to_run_configs: self.lr={:?} self.num_layers={:?} v={v:?}", self.lr, self.num_layers);
+
+            v
+        }
+    }
+
+    fn resource_config(&self) -> NodeResources {
+        NodeResources::new(
+            self.train_resource_group.clone(),
+            self.valid_resource_group.clone()
+        )
+    }
+
+    fn common_config(&self) -> CommonTrainFinalNodeRunConfig {
+        CommonTrainFinalNodeRunConfig::new(
+            self.cycles
+        )
+    }
+}
+
 
 #[derive(Debug, Args, Clone)]
 pub struct InferParams {
@@ -1905,7 +2067,7 @@ mod train_tests {
     use crate::my_tch::apply_channel_motifs;
     use crate::train_nets;
     use crate::train_nets::{apply_motif_nets, FinalNodeParams, LoadingTensorsDataBatch, TrainNodesValues};
-    use crate::train_nets::{load_all_label_models_ws, load_motif_models_ws, CommonTrainLabelNodeRunConfig, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TensorsDataBatch, TrainFinalParams, TrainLabelNodeParams, TrainLabelNodeRunConfig};
+    use crate::train_nets::{load_all_label_models_ws, load_motif_models_ws, CommonTrainLabelNodeRunConfig, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TensorsDataBatch, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig};
     use crate::utils::DataBatch;
     use crate::utils::from;
     use crate::ws::{FsWorkspace, Workspace};
@@ -2205,15 +2367,18 @@ mod train_tests {
         let tensors_path = Some(test_dir.join("tensors"));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 1000)?));
 
-        let params = TrainFinalParams {
+        let params = TrainFinalNodeParams {
             step:100,
             batch_size: 10,
             motif_batch_size:100,
             cycles: 3,
-            lr: 1.0e-5,
+            lr: 1.0e-5.into(),
+            num_layers: 1.into(),
             train_resource_group: "zzz".into(),
             valid_resource_group: "zzz".into(),
-            items_per_label: 5
+            items_per_label: 5,
+            opt_max_evals: 0,
+            opt_n_init: 0,
         };
 
         let motif_batch_size = 7;
