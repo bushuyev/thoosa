@@ -169,7 +169,7 @@ pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaE
     drop(diff);
     debug!("clc_dist_d2: squared_diff size={:?}", squared_diff.size());
 
-    let squared_distances = squared_diff.sum_dim_intlist(dim+2, false, Kind::Float);
+    let squared_distances = squared_diff.f_sum_dim_intlist(dim+2, false, Kind::Float).map_err(tch_to_thoosa_err)?;
     drop(squared_diff);
 
     Ok(squared_distances.sqrt())

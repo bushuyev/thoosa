@@ -679,7 +679,7 @@ mod tests {
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
     use thoosa_main::data::ParquetLoader;
-    use thoosa_main::cli::{import_resources, run_step, run_train_final, run_train_label_nodes, Cli, RunAllParams};
+    use thoosa_main::cli::{import_resources, run_step, run_train_label_nodes, Cli, RunAllParams};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, SelectMotifsParams};
     use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use thoosa_common::ws::Workspace;

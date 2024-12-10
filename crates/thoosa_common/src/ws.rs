@@ -217,31 +217,44 @@ impl Workspace for FsWorkspace {
 
         Ok(())
     }
+
+    /// returns vec of (safetensors_path, json_path)
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
         recurse_files(&self.labels_models_path, &|path| {
-            println!("path={path:?}");
+            println!("label_models:  path={path:?}");
             path.extension().map(|v| v.eq("safetensors")).unwrap_or(false)
         })?.into_iter().try_fold(HashMap::new(), |mut a, safetensors_path| {
             let parent = safetensors_path.parent().expect("parent");
             let label = parent.file_stem().expect("label");
             let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
             let json = format!("{}.json", file_stem);
-            let json = parent.join(json);
+            let json_path = parent.join(json);
 
-            debug!("label_models: label={label:?} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
+            debug!("label_models: label={label:?} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json_path:?}  {}", json_path.exists());
 
-            a.entry(label.to_str().expect("label").to_string()).or_insert(vec![]).push((safetensors_path, json));
+            a.entry(label.to_str().expect("label").to_string()).or_insert(vec![]).push((safetensors_path, json_path));
             Ok(a)
         })
     }
+
+    /// returns (safetensors_path, json_path)
+    fn final_model(&self, id: usize) -> Result<(PathBuf, PathBuf), ThoosaError> {
+        let safetensors_path = self.final_models_path.join(format!("{id}.safetensors"));
+        let json_path = self.final_models_path.join(format!("{id}.json"));
+
+        Ok((safetensors_path, json_path))
+    }
+
     #[inline]
     fn channels(&self) -> usize {
         self.channels
     }
+
     #[inline]
     fn max_input(&self) -> usize {
         self.max_input
     }
+
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
         debug!("FsWorkspace::clc_records: self.tensors_path={:?}", self.tensors_path);
 
@@ -293,6 +306,8 @@ pub trait Workspace:Sync + Send {
     fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
     fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
+    fn final_model(&self, id: usize) -> Result<(PathBuf, PathBuf), ThoosaError>;
+
     #[inline]
     fn channels(&self) -> usize;
     #[inline]
@@ -391,6 +406,10 @@ impl Workspace for DummyWorkspace {
     }
 
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
+        todo!()
+    }
+
+    fn final_model(&self, id: usize) -> Result<(PathBuf, PathBuf), ThoosaError>{
         todo!()
     }
 
