@@ -326,7 +326,7 @@ pub fn apply_channel_motifs(
     let input_t_size = channel.size();
     debug!("apply_channel_motifs: channel.size={:?} input_t_size={:?} nodes.len={:?} motif_width={motif_width} input_slices_motif_batch_size={input_slices_motif_batch_size}", channel.size(), input_t_size, motif_nodes.len());
 
-    assert!(input_t_size.len() == 1);
+    assert_eq!(input_t_size.len(), 1);//single channel
 
     let input_n = input_t_size[0];
 
