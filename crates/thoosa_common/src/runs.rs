@@ -130,7 +130,7 @@ impl ResourcesConfig for Logits {
         store.lock().list_resource_random_in_group(&self.group)?
             .into_iter()
             .map(move |(resourceId, labels_p)| {
-                debug!("labels_p={:?}", labels_p);
+                debug!("ResourcesConfig::to_resources resourceId={resourceId:?} labels_p={:?}", labels_p);
                 Ok((
                     resourceId,
                     labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))

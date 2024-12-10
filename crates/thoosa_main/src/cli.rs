@@ -735,23 +735,33 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: 
         for (label_run_id, label_node_params, node) in label_run_id_nodes {
 
             let motif_node_config_run_ids = store.lock().get_input_run_ids(*label_run_id, Some(&TrainMotifsNodesRunConfig::type_name())).expect("get_input_run_id(label_run_id)");
-            debug!("load_all_label_and_motif_models: label_run_id={label_run_id:?} motif_node_config_run_ids={motif_node_config_run_ids:?}");
-            // assert_eq!(motif_node_config_run_ids.len(), 1);
+            debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id:?} motif_node_config_run_ids={motif_node_config_run_ids:?}");
+            assert_eq!(motif_node_config_run_ids.len(), 1);
 
-            let motif_selection_run_ids = store.lock().get_input_run_ids(*label_run_id/*motif_node_config_run_ids[0]*/, Some(&SelectMotifsRunConfig::type_name())).expect("get_input_run_ids(motif_node_params_selection_run_ids");
+            let motif_selection_run_ids = store.lock().get_input_run_ids(motif_node_config_run_ids[0], Some(&SelectMotifsRunConfig::type_name())).expect("get_input_run_ids(motif_node_params_selection_run_ids");
             assert_eq!(motif_selection_run_ids.len(), 1);
 
-            debug!("load_all_label_and_motif_models: motif_selection_run_ids={motif_selection_run_ids:?}");
-
+            debug!("load_all_label_and_motif_models: label={label} motif_selection_run_ids={motif_selection_run_ids:?}");
 
             let channels_motifs_models = store.lock()
-                .list_selected_motifs(motif_selection_run_ids[0], ws.read().channels() as u32).expect("list_selected_motifs").into_iter().enumerate().flat_map(
+                .list_selected_motifs(
+                    motif_selection_run_ids[0],
+                    ws.read().channels() as u32
+                ).expect("list_selected_motifs")
+                .into_iter()
+                .enumerate()
+                .map(|(channel, channels_motifs)| {
 
-                |(channel, channels_motifs)| {
                     let ws_moved = Arc::clone(&ws);
-                    channels_motifs.into_iter().map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, device).expect("load_motif_models"))
-                }).collect();
+                    channels_motifs
+                        .into_iter()
+                        //TODO more than one model for a motif?
+                        .flat_map(move |(motif_id, rate)| load_motif_models_ws(&ws_moved, channel, motif_id, device).expect("load_motif_models"))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<Vec<_>>>();
 
+            debug!("load_all_label_and_motif_models: label={label} channels_motifs_models={channels_motifs_models:?}");
 
             labels_channels_motifs_models.insert(label.clone(), channels_motifs_models);
         }
@@ -760,7 +770,7 @@ fn load_all_label_and_motif_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: 
 }
 
 pub fn run_train_label_nodes(
-    motif_selection_run_ids: Option<&Vec<usize>>,
+    train_motif_nodes_run_ids: Option<&Vec<usize>>,
     run_configs: Vec<TrainLabelNodeRunConfig>,
     resource_config: &NetResources<Labeled>,
     common_config: &CommonTrainLabelNodeRunConfig,
@@ -778,11 +788,11 @@ pub fn run_train_label_nodes(
         a
     });
 
-    let motif_selection_run_ids: &Vec<usize> = motif_selection_run_ids.expect("motif_selection_run_ids");
+    let train_motif_nodes_run_ids: &Vec<usize> = train_motif_nodes_run_ids.expect("train_motif_nodes_run_ids");
 
     let chunk_len = max(1, train_resource_keys.len() / devices.len());
 
-    debug!("run_train_label_nodes: motif_selection_run_ids={motif_selection_run_ids:?} run_configs={run_configs:?} devices={devices:?} chunk_len={chunk_len}");
+    debug!("run_train_label_nodes: train_motif_nodes_run_ids={train_motif_nodes_run_ids:?} run_configs={run_configs:?} devices={devices:?} chunk_len={chunk_len}");
 
     let devices__resources = devices
         .into_iter()
@@ -808,27 +818,29 @@ pub fn run_train_label_nodes(
 
                 let train_labels_resource_rc = Rc::new(vec![
                     (1, resource_keys.clone()),
-                    (0, store.lock().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label"))
+                    (0, store.lock().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
                 ]);
                 let valid_labels_resources_rc = Rc::new(vec![
                     (1, valid_resource_keys),
-                    (0, store.lock().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label"))
+                    (0, store.lock().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
                 ]);
 
                 let run_configs_cl = Arc::clone(&run_configs_cl);
 
-                motif_selection_run_ids.into_iter().flat_map(move |motif_selection_run_id| {
-                    let find_motifs_run_ids = store.lock().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
-                    assert_eq!(find_motifs_run_ids.len(), 1); //selection has single input
+                train_motif_nodes_run_ids.into_iter().flat_map(move |train_motif_nodes_run_id| {
+                    let select_motifs_for_label_run_ids = store.lock().get_input_run_ids(*train_motif_nodes_run_id, Some(&SelectMotifsRunConfig::type_name())).expect("motif_selection_id failed");
+                    assert_eq!(select_motifs_for_label_run_ids.len(), 1); //selection has single input
+                    let select_motifs_for_label_run_id = select_motifs_for_label_run_ids[0];
 
 
-                    let channels_motifs_models:Vec<Vec<(MotifNodeParams, SyncModule)>> = store.lock().list_selected_motifs(*motif_selection_run_id, channels).expect("list_selected_motifs")
+                    let channels_motifs_models:Vec<Vec<(MotifNodeParams, SyncModule)>> = store.lock().list_selected_motifs(select_motifs_for_label_run_id, channels).expect("list_selected_motifs")
                         .into_iter().enumerate()
                         .map(|(channel, channels_motifs)| {
                             let ws_moved = Arc::clone(&ws);
                             channels_motifs.into_iter().flat_map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, &device_i).expect("load_motif_models")).collect()
                         }).collect();
 
+                    let motif_width = channels_motifs_models[0][0].0.num_features();//all channels motifs come from same selection/find_motifs
                     debug!("run_train_label_nodes:  channels={channels} channels_motifs_models.len={}", channels_motifs_models.len());
                     trace!("run_train_label_nodes:  channels_motifs_models={channels_motifs_models:?}");
 
@@ -840,11 +852,13 @@ pub fn run_train_label_nodes(
                         panic!("no motif nets found");//TODO skip?
                     }
 
-                    let (_, find_motifs_run_id) = store.lock().list_input_run_ids(&[*motif_selection_run_id]).expect("list_input_run_ids")[0]; //TODO motif_node_params_run_ids len > 1
+                    // let find_motifs_run_ids = store.lock().get_input_run_ids(*train_motif_nodes_run_id, Some(&FindMotifsRunConfig::type_name())).expect("find_motifs_run_ids failed");
+                    // assert_eq!(find_motifs_run_ids.len(), 1); //selection has single input
+                    // let find_motifs_run_id = find_motifs_run_ids[0];
 
-                    let motif_node_params = FindMotifsRunConfig::from_properties_map(find_motifs_run_id,store.lock().list_run_config_values(find_motifs_run_id).unwrap());
+                    // let motif_node_params = FindMotifsRunConfig::from_properties_map(find_motifs_run_id,store.lock().list_run_config_values(find_motifs_run_id).unwrap());
 
-                    let max_motif_batches = clc_num_batches(ws.read().max_input(), motif_node_params.window() as usize, common_config.input_slice_step, common_config.motif_batch_size);
+                    let max_motif_batches = clc_num_batches(ws.read().max_input(), motif_width as usize, common_config.input_slice_step, common_config.motif_batch_size);
                     debug!("run_train_label_nodes: max_motif_batches={max_motif_batches}");
 
                     //TODO Rc
@@ -853,7 +867,7 @@ pub fn run_train_label_nodes(
 
                     let mut results = Vec::with_capacity(run_configs_cl.len());
                     for run_config in run_configs_cl.iter() {
-                        debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
+                        // debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
 
 
                         let result = run_opt_train_label_nodes(
@@ -2033,8 +2047,6 @@ mod main_tests {
             "Test/FindMotifs"
         )?;
 
-
-
         run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesParams::new(MotifsBy::RunId(find_motifs_run_ids[0])))?;
         debug!("test_run_step: run_ids={find_motifs_run_ids:?}");
 
@@ -2076,7 +2088,7 @@ mod main_tests {
 
 
         let train_label_nodes_run_ids = run_step(
-            Some(select_motifs_for_label_run_ids),
+            Some(train_motif_nodes_run_ids),
             &TrainLabelNodeParams::dummy(100, vec![], "pure group 4".into(), "pure group 4".into(), 10, 5, 30,1e-5..1e-3, 3..4),
             run_train_label_nodes,
             &ws,

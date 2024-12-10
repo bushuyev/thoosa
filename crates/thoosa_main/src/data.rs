@@ -135,7 +135,7 @@ pub fn load_to_logits_tensors(group: &str, store: Arc<Mutex<Box<dyn Store>>>) ->
     store.lock().list_resource_random_in_group(group).expect("list_resource_random_in_group")
         .into_iter()
         .map(move |(resourceId, labels_p)| {
-            debug!("labels_p={:?}", labels_p);
+            debug!("load_to_logits_tensors: resourceId={resourceId:?} labels_p={:?}", labels_p);
             (
                 resourceId,
                 labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
