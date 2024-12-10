@@ -302,7 +302,6 @@ slices single input tensor's channel into batches of input_slices_motif_batch_si
 all motif nodes are to be from same run so have same input params.
 Arranges output into max_motif_nodes x max_motif_batches  (max_ - to be same for all channels)
 
-
 input_slices_motif_batch_size - both for motif node input batch size and output (input for label node) batch
 
  # returns Tensor nodes x batches x batch size
@@ -366,7 +365,7 @@ pub fn apply_channel_motifs(
 
             let motifs_p_t = node.1.forward(&input_slices_batch).squeeze();
 
-            debug!("apply_channel_motifs: motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
+            debug!("apply_channel_motifs: reminder, motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
 
             if motifs_p_t.size().len() > 0 {
                 add_node_output_batch(input_slices_motif_batch_size, node_batch, motifs_p_t);
@@ -378,9 +377,11 @@ pub fn apply_channel_motifs(
     }
 
     //nodes x batches in tensor/motif_batch_size x motif_batch_size
-    node_batches.iter().enumerate().for_each(|(i, node)| {
-        debug!("apply_channel_motifs: i={i:?} node sizes={:?}",  node.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
-    });
+    if log::log_enabled!(log::Level::Debug) {
+        node_batches.iter().enumerate().for_each(|(i, node)| {
+            debug!("apply_channel_motifs: i={i:?} node sizes={:?}",  node.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
+        });
+    }
     let node_tensors = node_batches.into_iter().map(|node_batches| Tensor::stack(node_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
     debug!("apply_channel_motifs: node_tensors.len()={:?} sizes={:?}", node_tensors.len(), node_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
 

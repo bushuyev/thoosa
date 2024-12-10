@@ -975,7 +975,7 @@ impl Module for SyncModule {
 }
 
 pub fn load_motif_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<(MotifNodeParams, SyncModule)>, ThoosaError> {
-    debug!("load_motif_models_ws: motif_selection_run_id={motif_id}");
+    debug!("load_motif_models_ws: channel={channel} motif_selection_run_id={motif_id}");
 
     let channel_motif_models_paths = ws.read().motif_models(&channel, motif_id)?;
 
@@ -1886,7 +1886,7 @@ fn apply_motif_nets(
 ) -> Tensor {
     let max_motif_nodes = channels_motifs_nodes.read().iter().map(|nets| nets.len()).max().unwrap_or(0);
 
-    debug!("apply_motif_nets: input_t.size()={:?} max_motif_nodes={max_motif_nodes} input_slices_motif_batch_size={input_slices_motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
+    debug!("apply_motif_nets: input_t.size={:?} max_motif_nodes={max_motif_nodes} input_slices_motif_batch_size={input_slices_motif_batch_size} max_motif_batches={max_motif_batches}", input_t.size());
 
     let channels_motifs = Tensor::stack(
         channels_motifs_nodes.read()
@@ -2193,7 +2193,7 @@ mod train_tests {
     use crate::train_nets;
     use crate::train_nets::{apply_motif_nets, label_node, FinalNodeParams, LoadingTensorsDataBatch, TrainNodesValues};
     use crate::train_nets::{load_all_label_models_ws, load_motif_models_ws, CommonTrainLabelNodeRunConfig, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TensorsDataBatch, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig};
-    use crate::utils::DataBatch;
+    use crate::utils::{reset_print_options, t_0_0, DataBatch};
     use crate::utils::from;
     use crate::ws::{FsWorkspace, Workspace};
     use thoosa_shared::resource::Resource;
@@ -2263,14 +2263,28 @@ mod train_tests {
             .end_seq().build_tch_module(&vs.root())
     }
 
+    #[test]
+    fn test_test_net() -> Result<(), ThoosaError>{
+        let t = lin_test_tensor(100).i((0, ..));
+
+        //sums and multiplies by k
+        assert_eq!(Tensor::from_slice(&[4950.]), test_net(100, 1. )?.forward(&t));
+        assert_eq!(Tensor::from_slice(&[9900.]), test_net(100, 2. )?.forward(&t));
+
+        // let sum=(100..200).sum::<u32>();
+        // println!("sum={sum}");
+        Ok(())
+    }
+
 
     #[test]
     fn test_apply_motif_models() -> Result<(), ThoosaError>{
+        reset_print_options();
         let input_n = 1000;
         let motif_width = 100;
-        let step = (motif_width / 1) as usize;
+        let step = (motif_width / 1) as usize;//1 - step==motif_width slices do not overlap so net output - sum(slice)*k
 
-        let t = make_test_tensor(input_n);
+        let t = lin_test_tensor(input_n);
 
         let motif_nets = vec![
             vec![(MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 1. )?)), (MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 2. )?))], //channel 0 nets
@@ -2278,15 +2292,20 @@ mod train_tests {
         ];
 
         let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.len()).max().unwrap_or(0);
+        assert_eq!(2, max_motif_nets_in_channel);
         let batch_size = 10;
         let motif_batches = batch_windows(input_n as usize, motif_width as usize, step, batch_size);
         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
         let channel_0_t = apply_channel_motifs(step, batch_size as i64, &motif_nets[0], t.i((0, ..)), max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
 
+        debug!("t.i((0, ..))=\n{}", t.i((0, ..)));
+        debug!("channel_0_t.size={:?} channel_0_t=\n{channel_0_t}", channel_0_t.size());
 
         let channel_0_motifs = Tensor::stack(&[
+                                     //sum 0-100  100-200 ...
                 Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 54950., 64950., 74950., 84950., 94950.]),  //ch 0 net 0 (ResourceId=1)
+                                     //sum 0-100  100-200 ... * 2 - k in second net in channel 0
                 Tensor::from_slice(&[9900., 29900., 49900., 69900., 89900., 109900., 129900., 149900., 169900., 189900.]) // ch. 0 net 1 (ResourceId=2)
             ], 0
         ).totype(Float).view((2, 1, 10));
@@ -2305,7 +2324,7 @@ mod train_tests {
 
         debug!("test_apply_motif_models: channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
 
-        let channels_motifs = super::apply_motif_nets(&t, Arc::new(RwLock::new(motif_nets)), step, batch_size as i64, max_motif_batches, &Cpu);
+        let channels_motifs = apply_motif_nets(&t, Arc::new(RwLock::new(motif_nets)), step, batch_size as i64, max_motif_batches, &Cpu);
 
         assert_eq!(
             Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
@@ -2320,8 +2339,8 @@ mod train_tests {
     fn test_apply_motif_models_diff_len() -> Result<(), ThoosaError>{
         let input_n_0 = 1000;
         let motif_width= 120;
-        let t_0 = make_test_tensor(input_n_0);
-        let t_1 = make_test_tensor(831);
+        let t_0 = lin_test_tensor(input_n_0);
+        let t_1 = lin_test_tensor(831);
 
         let motif_batch_size = 13;
 
@@ -2352,7 +2371,7 @@ mod train_tests {
     }
 
     //5 ch
-    fn make_test_tensor(input_n: i64) -> Tensor {
+    fn lin_test_tensor(input_n: i64) -> Tensor {
         Tensor::vstack(&[
             Tensor::from_slice((0..input_n).map(|i| i as f32).collect::<Vec<_>>().as_slice()),
             Tensor::from_slice((0..input_n).map(|i| i as f32 * 2.).collect::<Vec<_>>().as_slice()),
@@ -2365,7 +2384,7 @@ mod train_tests {
     fn load_test_tensor(id:&Resource, input_n: i64) ->Box<Tensor> {
         debug!("test_load_tensor: {id:?}");
 
-        Box::new(make_test_tensor(input_n))
+        Box::new(lin_test_tensor(input_n))
     }
 
 
