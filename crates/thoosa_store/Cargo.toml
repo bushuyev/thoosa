@@ -8,7 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 thoosa_shared = {path = "../thoosa_shared" }
-
+bytemuck.workspace = true
 rand.workspace = true
 log.workspace = true
 simplelog.workspace = true

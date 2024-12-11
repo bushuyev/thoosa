@@ -6,7 +6,7 @@ use log::{debug};
 use tch::Tensor;
 
 use thoosa_shared::ThoosaError;
-use thoosa_shared::TensorSliceIdx;
+use thoosa_shared::TensorIdSliceIdx;
 
 
 pub trait TensorsStore {
@@ -58,7 +58,7 @@ impl TensorSliceIter {
         }
     }
 }
-pub type TensorSlice = (TensorSliceIdx<String>, Tensor); //tensor idx, slice, tensor
+pub type TensorSlice = (TensorIdSliceIdx, Tensor); //tensor idx, slice, tensor
 
 impl Iterator for TensorSliceIter {
     type Item = Result<(TensorSlice, TensorSlice, usize), ThoosaError>;
@@ -77,8 +77,8 @@ impl Iterator for TensorSliceIter {
 
             let v = Some(Ok((
                 //TODO self.tensor_index_0.to_string() -> store.index_to_key
-                (TensorSliceIdx(self.tensor_index_0.to_string(), self.slice_index_0), t_0.f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()),//TODO unwrap
-                (TensorSliceIdx(self.tensor_index_1.to_string(), self.slice_index_1), t_1.f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()),
+                (TensorIdSliceIdx(self.tensor_index_0 as u32, self.slice_index_0 as u32), t_0.f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()), //TODO unwrap
+                (TensorIdSliceIdx(self.tensor_index_1 as u32, self.slice_index_1 as u32), t_1.f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()),
                 self.iteration_n.fetch_add(1, Ordering::Relaxed)
             )));
 

@@ -22,9 +22,10 @@ use std::ffi::OsStr;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use bytemuck::{Pod, Zeroable};
 use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
-
+use crate::resource::ResourceId;
 
 pub mod repeat_iter;
 pub mod val;
@@ -34,12 +35,16 @@ pub mod resource;
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
 where T:Hash + Eq + Debug {
 
+
+
     let mut pairs_groups: HashMap<T, u16> = HashMap::new();
     let mut last_group = 0u16;
 
     let mut separated_groups:  Vec<(u16, u16)> = vec![];
 
     for (ln, pair) in pairs.enumerate() {
+        trace!("group_slices: ln={ln} pairs={pair:?}");
+
         let g_0 = pairs_groups.get(&pair.0);
         let g_1 = pairs_groups.get(&pair.1);
         if let Some(g_0_val) = g_0 {
@@ -63,7 +68,7 @@ where T:Hash + Eq + Debug {
         }
     }
 
-    debug!("separated_groups={:?}", separated_groups);
+    trace!("separated_groups={:?}", separated_groups);
     let separated_groups_map = if !separated_groups.is_empty() {
         let map = group_slices(separated_groups.into_iter()) //group separated groups same as slices
             .values()
@@ -74,7 +79,7 @@ where T:Hash + Eq + Debug {
                 }
                 h
             });
-        debug!("separated_groups group_motifs={:?}", map);
+        trace!("separated_groups group_motifs={:?}", map);
         Some(map)
     } else {
         None
@@ -87,21 +92,17 @@ where T:Hash + Eq + Debug {
         gr_vec.insert(val);
     }
 
-    debug!("group_motifs groups={:?}", groups);
+    trace!("group_motifs groups={:?}", groups);
     groups
 }
 
-#[derive(Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
-pub struct TensorSliceIdx<R>(pub R, pub i64) where R:Eq+Debug;
+#[repr(C)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Pod, Zeroable, Hash)]
+pub struct TensorIdSliceIdx(pub ResourceId, pub u32);//TODO named fields
 
-impl From<(String, i64)> for TensorSliceIdx<String> {
-    fn from(value: (String, i64)) -> Self {
-        TensorSliceIdx(value.0, value.1)
-    }
-}
 
-impl <T> Display for TensorSliceIdx<T> where T:Eq+Display+Debug{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl Display for TensorIdSliceIdx {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "{},{}", self.0, self.1)
     }
 }

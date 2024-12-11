@@ -2597,7 +2597,6 @@ mod train_tests {
                 num_layers: 1.into(),
                 train_resource_group: "zzz".into(),
                 valid_resource_group: "zzz".into(),
-                items_per_label: 5,
                 opt_max_evals: 0,
                 opt_n_init: 0,
             },
@@ -2813,49 +2812,6 @@ mod train_tests {
         assert!(super::is_nonzero(&Tensor::from_slice(&[0., 1., 0.]))?);
         assert!(super::is_nonzero(&Tensor::stack(&[Tensor::from_slice(&[0., 1., 0.]), Tensor::from_slice(&[0., 0., 0.])], 0))?);
         assert!(!super::is_nonzero(&Tensor::from_slice(&[0., 0., 0.]))?);
-
-        Ok(())
-    }
-
-
-    #[test]
-    fn test_select_dim() -> Result<(), ThoosaError>{
-        /// { channels: 3, max_motif_nodes: 2, max_motif_batches: 2, motif_batch_size: 10 }
-        let ln = label_node(&LabelNodeParams::new(3, 2, 2, 10));
-
-        let m = ln.build_tch_module(&VarStore::new(Cpu).root())?;
-        println!("ln={:?}", m);
-
-        // let x = m.forward(&Tensor::rand([3, 2, 2, 10], FLOAT_CPU));
-        let x = m.forward(&Tensor::rand([1, 2, 1, 20], FLOAT_CPU));
-
-        println!("x.size()={:?}", x.size());
-
-        // let t_0_0_0 = Tensor::from_slice(&[0.01, 0.02, 0.03, 0.04]);
-        // let t_0_0_1 = Tensor::from_slice(&[0.11, 0.12, 0.13, 0.14]);
-        // let t_0_0_2 = Tensor::from_slice(&[0.21, 0.22, 0.23, 0.24]);
-        //
-        // let t_0_0 = Tensor::vstack(&[t_0_0_0, t_0_0_1, t_0_0_2]);
-        //
-        // println!("t_0_0={:?}", t_0_0.size());
-        //
-        // let t_0_1_0 = Tensor::from_slice(&[1.01, 1.02, 1.03, 1.04]);
-        // let t_0_1_1 = Tensor::from_slice(&[1.11, 1.12, 1.13, 1.14]);
-        // let t_0_1_2 = Tensor::from_slice(&[1.21, 1.22, 1.23, 1.24]);
-        //
-        // let t_0_1 = Tensor::vstack(&[t_0_1_0, t_0_1_1, t_0_1_2]);
-        //
-        // println!("t_0_1={:?}", t_0_1.size());
-        //
-        // let t_0 = Tensor::stack(&[t_0_0, t_0_1], 0);
-        //
-        // println!("t_0={:?} t_0=\n{t_0}", t_0.size());
-        //
-        // println!("{}", t_0.i((.., 1, ..)));
-        //
-        // // let t_0_2_0 = Tensor::from_slice(&[2.01, 2.02, 2.03]);
-        // // let t_0_2_1 = Tensor::from_slice(&[2.11, 2.12, 2.13]);
-        // // let t_0_2_2 = Tensor::from_slice(&[2.21, 2.22, 2.23]);
 
         Ok(())
     }

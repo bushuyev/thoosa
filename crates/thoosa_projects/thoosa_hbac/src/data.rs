@@ -724,12 +724,12 @@ mod tests {
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             100, window,
             &vec![t_0_0.into()], //sig_0 at idx 0
-            vec!["x"], Cpu
+            vec![0], Cpu
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             100, window,
             &vec![t_1_0.into()], //sig_0 at idx 2000
-            vec!["x"], Cpu
+            vec![0], Cpu
         ).t;
 
 

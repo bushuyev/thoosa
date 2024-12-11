@@ -8,6 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ctor = "0.2.6"
+bytemuck.workspace = true
 regex.workspace = true
 rand = {workspace = true}
 log = {workspace = true}

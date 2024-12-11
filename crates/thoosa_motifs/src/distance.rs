@@ -292,12 +292,12 @@ mod distance_tests {
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, window,
             &vec![t_0_0.into()], //sig_0 at idx 0
-            vec!["x"], Cpu
+            vec![0], Cpu
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, window,
             &vec![t_0_1.into()], //sig_0 at idx 2000
-            vec!["x"], Cpu
+            vec![0], Cpu
         ).t;
 
 
@@ -383,8 +383,8 @@ mod distance_tests {
         ]);
 
 
-        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec!["x"], Cpu).t;
-        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec!["x"], Cpu).t;
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec![0], Cpu).t;
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec![0], Cpu).t;
 
         let (le, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &[Quantile {q:0.1}])? else {
             panic!("no distances")
