@@ -83,7 +83,7 @@ pub type ResourceId = u32;
 
 impl AsRef<ResourceId> for Resource {
     fn as_ref(&self) -> &ResourceId {
-        &self.import_id
+        &self.id
     }
 }
 

@@ -41,7 +41,7 @@ where
     loader_fn: Arc<Box<dyn Fn(&Resource) -> SyncWrapper<V> + Sync + Send>>,
     loader_pool: ThreadPool,
 
-    resources: HashMap<Resource, SyncWrapper<V>>,
+    resources: HashMap<Resource, SyncWrapper<V>>,//TODO replace Resource with ResourceId
     resources_being_loaded: HashMap<Resource, u64>,
 }
 
@@ -80,6 +80,7 @@ where
             self_write_guard.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
         };
     }
+
 
     pub fn load_future(self_arc: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64) -> BoxFuture<'static, V> {
         let mut self_lock = self_arc.write();

@@ -29,9 +29,9 @@ use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_common::utils::*;
 use thoosa_shared::parse_key_val;
 use thoosa_shared::val::Val;
-use thoosa_shared::TensorSliceIdx;
+use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoosaError};
-use thoosa_store::SqlMotifTrackerStore;
+use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
 
 
@@ -299,7 +299,7 @@ pub fn find_motifs_by_euc_dist(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors<ResourceId>>, chunk_sliced_1: &ChunkOfSlicedTensors<ResourceId>, find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsRunConfig>| {
 
             debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
@@ -474,7 +474,7 @@ fn chunk_and_slice<G, CTX>(
 ) -> Result<(), ThoosaError>
 where
     CTX: Send + Sync,
-    G: Fn(&ChunkOfSlicedTensors<ResourceId>, &mut (FindMotifsRunConfig, CTX)) -> Result<(), ThoosaError> + Send + Sync
+    G: Fn(&ChunkOfSlicedTensors, &mut (FindMotifsRunConfig, CTX)) -> Result<(), ThoosaError> + Send + Sync
 {
     let mut resource_chunks = resources.chunks(chunk_size)
         .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())//TODO k.clone()
@@ -563,8 +563,8 @@ fn chunk_and_slice_2x<G, C>(
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
-    G: Fn(&Arc<ChunkOfSlicedTensors<ResourceId>>, &ChunkOfSlicedTensors<ResourceId>, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
-    C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<TensorSliceIdx<ResourceId>>, Vec<TensorSliceIdx<ResourceId>>) + Send + Sync,
+    G: Fn(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
 {
     rayon::scope(|s| {
         let mut resource_chunks = resources.chunks(chunk_size)
@@ -573,7 +573,7 @@ where
 
         resource_chunks.push(vec![]); //to get last window processed
 
-        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, Vec<TensorSliceIdx<ResourceId>>, Vec<TensorSliceIdx<ResourceId>>)>();
+        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
         let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(32).spawn_handler(|thread_builder| {
             let b = thread::Builder::new();
             b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
@@ -633,7 +633,7 @@ where
 
                 wg_0.wait();
 
-                let run_configs_applied_to_chunk_0:Vec<Arc<ChunkOfSlicedTensors<ResourceId>>> = run_configs.par_iter().enumerate()
+                let run_configs_applied_to_chunk_0:Vec<Arc<ChunkOfSlicedTensors>> = run_configs.par_iter().enumerate()
                     .map(|(i, run_config)| {
                         Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
                             run_config.step,
@@ -756,13 +756,13 @@ where
 }
 
 fn collect_dists<'a, F, C>(
-    chunk_0: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>,
-    chunk_1: Arc<RwLock<ChunkOfSlicedTensors<ResourceId>>>,
+    chunk_0: Arc<RwLock<ChunkOfSlicedTensors>>,
+    chunk_1: Arc<RwLock<ChunkOfSlicedTensors>>,
     distances:&Vec<f32>,
     step: i64,
     mut listener:F,
     condition:C
-) where F:FnMut((TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)),
+) where F:FnMut((TensorIdSliceIdx, TensorIdSliceIdx, f32)),
         C:Fn(&f32)->bool,
 {
 
@@ -787,8 +787,8 @@ fn collect_dists<'a, F, C>(
                     ) {
                         listener(
                             (
-                                TensorSliceIdx(chunk_0_read_guard.keys[t_idx_0].clone(), slice_0_idx as i64 * step),
-                                TensorSliceIdx(chunk_1_read_guard.keys[t_idx_1].clone(), slice_1_idx as i64 * step),
+                                TensorIdSliceIdx(chunk_0_read_guard.keys[t_idx_0].clone(), (slice_0_idx * step as usize) as u32),
+                                TensorIdSliceIdx(chunk_1_read_guard.keys[t_idx_1].clone(), (slice_1_idx * step as usize) as u32),
                                 distances[distances_i]
                             ),
                         );
@@ -807,8 +807,8 @@ fn collect_dists<'a, F, C>(
 //TODO trait for MotifTracker
 #[derive(Debug)]
 pub(crate) struct SimpleMotifTracker<'a> {
-    last:Option<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>,
-    motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>, //i_0, match_0, match_1, dist
+    last:Option<SlicesMatch>,
+    motifs: Vec<SlicesMatch>, //i_0, match_0, match_1, dist
     dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
     min_step:Option<usize>,
     max_slices_counts: Option<u32>,
@@ -826,28 +826,26 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    pub fn track(&mut self, i_0: TensorSliceIdx <ResourceId>, i_1: TensorSliceIdx <ResourceId>, dist: f32) {
+    pub fn track(&mut self, i_0: TensorIdSliceIdx, i_1: TensorIdSliceIdx, dist: f32) {
         trace!("SimpMotifTracker::track: i_0={i_0:?} i_1={i_1:?} dist={dist}");
 
         match self.min_step {
             None => {
-                self.motifs.push((i_0, i_1, dist));
+                self.motifs.push(SlicesMatch(i_0, i_1, dist));
             }
 
             Some(min_step) => {
 
                 let last = self.last.take();
-                if let Some(last) = last {
-                    if last.2 > dist {
-                        self.last.replace((i_0, i_1, dist));
-
-                    } else if i_0.1 - last.0.1  > min_step as i64 || i_1.1 - last.1.1  > min_step as i64 {//i_. .1 < last.1.1 if next tensor
+                if let Some(last) = last {//TODO
+                    if
+                        last.2 <= dist &&
+                        last.0.0 == i_0.0 && last.1.0 == i_1.0 && //still same chunks
+                        (i_0.1 - last.0.1  > min_step as u32 || i_1.1 - last.1.1  > min_step as u32) {//i_. .1 < last.1.1 if next tensor
                         self.motifs.push(last);
-                        self.last.replace((i_0, i_1, dist));
                     }
-                } else {
-                    self.last.replace((i_0, i_1, dist));
                 }
+                self.last.replace(SlicesMatch(i_0, i_1, dist));
             }
         }
 
@@ -869,82 +867,7 @@ impl<'a> SimpleMotifTracker<'a> {
     }
 
     #[cfg(test)]
-    pub fn motifs(&self) -> &Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)> {
-        &self.motifs
-    }
-}
-#[allow(dead_code)]
-#[derive(Debug)]
-pub(crate) struct MotifTracker {
-    motifs: Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, TensorSliceIdx<String>, f32)>, //i_0, match_0, match_1, dot
-    motif_start_op: Option<TensorSliceIdx<String>>, //tensor, slice
-    min_dot: f32,
-    i_0: TensorSliceIdx<String>,
-    file: File,
-    last_dot: f32,
-}
-#[allow(dead_code)]
-impl MotifTracker {
-    pub fn new(min_dot: f32, path: &str) -> Self {
-        match std::fs::remove_file(path) {
-            Ok(_) => {}
-            Err(_) => {}
-        }
-
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(true)
-            .open(path)
-            .unwrap();
-
-        Self {
-            motif_start_op: None,
-            min_dot,
-            motifs: vec![],
-            i_0: TensorSliceIdx("".to_string(), 0),
-            file,
-            last_dot: 0.,
-        }
-    }
-
-    pub fn track(&mut self, i_0: TensorSliceIdx<String>, i: TensorSliceIdx<String>, dot: f32) {
-        match &self.motif_start_op {
-            None => {
-                if dot > self.min_dot {
-                    self.motif_start_op = Some(i);
-                    self.last_dot = dot;
-                }
-            }
-            Some(motif_start) => {
-                if dot <= self.min_dot {
-                    self.motifs.push((i_0.clone(), motif_start.clone(), i, self.last_dot));
-                    self.motif_start_op = None;
-                    self.last_dot = 0.0;
-                }
-            }
-        }
-
-        if self.i_0 != i_0 {
-            self.i_0 = i_0;
-            self.dump();
-        }
-    }
-
-    pub fn next(&mut self) {
-        self.last_dot = 0.0;
-        self.motif_start_op = None;
-    }
-
-    fn dump(&mut self) {
-        for motif in self.motifs.iter() {
-            writeln!(self.file, "{}, {}, {},  {:.3}", motif.0, motif.1, motif.2, motif.3).unwrap();
-        }
-        self.file.flush().unwrap();
-        self.motifs.clear();
-    }
-
-    pub fn motifs(&self) -> &Vec<(TensorSliceIdx<String>, TensorSliceIdx<String>, TensorSliceIdx<String>, f32)> {
+    pub fn motifs(&self) -> &Vec<SlicesMatch> {
         &self.motifs
     }
 }
@@ -1661,7 +1584,7 @@ mod motif_find_tests {
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::val::Val;
-    use thoosa_store::{IdSlice, SqlStore, Store};
+    use thoosa_store::{IdSlice, SlicesMatch, SqlStore, Store};
 
     use crate::find::select_motifs_by_corr;
 
@@ -1671,25 +1594,6 @@ mod motif_find_tests {
         init_test_logging();
     }
 
-    #[test]
-    fn test_filt() {
-        //20 x 200_000 in files 5000 files 20_000_000_000
-        // let dots = [1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1];
-        let dots = [0.5, 0.9, 0.9, 0.5, 0.5, 0.9, 0.9, 0.9, 0.5, 0.5, 0.5, 0.5];
-
-        let mut mt = super::MotifTracker::new(0.8, "/tmp/test_motifs.csv");
-
-        for (i, dot) in dots.into_iter().enumerate() {
-            mt.track(TensorSliceIdx(0.to_string(), 0), TensorSliceIdx(0.to_string(), i as i64), dot as f32);
-        }
-        assert_eq!(
-            [
-                (TensorSliceIdx(0.to_string(), 0), TensorSliceIdx(0.to_string(), 1), TensorSliceIdx(0.to_string(), 3), 0.9f32),
-                (TensorSliceIdx(0.to_string(), 0), TensorSliceIdx(0.to_string(), 5), TensorSliceIdx(0.to_string(), 8), 0.9f32)
-            ],
-            mt.motifs()[0..2]
-        );
-    }
 
     #[test]
     fn test_z_norm() {
@@ -2328,11 +2232,11 @@ mod motif_find_tests {
 
     #[derive(Debug)]
     struct DummyDumper<'a> {
-        motifs:  &'a mut Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>
+        motifs:  &'a mut Vec<SlicesMatch>
     }
 
     impl <'a> DummyDumper<'a> {
-        pub fn new(motifs: &'a mut Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>) -> Self {
+        pub fn new(motifs: &'a mut Vec<SlicesMatch>) -> Self {
             Self {
                 motifs
             }
@@ -2341,15 +2245,9 @@ mod motif_find_tests {
 
     impl <'a> MotifTrackerStore for DummyDumper<'a> {
 
-        fn save_slices(&mut self, motifs: Vec<(TensorSliceIdx <ResourceId>, TensorSliceIdx <ResourceId>, f32)>) -> Result<(), ThoosaError>{
+        fn save_slices(&mut self, motifs: Vec<SlicesMatch>) -> Result<(), ThoosaError>{
 
-            self.motifs.extend(motifs.into_iter().map(|m|{
-                (
-                    TensorSliceIdx(0, m.0.1),
-                    TensorSliceIdx(1, m.1.1),
-                    1.0
-                )
-            }).collect::<Vec<(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)>>());
+            self.motifs.extend(motifs.into_iter().collect::<Vec<SlicesMatch>>());
 
             Ok(())
         }
@@ -2379,32 +2277,32 @@ mod motif_find_tests {
             DummyDumper::new(&mut motifs);
             let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), None, Some(100));
 
-            mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
-            mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
-            mt.track(TensorSliceIdx(0, 30), TensorSliceIdx(1, 30), 1.0);
+            mt.track(TensorIdSliceIdx(0, 10), TensorIdSliceIdx(1, 10), 1.0);
+            mt.track(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0);
+            mt.track(TensorIdSliceIdx(0, 30), TensorIdSliceIdx(1, 30), 1.0);
 
             mt.dump();
         }
         assert_eq!(motifs.len(), 3);
-        assert_eq!((TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0), motifs[0]);
-        assert_eq!((TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0), motifs[1]);
-        assert_eq!((TensorSliceIdx(0, 30), TensorSliceIdx(1, 30), 1.0), motifs[2]);
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 10), TensorIdSliceIdx(1, 10), 1.0), motifs[0]);
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0), motifs[1]);
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 30), TensorIdSliceIdx(1, 30), 1.0), motifs[2]);
 
         let mut motifs = vec![];
         {
             let mut mt = super::SimpleMotifTracker::new(Box::new(DummyDumper::new(&mut motifs)), Some(10), Some(100));
 
-            mt.track(TensorSliceIdx(0, 10), TensorSliceIdx(1, 10), 1.0);
-            mt.track(TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0);
-            mt.track(TensorSliceIdx(0, 31), TensorSliceIdx(1, 30), 1.0);
+            mt.track(TensorIdSliceIdx(0, 10), TensorIdSliceIdx(1, 10), 1.0);
+            mt.track(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0);
+            mt.track(TensorIdSliceIdx(0, 31), TensorIdSliceIdx(1, 30), 1.0);
 
             mt.dump();
         }
 
 
         assert_eq!(motifs.len(), 2);
-        assert_eq!((TensorSliceIdx(0, 20), TensorSliceIdx(1, 20), 1.0), motifs[0]);
-        assert_eq!((TensorSliceIdx(0, 31), TensorSliceIdx(1, 30), 1.0), motifs[1]);
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 20), TensorIdSliceIdx(1, 20), 1.0), motifs[0]);
+        assert_eq!(SlicesMatch(TensorIdSliceIdx(0, 31), TensorIdSliceIdx(1, 30), 1.0), motifs[1]);
 
         Ok(())
     }
@@ -2443,7 +2341,7 @@ mod motif_find_tests {
 
                 let dp = dot_norm(dim, &slice_01, &slice_02)?;
 
-                mt.track(TensorSliceIdx(0, i_0), TensorSliceIdx(0, i_1), dp.double_value(&[0]) as f32);
+                mt.track(TensorIdSliceIdx(0, i_0 as u32), TensorIdSliceIdx(0, i_1 as u32), dp.double_value(&[0]) as f32);
             }
         }
 
@@ -2460,10 +2358,10 @@ mod motif_find_tests {
         )?;
         */
 
-        let motifs: Vec<&(TensorSliceIdx<ResourceId>, TensorSliceIdx<ResourceId>, f32)> = mt.motifs().iter().filter(|v| v.2 > 0.9).collect();
+        let motifs: Vec<&SlicesMatch> = mt.motifs().iter().filter(|v| v.2 > 0.9).collect();
 
-        assert_eq!((TensorSliceIdx(0, 100), TensorSliceIdx(0, 600)), (motifs[0].0.clone(), motifs[0].1.clone()));
-        assert_eq!((TensorSliceIdx(0, 200), TensorSliceIdx(0, 700)), (motifs[1].0.clone(), motifs[1].1.clone()));
+        assert_eq!((TensorIdSliceIdx(0, 100), TensorIdSliceIdx(0, 600)), (motifs[0].0.clone(), motifs[0].1.clone()));
+        assert_eq!((TensorIdSliceIdx(0, 200), TensorIdSliceIdx(0, 700)), (motifs[1].0.clone(), motifs[1].1.clone()));
 
 
         Ok(())
@@ -2948,7 +2846,7 @@ mod motif_find_tests {
                 100,
                 1000,
                 &vec![t_0_0.into(), t_0_1.into()],
-                    vec!["t_0_0", "t_0_1"],
+                    vec![0, 1],
                     Cpu
             ).t,
             &Tensor::from_slice(&[1, 1, 1]).view((3, 1)),
@@ -2963,7 +2861,7 @@ mod motif_find_tests {
                 100,
                 1000,
                 &vec![t_1_0.into(), t_1_1.into()],
-                vec!["t_1_0", "t_1_1"],
+                vec![0, 1],
                 Cpu
             ).t,
             &Tensor::from_slice(&[1, 1, 1]).view((3, 1)),

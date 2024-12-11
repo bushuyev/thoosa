@@ -32,7 +32,7 @@ use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
 use thoosa_motifs::fragments::{load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams};
-use thoosa_shared::{batch_windows, cdt, cdt_for_dir, clc_num_batches, make_combos, RangeOrValue, ResourceType, TensorSliceIdx, ThoosaError};
+use thoosa_shared::{batch_windows, cdt, cdt_for_dir, clc_num_batches, make_combos, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoosaError};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_store::{SqlStore, Store};
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
@@ -1112,7 +1112,7 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
 }
 
 fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize) -> Result<(), ThoosaError> {
-    let (channel, run_id, slices) = store.lock().list_motif_slices(motif_id, None, None)?;
+    let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, None, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
     //     return Ok(())
@@ -1120,7 +1120,7 @@ fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(run_id, store.lock().list_run_config_values(run_id)?);
 
-    let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorSliceIdx(s.0.into(), s.1)).collect(), executor); //TODO Into for TensorSliceIdx
+    let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
 
     let all_sices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
@@ -1158,23 +1158,23 @@ fn run_train_motif_nodes (
         let (all_slices_0, all_slices_1, channel) = {
             let mut store_guard = store.lock();
 
-            let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, None, None)?;
+            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, None, None)?;
 
             assert_eq!(run_id, find_motifs_run_id);
 
             debug!("train_on_motif: 1. channel={}, find_motifs_run_id={}, slices={}", channel, find_motifs_run_id, slices.len());
 
             let all_slices_1 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, find_motifs_run_config.window(), slices, loader)
+                load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
-            let (channel, run_id, slices) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
+            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
 
             debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
 
             let all_slices_0 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, find_motifs_run_config.window(), slices, loader)
+                load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
             );
 
             debug!("train_on_motif: 0. run_id={}, done", run_id);
@@ -1332,9 +1332,9 @@ mod main_tests {
     use thoosa_common::utils::{from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, FindMotifsParams, FindMotifsRunConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesParams};
-    use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorSliceIdx, ThoosaError};
+    use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
-    use thoosa_store::{MotifTrackerStore, SqlMotifTrackerStore, SqlStore, Store};
+    use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use crate::cli::{import_resources, resource_path, run_infer, run_plot_motif_slices, run_step, run_train_final_node, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, Cli, RunAllParams};
     use crate::cli::Commands::FindMotifs;
     use crate::data::ParquetLoader;
@@ -1663,10 +1663,10 @@ mod main_tests {
 
         let slices = resource_0_ids.windows(2).into_iter().flat_map(|resource_id| {
             [
-                (TensorSliceIdx(resource_id[0], 100), TensorSliceIdx(resource_id[0], 1100), 1.0),
-                (TensorSliceIdx(resource_id[0], 100), TensorSliceIdx(resource_id[1], 100), 1.0),
-                (TensorSliceIdx(resource_id[0], 100), TensorSliceIdx(resource_id[1], 1100), 1.0),
-                (TensorSliceIdx(resource_id[1], 100), TensorSliceIdx(resource_id[1], 1100), 1.0)
+                SlicesMatch(TensorIdSliceIdx(resource_id[0], 100), TensorIdSliceIdx(resource_id[0], 1100), 1.0),
+                SlicesMatch(TensorIdSliceIdx(resource_id[0], 100), TensorIdSliceIdx(resource_id[1], 100), 1.0),
+                SlicesMatch(TensorIdSliceIdx(resource_id[0], 100), TensorIdSliceIdx(resource_id[1], 1100), 1.0),
+                SlicesMatch(TensorIdSliceIdx(resource_id[1], 100), TensorIdSliceIdx(resource_id[1], 1100), 1.0)
             ]
         }).collect::<Vec<_>>();
         // store.lock().save_slices(

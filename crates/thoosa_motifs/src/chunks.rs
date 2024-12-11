@@ -8,10 +8,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 use thoosa_common::loader::SyncWrapper;
 use thoosa_shared::resource::ResourceId;
-use thoosa_shared::TensorSliceIdx;
+use thoosa_shared::TensorIdSliceIdx;
 
 #[derive(Debug)]
-pub struct ChunkOfSlicedTensors <ResourceId> where {
+pub struct ChunkOfSlicedTensors where {
     pub(crate)  keys:Vec <ResourceId>,
     pub(crate)  sizes: Vec<i64>,//num splits in a ResourceId
     pub   t: SyncWrapper<Tensor>,
@@ -19,12 +19,12 @@ pub struct ChunkOfSlicedTensors <ResourceId> where {
     split_at:Option<i64>//split within tensor
 }
 
-pub struct ChunkOfSlicedTensorsIter<ResourceId:Clone+Debug+Eq> {
-    iter:Box<dyn Iterator<Item=TensorSliceIdx<ResourceId>> + Send>
+pub struct ChunkOfSlicedTensorsIter {
+    iter:Box<dyn Iterator<Item=TensorIdSliceIdx> + Send>
 }
 
 
-impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <ResourceId> {
+impl  ChunkOfSlicedTensors {
     pub fn new(keys:  Vec <ResourceId>, sizes: Vec<i64>, step:u32, t: Tensor) -> Self {
         Self {
             keys,
@@ -36,7 +36,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
     }
 
     // //TODO clone
-    pub fn to_vec(&self) -> Vec<TensorSliceIdx<ResourceId>>{
+    pub fn to_vec(&self) -> Vec<TensorIdSliceIdx>{
         let step = self.step as i64;
         let split_at_idx = self.split_at.map(|split_at_idx| split_at_idx * step).unwrap_or(0);
 
@@ -46,7 +46,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
             .flat_map(
                 |(t_i, (size, id))|(0..size).map(move |i|(id.clone(), i, if t_i == 0 {split_at_idx} else {0}))
             )
-            .map(move |v|TensorSliceIdx(v.0, v.2 + step  * v.1))
+            .map(move |v| TensorIdSliceIdx(v.0, (v.2 + step * v.1) as u32))
             .collect()
     }
 
@@ -117,7 +117,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors <ResourceId> {
+    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors::slice_tensors_chunk: step={step} window={window} tensors_chunk.len={}", tensors_chunk.len());
 
@@ -156,7 +156,7 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
         )
     }
 
-    pub fn start_split_queue(chunk:ChunkOfSlicedTensors<ResourceId>) -> SplitQueue<ResourceId>{
+    pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue{
         let queue = VecDeque::from([chunk]);
 
         SplitQueue {
@@ -167,16 +167,16 @@ impl <ResourceId:Clone+Debug+Eq+Sync+Send+'static> ChunkOfSlicedTensors <Resourc
 }
 
 #[derive(Debug)]
-pub struct SplitQueue<R> {
-    queue:VecDeque<ChunkOfSlicedTensors<R>>
+pub struct SplitQueue {
+    queue:VecDeque<ChunkOfSlicedTensors>
 }
 
-impl <R:Clone+Debug+Eq+Sync+Send+'static> SplitQueue<R> {
-    pub fn next(&mut self) -> Option<ChunkOfSlicedTensors<R>> {
+impl  SplitQueue {
+    pub fn next(&mut self) -> Option<ChunkOfSlicedTensors> {
         self.queue.pop_front()
     }
 
-    pub fn split(&mut self, chunk:ChunkOfSlicedTensors<R>)  {
+    pub fn split(&mut self, chunk:ChunkOfSlicedTensors)  {
         debug!("SplitQueue::split: chunk={chunk:?}");
         let [chunk_0, chunk_1] = chunk.split();
         debug!("SplitQueue::split: chunk_0={chunk_0:?}");
@@ -196,7 +196,7 @@ mod tests {
     use tch::Kind::Float;
     use tch::Tensor;
     use thoosa_common::loader::SyncWrapper;
-    use thoosa_shared::{init_test_logging, TensorSliceIdx, ThoosaError};
+    use thoosa_shared::{init_test_logging, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::resource::ResourceId;
     use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 
@@ -222,7 +222,7 @@ mod tests {
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             1, 2,
-            &vec![tensor_a.into(), tensor_b.into()], vec!["aaa", "bbb"],
+            &vec![tensor_a.into(), tensor_b.into()], vec![0, 1],
             Cpu
         );
 
@@ -263,7 +263,7 @@ mod tests {
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             1, 2,
-            &vec![tensor.into()], vec!["aaa"],
+            &vec![tensor.into()], vec![0],
             Cpu
         );
 
@@ -292,14 +292,14 @@ mod tests {
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, 20,
-            &vec![tensor.into()], vec!["aaa"],
+            &vec![tensor.into()], vec![0],
             Cpu
         );
 
         let slices = chunk.to_vec().into_iter().collect::<Vec<_>>();
 
         assert_eq!(
-            vec![TensorSliceIdx("aaa", 0), TensorSliceIdx("aaa", 10), TensorSliceIdx("aaa", 20), TensorSliceIdx("aaa", 30), TensorSliceIdx("aaa", 40), TensorSliceIdx("aaa", 50), TensorSliceIdx("aaa", 60), TensorSliceIdx("aaa", 70), TensorSliceIdx("aaa", 80)],
+            vec![TensorIdSliceIdx(0, 0), TensorIdSliceIdx(0, 10), TensorIdSliceIdx(0, 20), TensorIdSliceIdx(0, 30), TensorIdSliceIdx(0, 40), TensorIdSliceIdx(0, 50), TensorIdSliceIdx(0, 60), TensorIdSliceIdx(0, 70), TensorIdSliceIdx(0, 80)],
             slices
         );
     }
@@ -317,7 +317,7 @@ mod tests {
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, 20,
-            &vec![tensor.into()], vec!["aaa"],
+            &vec![tensor.into()], vec![0],
             Cpu
         );
 
@@ -325,7 +325,7 @@ mod tests {
 
         debug!("chunk.t={}", chunk.t);
 
-        let test_fn = |chunk:&ChunkOfSlicedTensors<&str>|->Result<Tensor, ThoosaError> {
+        let test_fn = |chunk:&ChunkOfSlicedTensors|->Result<Tensor, ThoosaError> {
             debug!("chunk.t={:?}", chunk.t);
             if chunk.t.size()[1] > 2 {
                 Err(ThoosaError::oom())
@@ -365,7 +365,7 @@ mod tests {
         debug!("glued_chunks={glued_chunks}");
 
         assert_eq!(
-            vec![TensorSliceIdx("aaa", 0), TensorSliceIdx("aaa", 10), TensorSliceIdx("aaa", 20), TensorSliceIdx("aaa", 30), TensorSliceIdx("aaa", 40), TensorSliceIdx("aaa", 50), TensorSliceIdx("aaa", 60), TensorSliceIdx("aaa", 70), TensorSliceIdx("aaa", 80)],
+            vec![TensorIdSliceIdx(0, 0), TensorIdSliceIdx(0, 10), TensorIdSliceIdx(0, 20), TensorIdSliceIdx(0, 30), TensorIdSliceIdx(0, 40), TensorIdSliceIdx(0, 50), TensorIdSliceIdx(0, 60), TensorIdSliceIdx(0, 70), TensorIdSliceIdx(0, 80)],
             slices
         );
 
@@ -391,7 +391,7 @@ mod tests {
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, 20,
-            &vec![tensor_aaa.into(), tensor_bbb.into()], vec!["aaa", "bbb"],
+            &vec![tensor_aaa.into(), tensor_bbb.into()], vec![0, 1],
             Cpu
         );
 
@@ -399,7 +399,7 @@ mod tests {
 
         debug!("chunk.t={}", chunk.t);
 
-        let test_fn = |chunk:&ChunkOfSlicedTensors<&str>|->Result<Tensor, ThoosaError> {
+        let test_fn = |chunk:&ChunkOfSlicedTensors|->Result<Tensor, ThoosaError> {
             debug!("chunk.t={:?}", chunk.t);
             if chunk.t.size()[1] > 2 {
                 Err(ThoosaError::oom())
@@ -440,8 +440,8 @@ mod tests {
 
         assert_eq!(
             vec![
-                TensorSliceIdx("aaa", 0), TensorSliceIdx("aaa", 10), TensorSliceIdx("aaa", 20), TensorSliceIdx("aaa", 30), TensorSliceIdx("aaa", 40), TensorSliceIdx("aaa", 50), TensorSliceIdx("aaa", 60), TensorSliceIdx("aaa", 70), TensorSliceIdx("aaa", 80),
-                TensorSliceIdx("bbb", 0), TensorSliceIdx("bbb", 10), TensorSliceIdx("bbb", 20), TensorSliceIdx("bbb", 30), TensorSliceIdx("bbb", 40), TensorSliceIdx("bbb", 50), TensorSliceIdx("bbb", 60), TensorSliceIdx("bbb", 70), TensorSliceIdx("bbb", 80)
+                TensorIdSliceIdx(0, 0), TensorIdSliceIdx(0, 10), TensorIdSliceIdx(0, 20), TensorIdSliceIdx(0, 30), TensorIdSliceIdx(0, 40), TensorIdSliceIdx(0, 50), TensorIdSliceIdx(0, 60), TensorIdSliceIdx(0, 70), TensorIdSliceIdx(0, 80),
+                TensorIdSliceIdx(1, 0), TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20), TensorIdSliceIdx(1, 30), TensorIdSliceIdx(1, 40), TensorIdSliceIdx(1, 50), TensorIdSliceIdx(1, 60), TensorIdSliceIdx(1, 70), TensorIdSliceIdx(1, 80)
             ],
             slices
         );

@@ -20,7 +20,7 @@ use thoosa_common::ResourceLoader;
 use thoosa_common::utils::{from, load_tensor};
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::TensorSliceIdx;
+use thoosa_shared::TensorIdSliceIdx;
 use thoosa_store::{SqlStore, Store};
 
 #[derive(Default)]
@@ -225,7 +225,7 @@ mod data_tests {
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
-    use thoosa_shared::{TensorSliceIdx, ThoosaError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::init_test_logging;
     use crate::data::{arr_to_expr, split_frame_by_offsets};
 
