@@ -9,6 +9,7 @@ use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use tch::nn::{Module, VarStore};
 use std::{fs, process};
+use std::error::Error;
 use plotters::prelude::BLACK;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::fs::{read_dir, File, OpenOptions};
@@ -52,10 +53,10 @@ pub struct Cli {
     pub ws_path: String,
 
     #[arg(long, default_value = "INFO")]
-    pub term_logger_level: String,
+    pub term_logger_level: LevelFilter,
 
     #[arg(long, default_value = "INFO")]
-    pub write_logger_level: String,
+    pub write_logger_level: LevelFilter,
 
     #[arg(long)]
     pub loader_threads: Option<usize>,
@@ -324,7 +325,7 @@ pub fn run_cli<F,R>(
     where F:Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
           R:Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoosaError> + Sync + Send
 {
-    set_oom_score_adj(-1000);
+    // set_oom_score_adj(-1000);
 
     unsafe {
         at_grad_set_enabled(0);
@@ -338,8 +339,6 @@ pub fn run_cli<F,R>(
         max_input
     )?));
 
-
-    //TODO make optional
     let logfile = match File::create(ws.read().log_path().join(format!("thoosa_{}.log", cdt_for_dir()).to_owned())){
         Ok(file) => {
             file
@@ -350,8 +349,9 @@ pub fn run_cli<F,R>(
     };
     CombinedLogger::init(
         vec![
-            TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
-            WriteLogger::new(LevelFilter::from_str(cli.write_logger_level.as_str())?, Config::default(), logfile),
+            // TermLogger::new(LevelFilter::from_str(cli.term_logger_level.as_str())?, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+            TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+            // WriteLogger::new(LevelFilter::from_str(cli.write_logger_level.as_str())?, Config::default(), logfile),
         ]
     ).expect("failed to init logging");
 
@@ -866,7 +866,8 @@ pub fn run_train_label_nodes(
                             channels_motifs.into_iter().flat_map(move |(motif_id, corr)| load_motif_models_ws(&ws_moved, channel, motif_id, &device_i).expect("load_motif_models")).collect()
                         }).collect();
 
-                    let motif_width = channels_motifs_models[0][0].0.num_features();//all channels motifs come from same selection/find_motifs
+
+                    let motif_width = channels_motifs_models.iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
                     debug!("run_train_label_nodes:  channels={channels} channels_motifs_models.len={}", channels_motifs_models.len());
                     trace!("run_train_label_nodes:  channels_motifs_models={channels_motifs_models:?}");
 
@@ -1368,8 +1369,8 @@ mod main_tests {
         let n = 1000i64;
         let max_y = 30.0;
 
-        let sig_0_v = sig_one_imp(n, max_y, None, None);
-        let sig_1_v = sig_two_imp(n, max_y, None, None);
+        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
+        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
 
@@ -1405,8 +1406,8 @@ mod main_tests {
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
 
-        let sig_0_v = sig_one_imp(n, max_y, None, None);
-        let sig_1_v = sig_two_imp(n, max_y, None, None);
+        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
+        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
 
@@ -1636,8 +1637,8 @@ mod main_tests {
         Tensor::vstack(&[
             Tensor::from_slice(
                 [
-                    sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)),
-                    sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))
+                    sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.), 0.1),
+                    sig_one_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.), 0.1)
                 ].concat().as_slice()),
         ])
     }
@@ -1646,7 +1647,7 @@ mod main_tests {
         Tensor::vstack(&[
             Tensor::from_slice([
                 sig_three_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.)),
-                sig_two_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.))
+                sig_two_imp(n, max_y, Some(10. .. 12.), Some(10. .. 12.), 0.1)
             ].concat().as_slice()),
         ])
     }
@@ -1711,8 +1712,8 @@ mod main_tests {
         fn label_0_t_rs(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
             Tensor::vstack(&[
                 Tensor::from_slice([sig_0_v.clone(), sig_0_v.clone(), sig_0_v.clone()].concat().as_slice()),
-                Tensor::from_slice([sig_2_v.clone(), saw(n), sig_2_v.clone()].concat().as_slice()),
-                Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+                Tensor::from_slice([sig_2_v.clone(), saw(n),          sig_2_v.clone()].concat().as_slice()),
+                Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
             ])
         }
 
@@ -1730,8 +1731,8 @@ mod main_tests {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, 3 * n as usize)?));
         let ws_runner = Arc::clone(&ws);
 
-        let sig_0_v = sig_one_imp(n, 30.0, None, None);
-        let sig_1_v = sig_two_imp(n, 30.0, None, None);
+        let sig_0_v = sig_one_imp(n, 30.0, None, None, 0.1);
+        let sig_1_v = sig_two_imp(n, 30.0, None, None, 0.1);
         let sig_2_v = sig_three_imp(n, 30.0, None, None);
 
         //t_label_tensor
@@ -1794,7 +1795,7 @@ mod main_tests {
         reset_print_options();
         let find_motifs_run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(1000, 1000, "pure group 4".into(), 10, 0.1, None, None, false),
+            &FindMotifsParams::dummy(200, 900, "pure group 4".into(), 10, 0.1, None, None, false),
             find_motifs_by_euc_dist,
             &ws,
             &store,

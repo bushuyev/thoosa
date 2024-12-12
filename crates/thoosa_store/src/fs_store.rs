@@ -115,14 +115,15 @@ pub struct ZstdFramedReader<T:AnyBitPattern> {
     reader: ZstdReader<'static, BufReader<File>>,
     frames:Vec<ZstdFrame>,
     _phantom: PhantomData<T>,
-    frame_i:usize
+    frame_i:usize,
+    file_path:PathBuf
 }
 
 impl<T:AnyBitPattern> ZstdFramedReader<T> {
 
     pub fn new(file_path: &Path) -> std::io::Result<Self> {
 
-        let mut reader = File::open(file_path)?;
+        let mut reader = File::open(&file_path)?;
         let table = zstd_framed::table::read_seek_table(&mut reader)?.unwrap();
 
         trace!("ChunkReader: table={table:?}");
@@ -132,6 +133,7 @@ impl<T:AnyBitPattern> ZstdFramedReader<T> {
             frames:table.frames().collect(),
             frame_i: 0,
             _phantom: PhantomData,
+            file_path: file_path.to_path_buf()
         })
     }
 }
@@ -140,13 +142,16 @@ impl<T:AnyBitPattern> Iterator for ZstdFramedReader<T> {
     type Item = io::Result<Vec<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.frame_i < self.frames.len() {
+        if self.frame_i < self.frames.len() && self.frames[self.frame_i].decompressed_size() > 0 {
             let mut buff = vec![0; self.frames[self.frame_i].decompressed_size() as usize];
             self.reader.read_exact(&mut buff).unwrap();
 
             self.frame_i+=1;
 
-            Some(Ok(bytemuck::cast_slice(&mut buff).to_vec()))
+            Some(Ok(bytemuck::try_cast_slice(&mut buff).map_err(|e|{
+                error!("ZstdFramedReader:next: file_path={:?} self.frame_i={} e={e:?}", self.file_path, self.frame_i);
+                e
+            }).expect("bytemuck failed").to_vec()))
 
         } else {
             None
@@ -371,5 +376,83 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_no_matches() -> Result<(), ThoosaError>{
+        log::set_max_level(Trace);
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        debug!("test_single_part: test_dir={test_dir:?}");
+        fs::create_dir_all(&test_dir)?;
+
+
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+
+        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+
+        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+
+        let mut file_store = FileMotifTrackerStore::new(
+            test_dir,
+            run_id,
+            3
+        )?;
+
+        file_store.load_slices_into_groups(&store, None)?;
+
+        let map = store.lock().list_motifs_slices(run_id)?;
+
+        assert_eq!(0, map.len());
+
+        Ok(())
+    }
+
+
+    /*
+     not a test - util to debug failing deserialization
+    #[test]
+     fn test_z() -> Result<(), ThoosaError>{
+
+         let mut slice_id = 0;
+         let run_id=28;
+         let channel=19;
+
+         log::set_max_level(Trace);
+         let groups:HashMap<u16, HashSet<IdSlice>> = group_slices(
+
+             // ZstdFramedReader::<SlicesMatch>::new(&PathBuf::from(format!("/tmp/ws_test/tmp/{run_id}_{channel}_slices.zstd").as_str()))?.flat_map(|slices|{
+             ZstdFramedReader::<SlicesMatch>::new(&PathBuf::from("/tmp/2024-12-12T12_54_47.820_01_00_3468226743/tmp/1_0_slices.zstd"))?.flat_map(|slices|{
+                 slices.unwrap().into_iter().map(move |slices:SlicesMatch|{
+                     slice_id+=1;
+                     (
+                         IdSlice(slice_id, slices.0.0, slices.0.1),
+                         IdSlice(slice_id, slices.1.0, slices.1.1)
+                     )
+                 })
+             })
+         );
+
+         debug!("{run_id}_{channel}_slices slice_id={slice_id} groups.len={}", groups.len());
+         let test_dir = Path::new("/tmp").join(cdt_for_dir());
+         fs::create_dir_all(&test_dir)?;
+         let sql_file = test_dir.join("test_store.db3");
+         fs::copy("/tmp/ws_test/main_db.db3", &sql_file)?;
+
+         debug!("sql_file={sql_file:?}");
+         let store = Arc::new(Mutex::new(SqlStore::from_path(sql_file)?));
+         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+
+         match store.lock().save_groups_as_motifs(
+             28, 19,
+             filter_groups_by_slices_count(None, groups)
+         ) {
+             Ok(v) => Ok(v),
+             Err(e) => {
+                 Err(e)
+             }
+         }?;
+
+         Ok(())
+
+     }*/
 
 }

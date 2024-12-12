@@ -199,6 +199,7 @@ impl Workspace for FsWorkspace {
             Ok(a)
         })
     }
+
     fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
         let label_models_path = self.labels_models_path.join(format!("{}", label));
 
@@ -440,6 +441,7 @@ mod tests {
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use thoosa_shared::{cdt_for_dir, ThoosaError};
+    use thoosa_shared::test_utils::test_util;
 
     #[ctor::ctor]
     fn init() {
