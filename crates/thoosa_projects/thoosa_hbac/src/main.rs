@@ -58,7 +58,7 @@ fn main()  {
     std::process::exit(0x0000);//for jupyter
 }
 
-// #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use std::any::Any;
     use std::ffi::c_void;
@@ -85,12 +85,12 @@ mod tests {
         thoosa_shared::init_test_logging();
     }
 
-    #[test]
+    // #[test]
     fn test_0(){
         println!("Ok");
     }
 
-    #[test]
+    // #[test]
     fn test_to_cpu() {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");

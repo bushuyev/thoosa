@@ -40,7 +40,8 @@ pub enum MaskMaker {
     Diagonal,
     Tril,
     LE {v:Tensor},//channels x thresholds
-    GT {v:Tensor} //channels x thresholds
+    GT {v:Tensor}, //channels x thresholds
+    LocalMin
 }
 
 impl MaskMaker {
@@ -73,7 +74,9 @@ impl MaskMaker {
             MaskMaker::GT { v } => {
                 Self::apply_prev(&perv_mask,  dists.gt_tensor(v))
             }
-
+            MaskMaker::LocalMin => {
+                Self::apply_prev(&perv_mask,  local_min_mask(dists))
+            }
         }
     }
 
@@ -106,7 +109,7 @@ pub fn clc_dist_d2_and_mask(
 
     Ok((
         mask_makers.into_iter().fold(None::<Tensor>, |mask, mask_maker|{
-            debug!("dist_d2_0: mask={mask:?}");
+            debug!("clc_dist_d2_and_mask: mask={mask:?}");
             Some(mask_maker.make_mask(mask, &distances))
         }).unwrap_or(Tensor::ones(distances.size(), (Bool, Cpu))),
 
@@ -119,12 +122,13 @@ pub fn clc_dist_d2_and_mask(
 }
 
 
+/// distances - [channels x slices 0 x slices 1]
 fn quantile_mask(q: f64, distances: &Tensor) -> Tensor {
     let channels= distances.size()[0];
     let flat_distances = distances.view((channels, -1));
 
     let samples = if flat_distances.size()[1] > 1000 {//TODO 1000 to config
-        debug!("dist_d2_0: flat_distances.size()={:?}", flat_distances.size());
+        debug!("quantile_mask: flat_distances.size()={:?}", flat_distances.size());
         let indices = Tensor::randint(
             flat_distances.size()[1],
             &[(flat_distances.size()[1] as f64 * 0.1) as i64],
@@ -140,16 +144,37 @@ fn quantile_mask(q: f64, distances: &Tensor) -> Tensor {
 
     let mut q_t = samples.quantile_scalar(q, 1, true, "lower").view((channels, 1, 1));
     trace!("quantile_mask: 1. q_t=\n{q_t}");
-    // let _ = q_t.multiply_scalar_(0.5);
-
     debug!("quantile_mask: samples.size={:?} q_t.size={:?}", samples.size(), q_t.size());
-    trace!("quantile_mask: 2. q_t=\n{q_t}");
 
     let mut le = distances.le_tensor(&q_t); //channels x motifs x num_slices
 
     trace!("quantile_mask:  le=\n{le}");
 
     le
+}
+
+fn local_min_mask(distances: &Tensor) -> Tensor {
+    debug!("local_min_mask: distances.size={:?}", distances.size());
+
+    let distances_size = distances.size();
+    let mid = distances.narrow(1, 1, distances_size[1]-2);
+    let left = distances.narrow(1, 0, distances_size[1]-2);
+    let right = distances.narrow(1, 2, distances_size[1]-2);
+
+    let is_less_than_left = mid.lt_tensor(&left);
+    let is_less_than_right = mid.lt_tensor(&right);
+
+    let local_min_mask = is_less_than_left.logical_and(&is_less_than_right);
+
+
+    let mut z = Tensor::zeros([distances_size[0], 1, distances_size[2]], (Bool, distances.device()));
+
+
+    let full_mask = Tensor::cat(&[z.shallow_clone(), local_min_mask, z], 1);
+
+    debug!("local_min_mask: full_mask.size={:?}", full_mask.size());
+
+    full_mask
 }
 
 pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
@@ -216,21 +241,24 @@ pub fn average_euclidean_distance(x: &Tensor) -> f32 {
 
 #[cfg(test)]
 mod distance_tests {
+    use std::f32::consts::PI;
+    use chrono::Utc;
     use log::__private_api::enabled;
-    use log::{debug, set_max_level};
+    use log::{debug, set_max_level, trace};
     use log::LevelFilter::Trace;
+    use plotters::prelude::{BLACK, GREEN, RED};
     use sci_rs::na::SimdBool;
     use tch::Device::Cpu;
     use tch::{Device, IndexOp, Kind};
     use tch::Kind::{Bool, Float};
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
-    use thoosa_shared::{sig_one_imp, sig_three_imp, sig_two_imp, ThoosaError};
+    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, reset_print_options, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
+    use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
 
-    use crate::distance::{average_euclidean_distance, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
+    use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
     use crate::chunks::ChunkOfSlicedTensors;
-    use crate::distance::MaskMaker::{Diagonal, Quantile, Tril, LE};
+    use crate::distance::MaskMaker::{Diagonal, LocalMin, Quantile, Tril, LE};
 
     #[ctor::ctor]
     fn init() {
@@ -267,55 +295,65 @@ mod distance_tests {
         let n = 1000i64;
         let max_y = 30.0;
 
-        let sig_0_v = sig_one_imp(n, max_y, None, None);
-        let sig_1_v = sig_two_imp(n, max_y, None, None);
+        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.0);
+        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
         //t_label_tensor
         //0 label - sig_0 in channel 0
         //1 label - sig_1 in channel 1
         //0,1 label - sig_2 in channel 2
-        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
+        // let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
+        let t_0 = Tensor::vstack(&[
+            Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
+        ]);
+
+        let t_1 =  Tensor::vstack(&[
+            Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n)].concat().as_slice()),
+            Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
+            Tensor::from_slice([sig_2_v.clone(), saw(n), saw(n)].concat().as_slice()),
+        ]);
+
 
         let x = lin_t(n*3);
         plot_series(
             vec![
-                (format!("t_0_0_0"), plotters::prelude::RED,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
-                (format!("t_0_1_0"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_1.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
-                // (format!("ch2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0_0.i((2, ..)))).collect::<Vec<(f32, f32)>>()),
-            ], "t_0_0_0 & t_0_1_0", (2000, 1000), &format!("/tmp/plots/t_0_0{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+                (format!("t_0_0_0"), plotters::prelude::RED,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_0.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
+                (format!("t_0_1_0"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t_1.i((0, ..)))).collect::<Vec<(f32, f32)>>()),
+            ], "t_0_0_0 & t_0_1_0 channel 0", (2000, 1000), &format!("/tmp/plots/t_0_0{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         )?;
 
-
         //t_label_tensor_channel
-        let window = 100;
-        let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
+        let window = 1000;
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, window,
-            &vec![t_0_0.into()], //sig_0 at idx 0
+            &vec![t_0.into()], //sig_0 at idx 0
             vec![0], Cpu
         ).t;
-        let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             10, window,
-            &vec![t_0_1.into()], //sig_0 at idx 2000
+            &vec![t_1.into()], //sig_0 at idx 2000
             vec![0], Cpu
         ).t;
-
 
         let (le, Some(distances)) = clc_dist_d2_and_mask(
-            t_0_0_0_sliced.shallow_clone(),
-            t_0_1_0_sliced.shallow_clone(),
+            t_0_sliced.shallow_clone(),
+            t_1_sliced.shallow_clone(),
 
             true, &[Quantile {q:1.}]
 
         )? else {
             panic!("no distances")
         };
+
         let x = lin_t(distances.size()[1]);
         plot_series(
             vec![
-                (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
-                (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((1, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
-                (format!("2ch"), plotters::prelude::BLUE,    vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((2, 100, ..)))).collect::<Vec<(f32, f32)>>()),//sig_2_v match
+                (format!("0ch t_0 slice 0"), plotters::prelude::GREEN,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
+                // (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((1, 0, ..)))).collect::<Vec<(f32, f32)>>()),//no matches
+                // (format!("2ch"), plotters::prelude::BLUE,    vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((2, 100, ..)))).collect::<Vec<(f32, f32)>>()),//sig_2_v match
             ], "distance", (2000, 1000), &format!("/tmp/plots/distance_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         )?;
 
@@ -323,7 +361,6 @@ mod distance_tests {
 
         let channels_dists_flat = distances.flatten(1,2);
 
-        // let channels_hists = channels_dists_flat.hist
         debug!("channels_dists_flat={:?}", channels_dists_flat.size());
         let hists = hist_1_dim(&channels_dists_flat, window);
         let x = lin_t(window as i64);
@@ -356,10 +393,6 @@ mod distance_tests {
         // debug!("kurtosis_gt={kurtosis_gt}");
         //
         // debug!("le={le}");
-
-
-
-
         Ok(())
     }
 
@@ -750,5 +783,57 @@ mod distance_tests {
 
         debug!("mask=\n{mask}");
     }
+
+    #[test]
+    fn test_mask_maker_local_min() -> Result<(), ThoosaError>{
+        let input_n =  1000;
+
+
+        let ch_0 = (0..input_n).map(|x| (2. * PI * (x as f32 / input_n as f32)).sin()).collect::<Vec<f32>>(); //sin_v(input_n, 1.);
+        let ch_1 = (0..input_n).map(|x| (4. * PI * (x as f32  / input_n as f32)).sin()).collect::<Vec<f32>>(); //sin_v(input_n, 0.5);
+
+        /*let x = lin_t(input_n);
+        plot_series(
+            vec![
+                (format!("ch_0"), GREEN, vec_f32_from(&x).into_iter().zip(ch_0.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
+                (format!("ch_1"), BLACK,  vec_f32_from(&x).into_iter().zip(ch_1.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
+
+            ], "Sigs", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
+        )?;*/
+        let min_ch0 = 3./4. * input_n as f32;
+        let min_ch1 = [3./8. * input_n as f32, 7./8. * input_n as f32] ;
+        debug!("min_ch0={min_ch0:?} min_ch1={min_ch1:?}");
+
+        let distances = Tensor::stack(&[
+            Tensor::from_slice(ch_0.as_slice()),
+            Tensor::from_slice(ch_1.as_slice())
+        ], 0).unsqueeze(2);//unsqueeze to make it [channels x t_0 slices x t_1 slices]
+
+        let mask = LocalMin.make_mask(None, &distances);
+        reset_print_options();
+        trace!("mask=\n{mask}");
+        debug!("mask.nonzero=\n{}", mask.nonzero());
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                0, 750, 0,
+                1, 375, 0,
+                1, 875, 0
+            ]).view((3, 3)),
+            mask.nonzero()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_slice(){
+        let t = Tensor::from_slice(&[0., 1., 2., 3., 4., 5., 6., 7.]);
+
+        println!("s={}", t.slice(0, 3, 6, 2));
+        println!("n={}", t.narrow(0, 0, 6));
+    }
+
+
 
 }

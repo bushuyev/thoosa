@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::f32::consts::PI;
 use std::fmt::{Debug, Display, Formatter};
-use std::fmt;
+use std::{fmt, fs};
 use std::hash::Hash;
 use std::ops::{Div, Mul, Range};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +30,9 @@ use crate::resource::ResourceId;
 pub mod repeat_iter;
 pub mod val;
 pub mod resource;
+
+#[cfg(test)]
+pub mod test_utils;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
@@ -269,7 +272,7 @@ pub fn sig_three_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: 
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
-pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
+pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
 
     join_with_offset::<f32>(0., 1.0, &[
@@ -278,10 +281,10 @@ pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Op
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
-pub fn sig_one_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
+pub fn sig_one_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
     join_with_offset::<f32>(0., 1.0, &[
-        ((0.1*n as f32) as usize, pulse_v_fit(0., σ, (0.8*n as f32) as i64, f, 100., max_y)),
+        ((offset*n as f32) as usize, pulse_v_fit(0., σ, ((1.0-2.*offset)*n as f32) as i64, f, 100., max_y)),
     ], random_saw_with_steps(n as usize, 20, 100.))
 }
 
@@ -685,7 +688,7 @@ pub fn cdt_for_dir() ->String {//TODO move to shared
 
 pub static LOG_INIT: AtomicBool = AtomicBool::new(false);
 
-// #[cfg(test)]
+#[cfg(test)]
 pub fn init_test_logging() {
 
     if !LOG_INIT.load(Ordering::Relaxed) {
@@ -720,23 +723,25 @@ pub fn init_test_logging() {
 pub fn recurse_files<F>(path: impl AsRef<Path>, filter:&F) -> std::io::Result<Vec<PathBuf>>
 where F:Fn(&PathBuf)->bool{
     let mut buf = vec![];
-    let entries = read_dir(path)?;
+    if fs::exists(&path)? {
+        let entries = read_dir(path)?;
 
-    for entry in entries {
-        let entry = entry?;
-        let meta = entry.metadata()?;
+        for entry in entries {
+            let entry = entry?;
+            let meta = entry.metadata()?;
 
-        if meta.is_dir() {
-            let mut subdir = recurse_files(entry.path(), filter)?;
-            buf.append(&mut subdir);
-        }
+            if meta.is_dir() {
+                let mut subdir = recurse_files(entry.path(), filter)?;
+                buf.append(&mut subdir);
+            }
 
-        if meta.is_file() {
-            let path = entry.path();
-            debug!("path={path:?} path.ends_with(safetensors)={} ", path.ends_with("safetensors"));
-            // if path.extension().map(|e|e.eq("safetensors")).unwrap_or(false) { //TODO param
-            if filter(&path) { //TODO param
-                buf.push(path);
+            if meta.is_file() {
+                let path = entry.path();
+                debug!("path={path:?} path.ends_with(safetensors)={} ", path.ends_with("safetensors"));
+                // if path.extension().map(|e|e.eq("safetensors")).unwrap_or(false) { //TODO param
+                if filter(&path) { //TODO param
+                    buf.push(path);
+                }
             }
         }
     }

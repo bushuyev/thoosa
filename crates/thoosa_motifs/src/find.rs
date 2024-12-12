@@ -56,7 +56,7 @@ use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_store::fs_store::FileMotifTrackerStore;
-use crate::distance::MaskMaker::{Diagonal, Quantile, LE, Tril};
+use crate::distance::MaskMaker::{Diagonal, Quantile, LE, Tril, LocalMin};
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -306,9 +306,9 @@ pub fn find_motifs_by_euc_dist(
 
             let mask_tril = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]) && !chunk_sliced_1.is_split();
             let mask_makers = if mask_tril {
-                &[Quantile { q: find_motifs_run_config.dist_quantile }, Tril][..]
+                &[Quantile { q: find_motifs_run_config.dist_quantile }, LocalMin, Tril][..]
             } else {
-                &[Quantile { q: find_motifs_run_config.dist_quantile }][..]
+                &[Quantile { q: find_motifs_run_config.dist_quantile }, LocalMin][..]
             };
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
@@ -331,11 +331,12 @@ pub fn find_motifs_by_euc_dist(
 
         },
         &|run_config_id, mask_cpu, chunk_0, chunk_1| {
-            let mut distances_i = 0;
+            // let mut distances_i = 0;
             let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
 
-            let run_config = run_configs_arcs.iter().find(|rc| rc.id.expect("id") == run_config_id).expect("rc");
-            let step = run_config.step;
+            // let run_config = run_configs_arcs.iter().find(|rc| rc.id.expect("id") == run_config_id).expect("rc");
+            // let step = run_config.step;
+            debug!("find_motifs_by_euc_dist: mask_cpu.size={:?}", mask_cpu.size());
 
             channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
                 let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
@@ -1589,10 +1590,9 @@ mod motif_find_tests {
 
     use crate::find::select_motifs_by_corr;
 
-
     #[ctor::ctor]
     fn init() {
-        init_test_logging();
+        thoosa_shared::init_test_logging();
     }
 
 
@@ -2803,8 +2803,8 @@ mod motif_find_tests {
 
         let max_y = 30.0;
 
-        let sig_0_v = sig_one_imp(n, max_y, None, None);
-        let sig_1_v = sig_two_imp(n, max_y, None, None);
+        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
+        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
         let x = lin_t(3 * n);

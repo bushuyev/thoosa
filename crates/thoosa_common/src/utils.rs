@@ -277,7 +277,7 @@ pub fn clone(from:&Tensor) -> Tensor {
 }
 
 pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
-    assert_eq!(tensor.dim(), 2, "Input tensor must have exactly two dimensions.");
+    assert_eq!(tensor.dim(), 2, "hist_1_dim: input tensor must have exactly two dimensions.");
 
 
     let min_vals = tensor.min_dim(1, true).0; //channels x 1
