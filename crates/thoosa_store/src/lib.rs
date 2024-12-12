@@ -25,8 +25,7 @@ use rusqlite::types::Value;
 use thoosa_shared::*;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
 use thoosa_shared::val::Val;
-
-
+use thoosa_shared::val::Val::UInt;
 
 #[derive(Debug, Clone)]
 pub struct IdSlice(u32, ResourceId, u32); //id, tensor id, slice idx
@@ -1068,7 +1067,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         let result = {
-            let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value FROM run_config_values WHERE run_id=?")?;
+            let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value, unsigned FROM run_config_values WHERE run_id=?")?;
 
 
             let result = stmt.query_map([run_id], |row| {
@@ -1077,14 +1076,17 @@ impl Store for SqlStore {
                         row.get::<usize, String>(0)?,
                         row.get::<usize, f64>(1).ok(),
                         row.get::<usize, i64>(2).ok(),
-                        row.get::<usize, String>(3).ok()
+                        row.get::<usize, String>(3).ok(),
+                        row.get::<usize, u8>(4).ok().map(|v| if v == 1  { true } else { false}).unwrap_or(false)
                     )
                 )
-            })?.map(|v| v.expect(format!("can't get run_config_values for {}", run_id).as_str())).fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value)| {
+            })?.map(|v| v.expect(format!("can't get run_config_values for {}", run_id).as_str())).fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value, unsigned)| {
                 a.insert(
                     name.clone(),
                     real_value.map(|v| v.into())
-                        .or(int_value.map(|v| v.into()))
+                        .or(int_value.map(|v| if unsigned {
+                            UInt(v as u32)} else{ Val::Int(v)}
+                        ))
                         .or(str_value.map(|v| v.into()))
                         .expect(format!("no value for {}", name).as_str()),
                 );
@@ -1345,6 +1347,7 @@ impl SqlStore {
                 real_value  REAL,
                 int_value   INTEGER,
                 str_value   VARCHAR(256),
+                unsigned    INTEGER DEFAULT 0,
                 label_id    REFERENCES labels(id) ON DELETE CASCADE
                 )",
                 (),
@@ -1445,7 +1448,7 @@ impl SqlStore {
                 t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
             Val::UInt(v) => {
-                t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value, unsigned) VALUES (?, ?, ?, ?, 1)", params![run_id, label_id, param_name, v])?;
             }
             Val::Str(v) => {
                 t.execute("INSERT INTO run_config_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
@@ -1802,7 +1805,7 @@ mod store_tests {
 
     #[ctor::ctor]
     fn init() {
-        thoosa_shared::init_test_logging();
+        thoosa_shared::test_utils::init_test_logging();
     }
 
     #[test]

@@ -309,15 +309,14 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
 pub fn apply_channel_motifs(
     input_slice_step: usize,
     input_slices_motif_batch_size: i64,
-    motif_nodes: &Vec<(MotifNodeParams, SyncModule)>,
+    motif_nodes: &[(MotifNodeParams, SyncModule)],
     channel: Tensor,
     max_motif_nodes: i64,
     max_motif_batches: usize,
     device: &Device
 ) -> Tensor {
 
-    if motif_nodes.len() == 0 {
-        //if no 'main' folds build motifs on remainder
+    if motif_nodes.is_empty() {
         return Tensor::zeros([max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size], (Float, *device));
     }
 
@@ -371,7 +370,7 @@ pub fn apply_channel_motifs(
                 add_node_output_batch(input_slices_motif_batch_size, node_batch, motifs_p_t);
 
             } else {
-                warn!("apply_channel_motifs: reminder, no rs for node_i={} batch.size()={:?}", node_i, input_slices_batch.size());
+                warn!("apply_channel_motifs: reminder, no results for node_i={} batch.size()={:?}", node_i, input_slices_batch.size());
             }
         };
     }

@@ -15,7 +15,7 @@ use chrono::SecondsFormat;
 use log::{debug, error, trace, LevelFilter};
 use rand::{Rng, RngCore};
 use regex::Regex;
-use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
 use std::env;
 use std::env::VarError;
 use std::ffi::OsStr;
@@ -31,7 +31,6 @@ pub mod repeat_iter;
 pub mod val;
 pub mod resource;
 
-#[cfg(test)]
 pub mod test_utils;
 
 //group of similar slices - motif
@@ -688,38 +687,6 @@ pub fn cdt_for_dir() ->String {//TODO move to shared
 
 pub static LOG_INIT: AtomicBool = AtomicBool::new(false);
 
-#[cfg(test)]
-pub fn init_test_logging() {
-
-    if !LOG_INIT.load(Ordering::Relaxed) {
-
-        LOG_INIT.store(true, Ordering::Relaxed);
-        CombinedLogger::init(
-
-            vec![
-                TermLogger::new(
-                    LevelFilter::Trace,//to let set trace level from tests with set_max_level
-                    Config::default(),
-                    TerminalMode::Mixed,
-                    ColorChoice::Auto
-                )
-            ]
-        ).unwrap_or_else(|e| {
-            debug!("CombinedLogger::init failed: {:?}", e);
-        });
-
-        log::set_max_level(
-            env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|e| {
-                println!("Can't find loglevel: {}", e);
-                VarError::NotPresent
-            })).unwrap_or(LevelFilter::Debug)
-        );
-
-        env::set_var("POLARS_FMT_MAX_COLS", "100");
-        env::set_var("POLARS_FMT_MAX_ROWS", "100");
-    }
-}
-
 pub fn recurse_files<F>(path: impl AsRef<Path>, filter:&F) -> std::io::Result<Vec<PathBuf>>
 where F:Fn(&PathBuf)->bool{
     let mut buf = vec![];
@@ -833,12 +800,12 @@ mod shared_tests {
     use clap::{Args, Parser};
 
 
-    use crate::{batch_windows, clc_num_batches, make_combos, group_slices, parse_range_str, RangeOrValue, ThoosaError, ResourceType};
+    use crate::{batch_windows, clc_num_batches, group_slices, make_combos, parse_range_str, test_utils, RangeOrValue, ResourceType, ThoosaError};
     use crate::pulse_v;
 
     #[ctor::ctor]
     fn init() {
-        super::init_test_logging();
+        test_utils::init_test_logging();
     }
 
     #[test]

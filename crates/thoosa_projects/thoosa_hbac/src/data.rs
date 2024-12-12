@@ -686,8 +686,9 @@ mod tests {
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::distance::MaskMaker::Quantile;
-    use thoosa_shared::{cdt_for_dir, init_test_logging, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, ThoosaError};
     use thoosa_shared::resource::Resource;
+    use thoosa_shared::test_utils::init_test_logging;
     use thoosa_store::SqlStore;
     use crate::data::EEGs;
 
