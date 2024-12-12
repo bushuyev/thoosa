@@ -441,11 +441,10 @@ mod tests {
     use tch::nn::VarStore;
     use tch::Device::Cpu;
     use thoosa_shared::{cdt_for_dir, ThoosaError};
-    use thoosa_shared::test_utils::test_util;
 
     #[ctor::ctor]
     fn init() {
-        thoosa_shared::init_test_logging();
+        thoosa_shared::test_utils::init_test_logging();
     }
 
 

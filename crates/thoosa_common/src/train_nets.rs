@@ -2140,7 +2140,7 @@ mod train_tests {
 
     #[ctor::ctor]
     fn test_init() {
-        thoosa_shared::init_test_logging();
+        thoosa_shared::test_utils::init_test_logging();
     }
 
     #[test]

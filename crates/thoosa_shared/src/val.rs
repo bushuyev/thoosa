@@ -21,6 +21,14 @@ impl Val {
         }
     }
 
+    pub fn as_u32(&self) -> Result<u32, ThoosaError> {
+        match self {
+            Self::UInt(v)=> Ok(*v),
+            _=> Err(ThoosaError::new("can't be u32"))
+        }
+    }
+
+
     pub fn as_i64(&self) -> Result<i64, ThoosaError> {
         match self {
             Self::Int(v)=> Ok(*v as i64),

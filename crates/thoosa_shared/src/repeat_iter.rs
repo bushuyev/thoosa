@@ -70,7 +70,7 @@ impl<I, T> Iterator for FirstLastRepeat<I, T>
 #[cfg(test)]
 mod tests {
 
-    use crate::init_test_logging;
+    use crate::test_utils::init_test_logging;
     use crate::repeat_iter::{FirstLastRepeat, Repeat};
 
     #[ctor::ctor]

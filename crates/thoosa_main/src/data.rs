@@ -226,7 +226,7 @@ mod data_tests {
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
-    use thoosa_shared::init_test_logging;
+    use thoosa_shared::test_utils::init_test_logging;
     use crate::data::{arr_to_expr, split_frame_by_offsets};
 
     #[ctor::ctor]

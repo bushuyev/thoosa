@@ -55,6 +55,7 @@ use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
+use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use crate::distance::MaskMaker::{Diagonal, Quantile, LE, Tril, LocalMin};
 
@@ -404,8 +405,8 @@ pub struct FindMotifsRunConfig {
 impl RunConfig for FindMotifsRunConfig {
     fn to_properties_map(&self) -> HashMap<String, Val> {
         let mut map = HashMap::from([
-            ("FindMotifsRunConfig.step".into(), self.step.into()),
-            ("FindMotifsRunConfig.window".into(), self.window.into()),
+            ("FindMotifsRunConfig.step".into(), UInt(self.step)),
+            ("FindMotifsRunConfig.window".into(), UInt(self.window)),
             ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
             ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
         ]);
@@ -420,12 +421,13 @@ impl RunConfig for FindMotifsRunConfig {
     //TODO set id
     fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
         let properties = thoosa_shared::val::unprefix_properties("FindMotifsRunConfig", &properties);
-        FindMotifsRunConfig::new(None,
-                                 properties.get("step").expect("no step").as_usize().expect("step as_usize") as u32,
-                                 properties.get("window").expect("no window").as_i64().expect("window as_i64") as u32,
-                                 properties.get("dist_quantile").expect("no dist_quantile").as_f32().expect("dist_quantile as_f32"),
-                                 properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
-                                 InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
+        FindMotifsRunConfig::new(
+            None,
+            properties.get("step").expect("no step").as_u32().expect("step as_u32"),
+            properties.get("window").expect("no window").as_u32().expect("window as_u32"),
+            properties.get("dist_quantile").expect("no dist_quantile").as_f32().expect("dist_quantile as_f32"),
+            properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
+            InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
         )
     }
 
@@ -1249,7 +1251,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
         debug!("select_motifs_for_label_2: label={label:?} resources={resources:?}");
         chunk_and_slice(
             resources,
-            10,//TODO params
+            2,//TODO params
             &mut find_motifs_run_config_motifs_tensors,
 
             |chunk, (cfg, (motif_tensors, label_motif_matches_sums))|{
@@ -1586,13 +1588,14 @@ mod motif_find_tests {
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::val::Val;
+    use thoosa_shared::val::Val::UInt;
     use thoosa_store::{IdSlice, SlicesMatch, SqlStore, Store};
 
     use crate::find::select_motifs_by_corr;
 
     #[ctor::ctor]
     fn init() {
-        thoosa_shared::init_test_logging();
+        thoosa_shared::test_utils::init_test_logging();
     }
 
 
@@ -2039,7 +2042,7 @@ mod motif_find_tests {
             &store,
             &executor_rc,
             vec![Cpu]
-        )?.expect("run_ids");
+        )?;
 
 
         debug!("run_ids={:?}", run_ids);
@@ -2552,8 +2555,8 @@ mod motif_find_tests {
         debug!("properties={:?}", properties);
 
         let sample_properties: HashMap<String, Val> = HashMap::from([
-            ("FindMotifsRunConfig.window".into(), 10.into()),
-            ("FindMotifsRunConfig.step".into(), 10.into()),
+            ("FindMotifsRunConfig.window".into(), UInt(10)),
+            ("FindMotifsRunConfig.step".into(), UInt(10)),
             ("FindMotifsRunConfig.dist_quantile".into(), 1.0.into()),
             ("FindMotifsRunConfig.descr".into(), "test".into()),
             ("FindMotifsRunConfig.filter.conv_1.Conv1Params.padding".into(), 1.into()),
@@ -2561,6 +2564,13 @@ mod motif_find_tests {
             ("FindMotifsRunConfig.filter.conv_1.Conv1Params.kernel".into(), 10.into()),
         ]);
 
+        //
+        // assert_eq!(sample_properties.len(), properties.len(), "len is not same");
+        // for (key, val) in sample_properties.iter() {
+        //     if properties.get(key).expect(key).ne(val) {
+        //         debug!("wrong val key={key:?} sample_val={val:?} properties_val={:?} ", properties.get(key));
+        //     }
+        // }
         assert_eq!(sample_properties, properties);
 
         let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map(0, properties);

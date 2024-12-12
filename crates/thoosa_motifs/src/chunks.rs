@@ -196,8 +196,9 @@ mod tests {
     use tch::Kind::Float;
     use tch::Tensor;
     use thoosa_common::loader::SyncWrapper;
-    use thoosa_shared::{init_test_logging, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::resource::ResourceId;
+    use thoosa_shared::test_utils::init_test_logging;
     use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 
 

@@ -563,7 +563,7 @@ mod tpe_optimizer_tests {
 
     #[ctor::ctor]
     fn init() {
-        thoosa_shared::init_test_logging();
+        thoosa_shared::test_utils::init_test_logging();
     }
 
 
