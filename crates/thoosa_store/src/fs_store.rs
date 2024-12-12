@@ -91,17 +91,10 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             })
         );
         info!("inserting {} groups {} slices", groups.len(), groups.values().map(|s|s.len()).sum::<usize>());
-        // let groups_for_err = groups.clone();
-        match store.lock().save_groups_as_motifs(
+        store.lock().save_groups_as_motifs(
             self.run_id, self.channel as i64,
             filter_groups_by_slices_count(max_slices_counts, groups)
-        ) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                // error!("save_groups_as_motifs failed: groups={groups_for_err:?}");
-                Err(e)
-            }
-        }
+        )
     }
 
 
@@ -379,48 +372,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_z() -> Result<(), ThoosaError>{
-
-
-        let mut slice_id = 0;
-        let run_id=28;
-        let channel=19;
-
-        let groups:HashMap<u16, HashSet<IdSlice>> = group_slices(
-
-            ZstdFramedReader::<SlicesMatch>::new(&PathBuf::from(format!("/tmp/ws_test/tmp/{run_id}_{channel}_slices.zstd").as_str()))?.flat_map(|slices|{
-                slices.unwrap().into_iter().map(move |slices:SlicesMatch|{
-                    slice_id+=1;
-                    (
-                        IdSlice(slice_id, slices.0.0, slices.0.1),
-                        IdSlice(slice_id, slices.1.0, slices.1.1)
-                    )
-                })
-            })
-        );
-
-        debug!("{run_id}_{channel}_slices slice_id={slice_id} groups.len={}", groups.len());
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        fs::create_dir_all(&test_dir)?;
-        let sql_file = test_dir.join("test_store.db3");
-        fs::copy("/tmp/ws_test/main_db.db3", &sql_file)?;
-
-        debug!("sql_file={sql_file:?}");
-        let store = Arc::new(Mutex::new(SqlStore::from_path(sql_file)?));
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-
-        match store.lock().save_groups_as_motifs(
-            28, 19,
-            filter_groups_by_slices_count(None, groups)
-        ) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                Err(e)
-            }
-        }?;
-
-        Ok(())
-
-    }
 }

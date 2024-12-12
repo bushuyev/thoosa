@@ -58,7 +58,7 @@ fn main()  {
     std::process::exit(0x0000);//for jupyter
 }
 
-#[cfg(test)]
+// #[cfg(test)]
 mod tests {
     use std::any::Any;
     use std::ffi::c_void;

@@ -69,7 +69,7 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long,value_parser=parse_resources)]
     pub resources: ResourceType,
 
-    #[arg(long, default_value = "10")]
+    #[arg(long)]
     pub min_tracker_step: Option<usize>,
 
     #[arg(long, default_value_t = 100)]
@@ -368,12 +368,13 @@ pub fn find_motifs_by_euc_dist(
         &devices
     )?;
 
+    //TODO
     // for tr in run_config__channels_trackers.iter().flat_map(|(_, v)|v.iter()){
     //     // tr.lock().finish();
     // }
 
     let total_trackers  = run_config__channels_trackers.values().map(|v| v.len()).sum::<usize>();
-    info!("setting motifs in {} configs,  {total_trackers} trackers", run_config_ids.len());
+    info!("setting motifs in {} configs,  {total_trackers} trackers on {} threads", run_config_ids.len(), rayon::current_num_threads());
     let num_trackers_per_thread = max(1, total_trackers/rayon::current_num_threads());
     let run_config__channels_trackers_vec = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).collect::<Vec<_>>();
 
@@ -810,7 +811,7 @@ pub(crate) struct SimpleMotifTracker<'a> {
     last:Option<SlicesMatch>,
     motifs: Vec<SlicesMatch>, //i_0, match_0, match_1, dist
     dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
-    min_step:Option<usize>,
+    min_step:Option<usize>,//TODO replace with enum - All, each Nth etc
     max_slices_counts: Option<u32>,
 }
 

@@ -789,51 +789,14 @@ impl Store for SqlStore {
     fn save_groups_as_motifs(&mut self, run_id: usize, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoosaError> {
         let mut guard = self.conn.lock();
 
-        self.conn.lock().execute("VACUUM", [])?;
-
         let t = guard.transaction()?;
 
         debug!("save_slices_groups_as_motifs_from_file: run_id={run_id:?}, channel={channel:?}");
 
         {
             for (group, slices) in groups {
-                let motifs_inserted = match t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize]){
-                    Ok(motifs_inserted) => Ok(motifs_inserted),
-                    Err(e) => {
-                        error!("save_groups_as_motifs: e={e} sqlite_error={:?} group={group} run_id={run_id}, channel={channel}", e.sqlite_error());
-
-                        if let Ok(mut stmt) = t.prepare("PRAGMA foreign_key_check;") {
-                            let rows = stmt.query_map([], |row| {
-                                let table: String = row.get(0)?;
-                                let rowid: i64 = row.get(1)?;
-                                let parent: String = row.get(2)?;
-                                Ok((table, rowid, parent))
-                            });
-
-                            if let Ok(rows) = rows {
-                                debug!("got rows");
-                                for row_res in rows {
-                                    match row_res {
-                                        Ok((table, rowid, parent)) => {
-                                            error!(
-                                                "Foreign key constraint failed: table='{}', rowid={}, parent='{}'",
-                                                table, rowid, parent
-                                            );
-                                        }
-                                        Err(e) => {
-                                            error!("Error reading foreign_key_check row: {}", e);
-                                        }
-                                    }
-                                }
-                            } else {
-                                error!("Error executing PRAGMA foreign_key_check");
-                            }
-                        } else {
-                            error!("Failed to prepare PRAGMA foreign_key_check statement");
-                        }
-                        Err(e)
-                    }
-                }?;
+                let motifs_inserted =  t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", [group as usize, run_id, channel as usize])
+                    .map_err(|e|Self::log_error((run_id, channel, group), &t, e))?;
 
                 let motif_id:i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
@@ -1428,6 +1391,7 @@ impl SqlStore {
         }
 
         Ok(Box::new(Self {
+            //TODO https://sqlite.org/cgi/src/doc/begin-concurrent/doc/begin_concurrent.md + pool
             conn: Mutex::new(conn)
         }))
     }
@@ -1617,6 +1581,37 @@ impl SqlStore {
         Ok(vec)
     }
 
+    fn log_error<C:Debug>(ctx:C, t: &Transaction,  e: Error) -> Error {
+        error!("log_error: ctx={ctx:?} sqlite_error={:?}", e.sqlite_error());
+
+        if let Ok(mut stmt) = t.prepare("PRAGMA foreign_key_check;") {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                let table: String = row.get(0)?;
+                let rowid: i64 = row.get(1)?;
+                let parent: String = row.get(2)?;
+                Ok((table, rowid, parent))
+            }) {
+                let mut rows_cnt = 0;
+                for row_res in rows {
+                    rows_cnt += 1;
+                    match row_res {
+                        Ok((table, rowid, parent)) => {
+                            error!("Foreign key constraint failed: table='{}', rowid={}, parent='{}'",table, rowid, parent);
+                        }
+                        Err(e) => {
+                            error!("Error reading foreign_key_check row: {}", e);
+                        }
+                    }
+                }
+                debug!("PRAGMA foreign_key_check: got {rows_cnt} rows");
+            } else {
+                error!("Error executing PRAGMA foreign_key_check");
+            }
+        } else {
+            error!("Failed to prepare PRAGMA foreign_key_check statement");
+        }
+        e
+    }
 }
 
 fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
