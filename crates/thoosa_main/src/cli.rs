@@ -45,6 +45,7 @@ use thoosa_shared::parse_range_or_value;
 
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
+use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
 
 #[derive(Parser, Clone)]
@@ -1130,23 +1131,25 @@ fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box
 
     let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
 
-    let all_sices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+    let all_slices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+
+    let slices_t = Tensor::vstack(all_slices.iter().map(|s| s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
+
+    let motif_avg_dist = average_euclidean_distance(&slices_t);
 
     // check_slices(&all_sices, 0.9);
 
     plot_series(
-        all_sices.into_iter().map(|t| {
+        all_slices.into_iter().map(|t| {
             (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
         }).collect(),
-        format!("Motif: {motif_id} run id: {run_id} number of slices: {slices_len}").as_str(),
+        format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={motif_avg_dist}").as_str(),
         (2000, 1000),
         &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
     )?;
 
     Ok(())
 }
-
-
 
 fn run_train_motif_nodes (
     motifs:&Vec<usize>,
@@ -1316,7 +1319,7 @@ where
 mod main_tests {
     use std::collections::{HashMap, HashSet};
     use std::{fs, ptr};
-    use std::cmp::max;
+    use std::cmp::{max, min};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::vec::IntoIter;
@@ -1327,6 +1330,7 @@ mod main_tests {
     use plotters::prelude::{IntoLinspace, BLACK};
     use polars::export::arrow::array::clone;
     use polars::export::chrono;
+    use rand::Rng;
     use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
     use rayon::prelude::IntoParallelIterator;
     use simplelog::CombinedLogger;
@@ -1340,7 +1344,7 @@ mod main_tests {
     use thoosa_common::utils::{from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, vec_f32_from};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, FindMotifsParams, FindMotifsRunConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesParams};
-    use thoosa_shared::{cdt, cdt_for_dir, recurse_files, saw, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::{cdt, cdt_for_dir, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use crate::cli::{import_resources, resource_path, run_infer, run_plot_motif_slices, run_step, run_train_final_node, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, Cli, RunAllParams};
@@ -1715,20 +1719,26 @@ mod main_tests {
     #[test]
     fn test_run_step() -> Result<(), ThoosaError> {
         // log::set_max_level(Warn);
+        let max_y = 1f32;
 
-        fn label_0_t_rs(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+        fn _saw(n:i64) -> Vec<f32>{
+            saw_with_steps(n as usize, 10, 10.)
+        }
+
+        fn label_0_t_rs(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y:f32) -> Tensor {
+
             Tensor::vstack(&[
-                Tensor::from_slice([sig_0_v.clone(), sig_0_v.clone(), sig_0_v.clone()].concat().as_slice()),
-                Tensor::from_slice([sig_2_v.clone(), saw(n),          sig_2_v.clone()].concat().as_slice()),
-                Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice()),
+                Tensor::from_slice([sig_0_v.clone(), _saw(n), sig_0_v.clone()].concat().as_slice()),
+                Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
+                Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice()),
             ])
         }
 
-        fn label_1_t_rs(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+        fn label_1_t_rs(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>,  max_y:f32) -> Tensor {
             Tensor::vstack(&[
-                Tensor::from_slice([sig_1_v.clone(), sig_1_v.clone(), sig_1_v.clone()].concat().as_slice()),
-                Tensor::from_slice([sig_2_v.clone(), saw(n),          sig_2_v.clone()].concat().as_slice()),
-                Tensor::from_slice([saw(n),          sig_2_v.clone(), saw(n)].concat().as_slice())
+                Tensor::from_slice([sig_1_v.clone(), _saw(n),           sig_1_v.clone()].concat().as_slice()),
+                Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
+                Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice())
             ])
         }
 
@@ -1738,46 +1748,37 @@ mod main_tests {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir.clone(), 3, 3 * n as usize)?));
         let ws_runner = Arc::clone(&ws);
 
-        let sig_0_v = sig_one_imp(n, 30.0, None, None, 0.1);
-        let sig_1_v = sig_two_imp(n, 30.0, None, None, 0.1);
-        let sig_2_v = sig_three_imp(n, 30.0, None, None);
-
         //t_label_tensor
         //0 label - sig_0 in channel 0
         //1 label - sig_1 in channel 1
         //0,1 label - sig_2 in channel 2
         (0..10).for_each(|i|{
-            label_0_t_rs(n, &sig_0_v, &sig_2_v).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
+            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
         });
 
         (0..10).for_each(|i|{
-            label_0_t_rs(n, &sig_1_v, &sig_2_v).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
+            label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
         });
 
         let x = lin_t(3*n);
         plot_series(
             (0..10).map(|i| {
                 let t = Tensor::load(&ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).expect(format!("can't open 1_t_0_{i}.pt").as_str());
-                if i % 2 == 0 {
-                    (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
-                } else {
-                    (format!("Sig1"), plotters::prelude::BLUE, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
-                }
+
+                (format!("Sig0"), plotters::prelude::BLUE, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
 
             }).collect::<Vec<_>>(),
-            "test_find_motifs_by_euc_dist", (1000, 500), &test_dir.clone().join("plots/0.png").to_path_buf(),
+            "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join("0.png").to_path_buf(),
         )?;
         plot_series(
             (0..10).map(|i| {
                 let t = Tensor::load(&ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).expect(format!("can't open 1_t_1_{i}.pt").as_str());
-                if i % 2 == 0 {
-                    (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
-                } else {
-                    (format!("Sig1"), plotters::prelude::BLUE, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
-                }
+
+                (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
+
 
             }).collect::<Vec<_>>(),
-            "test_find_motifs_by_euc_dist", (1000, 500), &test_dir.clone().join("plots/1.png").to_path_buf(),
+            "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join("1.png").to_path_buf(),
         )?;
 
 
@@ -1802,7 +1803,7 @@ mod main_tests {
         reset_print_options();
         let find_motifs_run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(200, 1000, "pure group 4".into(), 10, 0.01, None, None, false),
+            &FindMotifsParams::dummy(100, 800, "pure group 4".into(), 10, 0.1, None, None, false),
             find_motifs_by_euc_dist,
             &ws,
             &store,
@@ -1831,8 +1832,8 @@ mod main_tests {
 
         assert_eq!(selected_motifs[0].len(), 2);
         //no motifs in channels 1 and 2
-        // assert!(selected_motifs[1].is_empty());
-        // assert!(selected_motifs[2].is_empty());
+        assert!(selected_motifs[1].is_empty());
+        assert!(selected_motifs[2].is_empty());
         //TODO check if motifs match signals
 
 
@@ -1882,11 +1883,11 @@ mod main_tests {
         fs::create_dir_all(input_dir.as_path())?;
 
         (0..10).for_each(|i|{
-            label_0_t_rs(n, &sig_0_v, &sig_2_v).save(input_dir.join(format!("t_0_{i}.pt"))).unwrap();
+            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, None, 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(input_dir.join(format!("t_0_{i}.pt"))).unwrap();
         });
 
         (0..10).for_each(|i|{
-            label_1_t_rs(n, &sig_1_v, &sig_2_v).save(input_dir.join(format!("t_1_{i}.pt"))).unwrap();
+            label_1_t_rs(n, &sig_two_imp(n, 30.0, None, Some(2. ..3.), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(input_dir.join(format!("t_1_{i}.pt"))).unwrap();
         });
 
         run_infer(

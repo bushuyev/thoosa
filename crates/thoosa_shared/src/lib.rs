@@ -32,6 +32,7 @@ pub mod val;
 pub mod resource;
 
 pub mod test_utils;
+mod colors_iter;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
@@ -223,7 +224,7 @@ pub fn random_saw(n: usize) -> Vec<f32> {
         ).collect::<Vec<f32>>()
 }
 
-pub fn random_saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
+pub fn saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
     let mut rng = rand::thread_rng();
 
     let mut y = vec![0.;n];
@@ -243,7 +244,11 @@ pub fn random_saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
             let dy = max_y / (dx-1) as f32 * 2.;
 
             for i in 1..dx / 2  {
-                y[x + i] = if x + i > 0 { y[x + i - 1] } else { 0. } + dy;
+                y[x + i] = if x + i > 0 {
+                    y[x + i - 1]
+                } else {
+                    0.
+                } + dy;
                 y[x + dx - i - 1] = y[x + i];
             }
 
@@ -268,7 +273,7 @@ pub fn sig_three_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: 
         ((0.1*n as f32) as usize, pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y)),
         ((0.0*n as f32) as usize, pulse_v_fit(0., σ, (0.2 * n as f32) as i64, f, 100., max_y)),
         ((0.0*n as f32) as usize, pulse_v_fit(0., σ, (0.3 * n as f32) as i64, f, 100., max_y)),
-    ], random_saw_with_steps(n as usize, 20, 100.))
+    ], saw_with_steps(n as usize, 20, 0.2*max_y))
 }
 
 pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
@@ -277,14 +282,14 @@ pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Op
     join_with_offset::<f32>(0., 1.0, &[
         ((0.1*n as f32) as usize, pulse_v_fit(0., σ, (0.4*n as f32) as i64, f, 100., max_y)),
         ((0.0*n as f32) as usize, pulse_v_fit(0., σ, (0.4*n as f32) as i64, f, 100., max_y)),
-    ], random_saw_with_steps(n as usize, 20, 100.))
+    ], saw_with_steps(n as usize, 20, 0.2*max_y))
 }
 
 pub fn sig_one_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
     join_with_offset::<f32>(0., 1.0, &[
         ((offset*n as f32) as usize, pulse_v_fit(0., σ, ((1.0-2.*offset)*n as f32) as i64, f, 100., max_y)),
-    ], random_saw_with_steps(n as usize, 20, 100.))
+    ], saw_with_steps(n as usize, 20, 0.2*max_y))
 }
 
 fn σ_f_params(σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> (f32, f32) {
@@ -295,7 +300,7 @@ fn σ_f_params(σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> (f3
 }
 
 pub fn saw(n: i64) -> Vec<f32> {
-    random_saw_with_steps(n as usize, 30, 100.)
+    saw_with_steps(n as usize, 30, 100.)
 }
 
 pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {

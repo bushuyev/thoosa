@@ -141,8 +141,6 @@ pub fn motifs_to_tensor(
     let mut channels_motifs_slices_t = Vec::with_capacity(channels as usize);
     let mut channels_motifs_avg_dists_t = Vec::with_capacity(channels as usize);
 
-
-
     for channel in 0..channels {
         let motif_slices = channels_motifs_slices.write().remove(&(channel as u16)).unwrap_or(HashMap::new());
         let mut motifs_avg_dists = Vec::with_capacity(motif_slices.len());
@@ -293,7 +291,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
 
     debug!("load_motif_slices: tensors_ids_slices.len={}", tensors_ids_slices.len());
 
-    let mut all_slices:Arc<RwLock<Vec<(ResourceId, Vec<Box<SyncWrapper<Tensor>>>)>>> = Arc::new(RwLock::new(vec![]));
+    let mut all_slices:Arc<RwLock<Vec<(ResourceId, Vec<Box<SyncWrapper<Tensor>>>)>>> = Arc::new(RwLock::new(vec![]));//TODO remove Arc or add par_iter?
     let wg = WaitGroup::new();
 
 
