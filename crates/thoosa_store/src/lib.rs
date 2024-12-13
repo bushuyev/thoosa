@@ -935,9 +935,7 @@ impl Store for SqlStore {
 
             })?;
 
-            if tensor_motifs.0.len() < 10 {
-                debug!("motifs_to_eeg_slices: eeg_motifs={:?}", tensor_motifs);
-            }
+            trace!("motifs_to_eeg_slices: eeg_motifs={:?}", tensor_motifs);
 
             tensor_motifs.0.into_iter().fold((HashMap::new(), tensor_motifs.1), |mut a, (resource_id, slices)|{
                 a.0.insert(

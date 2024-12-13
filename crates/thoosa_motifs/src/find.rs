@@ -332,11 +332,8 @@ pub fn find_motifs_by_euc_dist(
 
         },
         &|run_config_id, mask_cpu, chunk_0, chunk_1| {
-            // let mut distances_i = 0;
             let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
 
-            // let run_config = run_configs_arcs.iter().find(|rc| rc.id.expect("id") == run_config_id).expect("rc");
-            // let step = run_config.step;
             debug!("find_motifs_by_euc_dist: mask_cpu.size={:?}", mask_cpu.size());
 
             channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
