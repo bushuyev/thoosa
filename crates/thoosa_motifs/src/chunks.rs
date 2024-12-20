@@ -12,7 +12,7 @@ use thoosa_shared::TensorIdSliceIdx;
 
 #[derive(Debug)]
 pub struct ChunkOfSlicedTensors where {
-    pub(crate)  keys:Vec <ResourceId>,
+    pub(crate) resource_ids:Vec <ResourceId>,
     pub(crate)  sizes: Vec<i64>,//num splits in a ResourceId
     pub   t: SyncWrapper<Tensor>,
     step:u32,
@@ -27,7 +27,7 @@ pub struct ChunkOfSlicedTensorsIter {
 impl  ChunkOfSlicedTensors {
     pub fn new(keys:  Vec <ResourceId>, sizes: Vec<i64>, step:u32, t: Tensor) -> Self {
         Self {
-            keys,
+            resource_ids: keys,
             sizes,//number of slices produced from each tensor
             step,
             t:SyncWrapper::new_t(t),
@@ -41,7 +41,7 @@ impl  ChunkOfSlicedTensors {
         let split_at_idx = self.split_at.map(|split_at_idx| split_at_idx * step).unwrap_or(0);
 
         self.sizes.clone().into_iter()
-            .zip(self.keys.clone().into_iter())
+            .zip(self.resource_ids.clone().into_iter())
             .enumerate()
             .flat_map(
                 |(t_i, (size, id))|(0..size).map(move |i|(id.clone(), i, if t_i == 0 {split_at_idx} else {0}))
@@ -51,7 +51,7 @@ impl  ChunkOfSlicedTensors {
     }
 
     pub fn keys_sizes(&self)->Vec<(ResourceId, i64)>{
-        self.keys.iter().zip(self.sizes.iter()).map(|v|(v.0.clone(), v.1.clone())).collect()
+        self.resource_ids.iter().zip(self.sizes.iter()).map(|v|(v.0.clone(), v.1.clone())).collect()
     }
 
     pub fn is_split(&self) -> bool {
@@ -60,21 +60,21 @@ impl  ChunkOfSlicedTensors {
 
     pub fn split(&self) -> [Self;2] {
         //only one tensor in the chunk, splitting tensor
-        if self.keys.len() == 1 {
+        if self.resource_ids.len() == 1 {
             assert_eq!(self.sizes.len(), 1);
 
             let split_at_idx = self.sizes[0]/2;
-            debug!("ChunkOfSlicedTensors::split: 0 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at_idx={split_at_idx}", self.sizes, self.keys, self.t.size());
+            debug!("ChunkOfSlicedTensors::split: 0 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at_idx={split_at_idx}", self.sizes, self.resource_ids, self.t.size());
             [
                 Self {
-                    keys: self.keys.clone(),
+                    resource_ids: self.resource_ids.clone(),
                     sizes: vec![split_at_idx],
                     step: self.step,
                     t: SyncWrapper::new_t(self.t.i((.., ..split_at_idx, ..))),
                     split_at: self.split_at,
                 },
                 Self {
-                    keys: self.keys.clone(),
+                    resource_ids: self.resource_ids.clone(),
                     sizes: vec![self.sizes[0]-split_at_idx],
                     step: self.step,
                     t: SyncWrapper::new_t(self.t.i((.., split_at_idx.., ..))),
@@ -83,17 +83,17 @@ impl  ChunkOfSlicedTensors {
             ]
         //more than one tensor in the chunk, splitting chunk
         } else {
-            let split_at = self.keys.len() / 2;
+            let split_at = self.resource_ids.len() / 2;
 
             assert!(split_at > 0);
 
             let split_at_tensors_idx = self.sizes.iter().take(split_at).sum::<i64>();
 
-            debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_tensors_idx}", self.sizes, self.keys, self.t.size());
+            debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_tensors_idx}", self.sizes, self.resource_ids, self.t.size());
 
             [
                 Self {
-                    keys: self.keys[..split_at].to_vec(),
+                    resource_ids: self.resource_ids[..split_at].to_vec(),
                     sizes: self.sizes[..split_at].to_vec(),
                     step: self.step,
                     t: SyncWrapper::new_t(self.t.i((.., ..split_at_tensors_idx, ..))),
@@ -101,7 +101,7 @@ impl  ChunkOfSlicedTensors {
                     split_at: self.split_at,
                 },
                 Self {
-                    keys: self.keys[split_at..].to_vec(),
+                    resource_ids: self.resource_ids[split_at..].to_vec(),
                     sizes: self.sizes[split_at..].to_vec(),
                     step: self.step,
                     t: SyncWrapper::new_t(self.t.i((.., split_at_tensors_idx.., ..))),

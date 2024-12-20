@@ -685,7 +685,7 @@ mod tests {
     use thoosa_common::ws::Workspace;
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
-    use thoosa_motifs::distance::MaskMaker::Quantile;
+    use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_shared::{cdt_for_dir, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::test_utils::init_test_logging;
@@ -738,7 +738,7 @@ mod tests {
             t_0_0_0_sliced.shallow_clone(),
             t_0_1_0_sliced.shallow_clone(),
 
-            true, &[Quantile {q:0.1}]
+            true, &[LeQuantile {q:0.1, with_mask: false }]
 
         )? else {
             panic!("no distances")
