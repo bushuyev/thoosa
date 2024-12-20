@@ -1,5 +1,15 @@
+use clap::clap_derive::{Args, Subcommand};
+use crossbeam_channel::SendError;
+use crossbeam_utils::sync::WaitGroup;
+use futures::{FutureExt, StreamExt};
+use log::*;
+use log::{debug, error, info, trace, warn};
 use parking_lot::Mutex;
+use parking_lot::RwLock;
+use rand::seq::SliceRandom;
+use rand::{thread_rng, Rng};
 use std::cell::Cell;
+use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::fs::{File, OpenOptions};
@@ -14,15 +24,6 @@ use std::sync::Arc;
 use std::thread::current;
 use std::time::{Duration, Instant};
 use std::{fmt, fs, mem, thread};
-use std::cmp::max;
-use clap::clap_derive::{Args, Subcommand};
-use crossbeam_channel::SendError;
-use crossbeam_utils::sync::WaitGroup;
-use futures::{FutureExt, StreamExt};
-use log::{debug, error, info, trace, warn};
-use log::*;
-use parking_lot::RwLock;
-use rand::{thread_rng, Rng};
 use tch::{Device, IndexOp, Kind, Tensor};
 
 
@@ -31,14 +32,16 @@ use thoosa_shared::parse_key_val;
 use thoosa_shared::val::Val;
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoosaError};
-use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 use thoosa_store::{IdSlice, MotifTrackerStore, SqlStore, Store};
+use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
-use crate::distance::slice_t;
-use crate::distance::{dist_d2, clc_dist_d2_and_mask};
-use crate::fragments::{motifs_to_tensor, MotifsTensors};
+use crate::distance::MaskMaker::{Diagonal, LeQuantile, LocalMin, Tril, LE};
+use crate::distance::{average_euclidean_distance, slice_t};
+use crate::distance::{clc_dist_d2_and_mask, dist_d2};
+use crate::fragments::{load_motif_slices, motifs_to_tensor, MotifsTensors};
+use plotters::prelude::BLACK;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
@@ -57,7 +60,6 @@ use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
-use crate::distance::MaskMaker::{Diagonal, Quantile, LE, Tril, LocalMin};
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -110,9 +112,6 @@ impl CommonFindMotifsConfig {
 
 impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsParams {
     fn to_run_configs(&self) -> Vec<FindMotifsRunConfig> {
-        // vec![
-        //     FindMotifsRunConfig::new(10, 10, "", None)
-        // ]
 
         debug!("FindMotifsParams::to_run_configs: self.step={:?} self.window={:?}", self.step, self.window);
 
@@ -251,7 +250,9 @@ pub fn find_motifs_by_euc_dist(
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
 
-    let resource_keys = resource_config.to_resources(store)?;
+
+    let mut resource_keys = resource_config.to_resources(store)?;
+    resource_keys.shuffle(&mut thread_rng());
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
@@ -304,12 +305,11 @@ pub fn find_motifs_by_euc_dist(
 
             debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
-
-            let mask_tril = chunk_sliced_0.keys[0].eq(&chunk_sliced_1.keys[0]) && !chunk_sliced_1.is_split();
+            let mask_tril = chunk_sliced_0.resource_ids[0].eq(&chunk_sliced_1.resource_ids[0]) && !chunk_sliced_1.is_split();
             let mask_makers = if mask_tril {
-                &[Quantile { q: find_motifs_run_config.dist_quantile }, LocalMin, Tril][..]
+                &[LocalMin, LeQuantile { q: find_motifs_run_config.dist_quantile, with_mask: true }, Tril][..]
             } else {
-                &[Quantile { q: find_motifs_run_config.dist_quantile }, LocalMin][..]
+                &[LocalMin, LeQuantile { q: find_motifs_run_config.dist_quantile, with_mask: true }][..]
             };
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
@@ -703,12 +703,12 @@ where
                                     &chunk_1_split,
                                     run_config,
                                 ) {
-                                    Ok(le_cpu) => {
+                                    Ok(cpu_t) => {
                                         chunk_1_split.drop_tensor();
 
                                         match tx.send((
                                             run_config.id.expect("id"),
-                                            le_cpu,
+                                            cpu_t,
                                             chunk_0.to_vec(),
                                             chunk_1_split.to_vec())
                                         ) {
@@ -782,14 +782,14 @@ fn collect_dists<'a, F, C>(
                     if condition(&distances[distances_i])
                     //if not on diagonal
                     && (
-                        chunk_0_read_guard.keys.get(t_idx_0).and_then(|k_0| chunk_1_read_guard.keys.get(t_idx_1).map(|k_1| k_1 != k_0)).unwrap_or(false)
+                        chunk_0_read_guard.resource_ids.get(t_idx_0).and_then(|k_0| chunk_1_read_guard.resource_ids.get(t_idx_1).map(|k_1| k_1 != k_0)).unwrap_or(false)
                         ||
                         slice_0_idx != slice_1_idx
                     ) {
                         listener(
                             (
-                                TensorIdSliceIdx(chunk_0_read_guard.keys[t_idx_0].clone(), (slice_0_idx * step as usize) as u32),
-                                TensorIdSliceIdx(chunk_1_read_guard.keys[t_idx_1].clone(), (slice_1_idx * step as usize) as u32),
+                                TensorIdSliceIdx(chunk_0_read_guard.resource_ids[t_idx_0].clone(), (slice_0_idx * step as usize) as u32),
+                                TensorIdSliceIdx(chunk_1_read_guard.resource_ids[t_idx_1].clone(), (slice_1_idx * step as usize) as u32),
                                 distances[distances_i]
                             ),
                         );
@@ -811,7 +811,7 @@ pub(crate) struct SimpleMotifTracker<'a> {
     last:Option<SlicesMatch>,
     motifs: Vec<SlicesMatch>, //i_0, match_0, match_1, dist
     dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
-    min_step:Option<usize>,//TODO replace with enum - All, each Nth etc
+    min_step:Option<usize>,//TODO remove, all filtering is in gpu
     max_slices_counts: Option<u32>,
 }
 
@@ -1556,7 +1556,7 @@ mod motif_find_tests {
     use crossbeam_channel::internal::SelectHandle;
     use crossbeam_utils::sync::WaitGroup;
     use parking_lot::{Mutex, RawMutex};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fmt::{Debug, Display};
     use std::ops::{Add, AddAssign, Deref};
     use std::path::{Path, PathBuf};
@@ -1565,10 +1565,13 @@ mod motif_find_tests {
     use std::sync::Arc;
 
 
-    use log::{debug, trace};
     use log::LevelFilter::Trace;
+    use log::{debug, trace};
     use parking_lot::RwLock;
     use parking_lot_mpsc::SendError;
+    use plotters::prelude::full_palette::ORANGE_800;
+    use plotters::prelude::{Color, RGBAColor, ShapeStyle};
+    use plotters::style::full_palette::GREY_A100;
     use rayon::iter::ParallelBridge;
     use rayon::iter::ParallelIterator;
     use tch::kind::DOUBLE_CPU;
@@ -1579,16 +1582,18 @@ mod motif_find_tests {
     use thoosa_shared::*;
 
     use crate::chunks::ChunkOfSlicedTensors;
-    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, select_motifs_for_label, select_motifs_by_label_variance, select_motifs_by_ratio, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
+    use crate::distance::clc_dist_d2;
+    use crate::find::select_motifs_by_corr;
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
+    use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
+    use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::val::Val;
     use thoosa_shared::val::Val::UInt;
     use thoosa_store::{IdSlice, SlicesMatch, SqlStore, Store};
-
-    use crate::find::select_motifs_by_corr;
 
     #[ctor::ctor]
     fn init() {
@@ -1859,7 +1864,8 @@ mod motif_find_tests {
                  (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
              ], "test_find_motifs_by_euc_dist", (1000, 500), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
-        ).unwrap();*/
+        ).unwrap();
+        */
 
 
         let  executor_rc = Arc::new(RwLock::new(LoadRunner::new(
@@ -1928,6 +1934,168 @@ mod motif_find_tests {
         Ok(())
     }
 
+
+    #[test]
+    fn test_find_motifs_by_euc_dist_two_motifs() -> Result<(), ThoosaError> {
+        let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
+
+        // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
+        // let mut store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_db.db3")?));
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+
+
+
+        // let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000)?));
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
+
+        // let pulse = pulse_v(50., 10., 100, 20.);
+        let pulse_0 = sig_one_imp(100, 30.0, None, Some(2. ..2.01), 0.0);
+        let pulse_1 = sig_one_imp(100, 30.0, None, Some(20. ..20.01), 0.0);
+        let n = 1000i64;
+
+        let scale = 10.0;
+        let sig_0 = join_with_offset::<f32>(0., scale, &[(100, pulse_0.clone()), (100, pulse_1.clone())], random_saw(1000));
+        let sig_1 = join_with_offset::<f32>(0., scale, &[(500, pulse_0.clone()), (100, pulse_1.clone())], random_saw(1000));
+        let sig_2 = join_with_offset::<f32>(0., scale, &[(200, pulse_1.clone()), (500, pulse_0.clone())], random_saw(1000));
+
+
+
+        let x = lin_t(n);
+        plot_series(
+             vec![
+                 (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
+
+             ], "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join(format!("0_{:?}.png", chrono::Utc::now().to_rfc3339()))
+        ).unwrap();
+
+
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
+            move |key: &Resource| {
+                let sig = match key.file_stem() {
+                    "1111" => &sig_0,
+                    "2222" => &sig_1,
+                    "3333" => &sig_2,
+                    _ => panic!("no")
+                };
+
+                SyncWrapper::new_tb(
+                    Box::new(Tensor::vstack(&[
+                        Tensor::from_slice(
+                            sig.as_slice()
+                        ), //ch 0
+                    ]))
+                )
+            }, 4, 100,
+        )));
+
+        let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
+            ("1111".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+        ]))?;
+
+
+        let params = FindMotifsParams {
+            step: 100.into(),
+            window: 100.into(),
+            resources: ResourceType::List(eeg_id_series),
+            min_tracker_step: Some(3),
+            chunk_size: 2,
+            dist_quantile: 0.001,
+            keep_slice_matches: false,
+            max_slices_k: None,
+            input_filter: None,
+        };
+
+        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
+        let run_ids = run_configs.iter().map(|run_config|run_config.id.expect("id")).collect::<Vec<_>>();
+
+
+        find_motifs_by_euc_dist(
+            None,
+            run_configs,
+            &Simple::new(params.resources),
+            &common_config,
+            &ws,
+            &store,
+            &loader,
+            vec![Cpu]
+        )?;
+
+        // debug!("{:?}", store.lock().list_run_resources(1)?);
+        let slices = store.lock().list_motifs_slices(run_ids[0])?;
+
+        let motif_id_set = slices
+            .iter()
+            .flat_map(|(resource, motifs)| motifs.into_iter().map(|m| m.motif_id).collect::<HashSet<_>>())
+            .collect::<HashSet<_>>();
+
+        for motif_id in motif_id_set {
+            plot_motif_slices(&ws, &store, &loader, motif_id)?;
+
+        }
+        debug!("run_ids={run_ids:?} slices: {slices:?}");
+        debug!("0: {:?}", slices.get(&resources[0]));
+        debug!("1: {:?}", slices.get(&resources[1]));
+        debug!("2: {:?}", slices.get(&resources[2]));
+
+
+        let motifs_tensors = motifs_to_tensor(
+            slices,
+            &loader,
+            100,
+            ws.read().channels() as i64,
+            Cpu,
+            0,
+        )?;
+        let pulse_0_t = Tensor::from_slice(pulse_0.as_slice()).multiply_scalar(scale as f64).view((1, -1));
+
+        let mut mean_motifs = vec![];
+        let mut colors_iter = DistinctColorIter::new();
+
+        for (motif_i, (motif_ids, avg_dists)) in motifs_tensors.channels_motifs_ids.i((0, ..)).iter::<i64>()?.zip(motifs_tensors.channels_motifs_avg_dists.i((0, ..)).iter::<f64>()?).enumerate() {
+            let motif_t = motifs_tensors.channels_motifs_slices.i((0, motif_i as i64, ..)).view((1, -1));
+
+            debug!("Size of motif_t tensor: {:?} pulse_0_t.size()={:?}", motif_t.size(), pulse_0_t.size());
+
+            
+            
+            let dist = clc_dist_d2(motif_t.shallow_clone(), pulse_0_t.shallow_clone(), 0)?;
+            debug!("Motif IDs: {motif_ids:?}, Average Distances: {avg_dists:?} dist={dist}");
+
+            let rgb = colors_iter.next().unwrap().rgb();
+            mean_motifs.push((format!("Motif {motif_i}"), ShapeStyle {
+                color: RGBAColor(rgb.0, rgb.1, rgb.2, 1.0),
+                filled: false,
+                stroke_width: 1,
+            }, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&motif_t.i((0, ..)))).collect::<Vec<(f32, f32)>>()),)
+        }
+
+        let rgb = GREY_A100; //colors_iter.next().unwrap().rgb();
+        mean_motifs.push(("pulse_0_t".to_string(), ShapeStyle {
+            color: RGBAColor(rgb.0, rgb.1, rgb.2, 0.1),
+            filled: false,
+            stroke_width: 3,
+        }, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&pulse_0_t.i((0, ..)))).collect::<Vec<(f32, f32)>>()));
+
+        plot_series(
+            mean_motifs, "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join(format!("motifs_{:?}.png", chrono::Utc::now().to_rfc3339()))
+        ).unwrap();
+
+        // assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slice_idx == 100)).is_some());
+        // assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slice_idx == 500)).is_some());
+        // assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slice_idx == 800)).is_some());
+
+        Ok(())
+    }
+
+
     fn test_init_store(store: &Arc<Mutex<Box<dyn Store>>>, labels: &[&str], resources: HashMap<String, (ResourceStats, Vec<(String, f32)>)>) -> Result<Vec<Resource>, ThoosaError> {
         {
             let mut store_guard = store.lock();
@@ -1953,7 +2121,7 @@ mod motif_find_tests {
         common_config.keep_slice_matches = file_motif_tracker;
         let mut run_configs = params.to_run_configs();
         run_configs.iter_mut().for_each(|c| {
-            let id = store.lock().save_run_config(None, &"todo", "test", "test", HashMap::new()).unwrap();
+            let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", c.to_properties_map()).unwrap();
             c.set_id(id);
         });
         (common_config, run_configs)
@@ -2930,4 +3098,35 @@ mod motif_find_tests {
     }
 
 
+}
+
+pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize) -> Result<(), ThoosaError> {
+    let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, None, None)?;
+    let slices_len = slices.len();
+    // if slices_len < 3 {
+    //     return Ok(())
+    // }
+
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(run_id, store.lock().list_run_config_values(run_id)?);
+
+    let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
+
+    let all_slices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+
+    let slices_t = Tensor::vstack(all_slices.iter().map(|s| s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
+
+    let motif_avg_dist = average_euclidean_distance(&slices_t);
+
+    // check_slices(&all_sices, 0.9);
+
+    plot_series(
+        all_slices.into_iter().map(|t| {
+            (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+        }).collect(),
+        format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={motif_avg_dist}").as_str(),
+        (2000, 1000),
+        &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
+    )?;
+
+    Ok(())
 }

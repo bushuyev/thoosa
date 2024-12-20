@@ -1,7 +1,8 @@
 use std::{fs, mem, ptr};
 use std::ffi::c_void;
 use std::io::Write;
-use std::ops::{Add, Div, Mul};
+use std::iter::Map;
+use std::ops::{Add, Div, Mul, Range};
 use std::time::Instant;
 
 use chrono::SecondsFormat;
@@ -83,10 +84,14 @@ pub fn list_devices() ->Vec<Device> {
 }
 
 pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), ThoosaError> where S:Into<ShapeStyle> + Clone{
-    plot_series_with_points(name_x_y_vec, caption, w_h, path, None)
+    _plot_series_with_points(name_x_y_vec, caption, w_h, path, None)
 }
 
-pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points:Option<&Vec<(f32, f32)>>) -> Result<(), ThoosaError> where S:Into<ShapeStyle> + Clone{
+pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points:&Vec<(f32, f32)>) -> Result<(), ThoosaError> where S:Into<ShapeStyle> + Clone{
+    _plot_series_with_points(name_x_y_vec, caption, w_h, path, Some(points))
+}
+
+fn _plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points:Option<&Vec<(f32, f32)>>) -> Result<(), ThoosaError> where S:Into<ShapeStyle> + Clone{
     if let Some(parent) = path.as_ref().parent() {
         fs::create_dir_all(parent)?;
     }
@@ -589,7 +594,11 @@ pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
 }
 
 pub fn lin_t(n: i64) -> Tensor {
-    Tensor::from((0..n).map(|x| x as f32).collect::<Vec<f32>>().as_slice())
+    Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
+}
+
+pub fn lin_iter(n: i64) -> Map<Range<i64>, fn(i64) -> f32> {
+    (0..n).map(|x| x as f32)
 }
 
 pub trait DataBatch {

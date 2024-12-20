@@ -30,7 +30,7 @@ use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{load_all_label_models_ws, load_motif_models_ws, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalNodeRunConfig, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues, run_opt_train_final, load_final_model, apply_motif_and_label_nets};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_all_label_models_ws, load_final_model, load_motif_models_ws, run_opt_train_final, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalNodeParams, TrainFinalNodeRunConfig, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
@@ -1096,7 +1096,7 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
         MotifsBy::MotifId(motif_id) => {
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
-            plot_motif_slices(ws, store, loader, motif_id)?;
+            find::plot_motif_slices(ws, store, loader, motif_id)?;
         }
         MotifsBy::RunId(run_id) => {
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
@@ -1108,7 +1108,7 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
             let mut done_cnt = AtomicU32::new(0);
             motif_distances.into_par_iter().for_each(| motif_id|{
                 debug!("run_plot_motif_slices: motif_id={motif_id}");
-                plot_motif_slices(ws, store, loader, motif_id).unwrap();
+                find::plot_motif_slices(ws, store, loader, motif_id).unwrap();
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 10 == 0{
                     info!("done {done} from  {motifs_len}");
@@ -1116,37 +1116,6 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
             });
         }
     }
-
-    Ok(())
-}
-
-fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize) -> Result<(), ThoosaError> {
-    let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, None, None)?;
-    let slices_len = slices.len();
-    // if slices_len < 3 {
-    //     return Ok(())
-    // }
-
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(run_id, store.lock().list_run_config_values(run_id)?);
-
-    let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
-
-    let all_slices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
-
-    let slices_t = Tensor::vstack(all_slices.iter().map(|s| s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
-
-    let motif_avg_dist = average_euclidean_distance(&slices_t);
-
-    // check_slices(&all_sices, 0.9);
-
-    plot_series(
-        all_slices.into_iter().map(|t| {
-            (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
-        }).collect(),
-        format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={motif_avg_dist}").as_str(),
-        (2000, 1000),
-        &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
-    )?;
 
     Ok(())
 }
@@ -1320,6 +1289,7 @@ mod main_tests {
     use std::collections::{HashMap, HashSet};
     use std::{fs, ptr};
     use std::cmp::{max, min};
+    use std::io::Read;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::vec::IntoIter;
@@ -1353,7 +1323,7 @@ mod main_tests {
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_common::runs::RunConfig;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
-    use thoosa_motifs::distance::MaskMaker::Quantile;
+    use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
 
     #[ctor::ctor]
@@ -1375,31 +1345,6 @@ mod main_tests {
         )
     }
 
-    #[test]
-    fn test_dists()-> Result<(), ThoosaError> {
-        let n = 1000i64;
-        let max_y = 30.0;
-
-        let sig_0_v = sig_one_imp(n, max_y, None, None, 0.1);
-        let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
-        let sig_2_v = sig_three_imp(n, max_y, None, None);
-
-
-        let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
-
-        let (mask, Some(dists)) = clc_dist_d2_and_mask(
-            t_0_0.i((0, 0..100)).view((1, 1, -1)),
-            t_0_1.i((0, 0..100)).view((1, 1, -1)),
-            true, &[Quantile {q:0.0}],
-        )? else {
-            panic!()
-        };
-
-        print!("mask={mask}");
-        print!("dists={dists}");
-
-        Ok(())
-    }
 
     #[test]
     fn test_motifs() -> Result<(), ThoosaError> {
@@ -1589,7 +1534,7 @@ mod main_tests {
     }
 
 
-    fn init_test_store(mut store: &Arc<Mutex<Box<dyn Store>>>) -> Result<Vec<ResourceId>, ThoosaError> {
+    fn init_test_store(mut store: &Arc<Mutex<Box<dyn Store>>>, tensors_per_label: i32) -> Result<Vec<ResourceId>, ThoosaError> {
         let store_guard = store.lock();
         let mut mutex_guard = store_guard.conn().lock();
         let t = mutex_guard.transaction()?;
@@ -1599,34 +1544,14 @@ mod main_tests {
 
         let import_id = store_guard.save_import(format!("test on {}", cdt()), &t)?;
 
-        //TODO
-        let resources = store_guard.save_resources_labels(&HashMap::from([
-                            ("t_0_0".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_1".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_2".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_3".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_4".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_5".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_6".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_7".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_8".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
-                            ("t_0_9".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_0".into(), 1.0)])),
+        let resources = store_guard.save_resources_labels(&(0..tensors_per_label).map(|i|(format!("t_0_{i}"), (ResourceStats::new(vec![1, 1000]), vec![("Label_0".into(), 1.0)]))).chain(
+            (0..tensors_per_label).map(|i|(format!("t_1_{i}"), (ResourceStats::new(vec![1, 1000]), vec![("Label_1".into(), 1.0)])))
+        ).collect(), import_id, &t)?;
 
-                            ("t_1_0".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_1".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_2".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_3".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_4".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_5".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_6".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_7".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_8".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                            ("t_1_9".into(), (ResourceStats::new(vec![1,1000]), vec![("Label_1".into(), 1.0)])),
-                        ]), import_id, &t)?;
-
-
-        store_guard.save_pure_sets(4, true, &t)?;
-        store_guard.save_pure_sets(6, true, &t)?;
+        store_guard.save_pure_sets(tensors_per_label as usize / 10, true, &t)?;
+        store_guard.save_pure_sets(tensors_per_label as usize, true, &t)?;
+        // store_guard.save_pure_sets(4, true, &t)?;
+        // store_guard.save_pure_sets(6, true, &t)?;
 
         t.commit()?;
 
@@ -1705,18 +1630,6 @@ mod main_tests {
     }
 
     #[test]
-    fn test_print_opts(){
-
-
-
-        let t = Tensor::rand(&[3,100,10], FLOAT_CPU);
-        log::set_max_level(Trace);
-
-        trace!("t=\n{t}");
-
-    }
-
-    #[test]
     fn test_run_step() -> Result<(), ThoosaError> {
         // log::set_max_level(Warn);
         let max_y = 1f32;
@@ -1729,16 +1642,20 @@ mod main_tests {
 
             Tensor::vstack(&[
                 Tensor::from_slice([sig_0_v.clone(), _saw(n), sig_0_v.clone()].concat().as_slice()),
-                Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
-                Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice()),
+                // Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
+                // Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice()),
+                Tensor::from_slice([_saw(n),          _saw(n), _saw(n)].concat().as_slice()),
+                Tensor::from_slice([_saw(n),          _saw(n), _saw(n)].concat().as_slice()),
             ])
         }
 
         fn label_1_t_rs(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>,  max_y:f32) -> Tensor {
             Tensor::vstack(&[
                 Tensor::from_slice([sig_1_v.clone(), _saw(n),           sig_1_v.clone()].concat().as_slice()),
-                Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
-                Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice())
+                // Tensor::from_slice([sig_2_v.clone(), _saw(n),          sig_2_v.clone()].concat().as_slice()),
+                // Tensor::from_slice([_saw(n),          sig_2_v.clone(), _saw(n)].concat().as_slice())
+                Tensor::from_slice([_saw(n),          _saw(n), _saw(n)].concat().as_slice()),
+                Tensor::from_slice([_saw(n),          _saw(n), _saw(n)].concat().as_slice()),
             ])
         }
 
@@ -1752,12 +1669,15 @@ mod main_tests {
         //0 label - sig_0 in channel 0
         //1 label - sig_1 in channel 1
         //0,1 label - sig_2 in channel 2
-        (0..10).for_each(|i|{
-            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
+        let tensors_per_label = 10;
+        (0..tensors_per_label).for_each(|i|{
+            // label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
+            label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
         });
 
-        (0..10).for_each(|i|{
-            label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
+        (0..tensors_per_label).for_each(|i|{
+            // label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
+            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();//first 1_ for import_id
         });
 
         let x = lin_t(3*n);
@@ -1785,12 +1705,14 @@ mod main_tests {
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        init_test_store(&store)?;
+        init_test_store(&store, tensors_per_label)?;
+        let group_name = format!("pure group {tensors_per_label}");
+        // let group_name = "pure group 4".to_string();
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
                 let path = ws_runner.read().tensor_path(key);
-                debug!("test_run_train_on_motifs: path={path:?}");
+                debug!("test_run_step: path={path:?}");
                 SyncWrapper::new_tb(
                     Box::new(Tensor::load(&path).expect(format!("can't open {path:?}").as_str()))
                 )
@@ -1801,9 +1723,10 @@ mod main_tests {
 
         // log::set_max_level(Trace);
         reset_print_options();
+
         let find_motifs_run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(100, 800, "pure group 4".into(), 10, 0.1, None, None, false),
+            &FindMotifsParams::dummy(100, 800, group_name.clone(), 10, 0.001, None, None, false),
             find_motifs_by_euc_dist,
             &ws,
             &store,
@@ -1817,7 +1740,7 @@ mod main_tests {
 
         let select_motifs_for_label_run_ids = run_step(
             Some(find_motifs_run_ids),
-            &SelectMotifsParams::dummy(vec![], "pure group 4".into()),
+            &SelectMotifsParams::dummy(vec![], group_name.clone()),
             select_motifs_for_label,
             &ws,
             &store,
@@ -1852,7 +1775,7 @@ mod main_tests {
 
         let train_label_nodes_run_ids = run_step(
             Some(train_motif_nodes_run_ids),
-            &TrainLabelNodeParams::dummy(100, vec![], "pure group 4".into(), "pure group 4".into(), 10, 5, 30,1e-5..1e-3, 3..4),
+            &TrainLabelNodeParams::dummy(100, vec![], group_name.clone(), group_name.clone(), 10, 5, 30, 1e-5..1e-3, 3..4),
             run_train_label_nodes,
             &ws,
             &store,
@@ -1865,7 +1788,7 @@ mod main_tests {
 
         let train_final_nodes_run_ids = run_step(
             Some(train_label_nodes_run_ids),
-            &TrainFinalNodeParams::dummy(100, 10, "pure group 4".into(), "pure group 4".into(), 10, 10),
+            &TrainFinalNodeParams::dummy(100, 10, group_name.clone(), group_name.clone(), 10, 10),
             run_train_final_node,
             &ws,
             &store,

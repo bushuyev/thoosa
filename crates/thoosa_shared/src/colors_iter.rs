@@ -21,13 +21,13 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
 }
 
 /// Iterator that yields distinct, non-primary colors.
-struct DistinctColorIter {
+pub struct DistinctColorIter {
     hue: f64,
     increment: f64,
 }
 
 impl DistinctColorIter {
-    fn new() -> Self {
+    pub fn new() -> Self {
         // Start at some non-primary hue, e.g. 30 degrees
         // Use the golden angle (~137.5 degrees) to spread hues
         DistinctColorIter {
