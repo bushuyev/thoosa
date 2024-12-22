@@ -182,7 +182,7 @@ where D: Display {
     }
 }
 
-#[derive(Debug, Eq, Hash, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq, Clone)]
 pub struct MotifSlice {
     pub motif_id: usize,//TODO u32?
     pub slice_idx: i64,

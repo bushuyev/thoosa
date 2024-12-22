@@ -136,7 +136,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
             chunk_size: self.chunk_size,
             min_tracker_step: self.min_tracker_step,
             keep_slice_matches: self.keep_slice_matches,
-            max_slices_k: None,
+            max_slices_k: self.max_slices_k,
         }
     }
 }
@@ -208,7 +208,7 @@ impl Conv1Params {
 
 impl FindMotifsParams {
     // #[cfg(test)]
-    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, dist_quantile: f32, input_filter: Option<&InputFilter>, min_tracker_step: Option<usize>, keep_slice_matches: bool) -> Self {
+    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, dist_quantile: f32, input_filter: Option<&InputFilter>, min_tracker_step: Option<usize>, keep_slice_matches: bool, max_slices_k: Option<f32>) -> Self {
         FindMotifsParams {
             step:step.into(),
 
@@ -224,7 +224,7 @@ impl FindMotifsParams {
 
             keep_slice_matches,
 
-            max_slices_k: None,
+            max_slices_k,
 
             input_filter: input_filter.cloned(),
         }
@@ -249,7 +249,6 @@ pub fn find_motifs_by_euc_dist(
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
-
 
     let mut resource_keys = resource_config.to_resources(store)?;
     resource_keys.shuffle(&mut thread_rng());
@@ -567,6 +566,9 @@ where
     G: Fn(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
 {
+    debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={run_configs:?}");
+    trace!("chunk_and_slice_2x: resources={resources:?}");
+
     rayon::scope(|s| {
         let mut resource_chunks = resources.chunks(chunk_size)
             .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>()) //TODO k.clone()
@@ -1571,7 +1573,7 @@ mod motif_find_tests {
     use parking_lot_mpsc::SendError;
     use plotters::prelude::full_palette::ORANGE_800;
     use plotters::prelude::{Color, RGBAColor, ShapeStyle};
-    use plotters::style::full_palette::GREY_A100;
+    use plotters::style::full_palette::{GREY_A100, YELLOW_A100};
     use rayon::iter::ParallelBridge;
     use rayon::iter::ParallelIterator;
     use tch::kind::DOUBLE_CPU;
@@ -1958,6 +1960,10 @@ mod motif_find_tests {
         let n = 1000i64;
 
         let scale = 10.0;
+        // dists between sample pulses and joined are too big
+        // let sig_0 = join_with_offset::<f32>(0., scale, &[(100, pulse_0.clone()), (100, pulse_1.clone())], saw_with_steps(n as usize, 10, 250.));
+        // let sig_1 = join_with_offset::<f32>(0., scale, &[(500, pulse_0.clone()), (100, pulse_1.clone())], saw_with_steps(n as usize, 10, 250.));
+        // let sig_2 = join_with_offset::<f32>(0., scale, &[(200, pulse_1.clone()), (500, pulse_0.clone())], saw_with_steps(n as usize, 10, 250.));
         let sig_0 = join_with_offset::<f32>(0., scale, &[(100, pulse_0.clone()), (100, pulse_1.clone())], random_saw(1000));
         let sig_1 = join_with_offset::<f32>(0., scale, &[(500, pulse_0.clone()), (100, pulse_1.clone())], random_saw(1000));
         let sig_2 = join_with_offset::<f32>(0., scale, &[(200, pulse_1.clone()), (500, pulse_0.clone())], random_saw(1000));
@@ -2007,7 +2013,7 @@ mod motif_find_tests {
             resources: ResourceType::List(eeg_id_series),
             min_tracker_step: Some(3),
             chunk_size: 2,
-            dist_quantile: 0.001,
+            dist_quantile: 0.1,
             keep_slice_matches: false,
             max_slices_k: None,
             input_filter: None,
@@ -2028,7 +2034,6 @@ mod motif_find_tests {
             vec![Cpu]
         )?;
 
-        // debug!("{:?}", store.lock().list_run_resources(1)?);
         let slices = store.lock().list_motifs_slices(run_ids[0])?;
 
         let motif_id_set = slices
@@ -2038,7 +2043,6 @@ mod motif_find_tests {
 
         for motif_id in motif_id_set {
             plot_motif_slices(&ws, &store, &loader, motif_id)?;
-
         }
         debug!("run_ids={run_ids:?} slices: {slices:?}");
         debug!("0: {:?}", slices.get(&resources[0]));
@@ -2047,7 +2051,7 @@ mod motif_find_tests {
 
 
         let motifs_tensors = motifs_to_tensor(
-            slices,
+            slices.clone(),
             &loader,
             100,
             ws.read().channels() as i64,
@@ -2055,19 +2059,33 @@ mod motif_find_tests {
             0,
         )?;
         let pulse_0_t = Tensor::from_slice(pulse_0.as_slice()).multiply_scalar(scale as f64).view((1, -1));
+        let pulse_1_t = Tensor::from_slice(pulse_1.as_slice()).multiply_scalar(scale as f64).view((1, -1));
 
         let mut mean_motifs = vec![];
         let mut colors_iter = DistinctColorIter::new();
 
-        for (motif_i, (motif_ids, avg_dists)) in motifs_tensors.channels_motifs_ids.i((0, ..)).iter::<i64>()?.zip(motifs_tensors.channels_motifs_avg_dists.i((0, ..)).iter::<f64>()?).enumerate() {
+        let mut pulse_0_found = None::<i64>;
+        let mut pulse_1_found = None::<i64>;
+        let zero = Tensor::from_slice(&[0.]).totype(Float);
+
+        for (motif_i, (motif_id, avg_dists)) in motifs_tensors.channels_motifs_ids.i((0, ..)).iter::<i64>()?.zip(motifs_tensors.channels_motifs_avg_dists.i((0, ..)).iter::<f64>()?).enumerate() {
             let motif_t = motifs_tensors.channels_motifs_slices.i((0, motif_i as i64, ..)).view((1, -1));
 
             debug!("Size of motif_t tensor: {:?} pulse_0_t.size()={:?}", motif_t.size(), pulse_0_t.size());
 
-            
-            
-            let dist = clc_dist_d2(motif_t.shallow_clone(), pulse_0_t.shallow_clone(), 0)?;
-            debug!("Motif IDs: {motif_ids:?}, Average Distances: {avg_dists:?} dist={dist}");
+
+            let dist_pulse_0 = clc_dist_d2(motif_t.shallow_clone(), pulse_0_t.shallow_clone(), 0)?;
+
+            if dist_pulse_0.allclose(&zero, 0.1, 0.2, false) {
+                pulse_0_found.replace(motif_id);
+            }
+
+            let dist_pulse_1 = clc_dist_d2(motif_t.shallow_clone(), pulse_1_t.shallow_clone(), 0)?;
+            if dist_pulse_1.allclose(&zero, 0.1, 0.2, false) {
+                pulse_1_found.replace(motif_id);
+            }
+
+            debug!("motif_id={motif_id:?}, avg_dists={avg_dists:?} dist_pulse_0={dist_pulse_0} dist_pulse_1={dist_pulse_1}");
 
             let rgb = colors_iter.next().unwrap().rgb();
             mean_motifs.push((format!("Motif {motif_i}"), ShapeStyle {
@@ -2077,20 +2095,51 @@ mod motif_find_tests {
             }, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&motif_t.i((0, ..)))).collect::<Vec<(f32, f32)>>()),)
         }
 
-        let rgb = GREY_A100; //colors_iter.next().unwrap().rgb();
-        mean_motifs.push(("pulse_0_t".to_string(), ShapeStyle {
-            color: RGBAColor(rgb.0, rgb.1, rgb.2, 0.1),
-            filled: false,
-            stroke_width: 3,
+
+        let rgb = YELLOW_A100; //colors_iter.next().unwrap().rgb();
+        mean_motifs.push(("pulse 0".to_string(), ShapeStyle {
+            color: RGBAColor(rgb.0, rgb.1, rgb.2, 0.5),
+            filled: true,
+            stroke_width: 5,
         }, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&pulse_0_t.i((0, ..)))).collect::<Vec<(f32, f32)>>()));
+
+        let rgb = GREY_A100; //colors_iter.next().unwrap().rgb();
+        mean_motifs.push(("pulse 1".to_string(), ShapeStyle {
+            color: RGBAColor(rgb.0, rgb.1, rgb.2, 0.5),
+            filled: true,
+            stroke_width: 5,
+        }, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&pulse_1_t.i((0, ..)))).collect::<Vec<(f32, f32)>>()));
 
         plot_series(
             mean_motifs, "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join(format!("motifs_{:?}.png", chrono::Utc::now().to_rfc3339()))
         ).unwrap();
 
-        // assert!(slices.get(&resources[0]).and_then(|v| v.iter().find(|s|s.slice_idx == 100)).is_some());
-        // assert!(slices.get(&resources[1]).and_then(|v| v.iter().find(|s|s.slice_idx == 500)).is_some());
-        // assert!(slices.get(&resources[2]).and_then(|v| v.iter().find(|s|s.slice_idx == 800)).is_some());
+        let pulse_0_motif = pulse_0_found.expect("pulse_0 not found");
+        let pulse_1_motif = pulse_1_found.expect("pulse_1 not found");
+
+
+        let mut pulse_0_slices: Vec<_> = slices
+            .values()
+            .flat_map(|slice_list| slice_list.iter())
+            .filter(|slice| slice.motif_id == pulse_0_motif as usize)
+            .map(|slice| slice.slice_idx)
+            .collect();
+
+        let mut pulse_1_slices: Vec<_> = slices
+            .values()
+            .flat_map(|slice_list| slice_list.iter())
+            .filter(|slice| slice.motif_id == pulse_1_motif as usize)
+            .map(|slice| slice.slice_idx)
+            .collect();
+
+        pulse_0_slices.sort();
+        pulse_1_slices.sort();
+
+        debug!("pulse_0_slices={pulse_0_slices:?} pulse_1_slices={pulse_1_slices:?}");
+
+        assert_eq!(pulse_0_slices, vec![100, 500, 800]);
+        assert_eq!(pulse_1_slices, vec![200, 300, 700]);
+
 
         Ok(())
     }
@@ -3112,6 +3161,13 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
     let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
 
     let all_slices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+
+    if all_slices.len() > 100_000 {
+        warn!("Too many slices to plot, skipping");
+        return Ok(())
+    } else {
+        debug!("plot_motif_slices: all_slices.len()={}", all_slices.len());
+    }
 
     let slices_t = Tensor::vstack(all_slices.iter().map(|s| s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
 

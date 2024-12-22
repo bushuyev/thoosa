@@ -1635,7 +1635,7 @@ mod main_tests {
         let max_y = 1f32;
 
         fn _saw(n:i64) -> Vec<f32>{
-            saw_with_steps(n as usize, 10, 10.)
+            saw_with_steps(n as usize, 10, 5.)
         }
 
         fn label_0_t_rs(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y:f32) -> Tensor {
@@ -1669,15 +1669,15 @@ mod main_tests {
         //0 label - sig_0 in channel 0
         //1 label - sig_1 in channel 1
         //0,1 label - sig_2 in channel 2
-        let tensors_per_label = 10;
+        let tensors_per_label = 20;
         (0..tensors_per_label).for_each(|i|{
-            // label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
-            label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
+            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
+            // label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
         });
 
         (0..tensors_per_label).for_each(|i|{
-            // label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
-            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();//first 1_ for import_id
+            label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
+            // label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();//first 1_ for import_id
         });
 
         let x = lin_t(3*n);
@@ -1726,7 +1726,7 @@ mod main_tests {
 
         let find_motifs_run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(100, 800, group_name.clone(), 10, 0.001, None, None, false),
+            &FindMotifsParams::dummy(100, 800, group_name.clone(), 2, 0.5, None, None, false, None),
             find_motifs_by_euc_dist,
             &ws,
             &store,
