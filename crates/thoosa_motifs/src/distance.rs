@@ -1,6 +1,10 @@
 use core::f32;
+use std::ops::Add;
+use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
 use log::{debug, log_enabled, trace};
 use log::Level::Trace;
+use parking_lot::{Mutex, RwLock};
 use tch::{IndexOp, TchError, Tensor};
 use tch::Device::Cpu;
 use tch::Kind;
@@ -35,8 +39,9 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 
 //TODO use distance's histogram kurtosis and skew to scale down q_t? If histogram flat - prob. of useful patterns lower
 #[derive(Debug)]
-pub enum MaskMaker {
+pub enum MaskMaker<'a> {
     LeQuantile {q:f32, with_mask:bool},
+    LeMean {k:f32, avg:&'a mut Mutex<Tensor>, total_samples:&'a mut Mutex<Tensor>},
     Diagonal,
     Tril,
     LE {v:Tensor},//channels x thresholds
@@ -44,8 +49,8 @@ pub enum MaskMaker {
     LocalMin
 }
 
-impl MaskMaker {
-    pub fn make_mask(&self, prev_mask:Option<Tensor>, dists:&Tensor) -> Tensor {
+impl <'a> MaskMaker<'a> {
+    pub fn make_mask(&mut self, prev_mask:Option<Tensor>, dists:&Tensor) -> Tensor {
         match self {
             MaskMaker::LeQuantile { q, with_mask } => {
                 Self::apply_prev(&prev_mask, quantile_mask(*q as f64, dists, if *with_mask { prev_mask.as_ref() } else {None}))
@@ -76,6 +81,9 @@ impl MaskMaker {
             MaskMaker::LocalMin => {
                 Self::apply_prev(&prev_mask, local_min_mask(&dists))
             }
+            MaskMaker::LeMean { k, avg, total_samples } => {
+                Self::apply_prev(&prev_mask, mean_mask(*k as f64, dists, prev_mask.as_ref(), *avg, total_samples))
+            }
         }
     }
 
@@ -97,7 +105,7 @@ pub fn clc_dist_d2_and_mask(
     t_0: Tensor,
     t_1: Tensor,
     with_distances: bool,
-    mask_makers:&[MaskMaker],
+    mask_makers:&mut [MaskMaker],
 ) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
     let de = t_0.device();
 
@@ -125,15 +133,6 @@ pub fn clc_dist_d2_and_mask(
 /// distances - [channels x slices 0 x slices 1]
 fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Tensor {
     let distances_size = distances.size();
-
-    // let distances = if let Some(pm) = pre_mask {
-    //     trace!("quantile_mask: pre_mask=\n{pm}");
-    //
-    //     let inf = Tensor::full_like(distances, f64::INFINITY);
-    //     distances.where_self(&pm, &inf)
-    // } else {
-    //     distances.shallow_clone()
-    // };
 
     trace!("quantile_mask: after pre_mask distances=\n{distances}");
 
@@ -212,6 +211,64 @@ fn local_min_mask(distances: &Tensor) -> Tensor {
     full_mask
 }
 
+/// distances - [channels x slices 0 x slices 1]
+fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&mut Mutex<Tensor>, total_samples:&mut Mutex<Tensor>) -> Tensor {
+    let distances_size = distances.size();
+
+    trace!("mean_mask: after pre_mask distances=\n{distances}");
+
+
+    let (mean_t, counts_t) = if let Some(pm) = pre_mask {
+        let mut means = Vec::with_capacity(distances_size[1] as usize);
+        let mut counts = Vec::with_capacity(distances_size[1] as usize);
+
+        for channel in 0..distances_size[0] {
+            let channel_dists_t = distances.i((channel, .., ..)).masked_select(&pm.i((channel, .., ..)));
+            let mean = channel_dists_t.mean(Kind::Float);
+            trace!("mean_mask: channel={channel} channel_dists_t=\n{channel_dists_t} mean={mean}");
+            means.push(mean);
+            counts.push(channel_dists_t.size()[0])
+        }
+        (
+            Tensor::stack(means.as_slice(), 0).view((distances_size[0], 1)),
+            Tensor::from_slice(counts.as_slice()).view((distances_size[0], 1)),
+        )
+    } else {
+        (
+            distances.mean_dim(&[1i64, 2i64][..],  false, Kind::Float),
+            Tensor::from_slice(&[distances_size[1] * distances_size[2]]).broadcast_to(distances_size[0]) //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel
+        )
+    };
+
+    trace!("mean_mask: full. mean_t=\n{mean_t}");
+
+    debug!("mean_mask: samples.size={:?} mean_t.size={:?}", distances.size(), mean_t.size());
+
+    let le = distances.le_tensor(&mean_t.view((-1, 1, 1)).broadcast_to(distances_size)); //channels x motifs x num_slices
+
+    trace!("mean_mask:  le=\n{le}");
+    debug!("mean_mask: total_samples={total_samples:?} counts={:?}", counts_t);
+
+    //TODO update means_acc
+    // total_means = (total_means * total_samples + current_means * batch_size_i)
+    //     / (total_samples + batch_size_i);
+    // total_samples += batch_size_i;
+
+    let mut means_guard = means_acc.lock();
+    let mut total_samples_guard = total_samples.lock();
+    debug!("new_total_means: 1. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
+
+
+
+    *means_guard = (means_guard.multiply(&total_samples_guard)  + mean_t * counts_t.shallow_clone())/counts_t.f_add(&total_samples_guard).unwrap();
+    *total_samples_guard += counts_t;
+
+    debug!("new_total_means: 2. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
+
+    le
+}
+
+
 pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
 
 
@@ -285,24 +342,26 @@ pub fn average_euclidean_distance(x: &Tensor) -> f32 {
 #[cfg(test)]
 mod distance_tests {
     use std::f32::consts::PI;
+    use std::sync::atomic::AtomicI64;
     use chrono::Utc;
     use log::__private_api::enabled;
     use log::{debug, set_max_level, trace};
     use log::LevelFilter::Trace;
+    use parking_lot::Mutex;
     use plotters::prelude::{BLACK, GREEN, RED};
     use plotters::style::full_palette::ORANGE;
     use sci_rs::na::SimdBool;
     use tch::Device::Cpu;
     use tch::{Device, IndexOp, Kind};
     use tch::Kind::{Bool, Float, Int};
-    use tch::kind::FLOAT_CPU;
+    use tch::kind::{FLOAT_CPU, INT64_CPU};
     use tch::Tensor;
     use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
     use crate::chunks::ChunkOfSlicedTensors;
-    use crate::distance::MaskMaker::{Diagonal, LocalMin, LeQuantile, Tril, LE};
+    use crate::distance::MaskMaker::{Diagonal, LocalMin, LeQuantile, Tril, LE, LeMean};
 
     #[ctor::ctor]
     fn init() {
@@ -335,7 +394,7 @@ mod distance_tests {
     #[test]
     fn test_dist_d2_0_1ch_with_sig() -> Result<(), ThoosaError>{
 
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let n = 1000i64;
         let max_y = 30.0;
@@ -393,7 +452,7 @@ mod distance_tests {
         let (mask, Some(distances)) = clc_dist_d2_and_mask(
             t_0_sliced.shallow_clone(),
             t_1_sliced.shallow_clone(),
-            true, &[LocalMin, LeQuantile {q:0.01, with_mask:true}]
+            true, &mut [LocalMin, LeQuantile {q:0.01, with_mask:true}]
 
         )? else {
             panic!("no distances")
@@ -482,7 +541,7 @@ mod distance_tests {
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec![0], Cpu).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec![0], Cpu).t;
 
-        let (mask, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &[])? else {
+        let (mask, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &mut [])? else {
             panic!("no distances")
         };
 
@@ -617,7 +676,7 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        let (mask, Some(dist_t)) = super::clc_dist_d2_and_mask(slice_0, slice_1, true, &[LeQuantile {q:0.2, with_mask: false }]).unwrap() else {
+        let (mask, Some(dist_t)) = super::clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LeQuantile {q:0.2, with_mask: false }]).unwrap() else {
             panic!("no dists");
         };
         // debug!("mask={mask}");
@@ -656,7 +715,7 @@ mod distance_tests {
 
     #[test]
     fn test_dist_d2_with_mask_local_min(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
         let slice_0 = Tensor::from_slice(&[
             7., 8.,
             7., 8.,
@@ -674,7 +733,7 @@ mod distance_tests {
         debug!("slice_1={slice_1}");
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
-        let (mask, Some(dist_t)) = super::clc_dist_d2_and_mask(slice_0, slice_1, true, &[LocalMin]).unwrap() else {
+        let (mask, Some(dist_t)) = super::clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LocalMin]).unwrap() else {
             panic!("no dists");
         };
         // debug!("mask={mask}");
@@ -739,7 +798,7 @@ mod distance_tests {
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         //set_max_level(Trace);
-        let (mask, Some(dist_t)) = clc_dist_d2_and_mask(slice_0, slice_1, true, &[LeQuantile {q:1.0, with_mask: false }, Diagonal]).unwrap() else {
+        let (mask, Some(dist_t)) = clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LeQuantile {q:1.0, with_mask: false }, Diagonal]).unwrap() else {
             panic!("no dists");
         };
         debug!("mask={mask}");
@@ -838,8 +897,98 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_quantile_mask(){
+    fn test_acc_mean_mask(){
         set_max_level(Trace);
+
+        let dists_t = tensor_3_7_5_lin();
+        let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
+
+        let mask = LeMean {k:1.0, avg: &mut means, total_samples: &mut Mutex::new(Tensor::zeros([3], INT64_CPU)) }.make_mask(None, &dists_t);
+
+        debug!("mask=\n{mask}");
+        assert_eq!(
+            Tensor::from_slice(&[
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , false, false, false,
+                true , true , false, false, false,
+                true , true , false, false, false,
+
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , false, false, false,
+                true , true , false, false, false,
+                true , true , false, false, false,
+
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , true , false, false,
+                true , true , false, false, false,
+                true , true , false, false, false,
+                true , true , false, false, false
+
+            ]).view((3,7,5)),
+            mask
+        );
+    }
+
+    #[test]
+    fn test_mean_mask_two_chunks(){
+        set_max_level(Trace);
+
+        let dists_t = tensor_3_7_5_lin();
+
+        let dists_t_0 = dists_t.i((.., .., ..3));
+        let dists_t_1 = dists_t.i((.., .., 3..));
+
+        let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
+
+        let mut total_samples = Mutex::new(Tensor::zeros([3], INT64_CPU));
+        let mask = LeMean {k:1.0, avg: &mut means, total_samples: &mut total_samples }.make_mask(None, &dists_t_0);
+        let mask = LeMean {k:1.0, avg: &mut means, total_samples: &mut total_samples }.make_mask(None, &dists_t_1);
+
+        debug!("mask=\n{mask}");
+        //
+        // //means [0.2300, 1.2300, 2.2300]
+        // assert_eq!(
+        //     Tensor::from_slice(&[
+        //         true , true , true , true , true ,
+        //         true , true , true , true , true ,
+        //         true , true , true , true , true ,
+        //         true , true , true , true , true ,
+        //         false, false, false, false, false,
+        //         false, false, false, false, false,
+        //         false, false, false, false, false,
+        //
+        //         true , true , true , true , true ,
+        //         true , true , true , true , true ,
+        //         true , true , true , true , true ,
+        //         true , true , true , true , true ,
+        //         false, false, false, false, false,
+        //         false, false, false, false, false,
+        //         false, false, false, false, false,
+        //
+        //         true , true , true , true , true,
+        //         true , true , true , true , true,
+        //         true , true , true , true , true,
+        //         true , true , true , true , true,
+        //         false, false, false, false, false,
+        //         false, false, false, false, false,
+        //         false, false, false, false, false
+        //     ]).view((3,7,5)),
+        //     mask
+        // );
+    }
+
+
+    #[test]
+    fn test_quantile_mask(){
+        // set_max_level(Trace);
 
         let dists_t = tensor_3_7_5_lin();
 
@@ -847,6 +996,7 @@ mod distance_tests {
 
         debug!("mask=\n{mask}");
 
+        //means [0.2300, 1.2300, 2.2300]
         assert_eq!(
             Tensor::from_slice(&[
                true , true , true , true , true ,
@@ -879,7 +1029,7 @@ mod distance_tests {
 
     #[test]
     fn test_quantile_mask_with_empty_pre_mask(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let dists_t = tensor_3_7_5_lin();
 
@@ -947,7 +1097,7 @@ mod distance_tests {
 
     #[test]
     fn test_quantile_mask_with_pre_mask_1(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let dists_t = tensor_3_7_5_lin();
 
@@ -1016,7 +1166,7 @@ mod distance_tests {
 
     #[test]
     fn test_quantile_mask_with_pre_mask_2(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let dists_t = tensor_3_7_5_lin();
 
@@ -1120,7 +1270,7 @@ mod distance_tests {
     //
     #[test]
     fn test_quantile_mask_diff_lengths(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let dists_t = Tensor::from_slice(&[
             0.0,  0.0,  2.0, 0.0,            10.0,
@@ -1159,7 +1309,7 @@ mod distance_tests {
 
     #[test]
     fn test_quantile_mask_diff_lengths_with_pre_mask(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let dists_t = Tensor::from_slice(&[
             100., 100., 100., 100.,           100.,
@@ -1214,16 +1364,16 @@ mod distance_tests {
 
     fn tensor_3_7_5_lin() -> Tensor {
         Tensor::from_slice(&[
-            //channel 0
-            //slice_1:    0       1       2       3       4
-            //slice_0
-            /*0*/     0.0000, 0.1000, 0.2000, 0.3000, 0.4000,
-            /*1*/     0.0100, 0.1100, 0.2100, 0.3100, 0.4100,
-            /*2*/     0.0200, 0.1200, 0.2200, 0.3200, 0.4200,
-            /*3*/     0.0300, 0.1300, 0.2300, 0.3300, 0.4300,
-            /*4*/     0.0400, 0.1400, 0.2400, 0.3400, 0.4400,
-            /*5*/     0.0500, 0.1500, 0.2500, 0.3500, 0.4500,
-            /*6*/     0.0600, 0.1600, 0.2600, 0.3600, 0.4600,
+    //channel 0
+    //slice_1: 0       1       2       3       4
+    //slice_0
+    /*0*/   0.0000, 0.1000, 0.2000, 0.3000, 0.4000,
+    /*1*/   0.0100, 0.1100, 0.2100, 0.3100, 0.4100,
+    /*2*/   0.0200, 0.1200, 0.2200, 0.3200, 0.4200,
+    /*3*/   0.0300, 0.1300, 0.2300, 0.3300, 0.4300,
+    /*4*/   0.0400, 0.1400, 0.2400, 0.3400, 0.4400,
+    /*5*/   0.0500, 0.1500, 0.2500, 0.3500, 0.4500,
+    /*6*/   0.0600, 0.1600, 0.2600, 0.3600, 0.4600,
             //channel 1
             1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
             1.0100, 1.1100, 1.2100, 1.3100, 1.4100,
@@ -1374,8 +1524,8 @@ mod distance_tests {
 
     #[test]
     fn test_mask_maker_local_min() -> Result<(), ThoosaError>{
-        reset_print_options();
-        set_max_level(Trace);
+        // reset_print_options();
+        // set_max_level(Trace);
         
         let input_n =  1000;
 

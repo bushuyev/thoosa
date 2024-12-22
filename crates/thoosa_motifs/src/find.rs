@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, Deref, Range};
 use std::rc::Rc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::current;
 use std::time::{Duration, Instant};
@@ -37,7 +37,7 @@ use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
-use crate::distance::MaskMaker::{Diagonal, LeQuantile, LocalMin, Tril, LE};
+use crate::distance::MaskMaker::{Diagonal, LeQuantile, LeMean, LocalMin, Tril, LE};
 use crate::distance::{average_euclidean_distance, slice_t};
 use crate::distance::{clc_dist_d2_and_mask, dist_d2};
 use crate::fragments::{load_motif_slices, motifs_to_tensor, MotifsTensors};
@@ -296,6 +296,10 @@ pub fn find_motifs_by_euc_dist(
 
     // debug!("find_motifs_by_euc_dist_: records_num={records_num} resource_keys={resource_keys:?} run_config_ids={run_config_ids:?}");
     let devices_2x = devices.clone();
+
+    let mut means_acc = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Float, devices[0])));
+    let mut total_samples = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Int64, devices[0])));
+
     chunk_and_slice_2x(
         resource_keys,
         common_config.chunk_size as usize,
@@ -306,9 +310,9 @@ pub fn find_motifs_by_euc_dist(
 
             let mask_tril = chunk_sliced_0.resource_ids[0].eq(&chunk_sliced_1.resource_ids[0]) && !chunk_sliced_1.is_split();
             let mask_makers = if mask_tril {
-                &[LocalMin, LeQuantile { q: find_motifs_run_config.dist_quantile, with_mask: true }, Tril][..]
+                &mut [LocalMin, LeMean { k: 0.1, avg: &mut means_acc, total_samples: &mut total_samples }, Tril][..]
             } else {
-                &[LocalMin, LeQuantile { q: find_motifs_run_config.dist_quantile, with_mask: true }][..]
+                &mut [LocalMin, LeMean { k: 0.1, avg: &mut means_acc, total_samples: &mut total_samples }][..]
             };
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
@@ -324,7 +328,7 @@ pub fn find_motifs_by_euc_dist(
 
             trace!("find_motifs_by_euc_dist: mask_cpu=\n{mask_cpu} mask_tril=\n{mask_tril}");
             if log_enabled!(Level::Debug) {
-                debug!("find_motifs_by_euc_dist: count_nonzero={}", mask_cpu.count_nonzero_dim_intlist([1,2]));
+                debug!("find_motifs_by_euc_dist: count_nonzero={}", mask_cpu.count_nonzero_dim_intlist(&[1, 2]));
             }
 
             Ok(mask_cpu)
@@ -563,7 +567,7 @@ fn chunk_and_slice_2x<G, C>(
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
-    G: Fn(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
 {
     debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={run_configs:?}");
@@ -1264,7 +1268,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                     chunk.t.to_device(devices[0]),
                     false,
                     //compare distances between tensor and motifs to motif's average distance
-                    &[LE {v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
+                    &mut [LE {v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
                 )?;
                 let mask = mask.to_device(Cpu);
                 trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
