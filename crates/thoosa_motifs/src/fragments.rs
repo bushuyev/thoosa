@@ -101,7 +101,7 @@ pub fn motifs_to_tensor(
             for (resource, motif_slices) in resource_id_motif_slices {
 
                 let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, area).await;
-                debug!("motifs_to_tensor: eeg_t.device={:?}", t.device());
+                debug!("motifs_to_tensor: eeg_t.size={:?}", t.size());
 
                 for motif_slice in motif_slices {
 
