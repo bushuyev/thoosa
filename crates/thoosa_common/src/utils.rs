@@ -1,5 +1,6 @@
 use std::{fs, mem, ptr};
 use std::ffi::c_void;
+use std::fmt::Display;
 use std::io::Write;
 use std::iter::Map;
 use std::ops::{Add, Div, Mul, Range};
@@ -304,6 +305,35 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
 
     one_hot.sum_dim_intlist(1, false, Kind::Int)
 }
+
+
+#[macro_export]
+macro_rules! panic_to_err {
+    ($expr:expr) => {{
+            match std::panic::catch_unwind(|| {
+                $expr
+            }) {
+                //no panic
+                Ok(inner_result) => match inner_result {
+                    Ok(val) => Ok(val),
+                    Err(err) => Err(ThoosaError::from(err))
+                },
+                //panic
+                Err(e) => {
+                    if let Some(msg) = e.downcast_ref::<String>() {
+                        debug!("thoosa_err String: {msg}");
+                        Err(ThoosaError::from(msg))
+                    } else if let Some(msg) = e.downcast_ref::<&str>() {
+                        debug!("thoosa_err str: {msg}");
+                        Err(ThoosaError::from(*msg))
+                    } else {
+                        debug!("thoosa_err unknown: {e:?}");
+                        Err(ThoosaError::from(format!("{e:?}")))
+                    }
+                }
+            }
+        }};
+    }
 
 #[cfg(test)]
 pub mod tests {
@@ -840,14 +870,6 @@ pub fn copy_cudarc(t:&Tensor) -> *mut c_void {
 pub fn free_cudarc(buf : *mut f32){
     unsafe {
         cudarc::driver::sys::lib().cuMemFreeHost(buf as *mut c_void);
-    }
-}
-
-pub fn tch_to_thoosa_err(tch_err:TchError) -> ThoosaError {
-    if tch_err.to_string().contains("out of memory") {
-        ThoosaError::oom()
-    } else {
-        ThoosaError::new(tch_err.to_string())
     }
 }
 

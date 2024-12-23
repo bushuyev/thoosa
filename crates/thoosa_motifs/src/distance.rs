@@ -11,7 +11,7 @@ use tch::Kind;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Bool;
 use thoosa_common::parzen::optimizer::Primitives::Float;
-use thoosa_common::utils::{skewness_kurtosis_1_dim, tch_to_thoosa_err, z_norm_2};
+use thoosa_common::utils::{skewness_kurtosis_1_dim, z_norm_2};
 use thoosa_shared::ThoosaError;
 
 #[allow(dead_code)]
@@ -231,12 +231,12 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&m
         }
         (
             Tensor::stack(means.as_slice(), 0).view((distances_size[0], 1)),
-            Tensor::from_slice(counts.as_slice()).view((distances_size[0], 1)),
+            Tensor::from_slice(counts.as_slice()).to_device(distances.device()).view((distances_size[0], 1)),
         )
     } else {
         (
             distances.mean_dim(&[1i64, 2i64][..],  false, Kind::Float),
-            Tensor::from_slice(&[distances_size[1] * distances_size[2]]).broadcast_to(distances_size[0]) //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel
+            Tensor::from_slice(&[distances_size[1] * distances_size[2]]).to_device(distances.device()).broadcast_to(distances_size[0]) //  Tensor of size [channels x 1] with values= distances[1] * distances[2] in each channel
         )
     };
 
@@ -244,9 +244,7 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&m
 
     debug!("mean_mask: samples.size={:?} mean_t.size={:?}", distances.size(), mean_t.size());
 
-    let le = distances.le_tensor(&mean_t.view((-1, 1, 1)).broadcast_to(distances_size)); //channels x motifs x num_slices
 
-    trace!("mean_mask:  le=\n{le}");
     debug!("mean_mask: total_samples={total_samples:?} counts={:?}", counts_t);
 
     //TODO update means_acc
@@ -265,6 +263,10 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&m
 
     debug!("new_total_means: 2. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
 
+    let le = distances.le_tensor(&means_guard.multiply_scalar(k).view((-1, 1, 1)).broadcast_to(distances_size)); //channels x motifs x num_slices
+
+    trace!("mean_mask:  le=\n{le}");
+
     le
 }
 
@@ -278,15 +280,15 @@ pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaE
     debug!("clc_dist_d2: t_0 size={:?}", t_0.size());
     debug!("clc_dist_d2: t_1 size={:?}", t_1.size());
 
-    let mut diff = t_0.f_subtract(&t_1).map_err(tch_to_thoosa_err)?;
+    let mut diff = t_0.f_subtract(&t_1)?;
     drop(t_0);
     drop(t_1);
 
-    let squared_diff = diff.f_pow_(2).map_err(tch_to_thoosa_err)?;
+    let squared_diff = diff.f_pow_(2)?;
     drop(diff);
     debug!("clc_dist_d2: squared_diff size={:?}", squared_diff.size());
 
-    let squared_distances = squared_diff.f_sum_dim_intlist(dim+2, false, Kind::Float).map_err(tch_to_thoosa_err)?;
+    let squared_distances = squared_diff.f_sum_dim_intlist(dim+2, false, Kind::Float)?;
     drop(squared_diff);
 
     Ok(squared_distances.sqrt())
@@ -301,23 +303,26 @@ pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
 }
 
 
-pub fn average_euclidean_distance(x: &Tensor) -> f32 {
-    let n = x.size()[0] as i64;
-
-    // Step 1: Compute the Gram matrix (dot products between vectors)
-    let gram = x.mm(&x.transpose(0, 1)); // Shape: [n, n]
+pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
+    let n = t.size()[0] as i64;
 
     // Step 2: Compute squared norms of each vector
-    let squared_norms = x.pow_tensor_scalar(2).sum_dim_intlist(1, true, Kind::Float); // Shape: [n, 1]
+    let squared_norms = t.f_pow_tensor_scalar(2)?
+        .f_sum_dim_intlist(1, true, Kind::Float)?;
 
     // Step 3: Compute squared distances matrix D
-    let dists_squared:Tensor = &squared_norms + &squared_norms.transpose(0, 1) - 2.0 * &gram; // Shape: [n, n]
-    drop(gram);
+    let squared_norms_sum = squared_norms.f_add(&squared_norms.transpose(0, 1))?;
     drop(squared_norms);
+
+    // Step 1: Compute the Gram matrix (dot products between vectors)
+    let gram = t.f_mm(&t.transpose(0, 1)).and_then(|v|v.f_multiply_scalar(2))?;
+    let dists_squared:Tensor = squared_norms_sum.f_subtract(&gram)?;
+    drop(gram);
+    drop(squared_norms_sum);
 
     let dists_squared = dists_squared.clamp_min(0.0); // Replace negative values with 0
     // Step 4: Extract upper triangle without diagonal
-    let triu_indices = Tensor::triu_indices(n, n, 1, INT64_CPU); // Indices of upper triangle without diagonal
+    let triu_indices = Tensor::triu_indices(n, n, 1, (Kind::Int64, t.device())); // Indices of upper triangle without diagonal
     let i = triu_indices.get(0);
     let j = triu_indices.get(1);
 
@@ -336,26 +341,29 @@ pub fn average_euclidean_distance(x: &Tensor) -> f32 {
 
     trace!("average_euclidean_distance: pairwise_dists=\n{pairwise_dists} mean_distance=\n{mean_distance}");
 
-    mean_distance.double_value(&[]) as f32
+    Ok(mean_distance.double_value(&[]) as f32)
 }
 
 #[cfg(test)]
 mod distance_tests {
     use std::f32::consts::PI;
+    use std::fmt::Display;
     use std::sync::atomic::AtomicI64;
     use chrono::Utc;
     use log::__private_api::enabled;
-    use log::{debug, set_max_level, trace};
+    use log::{debug, max_level, set_max_level, trace};
     use log::LevelFilter::Trace;
     use parking_lot::Mutex;
     use plotters::prelude::{BLACK, GREEN, RED};
     use plotters::style::full_palette::ORANGE;
     use sci_rs::na::SimdBool;
-    use tch::Device::Cpu;
+    use tch::Device::{Cpu, Cuda};
     use tch::{Device, IndexOp, Kind};
     use tch::Kind::{Bool, Float, Int};
-    use tch::kind::{FLOAT_CPU, INT64_CPU};
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
     use tch::Tensor;
+    use thoosa_common::builder::Node::Par;
+    use thoosa_common::panic_to_err;
     use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
@@ -1449,7 +1457,7 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_average_euclidean_distance(){
+    fn test_average_euclidean_distance() -> Result<(), ThoosaError>{
         let d = [
             1., 2., 3.,
             4., 5., 6.,
@@ -1470,13 +1478,60 @@ mod distance_tests {
 
         let x = Tensor::from_slice(&d).view((3, 3));
         println!("x={x}");
-        let avg_dist = average_euclidean_distance(&x);
+        let avg_dist = average_euclidean_distance(&x)?;
         assert_eq!(
             test_avg,
             avg_dist
         );
 
+        Ok(())
+    }
 
+
+    #[test]
+    fn test_average_euclidean_distance_max_size()-> Result<(), ThoosaError>{
+        set_max_level(Trace);
+        use cudarc::driver::{CudaDevice};
+        let _device = CudaDevice::new(0)?;
+
+        let mut free_mem: usize = 0;
+        let mut total_mem: usize = 0;
+
+        unsafe {
+            let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+
+            let cudarc_lib = cudarc::driver::sys::lib();
+            cudarc_lib.cuMemGetInfo_v2(&mut free_mem as *mut usize, &mut total_mem as *mut usize);
+        }
+        debug!("Device 0 free_mem: {free_mem}, total_mem: {total_mem}");
+
+        let size = ((free_mem  / size_of::<f32>()) as f64).sqrt() as i64 / 2;
+        let mut big_t = Tensor::rand(size*size, FLOAT_CUDA).view((size, size));
+
+        debug!("slices_t.size()={:?}", big_t.size());
+
+        let avg_r = loop {
+            match panic_to_err!(average_euclidean_distance(&big_t)){
+                Ok(v) => {
+                    break Ok(v);
+                }
+                Err(e) if e.is_oom()=> {
+                    let size = big_t.size()[0]/2;
+                    big_t = big_t.i((..size, ..size));
+                    debug!("2. slices_t.size={:?}", big_t.size());
+                }
+                Err(e) => {
+                    break Err(ThoosaError::from(e))
+                }
+            }
+        };
+
+        debug!("v={avg_r:?}");
+
+        assert!(avg_r.expect("avg_r").is_normal());
+
+
+        Ok(())
     }
 
     #[test]

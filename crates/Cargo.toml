@@ -20,8 +20,8 @@ rand = "0.8.5"
 log = "0.4.22"
 simplelog = "0.12.2"
 chrono = { version = "0.4.38" }
-tch = "0.18.0"
-torch-sys = "0.18.0"
+tch = "0.18.1"
+torch-sys = "0.18.1"
 #tch = { path="../../tch-rs", features = ["cuda-tests"] }
 #torch-sys = { path="../../tch-rs/torch-sys" }
 parking_lot =  "0.12.3"
@@ -37,7 +37,8 @@ lazy_static = "1.5.0"
 num-traits = "0.2.19"
 regex = "1.11.1"
 bytemuck = { version = "1.20.0", features = ["derive"] }
-cudarc = { version = "0.12.1", features = ["cuda-12060"] }#not used
+cudarc = { version = "0.12.1", features = ["cuda-12060"] }
+libloading = "0.8.6"
 plotters = { version = "0.3.7"}
 [profile.test]
 opt-level = 0
