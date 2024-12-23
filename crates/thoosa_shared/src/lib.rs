@@ -144,17 +144,12 @@ impl ThoosaError {
             is_oom: true
         }
     }
+
+    pub fn is_oom(&self) -> bool {
+        self.is_oom
+    }
 }
 
-// impl Display for ThoosaError {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-//         write!(f, "{}", self.msg)
-//     }
-// }
-//TODO remove impl<D> From<D> for ThoosaError
-// impl std::error::Error for ThoosaError {
-//
-// }
 
 //TODO https://github.com/rust-lang/rust/issues/65280
 impl Debug for ThoosaError {
@@ -177,8 +172,14 @@ impl<D> From<D> for ThoosaError
 where D: Display {
 
     fn from(value: D) -> Self {
-        error!("ThoosaError::from: value={}", value);
-        ThoosaError::new(value.to_string())
+        debug!("ThoosaError::from: value={}", value);
+        let msg = value.to_string();
+
+        if msg.contains("out of memory") {
+            ThoosaError::oom()
+        } else {
+            ThoosaError::new(msg)
+        }
     }
 }
 

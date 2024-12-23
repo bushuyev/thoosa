@@ -1191,7 +1191,7 @@ impl Store for SqlStore {
     }
 
     /**k
-        * returns vec of channel X (motif id, corr)
+        * returns vec of channel X (motif id, rate)
     */
     fn list_selected_motifs(&mut self, motif_selection_id: usize, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
         let mut channels_motifs = (0..channels).into_iter().map(|_| Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();

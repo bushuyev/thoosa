@@ -151,7 +151,7 @@ pub fn motifs_to_tensor(
             debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
             trace!("motifs_to_tensor: slices_t=\n{slices_t}");
 
-            let motif_avg_dist = average_euclidean_distance(&slices_t);
+            let motif_avg_dist = average_euclidean_distance(&slices_t).unwrap();
 
             trace!("motifs_to_tensor: motif_avg_dist={motif_avg_dist}");
             motifs_avg_dists.push(motif_avg_dist);

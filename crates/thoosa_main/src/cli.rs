@@ -172,7 +172,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
     }
 
     fn common_config(&self) -> CommonFindMotifsConfig {
-        CommonFindMotifsConfig::new(Some(100), 100, true, None)//TODO
+        CommonFindMotifsConfig::new(Some(100), 100, true, None, Some(0.1))//TODO
     }
 }
 
@@ -642,7 +642,7 @@ pub fn run_cli<F,R>(
 
         }
         Some(PlotMotifSlices(plot_motif_slices_params)) => {
-            run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params)?;
+            run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params, &devices[0])?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -1091,12 +1091,12 @@ pub fn import_resources<F, R>(
 
 }
 
-fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, plot_motif_slices_params: &PlotMotifSlicesParams) -> Result<(), ThoosaError> {
+fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, plot_motif_slices_params: &PlotMotifSlicesParams, device: &Device) -> Result<(), ThoosaError> {
     match plot_motif_slices_params.motifs_by() {
         MotifsBy::MotifId(motif_id) => {
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
-            find::plot_motif_slices(ws, store, loader, motif_id)?;
+            find::plot_motif_slices(ws, store, loader, motif_id, device)?;
         }
         MotifsBy::RunId(run_id) => {
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
@@ -1106,9 +1106,9 @@ fn run_plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
             let motif_distances = store.lock().list_motifs(run_id)?;
             let motifs_len = motif_distances.len();
             let mut done_cnt = AtomicU32::new(0);
-            motif_distances.into_par_iter().for_each(| motif_id|{
+            motif_distances/*.into_iter()*/.into_par_iter().for_each(| motif_id|{//TODO par in devices
                 debug!("run_plot_motif_slices: motif_id={motif_id}");
-                find::plot_motif_slices(ws, store, loader, motif_id).unwrap();
+                find::plot_motif_slices(ws, store, loader, motif_id, device).unwrap();
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 10 == 0{
                     info!("done {done} from  {motifs_len}");
@@ -1434,6 +1434,7 @@ mod main_tests {
                 dist_quantile: 0.01,
                 keep_slice_matches: false,
                 max_slices_k: Some(0.1),
+                mean_k: Some(0.1),
                 input_filter: None,
             },
             find_motifs_by_euc_dist,
@@ -1445,6 +1446,8 @@ mod main_tests {
         )?;
 
         let mut slices = store.lock().list_motifs_slices(run_ids[0])?;
+
+        debug!("slices={slices:?}");
 
         // debug!("test_motifs: len={:?} slices_0_0={:?}", slices.get(resources_0_0).map(|v|v.len()), slices.get(resources_0_0));
         // debug!("test_motifs: len={:?} slices_0_1={:?}", slices.get(resources_0_1).map(|v|v.len()), slices.get(resources_0_1));
@@ -1669,14 +1672,18 @@ mod main_tests {
         //0 label - sig_0 in channel 0
         //1 label - sig_1 in channel 1
         //0,1 label - sig_2 in channel 2
+        let sig_0 = sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1);
+        let sig_1 = sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1);
         let tensors_per_label = 20;
         (0..tensors_per_label).for_each(|i|{
-            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
+
+            label_0_t_rs(n, &sig_0, &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
             // label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
         });
 
         (0..tensors_per_label).for_each(|i|{
-            label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
+
+            label_1_t_rs(n, &sig_1, &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();
             // label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();//first 1_ for import_id
         });
 
@@ -1726,7 +1733,7 @@ mod main_tests {
 
         let find_motifs_run_ids = run_step(
             None,
-            &FindMotifsParams::dummy(100, 800, group_name.clone(), 2, 0.5, None, None, false, None),
+            &FindMotifsParams::dummy(100, 800, group_name.clone(), 2, 0.5, None, None, false, None, Some(0.2)),
             find_motifs_by_euc_dist,
             &ws,
             &store,
@@ -1735,7 +1742,7 @@ mod main_tests {
             "Test/FindMotifs"
         )?;
 
-        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesParams::new(MotifsBy::RunId(find_motifs_run_ids[0])))?;
+        run_plot_motif_slices(&ws, &store, &loader, &PlotMotifSlicesParams::new(MotifsBy::RunId(find_motifs_run_ids[0])), &devices[0])?;
         debug!("test_run_step: run_ids={find_motifs_run_ids:?}");
 
         let select_motifs_for_label_run_ids = run_step(
@@ -1753,7 +1760,9 @@ mod main_tests {
 
         let selected_motifs = store.lock().list_selected_motifs(select_motifs_for_label_run_ids[0], ws.read().channels() as u32)?;
 
-        assert_eq!(selected_motifs[0].len(), 2);
+        debug!("test_run_step: selected_motifs={selected_motifs:?}");
+
+        assert!(selected_motifs[0].len() > 2);
         //no motifs in channels 1 and 2
         assert!(selected_motifs[1].is_empty());
         assert!(selected_motifs[2].is_empty());
@@ -1806,11 +1815,11 @@ mod main_tests {
         fs::create_dir_all(input_dir.as_path())?;
 
         (0..10).for_each(|i|{
-            label_0_t_rs(n, &sig_one_imp(n, 30.0, None, None, 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(input_dir.join(format!("t_0_{i}.pt"))).unwrap();
+            label_0_t_rs(n, &sig_0, &sig_three_imp(n, 30.0, None, None), max_y).save(input_dir.join(format!("t_0_{i}.pt"))).unwrap();
         });
 
         (0..10).for_each(|i|{
-            label_1_t_rs(n, &sig_two_imp(n, 30.0, None, Some(2. ..3.), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(input_dir.join(format!("t_1_{i}.pt"))).unwrap();
+            label_1_t_rs(n, &sig_1, &sig_three_imp(n, 30.0, None, None), max_y).save(input_dir.join(format!("t_1_{i}.pt"))).unwrap();
         });
 
         run_infer(

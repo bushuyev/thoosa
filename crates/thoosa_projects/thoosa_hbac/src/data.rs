@@ -738,7 +738,7 @@ mod tests {
             t_0_0_0_sliced.shallow_clone(),
             t_0_1_0_sliced.shallow_clone(),
 
-            true, &[LeQuantile {q:0.1, with_mask: false }]
+            true, &mut [LeQuantile {q:0.1, with_mask: false }]
 
         )? else {
             panic!("no distances")

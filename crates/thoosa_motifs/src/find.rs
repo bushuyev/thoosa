@@ -48,18 +48,20 @@ use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelB
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use tch::Device::{Cpu, Cuda};
 use thoosa_common::bool_iter::BoolTensorIterator;
-use thoosa_common::loader;
+use thoosa_common::{loader, panic_to_err};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
 use thoosa_common::ws::{FsWorkspace, Workspace};
+use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
+
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -87,8 +89,12 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long)]
     pub max_slices_k: Option<f32>,
 
+    #[arg(long)]
+    pub mean_k: Option<f32>,
+
     #[command(subcommand)]
     pub input_filter: Option<InputFilter>,
+
 }
 
 #[derive(Debug)]
@@ -96,16 +102,19 @@ pub struct CommonFindMotifsConfig {
     min_tracker_step:Option<usize>,
     chunk_size:u32,
     keep_slice_matches:bool, //sql
-    max_slices_k:Option<f32>
+    max_slices_k:Option<f32>,
+    mean_k: f32,
 }
 
 impl CommonFindMotifsConfig {
-    pub fn new(min_tracker_step: Option<usize>, chunk_size: u32, keep_slice_matches: bool, max_slices_k: Option<f32>) -> Self {
+
+    pub fn new(min_tracker_step: Option<usize>, chunk_size: u32, keep_slice_matches: bool, max_slices_k: Option<f32>, mean_k: Option<f32>) -> Self {
         Self {
             min_tracker_step,
             chunk_size,
             keep_slice_matches,
-            max_slices_k
+            max_slices_k,
+            mean_k: mean_k.unwrap_or(0.01),
         }
     }
 }
@@ -137,6 +146,7 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
             min_tracker_step: self.min_tracker_step,
             keep_slice_matches: self.keep_slice_matches,
             max_slices_k: self.max_slices_k,
+            mean_k: self.mean_k.unwrap_or(0.01),
         }
     }
 }
@@ -208,7 +218,7 @@ impl Conv1Params {
 
 impl FindMotifsParams {
     // #[cfg(test)]
-    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, dist_quantile: f32, input_filter: Option<&InputFilter>, min_tracker_step: Option<usize>, keep_slice_matches: bool, max_slices_k: Option<f32>) -> Self {
+    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, dist_quantile: f32, input_filter: Option<&InputFilter>, min_tracker_step: Option<usize>, keep_slice_matches: bool, max_slices_k: Option<f32>, mean_k: Option<f32>) -> Self {
         FindMotifsParams {
             step:step.into(),
 
@@ -225,6 +235,8 @@ impl FindMotifsParams {
             keep_slice_matches,
 
             max_slices_k,
+
+            mean_k,
 
             input_filter: input_filter.cloned(),
         }
@@ -251,7 +263,7 @@ pub fn find_motifs_by_euc_dist(
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
 
     let mut resource_keys = resource_config.to_resources(store)?;
-    resource_keys.shuffle(&mut thread_rng());
+    // resource_keys.shuffle(&mut thread_rng());
 
     let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
@@ -310,9 +322,9 @@ pub fn find_motifs_by_euc_dist(
 
             let mask_tril = chunk_sliced_0.resource_ids[0].eq(&chunk_sliced_1.resource_ids[0]) && !chunk_sliced_1.is_split();
             let mask_makers = if mask_tril {
-                &mut [LocalMin, LeMean { k: 0.1, avg: &mut means_acc, total_samples: &mut total_samples }, Tril][..]
+                &mut [LocalMin, LeMean { k: common_config.mean_k, avg: &mut means_acc, total_samples: &mut total_samples }, Tril][..]
             } else {
-                &mut [LocalMin, LeMean { k: 0.1, avg: &mut means_acc, total_samples: &mut total_samples }][..]
+                &mut [LocalMin, LeMean { k: common_config.mean_k, avg: &mut means_acc, total_samples: &mut total_samples }][..]
             };
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
@@ -1909,6 +1921,7 @@ mod motif_find_tests {
             dist_quantile: 0.01,
             keep_slice_matches: false,
             max_slices_k: None,
+            mean_k: None,
             input_filter: None,
         };
 
@@ -2020,6 +2033,7 @@ mod motif_find_tests {
             dist_quantile: 0.1,
             keep_slice_matches: false,
             max_slices_k: None,
+            mean_k: None,
             input_filter: None,
         };
 
@@ -2046,7 +2060,7 @@ mod motif_find_tests {
             .collect::<HashSet<_>>();
 
         for motif_id in motif_id_set {
-            plot_motif_slices(&ws, &store, &loader, motif_id)?;
+            plot_motif_slices(&ws, &store, &loader, motif_id, &Cpu)?;
         }
         debug!("run_ids={run_ids:?} slices: {slices:?}");
         debug!("0: {:?}", slices.get(&resources[0]));
@@ -2244,6 +2258,7 @@ mod motif_find_tests {
             dist_quantile: 0.0001,
             keep_slice_matches: false,
             max_slices_k: None,
+            mean_k: None,
             input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
         };
 
@@ -2344,6 +2359,7 @@ mod motif_find_tests {
             dist_quantile: 0.0001,
             keep_slice_matches: false,
             max_slices_k: None,
+            mean_k: None,
             input_filter: None,
         };
 
@@ -2427,6 +2443,7 @@ mod motif_find_tests {
             dist_quantile: 0.01,
             keep_slice_matches: false,
             max_slices_k: None,
+            mean_k: None,
             input_filter: None,
         };
 
@@ -3149,11 +3166,9 @@ mod motif_find_tests {
         assert_eq!(good_rates, vec![0.5714286, 0.71428573, 0.85714287, 1.0]);
 
     }
-
-
 }
 
-pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize) -> Result<(), ThoosaError> {
+pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize, device: &Device) -> Result<(), ThoosaError> {
     let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, None, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
@@ -3162,26 +3177,41 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(run_id, store.lock().list_run_config_values(run_id)?);
 
-    let slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
+    let resources_slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
 
-    let all_slices = slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+    let all_slices = resources_slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
-    if all_slices.len() > 100_000 {
-        warn!("Too many slices to plot, skipping");
-        return Ok(())
+    let all_slices= if all_slices.len() > 3_000 {
+        warn!("Too many slices ({}) in motif {motif_id} to plot, truncating", all_slices.len());
+        &all_slices[..3_000]
     } else {
         debug!("plot_motif_slices: all_slices.len()={}", all_slices.len());
-    }
+        &all_slices
+    };
 
-    let slices_t = Tensor::vstack(all_slices.iter().map(|s| s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
-
-    let motif_avg_dist = average_euclidean_distance(&slices_t);
+    let mut slices_t = Tensor::vstack(all_slices.iter().map(|s| s.shallow_clone()).collect::<Vec<Tensor>>().as_slice()).to_device(*device);
+    
+    let motif_avg_dist = loop {
+        match panic_to_err!(average_euclidean_distance(&slices_t)){
+            Ok(v) => {
+                break Ok(v);
+            }
+            Err(e) if e.is_oom()=> {
+                let size = slices_t.size()[0]/2;
+                slices_t = slices_t.i((..size, ..));
+                debug!("plot_motif_slices cut slices_t.size={:?}", slices_t.size());
+            }
+            Err(e) => {
+                break Err(ThoosaError::from(e))
+            }
+        }
+    }?;
 
     // check_slices(&all_sices, 0.9);
-
+    let mut color_iter = DistinctColorIter::new();
     plot_series(
-        all_slices.into_iter().map(|t| {
-            (format!("0"), BLACK, t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+        all_slices.into_iter().enumerate().map(|(i, t)| {
+            (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
         }).collect(),
         format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={motif_avg_dist}").as_str(),
         (2000, 1000),
