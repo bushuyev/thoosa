@@ -18,6 +18,7 @@ use tch::IndexOp;
 use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
+use thoosa_common::panic_to_err;
 use thoosa_common::utils::*;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::TensorIdSliceIdx;
@@ -147,18 +148,28 @@ pub fn motifs_to_tensor(
 
 
         let mut motifs = motif_slices.into_iter().map(|(motif_id, slices)| {
-            let slices_t = Tensor::vstack(slices.into_iter().map(|s| *s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
-            debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
-            trace!("motifs_to_tensor: slices_t=\n{slices_t}");
+            if slices.len() > 10_000 {//TODO config
+                Err(ThoosaError::new(format!("skipped motif {motif_id} with too many slices ({})", slices.len())))
+            } else {
+                let slices_t = Tensor::vstack(slices.into_iter().map(|s| *s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
+                debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
+                trace!("motifs_to_tensor: slices_t=\n{slices_t}");
 
-            let motif_avg_dist = average_euclidean_distance(&slices_t).unwrap();
+                match panic_to_err!(average_euclidean_distance(&slices_t)) {
+                    Ok(motif_avg_dist) => {
+                        trace!("motifs_to_tensor: motif_avg_dist={motif_avg_dist}");
+                        motifs_avg_dists.push(motif_avg_dist);
+                        channel_motif_ids[channel as usize].push(motif_id);
 
-            trace!("motifs_to_tensor: motif_avg_dist={motif_avg_dist}");
-            motifs_avg_dists.push(motif_avg_dist);
-            channel_motif_ids[channel as usize].push(motif_id);
+                        Ok(slices_t.mean_dim(0, false, Float).copy())
+                    },
+                    Err(e) => {
+                        Err(ThoosaError::new(format!("can't load motif {motif_id} because of oom error, num slices={}", slices.len())))
+                    }
+                }
+            }
 
-            slices_t.mean_dim(0, false, Float).copy()
-        }).collect::<Vec<Tensor>>();
+        }).filter(|v|v.is_ok()).map(|v|v.unwrap()).collect::<Vec<Tensor>>();
 
 
         //make all motifs same length

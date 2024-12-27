@@ -670,16 +670,15 @@ pub fn batch_windows(input_n: usize, motif_width: usize, step: usize, batch_size
     })
 }
 
-pub fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, batch_size: usize) -> usize {
-    (((input_n-motif_width)/step) as f32 / batch_size as f32).ceil() as usize
+pub const fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, batch_size: usize) -> usize {
+    let positions = (input_n - motif_width) / step;
+    (positions + batch_size - 1) / batch_size
 }
 
 pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoosaError> {
     let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO const, error
     Ok(re.captures_iter(descr).map(|caps| (caps["id"].parse::<i64>().expect(&caps["id"]), caps["kind"].into())).collect::<Vec<(i64, String)>>())
 }
-
-
 
 pub fn cdt() -> String {
     chrono::offset::Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)

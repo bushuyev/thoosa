@@ -759,7 +759,7 @@ impl TryFrom<&RangeOrValue<f64>> for Hyperparameter {
     fn try_from(value: &RangeOrValue<f64>) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range,..} = value {
             Ok(Hyperparameter::UniformFloat {
-                name: "param_0".into(),
+                name: "param_0".into(),//TODO
                 lower: range.start,
                 upper: range.end
             })
@@ -801,7 +801,6 @@ impl TryFrom<&RangeOrValue<u32>> for Hyperparameter {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct ConfigurationSpace {
