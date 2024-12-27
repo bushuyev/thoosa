@@ -30,7 +30,7 @@ use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_all_label_models_ws, load_final_model, load_motif_models_ws, run_opt_train_final, run_opt_train_label_nodes, train_final, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalNodeParams, TrainFinalNodeRunConfig, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_all_label_models_ws, load_final_model, load_motif_models_ws, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TrainFinalNodeParams, TrainFinalNodeRunConfig, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{list_devices, plot_series};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, FindMotifsRunConfig, InputFilter, SelectMotifsParams, SelectMotifsRunConfig};
@@ -408,10 +408,12 @@ pub fn run_cli<F,R>(
                 |key:String| resource_to_tensor(&import_resources_params.source_path, key.as_str()),
                 true
             )?;
+
+            info!("ImportResources done");
         }
 
         Some(FindMotifs(find_motifs_params)) => {
-            info!("find_motifs_params={:?} devices={:?}", find_motifs_params, devices);
+            debug!("find_motifs_params={:?} devices={:?}", find_motifs_params, devices);
 
             let run_ids = run_step(
                 None,
@@ -424,11 +426,11 @@ pub fn run_cli<F,R>(
                 "FindMotifs"
             )?;
 
-            info!("run_find_motifs_on_set done, run_id={:?}", run_ids);
+            info!("FindMotifs done, run_ids={:?}", run_ids);
         }
 
         Some(SelectMotifs(select_motifs_params)) => {
-            info!("select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
+            debug!("SelectMotifs: select_motifs_params={:?} devices={:?}", select_motifs_params, devices);
 
             let run_ids = run_step(
                 Some(select_motifs_params.find_motifs_run_ids().clone()),
@@ -441,12 +443,14 @@ pub fn run_cli<F,R>(
                 "SelectMotifs"
             )?;
 
+            info!("SelectMotifs done, run_ids={:?}", run_ids);
+
         }
 
         Some(TrainOnMotifs(train_on_motif_params)) => {
-            debug!("train_on_motif: train_on_motif_params={:?}", train_on_motif_params);
+            debug!("TrainOnMotifs: train_on_motif: train_on_motif_params={:?}", train_on_motif_params);
 
-            let train_label_nodes_run_ids = run_step(
+            let run_ids = run_step(
                 Some(train_on_motif_params.motif_selection_run_id.clone()),
                 train_on_motif_params,
                 run_train_motif_nodes_on_motif_selection,
@@ -457,12 +461,13 @@ pub fn run_cli<F,R>(
                 "TrainFinalNode"
             )?;
 
+            info!("TrainOnMotifs done, run_ids={:?}", run_ids);
         }
 
         Some(TrainOnLabel(train_on_label_params)) => {
-            debug!("train_on_label_params={:?}", train_on_label_params);
+            debug!("TrainOnLabel: train_on_label_params={:?}", train_on_label_params);
 
-            let train_label_nodes_run_ids = run_step(
+            let run_ids = run_step(
                 Some(train_on_label_params.train_motif_nodes_run_ids.clone()),
                 train_on_label_params,
                 run_train_label_nodes,
@@ -470,15 +475,17 @@ pub fn run_cli<F,R>(
                 &store,
                 &loader,
                 devices.clone(),
-                "TrainFinalNode"
+                "TrainOnLabel"
             )?;
+
+            info!("TrainOnLabel done, run_ids={:?}", run_ids);
         }
 
         Some(TrainFinal(train_final_params)) => {
 
-            debug!("train_final_params={:?}", train_final_params);
+            debug!("TrainFinal: train_final_params={:?}", train_final_params);
 
-            let train_label_nodes_run_ids = run_step(
+            let run_ids = run_step(
                 Some(train_final_params.train_labels_run_ids.clone()),
                 train_final_params,
                 run_train_final_node,
@@ -489,7 +496,7 @@ pub fn run_cli<F,R>(
                 "TrainFinalNode"
             )?;
 
-            info!("train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
+            info!("TrainFinal done, run_ids={run_ids:?}");
         }
 
         Some(RunAll(run_all_params)) => {
@@ -706,10 +713,13 @@ pub fn run_train_final_node(
             loader,
             label_models,
             labels_channels_motifs_models
-
         )
-    }) .collect::<Result<Vec<Box<dyn SavableOptResult>>, ThoosaError>>().map(|v| v.into_iter()
-        .collect::<Vec<Box<dyn SavableOptResult>>>()).map(|v|Some(v))
+
+    }) .collect::<Result<Vec<Box<dyn SavableOptResult>>, ThoosaError>>()
+        .map(|v|
+            v.into_iter()
+            .collect::<Vec<Box<dyn SavableOptResult>>>()
+        ).map(|v|Some(v))
 }
 
 pub fn run_infer<F>(
@@ -741,11 +751,11 @@ pub fn run_infer<F>(
             &device
         );
 
-        debug!("run_infer:={path:?} result=\n{t} t.squeeze=\n{}",t.squeeze());
+        debug!("run_infer:={path:?} result=\n{t} t.flatten(0,1)=\n{}",t.view((1,-1)));
 
-        let final_result = final_model.2.forward(&t.squeeze());
+        let final_result = final_model.2.forward(&t.view((1,-1)));//batch(1 for infer) x classes
 
-        debug!("run_infer: entry={path:?} result=\n{final_result}");
+        debug!("run_infer: entry={path:?} result=\n{final_result} softmax={:?}", final_result.softmax(0, Float));
     }
 
     Ok((vec![], Tensor::from_slice(&[0.])))
@@ -811,6 +821,8 @@ pub fn run_train_label_nodes(
 
     let (train_resource_keys, valid_resource_keys) = resource_config.to_resources(store)?;
 
+    debug!("run_train_label_nodes: train_resource_keys={train_resource_keys:?} valid_resource_keys={valid_resource_keys:?}");
+
     let valid_datasets_map = valid_resource_keys.into_iter().fold(HashMap::new(), |mut a, v| {
         a.insert(v.0.clone(), v.1.clone());
         a
@@ -844,6 +856,9 @@ pub fn run_train_label_nodes(
                 let valid_resource_keys = valid_datasets_map_clone.get(label).expect(format!("valid dataset for {}", label).as_str()).clone();
                 let valid_resource_keys_len = valid_resource_keys.len();
 
+
+
+
                 let train_labels_resource_rc = Rc::new(vec![
                     (1, resource_keys.clone()),
                     (0, store.lock().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
@@ -852,6 +867,9 @@ pub fn run_train_label_nodes(
                     (1, valid_resource_keys),
                     (0, store.lock().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
                 ]);
+
+                debug!("run_train_label_nodes: label={label} resource_keys={resource_keys:?} train_labels_resource_rc[0]={:?} train_labels_resource_rc[1]={:?}", train_labels_resource_rc[0], train_labels_resource_rc[1]);
+
 
                 let run_configs_cl = Arc::clone(&run_configs_cl);
 
@@ -870,8 +888,8 @@ pub fn run_train_label_nodes(
 
 
                     let motif_width = channels_motifs_models.iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
-                    debug!("run_train_label_nodes:  channels={channels} channels_motifs_models.len={}", channels_motifs_models.len());
-                    trace!("run_train_label_nodes:  channels_motifs_models={channels_motifs_models:?}");
+                    debug!("run_train_label_nodes: label={label} channels={channels} channels_motifs_models.len={}", channels_motifs_models.len());
+                    trace!("run_train_label_nodes: label={label} channels_motifs_models={channels_motifs_models:?}");
 
                     let channels_motifs_models: Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>> = Arc::new(RwLock::new(channels_motifs_models)); //channels_motifs_models.into_iter().map(|v|v.into_iter().map(|m|Mutex::new(m)).collect::<Vec<_>>()).collect::<Vec<_>>();
                     let channels_motifs_models_arc = Arc::clone(&channels_motifs_models);
@@ -881,9 +899,8 @@ pub fn run_train_label_nodes(
                         panic!("no motif nets found");//TODO skip?
                     }
 
-
                     let max_motif_batches = clc_num_batches(ws.read().max_input(), motif_width as usize, common_config.input_slice_step, common_config.motif_batch_size);
-                    debug!("run_train_label_nodes: max_motif_batches={max_motif_batches}");
+                    debug!("run_train_label_nodes: label={label} max_motif_batches={max_motif_batches}");
 
                     //TODO Rc
                     let train_labels_resources_clone = Rc::clone(&train_labels_resource_rc);
@@ -1142,7 +1159,8 @@ fn run_train_motif_nodes (
 
             assert_eq!(run_id, find_motifs_run_id);
 
-            debug!("train_on_motif: 1. channel={}, find_motifs_run_id={}, slices={}", channel, find_motifs_run_id, slices.len());
+            debug!("train_on_motif: 1. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
+            trace!("train_on_motif: 1. slices={slices:?}, resources_map={resources_map:?}");
 
             let all_slices_1 = train_nets::slices_in_all_resources(
                 load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
@@ -1151,7 +1169,8 @@ fn run_train_motif_nodes (
             //list motifs which are NOT motif_id and NOT from run_id
             let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
 
-            debug!("train_on_motif: 0. channel={}, run_id={}, slices={}", channel, run_id, slices.len());
+            debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
+            trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
 
             let all_slices_0 = train_nets::slices_in_all_resources(
                 load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
@@ -1188,15 +1207,8 @@ fn run_train_motif_nodes (
             find_motifs_run_config.window(),
             common_config,
             device,
-        )/*?;
+        )
 
-        debug!("train_on_motif: motif_id={motif_id} loss={loss}");
-
-        if loss < common_config.max_loss {
-            //TODO save to run_id <<<<<<<<<<<<<<<<<<<<<<
-            ws.read().save_motif_model(&channel, &0, motif_id, vs, params)?;
-
-        }*/
     }).filter(|v|v.is_ok()).collect()
 }
 
@@ -1266,9 +1278,12 @@ where
     )?;
 
     if let Some(mut opt_run_configs) = opt_run_configs_opt {
+        debug!("run_step: saving opt_run_configs.len={}", opt_run_configs.len());
+
         for mut opt_run_config in opt_run_configs {
-            // opt_run_config.value()
-            opt_run_config.save(store, ws)?;
+            debug!("run_step: saving opt_run_config={opt_run_config:?}");
+
+            let opt_run_config_id = opt_run_config.save(store, ws)?;
 
             // let run_config_id = store.lock().save_tree_run(
             //     input_run_ids.as_deref(),
@@ -1277,7 +1292,7 @@ where
             //     opt_run_config.to_properties_map()
             // )?;
             //
-            // run_config_ids.push(run_config_id);
+            run_config_ids.push(opt_run_config_id);
         }
     }
 
@@ -1628,7 +1643,6 @@ mod main_tests {
 
         let groups = slices_store.load_slices_into_groups(&store, None)?;
 
-
         Ok(run_id)
     }
 
@@ -1636,6 +1650,10 @@ mod main_tests {
     fn test_run_step() -> Result<(), ThoosaError> {
         // log::set_max_level(Warn);
         let max_y = 1f32;
+
+        let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (20, 50, 30, 10, 10);
+        // let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (10, 5, 3, 1, 3);
+        debug!("test_run_step: tensors_per_label={tensors_per_label}, cycles={cycles}, opt_max_evals={opt_max_evals}, opt_n_init={opt_n_init}, motif_batch_size={motif_batch_size}");
 
         fn _saw(n:i64) -> Vec<f32>{
             saw_with_steps(n as usize, 10, 5.)
@@ -1674,7 +1692,9 @@ mod main_tests {
         //0,1 label - sig_2 in channel 2
         let sig_0 = sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1);
         let sig_1 = sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1);
-        let tensors_per_label = 20;
+
+
+
         (0..tensors_per_label).for_each(|i|{
 
             label_0_t_rs(n, &sig_0, &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();//first 1_ for import_id
@@ -1687,9 +1707,10 @@ mod main_tests {
             // label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();//first 1_ for import_id
         });
 
+        /*
         let x = lin_t(3*n);
         plot_series(
-            (0..10).map(|i| {
+            (0..tensors_per_label).map(|i| {
                 let t = Tensor::load(&ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).expect(format!("can't open 1_t_0_{i}.pt").as_str());
 
                 (format!("Sig0"), plotters::prelude::BLUE, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
@@ -1698,7 +1719,7 @@ mod main_tests {
             "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join("0.png").to_path_buf(),
         )?;
         plot_series(
-            (0..10).map(|i| {
+            (0..tensors_per_label).map(|i| {
                 let t = Tensor::load(&ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).expect(format!("can't open 1_t_1_{i}.pt").as_str());
 
                 (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&t.i((0,..)))).collect::<Vec<(f32, f32)>>())
@@ -1706,7 +1727,7 @@ mod main_tests {
 
             }).collect::<Vec<_>>(),
             "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join("1.png").to_path_buf(),
-        )?;
+        )?;*/
 
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
@@ -1769,9 +1790,10 @@ mod main_tests {
         //TODO check if motifs match signals
 
 
+
         let train_motif_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids.clone()),
-            &TrainMotifsNodesParams::dummy(vec![], 30, 0.01, 10, 1e-5..1e-3, 3..4, 10, 3),
+            &TrainMotifsNodesParams::dummy(vec![], cycles, 0.01, motif_batch_size, 1e-5..1e-3, 3..4, opt_max_evals, opt_n_init),
             run_train_motif_nodes_on_motif_selection,
             &ws,
             &store,
@@ -1783,8 +1805,8 @@ mod main_tests {
 
 
         let train_label_nodes_run_ids = run_step(
-            Some(train_motif_nodes_run_ids),
-            &TrainLabelNodeParams::dummy(100, vec![], group_name.clone(), group_name.clone(), 10, 5, 30, 1e-5..1e-3, 3..4),
+            Some(vec![train_motif_nodes_run_ids.last().expect("train_motif_nodes_run_ids is empty").clone()]),
+            &TrainLabelNodeParams::dummy(100, vec![], group_name.clone(), group_name.clone(), motif_batch_size as i64, 5, 2*cycles, 1e-3..1e-2, 3..4, opt_max_evals, opt_n_init),
             run_train_label_nodes,
             &ws,
             &store,
@@ -1796,8 +1818,8 @@ mod main_tests {
         debug!("train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
         let train_final_nodes_run_ids = run_step(
-            Some(train_label_nodes_run_ids),
-            &TrainFinalNodeParams::dummy(100, 10, group_name.clone(), group_name.clone(), 10, 10),
+            Some(vec![train_label_nodes_run_ids.last().expect("train_label_nodes_run_ids is empty").clone()]),
+            &TrainFinalNodeParams::dummy(100, 10, group_name.clone(), group_name.clone(), 2*cycles, motif_batch_size as i64, 1e-5..1e-2, 0..3, opt_max_evals, opt_n_init),
             run_train_final_node,
             &ws,
             &store,
@@ -1825,7 +1847,7 @@ mod main_tests {
         run_infer(
             &ws,
             &store,
-            &InferParams::new(train_final_nodes_run_ids[0], input_dir.to_string_lossy().to_string(), test_dir.join("infer_output").as_path().to_string_lossy().to_string(), 1000),
+            &InferParams::new(*train_final_nodes_run_ids.last().expect("train_final_nodes_run_ids"), input_dir.to_string_lossy().to_string(), test_dir.join("infer_output").as_path().to_string_lossy().to_string(), 1000),
             devices[0],
             |path|{
                 Ok(Tensor::load(path)?)

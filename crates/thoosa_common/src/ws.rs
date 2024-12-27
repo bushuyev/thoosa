@@ -144,6 +144,8 @@ impl Workspace for FsWorkspace {
         &self.final_models_path
     }
     fn save_final_model(&self, run_id: usize, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
+        debug!("save_final_model: run_id={run_id}  params={params:?} final_models_path={:?}", self.final_models_path);
+
         fs::create_dir_all(&self.final_models_path)?;
 
         vs.save(&self.final_models_path.join(format!("{run_id}.safetensors")))?;

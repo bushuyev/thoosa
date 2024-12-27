@@ -80,8 +80,6 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long, default_value_t = 100)]
     pub chunk_size: u32,
 
-    #[arg(long, default_value_t = 0.01)]
-    pub dist_quantile: f32,
 
     #[arg(long, default_value_t = false)]
     pub keep_slice_matches: bool,
@@ -89,11 +87,17 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long)]
     pub max_slices_k: Option<f32>,
 
-    #[arg(long)]
-    pub mean_k: Option<f32>,
 
     #[command(subcommand)]
     pub input_filter: Option<InputFilter>,
+
+
+    #[arg(long, default_value_t = 0.01)]
+    pub dist_quantile: f32,//TODO Option
+
+    #[arg(long)]
+    pub mean_k: Option<f32>,
+
 
 }
 
@@ -245,6 +249,7 @@ impl FindMotifsParams {
     pub fn resources(&self) -> &ResourceType {
         &self.resources
     }
+
     pub fn max_dist_k(&self) -> f32 {
         self.dist_quantile
     }
@@ -546,17 +551,30 @@ where
         run_configs.iter_mut().zip(devices.into_iter().cycle())
             // .par_bridge() //TODO spread among devices
             .for_each(|(run_config_with_ctx, device)| {
+                let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
+                    run_config_with_ctx.0.step,
+                    run_config_with_ctx.0.window,
+                    &window_0_tensors.read(),
+                    window_0_0_clone.clone(),
+                    Cpu
+                ));
+                while let Some(mut chunk_0_split) = split_queue.next() {
+                    match callback(
+                        &chunk_0_split,
+                        run_config_with_ctx,
+                    ) {
+                        Ok(_) => {
+                            chunk_0_split.drop_tensor();
 
-                callback(
-                    &ChunkOfSlicedTensors::slice_tensors_chunk(
-                        run_config_with_ctx.0.step,
-                        run_config_with_ctx.0.window,
-                        &window_0_tensors.read(),
-                        window_0_0_clone.clone(),
-                        *device
-                    ),
-                    run_config_with_ctx,
-                ).expect("callback_arc failed");
+                        }
+                        Err(e) => {
+                            debug!("got e={e:?}, splitting");
+
+                            split_queue.split(chunk_0_split);
+                        }
+                    }
+
+                }
             });
 
 
@@ -1287,7 +1305,6 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 
                 let sums = mask.sum_dim_intlist(2, false, Kind::Int64);//channels x motif matches
                 trace!("select_motifs_for_label_2: label={label} sums=\n{sums}");
-
 
                 label_motif_matches_sums.get_mut(&label).expect(format!("no motif sums tensor for {label}").as_str()).add_assign(sums.into());
 

@@ -975,7 +975,6 @@ impl Store for SqlStore {
                 Some((_run_id, channel_id)) => [motif_id, channel_id],
                 None => [motif_id, 0],
             };
-            let resources_map:HashMap<ResourceId, Resource> = HashMap::new();
 
 
             let (slices, channel_set, run_id, resources_map) = stmt.query_map(params, |row| {
@@ -1111,7 +1110,7 @@ impl Store for SqlStore {
                 .into_iter()
                 .fold(
 
-                (vec!["INSERT INTO selected_motifs (run_configs_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
+                (vec!["INSERT INTO selected_motifs (run_id, motif_id, rate) VALUES "], vec![]), //TODO check if channel matches one in motif
                 |mut a: (Vec<&str>, Vec<Value>), (motif_id, rate)| {
                     a.0.push("(?, ?, ?)");
                     a.0.push(", ");
@@ -1196,12 +1195,11 @@ impl Store for SqlStore {
     fn list_selected_motifs(&mut self, motif_selection_id: usize, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
         let mut channels_motifs = (0..channels).into_iter().map(|_| Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
 
-
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
         {
-            let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.run_configs_id=?")?;
+            let mut stmt = t.prepare("SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id WHERE sm.run_id=?")?;
 
             stmt.query_map([motif_selection_id], |row| {
                 Ok((
@@ -1384,7 +1382,7 @@ impl SqlStore {
             t.execute( //todo label
                        "CREATE TABLE IF NOT EXISTS selected_motifs (
                 motif_id   REFERENCES motifs(id),
-                run_configs_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 rate    FLOAT NOT NULL
             )", ())?;
 
