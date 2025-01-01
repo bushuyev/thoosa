@@ -148,6 +148,8 @@ pub fn motifs_to_tensor(
 
 
         let mut motifs = motif_slices.into_iter().map(|(motif_id, slices)| {
+            let slices_len = slices.len();
+
             if slices.len() > 10_000 {//TODO config
                 Err(ThoosaError::new(format!("skipped motif {motif_id} with too many slices ({})", slices.len())))
             } else {
@@ -164,7 +166,7 @@ pub fn motifs_to_tensor(
                         Ok(slices_t.mean_dim(0, false, Float).copy())
                     },
                     Err(e) => {
-                        Err(ThoosaError::new(format!("can't load motif {motif_id} because of oom error, num slices={}", slices.len())))
+                        Err(ThoosaError::new(format!("can't load motif {motif_id} because of oom error, num slices={slices_len}")))
                     }
                 }
             }
