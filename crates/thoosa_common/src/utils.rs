@@ -668,25 +668,22 @@ pub fn train<F>(
 
     for idx in 1..cycles {
 
-        let (x_t_0, y_t) = data.train_batch();
+        let (x_t_0, expected_y) = data.train_batch();
         debug!("train: device={:?} x_t_0.size()={:?} ", device, x_t_0.size());
 
         let x_t = x_f(x_t_0);
 
-        debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), y_t.size());
+        debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
 
 
-        let pred_y = model.forward(&x_t);
-
+        let predicted_y = model.forward(&x_t);
+        trace!("train: x_t=\n{x_t}");
         drop(x_t);
         unsafe { at_autocast_clear_cache(); }
 
-        // debug!("train: device={:?} pred_y.size()={:?}", device, pred_y.size());
-        // debug!("train: device={:?}   y_t ={:?}", device, from::<Vec<f32>>(&y_t));
+        let loss = loss_fn(&predicted_y, &expected_y);
 
-        // let pred_y_mean = pred_y.view((10, 1)); //pred_y.mean_dim(1, false, tch::Kind::Float);
-
-        let loss = loss_fn(&pred_y, &y_t);
+        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y}");
 
         let t1 = Instant::now();
 

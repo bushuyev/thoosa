@@ -562,7 +562,6 @@ pub fn train_label_nodes (
     let label_node_params = LabelNodeParams::new(channels, max_nets, max_motif_batches as i64, comon_label_node_params.motif_batch_size as i64);
     debug!("train_on_motif_nodes: label_node_params={label_node_params:?}");
 
-
     let device = device.clone();
     let channels = ws.read().channels();
 
@@ -577,6 +576,7 @@ pub fn train_label_nodes (
     let loss = train(
         &device,
         batch,
+        // &flat_label_node(&label_node_params).build_tch_module(&vs_0.root())?,
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
             debug!("train_on_label: pred.size={:?}", pred.size());
@@ -636,7 +636,6 @@ pub fn run_opt_train_final (
         a
     });
     let input_slice_step = common_train_final_run_config.input_slice_step;
-    let motif_batch_size = common_train_final_run_config.motif_batch_size as i64;
     let device = device.clone();
 
 
@@ -752,10 +751,10 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
     }
 }
 
-pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainNodesValues, common_train_final_run_config: &CommonTrainFinalNodeRunConfig, batch: &mut ClassTensorsLoaderData, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
+pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainNodesValues, common_train_final_run_config: &CommonTrainFinalNodeRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
     let final_node_params= FinalNodeParams::new(labels_len as i64, labels_len as i64, run_config_values.num_layers);
 
-    let mut optimizer = nn::AdamW::default().amsgrad(true);
+    let mut optimizer = nn::Adam::default();
     if let Some(adam_w) = run_config_values.adam_w {
         debug!("train_final_nodes: setting adam_w={adam_w:?}");
         optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
@@ -984,8 +983,8 @@ pub struct TrainNodesValues {
 }
 
 impl TrainNodesValues {
-    pub fn new(lr: f64, num_layers: u32) -> Self {
-        Self { lr, num_layers, adam_w: None }
+    pub fn new(lr: f64, num_layers: u32, adam_w: Option<AdamW>) -> Self {
+        Self { lr, num_layers, adam_w }
     }
 }
 
@@ -1278,6 +1277,27 @@ impl LabelNodeParams {
     }
 }
 
+pub fn flat_label_node(params: &LabelNodeParams) -> Node {
+    debug!("motif_node: params={params:?}");
+    let num_features = params.channels * params.max_motif_nodes * params.max_motif_batches * params.motif_batch_size;
+    let mut builder = SeqBuilder::new(params.max_motif_batches * params.motif_batch_size);
+    builder
+        .closure(Box::new(move |t: &Tensor| {
+            let t_0 = t.flatten(1, 3);
+            debug!("label_node flatten t.size={:?} t_0.size={:?}", t.size(), t_0.size());
+
+            t_0
+        }), Some(num_features))
+        .linear_s(num_features)
+        .func(Tensor::relu)
+        .linear_s(num_features)
+        .func(Tensor::relu)
+        .linear_s(1)
+
+        .func(Tensor::sigmoid)
+        .end_seq()
+}
+
 pub fn label_node(params:&LabelNodeParams) -> Node {
     debug!("label_node: params={:?}", params);
     /*
@@ -1445,17 +1465,18 @@ pub fn final_node(params:&FinalNodeParams) -> Node {
 
     let mut builder = SeqBuilder::new(params.features);
     let mut net = builder
-        .linear_s(params.features)
+        .linear_s(2*params.features)
         .func(Tensor::relu);
 
     for i in 0..params.num_layers {
-        net = net.linear_s(params.features * 2)
+        net = net.linear_s(params.features)
              .func(Tensor::relu)
     }
 
     net
+        // .func(Tensor::relu)
         .linear_s(params.classes_num)
-        .func(|t|t.softmax(1, Float))
+        // .func(|t|t.softmax(1, Float))
         .end_seq()
 }
 
@@ -1520,6 +1541,7 @@ impl TrainMotifsNodesRunConfigResult {
 }
 
 impl SavableOptResult for TrainMotifsNodesRunConfigResult {
+
     fn value(&self) -> f32 {
         self.loss
     }
@@ -1747,7 +1769,7 @@ impl TensorsDataBatch {
         let tensor = Tensor::stack(
             x_y_vecs.into_iter().map(|e|e.0).collect::<Vec<_>>().as_slice(),
             0,
-        ).view((batch_size as i64, -1));
+        ).view((batch_size as i64, -1)).to_device(*device).set_requires_grad(true);
 
 
 
@@ -1963,13 +1985,12 @@ impl RunConfig for crate::train_nets::TrainFinalNodeRunConfig {
 pub struct CommonTrainFinalNodeRunConfig {
     pub cycles:usize,
     pub batch_size:usize,
-    pub motif_batch_size:usize,
     pub input_slice_step: usize
 }
 
 impl CommonTrainFinalNodeRunConfig {
-    pub fn new(cycles: usize, batch_size:usize, motif_batch_size:usize, input_slice_step: usize) -> Self {
-        Self { cycles, batch_size,motif_batch_size,input_slice_step }
+    pub fn new(cycles: usize, batch_size:usize, input_slice_step: usize) -> Self {
+        Self { cycles, batch_size,input_slice_step }
     }
 }
 
@@ -2017,7 +2038,6 @@ impl Params<TrainFinalNodeRunConfig, NetResources<Logits>, CommonTrainFinalNodeR
         CommonTrainFinalNodeRunConfig::new(
             self.cycles,
             self.batch_size,
-            self.motif_batch_size as usize,
             self.step
         )
     }
@@ -2086,11 +2106,12 @@ mod train_tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use log::debug;
-    use rand::thread_rng;
-    use tch::nn::{init, LinearConfig, Module, VarStore};
+    use log::{debug, set_max_level};
+    use log::LevelFilter::Trace;
+    use rand::{thread_rng, Rng};
+    use tch::nn::{init, AdamW, LinearConfig, Module, VarStore};
     use tch::Device::Cpu;
-    use tch::IndexOp;
+    use tch::{IndexOp, Kind};
     use tch::Kind::Float;
     use tch::{nn, Device, Tensor};
     use tch::kind::FLOAT_CPU;
@@ -2102,7 +2123,7 @@ mod train_tests {
     use crate::train_nets::{load_all_label_models_ws, load_motif_models_ws, CommonTrainLabelNodeRunConfig, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TensorsDataBatch, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig};
     use crate::utils::{reset_print_options, t_0_0, DataBatch};
     use crate::utils::from;
-    use crate::ws::{FsWorkspace, Workspace};
+    use crate::ws::{DummyWorkspace, FsWorkspace, Workspace};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, ThoosaError};
     use thoosa_store::SqlStore;
@@ -2297,15 +2318,24 @@ mod train_tests {
     }
 
 
+
     #[test]
     fn test_train_label() -> Result<(), ThoosaError> {
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        debug!("test_train_on_label: test_dir={test_dir:?}");
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000)?));
 
-        let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000)?));
+        const BATCH_SIZE:usize = 10;
+        const CHANNELS:usize = 2;
+        const MAX_MOTIF_NETS:usize = 5;
+        const MOTIF_BATCHES:usize = 3;
+        const MOTIF_BATCH_SIZE:usize = 10;
+        let channel_motif_nets = [3,2,1];//TODO
 
+        // let mut rnd = thread_rng();
 
+        const TRAIN_LABELS: [bool; BATCH_SIZE] = build_labels::<BATCH_SIZE>();
+        const VALID_LABELS: [bool; BATCH_SIZE] = build_labels::<BATCH_SIZE>();
+
+        const MAX_MOTIF_BATCHES:usize = clc_num_batches(1000, 100, 100, BATCH_SIZE);
 
         struct DummyLabelBatch {}
 
@@ -2314,20 +2344,6 @@ mod train_tests {
                 Self {}
             }
         }
-
-        const BATCH_SIZE:usize = 10;
-        const CHANNELS:usize = 3;
-        const MAX_MOTIF_NETS:usize = 7;
-        const MOTIF_BATCHES:usize = 5;
-        const MOTIF_BATCH_SIZE:usize = 20;
-        let channel_motif_nets = [3,2,1];
-
-        // let mut rnd = thread_rng();
-
-        const TRAIN_LABELS: [bool; BATCH_SIZE] = build_train_labels::<BATCH_SIZE>();
-        const VALID_LABELS: [bool; BATCH_SIZE] = build_train_labels::<BATCH_SIZE>();
-
-        const MAX_MOTIF_BATCHES:usize = clc_num_batches(1000, 100, 100, BATCH_SIZE);
 
         impl DataBatch for DummyLabelBatch {
 
@@ -2340,20 +2356,17 @@ mod train_tests {
 
             fn valid_batch(&mut self) -> (Tensor, Tensor) {
                 (
-                    dummy_labels_net_input(&TRAIN_LABELS, CHANNELS, MAX_MOTIF_NETS, MAX_MOTIF_BATCHES, MOTIF_BATCH_SIZE),
+                    dummy_labels_net_input(&TRAIN_LABELS,  CHANNELS, MAX_MOTIF_NETS, MAX_MOTIF_BATCHES, MOTIF_BATCH_SIZE),
                     Tensor::from_slice(VALID_LABELS.as_slice()).totype(Float)
                 )
             }
         }
 
-        let mut batch = DummyLabelBatch::new();
-
-
         let (loss, params) = super::train_label_nodes(
             &ws,
-            &TrainNodesValues::new(1e-5,3),
-            &CommonTrainLabelNodeRunConfig::new(100,  MOTIF_BATCH_SIZE, BATCH_SIZE, 100),
-            &mut batch,
+            &TrainNodesValues::new(1e-3, 3, Some(AdamW::default().amsgrad(true))),
+            &CommonTrainLabelNodeRunConfig::new(100,  MOTIF_BATCH_SIZE, BATCH_SIZE, 300),
+            &mut DummyLabelBatch::new(),
             &Cpu,
             CHANNELS as i64,
             MAX_MOTIF_BATCHES as usize,
@@ -2361,13 +2374,16 @@ mod train_tests {
             &VarStore::new(Cpu)
         )?;
 
-        debug!("loss={loss:?} params={params:?}");
+        debug!("test_train_label: loss={loss:?} params={params:?}");
+
+        assert!(loss < 0.5);
 
         Ok(())
     }
 
     fn dummy_labels_net_input(labels:&[bool], channels:usize, max_motif_nets:usize, motif_batches:usize, motif_batch_size:usize ) ->Tensor{
         //batch size x channels x max motif nets x motif batches x motif batch size
+        let mut labels_iter = labels.iter();
         Tensor::stack(
             labels.iter().map(|label|
                 Tensor::stack((0..channels).map(|mb|
@@ -2385,14 +2401,16 @@ mod train_tests {
     }
 
     fn motifs_1(n: usize) -> Tensor {
-        Tensor::rand(n as i64, FLOAT_CPU).multiply_scalar(0.1).f_add_scalar(0.8).unwrap()
+        // Tensor::rand(n as i64, FLOAT_CPU).multiply_scalar(0.1).f_add_scalar(0.8).unwrap()
+        Tensor::ones(n as i64, FLOAT_CPU)
     }
 
     fn motifs_0(n: usize) -> Tensor {
-        Tensor::rand(n as i64, FLOAT_CPU).multiply_scalar(0.1)
+        // Tensor::rand(n as i64, FLOAT_CPU).multiply_scalar(0.01)
+        Tensor::zeros(n as i64, FLOAT_CPU)
     }
 
-    const fn build_train_labels<const BATCH_SIZE:usize>() -> [bool; BATCH_SIZE] {
+    const fn build_labels<const BATCH_SIZE:usize>() -> [bool; BATCH_SIZE] {
         let mut arr = [false; BATCH_SIZE];
         let mut i = 0;
         while i < BATCH_SIZE {
@@ -2420,110 +2438,231 @@ mod train_tests {
 
     #[test]
     fn test_train_final() -> Result<(), ThoosaError> {
-        let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        debug!("test_train_on_label: test_dir={test_dir:?}");
-        let channels = 5;
-        let tensors_path = Some(test_dir.join("tensors"));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels, 1000)?));
+        set_max_level(Trace);
 
-        let motif_batch_size = 7;
-        let window = 100;
-        let slice_step = 100;
-        let max_motif_batches = clc_num_batches(1000, window, slice_step, 7) as i64;
-
-
-
-        save_test_models(&ws, 10, channels, max_motif_batches, motif_batch_size, 1, window as i64)?;
-        // save_test_models(&ws, 20, channels, max_motif_batches, motif_batch_size, 2)?;
-
-
-        // let channels_motifs_models = load_motif_models_ws(&ws,  motif_selection_id,  &Cpu).expect("load_motif_models");//called from cli
-        let label_models = load_all_label_models_ws(&ws,  &Cpu)?;//called from cli
-        debug!("label_models={label_models:?}");
-
-        let mut labels_channels_motifs_models : HashMap<String, Vec<Vec<(MotifNodeParams, SyncModule)>>> = HashMap::from([
-            (
-                "other".into(),
-                vec![load_test_channels_motifs_models(&ws, [(0,0)].into())]
-            ),
-            (
-                "lpd".into(),
-                vec![load_test_channels_motifs_models(&ws, [(0,0)].into())]
-            ),
-            (
-                "gpd".into(),
-                vec![load_test_channels_motifs_models(&ws, [(0,0)].into())]
-            ),
-            (
-                "lrda".into(),
-                vec![load_test_channels_motifs_models(&ws, [(0,0)].into())]
-            ),
-            (
-                "grda".into(),
-                vec![load_test_channels_motifs_models(&ws, [(0,0)].into())]
-            ),
-            (
-                "seizure".into(),
-                vec![
-                    load_test_channels_motifs_models(&ws, [(0,0), (0,1), (0,2), (0,3)].into()),
-                    load_test_channels_motifs_models(&ws, [(1,10)].into()),
-                    load_test_channels_motifs_models(&ws, [(2,20)].into())
-                ]
-            )
-        ]);
-
-        let labels_channels_motifs_models_rw = labels_channels_motifs_models.into_iter().fold(HashMap::new(), |mut a, v|{
-            a.insert(v.0, Arc::new(RwLock::new(v.1)));
-            a
-        });
-
-
-        fs::write(&ws.read().models_path().join("unexpected.file"), "lalala")?;
-
-        let loader = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
-            move |key: &Resource| {
-
-                SyncWrapper::new_tb(
-                    load_test_tensor(key, 1000)
-                )
-            }, 4, 100,
-        )));
         let final_node_params = FinalNodeParams::new(6, 6, 1);
-        let common_train_final_run_config = CommonTrainFinalNodeRunConfig::new(100, 7, 10, 10);
 
-        let mut batch = ClassTensorsLoaderData::new(
-            (0..13).map(|i|(Resource::new(i, 1, format!("{i}"), 0), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
+        struct DummyLabelBatch {}
 
-            (0..13).map(|i|(Resource::new(i, 1, format!("{i}"), 0), vec![0.1, 0.1, 0.1, 0.1, 0.3, 0.3])).collect(),
+        impl DummyLabelBatch {
+            pub fn new() -> Self {
+                Self {}
+            }
+        }
 
-            common_train_final_run_config.batch_size,
-            loader,
-            Cpu,
-            Some( Box::new(move |t:Box<Tensor>| {
-                apply_motif_and_label_nets(&t, &label_models, &labels_channels_motifs_models_rw, slice_step, &Cpu)//input slice step can be != slice_step
+        const BATCH_SIZE:usize = 10;
+        const LABELS_SIZE:usize = 6;
 
-            }))
-        );
 
-        let vs = VarStore::new(Cpu);
+        impl DataBatch for DummyLabelBatch {
+
+            fn train_batch(&mut self) -> (Tensor, Tensor) {
+                let train_batch = dummy_final_net_input::<LABELS_SIZE>(BATCH_SIZE);
+                debug!("train_batch=\n{} \n{}", train_batch.0, train_batch.1);
+                train_batch
+            }
+
+            fn valid_batch(&mut self) -> (Tensor, Tensor) {
+                let valid_batch= dummy_final_net_input::<LABELS_SIZE>(BATCH_SIZE);
+                debug!("valid_batch={} \n{}", valid_batch.0, valid_batch.1);
+                valid_batch
+            }
+        }
 
         let (loss, final_params) = super::train_final_node(
-            &ws,
+            &Arc::new(RwLock::new(DummyWorkspace::new(0, 100)?)),
             &TrainNodesValues ::new(
-                1.0e-5,
-                1u32
+                1.0e-2,
+                3u32, None
             ),
-            &common_train_final_run_config,
-            &mut batch,
+            &CommonTrainFinalNodeRunConfig::new(300, BATCH_SIZE, 10),
+            &mut DummyLabelBatch::new(),
             &Cpu,
-            6,
-            &vs
+            LABELS_SIZE,
+            &VarStore::new(Cpu)
         )?;
 
         debug!("test_train_final: loss={loss:?} final_params={final_params:?}");
         // fs::remove_dir_all(dir)?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_000() -> Result<(), ThoosaError>{
+        use tch::{
+            nn,
+            nn::{Module, OptimizerConfig},
+            Tensor, Kind, Device,
+        };
+
+        /// A helper function to compute cross entropy with "soft" targets:
+        ///     loss = - sum(target * log_softmax(logits), dim=-1).mean()
+        fn soft_cross_entropy(logits: &Tensor, targets: &Tensor) -> Tensor {
+            let log_probs = logits.log_softmax(-1, Kind::Float);
+            -(targets * log_probs)
+                .sum_dim_intlist(-1, /*keepdim=*/ false, Kind::Float)
+                .mean(Kind::Float)
+        }
+
+
+            tch::manual_seed(42);
+
+            // 1. Example input: 10 rows × 6 columns
+            //    Each row is dominated by one value ~0.99, rest ~0.001–0.005.
+            //    (Same as your Python example.)
+            let data = Tensor::from_slice(&[
+                9.9000e-1, 2.8287e-3, 2.8840e-3, 7.4658e-4, 2.9063e-3, 6.3441e-4,
+                3.3242e-3, 1.6995e-3, 3.1235e-3, 1.2234e-3, 6.2936e-4, 9.9000e-1,
+                1.2532e-3, 9.9000e-1, 1.4392e-3, 2.7553e-3, 2.6766e-3, 1.8757e-3,
+                2.6381e-3, 8.7975e-4, 9.9000e-1, 2.5317e-3, 9.3366e-4, 3.0167e-3,
+                2.1682e-3, 1.1247e-3, 9.9000e-1, 8.8556e-4, 3.1458e-3, 2.6758e-3,
+                2.3740e-3, 1.1288e-3, 1.2962e-3, 9.9000e-1, 1.9552e-3, 3.2457e-3,
+                1.3802e-3, 4.7383e-3, 1.9842e-4, 9.9000e-1, 4.3529e-4, 3.2478e-3,
+                2.1425e-3, 2.3009e-3, 2.0676e-3, 2.0291e-3, 9.9000e-1, 1.4599e-3,
+                1.5468e-3, 4.1338e-3, 1.0492e-3, 8.1367e-4, 9.9000e-1, 2.4565e-3,
+                3.0800e-3, 1.5705e-4, 9.0507e-4, 2.1693e-3, 3.6886e-3, 9.9000e-1,
+            ])
+                .reshape(&[10, 6])
+                .totype(Float)
+                .to_device(Device::Cpu);
+
+            // 2. Define the "soft" target distribution (one-hot).
+            //    For row 0 => class 0 (i.e. [1,0,0,0,0,0])
+            //    For row 1 => class 5 (i.e. [0,0,0,0,0,1])
+            //    For row 2 => class 1 => etc.
+            //    Note row4 and row5 in the original question were both argmax=2, row6=3, etc.
+            let label_dist = Tensor::from_slice(&[
+                // row 0
+                1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                // row 1
+                0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                // row 2
+                0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+                // row 3
+                0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                // row 4
+                0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                // row 5
+                0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                // row 6
+                0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                // row 7
+                0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                // row 8
+                0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                // row 9
+                0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ])
+                .reshape(&[10, 6])
+                .to_device(Device::Cpu);
+
+            // 3. Build a small feed-forward network: 6 -> 8 -> 6
+            let vs = nn::VarStore::new(Device::Cpu);
+            let root = &vs.root();
+
+            let mut seq = nn::seq()
+                .add(nn::linear(root, 6, 12, Default::default()))
+                .add_fn(|xs| xs.relu())
+                .add(nn::linear(root, 12, 6, Default::default()));
+
+            // 4. Create an optimizer
+            let mut opt = nn::Adam::default().build(&vs, 1e-2)?;
+
+            // 5. Training loop
+            for epoch in 1..=500 {
+                // Forward
+                let logits = seq.forward(&data);
+                // Soft cross-entropy with the given target distribution
+                let loss = soft_cross_entropy(&logits, &label_dist);
+
+                // Backprop
+                opt.backward_step(&loss);
+
+                // Print loss every 100 epochs
+                if epoch % 100 == 0 {
+                    println!("Epoch {:03}, loss = {:8.6}", epoch, loss.double_value(&[]));
+                }
+            }
+
+            // 6. Evaluate
+            let logits = seq.forward(&data);
+            let probs = logits.softmax(-1, Kind::Float);
+            let predicted_labels = probs.argmax(-1, false);
+
+            println!("\nFinal output probabilities:\n{:?}", probs);
+            println!("\nArgmax predicted labels: {:?}", predicted_labels);
+
+            // Optional: one-hot from the argmax
+            let one_hot = predicted_labels.one_hot(6).to_kind(Kind::Float);
+            println!("\nOne-hot from argmax:\n{:?}", one_hot);
+
+            Ok(())
+
+
+    }
+
+    fn dummy_final_net_input<const LABELS_SIZE:usize>(batch_size: usize) -> (Tensor, Tensor) {
+        let mut rng = thread_rng();
+        let data = (0..batch_size).map(|label| {
+            let label = rng.gen_range(0..LABELS_SIZE);
+
+            let x = random_tensor_with_dominant(LABELS_SIZE as i64, label as i64, 0.99, Cpu);
+            let mut y = [0.; LABELS_SIZE];
+            y[label as usize] = 1.0;
+            let y = Tensor::from_slice(y.as_slice());
+
+            (x, y)
+        }).collect::<Vec<_>>();
+
+        (
+            Tensor::stack(data.iter().map(|d|d.0.shallow_clone()).collect::<Vec<_>>().as_slice(), 0),
+            Tensor::stack(data.iter().map(|d|d.1.shallow_clone()).collect::<Vec<_>>().as_slice(), 0),
+        )
+    }
+
+    /// Generate an n-dimensional tensor whose elements sum to 1,
+    /// with index m taking `fraction` of the total (e.g., 0.8),
+    /// and the remaining (1 - fraction) spread among the other n-1 entries.
+    ///
+    /// # Arguments
+    /// * `n`         - Size of the tensor (number of elements).
+    /// * `m`         - The index that will hold the dominant fraction.
+    /// * `fraction`  - The fraction of the total sum to assign to the m-th element (e.g., 0.8).
+    /// * `device`    - tch::Device (e.g., Device::Cpu).
+    ///
+    /// # Panics
+    /// If `m >= n` or `fraction <= 0.0` or `fraction >= 1.0`.
+    pub fn random_tensor_with_dominant(
+        n: i64,
+        m: i64,
+        fraction: f64,
+        device: Device
+    ) -> Tensor {
+        assert!(m < n, "m must be < n");
+        assert!(fraction > 0.0 && fraction < 1.0, "fraction must be in (0,1)");
+
+        let remainder = 1.0 - fraction;
+
+        // Generate n-1 random values in [0,1]
+        let other_values = Tensor::rand(&[n - 1], (Kind::Float, device));
+        // Normalize them so they sum up to `remainder`
+        let sum_others = other_values.sum(Kind::Float);
+        let scaled_others = &other_values / &sum_others * remainder;
+
+        // Create an output tensor of zeros
+        let mut out = Tensor::zeros(&[n], (Kind::Float, device));
+
+        // Fill the m-th entry with the dominant fraction
+        out.get(m).fill_(fraction);
+
+        // Prepare indices for all entries except m
+        let indices: Vec<i64> = (0..n).filter(|&idx| idx != m).collect();
+
+        // Put the scaled_others values into out at positions other than m
+        out.index_put_(&[Some(Tensor::from_slice(indices.as_slice()))], &scaled_others, false);
+
+        out
     }
 
     //6 corrs 4 motif models

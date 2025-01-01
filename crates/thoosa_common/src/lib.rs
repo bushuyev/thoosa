@@ -4,7 +4,6 @@
 // #![feature(iter_array_chunks)]
 extern crate core;
 
-
 use tch::Device;
 
 pub mod utils;
