@@ -347,7 +347,7 @@ pub fn apply_channel_motifs(
 
         for ((_node_i, node), node_output_batches) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
-            let motifs_p_t = node.1.forward(&input_slices_batch).squeeze();//squeeze is to remove motif width dimension: batch x width -> batch x 1 (probability) -> batch of probabilities that slice matches the motif
+            let motifs_p_t = node.1.forward(&input_slices_batch.to_device(*device)).squeeze();//squeeze is to remove motif width dimension: batch x width -> batch x 1 (probability) -> batch of probabilities that slice matches the motif
             debug!("apply_channel_motifs: motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
             add_node_output_batch(input_slices_motif_batch_size, node_output_batches, motifs_p_t);
         };
@@ -362,7 +362,7 @@ pub fn apply_channel_motifs(
 
         for ((node_i, node), node_batch) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
 
-            let motifs_p_t = node.1.forward(&input_slices_batch).squeeze();
+            let motifs_p_t = node.1.forward(&input_slices_batch.to_device(*device)).squeeze();
 
             debug!("apply_channel_motifs: reminder, motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
 

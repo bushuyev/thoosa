@@ -708,7 +708,7 @@ pub fn train<F>(
 
 
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
-                info!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+                debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
                 listener.as_mut().map(|l|l.on_valid_cycle(idx, valid_loss_f32))
 

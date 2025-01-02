@@ -2819,6 +2819,7 @@ dependencies = [
  "ctor",
  "futures-util",
  "lazy_static",
+ "libloading",
  "log",
  "parking_lot 0.12.3",
  "parking_lot_mpsc",
