@@ -23,6 +23,7 @@ pub mod loader;
 pub mod ws;
 pub mod runs;
 pub mod bool_iter;
+pub mod input_probs;
 
 pub trait ResourceLoader:Send+Sync {
     type K;

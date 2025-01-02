@@ -201,8 +201,6 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
 
     fn resource_config(&self) -> NetResources<Labeled> {
         NetResources::new(
-            // self.train_resource_group.clone(),
-            // self.valid_resource_group.clone()
             Labeled::new(self.train_resource_group.clone()), Labeled::new(self.valid_resource_group.clone())
         )
     }
@@ -310,7 +308,7 @@ impl LoadingTensorsDataBatch {
         let tensor = Tensor::stack(
             x_y_vecs.into_iter().map(|e|e.0).collect::<Vec<_>>().as_slice(),
             0,
-        );
+        ).to_device(*device).set_requires_grad(true);
 
         debug!("LoadingTensorsDataBatch::choose_for_batch: tensor.size()={:?} tensor.device()={:?}", tensor.size(), tensor.device());
 
@@ -395,7 +393,7 @@ impl   ClassTensorsLoaderData {
             let transform_fn = transform_fn.as_ref().map(|v|Arc::clone(v));
             let resource_id = resource_id.clone();
             let labels_p = labels_p.clone();
-            let device = *device;
+
             executor.write().exec(move |loader, _keys_purge| {
                 async move {
 
@@ -409,7 +407,7 @@ impl   ClassTensorsLoaderData {
                     let mut guard = x_y_acc_in_exec.lock();
                     guard.0.push(t);
                     guard.1.push(
-                        Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(device))
+                        Box::new(Tensor::from_slice(labels_p.as_slice()))
                     );
 
                     drop(wg_exec);
@@ -442,11 +440,11 @@ impl   ClassTensorsLoaderData {
             Tensor::stack(
                 guard.0.drain(..).collect::<Vec<_>>().as_slice(),
                 0,
-            ),
+            ).to_device(*device).set_requires_grad(true),
             Tensor::stack(
                 guard.1.drain(..).collect::<Vec<_>>().as_slice(),
                 0,
-            ),
+            ).to_device(*device),
         )
     }
 }
@@ -619,6 +617,7 @@ fn view_for_label_model(t: Tensor, channels: i64, max_motif_nets: i64, motif_bat
 
 pub fn run_opt_train_final (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
     train_final_run_config: &TrainFinalNodeRunConfig,
     common_train_final_run_config: &CommonTrainFinalNodeRunConfig,
     train_resources:Vec<(Resource, Vec<f32>)>,
@@ -638,6 +637,7 @@ pub fn run_opt_train_final (
     let input_slice_step = common_train_final_run_config.input_slice_step;
     let device = device.clone();
 
+    let labels = store.lock().list_labels()?;
 
     let mut batch = ClassTensorsLoaderData::new(
         train_resources,
@@ -647,7 +647,7 @@ pub fn run_opt_train_final (
         Arc::clone(&loader),
         device.clone(),
         Some( Box::new(move |t:Box<Tensor>| {
-            apply_motif_and_label_nets(&t, &label_models, &labels_channels_motifs_models_rw, input_slice_step, &device)
+            apply_motif_and_label_nets(&t, &label_models, &labels_channels_motifs_models_rw, input_slice_step, &device, &labels)
 
         }))
     );
@@ -673,10 +673,12 @@ pub fn apply_motif_and_label_nets(
     label_models: &HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>,
     labels_channels_motifs_models_rw: &HashMap<String, Arc<RwLock<Vec<Vec<(MotifNodeParams, SyncModule)>>>>>,
     input_slice_step: usize,
-    device: &Device
+    device: &Device,
+    labels: &Vec<String>
 ) -> Box<Tensor> {
     let mut labels_tensors = vec![];
-    for (label, label_nodes) in label_models {
+    for label in labels {
+        let label_nodes = label_models.get(label).expect(format!("no label model for {label}").as_str());
         debug!("train_final: label={label} label_nodes.len={:?} label_nodes[0].1={:?} t.size()={:?}", label_nodes.len(), label_nodes[0].1, input_t.size());
 
         let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("no {label} label in labels_channels_motifs_models").as_str());
@@ -692,7 +694,7 @@ pub fn apply_motif_and_label_nets(
             debug!("train_final: label={label} label_node_run_id={label_node_run_id:?} t_net_view.size()={:?}", t_net_view.size());
             trace!("train_final: label={label} t_net_view=\n{t_net_view}");
 
-            let t_out = label_node.forward(&t_net_view);
+            let t_out = label_node.forward(&t_net_view.to_device(*device));
             debug!("train_final: label={label} label_node.forward t_out.size()={:?}", t_out.size());
 
             labels_tensors.push(t_out);
@@ -776,7 +778,7 @@ pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values:
         common_train_final_run_config.cycles,
         optimizer.build(&vs_0, run_config_values.lr)?,
         |t:Tensor|{
-            trace!("train_final: t=\n{t} ");
+            trace!("train_final: t=\n{t} t.squeeze()={}", t.squeeze());
             debug!("train_final: t.size={:?} ", t.size());
 
             t.squeeze()
@@ -1606,7 +1608,6 @@ pub fn run_opt_train_motif(
         device
     );
 
-
     opt_train(
         |vs:&VarStore, run_config_values:&TrainNodesValues, listener: &mut PlotVecf32|{
             run_train_motif(motif_id, motif_width, common_config, &device, &mut batch, vs, run_config_values, listener)
@@ -1667,8 +1668,10 @@ where
                 opt_config.max_evals as usize, //common_config.opt_max_evals as usize,
                 opt_config.n_init as usize, //common_config.opt_n_init as usize,
             );
+
             let best_config = opt.optimize();
-            info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
+            trace!("opt_train: done opt, descr={descr} min_var_store={min_var_store:?}");
+            info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss}");
 
             min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
         }
@@ -2438,7 +2441,8 @@ mod train_tests {
 
     #[test]
     fn test_train_final() -> Result<(), ThoosaError> {
-        set_max_level(Trace);
+
+        // set_max_level(Trace);
 
         let final_node_params = FinalNodeParams::new(6, 6, 1);
 
@@ -2587,15 +2591,16 @@ mod train_tests {
 
             // 6. Evaluate
             let logits = seq.forward(&data);
+            println!("logits=\n{logits}");
             let probs = logits.softmax(-1, Kind::Float);
             let predicted_labels = probs.argmax(-1, false);
 
             println!("\nFinal output probabilities:\n{:?}", probs);
-            println!("\nArgmax predicted labels: {:?}", predicted_labels);
+            println!("\nArgmax predicted labels: \n{}", predicted_labels);
 
             // Optional: one-hot from the argmax
             let one_hot = predicted_labels.one_hot(6).to_kind(Kind::Float);
-            println!("\nOne-hot from argmax:\n{:?}", one_hot);
+            println!("\nOne-hot from argmax:\n{}", one_hot);
 
             Ok(())
 
