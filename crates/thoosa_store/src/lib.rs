@@ -16,7 +16,7 @@ use std::sync::{Arc};
 use bytemuck::{Pod, Zeroable};
 use parking_lot::{Mutex, RwLock};
 
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 use rusqlite::{Connection, Error, params, Transaction};
@@ -1691,7 +1691,7 @@ pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: Has
                 if v.1.len() < max_slices_counts as usize {
                     a.insert(v.0, v.1);
                 } else {
-                    debug!("load_slices_into_groups: skipping group with {} slices", v.1.len());
+                    warn!("load_slices_into_groups: skipping group with {} slices", v.1.len());
                 }
                 a
             })

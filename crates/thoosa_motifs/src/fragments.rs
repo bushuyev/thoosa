@@ -335,7 +335,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
                              let slice_ok = t.size()[1] >= (*slice_idx) as i64 + widow;
 
                              if !slice_ok {
-                                 warn!("slice doesn't fit into tensor: tensor_idx_id={tensor_idx_id}, t.size()={:?}, *slice_idx={:?}, widow={:?}", t.size(), slice_idx, widow)
+                                 warn!("slice doesn't fit into tensor: tensor_idx_id={tensor_idx_id}, t.size()={:?}, *slice_idx={slice_idx:?}, widow={widow:?}", t.size())
                              }
 
                              slice_ok

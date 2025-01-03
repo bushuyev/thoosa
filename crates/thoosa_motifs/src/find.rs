@@ -1338,11 +1338,11 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
             for run_config in &select_motif_run_configs {
 
                 match run_config.motif_selector {
-                    //TODO
+                    //TODO other selectors
                     MotifSelector::ByLabelVariance => {
 
                         let (good_motifs, motifs_rates) = select_motifs_by_label_variance(&labels_channels_motifs_counts, &motifs_tensors.channels_motifs_mask);
-                        info!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+                        debug!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
 
                         let good_motif_ids_rates = from::<Vec<Vec<i64>>>(&motifs_tensors.channels_motifs_ids).into_iter().flat_map(|v| v.into_iter()).zip(
                             from::<Vec<Vec<bool>>>(&good_motifs)
@@ -1356,8 +1356,6 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                         a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
                     }
                 }
-
-
             }
         } else {
             warn!("no label motif matches for cfg={find_motif_run_cfg:?}");

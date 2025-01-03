@@ -24,7 +24,7 @@ export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --re
 
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/tmp/ws_test/  select-motifs --find-motifs-run-ids=12 --resources-group="pure group 1000"
 
-export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/tmp/ws_test/  train-on-motifs --motif_selection_run_id=89 --lr=1e-5..1e-3 --num-layers=1-10 --opt-max=evals=100 --opt-n=init=10
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/tmp/ws_test/  run-all --train-resource-group="group:pure group 100" --valid-resource-group="group 6 labels/all" --step=100  --input-slice-step=100 --window=1000 --find-motifs-chunk-size=2 --lr=0.00001..0.001 --num-layers=1..10 --opt-max-evals=100 --opt-n-init=10
 
 
 

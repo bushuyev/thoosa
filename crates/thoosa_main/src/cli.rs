@@ -3,7 +3,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use tch::{Device, Kind, Tensor};
-use log::{debug, error, info, trace, warn, LevelFilter};
+use log::{debug, error, info, trace, warn, Level, LevelFilter};
 use std::cmp::max;
 use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,7 @@ use futures_util::{AsyncReadExt, StreamExt};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use tch::Device::{Cpu, Cuda};
 use lazy_static::lazy_static;
+use log::Level::Debug;
 use polars::export::arrow::pushable::Pushable;
 use tch::Kind::Float;
 use torch_sys::at_grad_set_enabled;
@@ -86,22 +87,16 @@ pub struct RunAllParams {
     #[arg(long)]
     pub import_source_path: Option<String>,
 
-    #[arg(long)]
-    pub import_resource_pattern: Option<String>,
-
     #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "1000")]
     pub step: RangeOrValue<u32>,
 
-    #[arg(long,  default_value_t = 1000)]
+    #[arg(long,  default_value_t = 100)]
     pub input_slice_step: usize, //slicing step for label & final training TODO take from find_motifs run?
 
     #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "1000")]
     pub window: RangeOrValue<u32>,
 
-    #[arg(long, default_value = "/tmp")]
-    models_dir: String,
-
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 2)]
     find_motifs_chunk_size: usize,
 
     #[command(subcommand)]
@@ -113,13 +108,11 @@ pub struct RunAllParams {
     #[arg(long, default_value_t = 0.3)]
     select_motifs_min_ratio: f32,
 
-
     #[arg(long,  default_value_t = 10)]
     batch_size: i64, //for motif slices when training motif nets and input tensors when training labels
 
     #[arg(long,  default_value_t = 100)]
     motif_batch_size: i64, //for motif
-
 
     #[arg(long, default_value_t = 0.2)]
     pub max_loss: f32,
@@ -132,7 +125,6 @@ pub struct RunAllParams {
 
     #[arg(long, value_parser=parse_range_or_value::<u32>)]
     pub num_layers: RangeOrValue<u32>,
-
 
     #[arg(long, default_value_t = 10)]
     pub opt_max_evals: u32,
@@ -153,11 +145,9 @@ impl RunAllParams {
             train_resource_group: train_resource_group.to_string(),
             valid_resource_group: valid_resource_group.to_string(),
             import_source_path: None,
-            import_resource_pattern:None,
             step: 1000.into(),
             input_slice_step: 100,
             window: 1000.into(),
-            models_dir: "".to_string(),
             find_motifs_chunk_size: 1000,
             find_motifs_input_filter: None,
             find_motifs_max_dist_k: 0.3,
@@ -175,9 +165,6 @@ impl RunAllParams {
     }
     pub fn valid_resource_group(&self) -> &str {
         &self.valid_resource_group
-    }
-    pub fn models_dir(&self) -> &str {
-        &self.models_dir
     }
 
     pub fn to_net_config_space(&self) -> Option<ConfigurationSpace> {
@@ -213,7 +200,13 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
     }
 
     fn common_config(&self) -> CommonFindMotifsConfig {
-        CommonFindMotifsConfig::new(Some(100), 100, true, None, Some(0.1))//TODO
+        CommonFindMotifsConfig::new(
+            None,
+            self.find_motifs_chunk_size as u32,
+            false,
+            Some(0.5),//TODO config
+            Some(0.01)//TODO config
+        )
     }
 }
 
@@ -278,9 +271,9 @@ impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> f
 
     fn common_config(&self) -> CommonTrainMotifsNodesRunConfig {
         CommonTrainMotifsNodesRunConfig {
-            batch_size: 0,
+            batch_size: self.motif_batch_size as usize,
             cycles: self.cycles,
-            max_loss: 0.0,
+            max_loss: 0.1,
         }
     }
 }
@@ -650,6 +643,9 @@ pub fn run_cli<F,R>(
 
         Some(TrainOnLabel(train_on_label_params)) => {
             debug!("TrainOnLabel: train_on_label_params={:?}", train_on_label_params);
+            unsafe {
+                at_grad_set_enabled(1);
+            }
 
             let run_ids = run_step(
                 Some(train_on_label_params.train_motif_nodes_run_ids.clone()),
@@ -668,6 +664,9 @@ pub fn run_cli<F,R>(
         Some(TrainFinal(train_final_params)) => {
 
             debug!("TrainFinal: train_final_params={:?}", train_final_params);
+            unsafe {
+                at_grad_set_enabled(1);
+            }
 
             let run_ids = run_step(
                 Some(train_final_params.train_labels_run_ids.clone()),
@@ -686,14 +685,14 @@ pub fn run_cli<F,R>(
         Some(RunAll(run_all_params)) => {
             debug!("RunAll: run_all_params={:?}", run_all_params);
 
-            if let Some(import_resource_pattern) =  run_all_params.import_resource_pattern.as_ref() {
+            if let Some(source_path) =  run_all_params.import_source_path.as_ref() {
                 debug!("RunAll: init_resources");
                 import_resources(
                     &ws,
                     &store,
                     labels,
-                    || labeled_resources(import_resource_pattern),
-                    |key:String| resource_to_tensor(&import_resource_pattern, key.as_str()),
+                    || labeled_resources(source_path),
+                    |key:String| resource_to_tensor(&source_path, key.as_str()),
                     true
                 )?;
             }
@@ -726,7 +725,9 @@ pub fn run_cli<F,R>(
             )?;
 
             info!("select_motifs done: motif_selection_run_ids={:?}", motif_selection_run_ids);
-
+            unsafe {
+                at_grad_set_enabled(1);
+            }
             let train_motif_nodes_run_ids = run_step(
                 Some(motif_selection_run_ids.clone()),
                 run_all_params,
@@ -1037,11 +1038,13 @@ pub fn run_train_label_nodes(
 
                 let run_configs_cl = Arc::clone(&run_configs_cl);
 
-                select_motifs_for_label_run_ids__channels_motifs_models.iter().flat_map(move |(train_motif_nodes_run_id, channels_motifs_models)| {
+                select_motifs_for_label_run_ids__channels_motifs_models.iter().flat_map(move |(select_motifs_for_label_run_id, channels_motifs_models)| {
 
                     let motif_width = channels_motifs_models.read().iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
-                    debug!("run_train_label_nodes: label={label} channels={channels} channels_motifs_models.len={}", channels_motifs_models.read().len());
-                    trace!("run_train_label_nodes: label={label} train_motif_nodes_run_id={train_motif_nodes_run_id} channels_motifs_models={channels_motifs_models:?}");
+                    if log::log_enabled!(Level::Debug){
+                        debug!("run_train_label_nodes: label={label} channels={channels} channels_motifs_models.len={:?}", channels_motifs_models.read().iter().map(|m|m.len()).collect::<Vec<_>>());
+                    }
+                    trace!("run_train_label_nodes: label={label} select_motifs_for_label_run_id={select_motifs_for_label_run_id} channels_motifs_models={channels_motifs_models:?}");
 
                     let channels_motifs_models_arc = Arc::clone(&channels_motifs_models);
 
@@ -2016,17 +2019,11 @@ mod main_tests {
             info!("file={file} probs={probs:?}")
         }
 
-        compare_input_probs(&expected, &inferred);
+        let (mse, _) = compare_input_probs(&expected, &inferred);
+
+        assert!(mse < 0.1);
 
         Ok(())
-    }
-
-
-    #[test]
-    fn test_cuda(){
-        let cuda = Device::cuda_if_available();
-
-        println!("cuda={cuda:?}");
     }
 
     #[test]
