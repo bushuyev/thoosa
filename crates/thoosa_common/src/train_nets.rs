@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tch::nn::{AdamW, ConvConfig, Module, OptimizerConfig, VarStore};
 use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Kind, Reduction, Tensor};
-
+use tch::Device::Cpu;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::apply_channel_motifs;
@@ -840,7 +840,7 @@ pub fn load_motif_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, 
 
     channel_motif_models_paths.into_iter().map(|(model, config)|{
 
-        let mut vs = nn::VarStore::new(device.clone());
+        let mut vs = VarStore::new(device.clone());
         let motif_node_params = MotifNodeParams::from_file(&config)?;
 
         debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
@@ -1755,6 +1755,7 @@ impl TensorsDataBatch {
         x_y_vecs.shuffle(&mut rng);
 
         debug!("TensorsDataBatch::choose_for_batch: x_y_vecs.1.len()={} batch_size={batch_size}", x_y_vecs.len());
+        assert!(x_y_vecs.len() > 0);
 
         //TODO throw if not enough tensors for batch?
         (x_y_vecs.len()..batch_size).for_each(|i|{

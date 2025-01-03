@@ -68,7 +68,7 @@ fn argmax_accuracy(inferred: &Tensor, expected: &Tensor) -> f64 {
 ///     - Mean Squared Error (MSE)
 ///     - Soft Cross-Entropy
 ///     - Argmax accuracy
-pub fn compare_input_probs(expected: &InputProbs, inferred: &InputProbs) {
+pub fn compare_input_probs(expected: &InputProbs, inferred: &InputProbs) -> (f64, f64) {
     // 1) Check labels are identical (in the same order).
     assert!(
         expected.labels == inferred.labels,
@@ -82,8 +82,7 @@ pub fn compare_input_probs(expected: &InputProbs, inferred: &InputProbs) {
     keys.sort(); // Ensure a deterministic order, if desired
     let n = keys.len();
     if n == 0 {
-        debug!("No keys to compare!");
-        return;
+        panic!("No keys to compare!");
     }
 
     // 3) Build data vectors for each matching key in order.
@@ -107,18 +106,20 @@ pub fn compare_input_probs(expected: &InputProbs, inferred: &InputProbs) {
 
     // 5) Compute metrics
     let mse_val = mse_loss(&t_inferred, &t_expected);
-    let mse_val_f = mse_val.double_value(&[]);
+    let mse = mse_val.double_value(&[]);
 
     let ce_val = soft_cross_entropy(&t_inferred, &t_expected);
-    let ce_val_f = ce_val.double_value(&[]);
+    let soft_ce = ce_val.double_value(&[]);
 
     let acc_val_f = argmax_accuracy(&t_inferred, &t_expected);
 
     // 6) Print metrics
     info!("Number of compared inputs = {}", n);
-    info!("MSE Loss         = {:.6}", mse_val_f);
-    info!("Soft CrossEntropy= {:.6}", ce_val_f);
+    info!("MSE Loss         = {:.6}", mse);
+    info!("Soft CrossEntropy= {:.6}", soft_ce);
     info!("Argmax Accuracy  = {:.2}%", acc_val_f * 100.0);
+
+    (mse, soft_ce)
 }
 
 #[cfg(test)]
