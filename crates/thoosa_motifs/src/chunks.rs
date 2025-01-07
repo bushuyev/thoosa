@@ -5,8 +5,10 @@ use std::marker::PhantomData;
 use log::{debug, trace, warn};
 use std::mem;
 use std::ops::Deref;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
 use thoosa_common::loader::SyncWrapper;
+use thoosa_common::utils::{SplitQueue, Splittable};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::TensorIdSliceIdx;
 
@@ -22,7 +24,6 @@ pub struct ChunkOfSlicedTensors where {
 pub struct ChunkOfSlicedTensorsIter {
     iter:Box<dyn Iterator<Item=TensorIdSliceIdx> + Send>
 }
-
 
 impl  ChunkOfSlicedTensors {
     pub fn new(keys:  Vec <ResourceId>, sizes: Vec<i64>, step:u32, t: Tensor) -> Self {
@@ -58,7 +59,59 @@ impl  ChunkOfSlicedTensors {
         self.split_at.is_some()
     }
 
-    pub fn split(&self) -> [Self;2] {
+
+    //TODO Option instead  of [0.0]
+    pub fn drop_tensor(&mut self) {
+        mem::swap(&mut self.t, &mut SyncWrapper::new_t(Tensor::from_slice(&[0.0])));
+    }
+
+    /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
+    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors {
+
+        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: step={step} window={window} tensors_chunk.len={}", tensors_chunk.len());
+
+        let mut slices = Vec::with_capacity(tensors_chunk.len());
+
+        for tensor in tensors_chunk {
+            let input_length = tensor.size()[1];
+
+            if input_length >= window as i64 {
+
+                let unfolded = tensor.unfold(1, window as i64, step as i64);
+                // channels x num_slices x window, transpose  to num_slices x channels x window
+                let unfolded = unfolded.transpose(0, 1);
+
+                debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
+                slices.push(unfolded);
+            } else {
+                warn!("skipping tensor")
+            }
+        }
+
+        let tensor= if slices.is_empty() {
+                                    //channels
+            Tensor::zeros(&[0, tensors_chunk[0].size()[0], window as i64], (Kind::Float, device))
+        } else {
+            //slices x channels x window -> channels x slices x window
+            Tensor::cat(&slices, 0).transpose(0, 1)
+        };
+        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
+
+        ChunkOfSlicedTensors::new(
+            keys,
+            slices.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
+            step,
+            tensor,
+        )
+    }
+
+    pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue<ChunkOfSlicedTensors>{
+        SplitQueue::new(chunk)
+    }
+}
+
+impl Splittable for ChunkOfSlicedTensors {
+    fn split(&self) -> [Self;2] {
         //only one tensor in the chunk, splitting tensor
         if self.resource_ids.len() == 1 {
             assert_eq!(self.sizes.len(), 1);
@@ -111,82 +164,8 @@ impl  ChunkOfSlicedTensors {
         }
     }
 
-    //TODO Option instead  of [0.0]
-    pub fn drop_tensor(&mut self) {
-        mem::swap(&mut self.t, &mut SyncWrapper::new_t(Tensor::from_slice(&[0.0])));
-    }
-
-    /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors {
-
-        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: step={step} window={window} tensors_chunk.len={}", tensors_chunk.len());
-
-        let mut slices = Vec::with_capacity(tensors_chunk.len());
-
-        for tensor in tensors_chunk {
-            let input_length = tensor.size()[1];
-
-            if input_length >= window as i64 {
-
-                let unfolded = tensor.unfold(1, window as i64, step as i64);
-                // channels x num_slices x window, transpose  to num_slices x channels x window
-                let unfolded = unfolded.transpose(0, 1);
-
-                debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
-                slices.push(unfolded);
-            } else {
-                warn!("skipping tensor")
-            }
-        }
-
-        let tensor= if slices.is_empty() {
-                                    //channels
-            Tensor::zeros(&[0, tensors_chunk[0].size()[0], window as i64], (Kind::Float, device))
-        } else {
-            //slices x channels x window -> channels x slices x window
-            Tensor::cat(&slices, 0).transpose(0, 1)
-        };
-        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
-
-        ChunkOfSlicedTensors::new(
-            keys,
-            slices.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
-            step,
-            tensor,
-        )
-    }
-
-    pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue{
-        let queue = VecDeque::from([chunk]);
-
-        SplitQueue {
-            queue
-        }
-    }
-
 }
 
-#[derive(Debug)]
-pub struct SplitQueue {
-    queue:VecDeque<ChunkOfSlicedTensors>
-}
-
-impl  SplitQueue {
-    pub fn next(&mut self) -> Option<ChunkOfSlicedTensors> {
-        self.queue.pop_front()
-    }
-
-    pub fn split(&mut self, chunk:ChunkOfSlicedTensors)  {
-        debug!("SplitQueue::split: chunk={chunk:?}");
-        let [chunk_0, chunk_1] = chunk.split();
-        debug!("SplitQueue::split: chunk_0={chunk_0:?}");
-        debug!("SplitQueue::split: chunk_1={chunk_1:?}");
-        debug!("-----------------------");
-        self.queue.push_front(chunk_1);
-        self.queue.push_front(chunk_0);
-
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -196,11 +175,11 @@ mod tests {
     use tch::Kind::Float;
     use tch::Tensor;
     use thoosa_common::loader::SyncWrapper;
+    use thoosa_common::utils::Splitter;
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::resource::ResourceId;
     use thoosa_shared::test_utils::init_test_logging;
     use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
-
 
     #[ctor::ctor]
     fn init() {

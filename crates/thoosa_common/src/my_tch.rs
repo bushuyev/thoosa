@@ -6,6 +6,7 @@ use parking_lot::{Mutex, RwLock};
 
 use log::{debug, error, warn};
 use tch::{Device, IndexOp, Tensor};
+use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::nn::{Init, LinearConfig, Module, Path};
 use tch::nn::ConvConfig;
@@ -309,7 +310,7 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
 pub fn apply_channel_motifs(
     input_slice_step: usize,
     input_slices_motif_batch_size: i64,
-    motif_nodes: &[(MotifNodeParams, SyncModule)],
+    motif_nodes: &mut [(MotifNodeParams, SyncModule)],
     channel: Tensor,
     max_motif_nodes: i64,
     max_motif_batches: usize,
@@ -319,6 +320,11 @@ pub fn apply_channel_motifs(
     if motif_nodes.is_empty() {
         return Tensor::zeros([max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size], (Float, *device));
     }
+
+    for motif_node in motif_nodes.iter_mut() {
+        motif_node.1.set_device(device.clone());
+    }
+
 
     let motif_width = motif_nodes[0].0.num_features();//TODO different window lengths in same selection?
 
@@ -344,10 +350,9 @@ pub fn apply_channel_motifs(
         let input_slices_batch = Tensor::stack(slice_0_idx.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);//TODO unfold?
         debug!("apply_channel_motifs: input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
-
         for ((_node_i, node), node_output_batches) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
+            let motifs_p_t = node.1.forward(&input_slices_batch.to_device(*device)).view(input_slices_batch.size()[0]);//squeeze is to remove motif width dimension: batch x width -> batch x 1 (probability) -> batch of probabilities that slice matches the motif
 
-            let motifs_p_t = node.1.forward(&input_slices_batch.to_device(*device)).squeeze();//squeeze is to remove motif width dimension: batch x width -> batch x 1 (probability) -> batch of probabilities that slice matches the motif
             debug!("apply_channel_motifs: motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
             add_node_output_batch(input_slices_motif_batch_size, node_output_batches, motifs_p_t);
         };
@@ -359,10 +364,11 @@ pub fn apply_channel_motifs(
         let input_slices_batch = Tensor::stack(folds.1.into_iter().map(|i| channel.i(i as i64..i as i64 + motif_width)).collect::<Vec<Tensor>>().as_slice(), 0);
         debug!("apply_channel_motifs: reminder, input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
-
         for ((node_i, node), node_batch) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
+            let tensor = node.1.forward(&input_slices_batch.to_device(*device));
+            debug!("apply_channel_motifs: reminder, tensor.size={:?} input_slices_motif_batch_size={input_slices_motif_batch_size}", tensor.size());
 
-            let motifs_p_t = node.1.forward(&input_slices_batch.to_device(*device)).squeeze();
+            let motifs_p_t = tensor.view(input_slices_batch.size()[0]);
 
             debug!("apply_channel_motifs: reminder, motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
 
@@ -393,6 +399,10 @@ pub fn apply_channel_motifs(
 
     //pad_motifs_to- to have same num motifs in all channels
     let nodes_t = pad_to(&nodes_t, &[max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size]).unwrap();
+
+    for motif_node in motif_nodes {
+        motif_node.1.set_device(Cpu);
+    }
 
     debug!("apply_channel_motifs: 2. nodes_t={:?}", nodes_t.size());
     nodes_t
@@ -572,177 +582,6 @@ mod tch_tests {
             .end_seq().build_tch_module(&vs.root())
     }
 
-
-    #[test]
-    pub fn test_full() -> Result<(), ThoosaError>{
-        let motif_width =  1000;
-        let input_n =  10000;
-
-        // let motif_0_slice = comp_sin_v(motif_width);
-        let motif_0_slice = sin_v(motif_width, 10.);
-        let motif_0_v = pulse_in_rand(
-            input_n,
-            &[(((input_n-motif_width)/2) as usize, motif_0_slice.clone()), ], 0.05, 1., 0.1
-        );
-
-        // let motif_1_slice = comp_sin_k_v(motif_width, vec![30., 20., 10., 5., 3.]);
-        let motif_1_slice = sin_v(motif_width, 20.);
-        let motif_1_v = pulse_in_rand(
-            input_n,
-            &[(((input_n-motif_width)/2) as usize, motif_1_slice.clone()), ], 0.05, 1., 0.1
-        );
-
-        let rnd_v_slice = comp_sin_k_v(motif_width, vec![6., 3., 2.], 0.5);
-        let rnd_v = pulse_in_rand(
-            input_n,
-            &[(((input_n-motif_width)/2) as usize, rnd_v_slice.clone()), ], 0.05, 1., 0.1
-        );
-
-        let x = lin_t(input_n);
-        plot_series(
-            vec![
-                (format!("Motif 0"), RED, vec_f32_from(&x).into_iter().zip(motif_0_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
-                (format!("Motif 1"), GREEN, vec_f32_from(&x).into_iter().zip(motif_1_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
-                (format!("Rand"), BLACK,  vec_f32_from(&x).into_iter().zip(rnd_v.clone().into_iter()).collect::<Vec<(f32, f32)>>()),
-
-            ], "Motifs", (input_n as u32, 480), &format!("/tmp/plots/0_{:?}.png", Utc::now().to_rfc3339()).as_str()
-        )?;
-        let motif_0_t = Tensor::from_slice(motif_0_slice.as_slice());
-        let motif_1_t = Tensor::from_slice(motif_1_slice.as_slice());
-        let rnd_t = Tensor::from_slice(rnd_v_slice.as_slice());
-
-
-        debug!("rnd_t.size()={:?}, motif_0_t.size()={:?}, motif_1_t.size()={:?}", rnd_t.size(), motif_0_t.size(), motif_1_t.size());
-
-        let vs_0 = nn::VarStore::new(Device::Cpu);
-        let net_0 = test_net(&vs_0, motif_width)?;
-
-        train(
-            &Device::Cpu,
-            &mut crate::simp::DummyDs::new(
-                rnd_t.shallow_clone(),
-                motif_0_t.shallow_clone(),
-            ) as &mut dyn DataBatch,
-            &net_0,
-            |pred: &Tensor, target: &Tensor| {
-                // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-
-                let pred_y = pred.i((.., 0, 0));
-                debug!("pred_y.size() ={:?} ", pred_y.size());
-                pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
-            },
-            10,
-            nn::AdamW::default().build(&vs_0, 1.0e-4)?,
-            |t|{
-                debug!("net_0: x ={:?} ", x.size());
-                t
-            },
-            None
-        )?;
-
-        let vs_1 = nn::VarStore::new(Cpu);
-        let net_1 = test_net(&vs_1, motif_width)?;
-        train(
-            &Cpu,
-            &mut crate::simp::DummyDs::new(
-                rnd_t.shallow_clone(),
-                motif_1_t.shallow_clone(),
-            ) as &mut dyn DataBatch,
-            &net_1,
-            |pred: &Tensor, target: &Tensor| {
-                // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
-
-                let pred_y = pred.i((.., 0, 0));
-                debug!("pred_y.size() ={:?} ", pred_y.size());
-                pred_y.binary_cross_entropy::<Tensor>(&target.totype(Kind::Float), None, Reduction::Mean)
-            },
-            10,
-            nn::AdamW::default().build(&vs_1, 1.0e-4)?,
-            |t|{
-                debug!("net_1: x ={:?} ", x.size());
-                t
-            },
-            None
-        )?;
-
-        let batch_rnd = Tensor::stack((0..10).map(|_| rnd_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
-        let batch_0 = Tensor::stack((0..10).map(|_| motif_0_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
-        let batch_1 = Tensor::stack((0..10).map(|_| motif_1_t.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, 1, motif_width));
-
-        /*
-        debug!("net_0 rnd_t={:?}, motif_0={:?}",
-             from::<Vec<f32>>(&net_0.forward(&batch_rnd).view(-1)),
-             from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1))
-        );
-
-        debug!("net_1 rnd_t={:?}, motif_1={:?}",
-             from::<Vec<f32>>(&net_1.forward(&batch_rnd).view(-1)),
-             from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1))
-        );
-
-        debug!("net_1x0 0-1={:?}, 1-0={:?}",
-             from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1)),
-             from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1))
-        );
-        */
-
-        let motif_0_t = Tensor::from_slice(motif_0_v.as_slice());
-        debug!("motif_0_t={:?}", motif_0_t.size());
-
-        let motif_1_t = Tensor::from_slice(motif_1_v.as_slice());
-        debug!("motif_1_t={:?}", motif_1_t.size());
-
-        // motif_0_t.split(motif_width, 0).into_iter().array_chunks::<10>().for_each(|slice|{
-        let step = (motif_width / 4) as usize;
-
-
-        let nets = vec![(MotifNodeParams::new(motif_width, 1), SyncModule::new(net_0)), (MotifNodeParams::new(motif_width, 1), SyncModule::new(net_1))];
-
-
-        let tensors = vec![motif_0_t, motif_1_t];
-
-        let tensors_len = tensors.len();
-
-        let tensors_arc = Arc::new(Mutex::new(tensors));
-
-        let motif_batch_size = 10;
-
-        let max_folds = batch_windows(input_n as usize, motif_width as usize, step, motif_batch_size as usize);
-        let max_folds = max_folds.0.get(0).map(|v|v.len()).unwrap_or(max_folds.1.len());
-
-
-        let full_batch_vec = (0..tensors_len).into_par_iter().map(|i|{
-
-            let t = {
-                let guard = tensors_arc.lock();
-                guard.get(i).expect(format!("can't get tensor at {}", i).as_str()).shallow_clone()
-            };
-
-
-            super::apply_channel_motifs(step, motif_batch_size, &nets, t, 2, max_folds, &Cpu)
-
-        }).collect::<Vec<Tensor>>();
-
-        let node = SeqBuilder::new(400i64)
-            .linear_s(1)
-            .func(Tensor::sigmoid)
-            .end_seq();
-
-        debug!("full_net_batch={:?}", full_batch_vec);
-
-        let full_batch = Tensor::stack(full_batch_vec.as_slice(), 0);
-
-        debug!("full_batch.size()={:?}", full_batch.size());
-
-        let vs = nn::VarStore::new(Cpu);
-
-        let net = node.build_tch_module(&vs.root())?;
-
-        let _ = net.forward(&full_batch.view(-1));
-
-        //if all matrix multiplication succeeded it's ok
-        Ok(())
-    }
 
     //TODO ignores values when decreasing length
     fn scale_x(series: &[f32], new_length: usize) -> Vec<f32> {

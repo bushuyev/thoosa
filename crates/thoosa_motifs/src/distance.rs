@@ -364,11 +364,11 @@ mod distance_tests {
     use tch::Tensor;
     use thoosa_common::builder::Node::Par;
     use thoosa_common::panic_to_err;
-    use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from};
+    use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, SplitQueue, Splittable};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
-    use crate::chunks::ChunkOfSlicedTensors;
+    use crate::chunks::{ChunkOfSlicedTensors};
     use crate::distance::MaskMaker::{Diagonal, LocalMin, LeQuantile, Tril, LE, LeMean};
 
     #[ctor::ctor]
@@ -1489,7 +1489,7 @@ mod distance_tests {
 
 
     #[test]
-    fn test_average_euclidean_distance_max_size()-> Result<(), ThoosaError>{
+    fn test_average_euclidean_distance_max_size() -> Result<(), ThoosaError> {
         set_max_level(Trace);
         use cudarc::driver::{CudaDevice};
         let _device = CudaDevice::new(0)?;
@@ -1505,31 +1505,29 @@ mod distance_tests {
         }
         debug!("Device 0 free_mem: {free_mem}, total_mem: {total_mem}");
 
-        let size = ((free_mem  / size_of::<f32>()) as f64).sqrt() as i64 / 2;
-        let mut big_t = Tensor::rand(size*size, FLOAT_CUDA).view((size, size));
+        let size = ((free_mem / size_of::<f32>()) as f64).sqrt() as i64 / 2;
+        let mut big_t = Tensor::rand(size * size, FLOAT_CUDA).view((size, size));
 
         debug!("slices_t.size()={:?}", big_t.size());
 
-        let avg_r = loop {
-            match panic_to_err!(average_euclidean_distance(&big_t)){
-                Ok(v) => {
-                    break Ok(v);
-                }
-                Err(e) if e.is_oom()=> {
-                    let size = big_t.size()[0]/2;
-                    big_t = big_t.i((..size, ..size));
-                    debug!("2. slices_t.size={:?}", big_t.size());
-                }
-                Err(e) => {
-                    break Err(ThoosaError::from(e))
-                }
-            }
-        };
+
+
+        let avg_r:f32 = run_split_on_oom(
+            SplitQueue::new(big_t),
+            |t|{
+                average_euclidean_distance(&t)
+            },
+            |v, t|{
+                debug!("v={v:?}");
+                v
+                // 0.1
+            },
+            3
+        );
 
         debug!("v={avg_r:?}");
 
-        assert!(avg_r.expect("avg_r").is_normal());
-
+        assert!(avg_r.is_normal());
 
         Ok(())
     }
