@@ -2759,6 +2759,7 @@ dependencies = [
  "cudarc",
  "futures",
  "lazy_static",
+ "libloading",
  "log",
  "num-traits",
  "parking_lot 0.12.3",

@@ -25,7 +25,7 @@ use std::thread::current;
 use std::time::{Duration, Instant};
 use std::{fmt, fs, mem, thread};
 use tch::{Device, IndexOp, Kind, Tensor};
-
+use std::panic::AssertUnwindSafe;
 
 use thoosa_common::utils::*;
 use thoosa_shared::parse_key_val;
@@ -61,7 +61,6 @@ use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
-
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -331,6 +330,7 @@ pub fn find_motifs_by_euc_dist(
             } else {
                 &mut [LocalMin, LeMean { k: common_config.mean_k, avg: &mut means_acc, total_samples: &mut total_samples }][..]
             };
+
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
                 chunk_sliced_0.t.to_device(devices_2x[0]),
@@ -597,7 +597,7 @@ fn chunk_and_slice_2x<G, C>(
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
-    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync, //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
 {
     debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={run_configs:?}");
@@ -719,50 +719,45 @@ where
                         // .par_bridge() //TODO spread among devices
                         .for_each(|(run_config, chunk_0)| {
 
-                            let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-                                run_config.step,
-                                run_config.window,
-                                &window_1_tensors.read(),
-                                window_1_0_clone.clone(),
-                                Cpu
-                            ));
-                            while let Some(mut chunk_1_split) = split_queue.next() {
-                                let num_tasks_v = num_tasks_arc.load(Relaxed);
-                                if num_tasks_v > 100 {//TODO config
-                                    debug!("chunk_and_slice: num_tasks_v={num_tasks_v}");
-                                    sleept_times_arc.fetch_add(1, Relaxed);
-                                    thread::sleep(Duration::from_millis(3000));//TODO config
-                                }
 
-                                match gpu_fn(
-                                    &chunk_0,
-                                    &chunk_1_split,
-                                    run_config,
-                                ) {
-                                    Ok(cpu_t) => {
-                                        chunk_1_split.drop_tensor();
+                            run_split_on_oom(
+                                ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
+                                    run_config.step,
+                                    run_config.window,
+                                    &window_1_tensors.read(),
+                                    window_1_0_clone.clone(),
+                                    Cpu
+                                )),
+                                |chunk_1_split|{
+                                    let num_tasks_v = num_tasks_arc.load(Relaxed);
+                                    if num_tasks_v > 100 {//TODO config
+                                        debug!("chunk_and_slice: num_tasks_v={num_tasks_v}");
+                                        sleept_times_arc.fetch_add(1, Relaxed);
+                                        thread::sleep(Duration::from_millis(3000));//TODO config
+                                    }
+                                    gpu_fn(
+                                        &chunk_0,
+                                        &chunk_1_split,
+                                        run_config,
+                                    )
+                                },
+                                |cpu_t, chunk_1_split|{
+                                    chunk_1_split.drop_tensor();
 
-                                        match tx.send((
-                                            run_config.id.expect("id"),
-                                            cpu_t,
-                                            chunk_0.to_vec(),
-                                            chunk_1_split.to_vec())
-                                        ) {
-                                            Ok(_) => {}
-                                            Err(e) => {
-                                                error!("e:{e:?}"); //TODO panic?
-                                            }
+                                    match tx.send((
+                                        run_config.id.expect("id"),
+                                        cpu_t,
+                                        chunk_0.to_vec(),
+                                        chunk_1_split.to_vec())
+                                    ) {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            error!("e:{e:?}"); //TODO panic?
                                         }
                                     }
-                                    Err(e) => {
-                                        debug!("got e={e:?}, splitting");
-
-                                        split_queue.split(chunk_1_split);
-                                    }
-                                }
-                                debug!("split_queue={split_queue:?}");
-                            }
-
+                                },
+                                3 //TODO config
+                            );
                         });
 
                     loader.write().purge_cache_keys(window_1[0].clone(), area_1);

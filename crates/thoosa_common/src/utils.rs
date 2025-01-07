@@ -1,12 +1,14 @@
 use std::{fs, mem, ptr};
+use std::collections::VecDeque;
 use std::ffi::c_void;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::io::Write;
 use std::iter::Map;
 use std::ops::{Add, Div, Mul, Range};
 use std::time::Instant;
 
 use chrono::SecondsFormat;
+use cudarc::driver::CudaDevice;
 use log::{debug, error, info, trace};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -16,7 +18,7 @@ use plotters::prelude::*;
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use rand::thread_rng;
-use tch::{Device, Kind, TchError, Tensor};
+use tch::{Device, IndexOp, Kind, TchError, Tensor};
 use tch::display::PrinterOptions;
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
@@ -24,7 +26,7 @@ use tch::nn::Module;
 use tch::nn::Optimizer;
 use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
-
+use std::panic::AssertUnwindSafe;
 use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt, saw};
 
 use crate::my_tch::LossFp;
@@ -307,49 +309,155 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
 }
 
 
+//free_mem, total_mem
+pub fn cuda_mem() -> (usize, usize){
+    let mut free_mem: usize = 0;
+    let mut total_mem: usize = 0;
+    unsafe {
+        CudaDevice::new(0);//TODO device
+
+        let cudarc_lib = cudarc::driver::sys::lib();
+        cudarc_lib.cuMemGetInfo_v2(&mut free_mem as *mut usize, &mut total_mem as *mut usize);
+
+        (free_mem, total_mem)
+    }
+}
+
 #[macro_export]
 macro_rules! panic_to_err {
+
     ($expr:expr) => {{
-            match std::panic::catch_unwind(|| {
-                $expr
-            }) {
-                //no panic
-                Ok(inner_result) => match inner_result {
-                    Ok(val) => Ok(val),
-                    Err(err) => Err(ThoosaError::from(err))
-                },
-                //panic
-                Err(e) => {
-                    if let Some(msg) = e.downcast_ref::<String>() {
-                        debug!("thoosa_err String: {msg}");
-                        Err(ThoosaError::from(msg))
-                    } else if let Some(msg) = e.downcast_ref::<&str>() {
-                        debug!("thoosa_err str: {msg}");
-                        Err(ThoosaError::from(*msg))
-                    } else {
-                        debug!("thoosa_err unknown: {e:?}");
-                        Err(ThoosaError::from(format!("{e:?}")))
+        match std::panic::catch_unwind(AssertUnwindSafe(|| {
+            $expr
+        })) {
+            //no panic
+            Ok(inner_result) => match inner_result {
+                Ok(val) => Ok(val),
+                Err(err) => Err(ThoosaError::from(err))
+            },
+            //panic
+            Err(e) => {
+                if let Some(msg) = e.downcast_ref::<String>() {
+                    debug!("thoosa_err String: {msg}");
+                    Err(ThoosaError::from(msg))
+                } else if let Some(msg) = e.downcast_ref::<&str>() {
+                    debug!("thoosa_err str: {msg}");
+                    Err(ThoosaError::from(*msg))
+                } else {
+                    debug!("thoosa_err unknown: {e:?}");
+                    Err(ThoosaError::from(format!("{e:?}")))
+                }
+            }
+        }
+    }};
+}
+
+pub trait Splittable {
+    fn split(&self) -> [Self;2] where Self: Sized;
+}
+
+impl Splittable for Tensor {
+    fn split(&self) -> [Self; 2]
+    where
+        Self: Sized,
+    {
+        let size = self.size()[0] / 2;
+        [
+            self.i((..size, ..size)),
+            self.i((size.., size..))
+        ]
+    }
+}
+
+pub  trait Splitter {
+    type S:Splittable;
+    fn next(&mut self) -> Option<Self::S>;
+    fn split(&mut self, split: Self::S);
+}
+
+#[derive(Debug)]
+pub struct SplitQueue<T> {
+    queue:VecDeque<T>
+}
+
+impl <T> SplitQueue<T> where T:Debug + Splittable{
+    pub fn new(chunk: T) -> Self {
+        Self {
+            queue: VecDeque::from([chunk])
+        }
+    }
+}
+
+impl <T> Splitter for SplitQueue<T> where T:Debug + Splittable {
+    type S=T;
+
+    fn next(&mut self) -> Option<T> {
+        self.queue.pop_front()
+    }
+
+    fn split(&mut self, chunk:T)  {
+        debug!("SplitQueue::split: chunk={chunk:?}");
+        let [chunk_0, chunk_1] = chunk.split();
+        debug!("SplitQueue::split: chunk_0={chunk_0:?}");
+        debug!("SplitQueue::split: chunk_1={chunk_1:?}");
+        self.queue.push_front(chunk_1);
+        self.queue.push_front(chunk_0);
+
+    }
+}
+
+pub fn run_split_on_oom<F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> OkR
+where
+    F: FnMut(&V) -> Result<FR, ThoosaError>,
+    S: Splitter<S=V>,
+    OkF: FnMut(FR, &mut V) -> OkR
+{
+    let mut attempt = 0;
+    loop {
+        match splitter.next() {
+            None => {
+                debug!("run_split_oom done")
+            }
+            Some(mut split_0) => {
+                match panic_to_err!(f(&split_0)) {
+                    Ok(fr) => {
+                        return on_ok(fr, &mut split_0);
+                    }
+                    Err(e) if e.is_oom() => {
+                        splitter.split(split_0);
+                        attempt = 0;
+                    }
+                    Err(e) => {
+                        if attempt > max_attempts {
+                            panic!("can't execute gpu function after {attempt} attempts");
+                        }
+                        attempt+=1;
                     }
                 }
             }
-        }};
+        }
     }
+}
+
 
 #[cfg(test)]
 pub mod tests {
     use std::collections::HashSet;
     use std::{fs, mem};
-
+    use std::path::PathBuf;
+    use std::time::Instant;
     use clap::{arg, Args, command, Parser, Subcommand};
-    use log::debug;
-    use log::LevelFilter::Trace;
-    use tch::Device::Cpu;
+    use cudarc::driver::CudaDevice;
+    use log::{debug, info, set_max_level};
+    use log::LevelFilter::{Info, Trace};
+    use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
 
     use thoosa_shared::{cdt_for_dir, ThoosaError};
     use crate::bool_iter::BoolTensorIterator;
+    use crate::train_nets::{motif_node, MotifNodeParams, SyncModule};
     use crate::utils::hist_1_dim;
 
     #[ctor::ctor]
@@ -567,6 +675,56 @@ pub mod tests {
         )
     }
 
+
+    #[test]
+    fn test_mem_track()->Result<(), ThoosaError>{
+        let mut free_mem_0: usize = 0;
+        let mut free_mem_1: usize = 0;
+        let mut total_mem: usize = 0;
+        let _device = CudaDevice::new(0)?;
+        let cudarc_lib = unsafe {
+            let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+
+            let cudarc_lib = cudarc::driver::sys::lib();
+            cudarc_lib.cuMemGetInfo_v2(&mut free_mem_0 as *mut usize, &mut total_mem as *mut usize);
+            debug!("Device 0 free_mem: {free_mem_0}, total_mem: {total_mem}");
+            cudarc_lib.cuMemGetInfo_v2(&mut free_mem_0 as *mut usize, &mut total_mem as *mut usize);
+
+            // cudarc_lib.
+
+            cudarc_lib
+        };
+
+        set_max_level(Info);
+        let motif_node_params = MotifNodeParams::from_file(&PathBuf::from("/tmp/ws_test/models/motifs/0/31211_366.json"))?;
+
+        let inst_0 = Instant::now();
+        let mut module = SyncModule::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cpu)?;
+        for i in 0..100 {
+            module.set_device(Cuda(0));
+            module.set_device(Cpu);
+        }
+
+        info!("cuda/cpu done in {}", inst_0.elapsed().as_millis());
+
+        let inst_0 = Instant::now();
+
+        for i in 0..100 {
+            let mut module = SyncModule::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cuda(0))?;
+        }
+
+        info!("cuda load done in {}", inst_0.elapsed().as_millis());
+
+        unsafe {
+            cudarc_lib.cuMemGetInfo_v2(&mut free_mem_1 as *mut usize, &mut total_mem as *mut usize);
+            debug!("Device 0 free_mem: {free_mem_1}, total_mem: {total_mem}");
+        }
+
+        debug!("free_mem_1 diff={}", (free_mem_0 - free_mem_1)/1024/1024);
+
+        Ok(())
+    }
+
 }
 
 pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
@@ -662,33 +820,35 @@ pub fn train<F>(
     where F:Fn(Tensor)->Tensor {
 
     debug!("train: device={:?} cycles={}", device, cycles);
+    debug!("train: opt={opt:?} optimizer_size={}", optimizer_size(&opt));
 
 
     let mut last_valid_loss = [0f32;3];
 
     for idx in 1..cycles {
-
+        debug!("train:  cuda_mem={:?}", cuda_mem());
         let (x_t_0, expected_y) = data.train_batch();
-        debug!("train: device={:?} x_t_0.size()={:?} ", device, x_t_0.size());
+        debug!("train: device={:?} x_t_0.size()={:?}", device, x_t_0.size());
+        debug!("train: 0. cuda_mem={:?}", cuda_mem());
 
         let x_t = x_f(x_t_0);
 
         debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
 
-
         let predicted_y = model.forward(&x_t);
+        debug!("train: 1. cuda_mem={:?}",  cuda_mem());
         trace!("train: x_t=\n{x_t}");
         drop(x_t);
         unsafe { at_autocast_clear_cache(); }
 
         let loss = loss_fn(&predicted_y, &expected_y);
-
+        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
         trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y}");
 
         let t1 = Instant::now();
 
         opt.backward_step(&loss);
-
+        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
         debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
 
 
@@ -699,7 +859,6 @@ pub fn train<F>(
                 // debug!("train: x_t_0.size={:?}", x_t_0.size());
 
                 let x_t = x_f(x_t_0);
-
 
                 let pred_y = model.forward(&x_t);
 
@@ -883,4 +1042,14 @@ pub fn reset_print_options(){
         ptr::write(line_width_ptr, 10_000);
     }
     tch::display::set_print_options(printer_options);
+}
+
+pub fn tensor_size_in_bytes(t:&Tensor) -> usize {
+    t.numel() * t.kind().elt_size_in_bytes()
+
+}
+
+
+pub fn optimizer_size(opt:&Optimizer) -> usize {
+    opt.trainable_variables().iter().map(|t|tensor_size_in_bytes(t)).sum()
 }

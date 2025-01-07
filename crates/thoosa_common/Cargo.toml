@@ -26,7 +26,7 @@ rayon.workspace = true
 serde.workspace = true
 lazy_static.workspace = true
 cudarc.workspace = true
-
+libloading.workspace = true
 thoosa_shared = {path = "../thoosa_shared" }
 thoosa_store = {path = "../thoosa_store" }
 

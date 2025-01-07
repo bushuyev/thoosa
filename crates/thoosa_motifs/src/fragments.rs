@@ -24,6 +24,7 @@ use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
+use std::panic::AssertUnwindSafe;
 
 #[derive(Debug, Args)]
 pub struct MotifsToFragmentsParams {
