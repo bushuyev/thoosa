@@ -224,7 +224,7 @@ impl Workspace for FsWorkspace {
     /// returns vec of (safetensors_path, json_path)
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
         recurse_files(&self.labels_models_path, &|path| {
-            println!("label_models:  path={path:?}");
+            debug!("label_models:  path={path:?}");
             path.extension().map(|v| v.eq("safetensors")).unwrap_or(false)
         })?.into_iter().try_fold(HashMap::new(), |mut a, safetensors_path| {
             let parent = safetensors_path.parent().expect("parent");
