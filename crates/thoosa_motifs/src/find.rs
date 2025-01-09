@@ -719,7 +719,6 @@ where
                         // .par_bridge() //TODO spread among devices
                         .for_each(|(run_config, chunk_0)| {
 
-
                             run_split_on_oom(
                                 ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
                                     run_config.step,

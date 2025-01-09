@@ -4,11 +4,11 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
-use log::{debug, error, warn};
+use log::{debug, error, trace, warn};
 use tch::{Device, IndexOp, Tensor};
 use tch::Device::Cpu;
 use tch::Kind::Float;
-use tch::nn::{Init, LinearConfig, Module, Path};
+use tch::nn::{Conv1D, Conv2D, Init, LinearConfig, Module, Path};
 use tch::nn::ConvConfig;
 
 use thoosa_shared::*;
@@ -22,29 +22,43 @@ use crate::utils::*;
 
 #[derive(Debug)]
 pub struct MySequential {
-    layers: Vec<Box<dyn Module>>,
+    layers: Vec<Box<dyn ThoModule>>,
 }
 
 impl MySequential {
-    pub fn new(layers: Vec<Box<dyn Module>>) -> Self {
+    pub fn new(layers: Vec<Box<dyn ThoModule>>) -> Self {
         Self { layers }
     }
 }
 
 impl Module for MySequential {
+
     fn forward(&self, xs: &Tensor) -> Tensor {
         if self.layers.is_empty() {
             xs.shallow_clone()
         } else {
-            debug!("MySequential::forward: xs.size={:?}", xs.size());
+            debug!("MySequential::forward: xs.size={:?} device={:?} self.layers[0]={:?}", xs.size(), xs.device(), self.layers[0]);
+
             let xs = self.layers[0].forward(xs);
-            self.layers.iter().skip(1).fold(xs, |xs, layer| layer.forward(&xs))
+            self.layers.iter().skip(1).enumerate().fold(xs, |xs,(i,  layer)| {
+                debug!("MySequential::layer={i} xs.size={:?} device={:?} layer={:?}", xs.size(), xs.device(), layer);
+
+                layer.forward(&xs)
+            })
+        }
+    }
+}
+
+impl ThoModule for MySequential {
+    fn debug(&self) {
+        for l in &self.layers {
+            l.debug();
         }
     }
 }
 
 pub struct MyParallel {
-    layers: Vec<Box<dyn Module>>,
+    layers: Vec<Box<dyn ThoModule>>,
     split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>,
     join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>,
 }
@@ -57,9 +71,10 @@ impl Debug for MyParallel {
     }
 }
 
-impl crate::my_tch::MyParallel {
 
-    pub fn new(layers: Vec<Box<dyn Module>>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>) -> Self {
+impl MyParallel {
+
+    pub fn new(layers: Vec<Box<dyn ThoModule>>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>) -> Self {
 
         assert!(layers.len() > 0, "layers len > 0");
 
@@ -71,7 +86,7 @@ impl crate::my_tch::MyParallel {
     }
 }
 
-impl Module for crate::my_tch::MyParallel {
+impl Module for MyParallel {
     fn forward(&self, xs: &Tensor) -> Tensor {
         debug!("MyParallel::forward: xs={:?}", xs.size());
         let t = (self.join)(
@@ -85,6 +100,22 @@ impl Module for crate::my_tch::MyParallel {
         t
 
     }
+}
+impl ThoModule for MyParallel{
+    fn debug(&self) {
+        for l in &self.layers{
+            l.debug();
+        }
+    }
+}
+
+
+impl ThoModule for Conv1D {
+
+}
+
+impl ThoModule for Conv2D {
+
 }
 
 #[derive(Debug)]
@@ -114,14 +145,16 @@ impl Module for MyMaxPool1d {
     }
 }
 
+impl ThoModule for MyMaxPool1d {
 
+}
 
 #[derive(Debug)]
 pub struct MyBatchNorm1d {
 
 }
 
-impl crate::my_tch::MyBatchNorm1d {
+impl MyBatchNorm1d {
     pub fn new() -> Self {
         Self {
 
@@ -129,11 +162,15 @@ impl crate::my_tch::MyBatchNorm1d {
     }
 }
 
-impl Module for crate::my_tch::MyBatchNorm1d {
+impl Module for MyBatchNorm1d {
 
     fn forward(&self, xs: &Tensor) -> Tensor {
         xs.batch_norm::<Tensor>(None, None, None, None, true, 0.1, 1.0e-05, false)
     }
+}
+
+impl ThoModule for MyBatchNorm1d{
+
 }
 
 
@@ -147,7 +184,7 @@ pub struct MyAvgPool1d {
     count_include_pad: bool
 }
 
-impl crate::my_tch::MyAvgPool1d {
+impl MyAvgPool1d {
     pub fn new(kernel_size: i64, stride: i64, padding: i64) -> Self {
         Self {
             kernel_size,
@@ -163,6 +200,15 @@ impl Module for MyAvgPool1d {
     fn forward(&self, xs: &Tensor) -> Tensor {
         xs.avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad)
     }
+}
+
+impl ThoModule for MyAvgPool1d{
+
+}
+
+
+pub trait ThoModule:Module{
+    fn debug(&self){}
 }
 
 
@@ -195,6 +241,10 @@ impl Module for MyFuncModule {
     }
 }
 
+impl ThoModule for MyFuncModule{
+
+}
+
 
 pub struct MyClosureModule {
     func: Box<dyn Fn(&Tensor)->Tensor + Send>
@@ -213,12 +263,16 @@ impl Debug for MyClosureModule {
     }
 }
 
-
 impl Module for MyClosureModule {
     fn forward(&self, xs: &Tensor) -> Tensor {
         (self.func)(xs)
     }
 }
+
+impl ThoModule for MyClosureModule{
+
+}
+
 
 #[derive(Debug)]
 pub struct MyLinear {
@@ -228,6 +282,7 @@ pub struct MyLinear {
 
 impl Module for MyLinear {
     fn forward(&self, xs: &Tensor) -> Tensor {
+        debug!("Module for MyLinear::forward: ws={:?} bs={:?} xs={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), xs.device());
         match xs.f_linear(&self.ws, self.bs.as_ref()) {//TODO error
             Ok(t) => t,
             Err(e) => {
@@ -237,6 +292,13 @@ impl Module for MyLinear {
         }
     }
 }
+
+impl ThoModule for MyLinear{
+    fn debug(&self) {
+        debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
+    }
+}
+
 
 pub fn my_linear<'a, T: Borrow<Path<'a>>>(
     vs: T,
@@ -307,7 +369,7 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
 
  # returns Tensor nodes x batches x batch size
 */
-pub fn apply_channel_motifs(
+pub fn apply_channel_motifs(//TODO move to train_nets
     input_slice_step: usize,
     input_slices_motif_batch_size: i64,
     motif_nodes: &mut [(MotifNodeParams, SyncModule)],
@@ -351,7 +413,11 @@ pub fn apply_channel_motifs(
         debug!("apply_channel_motifs: input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
         for ((_node_i, node), node_output_batches) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
-            let motifs_p_t = node.1.forward(&input_slices_batch.to_device(*device)).view(input_slices_batch.size()[0]);//squeeze is to remove motif width dimension: batch x width -> batch x 1 (probability) -> batch of probabilities that slice matches the motif
+            trace!("apply_channel_motifs: input_slices_batch=\n{input_slices_batch}");
+            let tensor = node.1.forward(&input_slices_batch.to_device(*device));
+            debug!("apply_channel_motifs: tensor.size={:?} input_slices_motif_batch_size={input_slices_motif_batch_size}", tensor.size());
+
+            let motifs_p_t = tensor.view(input_slices_batch.size()[0]);//view is to remove motif width dimension: batch x width -> batch x 1 (probability) -> batch of probabilities that slice matches the motif
 
             debug!("apply_channel_motifs: motifs_p_t.size={:?} motifs_p_t_vals={motifs_p_t}", motifs_p_t.size());
             add_node_output_batch(input_slices_motif_batch_size, node_output_batches, motifs_p_t);
@@ -365,6 +431,7 @@ pub fn apply_channel_motifs(
         debug!("apply_channel_motifs: reminder, input_slices_batch={:?} input_slices_motif_batch_size={:?} motif_width={:?}", input_slices_batch.size(), input_slices_motif_batch_size, motif_width);
 
         for ((node_i, node), node_batch) in motif_nodes.iter().enumerate().zip(node_batches.iter_mut()) {
+            trace!("apply_channel_motifs: reminder input_slices_batch=\n{input_slices_batch}");
             let tensor = node.1.forward(&input_slices_batch.to_device(*device));
             debug!("apply_channel_motifs: reminder, tensor.size={:?} input_slices_motif_batch_size={input_slices_motif_batch_size}", tensor.size());
 
@@ -388,14 +455,16 @@ pub fn apply_channel_motifs(
         });
     }
     let node_tensors = node_batches.into_iter().map(|node_batches| Tensor::stack(node_batches.as_slice(), 0)).collect::<Vec<Tensor>>();
-    debug!("apply_channel_motifs: node_tensors.len()={:?} sizes={:?}", node_tensors.len(), node_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
+    if log::log_enabled!(log::Level::Debug) {
+        debug!("apply_channel_motifs: node_tensors.len()={:?} sizes={:?}", node_tensors.len(), node_tensors.iter().map(|t|t.size()).collect::<Vec<Vec<i64>>>());
+    }
 
     let nodes_t = Tensor::stack(
         node_tensors.as_slice(),
         0
     );
-    debug!("apply_channel_motifs: 2.2 nodes_t.size={:?}", nodes_t.size());
-    debug!("apply_channel_motifs: 1. nodes_t.size={:?} max_motif_nodes={max_motif_nodes}, max_motif_batches={max_motif_batches} motif_batch_size={input_slices_motif_batch_size}", nodes_t.size());
+    debug!("apply_channel_motifs: nodes_t.size={:?}", nodes_t.size());
+    debug!("apply_channel_motifs: nodes_t.size={:?} max_motif_nodes={max_motif_nodes}, max_motif_batches={max_motif_batches} motif_batch_size={input_slices_motif_batch_size}", nodes_t.size());
 
     //pad_motifs_to- to have same num motifs in all channels
     let nodes_t = pad_to(&nodes_t, &[max_motif_nodes, max_motif_batches as i64, input_slices_motif_batch_size]).unwrap();
@@ -404,11 +473,13 @@ pub fn apply_channel_motifs(
         motif_node.1.set_device(Cpu);
     }
 
-    debug!("apply_channel_motifs: 2. nodes_t={:?}", nodes_t.size());
+    debug!("apply_channel_motifs: nodes_t={:?} device={:?} *****************************", nodes_t.size(), nodes_t.device());
     nodes_t
 }
 
 fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, motifs_p_t: Tensor) {
+    debug!("add_node_output_batch: motif_batch_size={motif_batch_size} net_batch.len={} motifs_p_t.size={:?}", net_batch.len(), motifs_p_t.size());
+
     if motifs_p_t.size()[0] < motif_batch_size {
         net_batch.push(
             pad_to(&motifs_p_t, &[motif_batch_size]).expect("pad_to failed")
@@ -434,7 +505,7 @@ mod tch_tests {
 
 
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-    use tch::Device::Cpu;
+    use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::nn::{ConvConfig, Init, Module, OptimizerConfig, VarStore};
 
@@ -443,6 +514,7 @@ mod tch_tests {
 
     use crate::builder::{clc_conv1d_out};
     use crate::builder::SeqBuilder;
+    use crate::my_tch::ThoModule;
     use crate::train_nets::{MotifNodeParams, SyncModule};
     use crate::utils;
     use crate::utils::*;
@@ -471,6 +543,10 @@ mod tch_tests {
 
     #[test]
     pub fn test_split_seq() -> Result<(), ThoosaError>{
+        // unsafe {
+        //     let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        // }
+
         let res_seq = SeqBuilder::new(10)
             .linear_s(1)
             .end_seq();
@@ -488,7 +564,7 @@ mod tch_tests {
 
             ).end_seq();
 
-        let vs = nn::VarStore::new(Device::Cpu);
+        let mut vs = nn::VarStore::new(Device::Cpu);
 
         let net = main.build_tch_module(&vs.root())?;
 
@@ -497,6 +573,18 @@ mod tch_tests {
 
 
         assert_eq!(vec![10,2], y_p.size());
+
+        net.debug();
+        for v in vs.trainable_variables() {
+            debug!("device={:?}", v.device());
+        }
+
+        // vs.set_device(Cuda(0));
+        //
+        // net.debug();
+        // for v in vs.trainable_variables() {
+        //     debug!("device={:?}", v.device());
+        // }
 
         Ok(())
     }
@@ -570,7 +658,7 @@ mod tch_tests {
         Ok(())
     }
 
-    fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn Module>, ThoosaError> {
+    fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn ThoModule>, ThoosaError> {
         SeqBuilder::new(num_features)
             .batch_norm()
             .closure(Box::new(|t:&Tensor|{

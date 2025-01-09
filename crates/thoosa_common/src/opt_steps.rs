@@ -6,6 +6,7 @@ use tch::Tensor;
 
 use thoosa_shared::val::Val;
 use log::debug;
+use crate::my_tch::ThoModule;
 
 struct EnvParams {
 
@@ -74,13 +75,13 @@ impl Apply for ApplyComp<'_> {
 }
 #[allow(dead_code)]
 struct ApplyNet {
-    net: Box<dyn Module>,
+    net: Box<dyn ThoModule>,
 }
 
 #[allow(dead_code)]
 impl ApplyNet {
 
-    pub fn new(net: Box<dyn Module>) -> Self {
+    pub fn new(net: Box<dyn ThoModule>) -> Self {
         Self { net }
     }
 }
@@ -203,6 +204,7 @@ mod tests {
     use crate::utils::DataBatch;
     use crate::utils::train;
     use log::debug;
+    use crate::my_tch::ThoModule;
 
     #[test]
     fn test_two_nets(){
@@ -328,7 +330,7 @@ mod tests {
         assert_eq!(vec![30], pred_2.size());
     }
 
-    fn build_net(_params: &HashMap<String, Val>, vs: &mut VarStore, in_features: i64, out_features: i64) -> Box<dyn Module> {
+    fn build_net(_params: &HashMap<String, Val>, vs: &mut VarStore, in_features: i64, out_features: i64) -> Box<dyn ThoModule> {
 
         debug!("build_net_1: in_features={} out_features={}", in_features, out_features);
 

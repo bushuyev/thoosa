@@ -6,7 +6,7 @@ use tch::nn::{ConvConfig, LinearConfig, Module};
 
 use thoosa_shared::ThoosaError;
 
-use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential};
+use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
@@ -71,13 +71,13 @@ impl NthParams for NthConst {
 
 impl Node {
 
-    pub fn build_tch_module(self, vs: &nn::Path) -> Result<Box<dyn Module>, ThoosaError>  {
+    pub fn build_tch_module(self, vs: &nn::Path) -> Result<Box<dyn ThoModule>, ThoosaError>  {
         Ok(match self {
             Node::Seq { elts } => {
 
-                let layers:Vec<Box<dyn Module>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn Module>>, node| {
+                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, node| {
                     kids.push(node.build_tch_module(vs)?);
-                    Ok::<Vec<Box<dyn Module>>, ThoosaError>(kids)
+                    Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
                 })?;
 
                 Box::new(MySequential::new(layers))
@@ -85,9 +85,9 @@ impl Node {
             }
 
             Node::Par {elts,  split, join } => {
-                let layers:Vec<Box<dyn Module>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn Module>>, node| {
+                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, node| {
                     kids.push(node.build_tch_module(vs)?);
-                    Ok::<Vec<Box<dyn Module>>, ThoosaError>(kids)
+                    Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
                 })?;
 
                 Box::new(MyParallel::new(layers, split, join))
@@ -109,7 +109,7 @@ impl Node {
                 assert!(in_feats > 0);
                 assert!(out_feats > 0);
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
-                Box::new(my_linear(vs/ "layer1", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)
+                Box::new(my_linear(vs/ "layer1", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)//TODO rename layer1
             }
 
             Node::MaxPool { kernel_size, stride, padding } => {

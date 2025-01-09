@@ -110,7 +110,7 @@ impl  ChunkOfSlicedTensors {
     }
 }
 
-impl Splittable for ChunkOfSlicedTensors {
+impl Splittable<2> for ChunkOfSlicedTensors {
     fn split(&self) -> [Self;2] {
         //only one tensor in the chunk, splitting tensor
         if self.resource_ids.len() == 1 {

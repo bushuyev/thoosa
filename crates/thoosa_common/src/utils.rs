@@ -29,7 +29,7 @@ use torch_sys::cuda::atc_cuda_device_count;
 use std::panic::AssertUnwindSafe;
 use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt, saw};
 
-use crate::my_tch::LossFp;
+use crate::my_tch::{LossFp, ThoModule};
 use crate::parzen::opt_rng::opt_rnd;
 
 pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Error>> {
@@ -235,18 +235,18 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
     from::<Vec<f64>>(&t.reshape(-1))
 }
 
-
-
 pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, ThoosaError>{
+    debug!("pad_to: input.size={:?}, to_size{:?}", input.size(), to_size);
+
     if input.size().len() != to_size.len() {
         ThoosaError::new(format!("dimensions don't match: {:?} {:?}", input.size(), to_size));
     }
     let mut to_size = to_size.to_vec();
 
-
     let mut input_size = input.size();
     input_size.reverse();
     to_size.reverse();
+
     let pad_idx = input_size.into_iter().zip(
         to_size.into_iter()
     )
@@ -352,11 +352,11 @@ macro_rules! panic_to_err {
     }};
 }
 
-pub trait Splittable {
-    fn split(&self) -> [Self;2] where Self: Sized;
+pub trait Splittable<const S: usize> {
+    fn split(&self) -> [Self;S] where Self: Sized;
 }
 
-impl Splittable for Tensor {
+impl Splittable<2> for Tensor {
     fn split(&self) -> [Self; 2]
     where
         Self: Sized,
@@ -369,8 +369,8 @@ impl Splittable for Tensor {
     }
 }
 
-pub  trait Splitter {
-    type S:Splittable;
+pub trait Splitter<const SIZE: usize> {
+    type S:Splittable<SIZE>;
     fn next(&mut self) -> Option<Self::S>;
     fn split(&mut self, split: Self::S);
 }
@@ -380,7 +380,7 @@ pub struct SplitQueue<T> {
     queue:VecDeque<T>
 }
 
-impl <T> SplitQueue<T> where T:Debug + Splittable{
+impl <T> SplitQueue<T> where T:Debug + Splittable<2>{
     pub fn new(chunk: T) -> Self {
         Self {
             queue: VecDeque::from([chunk])
@@ -388,7 +388,7 @@ impl <T> SplitQueue<T> where T:Debug + Splittable{
     }
 }
 
-impl <T> Splitter for SplitQueue<T> where T:Debug + Splittable {
+impl <T> Splitter<2> for SplitQueue<T> where T:Debug + Splittable<2> {
     type S=T;
 
     fn next(&mut self) -> Option<T> {
@@ -406,33 +406,55 @@ impl <T> Splitter for SplitQueue<T> where T:Debug + Splittable {
     }
 }
 
-pub fn run_split_on_oom<F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> OkR
+#[derive(Debug)]
+pub struct Reducer<T> {
+    value:Option<T>
+}
+
+impl <T> Reducer<T> {
+
+    pub fn new(value: T) -> Self {
+        Self { value:Some(value) }
+    }
+}
+
+impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
+    type S = T;
+
+    fn next(&mut self) -> Option<Self::S> {
+        self.value.take()
+    }
+
+    fn split(&mut self, v: Self::S) {
+        let [v_0] = v.split();
+        self.value = Some(v_0)
+    }
+}
+
+pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> Result<OkR, ThoosaError>
 where
     F: FnMut(&V) -> Result<FR, ThoosaError>,
-    S: Splitter<S=V>,
+    S: Splitter<SIZE, S=V>,
     OkF: FnMut(FR, &mut V) -> OkR
 {
     let mut attempt = 0;
+
     loop {
-        match splitter.next() {
-            None => {
-                debug!("run_split_oom done")
-            }
-            Some(mut split_0) => {
-                match panic_to_err!(f(&split_0)) {
-                    Ok(fr) => {
-                        return on_ok(fr, &mut split_0);
+        while let Some(mut split_0) = splitter.next() {
+            match panic_to_err!(f(&split_0)) {
+                Ok(fr) => {
+                    attempt = 0;
+                    return Ok(on_ok(fr, &mut split_0));
+                }
+                Err(e) if e.is_oom() => {
+                    splitter.split(split_0);
+                    if attempt > max_attempts {
+                        panic!("can't execute gpu function after {attempt} attempts");
                     }
-                    Err(e) if e.is_oom() => {
-                        splitter.split(split_0);
-                        attempt = 0;
-                    }
-                    Err(e) => {
-                        if attempt > max_attempts {
-                            panic!("can't execute gpu function after {attempt} attempts");
-                        }
-                        attempt+=1;
-                    }
+                    attempt += 1;
+                }
+                Err(e) => {
+                    return Err(e);
                 }
             }
         }
@@ -810,7 +832,7 @@ pub enum ListenerResponse {
 pub fn train<F>(
     device:&Device,
     data:&mut dyn DataBatch,
-    model:&Box<dyn Module>,
+    model:&Box<dyn ThoModule>,
     loss_fn:LossFp,
     cycles: usize,
     mut opt: Optimizer,

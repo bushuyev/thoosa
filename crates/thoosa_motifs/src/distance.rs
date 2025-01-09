@@ -1522,8 +1522,8 @@ mod distance_tests {
                 v
                 // 0.1
             },
-            3
-        );
+            10
+        )?;
 
         debug!("v={avg_r:?}");
 
