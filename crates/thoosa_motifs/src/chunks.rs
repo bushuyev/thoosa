@@ -105,7 +105,7 @@ impl  ChunkOfSlicedTensors {
         )
     }
 
-    pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue<ChunkOfSlicedTensors>{
+    pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue<2, ChunkOfSlicedTensors>{
         SplitQueue::new(chunk)
     }
 }
