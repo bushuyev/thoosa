@@ -387,7 +387,6 @@ pub fn apply_channel_motifs(//TODO move to train_nets
         motif_node.1.set_device(device.clone());
     }
 
-
     let motif_width = motif_nodes[0].0.num_features();//TODO different window lengths in same selection?
 
     let input_t_size = channel.size();

@@ -364,7 +364,7 @@ mod distance_tests {
     use tch::Tensor;
     use thoosa_common::builder::Node::Par;
     use thoosa_common::panic_to_err;
-    use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, SplitQueue, Splittable};
+    use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, SplitQueue, Splittable, SplittableTensor};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
@@ -1510,19 +1510,18 @@ mod distance_tests {
 
         debug!("slices_t.size()={:?}", big_t.size());
 
+        let mut avg_r: f32 = f32::NAN;
 
-
-        let avg_r:f32 = run_split_on_oom(
-            SplitQueue::new(big_t),
-            |t|{
-                average_euclidean_distance(&t)
+        run_split_on_oom(
+            SplitQueue::<2, SplittableTensor::<0>>::new(SplittableTensor::<0>(big_t)),
+            |t| {
+                average_euclidean_distance(&t.as_ref())
             },
-            |v, t|{
+            |v, t| {
                 debug!("v={v:?}");
-                v
-                // 0.1
+                avg_r = v;
             },
-            10
+            10,
         )?;
 
         debug!("v={avg_r:?}");

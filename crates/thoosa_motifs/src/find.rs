@@ -756,7 +756,7 @@ where
                                     }
                                 },
                                 3 //TODO config
-                            );
+                            ).expect("run_split_on_oom failed");
                         });
 
                     loader.write().purge_cache_keys(window_1[0].clone(), area_1);

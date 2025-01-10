@@ -352,22 +352,10 @@ macro_rules! panic_to_err {
     }};
 }
 
-pub trait Splittable<const S: usize> {
-    fn split(&self) -> [Self;S] where Self: Sized;
+pub trait Splittable<const SIZE: usize> {
+    fn split(&self) -> [Self;SIZE] where Self: Sized;
 }
 
-impl Splittable<2> for Tensor {
-    fn split(&self) -> [Self; 2]
-    where
-        Self: Sized,
-    {
-        let size = self.size()[0] / 2;
-        [
-            self.i((..size, ..size)),
-            self.i((size.., size..))
-        ]
-    }
-}
 
 pub trait Splitter<const SIZE: usize> {
     type S:Splittable<SIZE>;
@@ -376,11 +364,11 @@ pub trait Splitter<const SIZE: usize> {
 }
 
 #[derive(Debug)]
-pub struct SplitQueue<T> {
+pub struct SplitQueue<const SIZE: usize, T> {
     queue:VecDeque<T>
 }
 
-impl <T> SplitQueue<T> where T:Debug + Splittable<2>{
+impl <const SIZE: usize, T> SplitQueue<SIZE, T> where T:Debug + Splittable<SIZE>{
     pub fn new(chunk: T) -> Self {
         Self {
             queue: VecDeque::from([chunk])
@@ -388,21 +376,25 @@ impl <T> SplitQueue<T> where T:Debug + Splittable<2>{
     }
 }
 
-impl <T> Splitter<2> for SplitQueue<T> where T:Debug + Splittable<2> {
+impl <const SIZE: usize, T> Splitter<SIZE> for SplitQueue<SIZE, T> where T:Debug + Splittable<SIZE> {
     type S=T;
 
     fn next(&mut self) -> Option<T> {
-        self.queue.pop_front()
+        let v = self.queue.pop_front();
+
+        debug!("SplitQueue::next: self.queue.len={} pop_front={v:?}", self.queue.len());
+
+        v
     }
 
     fn split(&mut self, chunk:T)  {
         debug!("SplitQueue::split: chunk={chunk:?}");
-        let [chunk_0, chunk_1] = chunk.split();
-        debug!("SplitQueue::split: chunk_0={chunk_0:?}");
-        debug!("SplitQueue::split: chunk_1={chunk_1:?}");
-        self.queue.push_front(chunk_1);
-        self.queue.push_front(chunk_0);
+        let splits = chunk.split();
+        for split in splits.into_iter().rev() {
+            debug!("SplitQueue::split: push_front chunk={split:?}");
 
+            self.queue.push_front(split);
+        }
     }
 }
 
@@ -431,7 +423,7 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
     }
 }
 
-pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> Result<OkR, ThoosaError>
+pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> Result<(), ThoosaError>
 where
     F: FnMut(&V) -> Result<FR, ThoosaError>,
     S: Splitter<SIZE, S=V>,
@@ -444,9 +436,10 @@ where
             match panic_to_err!(f(&split_0)) {
                 Ok(fr) => {
                     attempt = 0;
-                    return Ok(on_ok(fr, &mut split_0));
+                    on_ok(fr, &mut split_0);
                 }
                 Err(e) if e.is_oom() => {
+                    debug!("run_split_on_oom: splitting on oom, attempt={attempt}");
                     splitter.split(split_0);
                     if attempt > max_attempts {
                         panic!("can't execute gpu function after {attempt} attempts");
@@ -458,9 +451,38 @@ where
                 }
             }
         }
+        return Ok(())
     }
 }
 
+#[derive(Debug)]
+pub struct SplittableTensor<const D:i64>(pub Tensor);//TODO more than one dimension?
+
+impl <const S:usize, const D:i64> Splittable<S> for SplittableTensor<D> {
+    fn split(&self) -> [Self; S]
+    where
+        Self: Sized,
+    {
+
+        let split_size = self.0.size()[D as usize] / S as i64 + 1; //TODO if self.0.size()[D as usize] < 2
+
+        debug!("SplittableTensor::split: self.0.size()={:?} S={S} D={D} split_size={split_size}", self.0.size());
+
+        let splits = self.0.split(split_size, D).into_iter().map(|t|SplittableTensor::<D>(t)).collect::<Vec<_>>();
+
+        debug!("SplittableTensor::split: splits={splits:?}");
+
+        let splits_len = splits.len();
+
+        splits.try_into().expect(format!("splits.len={} != {S}", splits_len).as_str())
+    }
+}
+
+impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
+    fn as_ref(&self) -> &Tensor {
+        &self.0
+    }
+}
 
 #[cfg(test)]
 pub mod tests {
@@ -475,16 +497,36 @@ pub mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
-    use tch::Tensor;
+    use tch::{IndexOp, Tensor};
 
     use thoosa_shared::{cdt_for_dir, ThoosaError};
     use crate::bool_iter::BoolTensorIterator;
     use crate::train_nets::{motif_node, MotifNodeParams, SyncModule};
-    use crate::utils::hist_1_dim;
+    use crate::utils::{hist_1_dim, Splittable, SplittableTensor};
 
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
+    }
+
+
+    #[test]
+    fn test_splittable_tensor(){
+        let t = Tensor::rand(&[3, 3], FLOAT_CPU);
+        debug!("t=\n{t}");
+
+        let sp_t = SplittableTensor::<0>(t.shallow_clone());
+
+        debug!("sp_t=\n{sp_t:?}");
+
+        let splits:[_; 2] = sp_t.split();
+
+        debug!("splits={splits:?}");
+
+        assert_eq!(
+            t,
+            Tensor::concat(&[splits[0].as_ref(), splits[1].as_ref()], 0)
+        )
     }
 
 
