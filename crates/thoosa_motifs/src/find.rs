@@ -37,7 +37,7 @@ use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
-use crate::distance::MaskMaker::{Diagonal, LeQuantile, LeMean, LocalMin, Tril, LE};
+use crate::distance::MaskMaker::{Diagonal, LeMean, LeQuantile, LocalMin, Tril, LE};
 use crate::distance::{average_euclidean_distance, slice_t};
 use crate::distance::{clc_dist_d2_and_mask, dist_d2};
 use crate::fragments::{load_motif_slices, motifs_to_tensor, MotifsTensors};
@@ -54,6 +54,7 @@ use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
+use thoosa_common::train_nets::{FindMotifsRunConfig, InputFilter};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::parse_range_or_value;
@@ -151,70 +152,6 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
             max_slices_k: self.max_slices_k,
             mean_k: self.mean_k.unwrap_or(0.01),
         }
-    }
-}
-
-#[derive(Debug, Subcommand, PartialEq, Clone)]
-pub enum InputFilter {
-    Conv1(Conv1Params)
-}
-
-#[derive(Debug, Args, PartialEq, Clone)] //PartialEq - for tests
-pub struct Conv1Params {
-    #[arg(long)]
-    kernel: i64,
-
-    #[arg(long, default_value_t = 1)]
-    stride: i64,
-
-    #[arg(long, default_value_t = 0)]
-    padding: i64,
-}
-
-impl InputFilter {
-    pub fn to_properties_map(&self) -> HashMap<String, Val> {
-        match self {
-            Self::Conv1(conv1_params) => {
-                conv1_params.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v| {
-                    a.insert(format!("conv_1.{}", v.0), v.1);
-                    a
-                })
-            }
-        }
-    }
-
-    pub fn from_properties_map(properties: &HashMap<String, Val>) -> Option<Self> {
-        let conv_1_props = thoosa_shared::val::unprefix_properties("conv_1", &properties);
-        if conv_1_props.len() > 0 {
-            assert!(conv_1_props.len() == 3);
-            Conv1Params::from_properties_map(conv_1_props).map(|props| InputFilter::Conv1(props)).ok()
-        } else {
-            None
-        }
-    }
-}
-
-impl Conv1Params {
-    pub fn new(kernel: i64, stride: i64, padding: i64) -> Self {
-        Self { kernel, stride, padding }
-    }
-
-    pub fn to_properties_map(&self) -> HashMap<String, Val> {
-        HashMap::from([
-            ("Conv1Params.kernel".into(), self.kernel.into()),
-            ("Conv1Params.stride".into(), self.stride.into()),
-            ("Conv1Params.padding".into(), self.padding.into()),
-        ])
-    }
-
-    pub fn from_properties_map(properties: HashMap<String, Val>) -> Result<Self, ThoosaError> {
-        let properties = thoosa_shared::val::unprefix_properties("Conv1Params", &properties);
-
-        Ok(Conv1Params {
-            kernel: properties.get("kernel").expect("kernel").as_i64().expect("kernel as_i64"),
-            stride: properties.get("stride").expect("stride").as_i64().expect("stride as_i64"),
-            padding: properties.get("padding").expect("padding").as_i64().expect("padding as_i64"),
-        })
     }
 }
 
@@ -406,83 +343,6 @@ pub fn find_motifs_by_euc_dist(
     });
 
     Ok(None)
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub struct FindMotifsRunConfig {
-    id:Option<usize>,
-    step: u32,
-    window: u32,
-    dist_quantile: f32,
-    min_tracker_step: Option<usize>,
-    filter: Option<InputFilter>,
-    descr: String,
-}
-
-impl RunConfig for FindMotifsRunConfig {
-    fn to_properties_map(&self) -> HashMap<String, Val> {
-        let mut map = HashMap::from([
-            ("FindMotifsRunConfig.step".into(), UInt(self.step)),
-            ("FindMotifsRunConfig.window".into(), UInt(self.window)),
-            ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
-            ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
-        ]);
-
-        if let Some(filter) = self.filter.as_ref() {
-            map.extend(thoosa_shared::val::prefix_properties("FindMotifsRunConfig.filter", filter.to_properties_map()).into_iter());
-        }
-
-        map
-    }
-
-    //TODO set id
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
-        let properties = thoosa_shared::val::unprefix_properties("FindMotifsRunConfig", &properties);
-        FindMotifsRunConfig::new(
-            None,
-            properties.get("step").expect("no step").as_u32().expect("step as_u32"),
-            properties.get("window").expect("no window").as_u32().expect("window as_u32"),
-            properties.get("dist_quantile").expect("no dist_quantile").as_f32().expect("dist_quantile as_f32"),
-            properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
-            InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
-        )
-    }
-
-    fn set_id(&mut self, id:usize) {
-        self.id.replace(id);
-    }
-
-    fn type_name() -> &'static str {
-        "FindMotifs"
-    }
-}
-
-impl FindMotifsRunConfig {
-    pub fn new(id: Option<usize>,
-               step: u32,
-               window: u32,
-               dist_quantile: f32, //TODO move to common
-               descr: impl Into<String>,
-               filter: Option<InputFilter>,
-    ) -> Self {
-        Self {
-            id,
-            step,
-            window,
-            dist_quantile,
-            filter,
-            min_tracker_step: None,//TODO
-            descr: descr.into(),
-        }
-    }
-
-    pub fn window(&self) -> i64 {
-        self.window as i64//TODO
-    }
-
-    pub fn step(&self) -> usize {
-        self.step as usize //TODO
-    }
 }
 
 fn chunk_and_slice<G, CTX>(
@@ -1611,10 +1471,11 @@ mod motif_find_tests {
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::clc_dist_d2;
     use crate::find::select_motifs_by_corr;
-    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, Conv1Params, FindMotifsParams, FindMotifsRunConfig, InputFilter, MotifTrackerStore};
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Params, RunConfig, Simple};
+    use thoosa_common::train_nets::{Conv1Params, FindMotifsRunConfig, InputFilter};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};

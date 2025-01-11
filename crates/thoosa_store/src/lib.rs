@@ -354,6 +354,8 @@ impl Store for SqlStore {
     }
 
     fn get_input_run_ids(&mut self, run_id: usize, input_type: Option<&dyn Display>) -> Result<Vec<usize>, ThoosaError> {
+        debug!("get_input_run_ids: run_id={run_id} input_type={:?}", input_type.map(|v|v.to_string()));
+
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
@@ -362,6 +364,8 @@ impl Store for SqlStore {
         };
 
         t.commit()?;
+
+        debug!("get_input_run_ids: input_run_ids={input_run_ids:?}");
 
         Ok(input_run_ids)
     }
