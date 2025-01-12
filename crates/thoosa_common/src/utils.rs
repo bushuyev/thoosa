@@ -858,6 +858,10 @@ pub trait DataBatch {
     fn valid_batch(&mut self) -> (Tensor, Tensor);
 }
 
+trait SplittableDataBatch: DataBatch + Splittable<2> {
+
+}
+
 pub trait TrainListener {
     fn on_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse {
         ListenerResponse::Nope
