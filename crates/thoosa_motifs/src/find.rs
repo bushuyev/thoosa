@@ -615,7 +615,7 @@ where
                                         }
                                     }
                                 },
-                                3 //TODO config
+                                10 //TODO config
                             ).expect("run_split_on_oom failed");
                         });
 

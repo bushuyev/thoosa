@@ -1,6 +1,6 @@
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
-use crate::my_tch::{apply_channel_motifs, ThoModule};
+use crate::my_tch::{ThoModule};
 use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives};
 use crate::runs::{Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
 use crate::train_nets;
@@ -156,16 +156,14 @@ impl RunConfig for TrainLabelNodeRunConfig {
 
 #[derive(Debug)]
 pub struct CommonTrainLabelNodeRunConfig {
-    pub input_slice_step:usize,
-    pub motif_batch_size:usize,
     pub label_batch_size:usize,
     pub cycles:usize,
 }
 
 impl CommonTrainLabelNodeRunConfig {
 
-    pub fn new(input_slice_step: usize, motif_batch_size: usize,  label_batch_size:usize, cycles:usize) -> Self {
-        Self { input_slice_step, motif_batch_size, label_batch_size, cycles}
+    pub fn new(label_batch_size:usize, cycles:usize) -> Self {
+        Self {  label_batch_size, cycles}
     }
 }
 
@@ -209,8 +207,6 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
 
     fn common_config(&self) -> CommonTrainLabelNodeRunConfig {
         CommonTrainLabelNodeRunConfig::new(
-            self.input_slice_step,
-            self.motif_batch_size as usize,
             self.label_batch_size,
             self.cycles
         )
@@ -556,7 +552,6 @@ pub fn run_opt_train_label_nodes (
     label: &String, slices_len: i64
 ) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
 
-    let input_slice_step = comon_label_node_params.input_slice_step;
     let channels = channels_motifs_nodes.read().len() as i64;
     let device = device.clone();
     let max_input = ws.read().max_input();
@@ -590,6 +585,8 @@ pub fn run_opt_train_label_nodes (
     })
 }
 
+
+
 pub fn train_label_nodes (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     run_config_values:&TrainNodesValues,
@@ -605,9 +602,7 @@ pub fn train_label_nodes (
     debug!("train_label_nodes: label_node_params={label_node_params:?} cuda_mem={:?}", cuda_mem());
 
     let device = device.clone();
-    let channels = ws.read().channels();
 
-    let motif_batch_size = comon_label_node_params.motif_batch_size as i64;
     let mut optimizer = AdamW::default().amsgrad(true);
 
     if let Some(adam_w) = run_config_values.adam_w {
@@ -620,25 +615,18 @@ pub fn train_label_nodes (
     let loss = train(
         &device,
         batch,
-        // &flat_label_node(&label_node_params).build_tch_module(&vs_0.root())?,
         &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
         |pred: &Tensor, target: &Tensor| {
             debug!("train_on_label: pred.size={:?}", pred.size());
             let pred_y = pred.squeeze();
-            //pred.i((.., 0, 0));
             debug!("train_on_label: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
             pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
         },
         comon_label_node_params.cycles,
-        // nn::AdamW::default().build(&vs_0, run_config.lr)?,
         optimizer.build(&vs_0, run_config_values.lr)?,
 
         |t: Tensor| {
             debug!("train_on_label: t.size={:?} cuda_mem={:?}", t.size(), cuda_mem());
-            //merge max_motif_batches * motif_batch_size
-            // let t_out = view_for_label_model(t, channels as i64, label_node_params.max_motif_nodes, motif_batch_size, label_node_params.max_motif_batches as usize); //.view((t.size()[0], -1));
-            //t.size()[0] - batch size
-            // debug!("train_on_label: t_out.size={:?} cuda_mem={:?}",  t_out.size(), cuda_mem());
             t
         },
         None,
@@ -680,7 +668,6 @@ pub fn run_opt_train_final (
         a.insert(v.0, Arc::new(RwLock::new(v.1)));
         a
     });
-    let input_slice_step = common_train_final_run_config.input_slice_step;
     let device = device.clone();
 
     let labels = store.lock().list_labels()?;
@@ -694,7 +681,7 @@ pub fn run_opt_train_final (
         device.clone(),
         Some( Box::new(move |t:Box<Tensor>| {
 
-            apply_motif_and_label_nets(&t, &mut label_models, &labels_channels_motifs_models_rw, input_slice_step, &device, &labels, max_input)
+            apply_motif_and_label_nets(&t, &mut label_models, &labels_channels_motifs_models_rw, &device, &labels, max_input)
 
         }))
     );
@@ -716,13 +703,22 @@ pub fn run_opt_train_final (
 }
 
 
-pub fn apply_channel_motifs_2(input_slice_step: usize,
-                              motif_nodes: &mut [(MotifNodeParams, SyncModule)],
-                              channel: Tensor,
-                              motif_width: i64,
-                              max_motif_nodes: i64,
-                              slices_len: i64,
-                              device: &Device
+/**
+slices single input tensor's channel into batches of input_slices_motif_batch_size with input_slice_step which were used during motif node training.
+all motif nodes are to be from same run so have same input params.
+Arranges output into max_motif_nodes x max_motif_batches  (max_ - to be same for all channels)
+
+input_slices_motif_batch_size - both for motif node input batch size and output (input for label node) batch
+
+ # returns Tensor nodes x batches x batch size
+*/
+pub fn apply_channel_motifs(input_slice_step: usize,
+                            motif_nodes: &mut [(MotifNodeParams, SyncModule)],
+                            channel: Tensor,
+                            motif_width: i64,
+                            max_motif_nodes: i64,
+                            slices_len: i64,
+                            device: &Device
 ) -> Result<Tensor, ThoosaError> {
 
     debug!("apply_channel_motifs_2: motif_nodes={motif_nodes:?} channel={channel:?} motif_width={motif_width} max_motif_nodes={max_motif_nodes} max_dists_len={slices_len} device={device:?}");
@@ -772,7 +768,6 @@ pub fn apply_motif_and_label_nets(
     input_t: &Box<Tensor>,
     label_models: &mut HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>,
     labels_channels_motifs_models_rw: &HashMap<String, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, SyncModule)>)>>>>,
-    input_slice_step: usize,
     device: &Device,
     labels: &Vec<String>,
     max_input: u32
@@ -1971,7 +1966,6 @@ fn apply_motif_nets(
 ) -> Tensor {
     let max_motif_nodes = channels_motifs_nodes.read().iter().map(|nets| nets.1.len()).max().unwrap_or(0);
 
-
     debug!("apply_motif_nets: input_t.size={:?} max_motif_nodes={max_motif_nodes} ", input_t.size());
 
     let channels_motifs = Tensor::stack(
@@ -1981,14 +1975,14 @@ fn apply_motif_nets(
             .map(|(channel, (find_motifs_cfg, motif_nodes))| {
                 let slices_len = slices_len(input_n as i64, find_motifs_cfg.window as i64, find_motifs_cfg.step as usize);
 
-                apply_channel_motifs_2(
-                find_motifs_cfg.step as usize,
-                motif_nodes,
-                input_t.i((channel as i64, ..)),
-                find_motifs_cfg.window as i64,
-                max_motif_nodes as i64,
-                slices_len as i64,
-                device
+                apply_channel_motifs(
+                    find_motifs_cfg.step as usize,
+                    motif_nodes,
+                    input_t.i((channel as i64, ..)),
+                    find_motifs_cfg.window as i64,
+                    max_motif_nodes as i64,
+                    slices_len,
+                    device
             )})
             .collect::<Result<Vec<_>, ThoosaError>>().unwrap().as_slice(),
         0
@@ -2130,12 +2124,11 @@ impl RunConfig for crate::train_nets::TrainFinalNodeRunConfig {
 pub struct CommonTrainFinalNodeRunConfig {
     pub cycles:usize,
     pub batch_size:usize,
-    pub input_slice_step: usize
 }
 
 impl CommonTrainFinalNodeRunConfig {
-    pub fn new(cycles: usize, batch_size:usize, input_slice_step: usize) -> Self {
-        Self { cycles, batch_size,input_slice_step }
+    pub fn new(cycles: usize, batch_size:usize) -> Self {
+        Self { cycles, batch_size }
     }
 }
 
@@ -2182,8 +2175,7 @@ impl Params<TrainFinalNodeRunConfig, NetResources<Logits>, CommonTrainFinalNodeR
     fn common_config(&self) -> CommonTrainFinalNodeRunConfig {
         CommonTrainFinalNodeRunConfig::new(
             self.cycles,
-            self.batch_size,
-            self.input_slice_step
+            self.batch_size
         )
     }
 }
@@ -2246,10 +2238,10 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
 mod train_tests {
     use crate::builder::SeqBuilder;
     use crate::loader::{LoadRunner, SyncWrapper};
-    use crate::my_tch::{apply_channel_motifs, ThoModule};
+    use crate::my_tch::{ThoModule};
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs_2, apply_motif_and_label_nets, apply_motif_nets, label_node, ClassTensorsLoaderData, CommonTrainFinalNodeRunConfig, FinalNodeParams, FindMotifsRunConfig, LoadingTensorsDataBatch, TrainNodesValues};
+    use crate::train_nets::{apply_channel_motifs, apply_motif_and_label_nets, apply_motif_nets, label_node, ClassTensorsLoaderData, CommonTrainFinalNodeRunConfig, FinalNodeParams, FindMotifsRunConfig, LoadingTensorsDataBatch, TrainNodesValues};
     use crate::train_nets::{load_label_models_ws, load_motif_models, CommonTrainLabelNodeRunConfig, InferParams, LabelNodeParams, MotifNodeParams, SyncModule, TensorsDataBatch, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig};
     use crate::utils::from;
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_size_in_bytes, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
@@ -2389,7 +2381,7 @@ mod train_tests {
         let max_motif_batches = motif_batches.0.len() + if motif_batches.1.len() > 0 {1} else {0};
 
         // let channel_0_t = apply_channel_motifs(step, batch_size as i64, &mut motif_nets[0], t.i((0, ..)), max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
-        let channel_0_t = apply_channel_motifs_2(step,  &mut motif_nets[0].1, t.i((0, ..)), motif_width, max_motif_nets_in_channel as i64, max_dists_len, &Cpu)?;
+        let channel_0_t = apply_channel_motifs(step, &mut motif_nets[0].1, t.i((0, ..)), motif_width, max_motif_nets_in_channel as i64, max_dists_len, &Cpu)?;
 
         debug!("t.i((0, ..))=\n{}", t.i((0, ..)));
         debug!("channel_0_t.size={:?} channel_0_t=\n{channel_0_t}", channel_0_t.size());
@@ -2404,7 +2396,7 @@ mod train_tests {
         assert_eq!(channel_0_motifs, channel_0_t.view((2, 10)));
 
         // let channel_1_t = apply_channel_motifs(step, batch_size as i64, &mut motif_nets[1], t.i((1, ..)), max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
-        let channel_1_t = apply_channel_motifs_2(step,  &mut motif_nets[1].1, t.i((1, ..)), motif_width, max_motif_nets_in_channel as i64, max_dists_len, &Cpu)?;
+        let channel_1_t = apply_channel_motifs(step, &mut motif_nets[1].1, t.i((1, ..)), motif_width, max_motif_nets_in_channel as i64, max_dists_len, &Cpu)?;
 
         debug!("test_apply_motif_models: max_motif_batches={:?}", max_motif_batches);
 
@@ -2451,7 +2443,7 @@ mod train_tests {
             (MotifNodeParams::new(motif_width, 1), SyncModule::new(test_net(motif_width, 1., Cuda(0))?))
         ];
 
-        let channel_1_t = apply_channel_motifs_2(input_slice_step,  &mut motif_nets, channel, motif_width, 1, max_dists_len, &Cuda(0))?.view(max_dists_len);
+        let channel_1_t = apply_channel_motifs(input_slice_step, &mut motif_nets, channel, motif_width, 1, max_dists_len, &Cuda(0))?.view(max_dists_len);
 
         trace!("channel_1_t=\n{channel_1_t}");
 
@@ -2568,7 +2560,7 @@ mod train_tests {
         let (loss, params) = super::train_label_nodes(
             &ws,
             &TrainNodesValues::new(1e-3, 3, Some(AdamW::default().amsgrad(true))),
-            &CommonTrainLabelNodeRunConfig::new(100,  0, BATCH_SIZE, 300),
+            &CommonTrainLabelNodeRunConfig::new(BATCH_SIZE, 300),
             &mut DummyLabelBatch::new(),
             &Cpu,
             CHANNELS as i64,
@@ -2647,7 +2639,7 @@ mod train_tests {
                 super::train_label_nodes(
                     &ws,
                     &TrainNodesValues::new(1e-3, 3, Some(AdamW::default().amsgrad(true))),
-                    &CommonTrainLabelNodeRunConfig::new(100,  MAX_SLICES_LEN, BATCH_SIZE, 300),
+                    &CommonTrainLabelNodeRunConfig::new(BATCH_SIZE, 300),
                     &mut DummyLabelBatch::new(),
                     &Cuda(0),
                     CHANNELS as i64,
@@ -2750,7 +2742,7 @@ mod train_tests {
                 1.0e-2,
                 3u32, None
             ),
-            &CommonTrainFinalNodeRunConfig::new(300, BATCH_SIZE, 10),
+            &CommonTrainFinalNodeRunConfig::new(300, BATCH_SIZE),
             &mut DummyLabelBatch::new(),
             &Cpu,
             LABELS_SIZE,
