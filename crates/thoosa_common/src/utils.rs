@@ -1,4 +1,5 @@
 use std::{fs, mem, ptr};
+use std::cell::{RefCell, RefMut};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt::{Debug, Display};
@@ -22,11 +23,12 @@ use tch::{Device, IndexOp, Kind, TchError, Tensor};
 use tch::display::PrinterOptions;
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
-use tch::nn::Module;
+use tch::nn::{Module, VarStore};
 use tch::nn::Optimizer;
 use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
 use std::panic::AssertUnwindSafe;
+use std::rc::Rc;
 use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt, saw};
 
 use crate::my_tch::{LossFp, ThoModule};
@@ -423,9 +425,11 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
     }
 }
 
+
+
 pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> Result<(), ThoosaError>
 where
-    F: FnMut(&V) -> Result<FR, ThoosaError>,
+    F: FnMut(&mut V) -> Result<FR, ThoosaError>,
     S: Splitter<SIZE, S=V>,
     OkF: FnMut(FR, &mut V) -> OkR
 {
@@ -433,7 +437,7 @@ where
 
     loop {
         while let Some(mut split_0) = splitter.next() {
-            match panic_to_err!(f(&split_0)) {
+            match panic_to_err!(f(&mut split_0)) {
                 Ok(fr) => {
                     attempt = 0;
                     on_ok(fr, &mut split_0);
@@ -858,9 +862,10 @@ pub trait DataBatch {
     fn valid_batch(&mut self) -> (Tensor, Tensor);
 }
 
-trait SplittableDataBatch: DataBatch + Splittable<2> {
+pub trait SplittableDataBatch: DataBatch + Splittable<1> + Debug {
 
 }
+
 
 pub trait TrainListener {
     fn on_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse {
@@ -888,8 +893,7 @@ pub fn train<F>(
     where F:Fn(Tensor)->Tensor {
 
     debug!("train: device={:?} cycles={}", device, cycles);
-    debug!("train: opt={opt:?} optimizer_size={}", optimizer_size(&opt));
-
+    debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
     let mut last_valid_loss = [0f32;3];
 
@@ -907,16 +911,20 @@ pub fn train<F>(
         debug!("train: 1. cuda_mem={:?}",  cuda_mem());
         trace!("train: x_t=\n{x_t}");
         drop(x_t);
-        unsafe { at_autocast_clear_cache(); }
+        // unsafe { at_autocast_clear_cache(); }
 
         let loss = loss_fn(&predicted_y, &expected_y);
-        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
-        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y}");
 
+        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
+        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}", optimizer_mem_size(&opt));
+        drop(predicted_y);
+        drop(expected_y);
+        debug!("train: 2.1 cuda_mem={:?}",  cuda_mem());
         let t1 = Instant::now();
 
         opt.backward_step(&loss);
-        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
+
+        debug!("train: 3. cuda_mem={:?}  optimizer_size={}", cuda_mem(),  optimizer_mem_size(&opt));
         debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
 
 
@@ -1112,12 +1120,15 @@ pub fn reset_print_options(){
     tch::display::set_print_options(printer_options);
 }
 
-pub fn tensor_size_in_bytes(t:&Tensor) -> usize {
+pub fn tensor_mem_size(t:&Tensor) -> usize {
     t.numel() * t.kind().elt_size_in_bytes()
+}
 
+pub fn vs_mem_size(opt:&VarStore) -> usize {
+    opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
 }
 
 
-pub fn optimizer_size(opt:&Optimizer) -> usize {
-    opt.trainable_variables().iter().map(|t|tensor_size_in_bytes(t)).sum()
+pub fn optimizer_mem_size(opt:&Optimizer) -> usize {
+    opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
 }

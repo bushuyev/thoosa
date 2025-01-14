@@ -1,6 +1,6 @@
 use parking_lot::{Mutex, RwLock};
 use parking_lot_mpsc::*;
-use log::{debug, trace};
+use log::{debug, log_enabled, trace, Level};
 use std::sync::Arc;
 use std::hash::Hash;
 use std::fmt::{Debug, Display};
@@ -20,8 +20,9 @@ use futures::{
     future::{BoxFuture, FutureExt},
     task::{waker_ref, ArcWake},
 };
-use tch::{IndexOp, Tensor};
+use tch::{Device, IndexOp, Tensor};
 use thoosa_shared::resource::{Resource, ResourceId};
+use crate::utils::tensor_mem_size;
 
 struct RayonNotify {}
 
@@ -36,7 +37,7 @@ impl ArcWake for RayonNotify {
 
 pub struct Loader<V>
 where
-    V: Send + Debug + 'static,
+    V: OfMemSize + Send + Debug + 'static,
 {
     loader_fn: Arc<Box<dyn Fn(&Resource) -> SyncWrapper<V> + Sync + Send>>,
     loader_pool: ThreadPool,
@@ -47,7 +48,7 @@ where
 
 impl<V> Loader<V>
 where
-    V: Send + Debug + 'static,
+    V: OfMemSize + Send + Debug + 'static,
 {
     pub fn preload(self_arc: Arc<RwLock<Loader<V>>>, keys: &[Resource], cache_area: u64) {
         debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
@@ -121,7 +122,7 @@ where
         debug!("preload_vec: in loader_pool 1 current_thread={:?}", thread::current().id());
     }
 
-    pub fn purge_resources(loader_arc: Arc<RwLock<Loader<V>>>, keys: &Vec<Resource>, cache_area: u64) {
+    pub fn purge_resources(loader_arc: Arc<RwLock<Loader<V>>>, keys: &[Resource], cache_area: u64) {
         let mut loader_guard = loader_arc.write();
 
 
@@ -138,11 +139,42 @@ where
             }
         }
     }
+
+    pub fn debug(loader_arc: &Arc<RwLock<Loader<V>>>, prefix:&str) {
+        let mut loader_guard = loader_arc.read();
+        let mut total_mem:HashMap<Device, usize> = HashMap::new();
+
+        for (key, resource) in loader_guard.resources.iter(){
+            let mem_size = resource.mem_size();
+            debug!("{prefix} loader debug: key={key:?} resource={resource:?} mem_size={mem_size:?}");
+            *total_mem.entry(mem_size.0).or_insert(0) += mem_size.1;
+        }
+
+        debug!("{prefix} loader debug: total_mem={total_mem:?}");
+    }
+}
+
+
+pub trait OfMemSize {
+    fn mem_size(&self) -> (Device, usize);
+}
+
+impl OfMemSize for Tensor {
+    fn mem_size(&self) -> (Device, usize) {
+        (self.device(), tensor_mem_size(self))
+    }
+}
+
+
+impl OfMemSize for Box<Tensor> {
+    fn mem_size(&self) -> (Device, usize) {
+        (self.device(), tensor_mem_size(self))
+    }
 }
 
 pub struct LoadRunner<V>
 where
-    V: Send + Debug + 'static,
+    V: OfMemSize + Send + Debug + 'static,
 {
     futures_pool: ThreadPool,
     features: Arc<RwLock<Vec<Mutex<BoxFuture<'static, ()>>>>>,
@@ -154,7 +186,7 @@ where
 
 impl<V> LoadRunner<V>
 where
-    V: Send + Debug + 'static,
+    V: OfMemSize + Send + Debug + 'static,
 {
     pub fn new<F>(loader: F, loader_threads: usize, futures_channel_bound: usize) -> Self
     where
@@ -245,7 +277,7 @@ where
 
     pub fn exec<F>(&mut self, make_future: F)
     where
-        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(&Vec<Resource>, u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
+        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(&[Resource], u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
 
     {
         let loader_for_purge = Arc::clone(&self.loader);
@@ -258,6 +290,11 @@ where
         ))).expect("features_sender.send");
     }
 
+    pub fn debug(&self, prefix:&str) {
+        if log_enabled!(Level::Debug) {
+            Loader::debug(&self.loader, prefix);
+        }
+    }
 
     pub fn load_future(loader: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64) -> BoxFuture<'static, V> {
         Loader::load_future(loader, key, cache_area)
@@ -341,7 +378,7 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
 
 struct ResourceFuture<V>
 where
-    V: Send + Debug + 'static,
+    V: OfMemSize + Send + Debug + 'static,
 {
     key: Resource,
     loader: Arc<RwLock<Loader<V>>>,
@@ -349,7 +386,7 @@ where
 
 impl<V> ResourceFuture<V>
 where
-    V: Send + Debug + 'static,
+    V: OfMemSize + Send + Debug + 'static,
 {
     pub fn new(loader: Arc<RwLock<Loader<V>>>, key: Resource) -> Self {
         Self {
@@ -361,7 +398,7 @@ where
 
 impl<V> Future for ResourceFuture<V>
 where
-    V: Send + Debug + 'static,
+    V: OfMemSize + Send + Debug + 'static,
 {
     type Output = V;
 
@@ -380,14 +417,14 @@ where
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct SyncWrapper<V>
 where
-    V: Send + Debug,
+    V: OfMemSize + Send + Debug,
 {
     v: V,
     shallow_clone_fn: fn(&V) -> V,
     cache_areas: u64,
 }
 
-impl<V:Send+Display+Debug> Display for SyncWrapper<V> {
+impl<V: OfMemSize + Send + Display + Debug> Display for SyncWrapper<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.v, f)
     }
@@ -407,7 +444,7 @@ impl SyncWrapper<Box<Tensor>> {
 
 impl<V> SyncWrapper<V>
 where
-    V: Send + Debug,
+    V: OfMemSize + Send + Debug,
 {
     pub fn new(v: V, shallow_clone_fn: fn(&V) -> V) -> Self {
         Self {
@@ -421,11 +458,11 @@ where
         (self.shallow_clone_fn)(&self.v)
     }
 }
-unsafe impl<V> Sync for SyncWrapper<V> where V: Send + Debug {}
+unsafe impl<V> Sync for SyncWrapper<V> where V: OfMemSize + Send + Debug {}
 
 impl<V> Deref for SyncWrapper<V>
 where
-    V: Send + Debug,
+    V: OfMemSize + Send + Debug,
 {
     type Target = V;
     fn deref(&self) -> &Self::Target {
@@ -435,7 +472,7 @@ where
 
 impl<V> DerefMut for SyncWrapper<V>
 where
-    V: Send + Debug,
+    V: OfMemSize + Send + Debug,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.v
@@ -471,13 +508,12 @@ mod tests {
     use crossbeam_utils::sync::WaitGroup;
     use log::debug;
     use rand::Rng;
-    use tch::Device::Cuda;
+    use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
-    use tch::Tensor;
+    use tch::{Device, Tensor};
     use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::ThoosaError;
-
-
+    use crate::loader::OfMemSize;
 
     #[ctor::ctor]
     fn init() {
@@ -487,6 +523,12 @@ mod tests {
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct TestEntity {
         key: Resource,
+    }
+
+    impl OfMemSize for TestEntity {
+        fn mem_size(&self) -> (Device, usize) {
+            (Cpu, 1)
+        }
     }
 
     #[allow(dead_code)]
@@ -649,7 +691,7 @@ mod tests {
 
                             drop(wg_0_i);
 
-                            (keys_purge)(&vec![aaa_resources[b][j].clone(), bbb_resources[b][j].clone()], cache_area_0);
+                            (keys_purge)(&[aaa_resources[b][j].clone(), bbb_resources[b][j].clone()], cache_area_0);
                         }.boxed()
                     });
 

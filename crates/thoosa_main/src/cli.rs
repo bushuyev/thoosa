@@ -618,13 +618,7 @@ where
                 warn!("tensor requires grad!");
             }
             debug!("key={key:?} tensor.size={:?}", tensor.size());
-            SyncWrapper::new_tb(Box::new(
-                // Tensor::load(tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())))
-                //     .map_err(|e| ThoosaError::new(e.to_string()))
-                //     .expect(format!("can't load {key:?}").as_str())
-                //     .to_device_(Cuda(0), Kind::Float, true, false)
-                tensor,
-            ))
+            SyncWrapper::new_tb(Box::new(tensor))
         },
         loader_threads,
         cli.futures_channel_bound,
@@ -2359,7 +2353,6 @@ mod main_tests {
                 select_motifs_for_label_run_ids,
                 group_name.clone(),
                 group_name.clone(),
-                motif_batch_size as i64,
                 5,
                 2 * cycles,
                 1e-3..1e-2,
@@ -2380,16 +2373,14 @@ mod main_tests {
         let train_final_nodes_run_ids = run_step(
             Some(train_label_nodes_run_ids.clone()),
             &TrainFinalNodeParams::dummy(train_label_nodes_run_ids,
-             100,
-             10,
-             group_name.clone(),
-             group_name.clone(),
-             2 * cycles,
-             motif_batch_size as i64,
-             1e-5..1e-2,
-             0..3,
-             opt_max_evals,
-             opt_n_init,
+                                         10,
+                                         group_name.clone(),
+                                         group_name.clone(),
+                                         2 * cycles,
+                                         1e-5..1e-2,
+                                         0..3,
+                                         opt_max_evals,
+                                         opt_n_init,
             ),
             run_train_final_node,
             &ws,
