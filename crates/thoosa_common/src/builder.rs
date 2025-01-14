@@ -94,11 +94,11 @@ impl Node {
             }
 
             Node::Conv1d { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv1d(vs/ "cnn", in_channels, out_channels, kernel, config))
+                Box::new(nn::conv1d(vs/ "cnn_id", in_channels, out_channels, kernel, config))
             }
 
             Node::Conv2d { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv2d(vs/ "cnn", in_channels, out_channels, kernel, config))
+                Box::new(nn::conv2d(vs/ "cnn_2d", in_channels, out_channels, kernel, config))
             }
 
             Node::BatchNorm { .. } => {
@@ -109,7 +109,7 @@ impl Node {
                 assert!(in_feats > 0);
                 assert!(out_feats > 0);
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
-                Box::new(my_linear(vs/ "layer1", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)//TODO rename layer1
+                Box::new(my_linear(vs/ "linear", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)//TODO rename layer1
             }
 
             Node::MaxPool { kernel_size, stride, padding } => {

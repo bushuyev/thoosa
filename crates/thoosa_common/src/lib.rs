@@ -1,4 +1,5 @@
 #![allow(uncommon_codepoints)]
+#![feature(trait_upcasting)]
 // #![feature(const_trait_impl)]
 // #![feature(effects)]
 // #![feature(iter_array_chunks)]

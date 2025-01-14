@@ -8,7 +8,7 @@ use log::{debug, error, trace, warn};
 use tch::{Device, IndexOp, Tensor};
 use tch::Device::Cpu;
 use tch::Kind::Float;
-use tch::nn::{Conv1D, Conv2D, Init, LinearConfig, Module, Path};
+use tch::nn::{Conv1D, Conv2D, Init, LinearConfig, Module, Optimizer, Path};
 use tch::nn::ConvConfig;
 
 use thoosa_shared::*;
@@ -206,9 +206,11 @@ impl ThoModule for MyAvgPool1d{
 
 }
 
-
 pub trait ThoModule:Module{
     fn debug(&self){}
+    fn mem_size(&self) -> usize {//TODO
+        0
+    }
 }
 
 
@@ -625,7 +627,7 @@ mod tch_tests {
     #[allow(dead_code)]
     #[test]
     pub fn test_save_load() -> Result<(), ThoosaError> {
-        let vs_0 = nn::VarStore::new(Device::Cpu);
+        let vs_0 = VarStore::new(Device::Cpu);
 
         let node = SeqBuilder::new(123)
             .linear_s(10)
@@ -638,7 +640,7 @@ mod tch_tests {
 
         vs_0.save("/tmp/test.safetensors")?;
 
-        let mut vs_1 = nn::VarStore::new(Device::Cpu);
+        let mut vs_1 = VarStore::new(Device::Cpu);
         for (key, t) in vs_0.variables() {
             let path = key.split(".").collect::<Vec<&str>>();
             let _ = (vs_1.root() / path[0] ).var(&path[1], &t.size(), Init::Const(0.0));
