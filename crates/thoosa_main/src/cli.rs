@@ -116,10 +116,7 @@ pub struct RunAllParams {
     select_motifs_min_ratio: f32,
 
     #[arg(long, default_value_t = 10)]
-    batch_size: i64, //for motif slices when training motif nets and input tensors when training labels
-
-    #[arg(long, default_value_t = 100)]
-    motif_batch_size: i64, //for motif
+    batch_size: i64,
 
     #[arg(long, default_value_t = 0.2)]
     pub max_loss: f32,
@@ -161,12 +158,12 @@ impl RunAllParams {
             num_layers: 3.into(),
 
             batch_size: 10,
-            motif_batch_size: 100,
             max_loss: 0.1,
             opt_n_init: 1,
             opt_max_evals: 3,
         }
     }
+
     pub fn valid_resource_group(&self) -> &str {
         &self.valid_resource_group
     }
@@ -295,7 +292,7 @@ impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> f
 
     fn common_config(&self) -> CommonTrainMotifsNodesRunConfig {
         CommonTrainMotifsNodesRunConfig {
-            batch_size: self.motif_batch_size as usize,
+            batch_size: self.batch_size as usize,
             cycles: self.cycles,
             max_loss: 0.1,
         }
