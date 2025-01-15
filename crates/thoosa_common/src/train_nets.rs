@@ -2645,11 +2645,11 @@ mod train_tests {
 
 
     fn asc_t<const S:usize>(mut data: [f32; S]) -> Tensor {
-        Tensor::from_slice((0..S).map(|i| data[0] + i as f32).collect::<Vec<_>>().as_slice()).to_kind(Float)
+        Tensor::from_slice((0..S).map(|i| data[i] + i as f32 * 2.).collect::<Vec<_>>().as_slice()).to_kind(Float)
     }
 
     fn desc_t<const S:usize>(mut data: [f32; S]) -> Tensor {
-        Tensor::from_slice((0..S).rev().map(|i| data[0] + i as f32).collect::<Vec<_>>().as_slice()).to_kind(Float)
+        Tensor::from_slice((0..S).rev().map(|i| data[i] + i as f32 * 2.).collect::<Vec<_>>().as_slice()).to_kind(Float)
     }
 
     #[test]
@@ -2660,56 +2660,115 @@ mod train_tests {
         let cudarc_lib = unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
+        let batch_size = 20;
+        const FEATURES:i64 = 11;
 
-        let res_seq_0 = SeqBuilder::new(11)
+        let res_seq_0 = SeqBuilder::new(FEATURES)
+            // .func(|t|{
+            //     debug!("res_seq_0: t={t:?}");
+            //     t.shallow_clone()
+            // })
             .batch_norm(BatchNormConfig::default())
+            .linear()
+            .func(Tensor::relu)
             .linear()
             .func(Tensor::relu)
             .linear_s(1)
             .func(Tensor::sigmoid)
             .end_seq();
 
+        let res_seq_1 = SeqBuilder::new(FEATURES)
+            // .func(|t|{
+            //     debug!("res_seq_1: t={t:?}");
+            //     t.shallow_clone()
+            // })
+            .batch_norm(BatchNormConfig::default())
+            .linear()
+            .func(Tensor::relu)
+            .linear()
+            .func(Tensor::relu)
+            .linear_s(1)
+            // .func(Tensor::sigmoid)
+            .end_seq();
+
+
+        let full = SeqBuilder::new(FEATURES)
+
+            .split(
+                vec![
+                    res_seq_0,
+                    res_seq_1
+                ],
+
+                Box::new(
+                    move |t:&Tensor| {
+                        debug!("split: t={t:?}");
+                        vec![
+                            t.i((.., 0, ..)),
+                            t.i((.., 1, ..))
+                        ]
+                    }
+                ),//label batch, channel, max_motif_nets, max slices
+
+                Box::new(move |t:Vec<Tensor>| {
+                    debug!("join: in t={t:?}");
+                    let t = Tensor::concat(t.as_slice(), 1);
+                    debug!("join: t={t:?}");
+                    t
+                })
+
+            )
+            .linear_feats(2, 2)
+            .func(Tensor::relu)
+            .linear_feats(2, 1)
+            .func(Tensor::sigmoid)
+            .end_seq();
+
         let mut vs_0 = VarStore::new(Cuda(0));
         let root = vs_0.root();
-        let net_0 = res_seq_0.build_tch_module(&root)?; //&(root / "vs_0"))?;
+        let net_full = full.build_tch_module(&root)?; //&(root / "vs_0"))?;
         let mut opt = AdamW::default().beta1(0.9).beta2(0.999).build(&vs_0, 1e-3)?;
         for epoch in 0..1000 {
 
             let mut rng = thread_rng();
-            let (input_0, input_1, target):(Vec<Tensor>, Vec<Tensor>, Vec<f32>) = (0..20).map(|i| {
-                let mut data = [0.; 11];
+
+            let (input_0, input_1, target):(Vec<Tensor>, Vec<Tensor>, Vec<f32>) = (0..batch_size).map(|i| {
+
+                let mut data = [0.; FEATURES as usize];
                 rng.fill(&mut data);
 
                 if rng.gen_bool(0.5) {
                     (
-                        // Tensor::from_slice(&data).to_kind(Float) + 100.,
                         asc_t(data),
                         desc_t(data),
-                        1.
+                        0.
                     )
                 } else {
                     (
-                        // Tensor::from_slice(&data).to_kind(Float),
                         desc_t(data),
                         asc_t(data),
-                        0.
+                        1.
                     )
                 }
-            }).fold((Vec::new(), Vec::new(), Vec::new()), |mut a, (i_0, i_1, t)| {
+            }).fold((Vec::new(), Vec::new(), Vec::new()), |mut a, (i_0, i_1, label)| {
                 a.0.push(i_0);
                 a.1.push(i_1);
-                a.2.push(t);
+                a.2.push(label);
                 a
             });
 
             let input_0 = Tensor::stack(input_0.as_slice(), 0).to_device(Cuda(0));
             let input_1 = Tensor::stack(input_1.as_slice(), 0).to_device(Cuda(0));
+            let input = Tensor::stack(&[input_0, input_1], 0).transpose(0,1);
 
-            debug!("input_1=\n{input_1}");
+            trace!("input=\n{input}");
 
             let target = Tensor::from_slice(target.as_slice()).view((-1,1)).to_device(Cuda(0));
 
-            let pred = net_0.tho_forward(&input_0, true);
+            trace!("target=\n{target}");
+
+
+            let pred = net_full.tho_forward(&input, true);
 
             let loss = pred.binary_cross_entropy(&target, None::<Tensor>, Reduction::Mean);
             opt.backward_step(&loss);
@@ -2721,27 +2780,52 @@ mod train_tests {
                 info!("loss={loss}");
             }
         }
-        let mut rng = thread_rng();
-        let mut data = [0.; 11];
-        rng.fill(&mut data);
 
         vs_0.freeze();
 
-        let pred_asc = net_0.tho_forward(&asc_t(data).view((1, 11)).to_device(Cuda(0)), false);
-        info!("pred_asc=\n{pred_asc}");
-        let pred_desc = net_0.tho_forward(&desc_t(data).view((1, 11)).to_device(Cuda(0)), false);
-        info!("pred_desc=\n{pred_desc}");
+        let mut rng = thread_rng();
+
+        // let mut results = vec![];
+        for i in 0..100 {
+            let mut data = [0.; FEATURES as usize];
+            rng.fill(&mut data);
+
+            let pred_0 = net_full.tho_forward(&Tensor::stack(&[
+                Tensor::stack(&[asc_t(data), desc_t(data)], 0), //0
+                // Tensor::stack(&[desc_t(data), asc_t(data)], 0), //1
+            ], 1).transpose(0, 1).to_device(Cuda(0)), false); //0
+            info!("pred_0=\n{pred_0}");
+
+            let pred_1 = net_full.tho_forward(&Tensor::stack(&[
+                // Tensor::stack(&[asc_t(data), desc_t(data)], 0), //0
+                Tensor::stack(&[desc_t(data), asc_t(data)], 0), //1
+            ], 1).transpose(0, 1).to_device(Cuda(0)), false); //1
+            info!("pred_1=\n{pred_1}");
+
+            assert!(pred_0.squeeze().double_value(&[]) < 0.5);
+            assert!(pred_1.squeeze().double_value(&[]) > 0.5);
+
+            // results.push((
+            //     pred_0.squeeze().double_value(&[]) < 0.5,
+            //     pred_1.squeeze().double_value(&[]) > 0.5
+            // ));
+        }
+        // info!("results={results:?}");
+
 
         // net_0
+       /* let mut data = [0.; FEATURES as usize];
+        for _ in 0..10 {
+            rng.fill(&mut data);
+            let pred_input = Tensor::stack(&[
+                Tensor::stack(&[asc_t(data), desc_t(data)], 0), //0
+                // Tensor::stack(&[desc_t(data), asc_t(data)], 0), //1
+            ], 1).transpose(0, 1).to_device(Cuda(0));
 
-        let pred_batch  = net_0.tho_forward(
-            &Tensor::stack(&[
-                desc_t(data),//0
-                asc_t(data),//1
-            ], 0).to_device(Cuda(0)),
-            false,
-        );
-        info!("pred_batch=\n{pred_batch}");
+            debug!("pred_input={pred_input:?}");
+            let pred_batch = net_full.tho_forward(&pred_input, false);
+            info!("pred_batch=\n{pred_batch}");
+        }*/
         // for i in 0..10 {
         //
         // }

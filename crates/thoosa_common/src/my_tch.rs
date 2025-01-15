@@ -95,7 +95,7 @@ impl ThoModule for MyParallel{
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t).into_iter().zip(self.layers.iter()).map(|(t, net)| {
-                net.tho_forward(&t, true)
+                net.tho_forward(&t, train)
             }).collect::<Vec<Tensor>>()
         );
 
