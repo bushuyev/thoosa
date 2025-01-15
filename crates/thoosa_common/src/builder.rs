@@ -236,6 +236,14 @@ impl SeqBuilder {
         self
     }
 
+    pub fn linear_feats(&mut self, num_features:i64, out_feats:i64) -> &mut Self {
+        self.elts.push(
+            Node::Linear { in_feats:num_features, out_feats:out_feats, config:None}
+        );
+        self.num_features = out_feats;
+        self
+    }
+
     pub fn linear_f(&mut self, f:f32) -> &mut Self {
         let out_feats = (self.num_features as f32 * f) as i64;
         self.elts.push(
