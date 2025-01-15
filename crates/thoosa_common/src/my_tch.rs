@@ -8,7 +8,8 @@ use log::{debug, error, trace, warn};
 use tch::{Device, IndexOp, Tensor};
 use tch::Device::Cpu;
 use tch::Kind::Float;
-use tch::nn::{Conv1D, Conv2D, Init, LinearConfig, Module, Optimizer, Path};
+use tch::kind::FLOAT_CPU;
+use tch::nn::{batch_norm1d, BatchNorm, BatchNormConfig, Conv1D, Conv2D, Init, LinearConfig, Module, ModuleT, Optimizer, Path};
 use tch::nn::ConvConfig;
 
 use thoosa_shared::*;
@@ -17,7 +18,7 @@ use thoosa_shared::ThoosaError;
 use crate::builder::Node;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
-use crate::train_nets::{MotifNodeParams, SyncModule};
+use crate::train_nets::{MotifNodeParams, ThoModuleWithStore};
 use crate::utils::*;
 
 #[derive(Debug)]
@@ -31,28 +32,25 @@ impl MySequential {
     }
 }
 
-impl Module for MySequential {
-
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        if self.layers.is_empty() {
-            xs.shallow_clone()
-        } else {
-            debug!("MySequential::forward: xs.size={:?} device={:?} self.layers[0]={:?}", xs.size(), xs.device(), self.layers[0]);
-
-            let xs = self.layers[0].forward(xs);
-            self.layers.iter().skip(1).enumerate().fold(xs, |xs,(i,  layer)| {
-                debug!("MySequential::layer={i} xs.size={:?} device={:?} layer={:?}", xs.size(), xs.device(), layer);
-
-                layer.forward(&xs)
-            })
-        }
-    }
-}
-
 impl ThoModule for MySequential {
     fn debug(&self) {
         for l in &self.layers {
             l.debug();
+        }
+    }
+
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        if self.layers.is_empty() {
+            t.shallow_clone()
+        } else {
+            debug!("MySequential::forward: xs.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.device(), self.layers[0]);
+
+            let xs = self.layers[0].tho_forward(t, train);
+            self.layers.iter().skip(1).enumerate().fold(xs, |xs,(i,  layer)| {
+                debug!("MySequential::layer={i} xs.size={:?} device={:?} layer={:?}", xs.size(), xs.device(), layer);
+
+                layer.tho_forward(&xs, train)
+            })
         }
     }
 }
@@ -86,36 +84,37 @@ impl MyParallel {
     }
 }
 
-impl Module for MyParallel {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        debug!("MyParallel::forward: xs={:?}", xs.size());
-        let t = (self.join)(
-            (self.split)(xs).into_iter().zip(self.layers.iter()).map(|(t, net)| {
-                net.forward(&t)
-            }).collect::<Vec<Tensor>>()
-        );
-
-        debug!("MyParallel::forward: t={:?}", t.size());
-
-        t
-
-    }
-}
 impl ThoModule for MyParallel{
     fn debug(&self) {
         for l in &self.layers{
             l.debug();
         }
     }
+
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        debug!("MyParallel::forward: xs={:?}", t.size());
+        let t = (self.join)(
+            (self.split)(t).into_iter().zip(self.layers.iter()).map(|(t, net)| {
+                net.tho_forward(&t, true)
+            }).collect::<Vec<Tensor>>()
+        );
+
+        debug!("MyParallel::forward: t={:?}", t.size());
+
+        t
+    }
 }
 
-
 impl ThoModule for Conv1D {
-
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        self.forward(t)
+    }
 }
 
 impl ThoModule for Conv2D {
-
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        self.forward(t)
+    }
 }
 
 #[derive(Debug)]
@@ -138,42 +137,31 @@ impl MyMaxPool1d {
     }
 }
 
-impl Module for MyMaxPool1d {
-
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        xs.max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)
-    }
-}
 
 impl ThoModule for MyMaxPool1d {
-
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        t.max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)
+    }
 }
 
 #[derive(Debug)]
 pub struct MyBatchNorm1d {
-
+    batch_norm:BatchNorm
 }
 
 impl MyBatchNorm1d {
-    pub fn new() -> Self {
+    pub fn new<'a, P: Borrow<Path<'a>>>(path:P, num_features:i64, config: BatchNormConfig) -> Self {
         Self {
-
+            batch_norm:batch_norm1d(path, num_features, config)
         }
     }
 }
 
-impl Module for MyBatchNorm1d {
-
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        xs.batch_norm::<Tensor>(None, None, None, None, true, 0.1, 1.0e-05, false)
+impl ThoModule for MyBatchNorm1d{
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        self.batch_norm.forward_t(t, train)
     }
 }
-
-impl ThoModule for MyBatchNorm1d{
-
-}
-
-
 
 #[derive(Debug)]
 pub struct MyAvgPool1d {
@@ -195,23 +183,23 @@ impl MyAvgPool1d {
     }
 }
 
-impl Module for MyAvgPool1d {
 
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        xs.avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad)
+impl ThoModule for MyAvgPool1d{
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        t.avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad)
     }
 }
 
-impl ThoModule for MyAvgPool1d{
-
-}
-
-pub trait ThoModule:Module{
+pub trait ThoModule:Debug  + Send  {
     fn debug(&self){}
     fn mem_size(&self) -> usize {//TODO
         0
     }
+
+    fn tho_forward(&self, t:&Tensor, train: bool) -> Tensor;
+
 }
+
 
 
 pub type Fp = fn(&Tensor)->Tensor;
@@ -237,14 +225,11 @@ impl  MyFuncModule {
 
 }
 
-impl Module for MyFuncModule {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        (self.func)(xs)
-    }
-}
 
 impl ThoModule for MyFuncModule{
-
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        (self.func)(t)
+    }
 }
 
 
@@ -265,14 +250,11 @@ impl Debug for MyClosureModule {
     }
 }
 
-impl Module for MyClosureModule {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        (self.func)(xs)
-    }
-}
 
 impl ThoModule for MyClosureModule{
-
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        (self.func)(t)
+    }
 }
 
 
@@ -282,22 +264,21 @@ pub struct MyLinear {
     pub bs: Option<Tensor>,
 }
 
-impl Module for MyLinear {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        debug!("Module for MyLinear::forward: ws={:?} bs={:?} xs={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), xs.device());
-        match xs.f_linear(&self.ws, self.bs.as_ref()) {//TODO error
+
+impl ThoModule for MyLinear{
+    fn debug(&self) {
+        debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
+    }
+
+    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+        debug!("Module for MyLinear::forward: ws={:?} bs={:?} xs={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), t.device());
+        match t.f_linear(&self.ws, self.bs.as_ref()) {//TODO error
             Ok(t) => t,
             Err(e) => {
                 error!("{:?}", e);
                 panic!("{:?}", e);
             }
         }
-    }
-}
-
-impl ThoModule for MyLinear{
-    fn debug(&self) {
-        debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
     }
 }
 
@@ -384,7 +365,8 @@ mod tch_tests {
     use parking_lot::Mutex;
 
     use chrono::Utc;
-    use log::debug;
+    use log::{debug, set_max_level};
+    use log::LevelFilter::Info;
     use plotters::prelude::{BLACK, GREEN, RED};
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -392,7 +374,7 @@ mod tch_tests {
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
-    use tch::nn::{ConvConfig, Init, Module, OptimizerConfig, VarStore};
+    use tch::nn::{BatchNormConfig, ConvConfig, Init, Module, OptimizerConfig, VarStore};
 
     use thoosa_shared::*;
     use thoosa_shared::ThoosaError;
@@ -400,7 +382,7 @@ mod tch_tests {
     use crate::builder::{clc_conv1d_out};
     use crate::builder::SeqBuilder;
     use crate::my_tch::ThoModule;
-    use crate::train_nets::{MotifNodeParams, SyncModule};
+    use crate::train_nets::{MotifNodeParams, ThoModuleWithStore};
     use crate::utils;
     use crate::utils::*;
 
@@ -421,7 +403,7 @@ mod tch_tests {
 
         let net = seq.build_tch_module(&vs.root()).unwrap();
 
-        let y_p = net.forward(&tch::Tensor::randn([10, 2], (Kind::Float, Device::Cpu)));
+        let y_p = net.tho_forward(&tch::Tensor::randn([10, 2], (Kind::Float, Device::Cpu)), true);
 
         assert_eq!(vec![10,2], y_p.size())
     }
@@ -454,7 +436,7 @@ mod tch_tests {
         let net = main.build_tch_module(&vs.root())?;
 
 
-        let y_p = net.forward(&tch::Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)));
+        let y_p = net.tho_forward(&tch::Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)), true);
 
 
         assert_eq!(vec![10,2], y_p.size());
@@ -476,11 +458,11 @@ mod tch_tests {
 
 
     #[test]
-    pub fn test_simp()-> Result<(), ThoosaError>{
-
+    pub fn test_save_load_net() -> Result<(), ThoosaError>{
+        set_max_level(Info);
         let mut vs_0 = VarStore::new(Cpu);
 
-        let n = 1000;
+        let n = 200;
         let net_0 = test_net(&vs_0, n)?;
 
 
@@ -507,7 +489,7 @@ mod tch_tests {
 
                 loss
             },
-            n as usize,
+            100,
             nn::AdamW::default().build(&vs_0, 1.0e-4)?,
             |t|t,
             None
@@ -519,8 +501,8 @@ mod tch_tests {
         let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n));
 
         debug!("net t_0={:?}, t_1={:?}",
-             from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)),
-             from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1))
+             from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true).view(-1)),
+             from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true).view(-1))
         );
 
         vs_0.freeze();
@@ -532,12 +514,12 @@ mod tch_tests {
         vs_1.load("/tmp/test_vars.safetensors")?;
 
         debug!("net 1 t_0={:?}, t_1={:?}",
-             from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1)),
-             from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1))
+             from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true).view(-1)),
+             from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true).view(-1))
         );
 
-        assert_eq!(from::<Vec<f32>>(&net_0.forward(&batch_0).view(-1)), from::<Vec<f32>>(&net_1.forward(&batch_0).view(-1)));
-        assert_eq!(from::<Vec<f32>>(&net_0.forward(&batch_1).view(-1)), from::<Vec<f32>>(&net_1.forward(&batch_1).view(-1)));
+        assert_eq!(from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true).view(-1)), from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true).view(-1)));
+        assert_eq!(from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true).view(-1)), from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true).view(-1)));
 
 
         Ok(())
@@ -545,7 +527,7 @@ mod tch_tests {
 
     fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn ThoModule>, ThoosaError> {
         SeqBuilder::new(num_features)
-            .batch_norm()
+            .batch_norm(BatchNormConfig::default())
             .closure(Box::new(|t:&Tensor|{
                 t.view((t.size()[0], 1, t.size()[1]))//channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
             }), None)
