@@ -89,7 +89,7 @@ impl ApplyNet {
 impl Apply for ApplyNet {
 
     fn apply(&self, t: Box<Tensor>) -> Box<Tensor> {
-        let out = self.net.forward(&t);
+        let out = self.net.tho_forward(&t, true);
 
         debug!("apply 1 in size={:?}  out size()={:?}", t.size(), out.size());
 

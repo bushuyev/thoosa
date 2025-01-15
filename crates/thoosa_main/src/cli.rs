@@ -38,7 +38,7 @@ use thoosa_common::runs::{
     Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult,
     Simple,
 };
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, InferParams, InputFilter, LabelNodeParams, MotifNodeParams, OptConfig, SyncModule, TrainFinalNodeParams, TrainFinalNodeRunConfig, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, InferParams, InputFilter, LabelNodeParams, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNodeParams, TrainFinalNodeRunConfig, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -990,7 +990,7 @@ where
             ws.read().max_input() as u32
         );
 
-        let logits = final_model.2.forward(&t.view((1, -1))); //batch(1 for infer) x classes
+        let logits = final_model.2.infer(&t.view((1, -1))); //batch(1 for infer) x classes
         let probs = logits.softmax(-1, Float);
 
         debug!(
@@ -1014,17 +1014,7 @@ where
 
     Ok(infer_result)
 }
-//
-// struct MotifsModels {
-//     find_motifs_run_ids:HashMap<usize, (FindMotifsRunConfig, Vec<(MotifNodeParams, SyncModule)>)>
-// }
-//
-// struct LabelAndMotifModels {
-//     train_label_nodes_run_id:usize,
-//     params:LabelNodeParams,
-//     module: SyncModule,
-//     channels_motifs_models:Vec<MotifsModels>
-// }
+
 
 fn load_label_and_motif_models(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1032,8 +1022,8 @@ fn load_label_and_motif_models(
     device: &Device,
     train_label_nodes_run_ids: Option<&Vec<usize>>,
 ) -> (
-    HashMap<String, Vec<(usize, LabelNodeParams, SyncModule)>>,
-    HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, SyncModule)>)>>,
+    HashMap<String, Vec<(usize, LabelNodeParams, ThoModuleWithStore)>>,
+    HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>,
 ) {
     debug!("load_label_and_motif_models: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
@@ -1043,7 +1033,7 @@ fn load_label_and_motif_models(
 
     let mut labels_channels_motifs_models: HashMap<
         String,
-        Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, SyncModule)>)>,
+        Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>,
     > = HashMap::new();
 
     for (label, label_run_id_nodes) in label_models.iter() {
@@ -1195,7 +1185,7 @@ pub fn run_train_label_nodes(
                 )),
             )
         })
-        .collect::<Vec<(usize, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, SyncModule)>)>>>)>>();
+        .collect::<Vec<(usize, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>)>>();
 
     devices__resources
         .into_par_iter()

@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 
 use log::debug;
 use tch::{nn, Tensor};
-use tch::nn::{ConvConfig, LinearConfig, Module};
+use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
 
 use thoosa_shared::ThoosaError;
 
@@ -22,14 +22,12 @@ pub fn clc_avgpool1d_out(l_in: i64, kernel: i64, padding:i64, stride:i64) -> i64
     (l_in + 2 * padding - kernel) / stride + 1
 }
 
-
-
 pub enum Node {
     Seq {elts: Vec<Node>},
     Par {elts: Vec<Node>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>},
     Conv1d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     Conv2d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
-    BatchNorm {num_features: i64},
+    BatchNorm {num_features: i64, config:BatchNormConfig},
     Linear { in_feats: i64, out_feats: i64, config:Option<LinearConfig>},
     Func { func:Fp},
     MaxPool { kernel_size:i64, stride:i64, padding:i64},
@@ -101,15 +99,15 @@ impl Node {
                 Box::new(nn::conv2d(vs/ "cnn_2d", in_channels, out_channels, kernel, config))
             }
 
-            Node::BatchNorm { .. } => {
-                Box::new(MyBatchNorm1d::new())
+            Node::BatchNorm { num_features, config } => {
+                Box::new(MyBatchNorm1d::new(vs/"batch_norm", num_features, config))
             }
 
             Node::Linear {in_feats, out_feats, config} => {
                 assert!(in_feats > 0);
                 assert!(out_feats > 0);
                 debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
-                Box::new(my_linear(vs/ "linear", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)//TODO rename layer1
+                Box::new(my_linear(vs/"linear", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)//TODO rename layer1
             }
 
             Node::MaxPool { kernel_size, stride, padding } => {
@@ -167,9 +165,9 @@ impl SeqBuilder {
         }
     }
 
-    pub fn batch_norm(&mut self) -> &mut Self {
+    pub fn batch_norm(&mut self, config: BatchNormConfig) -> &mut Self {
         self.elts.push(
-            Node::BatchNorm {num_features:self.num_features}
+            Node::BatchNorm {num_features:self.num_features, config }
         );
         self
     }

@@ -505,7 +505,7 @@ pub mod tests {
 
     use thoosa_shared::{cdt_for_dir, ThoosaError};
     use crate::bool_iter::BoolTensorIterator;
-    use crate::train_nets::{motif_node, MotifNodeParams, SyncModule};
+    use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, Splittable, SplittableTensor};
 
     #[ctor::ctor]
@@ -767,7 +767,7 @@ pub mod tests {
         let motif_node_params = MotifNodeParams::from_file(&PathBuf::from("/tmp/ws_test/models/motifs/0/31211_366.json"))?;
 
         let inst_0 = Instant::now();
-        let mut module = SyncModule::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cpu)?;
+        let mut module = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cpu)?;
         for i in 0..100 {
             module.set_device(Cuda(0));
             module.set_device(Cpu);
@@ -778,7 +778,7 @@ pub mod tests {
         let inst_0 = Instant::now();
 
         for i in 0..100 {
-            let mut module = SyncModule::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cuda(0))?;
+            let mut module = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cuda(0))?;
         }
 
         info!("cuda load done in {}", inst_0.elapsed().as_millis());
@@ -907,7 +907,7 @@ pub fn train<F>(
 
         debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
 
-        let predicted_y = model.forward(&x_t);
+        let predicted_y = model.tho_forward(&x_t, true);
         debug!("train: 1. cuda_mem={:?}",  cuda_mem());
         trace!("train: x_t=\n{x_t}");
         drop(x_t);
@@ -936,7 +936,7 @@ pub fn train<F>(
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = model.forward(&x_t);
+                let pred_y = model.tho_forward(&x_t, true);
 
                 let valid_loss = loss_fn(&pred_y, &y_t);
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
