@@ -886,7 +886,7 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
 }
 
 pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainNodesValues, common_train_final_run_config: &CommonTrainFinalNodeRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
-    let final_node_params= FinalNodeParams::new(labels_len as i64, labels_len as i64, run_config_values.num_layers);
+    let final_node_params= FinalNodeParams::new(labels_len as i64, run_config_values.num_layers);
 
     let mut optimizer = nn::Adam::default();
     if let Some(adam_w) = run_config_values.adam_w {
@@ -1528,18 +1528,18 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FinalNodeParams {
-    classes_num: i64,
+    in_features: i64,
     num_layers: u32
 }
 
 impl FinalNodeParams {
-    pub fn new(features: i64, classes_num: i64, num_layers: u32) -> Self {
-        Self { classes_num, num_layers }
+    pub fn new(in_features: i64, num_layers: u32) -> Self {
+        Self { in_features, num_layers }
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
         HashMap::from([
-            ("FinalNodeParams.classes_num".into(), self.classes_num.into()),
+            ("FinalNodeParams.classes_num".into(), self.in_features.into()),
             ("FinalNodeParams.num_layers".into(), self.num_layers.into()),
         ])
     }
@@ -1556,19 +1556,19 @@ impl FinalNodeParams {
 pub fn final_node(params:&FinalNodeParams) -> Node {
     debug!("final_node: params={:?}", params);
 
-    let mut builder = SeqBuilder::new(params.classes_num);
+    let mut builder = SeqBuilder::new(params.in_features);
     let mut net = builder
-        .linear_s(2*params.classes_num)
+        .linear_s(2*params.in_features)
         .func(Tensor::relu);
 
     for i in 0..params.num_layers {
-        net = net.linear_s(params.classes_num)
+        net = net.linear_s(params.in_features)
              .func(Tensor::relu)
     }
 
     net
         // .func(Tensor::relu)
-        .linear_s(params.classes_num)
+        .linear_s(params.in_features)
         // .func(|t|t.softmax(1, Float))
         .end_seq()
 }
@@ -3033,9 +3033,7 @@ mod train_tests {
     #[test]
     fn test_train_final() -> Result<(), ThoosaError> {
 
-        // set_max_level(Trace);
-
-        let final_node_params = FinalNodeParams::new(6, 6, 1);
+        set_max_level(Info);
 
         struct DummyLabelBatch {}
 
@@ -3053,13 +3051,13 @@ mod train_tests {
 
             fn train_batch(&mut self) -> (Tensor, Tensor) {
                 let train_batch = dummy_final_net_input::<LABELS_SIZE>(BATCH_SIZE);
-                debug!("train_batch=\n{} \n{}", train_batch.0, train_batch.1);
+                trace!("train_batch=\n{} \n{}", train_batch.0, train_batch.1);
                 train_batch
             }
 
             fn valid_batch(&mut self) -> (Tensor, Tensor) {
                 let valid_batch= dummy_final_net_input::<LABELS_SIZE>(BATCH_SIZE);
-                debug!("valid_batch={} \n{}", valid_batch.0, valid_batch.1);
+                trace!("valid_batch={} \n{}", valid_batch.0, valid_batch.1);
                 valid_batch
             }
         }
@@ -3068,7 +3066,8 @@ mod train_tests {
             &Arc::new(RwLock::new(DummyWorkspace::new(0, 100)?)),
             &TrainNodesValues ::new(
                 1.0e-2,
-                3u32, None
+                1u32,
+                None
             ),
             &CommonTrainFinalNodeRunConfig::new(300, BATCH_SIZE),
             &mut DummyLabelBatch::new(),
@@ -3077,6 +3076,7 @@ mod train_tests {
             &VarStore::new(Cpu)
         )?;
 
+        assert!(loss < 0.5);
         debug!("test_train_final: loss={loss:?} final_params={final_params:?}");
         // fs::remove_dir_all(dir)?;
 
@@ -3090,7 +3090,7 @@ mod train_tests {
 
             let x = random_tensor_with_dominant(LABELS_SIZE as i64, label as i64, 0.99, Cpu);
             let mut y = [0.; LABELS_SIZE];
-            y[label as usize] = 1.0;
+            y[label] = 1.0;
             let y = Tensor::from_slice(y.as_slice());
 
             (x, y)
@@ -3212,7 +3212,7 @@ mod train_tests {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = nn::VarStore::new(Cpu);
-        let _ = train_nets::final_node(&FinalNodeParams::new(features, features, 1)).build_tch_module(&vs_0.root())?;
+        let _ = train_nets::final_node(&FinalNodeParams::new(features, 1)).build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
         debug!("save_test_final_model: features={} vs_0.variables()={:?}", features, vs_0.variables());
