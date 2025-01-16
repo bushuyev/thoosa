@@ -954,10 +954,12 @@ pub struct ThoModuleWithStore {
 unsafe impl Sync for ThoModuleWithStore {}
 
 impl ThoModuleWithStore {
+
+    #[cfg(test)]
     pub fn new(module: Box<dyn ThoModule>) -> Self {
         Self {
             module,
-            var_store: VarStore::new(Cpu)//dummy TODO remove
+            var_store: VarStore::new(Cpu)//dummy
         }
     }
 
@@ -991,6 +993,10 @@ impl ThoModuleWithStore {
 
     pub fn infer(&self, t: &Tensor) -> Tensor {
         self.module.tho_forward(t, false)
+    }
+
+    pub fn var_store(&self) -> &VarStore {
+        &self.var_store
     }
 }
 
@@ -2207,7 +2213,7 @@ mod train_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::nn::{init, AdamW, BatchNormConfig, LinearConfig, Module, OptimizerConfig, VarStore};
     use tch::Device::{Cpu, Cuda};
-    use tch::Kind::Float;
+    use tch::Kind::{Float, Half};
     use tch::{nn, Device, Tensor};
     use tch::{IndexOp, Kind, Reduction};
     use torch_sys::at_autocast_clear_cache;
@@ -2655,7 +2661,7 @@ mod train_tests {
     #[test]
     fn test_train_basic_oom()->Result<(), ThoosaError> {
         reset_print_options();
-        set_max_level(Info);
+        set_max_level(Debug);
         let _device = CudaDevice::new(0)?;
         let cudarc_lib = unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -2674,7 +2680,7 @@ mod train_tests {
             .linear()
             .func(Tensor::relu)
             .linear_s(1)
-            .func(Tensor::sigmoid)
+            // .func(Tensor::sigmoid)
             .end_seq();
 
         let res_seq_1 = SeqBuilder::new(FEATURES)
@@ -2725,9 +2731,18 @@ mod train_tests {
             .end_seq();
 
         let mut vs_0 = VarStore::new(Cuda(0));
+
+
         let root = vs_0.root();
         let net_full = full.build_tch_module(&root)?; //&(root / "vs_0"))?;
-        let mut opt = AdamW::default().beta1(0.9).beta2(0.999).build(&vs_0, 1e-3)?;
+
+        debug!("vs_0={vs_0:?}");
+
+        let kind = Kind::BFloat16;
+        vs_0.root().set_kind(kind);
+
+        let mut opt_0 = AdamW::default().beta1(0.9).beta2(0.999).build(&vs_0, 1e-3)?;
+
         for epoch in 0..1000 {
 
             let mut rng = thread_rng();
@@ -2767,11 +2782,10 @@ mod train_tests {
 
             trace!("target=\n{target}");
 
+            let pred = net_full.tho_forward(&input.totype(kind), true);
 
-            let pred = net_full.tho_forward(&input, true);
-
-            let loss = pred.binary_cross_entropy(&target, None::<Tensor>, Reduction::Mean);
-            opt.backward_step(&loss);
+            let loss = pred.binary_cross_entropy(&target.totype(kind), None::<Tensor>, Reduction::Mean);
+            opt_0.backward_step(&loss);
 
             // debug!("input=\n{input}");
             // debug!("target=\n{target}");
@@ -2780,8 +2794,12 @@ mod train_tests {
                 info!("loss={loss}");
             }
         }
+        debug!("opt_0 optimizer_mem_size: {:?}", optimizer_mem_size(&opt_0));
 
         vs_0.freeze();
+        vs_0.set_kind(Kind::Float);
+
+        // debug!("opt_1 optimizer_mem_size: {:?}", optimizer_mem_size(&opt_1));
 
         let mut rng = thread_rng();
 
