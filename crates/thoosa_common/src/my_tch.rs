@@ -379,7 +379,7 @@ mod tch_tests {
     use thoosa_shared::*;
     use thoosa_shared::ThoosaError;
 
-    use crate::builder::{clc_conv1d_out};
+    use crate::builder::{clc_conv1d_out, Node};
     use crate::builder::SeqBuilder;
     use crate::my_tch::ThoModule;
     use crate::train_nets::{MotifNodeParams, ThoModuleWithStore};
@@ -609,53 +609,71 @@ mod tch_tests {
     #[allow(dead_code)]
     #[test]
     pub fn test_save_load() -> Result<(), ThoosaError> {
-        let vs_0 = VarStore::new(Device::Cpu);
+        let vs_0 = VarStore::new(Cpu);
 
-        let node = SeqBuilder::new(123)
-            .linear_s(10)
-            .conv_1d(3, 1, 2, ConvConfig::default())
-            .conv_1d(5, 1, 2, ConvConfig::default())
-            .linear_s(20)
-            .func(Tensor::sigmoid)
-            .end_seq();
+        let node = test_node();
         let _my_mod = node.build_tch_module(&vs_0.root())?;
+
+        debug!("variables={:?}", vs_0.variables());
+
+        assert_eq!(
+            26,
+            vs_0.variables().len()
+        );
 
         vs_0.save("/tmp/test.safetensors")?;
 
-        let mut vs_1 = VarStore::new(Device::Cpu);
-        for (key, t) in vs_0.variables() {
-            let path = key.split(".").collect::<Vec<&str>>();
-            let _ = (vs_1.root() / path[0] ).var(&path[1], &t.size(), Init::Const(0.0));
+        let loaded_module = ThoModuleWithStore::load(test_node(), "/tmp/test.safetensors".into(), Cpu)?;
+
+        debug!("loaded variables={:?}", loaded_module.var_store().variables());
+
+        assert_eq!(
+            vs_0.variables(),
+            loaded_module.var_store().variables()
+        );
+
+
+        fn test_node() -> Node {
+            SeqBuilder::new(123)
+                .split(
+                    vec![
+                        SeqBuilder::new(123)
+                            .batch_norm(BatchNormConfig::default())//3 weight bias running_var
+                            .linear()//2 weight bias
+                            .func(Tensor::relu)
+                            .linear()//2 weight bias
+                            .func(Tensor::relu)
+                            .linear_s(1)//2 weight bias
+                            .end_seq(),
+                        SeqBuilder::new(321)
+                            .batch_norm(BatchNormConfig::default())//3 weight bias running_var
+                            .linear()//2 weight bias
+                            .func(Tensor::relu)
+                            .linear_s(1)//2 weight bias
+                            .end_seq()
+                    ],
+
+                    Box::new(
+                        move |t:&Tensor| {
+                            vec![
+                                t.i((.., 0, ..)),
+                                t.i((.., 1, ..))
+                            ]
+                        }
+                    ),
+
+                    Box::new(move |t:Vec<Tensor>| {
+                        Tensor::concat(t.as_slice(), 1)
+                    })
+
+                )
+                .linear_s(10)//2 weight bias
+                .conv_1d(3, 1, 2, ConvConfig::default())//2 weight bias
+                .conv_1d(5, 1, 2, ConvConfig::default())//2 weight bias
+                .linear_s(20)//2 weight bias
+                .func(Tensor::sigmoid)
+                .end_seq()
         }
-
-        vs_1.load("/tmp/test.safetensors")?;
-
-        assert_eq!(
-            vs_0.variables().get("layer1.weight"),
-            vs_1.variables().get("layer1.weight")
-        );
-        assert_eq!(
-            vs_0.variables().get("layer1.weight__7"),
-            vs_1.variables().get("layer1.weight__7")
-        );
-
-        assert_eq!(
-            vs_0.variables().get("layer1.bias__6"),
-            vs_1.variables().get("layer1.bias__6")
-        );
-        assert_eq!(
-            vs_0.variables().get("layer1.bias"),
-            vs_1.variables().get("layer1.bias")
-        );
-
-        assert_eq!(
-            vs_0.variables().get("cnn.weight__5"),
-            vs_1.variables().get("cnn.weight__5")
-        );
-        assert_eq!(
-            vs_0.variables().get("cnn.bias__4"),
-            vs_1.variables().get("cnn.bias__4")
-        );
 
 
         Ok(())

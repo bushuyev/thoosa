@@ -66,15 +66,15 @@ impl NthParams for NthConst {
     }
 }
 
-
 impl Node {
 
     pub fn build_tch_module(self, vs: &nn::Path) -> Result<Box<dyn ThoModule>, ThoosaError>  {
         Ok(match self {
             Node::Seq { elts } => {
 
-                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, node| {
-                    kids.push(node.build_tch_module(vs)?);
+                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, (i, node)| {
+                    kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
+                    // kids.push(node.build_tch_module(&(vs))?);
                     Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
                 })?;
 
@@ -83,8 +83,9 @@ impl Node {
             }
 
             Node::Par {elts,  split, join } => {
-                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, node| {
-                    kids.push(node.build_tch_module(vs)?);
+
+                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, (i, node)| {
+                    kids.push(node.build_tch_module(&(vs / format!("split_{i}")))?);
                     Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
                 })?;
 
@@ -92,7 +93,7 @@ impl Node {
             }
 
             Node::Conv1d { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv1d(vs/ "cnn_id", in_channels, out_channels, kernel, config))
+                Box::new(nn::conv1d(vs/ "cnn_1d", in_channels, out_channels, kernel, config))
             }
 
             Node::Conv2d { kernel, in_channels, out_channels, config} => {

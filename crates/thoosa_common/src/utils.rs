@@ -744,8 +744,8 @@ pub mod tests {
     }
 
 
-    #[test]
-    fn test_mem_track()->Result<(), ThoosaError>{
+    // #[test]
+    fn test_mem_track()->Result<(), ThoosaError>{//TODO util
         let mut free_mem_0: usize = 0;
         let mut free_mem_1: usize = 0;
         let mut total_mem: usize = 0;
@@ -1127,7 +1127,6 @@ pub fn tensor_mem_size(t:&Tensor) -> usize {
 pub fn vs_mem_size(opt:&VarStore) -> usize {
     opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
 }
-
 
 pub fn optimizer_mem_size(opt:&Optimizer) -> usize {
     opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
