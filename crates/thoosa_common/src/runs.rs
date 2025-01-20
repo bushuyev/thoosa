@@ -207,3 +207,22 @@ pub trait SavableOptResult:Sync+Send+Debug{
     fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError>;
 }
 
+#[derive(Debug)]
+pub struct DummySavableOptResult;
+
+impl DummySavableOptResult {
+    pub fn new() -> Box<dyn SavableOptResult> {
+       Box::new(Self)
+    }
+}
+
+impl SavableOptResult for DummySavableOptResult {
+    fn value(&self) -> f32 {
+        0.
+    }
+
+    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError> {
+        Ok(0)
+    }
+}
+

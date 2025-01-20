@@ -6,6 +6,7 @@ use std::fmt::{Debug, Display};
 use std::io::Write;
 use std::iter::Map;
 use std::ops::{Add, Div, Mul, Range};
+use std::ops::ControlFlow::Continue;
 use std::time::Instant;
 
 use chrono::SecondsFormat;
@@ -29,6 +30,7 @@ use torch_sys::*;
 use torch_sys::cuda::atc_cuda_device_count;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
+use tch::Device::{Cpu, Cuda};
 use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt, saw};
 
 use crate::my_tch::{LossFp, ThoModule};
@@ -342,6 +344,10 @@ macro_rules! panic_to_err {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     debug!("thoosa_err String: {msg}");
                     Err(ThoosaError::from(msg))
+                //TODO
+                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
+                //     Err(*thoosa_error)
+
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     debug!("thoosa_err str: {msg}");
                     Err(ThoosaError::from(*msg))
@@ -446,11 +452,12 @@ where
                     debug!("run_split_on_oom: splitting on oom, attempt={attempt}");
                     splitter.split(split_0);
                     if attempt > max_attempts {
-                        panic!("can't execute gpu function after {attempt} attempts");
+                        return Err(e);
                     }
                     attempt += 1;
                 }
                 Err(e) => {
+                    debug!("run_split_on_oom: failed on oom {e:?}");
                     return Err(e);
                 }
             }
@@ -1130,4 +1137,21 @@ pub fn vs_mem_size(opt:&VarStore) -> usize {
 
 pub fn optimizer_mem_size(opt:&Optimizer) -> usize {
     opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
+}
+
+
+pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad: bool) {
+
+    for (name, mut tensor) in vsd.variables() {
+        if name.contains("batch_norm") {
+            continue
+        }
+        let freezing = name.starts_with(subpath);
+        debug!("freeze_subpath: name={name:?} freezing={freezing}");
+
+        if freezing {
+            _ = tensor.set_requires_grad(requires_grad);
+        }
+    }
+
 }

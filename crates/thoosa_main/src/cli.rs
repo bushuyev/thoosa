@@ -34,10 +34,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{
-    Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult,
-    Simple,
-};
+use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
 use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, InferParams, InputFilter, LabelNodeParams, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNodeParams, TrainFinalNodeRunConfig, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series};
 use thoosa_common::{train_nets, ResourceLoader};
@@ -814,7 +811,7 @@ where
                 "Test/TrainMotifsNodes",
             )?;
 
-            info!("run_train_on_motifs done");
+            info!("run_train_on_motifs done: train_motif_nodes_run_ids={train_motif_nodes_run_ids:?}");
 
             let train_label_nodes_run_ids = run_step(
                 Some(motif_selection_run_ids),
@@ -827,7 +824,7 @@ where
                 "Test/TrainLabelsNodes",
             )?;
 
-            info!("run_train_on_label done");
+            info!("run_train_on_label done: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
             let train_final_nodes_run_ids = run_step(
                 Some(train_label_nodes_run_ids),
@@ -1247,7 +1244,7 @@ pub fn run_train_label_nodes(
                     for run_config in run_configs_cl.iter() {
                         debug!("run_train_label_nodes: run_config={run_config:?}");
 
-                        let result = run_opt_train_label_nodes(
+                        match run_opt_train_label_nodes(
                             ws,
                             &run_config,
                             common_config,
@@ -1259,8 +1256,15 @@ pub fn run_train_label_nodes(
                             max_nets,
                             label,
                             slices_len
-                        );
-                        results.push(result);
+                        ) {
+                            Ok(result) => {
+                                results.push(Ok(result));
+                            }
+                            Err(e) => {
+                                warn!("run_train_label_nodes: run error={e:?}");
+                                results.push(Ok(DummySavableOptResult::new()));
+                            }
+                        };
 
                     }
                     results
