@@ -4,7 +4,7 @@ use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::{ThoModule};
 use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives};
 use crate::runs::{Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
-use crate::train_nets;
+use crate::{panic_to_err, train_nets};
 use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
 use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::{FsWorkspace, Workspace};
@@ -43,7 +43,7 @@ use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, ThoosaError};
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
-
+use std::panic::AssertUnwindSafe;
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainLabelNodeParams {
@@ -453,6 +453,7 @@ impl ClassTensorsLoaderData {
                     let t =  Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id.clone(), 0).await;
 
                     let mut guard = x_y_acc_in_exec.lock();
+
                     guard.0.push(t);
                     guard.1.push(
                         Box::new(Tensor::from_slice(labels_p.as_slice()))
@@ -492,7 +493,6 @@ impl ClassTensorsLoaderData {
             labels.push(Box::new(tensor_y));
 
         });
-
 
         (
             Tensor::stack(
@@ -590,26 +590,26 @@ pub fn run_opt_train_label_nodes (
     opt_train(
           |vs:&VarStore, train_node_values:&TrainNodesValues, listener: &mut PlotVecf32|{
 
-              train_label_nodes(
-                  ws, train_node_values, comon_label_node_params, &mut batch, &device, channels, max_nets, vs, slices_len
-              )
+              // train_label_nodes(
+              //     ws, train_node_values, comon_label_node_params, &mut batch, &device, channels, max_nets, vs, slices_len
+              // )
 
-             // let mut result = None::<(f32, LabelNodeParams)>;
-             // run_split_on_oom(
-             //     Reducer::new(batch.clone()),
-             //     |b|{
-             //         train_label_nodes(
-             //             ws, run_config_values, comon_label_node_params, b, &device, channels, max_nets, vs, slices_len
-             //         )
-             //     },
-             //     |v, i|{
-             //         debug!("v={v:?}");
-             //         result.replace(v);
-             //     },
-             //     3
-             // )?;
-             //
-             // Ok(result.unwrap())
+             let mut result = None::<(f32, LabelNodeParams)>;
+             run_split_on_oom(
+                 Reducer::new(batch.clone()),
+                 |b|{
+                     train_label_nodes(
+                         ws, train_node_values, comon_label_node_params, b, &device, channels, max_nets, vs, slices_len
+                     )
+                 },
+                 |v, i|{
+                     debug!("v={v:?}");
+                     result.replace(v);
+                 },
+                 3
+             )?;
+
+             Ok(result.expect("no result from train_label_nodes"))
         },
         &run_config.run_config_or_opt_space,
         device,
@@ -1341,7 +1341,7 @@ impl TrainMotifsNodesParams {
             .map(|v|ConfigurationSpace::new(v))
     }
 }
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNodeParams {
     num_features: i64,
     num_layers:i64
@@ -1410,7 +1410,7 @@ pub fn motif_node(params: &MotifNodeParams) -> Node {
         .end_seq()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LabelNodeParams {
     channels:i64,
     max_motif_nodes:i64,//TODO remove max?
@@ -1526,7 +1526,7 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
 
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FinalNodeParams {
     in_features: i64,
     num_layers: u32
@@ -1723,7 +1723,7 @@ where
 }
 
 
-pub fn opt_train<F, V, N:Debug>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, Option<V>, f32), ThoosaError>//Option<V> - Some if run config from opt
+pub fn opt_train<F, V, N:Debug+Default>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, Option<V>, f32), ThoosaError>//Option<V> - Some if run config from opt
 where
     F: FnMut(&VarStore, &V, &mut PlotVecf32) -> Result<(f32, N), ThoosaError>,
     for<'a> <V as TryFrom<&'a Vec<Primitives>>>::Error: Debug,
@@ -1747,6 +1747,7 @@ where
         ValuesOrOptSpace::OptSpace{opt_space,opt_config} => {
             let mut min_loss = f32::MAX;
             let mut min_var_store: Option<(VarStore, N, Option<V>, f32)> = None;
+            info!("running opt train {descr}");
 
             let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
                 |params| {
@@ -1755,7 +1756,15 @@ where
                     let vs = VarStore::new(device);
 
                     let mut listener = PlotVecf32::new(format!("_params_{}", run_config_values).as_str()); //motif_id ?
-                    let (loss, node_params) = train(&vs, &run_config_values, &mut listener).expect("tain failed");
+                    let (loss, node_params) =  match panic_to_err!(train(&vs, &run_config_values, &mut listener)){
+                        Ok(v) => {
+                           v
+                        }
+                        Err(e) => {
+                            warn!("opt_train failed with {e:?} on {run_config_values:?}");
+                            (f32::MAX, Default::default())
+                        }
+                    };
                     listener.plot();
 
                     debug!("opt_train: descr={descr} params={params:?} run_config_values={run_config_values:?} loss={loss}");
@@ -1763,18 +1772,21 @@ where
                         min_loss = loss;
                         min_var_store.replace((vs, node_params, Some(run_config_values), min_loss));
                     }
+                    print!(".");
                     loss
                 },
                 opt_space.clone(),
                 opt_config.max_evals as usize, //common_config.opt_max_evals as usize,
                 opt_config.n_init as usize, //common_config.opt_n_init as usize,
+
             );
 
             let best_config = opt.optimize();
-            trace!("opt_train: done opt, descr={descr} min_var_store={min_var_store:?}");
-            info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss}");
+            trace!("done opt {descr}");
+            info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
 
             min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
+            // min_var_store.unwrap_or_else(|| (VarStore::new(Cpu), Default::default(), Some(vec![]), f32::MAX))
         }
     }
 
@@ -2195,7 +2207,7 @@ mod train_tests {
     use crate::train_nets;
     use crate::train_nets::{apply_channel_motifs, apply_motif_and_label_nets, apply_motif_nets, label_node, opt_train, ClassTensorsLoaderData, CommonTrainFinalNodeRunConfig, FinalNodeParams, FindMotifsRunConfig, LoadingTensorsDataBatch, PlotVecf32, TrainNodesValues, ValuesOrOptSpace};
     use crate::train_nets::{load_label_models_ws, load_motif_models, CommonTrainLabelNodeRunConfig, InferParams, LabelNodeParams, MotifNodeParams, ThoModuleWithStore, TensorsDataBatch, TrainFinalNodeParams, TrainLabelNodeParams, TrainLabelNodeRunConfig};
-    use crate::utils::{cuda_mem, from, optimizer_mem_size, vs_mem_size, SplittableDataBatch};
+    use crate::utils::{cuda_mem, set_requires_grad_in_subpath, from, optimizer_mem_size, vs_mem_size, SplittableDataBatch};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
     use crate::ws::{DummyWorkspace, FsWorkspace, Workspace};
     use cudarc::driver::CudaDevice;
@@ -2205,7 +2217,7 @@ mod train_tests {
     use rand::{thread_rng, Rng};
     use rayon::iter::IntoParallelRefMutIterator;
     use std::collections::HashMap;
-    use std::fs;
+    use std::{fs, mem};
     use std::ops::Deref;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
@@ -2648,8 +2660,6 @@ mod train_tests {
         Ok(())
     }
 
-
-
     fn asc_t<const S:usize>(mut data: [f32; S]) -> Tensor {
         Tensor::from_slice((0..S).map(|i| data[i] + i as f32 * 2.).collect::<Vec<_>>().as_slice()).to_kind(Float)
     }
@@ -2666,8 +2676,11 @@ mod train_tests {
         let cudarc_lib = unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
-        let batch_size = 20;
-        const FEATURES:i64 = 11;
+        // let batch_size = 10000;
+        // const FEATURES:i64 = 2i64.pow(10);
+
+        let batch_size = 10;
+        const FEATURES:i64 = 10;
 
         let res_seq_0 = SeqBuilder::new(FEATURES)
             // .func(|t|{
@@ -2675,11 +2688,11 @@ mod train_tests {
             //     t.shallow_clone()
             // })
             .batch_norm(BatchNormConfig::default())
-            .linear()
+            .linear_s(FEATURES*20)
             .func(Tensor::relu)
-            .linear()
+            .linear_s(FEATURES*16)
             .func(Tensor::relu)
-            .linear_s(1)
+            .linear_s(10)
             // .func(Tensor::sigmoid)
             .end_seq();
 
@@ -2689,11 +2702,11 @@ mod train_tests {
             //     t.shallow_clone()
             // })
             .batch_norm(BatchNormConfig::default())
-            .linear()
+            .linear_s(FEATURES*20)
             .func(Tensor::relu)
-            .linear()
+            .linear_s(FEATURES*16)
             .func(Tensor::relu)
-            .linear_s(1)
+            .linear_s(10)
             // .func(Tensor::sigmoid)
             .end_seq();
 
@@ -2724,9 +2737,9 @@ mod train_tests {
                 })
 
             )
-            .linear_feats(2, 2)
+            .linear_feats(20, 20)
             .func(Tensor::relu)
-            .linear_feats(2, 1)
+            .linear_feats(20, 1)
             .func(Tensor::sigmoid)
             .end_seq();
 
@@ -2738,12 +2751,48 @@ mod train_tests {
 
         debug!("vs_0={vs_0:?}");
 
-        let kind = Kind::BFloat16;
+        // let kind = Kind::BFloat16;
+        let kind = Kind::Double;
         vs_0.root().set_kind(kind);
 
-        let mut opt_0 = AdamW::default().beta1(0.9).beta2(0.999).build(&vs_0, 1e-3)?;
+        // vs_0.root() /"seq_0"
+        let mut vs_opt_main = VarStore::new(Cuda(0));
+        let mut vs_opt_split_0 = VarStore::new(Cuda(0));
+        let mut vs_opt_split_1 = VarStore::new(Cuda(0));
+        for (name, t) in vs_0.variables() {
+            debug!("adding name={name}");
+            if name.contains("split_0") {
+                _ = vs_opt_split_0.root().add(&name.replace(".", "/"), t, !name.contains("batch"));
+            } else if name.contains("split_1") {
+                _ = vs_opt_split_1.root().add(&name.replace(".", "/"), t, !name.contains("batch"));
+            } else {
+                _ = vs_opt_main.root().add(&name.replace(".", "/"), t, !name.contains("batch"));
+            }
+        }
 
+        debug!("vs_opt_main={vs_opt_main:?}");
+        debug!("vs_opt_split_0={vs_opt_split_0:?}");
+        debug!("vs_opt_split_1={vs_opt_split_1:?}");
+
+        // let mut opt_0 = AdamW::default().beta1(0.9).beta2(0.999).build(&(vs_0.root() /"seq_0").into(), 1e-3)?;
+        let mut opt_main = AdamW::default().beta1(0.9).beta2(0.999).build(&vs_opt_main, 1e-3)?;
+        let mut opt_split_0 = AdamW::default().beta1(0.9).beta2(0.999).build(&vs_opt_split_0, 1e-3)?;
+        let mut opt_split_1 = AdamW::default().beta1(0.9).beta2(0.999).build(&vs_opt_split_1, 1e-3)?;
+
+        // vs_0.freeze();
+        // set_requires_grad_in_subpath(&vs_0, "seq_0", false);
+        // set_requires_grad_in_subpath(&vs_0, "seq_1", false);
+        // set_requires_grad_in_subpath(&vs_0, "seq_3", false);
+        // set_requires_grad_in_subpath(&vs_0, "seq_0.split_1", false);
+        let mut split_i =0;
         for epoch in 0..1000 {
+            // if epoch % 2 == 0 {
+            //     set_requires_grad_in_subpath(&vs_0, "seq_0.split_1", false);
+            //     set_requires_grad_in_subpath(&vs_0, "seq_0.split_0", true);
+            // } else {
+            //     set_requires_grad_in_subpath(&vs_0, "seq_0.split_1", true);
+            //     set_requires_grad_in_subpath(&vs_0, "seq_0.split_0", false);
+            // }
 
             let mut rng = thread_rng();
 
@@ -2785,19 +2834,34 @@ mod train_tests {
             let pred = net_full.tho_forward(&input.totype(kind), true);
 
             let loss = pred.binary_cross_entropy(&target.totype(kind), None::<Tensor>, Reduction::Mean);
-            opt_0.backward_step(&loss);
+
+            if split_i == 0 {
+                //TODO off-load to CPU
+                opt_split_0.backward_step(&loss);
+
+            } else if split_i ==1 {
+                opt_split_1.backward_step(&loss);
+
+            } else {
+                opt_main.backward_step(&loss);
+            }
 
             // debug!("input=\n{input}");
             // debug!("target=\n{target}");
             // debug!("pred=\n{pred}");
             if epoch % 50 == 0 {
-                info!("loss={loss}");
+                info!("loss={loss} cuda_mem={:?}", cuda_mem());
+            }
+            split_i+=1;
+            if split_i > 2 {
+                split_i = 0;
             }
         }
-        debug!("opt_0 optimizer_mem_size: {:?}", optimizer_mem_size(&opt_0));
+        debug!("opt_0 optimizer_mem_size: {:?}", optimizer_mem_size(&opt_main));
+        // debug!("cuda_mem: {:?}", tch::Cuda::memory_allocated());
 
         vs_0.freeze();
-        vs_0.set_kind(Kind::Float);
+        vs_0.set_kind(Float);
 
         // debug!("opt_1 optimizer_mem_size: {:?}", optimizer_mem_size(&opt_1));
 

@@ -506,7 +506,7 @@ impl <F> TPEOptimizer<F>
             }
         });
 
-        best_config.expect("best_config")
+        best_config.unwrap_or(vec![])//TODO
     }
 
     fn sample(&self)->Vec<Primitives> {
