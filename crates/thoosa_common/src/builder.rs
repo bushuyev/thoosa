@@ -23,7 +23,7 @@ pub fn clc_avgpool1d_out(l_in: i64, kernel: i64, padding:i64, stride:i64) -> i64
 }
 
 pub enum Node {
-    Seq {elts: Vec<Node>},
+    Seq {elts: Vec<Node>, split_input:Option<(i64, i64)>},
     Par {elts: Vec<Node>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>},
     Conv1d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
     Conv2d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
@@ -70,7 +70,7 @@ impl Node {
 
     pub fn build_tch_module(self, vs: &nn::Path) -> Result<Box<dyn ThoModule>, ThoosaError>  {
         Ok(match self {
-            Node::Seq { elts } => {
+            Node::Seq { elts, split_input } => {
 
                 let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, (i, node)| {
                     kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
@@ -78,7 +78,7 @@ impl Node {
                     Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
                 })?;
 
-                Box::new(MySequential::new(layers))
+                Box::new(MySequential::new(layers, split_input))
 
             }
 
@@ -135,15 +135,17 @@ impl Node {
 pub struct SeqBuilder {
     num_features:i64,
     kernel:Option<i64>,
-    elts: Vec<Node>
+    elts: Vec<Node>,
+    split_input: Option<(i64, i64)>
 }
 
 impl SeqBuilder {
-    pub fn new(num_features:i64) -> Self {
+    pub fn new(num_features:i64, split_input_dim: Option<i64>) -> Self {
         Self {
             num_features,
             kernel: None,
-            elts: vec![]
+            elts: vec![],
+            split_input: split_input_dim.map(|dim|(dim, num_features))
         }
     }
 
@@ -162,7 +164,8 @@ impl SeqBuilder {
         std::mem::swap(&mut elts, &mut self.elts);
 
         Node::Seq {
-            elts
+            elts,
+            split_input: self.split_input
         }
     }
 
