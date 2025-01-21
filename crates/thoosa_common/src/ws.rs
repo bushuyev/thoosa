@@ -495,15 +495,15 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
 
-        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 0))?;
-        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 0))?;
-        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 0))?;
-        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 0))?;
+        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 20, 10))?;
+        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 20, 10))?;
+        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 20, 10))?;
+        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 20, 10))?;
 
         let models =  ws.label_models()?;
-        for mm in &models{
-            debug!("mm={mm:?}");
-        }
+        // for mm in &models{
+        //     debug!("mm={mm:?}");
+        // }
 
         assert_eq!(models.len(), 2);
         assert_eq!(models.get("label_0".into()).expect("label_0").len(), 2);
