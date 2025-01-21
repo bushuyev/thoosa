@@ -334,7 +334,7 @@ mod tests {
 
         debug!("build_net_1: in_features={} out_features={}", in_features, out_features);
 
-        SeqBuilder::new(in_features)
+        SeqBuilder::new(in_features, None)
             .linear_s(out_features)
             .end_seq()
             .build_tch_module(&vs.root()).expect("build_tch_module")

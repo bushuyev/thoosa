@@ -566,7 +566,8 @@ pub fn run_opt_train_label_nodes (
     executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     channels_motifs_nodes:Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>,
     max_nets:i64,
-    label: &String, slices_len: i64
+    label: &String,
+    slices_len: i64
 ) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
 
     let channels = channels_motifs_nodes.read().len() as i64;
@@ -590,16 +591,12 @@ pub fn run_opt_train_label_nodes (
     opt_train(
           |vs:&VarStore, train_node_values:&TrainNodesValues, listener: &mut PlotVecf32|{
 
-              // train_label_nodes(
-              //     ws, train_node_values, comon_label_node_params, &mut batch, &device, channels, max_nets, vs, slices_len
-              // )
-
              let mut result = None::<(f32, LabelNodeParams)>;
              run_split_on_oom(
                  Reducer::new(batch.clone()),
                  |b|{
                      train_label_nodes(
-                         ws, train_node_values, comon_label_node_params, b, &device, channels, max_nets, vs, slices_len
+                         ws, train_node_values, comon_label_node_params, b, &device, channels, max_nets, vs, slices_len/5
                      )
                  },
                  |v, i|{
@@ -807,6 +804,10 @@ pub fn apply_motif_and_label_nets(
     let mut labels_tensors = vec![];
     for label in labels {
         let label_nodes = label_models.get_mut(label).expect(format!("no label model for {label}").as_str());
+        if label_nodes.len() == 0 {
+            warn!("no label models for {label}");
+            continue;
+        }
         debug!("apply_motif_and_label_nets: label={label} device={device:?} label_nodes.len={:?} label_nodes[0].1={:?} t.size()={:?}", label_nodes.len(), label_nodes[0].1, input_t.size());
 
         let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("no {label} label in labels_channels_motifs_models").as_str());
@@ -900,8 +901,12 @@ pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values:
         &final_node(&final_node_params).build_tch_module(&vs_0.root())?, //TODO features?
         |pred: &Tensor, target: &Tensor| {
 
+
+
             debug!("train_final: pred.size={:?} target.size={:?}", pred.size(), target.size());
             trace!("train_final: pred=\n{pred} target=\n{target}");
+            let pred= pad_to(&pred, &target.size()).expect("pad_to failed");
+            debug!("train_final: padded pred.size={:?}", pred.size());
 
             pred.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0)
 
@@ -1044,7 +1049,6 @@ pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nod
                 return None;
             }
 
-            let mut vs = nn::VarStore::new(device.clone());
             let label_node_params = LabelNodeParams::from_file(&params_path).expect(format!("no {params_path:?}").as_str());
 
             debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
@@ -1389,7 +1393,7 @@ impl MotifNodeParams {
 
 pub fn motif_node(params: &MotifNodeParams) -> Node {
     debug!("motif_node: params={params:?}");
-    let mut builder = SeqBuilder::new(params.num_features);
+    let mut builder = SeqBuilder::new(params.num_features, None);
     let mut net = builder
         // .batch_norm()
         // .conv_1d(10, 1, 1, ConvConfig::default())
@@ -1451,7 +1455,7 @@ impl LabelNodeParams {
 pub fn flat_label_node(params: &LabelNodeParams, slices_len:i64) -> Node {
     debug!("motif_node: params={params:?}");
     let num_features = params.channels * params.max_motif_nodes * slices_len;
-    let mut builder = SeqBuilder::new(slices_len);
+    let mut builder = SeqBuilder::new(slices_len, None);
     builder
         .closure(Box::new(move |t: &Tensor| {
             let t_0 = t.flatten(1, 3);
@@ -1473,12 +1477,12 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
     debug!("label_node: params={:?}", params);
 
     let max_motif_nets=  params.max_motif_nodes;
-    SeqBuilder::new(params.slices_len)
+    SeqBuilder::new(params.slices_len, Some(3))
 
         .split(
             (0..params.max_motif_nodes).map( |_i| {
                 let num_features = params.slices_len;
-                let mut builder = SeqBuilder::new(num_features);
+                let mut builder = SeqBuilder::new(num_features, None);
                 let mut net = builder
                     .linear_s(num_features);
 
@@ -1556,7 +1560,7 @@ impl FinalNodeParams {
 pub fn final_node(params:&FinalNodeParams) -> Node {
     debug!("final_node: params={:?}", params);
 
-    let mut builder = SeqBuilder::new(params.in_features);
+    let mut builder = SeqBuilder::new(params.in_features, None);
     let mut net = builder
         .linear_s(2*params.in_features)
         .func(Tensor::relu);
@@ -2289,7 +2293,7 @@ mod train_tests {
     pub fn test_net(num_features: i64, k: f64, device: Device, ) -> Result<Box<dyn ThoModule>, ThoosaError> {
         let vs = VarStore::new(device);
 
-        SeqBuilder::new(num_features)
+        SeqBuilder::new(num_features, None)
             .linear_s_with_conf(1, LinearConfig {
                 ws_init: init::Init::Const(k),//conflicts with ctor's init
                 bs_init: None,
@@ -2301,7 +2305,7 @@ mod train_tests {
     ///sums and multiplies inputs by k
     pub fn test_net_vs(num_features: i64, k: f64, vs:&VarStore) -> Result<Box<dyn ThoModule>, ThoosaError> {
 
-        SeqBuilder::new(num_features)
+        SeqBuilder::new(num_features, None)
             //.linear_s_with_conf(num_features, LinearConfig {
             //     ws_init: init::Init::Const(k),//conflicts with ctor's init
             //     bs_init: None,
@@ -2494,7 +2498,7 @@ mod train_tests {
 
     #[test]
     fn test_train_label() -> Result<(), ThoosaError> {
-        set_max_level(Info);
+        set_max_level(Debug);
         let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000)?));
 
         const BATCH_SIZE:usize = 10;
@@ -2550,12 +2554,12 @@ mod train_tests {
         let (loss, params) = super::train_label_nodes(
             &ws,
             &TrainNodesValues::new(1e-3, 3, Some(AdamW::default().amsgrad(true))),
-            &CommonTrainLabelNodeRunConfig::new(BATCH_SIZE, 300),
+            &CommonTrainLabelNodeRunConfig::new(BATCH_SIZE, 10),
             &mut DummyLabelBatch::new(),
             &Cpu,
             CHANNELS as i64,
             MAX_MOTIF_NETS as i64, //max_nets
-            &VarStore::new(Cpu), MAX_SLICES_LEN as i64
+            &VarStore::new(Cpu), MAX_SLICES_LEN as i64/2
         )?;
 
         debug!("test_train_label: loss={loss:?} params={params:?}");
@@ -2682,7 +2686,7 @@ mod train_tests {
         let batch_size = 10;
         const FEATURES:i64 = 10;
 
-        let res_seq_0 = SeqBuilder::new(FEATURES)
+        let res_seq_0 = SeqBuilder::new(FEATURES, None)
             // .func(|t|{
             //     debug!("res_seq_0: t={t:?}");
             //     t.shallow_clone()
@@ -2696,7 +2700,7 @@ mod train_tests {
             // .func(Tensor::sigmoid)
             .end_seq();
 
-        let res_seq_1 = SeqBuilder::new(FEATURES)
+        let res_seq_1 = SeqBuilder::new(FEATURES, None)
             // .func(|t|{
             //     debug!("res_seq_1: t={t:?}");
             //     t.shallow_clone()
@@ -2711,7 +2715,7 @@ mod train_tests {
             .end_seq();
 
 
-        let full = SeqBuilder::new(FEATURES)
+        let full = SeqBuilder::new(FEATURES, None)
 
             .split(
                 vec![
@@ -3301,7 +3305,7 @@ mod train_tests {
         let mut vs_0 = nn::VarStore::new(Cpu);
         let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window, 1)).build_tch_module(&vs_0.root())?;
 
-        let test_motif_model = SeqBuilder::new(100)
+        let test_motif_model = SeqBuilder::new(100, None)
             .linear_s_with_conf(1, LinearConfig {
                 ws_init: init::Init::Const(1.0),
                 bs_init: None,

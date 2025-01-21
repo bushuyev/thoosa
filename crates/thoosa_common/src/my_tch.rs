@@ -24,11 +24,27 @@ use crate::utils::*;
 #[derive(Debug)]
 pub struct MySequential {
     layers: Vec<Box<dyn ThoModule>>,
+    split_input:Option<(i64, i64)> //dim features
 }
 
 impl MySequential {
-    pub fn new(layers: Vec<Box<dyn ThoModule>>) -> Self {
-        Self { layers }
+
+    pub fn new(layers: Vec<Box<dyn ThoModule>>, split_input: Option<(i64, i64)>) -> Self {
+        Self {
+            layers ,
+            split_input
+        }
+    }
+
+    fn run_layers(&self, t: &Tensor, train: bool) -> Tensor {
+        debug!("MySequential::forward: xs.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.device(), self.layers[0]);
+
+        let xs = self.layers[0].tho_forward(t, train);
+        self.layers.iter().skip(1).enumerate().fold(xs, |xs, (i, layer)| {
+            debug!("MySequential::layer={i} xs.size={:?} device={:?} layer={:?}", xs.size(), xs.device(), layer);
+
+            layer.tho_forward(&xs, train)
+        })
     }
 }
 
@@ -43,14 +59,33 @@ impl ThoModule for MySequential {
         if self.layers.is_empty() {
             t.shallow_clone()
         } else {
-            debug!("MySequential::forward: xs.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.device(), self.layers[0]);
+            match self.split_input {
+                None => {
+                    self.run_layers(t, train)
+                }
+                Some((dim, num_features)) => {
+                    let splits= t.split(num_features, dim);
+                    let split_r = Tensor::concat(splits.into_iter().enumerate().filter_map(| (i, split) | {
+                        if split.size()[dim as usize] == num_features {
+                            let r = self.run_layers(&split, train);
+                            debug!("MySequential::tho_forward i={i} split={:?} r.size()={:?}", split.size(), r.size());
+                            Some(r)
+                        } else {
+                            debug!("MySequential::tho_forward skipping i={i} split.size={:?}", split.size());
 
-            let xs = self.layers[0].tho_forward(t, train);
-            self.layers.iter().skip(1).enumerate().fold(xs, |xs,(i,  layer)| {
-                debug!("MySequential::layer={i} xs.size={:?} device={:?} layer={:?}", xs.size(), xs.device(), layer);
+                            None
+                        }
 
-                layer.tho_forward(&xs, train)
-            })
+                    }).collect::<Vec<_>>().as_slice(), 1);
+
+                    let mean_r = split_r.mean_dim(1, false, None).unsqueeze(1);
+
+                    debug!("MySequential::tho_forward split_r.size()={:?} mean_r.size()={:?}", split_r.size(), mean_r.size());
+
+                    mean_r
+                }
+            }
+
         }
     }
 }
@@ -307,7 +342,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
 }
 
 pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node  {
-    let mut builder = SeqBuilder::new(num_features);
+    let mut builder = SeqBuilder::new(num_features, None);
 
     let dense_block = |b:&mut SeqBuilder| b
         .n_blocks(
@@ -374,6 +409,7 @@ mod tch_tests {
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
     use tch::nn::{BatchNormConfig, ConvConfig, Init, Module, OptimizerConfig, VarStore};
 
     use thoosa_shared::*;
@@ -395,7 +431,7 @@ mod tch_tests {
 
     #[test]
     pub fn test_seq_linear_same_size(){
-        let seq = SeqBuilder::new(2)
+        let seq = SeqBuilder::new(2, None)
             .linear()
             .end_seq();
 
@@ -414,16 +450,16 @@ mod tch_tests {
         //     let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         // }
 
-        let res_seq = SeqBuilder::new(10)
+        let res_seq = SeqBuilder::new(10, None)
             .linear_s(1)
             .end_seq();
 
-        let conv_seq = SeqBuilder::new(10)
+        let conv_seq = SeqBuilder::new(10, None)
             .conv_1d(5, 1, 1, ConvConfig::default())
             .linear_s(1)
             .end_seq();
 
-        let main = SeqBuilder::new(10)
+        let main = SeqBuilder::new(10, None)
             .split(
                 vec![res_seq, conv_seq],
                 Box::new(|t:&Tensor|vec![t.i((.., 0, ..)).view((10, 1, 10)), t.i((.., 1, ..)).view((10, 1, 10))]),
@@ -431,7 +467,7 @@ mod tch_tests {
 
             ).end_seq();
 
-        let mut vs = nn::VarStore::new(Device::Cpu);
+        let mut vs = nn::VarStore::new(Cpu);
 
         let net = main.build_tch_module(&vs.root())?;
 
@@ -456,6 +492,32 @@ mod tch_tests {
         Ok(())
     }
 
+
+    #[test]
+    pub fn test_equalize() -> Result<(), ThoosaError>{
+        let mut vs = nn::VarStore::new(Cpu);
+
+
+
+        // let input = Tensor::rand(&[3, 11], FLOAT_CPU);
+        let length = 11;
+
+        let input = lin_t(length).view((1,length));
+        let num_features = length / 2;
+        debug!("num_features={num_features} input=\n{input}");
+        let splits= input.split(num_features, 1);
+        let res_seq = SeqBuilder::new(num_features, None).linear_s(1).end_seq().build_tch_module(&vs.root())?;
+
+        for (i, split) in splits.into_iter().enumerate() {
+            debug!("i={i} split=\n{split}");
+            let r = res_seq.tho_forward(&split, true);
+
+            debug!("r=\n{r}");
+        }
+
+
+        Ok(())
+    }
 
     #[test]
     pub fn test_save_load_net() -> Result<(), ThoosaError>{
@@ -526,7 +588,7 @@ mod tch_tests {
     }
 
     fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn ThoModule>, ThoosaError> {
-        SeqBuilder::new(num_features)
+        SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(Box::new(|t:&Tensor|{
                 t.view((t.size()[0], 1, t.size()[1]))//channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
@@ -634,10 +696,10 @@ mod tch_tests {
 
 
         fn test_node() -> Node {
-            SeqBuilder::new(123)
+            SeqBuilder::new(123, None)
                 .split(
                     vec![
-                        SeqBuilder::new(123)
+                        SeqBuilder::new(123, None)
                             .batch_norm(BatchNormConfig::default())//3 weight bias running_var
                             .linear()//2 weight bias
                             .func(Tensor::relu)
@@ -645,7 +707,7 @@ mod tch_tests {
                             .func(Tensor::relu)
                             .linear_s(1)//2 weight bias
                             .end_seq(),
-                        SeqBuilder::new(321)
+                        SeqBuilder::new(321, None)
                             .batch_norm(BatchNormConfig::default())//3 weight bias running_var
                             .linear()//2 weight bias
                             .func(Tensor::relu)
