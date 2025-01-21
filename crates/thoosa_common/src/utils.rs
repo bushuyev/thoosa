@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use chrono::SecondsFormat;
 use cudarc::driver::CudaDevice;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -361,14 +361,14 @@ macro_rules! panic_to_err {
 }
 
 pub trait Splittable<const SIZE: usize> {
-    fn split(&self) -> [Self;SIZE] where Self: Sized;
+    fn split(&self) -> Option<[Self; SIZE]> where Self: Sized;
 }
 
 
 pub trait Splitter<const SIZE: usize> {
     type S:Splittable<SIZE>;
     fn next(&mut self) -> Option<Self::S>;
-    fn split(&mut self, split: Self::S);
+    fn split(&mut self, split: Self::S) -> Result<(), ThoosaError>;
 }
 
 #[derive(Debug)]
@@ -395,13 +395,19 @@ impl <const SIZE: usize, T> Splitter<SIZE> for SplitQueue<SIZE, T> where T:Debug
         v
     }
 
-    fn split(&mut self, chunk:T)  {
+    fn split(&mut self, chunk:T) -> Result<(), ThoosaError> {
         debug!("SplitQueue::split: chunk={chunk:?}");
-        let splits = chunk.split();
-        for split in splits.into_iter().rev() {
-            debug!("SplitQueue::split: push_front chunk={split:?}");
 
-            self.queue.push_front(split);
+        let splits = chunk.split();
+        if let Some(splits) = splits {
+            for split in splits.into_iter().rev() {
+                debug!("SplitQueue::split: push_front chunk={split:?}");
+
+                self.queue.push_front(split);
+            }
+            Ok(())
+        } else {
+            Err(ThoosaError::new("Can't split anymore".to_owned()))
         }
     }
 }
@@ -425,13 +431,20 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
         self.value.take()
     }
 
-    fn split(&mut self, v: Self::S) {
-        let [v_0] = v.split();
-        self.value = Some(v_0)
+    fn split(&mut self, v: Self::S) -> Result<(), ThoosaError> {
+        match v.split() {
+            None => {
+                Err(ThoosaError::new("Can't split anymore".to_owned()))
+            }
+            Some(a) => {
+                let [v_0] = a;
+                self.value = Some(v_0);
+
+                Ok(())
+            }
+        }
     }
 }
-
-
 
 pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> Result<(), ThoosaError>
 where
@@ -450,9 +463,13 @@ where
                 }
                 Err(e) if e.is_oom() => {
                     debug!("run_split_on_oom: splitting on oom, attempt={attempt}");
-                    splitter.split(split_0);
+
                     if attempt > max_attempts {
-                        return Err(e);
+                        attempt = 0;
+                        if let Err(e) = splitter.split(split_0) {
+                            return Err(e);
+                        }
+
                     }
                     attempt += 1;
                 }
@@ -470,7 +487,7 @@ where
 pub struct SplittableTensor<const D:i64>(pub Tensor);//TODO more than one dimension?
 
 impl <const S:usize, const D:i64> Splittable<S> for SplittableTensor<D> {
-    fn split(&self) -> [Self; S]
+    fn split(&self) -> Option<[Self; S]>
     where
         Self: Sized,
     {
@@ -483,9 +500,20 @@ impl <const S:usize, const D:i64> Splittable<S> for SplittableTensor<D> {
 
         debug!("SplittableTensor::split: splits={splits:?}");
 
-        let splits_len = splits.len();
+        // let splits_len = splits.len();
 
-        splits.try_into().expect(format!("splits.len={} != {S}", splits_len).as_str())
+        splits.try_into().ok()
+    }
+}
+
+//TODO for batch + degrade Kind: Double->Float->BFloat16
+pub struct CompositeReducer {
+    reducers:Vec<Box<dyn Splittable<1>>>
+}
+
+impl CompositeReducer {
+    pub fn new(reducers:Vec<Box<dyn Splittable<1>>>) -> Self {
+        Self { reducers }
     }
 }
 
@@ -513,7 +541,7 @@ pub mod tests {
     use thoosa_shared::{cdt_for_dir, ThoosaError};
     use crate::bool_iter::BoolTensorIterator;
     use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore};
-    use crate::utils::{hist_1_dim, Splittable, SplittableTensor};
+    use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
 
     #[ctor::ctor]
     fn init() {
@@ -522,7 +550,7 @@ pub mod tests {
 
 
     #[test]
-    fn test_splittable_tensor(){
+    fn test_splittable_tensor() {
         let t = Tensor::rand(&[3, 3], FLOAT_CPU);
         debug!("t=\n{t}");
 
@@ -530,13 +558,34 @@ pub mod tests {
 
         debug!("sp_t=\n{sp_t:?}");
 
-        let splits:[_; 2] = sp_t.split();
+        let splits:[_; 2] = sp_t.split().expect("some splits");
 
         debug!("splits={splits:?}");
 
         assert_eq!(
             t,
             Tensor::concat(&[splits[0].as_ref(), splits[1].as_ref()], 0)
+        )
+    }
+
+    #[test]
+    fn test_composite_reducer(){
+        let reducer = CompositeReducer::new(vec![
+
+        ]);
+        //TODO
+    }
+
+    #[test]
+    fn test_splittable_tensor_cant_split(){
+        let t = Tensor::rand(&[3, 3], FLOAT_CPU);
+        debug!("t=\n{t}");
+
+        let sp_t = SplittableTensor::<0>(t.shallow_clone());
+        let splits:Option<[_; 4]> = sp_t.split();
+
+        assert!(
+            splits.is_none()
         )
     }
 

@@ -430,7 +430,7 @@ where
                         Err(e) => {
                             debug!("got e={e:?}, splitting");
 
-                            split_queue.split(chunk_0_split);
+                            split_queue.split(chunk_0_split).expect("can't split chunks");//TODO return err
                         }
                     }
 

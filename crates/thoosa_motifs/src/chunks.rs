@@ -111,29 +111,33 @@ impl  ChunkOfSlicedTensors {
 }
 
 impl Splittable<2> for ChunkOfSlicedTensors {
-    fn split(&self) -> [Self;2] {
+    fn split(&self) -> Option<[Self; 2]> {
         //only one tensor in the chunk, splitting tensor
         if self.resource_ids.len() == 1 {
             assert_eq!(self.sizes.len(), 1);
 
             let split_at_idx = self.sizes[0]/2;
             debug!("ChunkOfSlicedTensors::split: 0 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at_idx={split_at_idx}", self.sizes, self.resource_ids, self.t.size());
-            [
-                Self {
-                    resource_ids: self.resource_ids.clone(),
-                    sizes: vec![split_at_idx],
-                    step: self.step,
-                    t: SyncWrapper::new_t(self.t.i((.., ..split_at_idx, ..))),
-                    split_at: self.split_at,
-                },
-                Self {
-                    resource_ids: self.resource_ids.clone(),
-                    sizes: vec![self.sizes[0]-split_at_idx],
-                    step: self.step,
-                    t: SyncWrapper::new_t(self.t.i((.., split_at_idx.., ..))),
-                    split_at: self.split_at.map(|v|Some(v+split_at_idx)).unwrap_or(Some(split_at_idx)),
-                }
-            ]
+            if split_at_idx > 0 {
+                Some([
+                    Self {
+                        resource_ids: self.resource_ids.clone(),
+                        sizes: vec![split_at_idx],
+                        step: self.step,
+                        t: SyncWrapper::new_t(self.t.i((.., ..split_at_idx, ..))),
+                        split_at: self.split_at,
+                    },
+                    Self {
+                        resource_ids: self.resource_ids.clone(),
+                        sizes: vec![self.sizes[0] - split_at_idx],
+                        step: self.step,
+                        t: SyncWrapper::new_t(self.t.i((.., split_at_idx.., ..))),
+                        split_at: self.split_at.map(|v| Some(v + split_at_idx)).unwrap_or(Some(split_at_idx)),
+                    }
+                ])
+            } else {
+                None
+            }
         //more than one tensor in the chunk, splitting chunk
         } else {
             let split_at = self.resource_ids.len() / 2;
@@ -144,7 +148,7 @@ impl Splittable<2> for ChunkOfSlicedTensors {
 
             debug!("ChunkOfSlicedTensors::split: 1 self.sizes={:?} self.keys={:?} self.t.size()={:?} split_at={split_at} split_at_idx={split_at_tensors_idx}", self.sizes, self.resource_ids, self.t.size());
 
-            [
+            Some([
                 Self {
                     resource_ids: self.resource_ids[..split_at].to_vec(),
                     sizes: self.sizes[..split_at].to_vec(),
@@ -160,7 +164,7 @@ impl Splittable<2> for ChunkOfSlicedTensors {
                     t: SyncWrapper::new_t(self.t.i((.., split_at_tensors_idx.., ..))),
                     split_at: None, //self.split_at.map(|v|Some(v+ split_at_tensors_idx)).unwrap_or(Some(split_at_tensors_idx)),
                 }
-            ]
+            ])
         }
     }
 
@@ -327,7 +331,7 @@ mod tests {
                     iters.push(chunk.to_vec().into_iter());
                 }
                 Err(_) => {
-                    split_queue.split(chunk);
+                    split_queue.split(chunk).expect("split");
                 }
             }
             debug!("split_queue={split_queue:?}");
@@ -401,7 +405,7 @@ mod tests {
                     iters.push(chunk.to_vec().into_iter());
                 }
                 Err(_) => {
-                    split_queue.split(chunk);
+                    split_queue.split(chunk).expect("split");
                 }
             }
             debug!("split_queue={split_queue:?}");

@@ -371,7 +371,7 @@ impl DataBatch for LoadingTensorsDataBatch {
 
 
 impl Splittable<1> for LoadingTensorsDataBatch {
-    fn split(&self) -> [Self; 1]
+    fn split(&self) -> Option<[Self; 1]>
     where
         Self: Sized
     {
@@ -379,7 +379,7 @@ impl Splittable<1> for LoadingTensorsDataBatch {
         batch.batch_size = batch.batch_size/2;
 
         debug!("Splittable<1> for LoadingTensorsDataBatch: batch.batch_size={}", batch.batch_size);
-        [batch]
+        Some([batch])
     }
 }
 
@@ -624,10 +624,11 @@ pub fn train_label_nodes<B:SplittableDataBatch> (
     device: &Device,
     channels:i64,
     max_nets:i64,
-    vs_0: &VarStore, slices_len: i64
+    vs_0: &VarStore,
+    slices_len: i64
 ) ->  Result<(f32, LabelNodeParams), ThoosaError> {
 
-    let label_node_params = LabelNodeParams::new(channels, max_nets, slices_len);
+    let label_node_params = LabelNodeParams::new(channels, max_nets, slices_len, train_node_values.num_layers as i64);
     debug!("train_label_nodes: label_node_params={label_node_params:?} cuda_mem={:?}", cuda_mem());
 
     let device = device.clone();
@@ -1157,7 +1158,8 @@ pub fn basic_hyperparams() -> Vec<Hyperparameter>{
 
 #[derive(Debug, Clone)]
 pub struct TrainNodesValues {
-    lr: f64, num_layers: u32,
+    lr: f64,
+    num_layers: u32,
     adam_w: Option<AdamW>
 }
 
@@ -1417,19 +1419,20 @@ pub fn motif_node(params: &MotifNodeParams) -> Node {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LabelNodeParams {
     channels:i64,
-    max_motif_nodes:i64,//TODO remove max?
+    motif_nodes:i64,
+    motif_layers:i64,
     slices_len:i64
 }
 
 impl LabelNodeParams {
-    pub fn new(channels: i64, max_motif_nodes: i64, slices_len:i64) -> Self {
-        Self { channels, max_motif_nodes, slices_len }
+    pub fn new(channels: i64, max_motif_nodes: i64, slices_len:i64, motif_layers:i64) -> Self {
+        Self { channels, motif_nodes: max_motif_nodes, slices_len, motif_layers }
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
         let map = HashMap::from([
             ("LabelNodeParams.channels".into(),  self.channels.into()),
-            ("LabelNodeParams.max_motif_nets".into(),  self.max_motif_nodes.into()),
+            ("LabelNodeParams.max_motif_nets".into(),  self.motif_nodes.into()),
             ("LabelNodeParams.slices_len".into(),  self.slices_len.into()),
         ]);
 
@@ -1440,7 +1443,8 @@ impl LabelNodeParams {
         let properties = unprefix_properties("LabelNodeParams", &properties);
         LabelNodeParams::new(
             properties.get("channels").expect("channels").as_i64().expect("channels as_i64"),
-            properties.get("max_motif_nets").expect("max_motif_nets").as_i64().expect("max_motif_nets as_i64"),
+            properties.get("motif_nets").expect("motif_nets").as_i64().expect("motif_nets as_i64"),
+            properties.get("motif_layers").expect("motif_layers").as_i64().expect("motif_layers as_i64"),
             properties.get("slices_len").expect("slices_len").as_i64().expect("slices_len as_i64")
         )
     }
@@ -1454,7 +1458,7 @@ impl LabelNodeParams {
 
 pub fn flat_label_node(params: &LabelNodeParams, slices_len:i64) -> Node {
     debug!("motif_node: params={params:?}");
-    let num_features = params.channels * params.max_motif_nodes * slices_len;
+    let num_features = params.channels * params.motif_nodes * slices_len;
     let mut builder = SeqBuilder::new(slices_len, None);
     builder
         .closure(Box::new(move |t: &Tensor| {
@@ -1476,17 +1480,17 @@ pub fn flat_label_node(params: &LabelNodeParams, slices_len:i64) -> Node {
 pub fn label_node(params:&LabelNodeParams) -> Node {
     debug!("label_node: params={:?}", params);
 
-    let max_motif_nets=  params.max_motif_nodes;
+    let max_motif_nets=  params.motif_nodes;
     SeqBuilder::new(params.slices_len, Some(3))
 
         .split(
-            (0..params.max_motif_nodes).map( |_i| {
+            (0..params.motif_nodes).map( |_i| {
                 let num_features = params.slices_len;
                 let mut builder = SeqBuilder::new(num_features, None);
                 let mut net = builder
                     .linear_s(num_features);
 
-                for i in 0..2 as usize {//params.num_layers
+                for i in 0..params.motif_layers as usize {//params.num_layers
                     net = net
                         .linear_s(num_features)
                         .func(Tensor::relu);
@@ -2541,11 +2545,11 @@ mod train_tests {
         }
 
         impl Splittable<1> for DummyLabelBatch {
-            fn split(&self) -> [Self; 1]
+            fn split(&self) -> Option<[Self; 1]>
             where
                 Self: Sized
             {
-                [DummyLabelBatch::new()]
+                Some([DummyLabelBatch::new()])
             }
         }
 
@@ -2755,8 +2759,8 @@ mod train_tests {
 
         debug!("vs_0={vs_0:?}");
 
-        // let kind = Kind::BFloat16;
-        let kind = Kind::Double;
+        let kind = Kind::BFloat16;
+        // let kind = Kind::Double;
         vs_0.root().set_kind(kind);
 
         // vs_0.root() /"seq_0"
@@ -3003,11 +3007,11 @@ mod train_tests {
         }
 
         impl Splittable<1> for DummyLabelBatch {
-            fn split(&self) -> [Self;1]
+            fn split(&self) -> Option<[Self; 1]>
             where
                 Self: Sized
             {
-                [DummyLabelBatch::new()]
+                Some([DummyLabelBatch::new()])
             }
         }
 
@@ -3048,6 +3052,8 @@ mod train_tests {
             Cpu,
             "label"
         );
+
+        debug!("test_train_oom: r={r:?}");
 
 
         Ok(())
@@ -3289,7 +3295,7 @@ mod train_tests {
     }
 
     fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: usize, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
-        let label_node_params = LabelNodeParams::new(channels as i64, max_motif_nets, 0);
+        let label_node_params = LabelNodeParams::new(channels as i64, max_motif_nets, 0, 0);//TODO slices_len, motif_layers
 
         let mut vs_0 = nn::VarStore::new(Cpu);
         let _ = train_nets::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
