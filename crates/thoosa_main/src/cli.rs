@@ -47,7 +47,7 @@ use thoosa_motifs::find::{
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams,
 };
-use thoosa_shared::{parse_range_or_value, slices_len};
+use thoosa_shared::{parse_range_or_value, slices_len, LabelNodeType};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_shared::{
     batch_windows, cdt, cdt_for_dir, clc_num_batches, make_combos, RangeOrValue, ResourceType,
@@ -328,7 +328,7 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
                 debug!("TrainLabelNodeParams::to_run_configs: config_combo={config_combo:?} ");
                 let num_layers = config_combo.pop().unwrap().try_into().unwrap();
                 let lr = config_combo.pop().unwrap().try_into().unwrap();
-                TrainLabelNodeRunConfig::from_values(None, lr, num_layers)
+                TrainLabelNodeRunConfig::from_values(None, lr, num_layers, LabelNodeType::FixedNumSlices)
             })
             .collect();
 
@@ -2340,7 +2340,6 @@ mod main_tests {
         let train_label_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids.clone()),
             &TrainLabelNodeParams::dummy(
-                100,
                 select_motifs_for_label_run_ids,
                 group_name.clone(),
                 group_name.clone(),

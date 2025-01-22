@@ -2,6 +2,7 @@ use tch::Tensor;
 
 use crate::utils::DataBatch;
 
+#[derive(Debug)]
 pub struct DummyDs {
     y_0:Tensor,
     y_1:Tensor,

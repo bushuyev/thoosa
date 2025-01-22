@@ -6,7 +6,7 @@ use log::{debug, trace};
 use rand::distributions::Uniform;
 use rand::Rng;
 use tch::{IndexOp, Tensor};
-use thoosa_shared::{RangeOrValue, ThoosaError};
+use thoosa_shared::{LabelNodeType, RangeOrValue, ThoosaError};
 use thoosa_shared::val::Val;
 use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
@@ -878,5 +878,16 @@ impl<'a> IntoIterator for &'a ConfigurationSpace {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+impl TryFrom<&[LabelNodeType]> for Hyperparameter{
+    type Error = ();
+
+    fn try_from(value: &[LabelNodeType]) -> Result<Self, Self::Error> {
+        Ok(Hyperparameter::Categorical {
+            name: "LabelNodeType".to_string(),
+            values: value.into_iter().map(|v|v.to_string()).collect()
+        })
     }
 }
