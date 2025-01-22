@@ -518,6 +518,28 @@ impl IntoIterator for RangeOrValue<f64> {
 
 
 
+#[derive(Debug, Clone)]
+pub enum LabelNodeType {
+    MaxPadding,
+    FixedNumSlices
+}
+
+impl Display for LabelNodeType {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            LabelNodeType::MaxPadding => {
+                Display::fmt(&"MaxPadding", f)
+            }
+            LabelNodeType::FixedNumSlices => {
+                Display::fmt(&"FixedNumSlices", f)
+            }
+        }
+    }
+}
+
+impl LabelNodeType {
+
+}
 
 /*impl<V: 'static + Mul<V, Output = usize> + From<u32> + Div<Output=V>> IntoIterator for RangeOrValue<V>
 
