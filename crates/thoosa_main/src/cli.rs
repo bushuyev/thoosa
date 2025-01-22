@@ -979,7 +979,7 @@ where
         let path = entry?.path();
 
         let t = apply_motif_and_label_nets(
-            &Box::new(load_tensor(&path)?),
+            &load_tensor(&path)?.unsqueeze(0),//for batch dim
             &mut label_models,
             &labels_channels_motifs_models_rw,
             &device,
