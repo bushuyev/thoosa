@@ -929,8 +929,8 @@ pub fn lin_iter(n: i64) -> Map<Range<i64>, fn(i64) -> f32> {
 
 pub trait DataBatch {
     /// returns (inputs, labels)
-    fn train_batch(&mut self) -> (Tensor, Tensor);//TODO change to Box<Tensor>
-    fn valid_batch(&mut self) -> (Tensor, Tensor);
+    fn train_batch(&self) -> (Tensor, Tensor);//TODO change to Box<Tensor>
+    fn valid_batch(&self) -> (Tensor, Tensor);
 }
 
 pub trait SplittableDataBatch: DataBatch + Splittable<1> + Debug {

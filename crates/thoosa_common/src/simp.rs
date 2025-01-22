@@ -22,7 +22,7 @@ impl DummyDs {
 }
 
 impl DataBatch for DummyDs {
-    fn train_batch(&mut self) -> (Tensor, Tensor) {
+    fn train_batch(&self) -> (Tensor, Tensor) {
         let (x, y):(Vec<Tensor>, Vec<Tensor>) = (0..self.batch_size).fold((vec![], vec![]), |mut x_y, i| {
 
             if i % 2 == 0 {
@@ -54,7 +54,7 @@ impl DataBatch for DummyDs {
         )
     }
 
-    fn valid_batch(&mut self) -> (Tensor, Tensor) {
+    fn valid_batch(&self) -> (Tensor, Tensor) {
         self.train_batch()
     }
 }
