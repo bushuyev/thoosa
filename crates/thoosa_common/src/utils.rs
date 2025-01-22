@@ -538,7 +538,7 @@ pub mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::{IndexOp, Tensor};
 
-    use thoosa_shared::{cdt_for_dir, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, clc_step, ThoosaError};
     use crate::bool_iter::BoolTensorIterator;
     use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
@@ -574,6 +574,20 @@ pub mod tests {
 
         ]);
         //TODO
+    }
+
+    #[test]
+    fn test_clc_step(){
+        let n = 10_000;
+        let w = 1000;
+        let t = Tensor::rand(&[1, n], FLOAT_CPU);
+        let k = 100;
+        let (step, pad) = clc_step(n, w, k); //(n-w)/(k-1);
+        let u = t.pad([0, pad], "constant", 0.).unfold(1, w, step);
+
+        debug!("u={u:?}");
+
+        assert_eq!(k as i64, u.size()[1]);
     }
 
     #[test]

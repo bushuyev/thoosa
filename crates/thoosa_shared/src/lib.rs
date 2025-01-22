@@ -25,6 +25,7 @@ use std::str::FromStr;
 use bytemuck::{Pod, Zeroable};
 use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
+use num_traits::real::Real;
 use crate::resource::ResourceId;
 
 pub mod repeat_iter;
@@ -675,8 +676,25 @@ pub const fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, ba
     (positions + batch_size - 1) / batch_size
 }
 
-pub const  fn slices_len(input_n: i64, motif_width: i64, step: usize) -> i64 {
+pub const fn slices_len(input_n: i64, motif_width: i64, step: usize) -> i64 {
     (input_n - motif_width) / step as i64 + 1
+}
+
+pub  fn clc_step(input_n: i64, motif_width: i64, k:i64) -> (i64, i64) {
+    let v = input_n - motif_width;
+    let div = (k - 1);
+
+    let r = v % div;
+
+    let pad = if r == 0 {
+        0
+    } else {
+        div - r
+    };
+
+    let step = (v + pad) / div;
+
+    (step, pad)
 }
 
 
