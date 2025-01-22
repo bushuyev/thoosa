@@ -647,11 +647,11 @@ impl EEGs {
 }
 
 impl DataBatch for EEGs {
-    fn train_batch(&mut self) -> (Tensor, Tensor) {
+    fn train_batch(&self) -> (Tensor, Tensor) {
         Self::random_subset(self.batch_size, &self.train_set)
     }
 
-    fn valid_batch(&mut self) -> (Tensor, Tensor) {
+    fn valid_batch(&self) -> (Tensor, Tensor) {
         Self::random_subset(self.batch_size, &self.valid_set)
     }
 }
