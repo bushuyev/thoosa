@@ -27,8 +27,8 @@ export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --re
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/tmp/ws_test/  train-on-label --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100" --select-motifs-for-label-run-ids=146 --lr=0.00001..0.001 --num-layers=1..5 --opt-max-evals=20 --opt-n-init=10 --label-batch-size=6 --cycles=100
 
 
-export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run  -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/tmp/ws_test/  train-final \
- --train-labels-run-ids=214 --train-labels-run-ids=215 \
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release   -- --term-logger-level=INFO --write-logger-level=DEBUG --ws-path=/tmp/ws_test/  train-final \
+ --train-labels-run-ids=245 --train-labels-run-ids=246 --train-labels-run-ids=247 --train-labels-run-ids=248 --train-labels-run-ids=249 --train-labels-run-ids=250 \
   --train-resource-group="pure group 100" --valid-resource-group="group 1 labels/100/0-100" --opt-max-evals=10 --opt-n-init=3  --batch-size=10 --cycles=20 \
   --lr=0.00001..0.001 --num-layers=9..10
 

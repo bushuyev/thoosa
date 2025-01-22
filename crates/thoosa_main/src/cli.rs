@@ -1229,7 +1229,7 @@ pub fn run_train_label_nodes(
 
                     let channels_motifs_models_arc = Arc::clone(&channels_motifs_models);
 
-                    let max_nets = channels_motifs_models.read().iter().map(|nets| nets.1.len()).max().unwrap_or(0) as i64;
+                    let max_nets = channels_motifs_models.read().iter().map(|nets| nets.1.len()).sum::<usize>() as i64;
                     if max_nets <= 0 {
                         panic!("no motif nets found");//TODO skip?
                     }
@@ -1255,7 +1255,7 @@ pub fn run_train_label_nodes(
                             Arc::clone(&channels_motifs_models_arc),
                             max_nets,
                             label,
-                            slices_len
+                            100, //slices_len/3
                         ) {
                             Ok(result) => {
                                 results.push(Ok(result));

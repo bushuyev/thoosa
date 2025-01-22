@@ -35,7 +35,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Kind, Reduction, Tensor};
 use clap::Subcommand;
-use thoosa_shared::{parse_key_val, slices_len};
+use thoosa_shared::{clc_step, parse_key_val, slices_len};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::val::Val;
@@ -378,8 +378,12 @@ impl Splittable<1> for LoadingTensorsDataBatch {
         let mut batch = self.clone();
         batch.batch_size = batch.batch_size/2;
 
-        debug!("Splittable<1> for LoadingTensorsDataBatch: batch.batch_size={}", batch.batch_size);
-        Some([batch])
+        if batch.batch_size > 0 {
+            debug!("Splittable<1> for LoadingTensorsDataBatch: batch.batch_size={}", batch.batch_size);
+            Some([batch])
+        } else {
+            None
+        }
     }
 }
 
@@ -586,7 +590,7 @@ pub fn run_opt_train_label_nodes (
         }))
 
     ); //));
-    debug!("run_opt_train_label_nodes: label={label:?} run_config={run_config:?} comon_label_node_params={comon_label_node_params:?} channels={channels} cuda_mem={:?}", cuda_mem());
+    debug!("run_opt_train_label_nodes: label={label:?} run_config={run_config:?} slices_len={slices_len} comon_label_node_params={comon_label_node_params:?} channels={channels} cuda_mem={:?}", cuda_mem());
 
     opt_train(
           |vs:&VarStore, train_node_values:&TrainNodesValues, listener: &mut PlotVecf32|{
@@ -596,7 +600,7 @@ pub fn run_opt_train_label_nodes (
                  Reducer::new(batch.clone()),
                  |b|{
                      train_label_nodes(
-                         ws, train_node_values, comon_label_node_params, b, &device, channels, max_nets, vs, slices_len/5
+                         ws, train_node_values, comon_label_node_params, b, &device, channels, max_nets, vs, slices_len
                      )
                  },
                  |v, i|{
@@ -742,6 +746,63 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
  # returns Tensor nodes x batches x batch size
 */
 pub fn apply_channel_motifs(input_slice_step: usize,
+                            motif_nodes: &mut [(MotifNodeParams, ThoModuleWithStore)],
+                            channel: Tensor,
+                            motif_width: i64,
+                            max_motif_nodes: i64,
+                            slices_len: i64,
+                            device: &Device
+) -> Result<Tensor, ThoosaError> {
+
+    debug!("apply_channel_motifs_2: motif_nodes={motif_nodes:?} channel={channel:?} motif_width={motif_width} max_motif_nodes={max_motif_nodes} max_dists_len={slices_len} device={device:?}");
+
+    if motif_nodes.is_empty() {
+        return Ok(Tensor::zeros([max_motif_nodes, slices_len], (Float, *device)));
+    }
+
+    let (input_slice_step, pad) = clc_step(channel.size()[0], motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
+    let unfolded = channel.pad([0, pad], "constant", 0.).unfold(0, motif_width, input_slice_step);
+
+    debug!("apply_channel_motifs_2: channel.size={:?} motif_width={motif_width} input_slice_step={input_slice_step}  unfolded.size()={:?}", channel.size(), unfolded.size());
+
+
+
+    let motif_dists = motif_nodes.iter_mut().map(|(_params, net)| {
+        net.set_device(device.clone());
+
+        let mut motif_distance_splits = vec![];
+        run_split_on_oom(
+            SplitQueue::<2, _>::new(SplittableTensor::<0>(unfolded.shallow_clone())),
+            |t|{
+
+                let r = net.infer(&t.as_ref().to_device(device.clone()));
+                debug!("apply_channel_motifs_2: forward: size={:?} r.size={:?}", t.as_ref().size(), r.size());
+
+                Ok(r)
+            },
+            |v, t|{
+                debug!("v={v:?}");
+                motif_distance_splits.push(v);
+            },
+            10//TODO config
+        ).unwrap();//TODO unwrap
+
+        net.set_device(Cpu);
+        debug!("apply_channel_motifs_2: motif_distance_splits={motif_distance_splits:?}");
+        if motif_distance_splits.len() > 0 {
+            Ok(Tensor::concat(&motif_distance_splits, 0))
+        } else if motif_distance_splits.len() == 1 {
+            Ok(motif_distance_splits.pop().unwrap())
+        } else {
+            Err(ThoosaError::new("no motif distances "))
+        }
+    }).collect::<Result<Vec<_>, ThoosaError>>()?;
+
+    // pad_to(&Tensor::stack(motif_dists.as_slice(), 0).view((motif_nodes.len() as i64, -1)), &[max_motif_nodes, slices_len])
+    Ok(Tensor::stack(motif_dists.as_slice(), 0).view((motif_nodes.len() as i64, -1)))
+}
+
+pub fn apply_channel_motifs_with_padding(input_slice_step: usize,
                             motif_nodes: &mut [(MotifNodeParams, ThoModuleWithStore)],
                             channel: Tensor,
                             motif_width: i64,
@@ -1481,7 +1542,7 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
     debug!("label_node: params={:?}", params);
 
     let max_motif_nets=  params.motif_nodes;
-    SeqBuilder::new(params.slices_len, Some(3))
+    SeqBuilder::new(params.slices_len, None)//Some(2)
 
         .split(
             (0..params.motif_nodes).map( |_i| {
@@ -1508,9 +1569,74 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
                 move |t:&Tensor|
                     (0..max_motif_nets)
                     .map(|net_i|{
-                        t.i((.., .., net_i, ..))
+                        t.i((.., net_i, ..))
                     })
                 .collect()
+            ),//label batch, channel, max_motif_nets, max slices
+
+            Box::new(move |t:Vec<Tensor>|{
+                debug!("label_node merging t={t:?}");
+                // let out = Tensor::stack(t.as_slice(), 1).mean_dim(1, false, Float);
+                let out = Tensor::concat(t.as_slice(), 1); //.mean_dim(1, false, Float);
+                debug!("label_node merging out={:?}", out.size());
+
+                out
+            })
+
+        )
+        .closure(Box::new(move |t:&Tensor|{
+            debug!("label_node merged final in flatten t.size()={:?}", t.size());
+
+            // let t_0 = t.squeeze_dims(1);
+            // debug!("label_node merged final out flatten t_0.size()={:?}", t_0.size());
+            // t_0
+            t.shallow_clone()
+
+        }), Some(params.motif_nodes))
+
+        .linear()
+        // .func(Tensor::relu)
+        .linear_s(1)
+        .func(Tensor::sigmoid)
+        .end_seq()
+
+}
+
+
+pub fn label_node_with_padding(params:&LabelNodeParams) -> Node {
+    debug!("label_node: params={:?}", params);
+
+    let max_motif_nets=  params.motif_nodes;
+    SeqBuilder::new(params.slices_len, Some(3))
+
+        .split(
+            (0..params.motif_nodes).map( |_i| {
+                let num_features = params.slices_len;
+                let mut builder = SeqBuilder::new(num_features, None);
+                let mut net = builder
+                    .linear_s(num_features);
+
+                for i in 0..params.motif_layers as usize {//params.num_layers
+                    net = net
+                        .linear_s(num_features)
+                        .func(Tensor::relu);
+                }
+
+                net
+                    .func(Tensor::relu)
+                    .linear_s(1)
+                    // .func(Tensor::sigmoid)
+                    .end_seq()
+
+            }).collect(),
+
+            Box::new(
+                move |t:&Tensor|
+                    (0..max_motif_nets)
+                        .map(|net_i|{
+                            t.i((.., .., net_i, ..))
+                        })
+                        .collect()
             ),//label batch, channel, max_motif_nets, max slices
 
             Box::new(move |t:Vec<Tensor>|Tensor::stack(t.as_slice(), 1).mean_dim(1, false, Float))
@@ -1533,6 +1659,7 @@ pub fn label_node(params:&LabelNodeParams) -> Node {
         .end_seq()
 
 }
+
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FinalNodeParams {
@@ -1955,6 +2082,45 @@ fn apply_motif_nets(
 
     debug!("apply_motif_nets: input_t.size={:?} max_motif_nodes={max_motif_nodes} ", input_t.size());
 
+    let channels_motifs = Tensor::concat(
+        channels_motifs_nodes.write()
+            .iter_mut()
+            .enumerate()
+            .map(|(channel, (find_motifs_cfg, motif_nodes))| {
+                let slices_len = 100; //slices_len(input_t.size()[1], find_motifs_cfg.window as i64, find_motifs_cfg.step as usize);
+                debug!("apply_motif_nets: slices_len={slices_len} input_n={input_n} motif_width={} step={}", find_motifs_cfg.window, find_motifs_cfg.step);
+                apply_channel_motifs(
+                    find_motifs_cfg.step as usize,
+                    motif_nodes,
+                    input_t.i((channel as i64, ..)),
+                    find_motifs_cfg.window as i64,
+                    max_motif_nodes as i64,
+                    slices_len,
+                    device
+            )})
+            .collect::<Result<Vec<_>, ThoosaError>>().unwrap().as_slice(),
+        0
+    );
+
+    // let padded = pad_to(&channels_motifs, &[5, max_motif_nodes as i64, max_motif_batches as i64, 7]).unwrap();
+    // debug!("apply_label_motifs: channels_motifs.size={:?} padded.size()={:?}", channels_motifs.size(), padded.size());
+    // padded
+
+    debug!("apply_motif_nets: channels_motifs.size={:?}", channels_motifs.size());
+
+    channels_motifs
+}
+
+fn apply_motif_nets_with_padding(
+    input_t: &Tensor,
+    channels_motifs_nodes: Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>,
+    device: &Device,
+    input_n: u32
+) -> Tensor {
+    let max_motif_nodes = channels_motifs_nodes.read().iter().map(|nets| nets.1.len()).max().unwrap_or(0);
+
+    debug!("apply_motif_nets: input_t.size={:?} max_motif_nodes={max_motif_nodes} ", input_t.size());
+
     let channels_motifs = Tensor::stack(
         channels_motifs_nodes.write()
             .iter_mut()
@@ -1970,7 +2136,7 @@ fn apply_motif_nets(
                     max_motif_nodes as i64,
                     slices_len,
                     device
-            )})
+                )})
             .collect::<Result<Vec<_>, ThoosaError>>().unwrap().as_slice(),
         0
     );
@@ -2394,9 +2560,9 @@ mod train_tests {
 
         let channel_1_motifs = Tensor::stack(&[
                 Tensor::from_slice(&[99000., 299000., 499000., 699000., 899000., 1.099e+06, 1.299e+06, 1.499e+06, 1.699e+06, 1.899e+06]),  //ch 1 net 0 (ResourceId=1)
-                Tensor::from_slice(&[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]),  //ch 1 net 0 (ResourceId=1)
-            ], 00
-        ).totype(Float).view((2, 10));
+                // Tensor::from_slice(&[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]),  //ch 1 net 0 (ResourceId=1)
+            ], 0
+        ).totype(Float).view((1, 10));
         assert_eq!(channel_1_motifs, channel_1_t);
 
         debug!("test_apply_motif_models: channel_0_motifs.size()={:?}, channel_1_motifs.size()={:?}", channel_0_motifs.size(), channel_1_motifs.size());
@@ -2404,7 +2570,7 @@ mod train_tests {
         let channels_motifs = apply_motif_nets(&t, Arc::new(RwLock::new(motif_nets)), &Cpu, input_n as u32).squeeze();
 
         assert_eq!(
-            Tensor::stack(&[channel_0_motifs, channel_1_motifs], 0),
+            Tensor::concat(&[channel_0_motifs, channel_1_motifs], 0),
             channels_motifs
         );
 
@@ -2479,7 +2645,7 @@ mod train_tests {
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
         assert_eq!(vec![3, 2, max_dists_len], channels_motifs_0.size());//channel, motif nets, batches, batch size
-        assert_eq!(vec![3, 2, max_dists_len], channels_motifs_1.size());
+        assert_eq!(vec![3, 2,  (831-motif_width)/step as i64 + 1], channels_motifs_1.size());//TODO
         Ok(())
     }
 
@@ -2515,7 +2681,7 @@ mod train_tests {
         const TRAIN_LABELS: [bool; BATCH_SIZE] = build_labels::<BATCH_SIZE>();
         const VALID_LABELS: [bool; BATCH_SIZE] = build_labels::<BATCH_SIZE>();
 
-        const MAX_SLICES_LEN:usize = slices_len(1000, 100, 100) as usize;
+        const MAX_SLICES_LEN:usize = slices_len(1100, 100, 100) as usize;
 
 
         #[derive(Debug)]
@@ -2531,14 +2697,14 @@ mod train_tests {
 
             fn train_batch(&mut self) -> (Tensor, Tensor) {
                 (
-                    dummy_labels_net_input(&TRAIN_LABELS, CHANNELS, MAX_MOTIF_NETS, MAX_SLICES_LEN),
+                    dummy_labels_net_input(&TRAIN_LABELS, MAX_MOTIF_NETS, MAX_SLICES_LEN),
                     Tensor::from_slice(TRAIN_LABELS.as_slice()).totype(Float)
                 )
             }
 
             fn valid_batch(&mut self) -> (Tensor, Tensor) {
                 (
-                    dummy_labels_net_input(&TRAIN_LABELS, CHANNELS, MAX_MOTIF_NETS, MAX_SLICES_LEN),
+                    dummy_labels_net_input(&TRAIN_LABELS, MAX_MOTIF_NETS, MAX_SLICES_LEN),
                     Tensor::from_slice(VALID_LABELS.as_slice()).totype(Float)
                 )
             }
@@ -2563,7 +2729,8 @@ mod train_tests {
             &Cpu,
             CHANNELS as i64,
             MAX_MOTIF_NETS as i64, //max_nets
-            &VarStore::new(Cpu), MAX_SLICES_LEN as i64/2
+            &VarStore::new(Cpu),
+            MAX_SLICES_LEN as i64
         )?;
 
         debug!("test_train_label: loss={loss:?} params={params:?}");
@@ -2993,14 +3160,14 @@ mod train_tests {
 
             fn train_batch(&mut self) -> (Tensor, Tensor) {
                 (
-                    dummy_labels_net_input(&TRAIN_LABELS, CHANNELS, MAX_MOTIF_NETS, MAX_SLICES_LEN).to_device(Cuda(0)),
+                    dummy_labels_net_input(&TRAIN_LABELS, MAX_MOTIF_NETS, MAX_SLICES_LEN).to_device(Cuda(0)),
                     Tensor::from_slice(TRAIN_LABELS.as_slice()).totype(Float).to_device(Cuda(0))
                 )
             }
 
             fn valid_batch(&mut self) -> (Tensor, Tensor) {
                 (
-                    dummy_labels_net_input(&TRAIN_LABELS,  CHANNELS, MAX_MOTIF_NETS, MAX_SLICES_LEN).to_device(Cuda(0)),
+                    dummy_labels_net_input(&TRAIN_LABELS, MAX_MOTIF_NETS, MAX_SLICES_LEN).to_device(Cuda(0)),
                     Tensor::from_slice(VALID_LABELS.as_slice()).totype(Float).to_device(Cuda(0))
                 )
             }
@@ -3060,12 +3227,12 @@ mod train_tests {
     }
 
 
-    fn dummy_labels_net_input(labels:&[bool], channels:usize, max_motif_nets:usize, slices_len:usize ) ->Tensor{
+    fn dummy_labels_net_input(labels:&[bool], max_motif_nets:usize, slices_len:usize) ->Tensor{
         //batch size x channels x max motif nets x slices_len
         let mut labels_iter = labels.iter();
         Tensor::stack(
             labels.iter().map(|label|
-                Tensor::stack((0..channels).map(|mb|
+                // Tensor::stack((0..channels).map(|mb|
                     Tensor::stack((0..max_motif_nets).map(|mmn|
                           if *label {
                               motifs_1(slices_len)
@@ -3073,7 +3240,7 @@ mod train_tests {
                               motifs_0(slices_len)
                           }
                     ).collect::<Vec<_>>().as_slice(), 0)
-                ).collect::<Vec<_>>().as_slice(), 0)
+                // ).collect::<Vec<_>>().as_slice(), 0)
             ).collect::<Vec<_>>().as_slice(),
             0,
         )
