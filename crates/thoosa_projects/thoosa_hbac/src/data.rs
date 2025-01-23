@@ -674,10 +674,10 @@ mod tests {
     use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
-    use thoosa_common::train_nets::{TrainFinalNodeParams, TrainLabelNodeParams};
+    use thoosa_common::train_nets::{TrainFinalNetParams, TrainLabelNetsParams};
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
-    use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinal, TrainOnLabel};
+    use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{import_resources, run_step, run_train_label_nodes, Cli, RunAllParams};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, FindMotifsParams, SelectMotifsParams};

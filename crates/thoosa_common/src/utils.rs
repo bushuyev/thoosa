@@ -531,15 +531,18 @@ pub mod tests {
     use std::time::Instant;
     use clap::{arg, Args, command, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
-    use log::{debug, info, set_max_level};
+    use log::{debug, error, info, set_max_level};
     use log::LevelFilter::{Info, Trace};
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::{IndexOp, Tensor};
 
-    use thoosa_shared::{cdt_for_dir, clc_step, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
+    use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use crate::bool_iter::BoolTensorIterator;
+    use crate::parzen::optimizer::Hyperparameter;
+    use crate::runs::{ResourcesConfig, Simple};
     use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
 
@@ -717,7 +720,8 @@ pub mod tests {
     }
 
     #[test]
-    fn test_param_ranges(){
+    fn test_param_ranges() {
+        use thoosa_shared::parse_range_or_value;
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -731,19 +735,19 @@ pub mod tests {
 
         #[derive(Debug, Subcommand, Clone)]
         enum Commands {
-            TestCommand(TestCommandParams),
+            TestCommand(TestCommandArgs),
         }
 
         #[derive(Debug, Args, Clone)]
-        struct TestCommandParams{
-            #[arg(long)]
-            window:usize,
+        struct TestCommandArgs {
+            #[arg(long, value_parser=parse_range_or_value::<f64>)]
+            window: RangeOrValue<f64>,
+
+            #[arg(long, value_parser=parse_range_or_value::<u32>)]
+            step: RangeOrValue<u32>,
 
             #[arg(long)]
-            step:usize,
-
-            #[arg(long)]
-            command_param:String,
+            some_const_param:u32,
 
             #[command(subcommand)]
             input_filter: InputFilter
@@ -751,22 +755,108 @@ pub mod tests {
 
         #[derive(Debug, Subcommand, Clone)]
         enum InputFilter {
-            Conv1(Conv1Params)
+            Conv1(Conv1Args)
         }
-
 
         #[derive(Debug, Args, Clone)]
-        struct Conv1Params {
-            #[arg(long)]
-            kernel:usize
+        struct Conv1Args {
+            #[arg(long, value_parser=parse_range_or_value::<usize>)]
+            kernel:RangeOrValue<usize>
         }
 
-        let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--command-param", "command-param-value", "--window", "11", "--step", "22", "conv1", "--kernel", "10"]);
+        trait ConstConfig {
+            fn consts(&self) -> &[NamedVal];
+        }
+
+        trait GridConfig {
+            fn grid(&self) -> &[NamedRange];
+        }
+
+        trait OptConfig {
+            fn opt(&self) -> &[Hyperparameter];
+        }
+
+        trait ArgsToConfig {
+            type RC: ResourcesConfig;
+            type CC: ConstConfig;
+            type GC: GridConfig;
+            type OC: OptConfig;
+
+            fn to_run_config(self) ->RunConfig<Self::RC, Self::CC, Self::GC, Self::OC>;
+        }
+
+        struct RunConfig<RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> {
+            resource_config: RC,
+            const_config: CC,
+            grid_config: GC,
+            opt_config: OC,
+        }
+
+        impl <RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> RunConfig<RC, CC, GC, OC> {
+
+            pub fn new(resource_config: RC, const_config: CC, grid_config: GC, opt_config: OC) -> Self {
+                Self { resource_config, const_config, grid_config, opt_config }
+            }
+        }
+
+        struct VecConfig<V> {
+            configs: Vec<V>
+        }
+
+        impl <V> VecConfig<V> {
+            pub fn new(const_configs: Vec<V>) -> Self {
+                Self { configs: const_configs }
+            }
+        }
+
+        impl ConstConfig for VecConfig<NamedVal> {
+            fn consts(&self) -> &[NamedVal] {
+                self.configs.as_slice()
+            }
+        }
+
+        impl GridConfig for VecConfig<NamedRange> {
+            fn grid(&self) -> &[NamedRange] {
+                self.configs.as_slice()
+            }
+        }
+
+        impl OptConfig for VecConfig<Hyperparameter> {
+            fn opt(&self) -> &[Hyperparameter] {
+                self.configs.as_slice()
+            }
+        }
+
+        impl ArgsToConfig for TestCommandArgs {
+            type RC = Simple;
+            type CC = VecConfig<NamedVal>;
+            type GC = VecConfig<NamedRange>;
+            type OC = VecConfig<Hyperparameter>;
+
+            fn to_run_config(self) -> RunConfig<Self::RC, Self::CC, Self::GC, Self::OC> {
+                RunConfig::new(
+                    Simple::new(ResourceType::List(vec![])),
+                    VecConfig::new(vec![("some_const_param", self.some_const_param).into()]),
+                    VecConfig::new([
+                        ("step", &self.step).try_into(),
+                        ("window", &self.window).try_into(),
+                    ].into_iter().filter(|v|v.is_ok()).collect::<Result<Vec<NamedRange>, ()>>().expect("grid")),
+                    VecConfig::new([
+                        (&self.step).try_into(),
+                        (&self.window).try_into(),
+                    ].into_iter().filter(|v|v.is_ok()).collect::<Result<Vec<Hyperparameter>, ()>>().expect("hyperparams is ok"))
+                )
+            }
+        }
+
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--some-const-param", "77", "--window", "11", "--step", "22", "conv1", "--kernel", "10"]);
         debug!("cli.some_field={:?}", cli.some_field);
+
+        assert_eq!("zzz", cli.some_field);
 
         match cli.command.unwrap() {
             Commands::TestCommand(cmd)=>{
-                debug!("cmd.command_param={:?}", cmd.command_param);
+                debug!("cmd.command_param={:?}", cmd.some_const_param);
 
                 match cmd.input_filter {
                     InputFilter::Conv1(filter_params) => {

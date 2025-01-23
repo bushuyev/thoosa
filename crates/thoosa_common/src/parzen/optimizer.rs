@@ -6,13 +6,13 @@ use log::{debug, trace};
 use rand::distributions::Uniform;
 use rand::Rng;
 use tch::{IndexOp, Tensor};
-use thoosa_shared::{LabelNodeType, RangeOrValue, ThoosaError};
+use thoosa_shared::{RangeOrValue, ThoosaError};
 use thoosa_shared::val::Val;
 use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
-
+use crate::train_nets::LabelNetType;
 use super::opt_rng::opt_rnd;
 
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
@@ -557,7 +557,7 @@ mod tpe_optimizer_tests {
     use tch::{IndexOp, Tensor};
 
     use crate::argmin::ArgmTensor;
-    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives, stack_params, TPEOptimizer};
+    use crate::parzen::optimizer::{stack_params, ConfigurationSpace, Hyperparameter, Primitives, TPEOptimizer};
     use crate::parzen::optimizer::Primitives::Integer;
 
 
@@ -754,19 +754,19 @@ impl Hyperparameter {
 }
 
 impl TryFrom<&RangeOrValue<f64>> for Hyperparameter {
-    type Error = ();
+    type Error = ();//TODO ThoosaError
 
     fn try_from(value: &RangeOrValue<f64>) -> Result<Self, Self::Error> {
-        if let RangeOrValue::Range{range,..} = value {
-            Ok(Hyperparameter::UniformFloat {
-                name: "param_0".into(),//TODO
-                lower: range.start,
-                upper: range.end
-            })
-        } else {
-            Err(())
+        if let RangeOrValue::Range{range,step} = value {
+            if step.is_none() {
+                return Ok(Hyperparameter::UniformFloat {
+                    name: "param_0".into(),//TODO
+                    lower: range.start,
+                    upper: range.end
+                });
+            }
         }
-
+        Err(())
     }
 }
 
@@ -881,13 +881,13 @@ impl<'a> IntoIterator for &'a ConfigurationSpace {
     }
 }
 
-impl TryFrom<&[LabelNodeType]> for Hyperparameter{
-    type Error = ();
-
-    fn try_from(value: &[LabelNodeType]) -> Result<Self, Self::Error> {
-        Ok(Hyperparameter::Categorical {
-            name: "LabelNodeType".to_string(),
-            values: value.into_iter().map(|v|v.to_string()).collect()
-        })
-    }
-}
+// impl TryFrom<&[LabelNodeType]> for Hyperparameter {
+//     type Error = ();
+//
+//     fn try_from(value: &[LabelNodeType]) -> Result<Self, Self::Error> {
+//         Ok(Hyperparameter::Categorical {
+//             name: "LabelNodeType".to_string(),
+//             values: value.into_iter().map(|v|v.to_string()).collect()
+//         })
+//     }
+// }

@@ -1,6 +1,6 @@
 use crate::cli::Commands::{
     FindMotifs, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello,
-    SelectMotifs, TrainFinal, TrainOnLabel, TrainOnMotifs,
+    SelectMotifs, TrainFinalNet, TrainLabelNets, TrainMotifsNets,
 };
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
@@ -35,7 +35,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, InferParams, InputFilter, LabelNodeParams, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNodeParams, TrainFinalNodeRunConfig, TrainLabelNodeParams, TrainLabelNodeRunConfig, TrainMotifsNodesParams, TrainMotifsNodesRunConfig, TrainNodesValues};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, InferParams, InputFilter, LabelNodeParams, LabelNetType, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsParams, TrainMotifsNodesRunConfig, TrainNodesValues, FixedNumSlicesNetParams};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -47,7 +47,7 @@ use thoosa_motifs::find::{
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams,
 };
-use thoosa_shared::{parse_range_or_value, slices_len, LabelNodeType};
+use thoosa_shared::{parse_range_or_value, slices_len};
 use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
 use thoosa_shared::{
     batch_windows, cdt, cdt_for_dir, clc_num_batches, make_combos, RangeOrValue, ResourceType,
@@ -61,7 +61,7 @@ use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
 
-#[derive(Parser, Clone)]
+#[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
     #[arg(long, default_value = ".")]
@@ -328,7 +328,7 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
                 debug!("TrainLabelNodeParams::to_run_configs: config_combo={config_combo:?} ");
                 let num_layers = config_combo.pop().unwrap().try_into().unwrap();
                 let lr = config_combo.pop().unwrap().try_into().unwrap();
-                TrainLabelNodeRunConfig::from_values(None, lr, num_layers, LabelNodeType::FixedNumSlices{slices_len:100})
+                TrainLabelNodeRunConfig::from_values(None, lr, num_layers, LabelNetType::FixedNumSlices(FixedNumSlicesNetParams{ num_layers: 3.into(), slices_len: 100.into() }))
             })
             .collect();
 
@@ -510,9 +510,9 @@ pub enum Commands {
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
-    TrainOnMotifs(TrainMotifsNodesParams),
-    TrainOnLabel(TrainLabelNodeParams),
-    TrainFinal(TrainFinalNodeParams),
+    TrainMotifsNets(TrainMotifsNetsParams),
+    TrainLabelNets(TrainLabelNetsParams),
+    TrainFinalNet(TrainFinalNetParams),
     RunAll(RunAllParams),
     Infer(InferParams),
     SayHello(SayHelloParams),
@@ -678,7 +678,7 @@ where
             info!("SelectMotifs done, run_ids={:?}", run_ids);
         }
 
-        Some(TrainOnMotifs(train_on_motif_params)) => {
+        Some(TrainMotifsNets(train_on_motif_params)) => {
             debug!(
                 "TrainOnMotifs: train_on_motif: train_on_motif_params={:?}",
                 train_on_motif_params
@@ -700,7 +700,7 @@ where
             info!("TrainOnMotifs done, run_ids={:?}", run_ids);
         }
 
-        Some(TrainOnLabel(train_on_label_params)) => {
+        Some(TrainLabelNets(train_on_label_params)) => {
             debug!(
                 "TrainOnLabel: train_on_label_params={:?} cuda_mem={:?}",
                 train_on_label_params,
@@ -728,7 +728,7 @@ where
             info!("TrainOnLabel done, run_ids={:?}", run_ids);
         }
 
-        Some(TrainFinal(train_final_params)) => {
+        Some(TrainFinalNet(train_final_params)) => {
             debug!("TrainFinal: train_final_params={:?}", train_final_params);
             unsafe {
                 at_grad_set_enabled(1);
@@ -1681,7 +1681,7 @@ where
 }
 
 #[cfg(test)]
-mod main_tests {
+mod cli_tests {
     use crate::cli::Commands::FindMotifs;
     use crate::cli::{
         import_resources, resource_path, run_infer, run_plot_motif_slices, run_step,
@@ -1707,6 +1707,7 @@ mod main_tests {
     use std::sync::Arc;
     use std::vec::IntoIter;
     use std::{fs, ptr};
+    use clap::Parser;
     use tch::display::{set_print_options, PrinterOptions};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Device::{Cpu, Cuda};
@@ -1715,7 +1716,7 @@ mod main_tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::RunConfig;
     use thoosa_common::runs::{Params, ResourcesConfig};
-    use thoosa_common::train_nets::{motif_node, FindMotifsRunConfig, InferParams, MotifNodeParams, TrainFinalNodeParams, TrainLabelNodeParams, TrainMotifsNodesParams};
+    use thoosa_common::train_nets::{motif_node, FindMotifsRunConfig, InferParams, MotifNodeParams, TrainFinalNetParams, TrainLabelNetsParams, TrainMotifsNetsParams};
     use thoosa_common::utils::{
         from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
         three_sigs_tensor, vec_f32_from,
@@ -2318,7 +2319,7 @@ mod main_tests {
 
         let train_motif_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids.clone()),
-            &TrainMotifsNodesParams::dummy(
+            &TrainMotifsNetsParams::dummy(
                 select_motifs_for_label_run_ids.clone(),
                 cycles,
                 0.01,
@@ -2339,7 +2340,7 @@ mod main_tests {
 
         let train_label_nodes_run_ids = run_step(
             Some(select_motifs_for_label_run_ids.clone()),
-            &TrainLabelNodeParams::dummy(
+            &TrainLabelNetsParams::dummy(
                 select_motifs_for_label_run_ids,
                 group_name.clone(),
                 group_name.clone(),
@@ -2362,15 +2363,15 @@ mod main_tests {
 
         let train_final_nodes_run_ids = run_step(
             Some(train_label_nodes_run_ids.clone()),
-            &TrainFinalNodeParams::dummy(train_label_nodes_run_ids,
-                                         10,
-                                         group_name.clone(),
-                                         group_name.clone(),
-                                         2 * cycles,
-                                         1e-5..1e-2,
-                                         0..3,
-                                         opt_max_evals,
-                                         opt_n_init,
+            &TrainFinalNetParams::dummy(train_label_nodes_run_ids,
+                                        10,
+                                        group_name.clone(),
+                                        group_name.clone(),
+                                        2 * cycles,
+                                        1e-5..1e-2,
+                                        0..3,
+                                        opt_max_evals,
+                                        opt_n_init,
             ),
             run_train_final_node,
             &ws,
@@ -2470,6 +2471,33 @@ mod main_tests {
         imported_keys.sort();
 
         assert_eq!(vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1",], imported_keys);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cli_train_label_nets() -> Result<(), ThoosaError> {
+        let cli = Cli::parse_from([
+             "",
+            "--term-logger-level", "INFO",
+            "--write-logger-level", "DEBUG",
+            "--ws-path", "/tmp/ws_test/",
+            "train-label-nets",
+                "--train-resource-group", "pure group 100",
+                "--valid-resource-group", "group 1 labels/100/0-100",
+                "--select-motifs-for-label-run-ids", "254",
+                "--lr", "0.00001..0.001",
+                "--opt-max-evals", "20",
+                "--opt-n-init", "10",
+                "--batch-size", "6",
+                "--cycles", "100",
+                "fixed-num-slices",
+                    "--num-layers", "3",
+                    "--slices-len", "100",
+
+        ]);
+
+        debug!("cli={cli:?}");
 
         Ok(())
     }

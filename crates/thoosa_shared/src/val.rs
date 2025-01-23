@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-
-use crate::ThoosaError;
+use std::ops::Range;
+use crate::{RangeOrValue, ThoosaError};
 
 
 #[derive(Debug, PartialEq, Clone)]
@@ -10,6 +10,67 @@ pub enum Val {
     UInt(u32),
     Str(String),
     Bool(bool)
+}
+
+pub struct NamedVal{name: String, val:Val}
+pub struct NamedRange{name: String, range:Range<Val>, step:(Val, u32)}
+
+
+impl From<(&str, u32)> for NamedVal {
+    fn from((name, value): (&str, u32)) -> Self {
+        NamedVal{name: name.to_string(), val:value.into()}
+    }
+}
+
+impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange {
+    type Error = ();
+
+    fn try_from((name, value): (&str, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
+        if let RangeOrValue::Range{range,step} = value {
+            if let Some(step) = step {
+                return Ok(NamedRange {
+                    name: name.into(),
+                    range: Val::Real(range.start)..Val::Real(range.end),
+                    step: (Val::Real(step.0), step.1)
+                })
+            }
+        }
+        Err(())
+    }
+}
+//
+// impl TryFrom<&RangeOrValue<i32>> for Hyperparameter {
+//     type Error = ();
+//
+//     fn try_from(value: &RangeOrValue<i32>) -> Result<Self, Self::Error> {
+//         if let RangeOrValue::Range{range, ..} = value {
+//             Ok(Hyperparameter::UniformInt {
+//                 name: "param_0".into(),
+//                 lower: range.start as i64, //TODO as i64
+//                 upper: range.end as i64
+//             })
+//         } else {
+//             Err(())
+//         }
+//     }
+// }
+
+
+impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange {
+    type Error = ();
+
+    fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+        if let RangeOrValue::Range{range,step} = value {
+            if let Some(step) = step {
+                return Ok(NamedRange {
+                    name: name.into(),
+                    range: Val::UInt(range.start)..Val::UInt(range.end),
+                    step: (Val::UInt(step.0), step.1)
+                })
+            }
+        }
+        Err(())
+    }
 }
 
 //TODO remove
