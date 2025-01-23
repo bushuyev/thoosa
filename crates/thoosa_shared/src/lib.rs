@@ -23,6 +23,7 @@ use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use bytemuck::{Pod, Zeroable};
+use clap::Subcommand;
 use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
 use num_traits::real::Real;
@@ -516,32 +517,6 @@ impl IntoIterator for RangeOrValue<f64> {
 }
 
 
-#[derive(Debug, Clone)]
-pub enum LabelNodeType {
-    //to produce same size tensors for label net
-    MaxPadding,
-    //...input tensors are padded to max nets in a channel/max input length over all inputs
-    FixedNumSlices { slices_len: u32 },
-    //... motif nodes are ran with calculated step to produce equally sized (slices_len) output tensors (shared/clc_step) for inputs of different size
-}
-
-impl Display for LabelNodeType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            LabelNodeType::MaxPadding => {
-                Display::fmt(&"MaxPadding", f)
-            }
-            LabelNodeType::FixedNumSlices{..} => {
-                Display::fmt(&"FixedNumSlices", f)
-            }
-        }
-    }
-}
-
-impl LabelNodeType {
-
-}
-
 impl <V:Display+PrimInt> Display for RangeOrValue<V> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -822,8 +797,6 @@ mod shared_tests {
    */
     use std::collections::HashSet;
     use std::fmt::Display;
-    use std::sync::Arc;
-    use std::vec::IntoIter;
     use clap::{Args, Parser};
 
 
