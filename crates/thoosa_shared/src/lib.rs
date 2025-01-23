@@ -516,12 +516,13 @@ impl IntoIterator for RangeOrValue<f64> {
 }
 
 
-
-
 #[derive(Debug, Clone)]
 pub enum LabelNodeType {
+    //to produce same size tensors for label net
     MaxPadding,
-    FixedNumSlices
+    //...input tensors are padded to max nets in a channel/max input length over all inputs
+    FixedNumSlices { slices_len: u32 },
+    //... motif nodes are ran with calculated step to produce equally sized (slices_len) output tensors (shared/clc_step) for inputs of different size
 }
 
 impl Display for LabelNodeType {
@@ -530,7 +531,7 @@ impl Display for LabelNodeType {
             LabelNodeType::MaxPadding => {
                 Display::fmt(&"MaxPadding", f)
             }
-            LabelNodeType::FixedNumSlices => {
+            LabelNodeType::FixedNumSlices{..} => {
                 Display::fmt(&"FixedNumSlices", f)
             }
         }
@@ -541,30 +542,6 @@ impl LabelNodeType {
 
 }
 
-/*impl<V: 'static + Mul<V, Output = usize> + From<u32> + Div<Output=V>> IntoIterator for RangeOrValue<V>
-
-{
-    type Item = V;
-    type IntoIter = Box<dyn Iterator<Item = V>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        match self {
-            RangeOrValue::Range { range, step } => {
-                if let Some((step, mul)) = step {
-                    Box::new(
-                        ((range.start * mul.into()) as u32 .. (range.end * mul.into()) as u32)
-                            .step_by(step * mul.into())
-                            .map(move |v|<u32 as Into<V>>::into(v)/mul.into())
-                    )
-                } else {
-                    Box::new(std::iter::empty())
-                }
-            }
-            RangeOrValue::Value(v) => Box::new(std::iter::once(v)),
-        }
-    }
-}
-*/
 impl <V:Display+PrimInt> Display for RangeOrValue<V> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

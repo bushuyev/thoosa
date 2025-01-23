@@ -103,7 +103,7 @@ impl TrainLabelNodeParams {
                 (&self.num_layers).try_into().ok(),
             ],
             adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter>>>().as_slice(),
-            &[[LabelNodeType::MaxPadding, LabelNodeType::FixedNumSlices][..].try_into().ok()]//TODO LabelNodeType
+            &[[LabelNodeType::MaxPadding, LabelNodeType::FixedNumSlices{slices_len:100}][..].try_into().ok()]//TODO LabelNodeType
         ].concat().into_iter()
             .collect::<Option<Vec<Hyperparameter>>>()
             .map(|v|ConfigurationSpace::new(v))
@@ -136,6 +136,16 @@ impl TrainLabelNodeRunConfig {
 }
 
 impl RunConfig for TrainLabelNodeRunConfig {
+    fn to_properties_map(&self) -> HashMap<String, Val> {
+        // let mut map = HashMap::from([
+        //     ("FindMotifsRunConfig.step".into(), UInt(self.step)),
+        //     ("FindMotifsRunConfig.window".into(), UInt(self.window)),
+        //     ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
+        //     ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
+        // ]);
+        todo!()
+    }
+
     fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
@@ -152,7 +162,7 @@ impl RunConfig for TrainLabelNodeRunConfig {
 
 #[derive(Debug, Clone)]
 pub struct TrainLabelNodesValues {
-    label_node_type:LabelNodeType,
+    label_node_type:LabelNodeType,//TODO use enum with LabelNodeParams for each ndoe type
     train_nodes_values: TrainNodesValues
 }
 
@@ -217,7 +227,7 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
                     None,
                     lr,
                     num_layers,
-                    LabelNodeType::FixedNumSlices,//TODO LabelNodeType
+                    LabelNodeType::FixedNumSlices{slices_len:100},//TODO LabelNodeType
                 )
             }).collect();
 
@@ -613,7 +623,7 @@ pub struct TrainLabelNodesRunConfigResult {
     label:String,
     loss: f32,
     label_node_params: LabelNodeParams,
-    train_motifs_nodes_values: Option<TrainLabelNodesValues>,
+    train_label_nodes_values: Option<TrainLabelNodesValues>,
     var_store: VarStore
 }
 
@@ -624,7 +634,7 @@ impl TrainLabelNodesRunConfigResult {
             label,
             loss,
             label_node_params,
-            train_motifs_nodes_values,
+            train_label_nodes_values: train_motifs_nodes_values,
             var_store,
         }
     }
@@ -636,7 +646,7 @@ impl SavableOptResult for TrainLabelNodesRunConfigResult {
     }
 
     fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError> {
-        let run_config_id = match self.train_motifs_nodes_values.as_ref(){
+        let run_config_id = match self.train_label_nodes_values.as_ref(){
             None => self.train_label_nodes_run_config_id,
 
             Some(train_motifs_nodes_values) => {
@@ -679,16 +689,13 @@ pub fn run_opt_train_label_nodes (
     let device = device.clone();
     let max_input = ws.read().max_input();
 
-    let mut batch = Rc::new(Box::new(LoadingTensorsDataBatch::new(
+    let batch = Rc::new(Box::new(LoadingTensorsDataBatch::new(
         train_labels_resources,
         valid_labels_resources,
 
         comon_label_node_params.label_batch_size,
         Arc::clone(&executor),
         device.clone(),
-        // Some( Box::new(move |t:Box<Tensor>| {
-        //     Box::new(apply_motif_nets(&t, Arc::clone(&channels_motifs_nodes), &device, 100u32))
-        // }))
         None
 
     )));
@@ -700,8 +707,15 @@ pub fn run_opt_train_label_nodes (
              let mut result = None::<(f32, LabelNodeParams)>;
              run_split_on_oom(
                  Reducer::new(BatchTransform::new(Rc::clone(&batch), |t|{
-                     // t.shallow_clone()
-                     apply_motif_nets(&t, Arc::clone(&channels_motifs_nodes), &device, 100u32)
+                     match train_node_values.label_node_type {
+                         LabelNodeType::MaxPadding => {
+                             apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nodes), &device, max_input as u32)
+                         }
+                         LabelNodeType::FixedNumSlices{slices_len} => {
+                             apply_motif_nets(&t, Arc::clone(&channels_motifs_nodes), &device, slices_len)
+                         }
+                     }
+
                  })),
                  |b|{
                      train_label_nodes(
@@ -754,7 +768,15 @@ pub fn train_label_nodes<B:DataBatch> (
     let loss = train(
         &device,
         batch as &mut dyn DataBatch,
-        &label_node(&label_node_params).build_tch_module(&vs_0.root())?,
+        &match train_node_values.label_node_type {
+            LabelNodeType::MaxPadding => {
+                label_node_with_padding(&label_node_params).build_tch_module(&vs_0.root())?
+            }
+            LabelNodeType::FixedNumSlices { .. } => {
+                label_node(&label_node_params).build_tch_module(&vs_0.root())?
+            }
+        },
+
         |pred: &Tensor, target: &Tensor| {
             debug!("train_on_label: pred.size={:?}", pred.size());
             let pred_y = pred.squeeze();
@@ -1052,7 +1074,7 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
                     &TrainLabelNodeRunConfig::type_name(),
                     "Final",
                     "todo",
-                    TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNodeType::FixedNumSlices).to_properties_map()
+                    TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNodeType::FixedNumSlices{slices_len:100}).to_properties_map()
                 )?
             }
         };
@@ -1355,6 +1377,8 @@ impl TryFrom<&Vec<Primitives>> for TrainNodesValues {
     type Error =ThoosaError;
 
     fn try_from(value: &Vec<Primitives>) -> Result<Self, Self::Error> {
+        debug!("TrainNodesValues::try_from: value={:?}", value);
+
         let num_layers:f32 = value[1].try_into()?;//TODO opt can't produce ints
         Ok(Self {
             lr: value[0].try_into()?,
@@ -1366,6 +1390,29 @@ impl TryFrom<&Vec<Primitives>> for TrainNodesValues {
                 None
             },
         })
+    }
+}
+
+impl From<TrainNodesValues> for HashMap<String, Val>   {
+    fn from(v: TrainNodesValues) -> Self {
+
+        let mut h = HashMap::from([
+
+                ("TrainNodesValues.lr".into(), (v.lr).into()),
+                ("TrainNodesValues.num_layers".into(), (v.num_layers).into()),
+            ]
+        );
+
+        if let Some(adam_w) = v.adam_w {
+            h.extend(HashMap::from([
+                ("AdamW.beta1".into(), adam_w.beta1.into()),
+                ("AdamW.beta2".into(), adam_w.beta2.into()),
+                ("AdamW.wd".into(), adam_w.wd.into()),
+                ("AdamW.eps".into(), adam_w.eps.into()),
+                ("AdamW.amsgrad".into(), adam_w.amsgrad.into())
+            ]));
+        }
+        h
     }
 }
 
@@ -2655,6 +2702,7 @@ mod train_tests {
     use torch_sys::at_autocast_clear_cache;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, LabelNodeType, ThoosaError};
+    use thoosa_shared::val::Val;
     use thoosa_store::SqlStore;
 
     #[ctor::ctor]
@@ -2917,9 +2965,8 @@ mod train_tests {
         Ok(())
     }
 
-
     #[test]
-    fn test_apply_motif_models_2() -> Result<(), ThoosaError> {
+    fn slow_test_apply_motif_models_2() -> Result<(), ThoosaError> {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -3064,7 +3111,7 @@ mod train_tests {
 
         let (loss, params) = super::train_label_nodes(
             &ws,
-            &TrainLabelNodesValues::new(LabelNodeType::FixedNumSlices, TrainNodesValues::new(1e-3, 3, Some(AdamW::default().amsgrad(true)))),
+            &TrainLabelNodesValues::new(LabelNodeType::FixedNumSlices{slices_len:100}, TrainNodesValues::new(1e-3, 3, Some(AdamW::default().amsgrad(true)))),
             &CommonTrainLabelNodeRunConfig::new(BATCH_SIZE, 10),
             &mut DummyLabelBatch::new(),
             &Cpu,
@@ -3565,6 +3612,14 @@ mod train_tests {
 
 
         Ok(())
+    }
+
+    #[test]
+    fn test_train_nodes_values_to_hashmap(){
+        let train_nodes_values = TrainNodesValues::new(0.1, 3, Some(AdamW::default()));
+        let train_nodes_values_map:HashMap<String, Val> = train_nodes_values.into();
+
+        debug!("test_train_nodes_values_to_hashmap:{train_nodes_values_map:#?}");
     }
 
 

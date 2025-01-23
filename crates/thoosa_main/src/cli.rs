@@ -328,7 +328,7 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
                 debug!("TrainLabelNodeParams::to_run_configs: config_combo={config_combo:?} ");
                 let num_layers = config_combo.pop().unwrap().try_into().unwrap();
                 let lr = config_combo.pop().unwrap().try_into().unwrap();
-                TrainLabelNodeRunConfig::from_values(None, lr, num_layers, LabelNodeType::FixedNumSlices)
+                TrainLabelNodeRunConfig::from_values(None, lr, num_layers, LabelNodeType::FixedNumSlices{slices_len:100})
             })
             .collect();
 
