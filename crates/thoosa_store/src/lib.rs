@@ -370,6 +370,7 @@ impl Store for SqlStore {
         Ok(input_run_ids)
     }
 
+    //TODO remove?
     fn save_params_value(&mut self, params: HashMap<String, Val>, run_id: usize, label: Option<&str>) -> Result<(), ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -1068,7 +1069,7 @@ impl Store for SqlStore {
         let t = guard.transaction()?;
 
         let result = {
-            let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value, unsigned FROM run_config_values WHERE run_id=?")?;
+            let mut stmt = t.prepare("SELECT name, real_value, int_value, str_value, bool_value, unsigned FROM run_config_values WHERE run_id=?")?;
 
 
             let result = stmt.query_map([run_id], |row| {
@@ -1078,18 +1079,20 @@ impl Store for SqlStore {
                         row.get::<usize, f64>(1).ok(),
                         row.get::<usize, i64>(2).ok(),
                         row.get::<usize, String>(3).ok(),
+                        row.get::<usize, u8>(4).ok().map(|v| if v == 1  { true } else { false}),
                         row.get::<usize, u8>(4).ok().map(|v| if v == 1  { true } else { false}).unwrap_or(false)
                     )
                 )
-            })?.map(|v| v.expect(format!("can't get run_config_values for {}", run_id).as_str())).fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value, unsigned)| {
+            })?.map(|v| v.expect(format!("can't get run_config_values for {}", run_id).as_str())).fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value, bool_value, unsigned)| {
                 a.insert(
                     name.clone(),
                     real_value.map(|v| v.into())
-                        .or(int_value.map(|v| if unsigned {
-                            UInt(v as u32)} else{ Val::Int(v)}
-                        ))
-                        .or(str_value.map(|v| v.into()))
-                        .expect(format!("no value for {}", name).as_str()),
+                    .or(int_value.map(|v| if unsigned {
+                        UInt(v as u32)} else{ Val::Int(v)}
+                    ))
+                    .or(str_value.map(|v| v.into()))
+                    .or(bool_value.map(|v| v.into()))
+                    .expect(format!("no value for {}", name).as_str())
                 );
                 a
             });
@@ -1347,8 +1350,9 @@ impl SqlStore {
                 real_value  REAL,
                 int_value   INTEGER,
                 str_value   VARCHAR(256),
+                bool_value  INTEGER,
                 unsigned    INTEGER DEFAULT 0,
-                label_id    REFERENCES labels(id) ON DELETE CASCADE
+                label_id    REFERENCES labels(id) ON DELETE CASCADE --TODO remove?
                 )",
                 (),
             )?;
@@ -1452,6 +1456,9 @@ impl SqlStore {
             }
             Val::Str(v) => {
                 t.execute("INSERT INTO run_config_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+            }
+            Val::Bool(v) => {
+                t.execute("INSERT INTO run_config_values (run_id, label_id, name, bool_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
             }
         }
 
@@ -2100,32 +2107,14 @@ mod store_tests {
             None,
             &"todo",
             "test", "",
-            HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string()))]),
+            HashMap::from([("prop1".into(), Val::Int(1)), ("prop2".into(), Val::Real(2.0)), ("prop3".into(), Val::Str("333".to_string())), ("prop4".into(), Val::Bool(false)), ("prop5".into(), Val::Bool(true))]),
         )?;
 
         let next_run_id = store.lock().save_run_config(
             Some(&[run_id]),
             &"todo",
             "test next", "",
-            HashMap::from([("next_prop1".into(), Val::Int(1)), ("next_prop2".into(), Val::Real(2.0)), ("next_prop3".into(), Val::Str("333".to_string()))]),
-        )?;
-
-        store.lock().save_params_value(
-            HashMap::from([("label.prop1".into(), Val::Int(10)), ("label.prop2".into(), Val::Real(20.0)), ("label.prop3".into(), Val::Str("3330".to_string()))]),
-            run_id,
-            Some("aaa"),
-        )?;
-
-        store.lock().save_params_value(
-            HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
-            run_id,
-            Some("bbb"),
-        )?;
-
-        store.lock().save_params_value(
-            HashMap::from([("label.prop1".into(), Val::Int(1)), ("label.prop2".into(), Val::Real(2.0)), ("label.prop3".into(), Val::Str("333".to_string()))]),
-            run_id,
-            None,
+            HashMap::from([("next_prop1".into(), Val::Int(1)), ("next_prop2".into(), Val::Real(2.0)), ("next_prop3".into(), Val::Str("zzz".to_string()))]),
         )?;
 
         let loaded_params = store.lock().list_run_config_values(run_id)?;
@@ -2133,10 +2122,16 @@ mod store_tests {
         assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
         assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
         assert_eq!(loaded_params.get("prop3").expect("prop3"), &Val::Str("333".to_string()));
+        assert_eq!(loaded_params.get("prop4").expect("prop4"), &Val::Bool(false));
+        assert_eq!(loaded_params.get("prop5").expect("prop5"), &Val::Bool(true));
 
-        let loaded_params_aaa = store.lock().list_run_config_values(run_id)?;
+        let netx_loaded_params = store.lock().list_run_config_values(next_run_id)?;
 
-        debug!("loaded_params_aaa={:?}", loaded_params_aaa);
+        debug!("netx_loaded_params={netx_loaded_params:?}");
+
+        assert_eq!(netx_loaded_params.get("next_prop1").expect("next_prop1"), &Val::Int(1));
+        assert_eq!(netx_loaded_params.get("next_prop2").expect("next_prop2"), &Val::Real(2.0));
+        assert_eq!(netx_loaded_params.get("next_prop3").expect("next_prop3"), &Val::Str("zzz".to_string()));
 
         Ok(())
     }

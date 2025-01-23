@@ -8,7 +8,8 @@ pub enum Val {
     Real(f64),
     Int(i64),
     UInt(u32),
-    Str(String)
+    Str(String),
+    Bool(bool)
 }
 
 //TODO remove
@@ -48,7 +49,8 @@ impl Val {
             Self::Str(v)=> Ok(v.clone()),
             Self::Int(v)  => Ok(format!("{}", v)),
             Self::UInt(v)=> Ok(format!("{}", v)),
-            Self::Real(v)=> Ok(format!("{}", v))
+            Self::Real(v)=> Ok(format!("{}", v)),
+            Val::Bool(v) =>Ok(format!("{}", v)),
         }
     }
 }
@@ -158,6 +160,11 @@ impl From<&i64> for Val {
 impl From<&i32> for Val {
     fn from(v: &i32) -> Self {
         Val::Int(*v as i64)
+    }
+}
+impl From<bool> for Val {
+    fn from(v: bool) -> Self {
+        Val::Bool(v)
     }
 }
 
