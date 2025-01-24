@@ -23,6 +23,7 @@ pub trait ResourcesConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct Simple {
     resources: ResourceType
 }

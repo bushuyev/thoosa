@@ -807,6 +807,12 @@ pub struct ConfigurationSpace {
     hyperparameters:Vec<Hyperparameter>
 }
 
+impl From<&[Hyperparameter]> for ConfigurationSpace {
+    fn from(value: &[Hyperparameter]) -> Self {
+        ConfigurationSpace::new(value.to_vec())
+    }
+}
+
 impl From<&ConfigurationSpace> for HashMap<String, Val> {
     fn from(value: &ConfigurationSpace) -> Self {
         let mut map = HashMap::new();
