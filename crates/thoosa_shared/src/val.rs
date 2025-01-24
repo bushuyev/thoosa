@@ -12,7 +12,10 @@ pub enum Val {
     Bool(bool)
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub struct NamedVal{name: String, val:Val}
+
+#[derive(Debug)]
 pub struct NamedRange{name: String, range:Range<Val>, step:(Val, u32)}
 
 
@@ -36,6 +39,12 @@ impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange {
             }
         }
         Err(())
+    }
+}
+
+impl From<&NamedRange> for &[NamedVal] {
+    fn from(value: &NamedRange) -> Self {
+        todo!()
     }
 }
 //

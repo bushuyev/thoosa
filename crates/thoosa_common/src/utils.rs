@@ -541,7 +541,7 @@ pub mod tests {
     use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use crate::bool_iter::BoolTensorIterator;
-    use crate::parzen::optimizer::Hyperparameter;
+    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, TPEOptimizer};
     use crate::runs::{ResourcesConfig, Simple};
     use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
@@ -782,23 +782,25 @@ pub mod tests {
             type GC: GridConfig;
             type OC: OptConfig;
 
-            fn to_run_config(self) ->RunConfig<Self::RC, Self::CC, Self::GC, Self::OC>;
+            fn to_run_configs_source(self) -> RunConfigsSource<Self::RC, Self::CC, Self::GC, Self::OC>;
         }
 
-        struct RunConfig<RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> {
+        #[derive(Debug)]
+        struct RunConfigsSource<RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> {
             resource_config: RC,
             const_config: CC,
-            grid_config: GC,
-            opt_config: OC,
+            grid_config: Option<GC>,
+            opt_config: Option<OC>,
         }
 
-        impl <RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> RunConfig<RC, CC, GC, OC> {
+        impl <RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> RunConfigsSource<RC, CC, GC, OC> {
 
-            pub fn new(resource_config: RC, const_config: CC, grid_config: GC, opt_config: OC) -> Self {
+            pub fn new(resource_config: RC, const_config: CC, grid_config: Option<GC>, opt_config: Option<OC>) -> Self {
                 Self { resource_config, const_config, grid_config, opt_config }
             }
         }
 
+        #[derive(Debug)]
         struct VecConfig<V> {
             configs: Vec<V>
         }
@@ -833,18 +835,30 @@ pub mod tests {
             type GC = VecConfig<NamedRange>;
             type OC = VecConfig<Hyperparameter>;
 
-            fn to_run_config(self) -> RunConfig<Self::RC, Self::CC, Self::GC, Self::OC> {
-                RunConfig::new(
-                    Simple::new(ResourceType::List(vec![])),
+            fn to_run_configs_source(self) -> RunConfigsSource<Self::RC, Self::CC, Self::GC, Self::OC> {
+                RunConfigsSource::new(
+                    Simple::new(ResourceType::List(vec!["123".to_string()])),
                     VecConfig::new(vec![("some_const_param", self.some_const_param).into()]),
-                    VecConfig::new([
+
+                    [
                         ("step", &self.step).try_into(),
                         ("window", &self.window).try_into(),
-                    ].into_iter().filter(|v|v.is_ok()).collect::<Result<Vec<NamedRange>, ()>>().expect("grid")),
-                    VecConfig::new([
+                    ]
+                    .into_iter()
+                    .filter(|v|v.is_ok())
+                    .collect::<Result<Vec<NamedRange>, ()>>()
+                    .ok()
+                    .map(|v|VecConfig::new(v)),
+
+                    [
                         (&self.step).try_into(),
                         (&self.window).try_into(),
-                    ].into_iter().filter(|v|v.is_ok()).collect::<Result<Vec<Hyperparameter>, ()>>().expect("hyperparams is ok"))
+                    ]
+                    .into_iter()
+                    .filter(|v|v.is_ok())
+                    .collect::<Result<Vec<Hyperparameter>, ()>>()
+                    .ok()
+                    .map(|v|VecConfig::new(v))
                 )
             }
         }
@@ -854,17 +868,68 @@ pub mod tests {
 
         assert_eq!("zzz", cli.some_field);
 
-        match cli.command.unwrap() {
-            Commands::TestCommand(cmd)=>{
-                debug!("cmd.command_param={:?}", cmd.some_const_param);
+        let Some(Commands::TestCommand(test_command_args)) = cli.command else {
+            panic!("no test command");
+        };
 
-                match cmd.input_filter {
-                    InputFilter::Conv1(filter_params) => {
-                        debug!("filter_params={:?}", filter_params);
-                    }
-                }
+        let run_config_source = test_command_args.to_run_configs_source();
+        debug!("cmd.to_run_config={run_config_source:?}");
+        let const_config = run_config_source.const_config;
+        assert_eq!(<(&str, u32) as Into<NamedVal>>::into(("some_const_param", 77)), const_config.configs[0]);
+
+        let const_configs = const_config.configs;
+
+        let mut grid_configs :Vec<Vec<NamedVal>> = vec![];
+
+        if let Some(grid_config) = run_config_source.grid_config {
+            for range in grid_config.grid() {
+                let name_vals:&[NamedVal] = range.into();
+                grid_configs.push(name_vals.to_vec());
             }
         }
+
+        let opt_config:Option<ConfigurationSpace> = run_config_source.opt_config.map(|opt_cfg| opt_cfg.opt().into());
+
+        for grid_config in &grid_configs {
+
+            if let Some(config_space) = opt_config.clone() {
+                let optimizer = TPEOptimizer::new(
+                    |primis| {
+                        debug!("const_configs={const_configs:?} grid_configs={grid_configs:?}");
+
+                        my_func(MyFuncRunConfig::new());
+                        0.0
+                    },
+                    config_space,
+                    10,
+                    3
+                );
+            } else {
+                debug!("const_configs={const_configs:?} grid_configs={grid_configs:?}");
+                my_func(MyFuncRunConfig::new());
+            }
+        }
+
+
+        struct MyFuncRunConfig {
+
+        }
+
+        impl MyFuncRunConfig {
+            pub fn new() -> Self {
+                Self {}
+            }
+        }
+        fn my_func(p:MyFuncRunConfig){
+
+        }
+
+        // match cmd.input_filter {
+        //     InputFilter::Conv1(filter_params) => {
+        //         debug!("filter_params={:?}", filter_params);
+        //     }
+        // }
+
     }
 
     #[test]
