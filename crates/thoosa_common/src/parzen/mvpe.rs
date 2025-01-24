@@ -1,7 +1,7 @@
 use tch::Tensor;
-
+use thoosa_shared::val::Val;
 use crate::parzen::npe;
-use crate::parzen::optimizer::{Distribution, Primitives};
+use crate::parzen::optimizer::{Distribution};
 
 #[derive(Debug)]
 pub struct MultiVariateParzenEstimator {
@@ -18,7 +18,7 @@ impl MultiVariateParzenEstimator {
         self.parzen_estimators.len()
     }
 
-    pub fn sample(&self, dim_independent:bool, n_samples: usize) -> Vec<Vec<Primitives>>{
+    pub fn sample(&self, dim_independent:bool, n_samples: usize) -> Vec<Vec<Val>>{
         if dim_independent {
             self.parzen_estimators.iter().map(|pe|pe.sample(n_samples)).collect()//TODO collect/collect
 
@@ -27,7 +27,7 @@ impl MultiVariateParzenEstimator {
         }
     }
 
-    pub fn log_pdf(&self, configs:&Vec<Vec<Primitives>>) -> Tensor {
+    pub fn log_pdf(&self, configs:&Vec<Vec<Val>>) -> Tensor {
         let tensor = Tensor::stack(
             (&self.parzen_estimators).iter()
                 .zip(configs.into_iter())
@@ -47,11 +47,10 @@ impl MultiVariateParzenEstimator {
 #[cfg(test)]
 mod multi_variate_parzen_estimator_tests {
     use tch::Tensor;
-
+    use thoosa_shared::val::Val;
     use crate::parzen::mvpe::MultiVariateParzenEstimator;
     use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
     use crate::parzen::optimizer::ParzenEstimator;
-    use crate::parzen::optimizer::Primitives::Float;
 
     #[ctor::ctor]
     fn init() {
@@ -95,9 +94,9 @@ mod multi_variate_parzen_estimator_tests {
 
         let v = mvpe.log_pdf(
             &vec![
-                vec![Float(0.0)],//x0
-                vec![Float(0.1)],//x1
-                vec![Float(0.2)]//x2
+                vec![Val::Real(0.0)],//x0
+                vec![Val::Real(0.1)],//x1
+                vec![Val::Real(0.2)]//x2
             ]
         );
 
