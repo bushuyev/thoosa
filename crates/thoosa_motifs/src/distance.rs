@@ -10,13 +10,11 @@ use tch::Device::Cpu;
 use tch::Kind;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Bool;
-use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::utils::{skewness_kurtosis_1_dim, z_norm_2};
 use thoosa_shared::ThoosaError;
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0:&Tensor, t_1:&Tensor, dim:i64) -> Result<Tensor, ThoosaError>{
-
 
     Ok(
         (

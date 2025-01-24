@@ -17,142 +17,11 @@ use super::opt_rng::opt_rnd;
 
 // type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
 
-//TODO merge with shared::Val ?
-#[derive(Debug, Copy, Clone, PartialOrd, PartialEq)]
-pub enum Primitives {
-    Integer(i32),
-    Long(i64),
-    Float(f32),
-    Double(f64)
-}
 
-impl From<f64> for Primitives {
-    fn from(value: f64) -> Self {
-        Primitives::Double(value)
-    }
-}
-
-impl From<i32> for Primitives {
-    fn from(value: i32) -> Self {
-        Primitives::Integer(value)
-    }
-}
-
-impl From<u32> for Primitives {
-    fn from(value: u32) -> Self {
-        Primitives::Integer(value.try_into().expect(format!("can't fit u32 {value} into i32").as_str()))
-    }
-}
-
-
-impl From<i64> for Primitives {
-    fn from(value: i64) -> Self {
-        Primitives::Long(value)
-    }
-}
-
-
-impl From<Primitives> for f32 {
-    fn from(value: Primitives) -> Self {
-        match value {
-            Primitives::Integer(v) => {
-                v as f32
-            }
-            Primitives::Long(v) => {
-                v as f32
-            }
-            Primitives::Float(v) => {
-                v
-            }
-            Primitives::Double(v) => {
-                v as f32
-            }
-        }
-    }
-}
-
-impl From<Primitives> for f64 {
-    fn from(value: Primitives) -> Self {
-        match value {
-            Primitives::Integer(v) => {
-                v as f64
-            }
-            Primitives::Long(v) => {
-                v as f64
-            }
-            Primitives::Float(v) => {
-                v as f64
-            }
-            Primitives::Double(v) => {
-                v as f64
-            }
-        }
-    }
-}
-
-
-impl From<&Primitives> for f32 {
-    fn from(value: &Primitives) -> Self {
-        match value {
-            Primitives::Integer(v) => {
-                *v as f32
-            }
-            Primitives::Long(v) => {
-                *v as f32
-            }
-            Primitives::Float(v) => {
-                *v
-            }
-            Primitives::Double(v) => {
-                *v as f32
-            }
-        }
-    }
-}
-
-impl From<Primitives> for i64 {
-    fn from(value: Primitives) -> Self {
-        match value {
-            Primitives::Integer(v) => {
-                v as i64
-            }
-            Primitives::Long(v) => {
-                v
-            }
-            Primitives::Float(v) => {
-                v as i64
-            }
-            Primitives::Double(v) => {
-                v as i64
-            }
-        }
-    }
-}
-
-impl TryFrom<Primitives> for u32 {
-
-    type Error = ThoosaError;
-
-    fn try_from(value: Primitives) -> Result<Self, Self::Error> {
-        match value {
-            Primitives::Integer(v) => {
-                v.try_into().map_err(|e|ThoosaError::from(e))
-            }
-            Primitives::Long(v) => {
-                v.try_into().map_err(|e|ThoosaError::from(e))
-            }
-            _=>{
-                Err(ThoosaError::new(format!("can't convert non-integer {value:?} to u32")))
-            }
-        }
-    }
-}
-
-
-//TODO remove
-impl From<Vec<Primitives>> for ArgmTensor {
-    fn from(vals: Vec<Primitives>) -> Self {
-        ArgmTensor(Tensor::from_slice(vals.into_iter().map(|v|v.into()).collect::<Vec<f64>>().as_slice()))
+//TODO used in tests only
+impl From<Vec<Val>> for ArgmTensor {
+    fn from(vals: Vec<Val>) -> Self {
+        ArgmTensor(Tensor::from_slice(vals.into_iter().map(|v|v.try_into().unwrap()).collect::<Vec<f64>>().as_slice()))
     }
 }
 
@@ -161,11 +30,11 @@ impl From<Vec<Primitives>> for ArgmTensor {
 #[derive(Debug, Clone)]
 struct RunResult{
     loss:f32,
-    eval_config:Vec<Primitives>
+    eval_config:Vec<Val>
 }
 
 impl RunResult {
-    pub fn new(loss: f32, eval_config: Vec<Primitives>) -> Self {
+    pub fn new(loss: f32, eval_config: Vec<Val>) -> Self {
         Self { loss, eval_config }
     }
 }
@@ -223,12 +92,12 @@ mod run_result_tests {
 #[allow(dead_code)]
 pub trait ParzenEstimator {
     fn clc_distr(&self, samples:Tensor, weights: Option<Tensor>) -> Box<dyn Distribution>;
-    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, weights: Option<Tensor>) -> Box<dyn Distribution>;
+    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Val>, weights: Option<Tensor>) -> Box<dyn Distribution>;
 }
 
 pub trait Distribution:Debug {
-    fn sample(&self, n_samples:usize) -> Vec<Primitives>;
-    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Primitives>) -> Tensor;
+    fn sample(&self, n_samples:usize) -> Vec<Val>;
+    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Val>) -> Tensor;
     fn weights(&self)->&Tensor;
 }
 
@@ -290,7 +159,7 @@ impl TreeStructuredParzenEstimator {
         }
     }
 
-    pub fn update_observations(&mut self, loss:f32, eval_config:&Vec<Primitives>) {
+    pub fn update_observations(&mut self, loss:f32, eval_config:&Vec<Val>) {
         self.observations.push(Reverse(RunResult::new(loss, eval_config.clone())));//TODO clone
 
         let n_lower = Self::percentile(self.observations.len()) as usize;
@@ -305,10 +174,10 @@ impl TreeStructuredParzenEstimator {
 
         let (lower_esitmators, upper_esitmators) = self.esitmators.iter().enumerate().fold((vec![], vec![]), |mut lower_upper_esitmators, (param_i, pe)|{
             lower_upper_esitmators.0.push(
-                pe.clc_distr_from_vec(&mut lower_vals.iter().map(|v|v[param_i]), None)
+                pe.clc_distr_from_vec(&mut lower_vals.iter().map(|v|v[param_i].clone()), None)
             );
             lower_upper_esitmators.1.push(
-                pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v|v[param_i]), None)
+                pe.clc_distr_from_vec(&mut upper_vals.iter().map(|v|v[param_i].clone()), None)
             );
 
             lower_upper_esitmators
@@ -321,7 +190,7 @@ impl TreeStructuredParzenEstimator {
         trace!("self.self.mvpe_upper={:?}", self.mvpe_upper);
     }
 
-    fn pop_observations(&mut self, n_lower: usize) -> (Vec<Vec<Primitives>>, Vec<Vec<Primitives>>) {
+    fn pop_observations(&mut self, n_lower: usize) -> (Vec<Vec<Val>>, Vec<Vec<Val>>) {
         let mut observations_c = self.observations.clone();
         let mut lower_vals = Vec::with_capacity(n_lower);
         let mut upper_vals = Vec::with_capacity(observations_c.len() - n_lower);
@@ -342,17 +211,17 @@ impl TreeStructuredParzenEstimator {
     }
 
     /// variables/samples
-    fn get_config_candidates(&self, n_samples: usize) -> Vec<Vec<Primitives>> {
+    fn get_config_candidates(&self, n_samples: usize) -> Vec<Vec<Val>> {
         self.mvpe_lower.as_ref().map(|mvpe_lower|mvpe_lower.sample(true, n_samples)).unwrap_or(vec![])
     }
 
-    fn compute_config_loglikelihoods(&self, config_cands:&Vec<Vec<Primitives>>) -> (Tensor, Tensor) {
+    fn compute_config_loglikelihoods(&self, config_cands:&Vec<Vec<Val>>) -> (Tensor, Tensor) {
         let config_ll_lower = self.mvpe_lower.as_ref().expect("mvpe_lower").log_pdf(config_cands);
         let config_ll_upper = self.mvpe_upper.as_ref().expect("mvpe_upper").log_pdf(config_cands);
         (config_ll_lower, config_ll_upper)
     }
 
-    fn compute_probability_improvement(&self, config_cands:&Vec<Vec<Primitives>> ) -> Tensor{
+    fn compute_probability_improvement(&self, config_cands:&Vec<Vec<Val>> ) -> Tensor{
 
         let eps = 1e-12;
         let (cll_lower, cll_upper) = self.compute_config_loglikelihoods(config_cands);
@@ -370,8 +239,8 @@ mod tree_structured_parzen_estimator_tests {
 
     use crate::parzen::mvpe::MultiVariateParzenEstimator;
     use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
-    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, ParzenEstimator, Primitives, TreeStructuredParzenEstimator};
-    use crate::parzen::optimizer::Primitives::Float;
+    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, ParzenEstimator, Val, TreeStructuredParzenEstimator};
+    use crate::parzen::optimizer::Val::Real;
 
     #[test]
     fn test_percentile(){
@@ -391,10 +260,10 @@ mod tree_structured_parzen_estimator_tests {
 
         let mut tree_structured_parzen_estimator = TreeStructuredParzenEstimator::new(&cs);
 
-        tree_structured_parzen_estimator.update_observations(0.4, &vec![Primitives::Float(0.4), Primitives::Float(1.4)]);
-        tree_structured_parzen_estimator.update_observations(0.1, &vec![Primitives::Float(0.1), Primitives::Float(1.1)]);
-        tree_structured_parzen_estimator.update_observations(0.3, &vec![Primitives::Float(0.3), Primitives::Float(1.3)]);
-        tree_structured_parzen_estimator.update_observations(0.2, &vec![Primitives::Float(0.2), Primitives::Float(1.2)]);
+        tree_structured_parzen_estimator.update_observations(0.4, &vec![Val::Real(0.4), Val::Real(1.4)]);
+        tree_structured_parzen_estimator.update_observations(0.1, &vec![Val::Real(0.1), Val::Real(1.1)]);
+        tree_structured_parzen_estimator.update_observations(0.3, &vec![Val::Real(0.3), Val::Real(1.3)]);
+        tree_structured_parzen_estimator.update_observations(0.2, &vec![Val::Real(0.2), Val::Real(1.2)]);
 
         // debug!("{:?}", tree_structured_parzen_estimator.observations);
         
@@ -436,9 +305,9 @@ mod tree_structured_parzen_estimator_tests {
 
 
         let pi = tsp.compute_probability_improvement(&vec![
-            vec![Float(0.0), Float(1.0), Float(2.0)], //x0
-            vec![Float(0.1), Float(1.1), Float(2.1)], //x1
-            vec![Float(0.2), Float(1.2), Float(2.2)]  //x2
+            vec![Val::Real(0.0), Val::Real(1.0), Val::Real(2.0)], //x0
+            vec![Val::Real(0.1), Val::Real(1.1), Val::Real(2.1)], //x1
+            vec![Val::Real(0.2), Val::Real(1.2), Val::Real(2.2)]  //x2
         ]);
 
         debug!("pi={pi}");
@@ -449,7 +318,7 @@ mod tree_structured_parzen_estimator_tests {
     }
 }
 #[allow(dead_code)]
-pub struct TPEOptimizer<F> where F: FnMut(&Vec<Primitives>) -> f32 {
+pub struct TPEOptimizer<F> where F: FnMut(&Vec<Val>) -> f32 {
     obj_func:F,
     cs:ConfigurationSpace,
     n_init:usize,
@@ -458,7 +327,7 @@ pub struct TPEOptimizer<F> where F: FnMut(&Vec<Primitives>) -> f32 {
 }
 
 impl <F> TPEOptimizer<F>
-    where F: FnMut(&Vec<Primitives>) -> f32 {
+    where F: FnMut(&Vec<Val>) -> f32 {
 
     #[allow(dead_code)]
     pub fn new(obj_func:F, cs:ConfigurationSpace, max_evals: usize, n_init: usize) -> Self {
@@ -477,9 +346,9 @@ impl <F> TPEOptimizer<F>
         }
     }
 
-    pub fn optimize(&mut self) -> Vec<Primitives> {
+    pub fn optimize(&mut self) -> Vec<Val> {
         let mut best_loss = f32::MAX;
-        let mut best_config:Option<Vec<Primitives>> = None;
+        let mut best_config:Option<Vec<Val>> = None;
 
         (0..self.max_evals).for_each(|i|{
 
@@ -509,14 +378,14 @@ impl <F> TPEOptimizer<F>
         best_config.unwrap_or(vec![])//TODO
     }
 
-    fn sample(&self)->Vec<Primitives> {
+    fn sample(&self)->Vec<Val> {
 
         //TODO if always loss only - merge get_config_candidates & compute_probability_improvement
         let config_cands = stack_params(
 
             self.tpe_samplers.values().map(|tpe| {
                 tpe.get_config_candidates(24)//TODO to param
-            }).collect::<Vec<Vec<Vec<Primitives>>>>() //tpe(only loss)/params/candidates
+            }).collect::<Vec<Vec<Vec<Val>>>>() //tpe(only loss)/params/candidates
         );
 
         //TODO weights? loss only
@@ -532,7 +401,7 @@ impl <F> TPEOptimizer<F>
 
         let max_i = pi_config.argmax(1, true).i(0).double_value(&[]);
 
-        config_cands.into_iter().map(|p|p[max_i as usize]).collect()   // return weights @ pi_config_array
+        config_cands.into_iter().map(|p|p[max_i as usize].clone()).collect()   // return weights @ pi_config_array
 
     }
 
@@ -557,8 +426,8 @@ mod tpe_optimizer_tests {
     use tch::{IndexOp, Tensor};
 
     use crate::argmin::ArgmTensor;
-    use crate::parzen::optimizer::{stack_params, ConfigurationSpace, Hyperparameter, Primitives, TPEOptimizer};
-    use crate::parzen::optimizer::Primitives::Integer;
+    use crate::parzen::optimizer::{stack_params, ConfigurationSpace, Hyperparameter, Val, TPEOptimizer};
+    use crate::parzen::optimizer::Val::Int;
 
 
     #[ctor::ctor]
@@ -593,11 +462,11 @@ mod tpe_optimizer_tests {
     #[test]
     fn test_sphere(){
         let sphere = sphere(30)(&vec![
-            Primitives::Float(0.1),
-            Primitives::Float(0.2),
-            Primitives::Float(0.3),
-            Primitives::Float(0.4),
-            Primitives::Float(0.5),
+            Val::Real(0.1),
+            Val::Real(0.2),
+            Val::Real(0.3),
+            Val::Real(0.4),
+            Val::Real(0.5),
         ]);
 
         assert_eq!(4410.55, sphere);
@@ -618,9 +487,9 @@ mod tpe_optimizer_tests {
         let best_config = opt.optimize();
 
         debug!("best_config={best_config:?}");
-        assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
-        assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
-        assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into((&best_config[0])).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into((&best_config[1])).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into((&best_config[2])).unwrap()).abs() < 3.);
     }
 
 
@@ -652,9 +521,9 @@ mod tpe_optimizer_tests {
                 debug!("params={params:?}");
 
 
-                let x_0 = <Primitives as Into<f32>>::into(params[0]);
-                let x_1 = <Primitives as Into<f32>>::into(params[1]);
-                let x_2 = <Primitives as Into<i64>>::into(params[2]) as u32;
+                let x_0 = <&Val as TryInto<f32>>::try_into(&params[0]).unwrap();
+                let x_1 = <&Val as TryInto<f32>>::try_into(&params[1]).unwrap();
+                let x_2 = <&Val as TryInto<i64>>::try_into(&params[2]).unwrap() as u32;
 
                 let loss = (x_0 -30.).powi(2) + (x_1-30.).powi(2);
                 let loss = match x_2 {
@@ -688,16 +557,16 @@ mod tpe_optimizer_tests {
         let best_config = opt.optimize();
 
         debug!("best_config={best_config:?}");
-        assert!((30. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
-        assert!((30. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
-        assert_eq!(Integer(1), best_config[2]);
+        assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
+        assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
+        assert_eq!(Val::Int(1), best_config[2]);
     }
 
 
-    fn sphere(d_x: i64) -> impl Fn(&Vec<Primitives>) -> f32 {
+    fn sphere(d_x: i64) -> impl Fn(&Vec<Val>) -> f32 {
         move |params| {
             debug!("params={params:?}");
-            let t: Tensor = <Vec<Primitives> as Into<ArgmTensor>>::into(params.clone()).into();
+            let t: Tensor = <Vec<Val> as Into<ArgmTensor>>::into(params.clone()).into();
             let loss = t.subtract_scalar(d_x).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
 
             debug!("loss={loss:?}");
@@ -728,25 +597,25 @@ pub enum Hyperparameter {
 
 impl Hyperparameter {
 
-    pub fn random_sample(&self) -> Primitives {
+    pub fn random_sample(&self) -> Val {
         match self {
             Hyperparameter::UniformFloat { name, lower, upper } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = lower + uniform * (upper - lower) ;
                 debug!("UniformFloat={uniform:?} lb={lower} ub={upper} sample={sample} ");
-                Primitives::Double(sample)
+                Val::Real(sample)
             }
             Hyperparameter::Categorical { name, values } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = uniform * values.len() as f32;
                 // debug!("Categorical={sample:?} values={values:?} ");
-                Primitives::Integer(sample as i32)
+                Val::Int(sample as i64)
             }
             Hyperparameter::UniformInt { name, lower, upper } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = *lower as f64+ uniform * ((upper - lower) as f64) ;
                 // debug!("UniformInt={uniform:?} lb={lower} ub={upper} sample={sample} ");
-                Primitives::Integer(sample as i32)
+                Val::Int(sample as i64)
             }
         }
     }
@@ -855,7 +724,7 @@ impl ConfigurationSpace {
         self.hyperparameters.push(hpe);
     }
 
-    pub fn random_sample(&self) ->Vec<Primitives> {
+    pub fn random_sample(&self) ->Vec<Val> {
         self.hyperparameters.iter().map(|hp|hp.random_sample()).collect()
     }
 

@@ -51,7 +51,6 @@ use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
-use thoosa_common::parzen::optimizer::Primitives::Float;
 use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
 use thoosa_common::train_nets::{FindMotifsRunConfig, InputFilter};

@@ -3,9 +3,9 @@ use rand::prelude::SliceRandom;
 use tch::{IndexOp, Tensor};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Float;
-
+use thoosa_shared::val::Val;
 use crate::parzen::opt_rng::opt_rnd;
-use crate::parzen::optimizer::{Distribution, ParzenEstimator, Primitives};
+use crate::parzen::optimizer::{Distribution, ParzenEstimator};
 use crate::parzen::util::uniform_weight;
 use crate::utils::from;
 
@@ -100,8 +100,8 @@ impl ParzenEstimator for CategoricalParzenEstimator {
         Box::new(self._clc_distr(samples, weights))
     }
 
-    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, weights: Option<Tensor>) -> Box<dyn Distribution>{
-        Box::new(self._clc_distr(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<i64>>().as_slice()).totype(tch::Kind::Int64), weights))
+    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Val>, weights: Option<Tensor>) -> Box<dyn Distribution>{
+        Box::new(self._clc_distr(Tensor::from_slice(samples.map(|p| p.try_into().unwrap()).collect::<Vec<i64>>().as_slice()).totype(tch::Kind::Int64), weights))
 
     }
 }
@@ -134,7 +134,7 @@ impl CategoricalGaussian {
 
 impl Distribution for CategoricalGaussian {
 
-    fn sample(&self, n_samples: usize) -> Vec<Primitives> {
+    fn sample(&self, n_samples: usize) -> Vec<Val> {
 
         (0..n_samples).map(|_|{
             self.indexes.choose_weighted(opt_rnd(), |i|self.probs_vec[*i]).expect("choose_weighted")
@@ -143,9 +143,9 @@ impl Distribution for CategoricalGaussian {
         .collect()
     }
 
-    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Primitives>) -> Tensor {
+    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Val>) -> Tensor {
         // debug!("basis_loglikelihood: x={x}");
-        self.log_blls.index_select(1, &Tensor::from_slice(x.map(|v|(*v).into()).collect::<Vec<i64>>().as_slice()))
+        self.log_blls.index_select(1, &Tensor::from_slice(x.map(|v|v.try_into().unwrap()).collect::<Vec<i64>>().as_slice()))
 
     }
 
@@ -158,9 +158,9 @@ impl Distribution for CategoricalGaussian {
 mod categorical_parzen_estimator_tests {
     use tch::Kind::Float;
     use tch::Tensor;
-
+    use thoosa_shared::val::Val;
     use crate::parzen::cpe::CategoricalParzenEstimator;
-    use crate::parzen::optimizer::{Distribution, Primitives};
+    use crate::parzen::optimizer::{Distribution};
 
     #[ctor::ctor]
     fn init() {
@@ -196,9 +196,9 @@ mod categorical_parzen_estimator_tests {
             )
         );
         let samples = distr.sample(1000);
-        let p_0 = samples.iter().filter(|i|*i == &Primitives::Integer(0)).count() as f32/1000.;
-        let p_1 = samples.iter().filter(|i|*i == &Primitives::Integer(1)).count() as f32/1000.;
-        let p_2 = samples.iter().filter(|i|*i == &Primitives::Integer(2)).count() as f32/1000.;
+        let p_0 = samples.iter().filter(|i|*i == &Val::Int(0)).count() as f32/1000.;
+        let p_1 = samples.iter().filter(|i|*i == &Val::Int(1)).count() as f32/1000.;
+        let p_2 = samples.iter().filter(|i|*i == &Val::Int(2)).count() as f32/1000.;
 
 
         assert!((0.86666667 - p_0).abs() < 0.1);
@@ -208,7 +208,7 @@ mod categorical_parzen_estimator_tests {
 
         // let bll = distr.basis_loglikelihood(&Tensor::from_slice(samples.into_iter().map(|v|v.into()).collect::<Vec<i64>>().as_slice()));
 
-        let bll = distr.basis_loglikelihood(&mut vec![&Primitives::Integer(0), &Primitives::Integer(1), &Primitives::Integer(2), &Primitives::Integer(0)].into_iter());
+        let bll = distr.basis_loglikelihood(&mut vec![&Val::Int(0), &Val::Int(1), &Val::Int(2), &Val::Int(0)].into_iter());
         assert_eq!(
             Tensor::from_slice(
                 &[

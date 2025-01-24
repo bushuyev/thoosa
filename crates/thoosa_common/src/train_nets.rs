@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
-use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, Primitives};
+use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
 use crate::runs::{Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
 use crate::{panic_to_err, train_nets};
 use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
@@ -169,10 +169,10 @@ impl TrainLabelNodesValues {
     }
 }
 
-impl TryFrom<&Vec<Primitives>> for TrainLabelNodesValues {
+impl TryFrom<&Vec<Val>> for TrainLabelNodesValues {
     type Error =ThoosaError;
 
-    fn try_from(value: &Vec<Primitives>) -> Result<Self, Self::Error> {
+    fn try_from(value: &Vec<Val>) -> Result<Self, Self::Error> {
 
         Ok(Self {
             label_node_type: LabelNetType::MaxPadding(MaxPaddingNetParams{ num_layers: 10.into() }),
@@ -1375,19 +1375,19 @@ impl Display for TrainNodesValues {
     }
 }
 
-impl TryFrom<&Vec<Primitives>> for TrainNodesValues {
+impl TryFrom<&Vec<Val>> for TrainNodesValues {
     type Error =ThoosaError;
 
-    fn try_from(value: &Vec<Primitives>) -> Result<Self, Self::Error> {
+    fn try_from(value: &Vec<Val>) -> Result<Self, Self::Error> {
         debug!("TrainNodesValues::try_from: value={:?}", value);
 
-        let num_layers:f32 = value[1].try_into()?;//TODO opt can't produce ints
+        let num_layers:f32 = (&value[1]).try_into()?;//TODO opt can't produce ints
         Ok(Self {
-            lr: value[0].try_into()?,
+            lr: (&value[0]).try_into()?,
             num_layers: num_layers as u32,
             adam_w: if value.len() > 2 {Some(AdamW::default()
-                .beta1(value[2].into())
-                .beta2(value[3].into())
+                .beta1((&value[2]).try_into()?)
+                .beta2((&value[3]).try_into()?)
             )} else {
                 None
             },
@@ -2017,8 +2017,8 @@ pub fn run_opt_train_motif(
 pub fn opt_train<F, V, N:Debug+Default>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, Option<V>, f32), ThoosaError>//Option<V> - Some if run config from opt
 where
     F: FnMut(&VarStore, &V, &mut PlotVecf32) -> Result<(f32, N), ThoosaError>,
-    for<'a> <V as TryFrom<&'a Vec<Primitives>>>::Error: Debug,//TODO remove Vec
-    V: Clone + Display + Debug + for<'a> TryFrom<&'a Vec<Primitives>>,
+    for<'a> <V as TryFrom<&'a Vec<Val>>>::Error: Debug,//TODO remove Vec
+    V: Clone + Display + Debug + for<'a> TryFrom<&'a Vec<Val>>,
 {
 
     match &run_config {

@@ -7,9 +7,9 @@ use rand::Rng;
 use rand::seq::SliceRandom;
 use statrs::distribution::Normal;
 use tch::{IndexOp, Kind, Tensor};
-
+use thoosa_shared::val::Val;
 use crate::parzen::opt_rng::opt_rnd;
-use crate::parzen::optimizer::{Distribution, ParzenEstimator, Primitives};
+use crate::parzen::optimizer::{Distribution, ParzenEstimator};
 use crate::parzen::util::uniform_weight;
 
 #[allow(dead_code)]
@@ -148,8 +148,8 @@ where
         Box::new(self.clc_distr(samples))
     }
 
-    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Primitives>, _weights: Option<Tensor>) -> Box<dyn Distribution>{
-        Box::new(self.clc_distr(Tensor::from_slice(samples.map(|p| p.into()).collect::<Vec<f32>>().as_slice())))
+    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Val>, _weights: Option<Tensor>) -> Box<dyn Distribution>{
+        Box::new(self.clc_distr(Tensor::from_slice(samples.map(|p| p.try_into().unwrap()).collect::<Vec<f32>>().as_slice())))
         // todo!()
     }
 
@@ -333,12 +333,12 @@ impl NumericalGaussian {
 
 
 impl Distribution for NumericalGaussian {
-    fn sample(&self, n_samples: usize) -> Vec<Primitives> {
+    fn sample(&self, n_samples: usize) -> Vec<Val> {
         self._sample(n_samples).into_iter().map(|v|v.into()).collect()
     }
 
-    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Primitives>) -> Tensor {
-        self._basis_loglikelihood(&Tensor::from_slice(x.map(|v|(*v).into()).collect::<Vec<f64>>().as_slice()))
+    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Val>) -> Tensor {
+        self._basis_loglikelihood(&Tensor::from_slice(x.map(|v|v.try_into().unwrap()).collect::<Vec<f64>>().as_slice()))
     }
 
     fn weights(&self) -> &Tensor {
