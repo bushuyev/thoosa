@@ -61,7 +61,7 @@ impl From<(&str, Range<f64>)> for Hyperparameter {
 
 impl From<(&str, Range<u32>)> for Hyperparameter {
     fn from(value: (&str, Range<u32>)) -> Self {
-        Hyperparameter::UniformFloat {
+        Hyperparameter::UniformInt {
             name: value.0.into(),
             lower: value.1.start.into(),
             upper: value.1.end.into()
