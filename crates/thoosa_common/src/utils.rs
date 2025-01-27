@@ -724,6 +724,7 @@ pub mod tests {
 
     #[test]
     fn test_param_ranges() {
+        set_max_level(Trace);
         use thoosa_shared::parse_range_or_value;
         use thoosa_shared::parse_resources;
 
@@ -795,52 +796,10 @@ pub mod tests {
         run_opt(run_config_source);
 
 
-        #[derive(Debug)]
-        struct MyFuncRunConfig {
-            window: f64,
 
-            step: u32,
-
-            some_const_param:u32,
-        }
-
-        impl MyFuncRunConfig {
-            pub fn new() -> Self {
-                Self {
-                    window: 0.0,
-                    step: 0,
-                    some_const_param: 0,
-                }
-            }
-
-        }
-
-
-        fn my_func(p:MyFuncRunConfig){
+        fn my_func(p:TestCommandRunConfig){
             debug!("test_param_ranges: my_func: p={p:?}");
         }
-
-        impl From<&[NamedVal]> for MyFuncRunConfig {
-            fn from(values: &[NamedVal]) -> Self {
-                let values_hash = values.into_iter().fold(HashMap::new(), |mut acc, x| {
-
-                    acc.insert(x.name(), x.val().clone());
-
-                    acc
-                });
-                Self {
-                    window: values_hash.get("window").expect("window").try_into().expect("Failed to parse window val"),
-                    step: values_hash.get("step").expect("step").try_into().expect("Failed to parse step val"),
-                    some_const_param: values_hash.get("some_const_param").expect("some_const_param").try_into().expect("Failed to parse step val"),
-                }
-            }
-        }
-
-        // match cmd.input_filter {
-        //     InputFilter::Conv1(filter_params) => {
-        //         debug!("filter_params={:?}", filter_params);
-        //     }
-        // }
 
         fn run_opt(run_config_source: RunConfigs<VecConfig<NamedVal>, VecConfig<NamedRange>, VecConfig<Hyperparameter>>) {
             let const_config = run_config_source.const_config;
@@ -849,7 +808,7 @@ pub mod tests {
 
             let const_vals = const_config.configs;
 
-            let mut grid_configs: Vec<Vec<NamedVal>> = vec![vec![]];
+            let mut grid_configs: Vec<Vec<NamedVal>> = vec![];
 
             if let Some(grid_config) = run_config_source.grid_config {
                 for range in grid_config.grid() {
@@ -862,9 +821,9 @@ pub mod tests {
 
             for grid_vals in &grid_configs {
                 if let Some(config_space) = opt_config.clone() {
-                    let optimizer = TPEOptimizer::new(
+                    let mut optimizer = TPEOptimizer::new(
                         |opt_vals| {
-                            debug!("const_configs={const_vals:?} grid_configs={grid_configs:?}");
+                            debug!("const_configs={const_vals:?} grid_vals={grid_vals:?} opt_vals={opt_vals:?}");
 
                             let all_configs = [const_vals.clone(), grid_vals.clone(), opt_vals.to_vec()].concat();
 
@@ -875,6 +834,8 @@ pub mod tests {
                         10,
                         3
                     );
+
+                    optimizer.optimize();
                 } else {
                     debug!("const_configs={const_vals:?} grid_configs={grid_configs:?}");
                     let all_configs = [const_vals.clone(), grid_vals.clone()].concat();

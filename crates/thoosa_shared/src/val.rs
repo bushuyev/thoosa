@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::Range;
+use num_traits::ToPrimitive;
 use crate::{RangeOrValue, ThoosaError};
 
 
@@ -195,6 +196,7 @@ impl TryFrom<Val> for u32 {
 
     fn try_from(value: Val) -> Result<u32, ThoosaError> {
         match value {
+            Val::Real(v)=> Ok(v as u32), //v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
             Val::Int(v)=> v.try_into().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
             Val::UInt(v)=> v.try_into().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
             Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
@@ -224,6 +226,7 @@ impl TryFrom<&Val> for f64 {
 
     fn try_from(value: &Val) -> Result<f64, ThoosaError> {
         match value {
+            Val::Int(v)=> (*v).to_f64().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
             Val::UInt(v)=> (*v).try_into().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
             Val::Real(v)=> (*v).try_into().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
             Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
@@ -238,6 +241,8 @@ impl TryFrom<&Val> for u32 {
 
     fn try_from(value: &Val) -> Result<u32, ThoosaError> {
         match value {
+            Val::Real(v)=> Ok(*v as u32), //TODO v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Int(v)=> (*v).to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
             Val::UInt(v)=> Ok(*v),
             Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
             _ => Err(ThoosaError::new(format!("can't convert {value:?}")))
