@@ -525,7 +525,7 @@ impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::{fs, mem};
     use std::path::PathBuf;
     use std::time::Instant;
@@ -836,6 +836,7 @@ pub mod tests {
             type OC = VecConfig<Hyperparameter>;
 
             fn to_run_configs_source(self) -> RunConfigsSource<Self::RC, Self::CC, Self::GC, Self::OC> {
+
                 RunConfigsSource::new(
                     Simple::new(ResourceType::List(vec!["123".to_string()])),
                     VecConfig::new(vec![("some_const_param", self.some_const_param).into()]),
@@ -851,8 +852,8 @@ pub mod tests {
                     .map(|v|VecConfig::new(v)),
 
                     [
-                        (&self.step).try_into(),
-                        (&self.window).try_into(),
+                        ("step", &self.step).try_into(),
+                        ("window", &self.window).try_into(),
                     ]
                     .into_iter()
                     .filter(|v|v.is_ok())
@@ -894,7 +895,7 @@ pub mod tests {
 
             if let Some(config_space) = opt_config.clone() {
                 let optimizer = TPEOptimizer::new(
-                    |primis| {
+                    |vals| {
                         debug!("const_configs={const_configs:?} grid_configs={grid_configs:?}");
 
                         my_func(MyFuncRunConfig::new());
@@ -912,14 +913,39 @@ pub mod tests {
 
 
         struct MyFuncRunConfig {
+            window: f64,
 
+            step: u32,
+
+            some_const_param:u32,
         }
 
         impl MyFuncRunConfig {
             pub fn new() -> Self {
-                Self {}
+                Self {
+                    window: 0.0,
+                    step: 0,
+                    some_const_param: 0,
+                }
+            }
+
+            pub fn from_named_values(values:&[NamedVal]) -> Self {
+
+                let values_hash = values.into_iter().fold(HashMap::new(), |mut acc, x| {
+
+                    acc.insert(x.name(), x.val().clone());
+
+                    acc
+                });
+                Self {
+                    window: values_hash.get("window").expect("window").try_into().expect("Failed to parse window val"),
+                    step: values_hash.get("step").expect("step").try_into().expect("Failed to parse step val"),
+                    some_const_param: values_hash.get("some_const_param").expect("some_const_param").try_into().expect("Failed to parse step val"),
+                }
             }
         }
+
+
         fn my_func(p:MyFuncRunConfig){
 
         }

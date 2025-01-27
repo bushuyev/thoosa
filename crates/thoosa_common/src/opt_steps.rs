@@ -221,7 +221,7 @@ mod tests {
                 Box::new(move |params: &HashMap<String, Val>, data_keys: &Vec<String>, _apply: &dyn Apply| {
                     debug!("params={:?} data_keys={:?}", params, data_keys);
                     let mut vs = VarStore::new(Cpu);
-                    let out_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
+                    let out_features = params.get("window_1").expect("window_1").try_into().expect("window_1 as i64");
 
                     let node = build_net(params, &mut vs, 100, out_features);
 
@@ -250,7 +250,7 @@ mod tests {
                     debug!("new apply 1, params={:?}", params);
 
                     let mut vs = VarStore::new(Cpu);
-                    let out_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
+                    let out_features = params.get("window_1").expect("window_1").try_into().expect("window_1 as i64");
                     Box::new(super::ApplyNet::new(build_net(params, &mut vs, 100, out_features)))
                 })),
                 vec!["aaa".to_string(), "bbb".to_string()],
@@ -260,8 +260,8 @@ mod tests {
                 Box::new(move |params: &HashMap<String, Val>, data_keys: &Vec<String>, apply: &dyn Apply| {
                     debug!("params={:?} data_keys={:?}", params, data_keys);
                     let mut vs = VarStore::new(Cpu);
-                    let in_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
-                    let out_features = params.get("window_2").expect("window_2").as_i64().expect("window_2 as i64");
+                    let in_features = params.get("window_1").expect("window_1").try_into().expect("window_1 as i64");
+                    let out_features = params.get("window_2").expect("window_2").try_into().expect("window_2 as i64");
 
                     let node = build_net(params, &mut vs, in_features, out_features);
 
@@ -290,8 +290,8 @@ mod tests {
                     debug!("new apply2, params={:?}", params);
 
                     let mut vs = VarStore::new(Cpu);
-                    let in_features = params.get("window_1").expect("window_1").as_i64().expect("window_1 as i64");
-                    let out_features = params.get("window_2").expect("window_2").as_i64().expect("window_2 as i64");
+                    let in_features = params.get("window_1").expect("window_1").try_into().expect("window_1 as i64");
+                    let out_features = params.get("window_2").expect("window_2").try_into().expect("window_2 as i64");
 
                     Box::new(super::ApplyNet::new(build_net(params, &mut vs, in_features, out_features)))
                 })),

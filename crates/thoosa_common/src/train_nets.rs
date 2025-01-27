@@ -38,7 +38,7 @@ use clap::Subcommand;
 use thoosa_shared::{clc_step, parse_key_val, slices_len};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::resource::{Resource, ResourceId};
-use thoosa_shared::val::Val;
+use thoosa_shared::val::{NamedVal, Val};
 use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, ThoosaError};
 use thoosa_shared::val::Val::UInt;
@@ -95,7 +95,7 @@ impl TrainLabelNetsParams {
     pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
         [
             &[
-                (&self.common.lr).try_into().ok(),
+                ("lr", &self.common.lr).try_into().ok(),
                 // (&self.num_layers).try_into().ok(),
                 // self.net.to_config_space()
             ],
@@ -169,6 +169,13 @@ impl TrainLabelNodesValues {
     }
 }
 
+impl TryFrom<&[NamedVal]> for TrainLabelNodesValues {
+    type Error = ();
+
+    fn try_from(value: &[NamedVal]) -> Result<Self, Self::Error> {
+        todo!()
+    }
+}
 impl TryFrom<&Vec<Val>> for TrainLabelNodesValues {
     type Error =ThoosaError;
 
@@ -1375,6 +1382,13 @@ impl Display for TrainNodesValues {
     }
 }
 
+impl TryFrom<&[NamedVal]> for TrainNodesValues {
+    type Error = ();
+
+    fn try_from(value: &[NamedVal]) -> Result<Self, Self::Error> {
+        todo!()
+    }
+}
 impl TryFrom<&Vec<Val>> for TrainNodesValues {
     type Error =ThoosaError;
 
@@ -1470,8 +1484,8 @@ impl RunConfig for TrainMotifsNodesRunConfig{
                 id:Some(run_id),
 
                 run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {
-                    lr: properties.get("lr").expect("no lr").as_f32().expect("lr as_f32") as f64,
-                    num_layers: properties.get("num_layers").expect("no num_layers").as_usize().expect("num_layers as usize") as u32,
+                    lr: <&Val as TryInto<f64>>::try_into(properties.get("lr").expect("no lr")).expect("lr as f32"),
+                    num_layers: <&Val as TryInto<u32>>::try_into(properties.get("num_layers").expect("no num_layers")).expect("num_layers as u32"),
                     adam_w: None,
                 }),
             }
@@ -1567,8 +1581,8 @@ impl TrainMotifsNetsParams {
     //TODO add explicit flag to enable optimization
     pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
         [
-            (&self.common.lr).try_into().ok(),
-            (&self.num_layers).try_into().ok(),
+            ("lr", &self.common.lr).try_into().ok(),
+            ("num_layers", &self.num_layers).try_into().ok(),
         ].into_iter()
             .collect::<Option<Vec<Hyperparameter>>>()
             .map(|v|ConfigurationSpace::new(v))
@@ -1598,7 +1612,7 @@ impl MotifNodeParams {
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
 
         MotifNodeParams::new(
-            properties.get("num_features").expect(format !("no num_features in {:?}", properties).as_str()).as_i64().expect("num_features as_i64"), 1,
+            properties.get("num_features").expect(format !("no num_features in {:?}", properties).as_str()).try_into().expect("num_features as_i64"), 1,
         )
     }
 
@@ -1669,10 +1683,10 @@ impl LabelNodeParams {
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
         let properties = unprefix_properties("LabelNodeParams", &properties);
         LabelNodeParams::new(
-            properties.get("channels").expect("channels").as_i64().expect("channels as_i64"),
-            properties.get("motif_nets").expect("motif_nets").as_i64().expect("motif_nets as_i64"),
-            properties.get("motif_layers").expect("motif_layers").as_i64().expect("motif_layers as_i64"),
-            properties.get("slices_len").expect("slices_len").as_i64().expect("slices_len as_i64")
+            properties.get("channels").expect("channels").try_into().expect("channels as_i64"),
+            properties.get("motif_nets").expect("motif_nets").try_into().expect("motif_nets as_i64"),
+            properties.get("motif_layers").expect("motif_layers").try_into().expect("motif_layers as_i64"),
+            properties.get("slices_len").expect("slices_len").try_into().expect("slices_len as_i64")
         )
     }
 
@@ -2017,8 +2031,8 @@ pub fn run_opt_train_motif(
 pub fn opt_train<F, V, N:Debug+Default>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, Option<V>, f32), ThoosaError>//Option<V> - Some if run config from opt
 where
     F: FnMut(&VarStore, &V, &mut PlotVecf32) -> Result<(f32, N), ThoosaError>,
-    for<'a> <V as TryFrom<&'a Vec<Val>>>::Error: Debug,//TODO remove Vec
-    V: Clone + Display + Debug + for<'a> TryFrom<&'a Vec<Val>>,
+    for<'a> <V as TryFrom<&'a [NamedVal]>>::Error: Debug,//TODO remove Vec
+    V: Clone + Display + Debug + for<'a> TryFrom<&'a [NamedVal]>,
 {
 
     match &run_config {
@@ -2358,8 +2372,8 @@ impl TrainFinalNetParams {
     pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
         [
             vec![
-                (&self.lr).try_into().ok(),
-                (&self.num_layers).try_into().ok(),
+                ("lr", &self.lr).try_into().ok(),
+                ("num_layers", &self.num_layers).try_into().ok(),
             ],
             adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter>>>(),
         ].concat().into_iter()
@@ -2561,13 +2575,13 @@ impl RunConfig for FindMotifsRunConfig {
 
     //TODO set id
     fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
-        let properties = thoosa_shared::val::unprefix_properties("FindMotifsRunConfig", &properties);
+        let properties = unprefix_properties("FindMotifsRunConfig", &properties);
         FindMotifsRunConfig::new(
             None,
-            properties.get("step").expect("no step").as_u32().expect("step as_u32"),
-            properties.get("window").expect("no window").as_u32().expect("window as_u32"),
-            properties.get("dist_quantile").expect("no dist_quantile").as_f32().expect("dist_quantile as_f32"),
-            properties.get("descr").expect("no descr").as_str().expect("descr as_str"),
+            properties.get("step").expect("no step").try_into().expect("step as_u32"),
+            properties.get("window").expect("no window").try_into().expect("window as_u32"),
+            properties.get("dist_quantile").expect("no dist_quantile").try_into().expect("dist_quantile as_f32"),
+            <&Val as TryInto<&str>>::try_into(properties.get("descr").expect("no descr")).expect("descr as_str"),
             InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
         )
     }
@@ -2666,9 +2680,9 @@ impl Conv1Params {
         let properties = thoosa_shared::val::unprefix_properties("Conv1Params", &properties);
 
         Ok(Conv1Params {
-            kernel: properties.get("kernel").expect("kernel").as_i64().expect("kernel as_i64"),
-            stride: properties.get("stride").expect("stride").as_i64().expect("stride as_i64"),
-            padding: properties.get("padding").expect("padding").as_i64().expect("padding as_i64"),
+            kernel: properties.get("kernel").expect("kernel").try_into().expect("kernel as_i64"),
+            stride: properties.get("stride").expect("stride").try_into().expect("stride as_i64"),
+            padding: properties.get("padding").expect("padding").try_into().expect("padding as_i64"),
         })
     }
 }
