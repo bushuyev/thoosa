@@ -7,7 +7,7 @@ use rand::distributions::Uniform;
 use rand::Rng;
 use tch::{IndexOp, Tensor};
 use thoosa_shared::{RangeOrValue, ThoosaError};
-use thoosa_shared::val::Val;
+use thoosa_shared::val::{NamedVal, Val};
 use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
@@ -15,15 +15,6 @@ use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
 use crate::train_nets::LabelNetType;
 use super::opt_rng::opt_rnd;
 
-// type TargetFn = dyn Fn(HashMap<String, Box<dyn num_traits::AsPrimitive<_>>>) -> f64;
-
-
-//TODO used in tests only
-impl From<Vec<Val>> for ArgmTensor {
-    fn from(vals: Vec<Val>) -> Self {
-        ArgmTensor(Tensor::from_slice(vals.into_iter().map(|v|v.try_into().unwrap()).collect::<Vec<f64>>().as_slice()))
-    }
-}
 
 
 #[allow(dead_code)]
@@ -318,7 +309,7 @@ mod tree_structured_parzen_estimator_tests {
     }
 }
 #[allow(dead_code)]
-pub struct TPEOptimizer<F> where F: FnMut(&Vec<Val>) -> f32 {
+pub struct TPEOptimizer<F> where F: FnMut(&[NamedVal]) -> f32 {
     obj_func:F,
     cs:ConfigurationSpace,
     n_init:usize,
@@ -327,7 +318,7 @@ pub struct TPEOptimizer<F> where F: FnMut(&Vec<Val>) -> f32 {
 }
 
 impl <F> TPEOptimizer<F>
-    where F: FnMut(&Vec<Val>) -> f32 {
+    where F: FnMut(&[NamedVal]) -> f32 {
 
     #[allow(dead_code)]
     pub fn new(obj_func:F, cs:ConfigurationSpace, max_evals: usize, n_init: usize) -> Self {
@@ -362,7 +353,7 @@ impl <F> TPEOptimizer<F>
             };
 
             let loss = (self.obj_func)(
-                &eval_config
+                &eval_config.iter().zip(self.cs.hyperparameters.iter()).map(|(val, hp)|(hp.name(), val).into()).collect::<Vec<_>>().as_slice()
             );
             if loss < best_loss {
                 best_loss = loss;
@@ -424,7 +415,7 @@ fn stack_params<T:Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 mod tpe_optimizer_tests {
     use log::debug;
     use tch::{IndexOp, Tensor};
-
+    use thoosa_shared::val::NamedVal;
     use crate::argmin::ArgmTensor;
     use crate::parzen::optimizer::{stack_params, ConfigurationSpace, Hyperparameter, Val, TPEOptimizer};
     use crate::parzen::optimizer::Val::Int;
@@ -462,11 +453,11 @@ mod tpe_optimizer_tests {
     #[test]
     fn test_sphere(){
         let sphere = sphere(30)(&vec![
-            Val::Real(0.1),
-            Val::Real(0.2),
-            Val::Real(0.3),
-            Val::Real(0.4),
-            Val::Real(0.5),
+            ("x", Val::Real(0.1)).into(),
+            ("x", Val::Real(0.2)).into(),
+            ("x", Val::Real(0.3)).into(),
+            ("x", Val::Real(0.4)).into(),
+            ("x", Val::Real(0.5)).into(),
         ]);
 
         assert_eq!(4410.55, sphere);
@@ -520,10 +511,9 @@ mod tpe_optimizer_tests {
             move |params| {
                 debug!("params={params:?}");
 
-
-                let x_0 = <&Val as TryInto<f32>>::try_into(&params[0]).unwrap();
-                let x_1 = <&Val as TryInto<f32>>::try_into(&params[1]).unwrap();
-                let x_2 = <&Val as TryInto<i64>>::try_into(&params[2]).unwrap() as u32;
+                let x_0:f32 = (&params[0]).try_into().unwrap();
+                let x_1:f32 = (&params[1]).try_into().unwrap();
+                let x_2:u32 = (&params[2]).try_into().unwrap();
 
                 let loss = (x_0 -30.).powi(2) + (x_1-30.).powi(2);
                 let loss = match x_2 {
@@ -563,10 +553,13 @@ mod tpe_optimizer_tests {
     }
 
 
-    fn sphere(d_x: i64) -> impl Fn(&Vec<Val>) -> f32 {
+    fn sphere(d_x: i64) -> impl Fn(&[NamedVal]) -> f32 {
         move |params| {
             debug!("params={params:?}");
-            let t: Tensor = <Vec<Val> as Into<ArgmTensor>>::into(params.clone()).into();
+
+            let t: Tensor = ArgmTensor(Tensor::from_slice(
+                params.into_iter().map(|v|<&NamedVal as TryInto<f64>>::try_into(v).unwrap()).collect::<Vec<f64>>().as_slice()
+            )).into();
             let loss = t.subtract_scalar(d_x).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
 
             debug!("loss={loss:?}");
@@ -602,34 +595,42 @@ impl Hyperparameter {
             Hyperparameter::UniformFloat { name, lower, upper } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = lower + uniform * (upper - lower) ;
-                debug!("UniformFloat={uniform:?} lb={lower} ub={upper} sample={sample} ");
+                trace!("UniformFloat={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Val::Real(sample)
             }
             Hyperparameter::Categorical { name, values } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = uniform * values.len() as f32;
-                // debug!("Categorical={sample:?} values={values:?} ");
+                trace!("Categorical={sample:?} values={values:?} ");
                 Val::Int(sample as i64)
             }
             Hyperparameter::UniformInt { name, lower, upper } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = *lower as f64+ uniform * ((upper - lower) as f64) ;
-                // debug!("UniformInt={uniform:?} lb={lower} ub={upper} sample={sample} ");
+                trace!("UniformInt={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Val::Int(sample as i64)
             }
         }
     }
 
+    fn name(&self) -> &str {
+        match self {
+            Hyperparameter::UniformFloat { name, .. } => name,
+            Hyperparameter::UniformInt { name, .. } => name,
+            Hyperparameter::Categorical { name, .. } => name,
+        }
+    }
+
 }
 
-impl TryFrom<&RangeOrValue<f64>> for Hyperparameter {
-    type Error = ();//TODO ThoosaError
+impl TryFrom<(&str, &RangeOrValue<f64>)> for Hyperparameter {
+    type Error = ();
 
-    fn try_from(value: &RangeOrValue<f64>) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (&str, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range,step} = value {
             if step.is_none() {
                 return Ok(Hyperparameter::UniformFloat {
-                    name: "param_0".into(),//TODO
+                    name: name.into(),
                     lower: range.start,
                     upper: range.end
                 });
@@ -639,35 +640,37 @@ impl TryFrom<&RangeOrValue<f64>> for Hyperparameter {
     }
 }
 
-impl TryFrom<&RangeOrValue<i32>> for Hyperparameter {
+impl TryFrom<(&str, &RangeOrValue<i32>)> for Hyperparameter {
     type Error = ();
 
-    fn try_from(value: &RangeOrValue<i32>) -> Result<Self, Self::Error> {
-        if let RangeOrValue::Range{range, ..} = value {
-            Ok(Hyperparameter::UniformInt {
-                name: "param_0".into(),
-                lower: range.start as i64, //TODO as i64
-                upper: range.end as i64
-            })
-        } else {
-            Err(())
+    fn try_from((name, value): (&str, &RangeOrValue<i32>)) -> Result<Self, Self::Error> {
+        if let RangeOrValue::Range{range, step} = value {
+            if step.is_none() {
+                return Ok(Hyperparameter::UniformInt {
+                    name: name.into(),
+                    lower: range.start as i64, //TODO as i64
+                    upper: range.end as i64
+                });
+            }
         }
+        Err(())
     }
 }
 
-impl TryFrom<&RangeOrValue<u32>> for Hyperparameter {
+impl TryFrom<(&str, &RangeOrValue<u32>)> for Hyperparameter {
     type Error = ();
 
-    fn try_from(value: &RangeOrValue<u32>) -> Result<Self, Self::Error> {
-        if let RangeOrValue::Range{range, ..} = value {
-            Ok(Hyperparameter::UniformInt {
-                name: "param_0".into(),
-                lower: range.start as i64, //TODO as i64
-                upper: range.end as i64
-            })
-        } else {
-            Err(())
+    fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+        if let RangeOrValue::Range{range, step} = value {
+            if step.is_none() {
+                return Ok(Hyperparameter::UniformInt {
+                    name: name.into(),
+                    lower: range.start as i64, //TODO as i64
+                    upper: range.end as i64
+                });
+            }
         }
+        Err(())
     }
 }
 
@@ -718,10 +721,6 @@ impl ConfigurationSpace {
     }
     pub fn new(hyperparameters: Vec<Hyperparameter>) -> Self {
         Self { hyperparameters }
-    }
-
-    pub fn add_hyperparameter(&mut self, hpe:Hyperparameter){
-        self.hyperparameters.push(hpe);
     }
 
     pub fn random_sample(&self) ->Vec<Val> {

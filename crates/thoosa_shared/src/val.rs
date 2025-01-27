@@ -13,7 +13,20 @@ pub enum Val {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct NamedVal{name: String, val:Val}
+pub struct NamedVal{
+    name: String,
+    val:Val
+}
+
+impl NamedVal {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn val(&self) -> &Val {
+        &self.val
+    }
+}
 
 #[derive(Debug)]
 pub struct NamedRange{name: String, range:Range<Val>, step:(Val, u32)}
@@ -22,6 +35,19 @@ pub struct NamedRange{name: String, range:Range<Val>, step:(Val, u32)}
 impl From<(&str, u32)> for NamedVal {
     fn from((name, value): (&str, u32)) -> Self {
         NamedVal{name: name.to_string(), val:value.into()}
+    }
+}
+
+impl From<(&str, Val)> for NamedVal {
+    fn from((name, val): (&str, Val)) -> Self {
+        NamedVal{name: name.to_string(), val}
+    }
+}
+
+
+impl From<(&str, &Val)> for NamedVal {
+    fn from((name, val): (&str, &Val)) -> Self {
+        NamedVal{name: name.to_string(), val:val.clone()}
     }
 }
 
@@ -81,50 +107,6 @@ impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange {
         Err(())
     }
 }
-
-//TODO remove
-impl Val {
-
-    pub fn as_usize(&self) -> Result<usize, ThoosaError> {
-        match self {
-            Self::Int(v)=> Ok(*v as usize),
-            _=> Err(ThoosaError::new("can't be usize"))
-        }
-    }
-
-    pub fn as_u32(&self) -> Result<u32, ThoosaError> {
-        match self {
-            Self::UInt(v)=> Ok(*v),
-            _=> Err(ThoosaError::new("can't be u32"))
-        }
-    }
-
-
-    pub fn as_i64(&self) -> Result<i64, ThoosaError> {
-        match self {
-            Self::Int(v)=> Ok(*v as i64),
-            _=> Err(ThoosaError::new("can't be i64"))
-        }
-    }
-
-    pub fn as_f32(&self) -> Result<f32, ThoosaError> {
-        match self {
-            Self::Real(v)=> Ok(*v as f32),
-            _=> Err(ThoosaError::new("can't be f32"))
-        }
-    }
-
-    pub fn as_str(&self) -> Result<String, ThoosaError> {
-        match self {
-            Self::Str(v)=> Ok(v.clone()),
-            Self::Int(v)  => Ok(format!("{}", v)),
-            Self::UInt(v)=> Ok(format!("{}", v)),
-            Self::Real(v)=> Ok(format!("{}", v)),
-            Val::Bool(v) =>Ok(format!("{}", v)),
-        }
-    }
-}
-
 
 impl TryFrom<Val> for f64 {
     type Error = ThoosaError;
@@ -237,6 +219,17 @@ impl TryFrom<&Val> for f32 {
     }
 }
 
+impl TryFrom<&Val> for &str {
+    type Error = ThoosaError;
+
+    fn try_from(value: &Val) -> Result<&'static str, ThoosaError> {
+        match value {
+            v => v.try_into().map_err(|e|ThoosaError::new(format!("e={e:?}")))
+        }
+    }
+}
+
+
 impl From<f32> for Val {
     fn from(v: f32) -> Self {
         Val::Real(v as f64)
@@ -337,4 +330,30 @@ pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<S
         }
         a
     })
+}
+
+
+impl TryFrom<&NamedVal> for f64 {
+    type Error = ThoosaError;
+
+    fn try_from(value: &NamedVal) -> Result<Self, Self::Error> {
+        value.val.clone().try_into()
+    }
+}
+
+
+impl TryFrom<&NamedVal> for f32 {
+    type Error = ThoosaError;
+
+    fn try_from(value: &NamedVal) -> Result<Self, Self::Error> {
+        value.val.clone().try_into()
+    }
+}
+
+impl TryFrom<&NamedVal> for u32 {
+    type Error = ThoosaError;
+
+    fn try_from(value: &NamedVal) -> Result<Self, Self::Error> {
+        value.val.clone().try_into()
+    }
 }
