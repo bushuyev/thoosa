@@ -33,9 +33,9 @@ use tch::Kind::Float;
 use tch::{Device, Kind, Tensor};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
-use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, InferParams, InputFilter, LabelNodeParams, LabelNetType, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsParams, TrainMotifsNodesRunConfig, TrainNodesValues, FixedNumSlicesNetParams};
+use thoosa_common::parzen::optimizer::ConfigurationSpace;
+use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, InferParams, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -59,7 +59,8 @@ use torch_sys::at_grad_set_enabled;
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
+use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -1715,7 +1716,7 @@ mod cli_tests {
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::RunConfig;
-    use thoosa_common::runs::{Params, ResourcesConfig};
+    use thoosa_common::runs::Params;
     use thoosa_common::train_nets::{motif_node, FindMotifsRunConfig, InferParams, MotifNodeParams, TrainFinalNetParams, TrainLabelNetsParams, TrainMotifsNetsParams};
     use thoosa_common::utils::{
         from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
@@ -1729,7 +1730,7 @@ mod cli_tests {
         SelectMotifsParams,
     };
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesParams};
-    use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
+    use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_shared::{
         cdt, cdt_for_dir, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp,

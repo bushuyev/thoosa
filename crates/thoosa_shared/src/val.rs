@@ -12,6 +12,29 @@ pub enum Val {
     Bool(bool)
 }
 
+impl Val {
+    pub fn to_i64(&self, p:u32) -> i64 {
+
+        match self {
+            Val::Real(v) => {
+                (v * 10_f64.powi(p as i32)) as i64
+            }
+            Val::Int(v) => {
+                *v
+            }
+            Val::UInt(v) => {
+                *v as i64
+            }
+            Val::Str(v) => {
+                v.parse().expect(format!("Could not parse {v} string").as_str())
+            }
+            Val::Bool(v) => {
+                if *v { 1 } else { 0 }
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct NamedVal{
     name: String,
@@ -41,12 +64,12 @@ impl NamedRange {
         Self { name:name.into(), range, step }
     }
 }
-
-impl From<(&str, u32)> for NamedVal {
-    fn from((name, value): (&str, u32)) -> Self {
-        NamedVal{name: name.to_string(), val:value.into()}
-    }
-}
+//
+// impl From<(&str, u32)> for NamedVal {
+//     fn from((name, value): (&str, u32)) -> Self {
+//         NamedVal{name: name.to_string(), val:value.into()}
+//     }
+// }
 
 impl From<(&str, Val)> for NamedVal {
     fn from((name, val): (&str, Val)) -> Self {
@@ -55,11 +78,11 @@ impl From<(&str, Val)> for NamedVal {
 }
 
 
-impl From<(&str, &Val)> for NamedVal {
-    fn from((name, val): (&str, &Val)) -> Self {
-        NamedVal{name: name.to_string(), val:val.clone()}
-    }
-}
+// impl From<(&str, &Val)> for NamedVal {
+//     fn from((name, val): (&str, &Val)) -> Self {
+//         NamedVal{name: name.to_string(), val:val.clone()}
+//     }
+// }
 
 impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange {
     type Error = ();
@@ -78,9 +101,18 @@ impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange {
     }
 }
 
-impl From<&NamedRange> for &[NamedVal] {
+
+impl From<&NamedRange> for Vec<NamedVal> {
     fn from(value: &NamedRange) -> Self {
-        todo!()
+
+        let start:i64 = value.range.start.to_i64(value.step.1);
+        let end:i64 = value.range.end.to_i64(value.step.1);
+        let step:usize = value.step.0.to_i64(value.step.1) as usize;
+
+        (start..end).step_by(step).map(|i| (
+            value.name.as_str(),
+            <Val as Into<Val>>::into(i.into())
+        ).into()).collect::<Vec<NamedVal>>()
     }
 }
 
@@ -236,6 +268,20 @@ impl TryFrom<&Val> for &str {
         }
     }
 }
+
+impl TryFrom<Val> for usize {
+    type Error = ThoosaError;
+
+    fn try_from(value: Val) -> Result<usize, ThoosaError> {
+        match value {
+            Val::Int(v)=> Ok(v as usize),
+            Val::UInt(v)=> Ok(v as usize),
+            Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            _ => Err(ThoosaError::new(format!("can't convert {value:?}")))
+        }
+    }
+}
+
 
 
 impl From<f32> for Val {

@@ -3,6 +3,8 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use clap::builder::Str;
 use log::{debug, trace};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use crate::ThoosaError;
 
 pub trait ResourceStore {
@@ -104,5 +106,14 @@ impl ResourceStats {
 
     pub fn length(&self)->u32 {
         self.size[self.length_dim]
+    }
+}
+
+pub trait ResourcesConfig {
+    type Result;
+    fn to_resources<S:ResourceStore+ ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError>;
+
+    fn serialize(&self) -> String {
+        "TODO".to_string()
     }
 }

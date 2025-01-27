@@ -51,14 +51,15 @@ use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
-use thoosa_common::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
-use thoosa_common::runs::{Labeled, Params, ResourcesConfig, RunConfig, SavableOptResult, Simple};
+use thoosa_common::parzen::optimizer::ConfigurationSpace;
+use thoosa_common::runs::{Labeled, Params, RunConfig, SavableOptResult, Simple};
 use thoosa_common::train_nets::{FindMotifsRunConfig, InputFilter};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::colors_iter::DistinctColorIter;
+use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
-use thoosa_shared::resource::{Resource, ResourceId, ResourceStore};
+use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 

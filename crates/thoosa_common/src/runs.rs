@@ -4,7 +4,7 @@ use std::sync::Arc;
 use log::debug;
 use parking_lot::{Mutex, RwLock};
 use tch::nn::VarStore;
-use thoosa_shared::resource::{Resource, ResourceStore};
+use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{ResourceType, ThoosaError};
 use thoosa_shared::val::Val;
 use thoosa_store::Store;
@@ -13,15 +13,6 @@ use crate::ws::Workspace;
 
 type Label = i64;//TODO
 
-
-pub trait ResourcesConfig {
-    type Result;
-    fn to_resources<S:ResourceStore+ ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError>;
-
-    fn serialize(&self) -> String {
-        "TODO".to_string()
-    }
-}
 
 #[derive(Debug)]
 pub struct Simple {
