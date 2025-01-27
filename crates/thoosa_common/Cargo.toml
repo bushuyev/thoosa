@@ -30,6 +30,9 @@ libloading.workspace = true
 thoosa_shared = {path = "../thoosa_shared" }
 thoosa_store = {path = "../thoosa_store" }
 
+thoosa_run_config_source = {path = "../thoosa_macros/thoosa_run_config_source" }
+thoosa_run_config_source_derive = {path = "../thoosa_macros/thoosa_run_config_source_derive" }
+
 plotters.workspace = true
 
 chrono = { version = "0.4.32" }

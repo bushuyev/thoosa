@@ -7,7 +7,8 @@ members = [
     "thoosa_store",
     "thoosa_motifs",
     "thoosa_main",
-    "thoosa_projects/thoosa_hbac"
+    "thoosa_projects/thoosa_hbac",
+    "thoosa_macros/thoosa_run_config_source"
 ]
 
 [workspace.package]

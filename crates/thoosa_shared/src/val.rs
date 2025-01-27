@@ -29,8 +29,18 @@ impl NamedVal {
 }
 
 #[derive(Debug)]
-pub struct NamedRange{name: String, range:Range<Val>, step:(Val, u32)}
+pub struct NamedRange{
+    name: String,
+    range:Range<Val>,
+    step:(Val, u32)
+}
 
+
+impl NamedRange {
+    pub fn new(name: &str, range: Range<Val>, step: (Val, u32)) -> Self {
+        Self { name:name.into(), range, step }
+    }
+}
 
 impl From<(&str, u32)> for NamedVal {
     fn from((name, value): (&str, u32)) -> Self {
@@ -73,23 +83,6 @@ impl From<&NamedRange> for &[NamedVal] {
         todo!()
     }
 }
-//
-// impl TryFrom<&RangeOrValue<i32>> for Hyperparameter {
-//     type Error = ();
-//
-//     fn try_from(value: &RangeOrValue<i32>) -> Result<Self, Self::Error> {
-//         if let RangeOrValue::Range{range, ..} = value {
-//             Ok(Hyperparameter::UniformInt {
-//                 name: "param_0".into(),
-//                 lower: range.start as i64, //TODO as i64
-//                 upper: range.end as i64
-//             })
-//         } else {
-//             Err(())
-//         }
-//     }
-// }
-
 
 impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange {
     type Error = ();
@@ -107,6 +100,21 @@ impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange {
         Err(())
     }
 }
+
+impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedVal {
+    type Error = ();
+
+    fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+        if let RangeOrValue::Value(v) = value {
+            return Ok(NamedVal {
+                name: name.into(),
+                val: v.into()
+            });
+        }
+        Err(())
+    }
+}
+
 
 impl TryFrom<Val> for f64 {
     type Error = ThoosaError;
