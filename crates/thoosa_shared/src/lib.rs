@@ -35,6 +35,7 @@ pub mod resource;
 
 pub mod test_utils;
 pub mod colors_iter;
+mod hyperparameter;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
@@ -531,6 +532,7 @@ impl <V:Display+PrimInt> Display for RangeOrValue<V> {
 }
 
 impl<V> RangeOrValue<V> where V: Clone + 'static  {
+
     pub fn expect_value(&self) -> Result<&V, ThoosaError> {
         match self {
             RangeOrValue::Range{..} => {
