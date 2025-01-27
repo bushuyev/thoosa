@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
-use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter};
+use crate::parzen::optimizer::ConfigurationSpace;
 use crate::runs::{Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
 use crate::{panic_to_err, train_nets};
 use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
@@ -44,6 +44,7 @@ use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, T
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
+use thoosa_shared::hyperparameter::Hyperparameter;
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainLabelNetsParams {

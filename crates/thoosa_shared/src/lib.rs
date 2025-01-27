@@ -35,7 +35,8 @@ pub mod resource;
 
 pub mod test_utils;
 pub mod colors_iter;
-mod hyperparameter;
+pub mod hyperparameter;
+pub mod opt_rng;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
@@ -627,7 +628,7 @@ pub fn parse_resources(s: &str) -> Result<ResourceType, Box<dyn Error + Send + S
         Ok(ResourceType::Group(s[value_pos..].to_string()))
 
     } else {
-        panic!("unexpected param {s}")
+        panic!("unknown resource type {s}, expecting list, set or group")
     }
 }
 

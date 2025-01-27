@@ -31,10 +31,10 @@ use torch_sys::cuda::atc_cuda_device_count;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
 use tch::Device::{Cpu, Cuda};
-use thoosa_shared::{gauss_i, ThoosaError, pulse_in_rand, pulse_v, pulses_in_const, cdt, saw};
+use thoosa_shared::{cdt, gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
 
 use crate::my_tch::{LossFp, ThoModule};
-use crate::parzen::opt_rng::opt_rnd;
+use thoosa_shared::opt_rng::opt_rnd;
 
 pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -529,7 +529,7 @@ pub mod tests {
     use std::{fs, mem};
     use std::path::PathBuf;
     use std::time::Instant;
-    use clap::{arg, Args, command, Parser, Subcommand};
+    use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
     use log::{debug, error, info, set_max_level};
     use log::LevelFilter::{Info, Trace};
@@ -537,12 +537,15 @@ pub mod tests {
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::{IndexOp, Tensor};
+    use thoosa_run_config_source::{GridConfig, OptConfig, RunConfigSource, RunConfigs, VecConfig};
     use thoosa_run_config_source_derive::RunConfigSource;
     use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
+    use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::resource::ResourcesConfig;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use crate::bool_iter::BoolTensorIterator;
-    use crate::parzen::optimizer::{ConfigurationSpace, Hyperparameter, TPEOptimizer};
-    use crate::runs::{ResourcesConfig, Simple};
+    use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
+    use crate::runs::Simple;
     use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
 
@@ -722,6 +725,8 @@ pub mod tests {
     #[test]
     fn test_param_ranges() {
         use thoosa_shared::parse_range_or_value;
+        use thoosa_shared::parse_resources;
+
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -738,16 +743,22 @@ pub mod tests {
             TestCommand(TestCommandArgs),
         }
 
-        #[derive(Debug, Args, Clone, RunConfigSource)]
+        #[derive(Debug, Args, Clone, RunConfigSource)]//
         struct TestCommandArgs {
+            #[arg(long,value_parser=parse_resources)]
+            pub resources: ResourceType,
+
             #[arg(long, value_parser=parse_range_or_value::<f64>)]
+            #[run_config]
             window: RangeOrValue<f64>,
 
             #[arg(long, value_parser=parse_range_or_value::<u32>)]
+            #[run_config]
             step: RangeOrValue<u32>,
 
-            #[arg(long)]
-            some_const_param:u32,
+            #[arg(long, value_parser=parse_range_or_value::<u32>)]
+            #[run_config]
+            some_const_param:RangeOrValue<u32>,
 
             #[command(subcommand)]
             input_filter: InputFilter
@@ -764,127 +775,9 @@ pub mod tests {
             kernel:RangeOrValue<usize>
         }
 
-        trait ConstConfig {
-            fn consts(&self) -> &[NamedVal];
-        }
 
-        trait GridConfig {
-            fn grid(&self) -> &[NamedRange];
-        }
 
-        trait OptConfig {
-            fn opt(&self) -> &[Hyperparameter];
-        }
-
-        trait TestRunConfigSource {
-            type RC: ResourcesConfig;
-            type CC: ConstConfig;
-            type GC: GridConfig;
-            type OC: OptConfig;
-
-            fn to_run_configs(self) -> TestRunConfigs<Self::RC, Self::CC, Self::GC, Self::OC>;
-        }
-
-        #[derive(Debug)]
-        struct TestRunConfigs<RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> {
-            resource_config: RC,
-            const_config: CC,
-            grid_config: Option<GC>,
-            opt_config: Option<OC>,
-        }
-
-        impl <RC: ResourcesConfig, CC: ConstConfig, GC: GridConfig, OC: OptConfig> TestRunConfigs<RC, CC, GC, OC> {
-
-            pub fn new(resource_config: RC, const_config: CC, grid_config: Option<GC>, opt_config: Option<OC>) -> Self {
-                Self { resource_config, const_config, grid_config, opt_config }
-            }
-        }
-
-        #[derive(Debug)]
-        struct VecConfig<V> {
-            configs: Vec<V>
-        }
-
-        impl <V> VecConfig<V> {
-            pub fn new(const_configs: Vec<V>) -> Self {
-                Self { configs: const_configs }
-            }
-        }
-
-        impl ConstConfig for VecConfig<NamedVal> {
-            fn consts(&self) -> &[NamedVal] {
-                self.configs.as_slice()
-            }
-        }
-
-        impl GridConfig for VecConfig<NamedRange> {
-            fn grid(&self) -> &[NamedRange] {
-                self.configs.as_slice()
-            }
-        }
-
-        impl OptConfig for VecConfig<Hyperparameter> {
-            fn opt(&self) -> &[Hyperparameter] {
-                self.configs.as_slice()
-            }
-        }
-
-        impl <V> From<Vec<V>> for VecConfig<V> {
-            fn from(value: Vec<V>) -> Self {
-                VecConfig::new(value)
-            }
-        }
-
-        impl TestRunConfigSource for TestCommandArgs {
-            type RC = Simple;
-            type CC = VecConfig<NamedVal>;
-            type GC = VecConfig<NamedRange>;
-            type OC = VecConfig<Hyperparameter>;
-
-            fn to_run_configs(self) -> TestRunConfigs<Self::RC, Self::CC, Self::GC, Self::OC> {
-
-                let (mut const_params, mut grid_params, mut opt_params):(Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>) = (vec![], vec![], vec![]);
-                match self.step {
-                    RangeOrValue::Range { range, step: step_op } => {
-                        match step_op {
-                            None => {
-                                opt_params.push(
-                                    Hyperparameter::UniformInt {
-                                        name: "step".into(),
-                                        lower: range.start.into(),
-                                        upper: range.end.into(),
-                                    }
-                                );
-                            }
-                            Some((step, mul)) => {
-                                grid_params.push(
-                                    NamedRange::new(
-                                        "step",
-                                        range.start.into()..range.end.into(),
-                                        (step.into(), mul)
-                                    )
-                                );
-                            }
-                        }
-                    }
-
-                    RangeOrValue::Value(v) => {
-                        const_params.push(
-                            NamedVal::from(("step", <u32 as Into<Val>>::into(v)))
-                        );
-                    }
-                }
-
-                TestRunConfigs::new(
-                    Simple::new(ResourceType::List(vec!["123".to_string()])),
-                    const_params.into(),
-                    if grid_params.is_empty() {None} else {Some(grid_params.into())},
-                    if opt_params.is_empty() {None} else {Some(opt_params.into())},
-                )
-            }
-        }
-
-        let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--some-const-param", "77", "--window", "10..20:5", "--step", "1..10", "conv1", "--kernel", "10"]);
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--resources", "list:123",  "--some-const-param", "77", "--window", "10..20:5", "--step", "1..10", "conv1", "--kernel", "10"]);
         debug!("cli.some_field={:?}", cli.some_field);
 
         assert_eq!("zzz", cli.some_field);
@@ -894,9 +787,9 @@ pub mod tests {
             panic!("no test command");
         };
 
-        test_command_args.to_run_configs();
-
         let run_config_source = test_command_args.to_run_configs();
+
+        // let run_config_source = test_command_args.to_run_configs();
         debug!("cmd.to_run_config={run_config_source:?}");
 
         run_opt(run_config_source);
@@ -949,9 +842,9 @@ pub mod tests {
         //     }
         // }
 
-        fn run_opt(run_config_source: TestRunConfigs<Simple, VecConfig<NamedVal>, VecConfig<NamedRange>, VecConfig<Hyperparameter>>) {
+        fn run_opt(run_config_source: RunConfigs<VecConfig<NamedVal>, VecConfig<NamedRange>, VecConfig<Hyperparameter>>) {
             let const_config = run_config_source.const_config;
-            assert_eq!(<(&str, u32) as Into<NamedVal>>::into(("some_const_param", 77)), const_config.configs[0]);
+            assert_eq!(<(&str, Val) as Into<NamedVal>>::into(("some_const_param", Val::UInt(77))), const_config.configs[0]);
 
 
             let const_vals = const_config.configs;
@@ -960,8 +853,8 @@ pub mod tests {
 
             if let Some(grid_config) = run_config_source.grid_config {
                 for range in grid_config.grid() {
-                    let name_vals: &[NamedVal] = range.into();
-                    grid_configs.push(name_vals.to_vec());
+                    let name_vals: Vec<NamedVal> = range.into();
+                    grid_configs.push(name_vals);
                 }
             }
 

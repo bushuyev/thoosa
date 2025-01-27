@@ -2775,7 +2775,6 @@ dependencies = [
  "parking_lot_mpsc",
  "plotters",
  "rand 0.8.5",
- "rand_mt",
  "rayon",
  "regex",
  "serde",
@@ -2887,6 +2886,9 @@ dependencies = [
 [[package]]
 name = "thoosa_run_config_source"
 version = "0.1.0"
+dependencies = [
+ "thoosa_shared",
+]
 
 [[package]]
 name = "thoosa_run_config_source_derive"
@@ -2909,8 +2911,10 @@ dependencies = [
  "lazy_static",
  "log",
  "num-traits",
+ "parking_lot 0.12.3",
  "plotters",
  "rand 0.8.5",
+ "rand_mt",
  "regex",
  "simplelog",
 ]

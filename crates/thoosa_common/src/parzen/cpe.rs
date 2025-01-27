@@ -4,7 +4,7 @@ use tch::{IndexOp, Tensor};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Float;
 use thoosa_shared::val::Val;
-use crate::parzen::opt_rng::opt_rnd;
+use thoosa_shared::opt_rng::opt_rnd;
 use crate::parzen::optimizer::{Distribution, ParzenEstimator};
 use crate::parzen::util::uniform_weight;
 use crate::utils::from;

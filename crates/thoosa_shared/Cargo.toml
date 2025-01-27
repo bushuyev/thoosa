@@ -11,6 +11,7 @@ ctor = "0.2.6"
 bytemuck.workspace = true
 regex.workspace = true
 rand = {workspace = true}
+rand_mt = "4.2.2"
 log = {workspace = true}
 simplelog = {workspace = true}
 chrono.workspace = true
@@ -18,3 +19,4 @@ clap.workspace = true
 num-traits.workspace = true
 lazy_static = "1.5.0"
 plotters.workspace = true
+parking_lot.workspace = true
