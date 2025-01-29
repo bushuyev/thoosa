@@ -7,7 +7,7 @@ use crate::RangeOrValue;
 use crate::val::Val;
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Hyperparameter {
     UniformFloat{name:String, lower:f64, upper:f64},
     UniformInt{name:String, lower:i64, upper:i64},

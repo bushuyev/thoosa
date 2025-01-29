@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::ResourcesConfig;
 use thoosa_shared::val::{NamedRange, NamedVal};
@@ -21,6 +22,11 @@ pub trait RunConfigSource {
 
     fn to_run_configs(self) -> RunConfigs<Self::CC, Self::GC, Self::OC>;
 }
+
+pub trait ResourceConfigSource<R:ResourcesConfig>:Debug {
+    fn resource_config(&self) -> R;
+}
+
 
 impl <V> From<Vec<V>> for VecConfig<V> {
     fn from(value: Vec<V>) -> Self {
@@ -74,6 +80,16 @@ impl OptConfig for VecConfig<Hyperparameter> {
 
 
 
+#[derive(Debug, Clone)]
+pub struct FieldMeta {
+    pub name: String,
+    pub ty_str: String,
+}
+
+pub trait FlattenAllFields {
+    fn all_fields() -> &'static [FieldMeta];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,3 +99,4 @@ mod tests {
 
     }
 }
+

@@ -1384,10 +1384,19 @@ impl Display for TrainNodesValues {
 }
 
 impl TryFrom<&[NamedVal]> for TrainNodesValues {
-    type Error = ();
+    type Error = ThoosaError;
 
     fn try_from(value: &[NamedVal]) -> Result<Self, Self::Error> {
-        todo!()
+        let params_map = value.into_iter().try_fold(HashMap::new(), |mut a, x| {
+            a.insert(x.name(), x.val());
+            Ok::<HashMap<&str, &Val>, ThoosaError>(a)
+        })?;
+
+        Ok(TrainNodesValues::new(
+            (*params_map.get("lr").expect("lr")).try_into()?,
+            (*params_map.get("num_layers").expect("num_layers")).try_into()?,
+            None//TODO
+        ))
     }
 }
 impl TryFrom<&Vec<Val>> for TrainNodesValues {
@@ -2576,15 +2585,21 @@ impl RunConfig for FindMotifsRunConfig {
 
     //TODO set id
     fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+        debug!("FindMotifsRunConfig::from_properties_map: run_id={run_id} properties={properties:?}");
+
         let properties = unprefix_properties("FindMotifsRunConfig", &properties);
-        FindMotifsRunConfig::new(
+        let find_motifs_run_config = FindMotifsRunConfig::new(
             None,
             properties.get("step").expect("no step").try_into().expect("step as_u32"),
             properties.get("window").expect("no window").try_into().expect("window as_u32"),
             properties.get("dist_quantile").expect("no dist_quantile").try_into().expect("dist_quantile as_f32"),
-            <&Val as TryInto<&str>>::try_into(properties.get("descr").expect("no descr")).expect("descr as_str"),
+            <&Val as TryInto<String>>::try_into(properties.get("descr").expect("no descr")).expect("descr as_str"),
             InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
-        )
+        );
+
+        debug!("FindMotifsRunConfig::from_properties_map: find_motifs_run_config={find_motifs_run_config:?}");
+
+        find_motifs_run_config
     }
 
     fn set_id(&mut self, id:usize) {

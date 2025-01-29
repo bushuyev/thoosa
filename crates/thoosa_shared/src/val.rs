@@ -64,6 +64,18 @@ impl NamedRange {
     pub fn new(name: &str, range: Range<Val>, step: (Val, u32)) -> Self {
         Self { name:name.into(), range, step }
     }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn range(&self) -> &Range<Val> {
+        &self.range
+    }
+
+    pub fn step(&self) -> &(Val, u32) {
+        &self.step
+    }
 }
 //
 // impl From<(&str, u32)> for NamedVal {
@@ -264,16 +276,16 @@ impl TryFrom<&Val> for f32 {
     }
 }
 
-impl TryFrom<&Val> for &str {
+impl TryFrom<&Val> for String {
     type Error = ThoosaError;
 
-    fn try_from(value: &Val) -> Result<&'static str, ThoosaError> {
+    fn try_from(value: &Val) -> Result<String, ThoosaError> {
         match value {
+            Val::Str(v) => Ok(v.clone()), // Return a string slice with the correct lifetime
             v => v.try_into().map_err(|e|ThoosaError::new(format!("e={e:?}")))
         }
     }
 }
-
 impl TryFrom<Val> for usize {
     type Error = ThoosaError;
 

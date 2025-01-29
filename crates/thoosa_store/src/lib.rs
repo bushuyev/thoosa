@@ -1101,7 +1101,7 @@ impl Store for SqlStore {
         };
 
         t.commit()?;
-        debug!("list_run_params: run_id={run_id} result={result:?}");
+        debug!("list_run_config_values: run_id={run_id} result={result:?}");
 
         Ok(result)
     }

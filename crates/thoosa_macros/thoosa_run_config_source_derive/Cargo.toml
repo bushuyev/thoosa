@@ -11,4 +11,5 @@ syn = {version="2.0.96", features=["extra-traits", "printing"]}
 quote = "1.0.38"
 #paste = "1.0.6"
 convert_case = "0.7.1"
+thoosa_run_config_source = {path = "../thoosa_run_config_source" }
 proc-macro2 = { version = "1.0.93" }
