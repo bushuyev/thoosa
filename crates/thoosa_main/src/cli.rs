@@ -1105,23 +1105,23 @@ pub fn run_train_label_nodes(
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
     debug!("run_train_label_nodes: run_configs={run_configs:?} resource_config={resource_config:?} cuda_mem={:?}", cuda_mem());
 
-    let (train_resource_keys, valid_resource_keys) = resource_config.to_resources(store)?;
+    let (train_labels_resource_keys, valid_label_resource_keys) = resource_config.to_resources(store)?;
 
     debug!(
         "run_train_label_nodes: train_resource_keys={:?} valid_resource_keys={:?}",
-        train_resource_keys
+        train_labels_resource_keys
             .iter()
             .map(|(label, keys)| (label, keys.len()))
             .collect::<Vec<_>>(),
-        valid_resource_keys
+        valid_label_resource_keys
             .iter()
             .map(|(label, keys)| (label, keys.len()))
             .collect::<Vec<_>>()
     );
-    trace!("run_train_label_nodes: train_resource_keys={train_resource_keys:?}");
-    trace!("run_train_label_nodes: valid_resource_keys={valid_resource_keys:?}");
+    trace!("run_train_label_nodes: train_labels_resource_keys={train_labels_resource_keys:?}");
+    trace!("run_train_label_nodes: valid_label_resource_keys={valid_label_resource_keys:?}");
 
-    let valid_datasets_map = valid_resource_keys
+    let valid_datasets_map = valid_label_resource_keys
         .into_iter()
         .fold(HashMap::new(), |mut a, v| {
             assert!(v.1.len() > 0, "no resources for {}", v.0);
@@ -1132,7 +1132,7 @@ pub fn run_train_label_nodes(
     let select_motifs_for_label_run_ids: &Vec<usize> =
         select_motifs_for_label_run_ids.expect("select_motifs_for_label_run_ids");
 
-    let chunk_len = max(1, train_resource_keys.len() / devices.len());
+    let chunk_len = max(1, train_labels_resource_keys.len() / devices.len());
 
     debug!("run_train_label_nodes: select_motifs_for_label_run_ids={select_motifs_for_label_run_ids:?} run_configs={run_configs:?} devices={devices:?} chunk_len={chunk_len}");
 
@@ -1142,10 +1142,10 @@ pub fn run_train_label_nodes(
     let devices__resources = devices
         .into_iter()
         .cycle()
-        .zip(train_resource_keys.chunks(chunk_len).into_iter())
+        .zip(train_labels_resource_keys.chunks(chunk_len).into_iter())
         .collect::<Vec<(Device, &[(String, Vec<Resource>)])>>();
 
-    let run_configs_rc = Arc::new(run_configs); //.into_iter().map(|c|Arc::new(c)).collect::<Vec<_>>());
+    let run_configs_arc = Arc::new(run_configs); //.into_iter().map(|c|Arc::new(c)).collect::<Vec<_>>());
     let select_motifs_for_label_run_ids__channels_motifs_models = select_motifs_for_label_run_ids
         .iter()
         .map(|select_motifs_for_label_run_id| {
@@ -1189,7 +1189,7 @@ pub fn run_train_label_nodes(
         .into_par_iter()
         .map(move |(device_i, train_resource_keys_chunk)| {
 
-            let run_configs_cl = Arc::clone(&run_configs_rc);
+            let run_configs_arc = Arc::clone(&run_configs_arc);
             let valid_datasets_map_clone = valid_datasets_map.clone(); //TODO
 
 
@@ -1213,7 +1213,7 @@ pub fn run_train_label_nodes(
                 debug!("run_train_label_nodes: label={label} \ntrain_labels_resource_rc[0]={:?} \ntrain_labels_resource_rc[1]={:?} cuda_mem={:?}", train_labels_resource_rc[0], train_labels_resource_rc[1], cuda_mem());
 
 
-                let run_configs_cl = Arc::clone(&run_configs_cl);
+                let run_configs_arc = Arc::clone(&run_configs_arc);
 
                 select_motifs_for_label_run_ids__channels_motifs_models.iter().flat_map(move |(select_motifs_for_label_run_id, channels_motifs_models)| {
                     let find_motifs_for_label_run_ids = store.lock().get_input_run_ids(*select_motifs_for_label_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_for_label_run_id={select_motifs_for_label_run_id} not found").as_str());
@@ -1241,8 +1241,8 @@ pub fn run_train_label_nodes(
                     let train_labels_resources_clone = Rc::clone(&train_labels_resource_rc);
                     let valid_labels_resources_clone = Rc::clone(&valid_labels_resources_rc);
 
-                    let mut results = Vec::with_capacity(run_configs_cl.len());
-                    for run_config in run_configs_cl.iter() {
+                    let mut results = Vec::with_capacity(run_configs_arc.len());
+                    for run_config in run_configs_arc.iter() {
                         debug!("run_train_label_nodes: run_config={run_config:?}");
 
                         match run_opt_train_label_nodes(
@@ -2145,8 +2145,8 @@ mod cli_tests {
         // log::set_max_level(Warn);
         let max_y = 1f32;
 
-        let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (20, 50, 20, 10, 10);
-        // let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (10, 10, 3, 1, 3);
+        // let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (20, 50, 20, 10, 10);
+        let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (10, 10, 3, 1, 3);
         // debug!("test_run_step: tensors_per_label={tensors_per_label}, cycles={cycles}, opt_max_evals={opt_max_evals}, opt_n_init={opt_n_init}, motif_batch_size={motif_batch_size}");
 
         fn _saw(n: i64) -> Vec<f32> {
@@ -2479,7 +2479,7 @@ mod cli_tests {
     #[test]
     fn test_cli_train_label_nets() -> Result<(), ThoosaError> {
         let cli = Cli::parse_from([
-             "",
+            "",
             "--term-logger-level", "INFO",
             "--write-logger-level", "DEBUG",
             "--ws-path", "/tmp/ws_test/",

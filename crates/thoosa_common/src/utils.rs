@@ -537,12 +537,13 @@ pub mod tests {
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::{IndexOp, Tensor};
-    use thoosa_run_config_source::{GridConfig, OptConfig, RunConfigSource, RunConfigs, VecConfig};
+    use thoosa_run_config_source::{GridConfig, OptConfig, ResourceConfigSource, RunConfigSource, RunConfigs, VecConfig};
     use thoosa_run_config_source_derive::RunConfigSource;
     use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::ResourcesConfig;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
+    use thoosa_shared::val::Val::UInt;
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
@@ -727,6 +728,7 @@ pub mod tests {
         set_max_level(Trace);
         use thoosa_shared::parse_range_or_value;
         use thoosa_shared::parse_resources;
+        use thoosa_run_config_source::*;
 
 
         #[derive(Parser, Clone)]
@@ -742,6 +744,19 @@ pub mod tests {
         #[derive(Debug, Subcommand, Clone)]
         enum Commands {
             TestCommand(TestCommandArgs),
+        }
+
+
+
+        #[derive(Debug, Args, Clone, RunConfigSource)]//
+        struct CommonTestArgs {
+            #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "10")]
+            #[run_config]
+            pub batch_size: RangeOrValue<u32>,
+
+            #[arg(long, value_parser=parse_range_or_value::<f64>)]
+            #[run_config]
+            pub lr: RangeOrValue<f64>,
         }
 
         #[derive(Debug, Args, Clone, RunConfigSource)]//
@@ -762,7 +777,19 @@ pub mod tests {
             some_const_param:RangeOrValue<u32>,
 
             #[command(subcommand)]
-            input_filter: InputFilter
+            input_filter: InputFilter,
+
+            #[command(flatten)]
+            common: CommonTestArgs
+        }
+
+        impl ResourceConfigSource<Simple> for TestCommandArgs{
+            fn resource_config(&self) -> Simple {
+                Simple::new(
+                    self.resources.clone()
+                )
+
+            }
         }
 
         #[derive(Debug, Subcommand, Clone)]
@@ -776,9 +803,7 @@ pub mod tests {
             kernel:RangeOrValue<usize>
         }
 
-
-
-        let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--resources", "list:123",  "--some-const-param", "77", "--window", "10..20:5", "--step", "1..10", "conv1", "--kernel", "10"]);
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--resources", "list:123", "--lr", "0.01", "--some-const-param", "77", "--window", "10..20:5", "--step", "1..10", "conv1", "--kernel", "10"]);
         debug!("cli.some_field={:?}", cli.some_field);
 
         assert_eq!("zzz", cli.some_field);
@@ -788,23 +813,37 @@ pub mod tests {
             panic!("no test command");
         };
 
+        let resources = &test_command_args.resource_config();
         let run_config_source = test_command_args.to_run_configs();
 
         // let run_config_source = test_command_args.to_run_configs();
         debug!("cmd.to_run_config={run_config_source:?}");
 
-        run_opt(run_config_source);
+        assert_eq!("some_const_param", run_config_source.const_config.configs[0].name());
+        assert_eq!(&UInt(77), run_config_source.const_config.configs[0].val());
 
+        assert_eq!(1, run_config_source.grid_config.as_ref().expect("grid_config").configs.len());
+        assert_eq!("window", run_config_source.grid_config.as_ref().expect("grid_config").configs[0].name());
+        assert_eq!(&(Val::Real(10.0)..Val::Real(20.0)), run_config_source.grid_config.as_ref().expect("grid_config").configs[0].range());
+        assert_eq!(&((Val::Real(5.0), 1)), run_config_source.grid_config.as_ref().expect("grid_config").configs[0].step());
 
+        assert_eq!(1, run_config_source.opt_config.as_ref().expect("opt_config").configs.len());
+        assert_eq!("step", run_config_source.opt_config.as_ref().expect("opt_config").configs[0].name());
+        assert_eq!(Hyperparameter::UniformInt { name: "step".to_string(), lower:1, upper:10}, run_config_source.opt_config.as_ref().expect("opt_config").configs[0]);
+
+        run_step_2(run_config_source, resources);
 
         fn my_func(p:TestCommandRunConfig){
             debug!("test_param_ranges: my_func: p={p:?}");
         }
 
-        fn run_opt(run_config_source: RunConfigs<VecConfig<NamedVal>, VecConfig<NamedRange>, VecConfig<Hyperparameter>>) {
+        fn run_step_2<R>(
+            run_config_source: RunConfigs<VecConfig<NamedVal>, VecConfig<NamedRange>, VecConfig<Hyperparameter>>,
+            resource_config:&R
+        ) where
+            R: ResourcesConfig
+        {
             let const_config = run_config_source.const_config;
-            assert_eq!(<(&str, Val) as Into<NamedVal>>::into(("some_const_param", Val::UInt(77))), const_config.configs[0]);
-
 
             let const_vals = const_config.configs;
 
@@ -820,7 +859,7 @@ pub mod tests {
             let opt_config: Option<ConfigurationSpace> = run_config_source.opt_config.map(|opt_cfg| opt_cfg.opt().into());
 
             for grid_vals in &grid_configs {
-                if let Some(config_space) = opt_config.clone() {
+                if let Some(config_space) = opt_config.as_ref() {
                     let mut optimizer = TPEOptimizer::new(
                         |opt_vals| {
                             debug!("const_configs={const_vals:?} grid_vals={grid_vals:?} opt_vals={opt_vals:?}");
@@ -830,7 +869,7 @@ pub mod tests {
                             my_func(all_configs.as_slice().into());
                             0.0
                         },
-                        config_space,
+                        config_space.clone(),
                         10,
                         3
                     );
