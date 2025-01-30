@@ -78,8 +78,6 @@ impl OptConfig for VecConfig<Hyperparameter> {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub struct FieldMeta {
     pub name: String,

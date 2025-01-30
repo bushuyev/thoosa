@@ -1,13 +1,13 @@
-use std::{fs, mem, ptr};
 use std::cell::{RefCell, RefMut};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt::{Debug, Display};
 use std::io::Write;
 use std::iter::Map;
-use std::ops::{Add, Div, Mul, Range};
 use std::ops::ControlFlow::Continue;
+use std::ops::{Add, Div, Mul, Range};
 use std::time::Instant;
+use std::{fs, mem, ptr};
 
 use chrono::SecondsFormat;
 use cudarc::driver::CudaDevice;
@@ -18,20 +18,21 @@ use plotters::drawing::IntoDrawingArea;
 use plotters::element::PathElement;
 use plotters::prelude::*;
 use rand::prelude::ThreadRng;
-use rand::Rng;
 use rand::thread_rng;
-use tch::{Device, IndexOp, Kind, TchError, Tensor};
-use tch::display::PrinterOptions;
-use tch::Kind::Float;
-use tch::kind::FLOAT_CPU;
-use tch::nn::{Module, VarStore};
-use tch::nn::Optimizer;
-use torch_sys::*;
-use torch_sys::cuda::atc_cuda_device_count;
+use rand::Rng;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
+use tch::display::PrinterOptions;
+use tch::kind::FLOAT_CPU;
+use tch::nn::Optimizer;
+use tch::nn::{Module, VarStore};
 use tch::Device::{Cpu, Cuda};
+use tch::Kind::Float;
+use tch::{Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_shared::{cdt, gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
+use torch_sys::cuda::atc_cuda_device_count;
+use torch_sys::*;
+use thoosa_run_config_args::ThoosaArgsCommand;
 
 use crate::my_tch::{LossFp, ThoModule};
 use thoosa_shared::opt_rng::opt_rnd;
@@ -525,30 +526,33 @@ impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::collections::{HashMap, HashSet};
-    use std::{fs, mem};
-    use std::path::PathBuf;
-    use std::time::Instant;
-    use clap::{arg, command, Args, Parser, Subcommand};
-    use cudarc::driver::CudaDevice;
-    use log::{debug, error, info, set_max_level};
-    use log::LevelFilter::{Info, Trace};
-    use tch::Device::{Cpu, Cuda};
-    use tch::Kind::Float;
-    use tch::kind::FLOAT_CPU;
-    use tch::{IndexOp, Tensor};
-    use thoosa_run_config_source::{GridConfig, OptConfig, ResourceConfigSource, RunConfigSource, RunConfigs, VecConfig};
-    use thoosa_run_config_source_derive::RunConfigSource;
-    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
-    use thoosa_shared::hyperparameter::Hyperparameter;
-    use thoosa_shared::resource::ResourcesConfig;
-    use thoosa_shared::val::{NamedRange, NamedVal, Val};
-    use thoosa_shared::val::Val::UInt;
+    use clap::{Arg, Command};
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
-    use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore};
+    use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore, TrainNodesValues};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
+    use clap::{arg, command, Args, Parser, Subcommand};
+    use cudarc::driver::CudaDevice;
+    use log::LevelFilter::{Info, Trace};
+    use log::{debug, error, info, set_max_level};
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
+    use std::time::Instant;
+    use std::{fs, mem};
+    use tch::kind::FLOAT_CPU;
+    use tch::Device::{Cpu, Cuda};
+    use tch::Kind::Float;
+    use tch::{IndexOp, Tensor};
+    use thoosa_run_config_args::{ThoosaArgs, ThoosaArgsCommand};
+    use thoosa_run_config_args_derive::{ThoosaArgs, ThoosaArgsCommand};
+    use thoosa_run_config_source::{GridConfig, OptConfig, ResourceConfigSource, RunConfigSource, RunConfigs, VecConfig};
+    use thoosa_run_config_source_derive::RunConfigSource;
+    use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::resource::ResourcesConfig;
+    use thoosa_shared::val::Val::UInt;
+    use thoosa_shared::val::{NamedRange, NamedVal, Val};
+    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
 
     #[ctor::ctor]
     fn init() {
@@ -720,6 +724,290 @@ pub mod tests {
         //TODO devices
 
         debug!("processed_classes={:?}", processed_classes);
+
+    }
+
+    #[test]
+    fn test_run_configs(){
+
+        pub struct TrainConfig {
+            lr: f64,
+            num_layers: u32,
+        }
+
+        struct MaxPaddingNet {
+            num_layers: u32,
+        }
+
+        struct FixedNumSlicesNet{
+            slices_len: u32,
+        }
+
+        enum NetType {
+            MaxPaddingNet(MaxPaddingNet),
+            FixedNumSlicesNet(FixedNumSlicesNet)
+        }
+
+        struct TrainLabelNodeRunConfig {
+            train_config: TrainConfig,
+            net_type: NetType
+        }
+
+        impl TrainLabelNodeRunConfig {
+
+        }
+
+        impl From<TrainConfig> for &[NamedVal] {
+            fn from(value: TrainConfig) -> Self {
+                &[]
+            }
+        }
+
+        impl From<TrainLabelNodeRunConfig> for &[NamedVal] {
+            fn from(value: TrainLabelNodeRunConfig) -> Self {
+                &[]
+            }
+        }
+
+        struct GridRunConfigSource<CP, GP> {
+            const_params:CP,
+            grid_params:GP
+        }
+
+        impl GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
+
+            pub fn new(const_params:Vec<NamedVal>, grid_params:Vec<NamedRange>) -> Self {
+                Self {
+                    const_params,
+                    grid_params
+                }
+            }
+
+            fn const_params(&self) -> Vec<NamedVal> {
+                vec![]
+            }
+
+            fn grid_params(&self) -> Vec<NamedRange> {
+                vec![]
+            }
+
+            fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
+                vec![]
+            }
+
+        }
+
+        struct OptRunConfigSource<CP, GP, OP> {
+            grid_run_config_source: GridRunConfigSource<CP, GP>,
+            opt_params:OP
+        }
+
+        impl OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>  {
+
+            pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>>, opt_params:Vec<Hyperparameter>) -> Self {
+                Self {
+                    grid_run_config_source,
+                    opt_params
+                }
+            }
+
+            fn opt_params(&self) -> Vec<Hyperparameter> {
+                vec![]
+            }
+
+            fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
+                vec![]
+            }
+
+            pub fn grid_run_config_source(&self) -> &GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
+                &self.grid_run_config_source
+            }
+        }
+
+        let run_config_source = OptRunConfigSource::new(
+            GridRunConfigSource::new(
+            vec![],
+            vec![],
+            ),
+            vec![],
+        );
+
+        let const_vals = run_config_source.grid_run_config_source().const_params();
+        for grid_vals in run_config_source.grid_to_vals(run_config_source.grid_run_config_source().grid_params()) {
+
+
+            let mut opt = TPEOptimizer::new(|opt_vals| {
+
+                debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
+                0.0
+            },
+            ConfigurationSpace::new(run_config_source.opt_params()),
+            10,
+            3,
+            );
+
+            let best_config = opt.optimize();
+
+            debug!("best_config={:?}", best_config);
+        }
+
+    }
+
+    #[test]
+    fn test_z(){
+        fn some_args()->Vec<impl Into<Arg>> {
+            vec![
+                arg!(-x --xxx "xxx xxx xxx").action(clap::ArgAction::SetTrue)
+            ]
+        }
+
+        let mut train_cmd = clap::Command::new("test")
+            .about("does testing things")
+            .arg(
+                arg!(-l --list "lists test values").action(clap::ArgAction::SetTrue)
+            )
+            .args(some_args());
+
+
+
+    }
+
+    #[test]
+    fn test_run_config_args(){
+
+        #[derive(ThoosaArgs)]
+        struct SomeSubTrainConfig {
+            ///learning rate
+            lr: f64,
+        }
+
+        #[derive(ThoosaArgs)]
+        struct CommonTrainConfig {
+
+            ///some beta
+            beta: f64,
+
+            #[run_config]
+            sub_config:SomeSubTrainConfig
+        }
+
+        enum NetType {
+            NetOne(NetOneConfig),
+            NetTwo(NetTwoConfig)
+        }
+
+        struct NetOneConfig {
+            ///number of aaa
+            num_aaa: u32,
+        }
+
+        struct NetTwoConfig {
+            ///number of bbb
+            num_bbb: u32,
+        }
+
+        #[derive(ThoosaArgsCommand)]
+        struct TrainLabelRunConfig {
+
+            #[run_config]
+            common_config:CommonTrainConfig,
+            net_type: NetType
+
+        }
+
+        // impl TrainLabelRunConfig {
+        //     pub fn new_one(lr: f64, beta: f64, num_aaa: u32) -> Self {
+        //         Self {
+        //             common_config: CommonTrainConfig {
+        //                 lr,
+        //                 beta,
+        //             },
+        //             net_type: NetType::NetOne(NetOneConfig {
+        //                 num_aaa,
+        //             })
+        //         }
+        //     }
+        //     pub fn new_two(lr: f64, beta: f64, num_bbb: u32) -> Self {
+        //         Self {
+        //             common_config: CommonTrainConfig {
+        //                 lr,
+        //                 beta,
+        //             },
+        //             net_type: NetType::NetTwo(NetTwoConfig {
+        //                 num_bbb,
+        //             })
+        //         }
+        //     }
+        // }
+
+        let train_cmd = TrainLabelRunConfig::command();
+
+        debug!("test_run_config_args: config={train_cmd:?}");
+
+        #[derive(Parser, Clone)]
+        #[command(version, about, long_about = None)]
+        struct TestCli {
+            #[arg(long)]
+            some_field: String,
+
+            #[command(subcommand)]
+            command: Commands,
+        }
+
+        #[derive(Debug, Subcommand, Clone)]
+        enum Commands {
+            StandardCommand {number:u32},
+            #[command(external_subcommand)]
+            TrainTestNet(Vec<String>),
+        }
+
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-command", "--lr", "0.01..0.03", "--beta", "0.3"]);
+
+        match &cli.command {
+            Commands::StandardCommand { number } => {
+                println!("Standard command received with number: {}", number);
+            }
+            Commands::TrainTestNet(args) => {
+                // Manually build the subcommand using the builder API
+                let matches = TrainLabelRunConfig::command().try_get_matches_from(args);
+
+                match matches {
+                    Ok(m) => {
+
+                        if let Some(input) = m.get_one::<RangeOrValue<f64>>("lr") {
+                            println!("lr={:?}", input);
+                        }
+                        if let Some(input) = m.get_one::<RangeOrValue<f64>>("beta") {
+                            println!("beta={:?}", input);
+                        }
+                        // for id in m.ids() {
+                        //     let arg_name = id.as_str();
+                        //
+                        //     if let Some(value) = m.get_one::<RangeOrValue<_>>(arg_name) {
+                        //         println!("arg_name={arg_name} value={:?}", value);
+                        //
+                        //         // Try parsing as f64
+                        //         // if let Ok(parsed) = value.parse::<f64>() {
+                        //         //     println!("{} = {} (f64)", arg_name, parsed);
+                        //         // }
+                        //         // // Try parsing as u32
+                        //         // else if let Ok(parsed) = value.parse::<u32>() {
+                        //         //     println!("{} = {} (u32)", arg_name, parsed);
+                        //         // }
+                        //         // // Fallback as string
+                        //         // else {
+                        //         //     println!("{} = {} (string)", arg_name, value);
+                        //         // }
+                        //     }
+                        // }
+
+                    }
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+
+
+            }
+        }
 
     }
 

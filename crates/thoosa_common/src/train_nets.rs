@@ -135,13 +135,16 @@ impl TrainLabelNodeRunConfig {
 
 impl RunConfig for TrainLabelNodeRunConfig {
     fn to_properties_map(&self) -> HashMap<String, Val> {
-        // let mut map = HashMap::from([
-        //     ("FindMotifsRunConfig.step".into(), UInt(self.step)),
-        //     ("FindMotifsRunConfig.window".into(), UInt(self.window)),
-        //     ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
-        //     ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
-        // ]);
-        todo!()
+        match &self.run_config_or_opt_space {
+            ValuesOrOptSpace::Values(values) => {
+                // values.to_properties_map()
+                todo!()
+            },
+            ValuesOrOptSpace::OptSpace { .. } => {
+                todo!()
+            }
+        }
+
     }
 
     fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
