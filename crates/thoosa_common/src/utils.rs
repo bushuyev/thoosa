@@ -526,7 +526,7 @@ impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
 
 #[cfg(test)]
 pub mod tests {
-    use clap::{Arg, Command};
+    use clap::{Arg, ArgAction, Command};
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
@@ -861,14 +861,65 @@ pub mod tests {
             ]
         }
 
-        let mut train_cmd = clap::Command::new("test")
+        fn some_subcommands()->Vec<impl Into<Arg>> {
+            vec![
+                arg!(-x --xxx "xxx xxx xxx").action(clap::ArgAction::SetTrue)
+            ]
+        }
+
+        let option_a_sub_cmd = Command::new("option_a")
             .about("does testing things")
             .arg(
-                arg!(-l --list "lists test values").action(clap::ArgAction::SetTrue)
+                Arg::new("field_a")
+                    .long("field-a")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+        let option_b_sub_cmd = Command::new("option_b")
+            .about("does testing things")
+            .arg(
+                Arg::new("field_b")
+                    .long("field-b")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+        let train_cmd = Command::new("test")
+            .about("does testing things")
+            .arg(
+                Arg::new("some_field")
+                    .long("some-field")
+                    .action(ArgAction::Set),
             )
-            .args(some_args());
+            .subcommands(vec![
+                option_a_sub_cmd,
+                option_b_sub_cmd,
+            ])
+            .subcommand_required(true) ;
 
 
+        let matches = train_cmd.get_matches_from(["test_cli", "--some-field", "zzz", "option_a", "--field-a", "10"]);//"option_b", "--field-b", "20"
+
+        // Extract the value
+        let some_field = matches.get_one::<String>("some_field").unwrap();
+        for id in matches.ids(){
+            println!("id={:?}", id);
+
+        }
+        if let Some(option_a_match) = matches.subcommand_matches("option_a") {
+            for id in option_a_match.ids() {
+                println!("option_a_match: id={:?}", id);
+            }
+        }
+        if let Some(option_b_match) = matches.subcommand_matches("option_b") {
+            for id in option_b_match.ids() {
+                println!("option_b_match: id={:?}", id);
+            }
+        }
+        assert_eq!(some_field, "zzz");
 
     }
 
@@ -891,16 +942,19 @@ pub mod tests {
             sub_config:SomeSubTrainConfig
         }
 
+        #[derive(ThoosaArgs)]
         enum NetType {
             NetOne(NetOneConfig),
             NetTwo(NetTwoConfig)
         }
 
+        #[derive(ThoosaArgs)]
         struct NetOneConfig {
             ///number of aaa
             num_aaa: u32,
         }
 
+        #[derive(ThoosaArgs)]
         struct NetTwoConfig {
             ///number of bbb
             num_bbb: u32,
@@ -911,6 +965,8 @@ pub mod tests {
 
             #[run_config]
             common_config:CommonTrainConfig,
+
+            #[run_config]
             net_type: NetType
 
         }
@@ -961,7 +1017,8 @@ pub mod tests {
             TrainTestNet(Vec<String>),
         }
 
-        let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-command", "--lr", "0.01..0.03", "--beta", "0.3"]);
+        let cli = TestCli::parse_from(["", "--some-field", "zzz"]);
+        // let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-command", "--sub-config-lr", "0.01..0.03", "--beta", "0.3"]);
 
         match &cli.command {
             Commands::StandardCommand { number } => {
@@ -974,32 +1031,18 @@ pub mod tests {
                 match matches {
                     Ok(m) => {
 
-                        if let Some(input) = m.get_one::<RangeOrValue<f64>>("lr") {
-                            println!("lr={:?}", input);
+                        for id in m.ids() {
+                            let arg_name = id.as_str();
+                            println!("arg_name={}", arg_name);
+
+                        }
+
+                        if let Some(input) = m.get_one::<RangeOrValue<f64>>("sub-config-lr") {
+                            println!("sub-config-lr={:?}", input);
                         }
                         if let Some(input) = m.get_one::<RangeOrValue<f64>>("beta") {
                             println!("beta={:?}", input);
                         }
-                        // for id in m.ids() {
-                        //     let arg_name = id.as_str();
-                        //
-                        //     if let Some(value) = m.get_one::<RangeOrValue<_>>(arg_name) {
-                        //         println!("arg_name={arg_name} value={:?}", value);
-                        //
-                        //         // Try parsing as f64
-                        //         // if let Ok(parsed) = value.parse::<f64>() {
-                        //         //     println!("{} = {} (f64)", arg_name, parsed);
-                        //         // }
-                        //         // // Try parsing as u32
-                        //         // else if let Ok(parsed) = value.parse::<u32>() {
-                        //         //     println!("{} = {} (u32)", arg_name, parsed);
-                        //         // }
-                        //         // // Fallback as string
-                        //         // else {
-                        //         //     println!("{} = {} (string)", arg_name, value);
-                        //         // }
-                        //     }
-                        // }
 
                     }
                     Err(e) => eprintln!("Error: {}", e),

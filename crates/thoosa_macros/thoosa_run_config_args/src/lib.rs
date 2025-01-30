@@ -9,7 +9,7 @@ pub trait ThoosaArgsCommand {
 }
 
 pub trait ThoosaArgs {
-    fn args()->Vec<impl Into<Arg>>;
+    fn args(prefix: Option<&str>) -> (Option<Vec<impl Into<Arg>>>, Option<Vec<Command>>);
 }
 
 #[cfg(test)]
