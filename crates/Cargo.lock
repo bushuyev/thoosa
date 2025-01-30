@@ -2783,6 +2783,8 @@ dependencies = [
  "simplelog",
  "statrs",
  "tch",
+ "thoosa_run_config_args",
+ "thoosa_run_config_args_derive",
  "thoosa_run_config_source",
  "thoosa_run_config_source_derive",
  "thoosa_shared",
@@ -2820,6 +2822,14 @@ dependencies = [
  "thoosa_shared",
  "thoosa_store",
  "torch-sys",
+]
+
+[[package]]
+name = "thoosa_macros_utils"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "syn 2.0.96",
 ]
 
 [[package]]
@@ -2882,6 +2892,27 @@ dependencies = [
  "thoosa_shared",
  "thoosa_store",
  "torch-sys",
+]
+
+[[package]]
+name = "thoosa_run_config_args"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "thoosa_shared",
+]
+
+[[package]]
+name = "thoosa_run_config_args_derive"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "convert_case",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.96",
+ "thoosa_macros_utils",
+ "thoosa_run_config_args",
 ]
 
 [[package]]

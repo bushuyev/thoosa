@@ -1,0 +1,18 @@
+[package]
+name = "thoosa_run_config_args_derive"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+
+#paste = "1.0.6"
+convert_case = "0.7.1"
+thoosa_run_config_args = {path = "../thoosa_run_config_args" }
+thoosa_macros_utils = {path = "../thoosa_macros_utils" }
+proc-macro2 = { version = "1.0.93" }
+clap.workspace = true
