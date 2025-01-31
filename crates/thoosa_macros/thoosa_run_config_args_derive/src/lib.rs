@@ -21,7 +21,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         let field_ident = field.ident.as_ref().unwrap();
                         let field_name = field_ident.to_string().replace("_", "-");
                         let field_type = field.ty.clone();
-                        eprintln!("field_name={field_name:?} field_type={field_type:?}");
+                        // eprintln!("field_name={field_name:?} field_type={field_type:?}");
 
                         let dynamic_long = quote! {
                              let dynamic_long = match prefix {
@@ -73,14 +73,35 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             }
         },
         syn::Data::Enum(data_enum) => {
-            eprintln!("data_struct={data_enum:?}");
+            // eprintln!("data_struct={data_enum:?}");
 
-            data_enum.variants.iter().map(|v|{
-                eprintln!("variant={v:?}");
+            data_enum.variants.iter().map(|variant|{
+                // eprintln!("variant={variant:?} ");
+
+                let variant_name = &variant.ident.to_string();
+                let struct_name  = if let syn::Fields::Unnamed(syn::FieldsUnnamed { unnamed, .. }) = &variant.fields {
+                    if let Some(syn::Field { ty: syn::Type::Path(type_path), .. }) = unnamed.first() {
+                        type_path.path.segments.last().map(|segment| &segment.ident).expect("ident")
+                    } else {
+                        panic!("can't parse subcommand ident")
+                    }
+                } else {
+                    panic!("can't parse subcommand")
+                };
+
+                eprintln!("struct_name={struct_name:?} ");
 
                 quote! {
 
-                    let command = clap::Command::new("test");
+                    let mut command = clap::Command::new(#variant_name);
+
+                    let (sub_args_op, commands_op) = #struct_name::args(None);
+                    if let Some(sub_args) = sub_args_op {
+                        command = command.args(sub_args.into_iter().map(|v|v.into()));
+                    }
+                    if let Some(sub_commands) = commands_op {
+                        command = command.subcommands(sub_commands);
+                    }
 
                     commands.push(command);
                 }
@@ -142,7 +163,7 @@ pub fn thoosa_args_command_derive(input: TokenStream) -> TokenStream {
                         let field_ident = field.ident.as_ref().unwrap();
                         let field_name = field_ident.to_string().replace("_", "-");
                         let field_type = field.ty.clone();
-                        eprintln!("field_name={field_name:?} field_type={field_type:?}");
+                        // eprintln!("field_name={field_name:?} field_type={field_type:?}");
 
                         if is_primitive(&field_type) {
                             let descr = comment(&field, &field_name);
@@ -159,7 +180,7 @@ pub fn thoosa_args_command_derive(input: TokenStream) -> TokenStream {
                             }
                         } else if field.attrs.iter().any(|attr|attr.path().is_ident("run_config")) {
                             let field_type = field.ty.clone();
-                            eprintln!("run_config field={field:?} field_type={field_type:?}");
+                            // eprintln!("run_config field={field:?} field_type={field_type:?}");
                             quote! {
 
                                 // command = command.args(#field_type::args(None));
@@ -168,7 +189,7 @@ pub fn thoosa_args_command_derive(input: TokenStream) -> TokenStream {
                                 if let Some(sub_args) = sub_args_op {
                                     command = command.args(sub_args);
                                 }
-                                 if let Some(sub_commands) = commands_op {
+                                if let Some(sub_commands) = commands_op {
                                     command = command.subcommands(sub_commands);
                                 }
                             }
@@ -180,7 +201,7 @@ pub fn thoosa_args_command_derive(input: TokenStream) -> TokenStream {
                     quote! { #(#args_for_fields)* }
                 },
                 _ => {
-                    println!("unnamed fields");
+                    eprintln!("unnamed fields");
                     // If struct has unnamed fields or other forms, do nothing
                     quote! {}
                 }
@@ -221,12 +242,4 @@ fn comment(field: &&Field, field_name: &String) -> String {
         }
     }
     descr
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_it(){
-
-    }
 }
