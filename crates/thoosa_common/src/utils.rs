@@ -929,6 +929,7 @@ pub mod tests {
         #[derive(ThoosaArgs)]
         struct SomeSubTrainConfig {
             ///learning rate
+            #[run_config]
             lr: f64,
         }
 
@@ -936,6 +937,7 @@ pub mod tests {
         struct CommonTrainConfig {
 
             ///some beta
+            #[run_config]
             beta: f64,
 
             #[run_config]
@@ -951,12 +953,14 @@ pub mod tests {
         #[derive(ThoosaArgs)]
         struct NetOneConfig {
             ///number of aaa
+            #[run_config]
             num_aaa: u32,
         }
 
         #[derive(ThoosaArgs)]
         struct NetTwoConfig {
             ///number of bbb
+            #[run_config]
             num_bbb: u32,
         }
 
@@ -1017,15 +1021,14 @@ pub mod tests {
             TrainTestNet(Vec<String>),
         }
 
-        let cli = TestCli::parse_from(["", "--some-field", "zzz"]);
-        // let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-command", "--sub-config-lr", "0.01..0.03", "--beta", "0.3"]);
+        // let cli = TestCli::parse_from(["", "--some-field", "zzz"]);
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-net",  "--sub-config-lr", "0.01..0.03", "--beta", "0.3", "NetOne", "--num-aaa", "111"]);
+        // let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-net",  "--sub-config-lr", "0.01..0.03", "--beta", "0.3", "NetTwo", "--num-bbb", "222"]);
 
         match &cli.command {
-            Commands::StandardCommand { number } => {
-                println!("Standard command received with number: {}", number);
-            }
+
             Commands::TrainTestNet(args) => {
-                // Manually build the subcommand using the builder API
+                println!("args={args:?}");
                 let matches = TrainLabelRunConfig::command().try_get_matches_from(args);
 
                 match matches {
@@ -1034,21 +1037,63 @@ pub mod tests {
                         for id in m.ids() {
                             let arg_name = id.as_str();
                             println!("arg_name={}", arg_name);
-
                         }
 
                         if let Some(input) = m.get_one::<RangeOrValue<f64>>("sub-config-lr") {
                             println!("sub-config-lr={:?}", input);
+                            assert_eq!(&RangeOrValue::Range {range: 0.01..0.03, step:None}, input);
+                        } else {
+                            panic!("sub-config-lr not found");
                         }
+
                         if let Some(input) = m.get_one::<RangeOrValue<f64>>("beta") {
                             println!("beta={:?}", input);
+                            assert_eq!(&RangeOrValue::Value (0.3), input);
+                        } else {
+                            panic!("beta not found");
+                        }
+
+                        if let Some(subcmd_matches) = m.subcommand_matches("NetOne") {
+                            println!("NetOne subcmd_matches={subcmd_matches:?}");
+                            for id in subcmd_matches.ids() {
+                                let arg_name = id.as_str();
+                                println!("NetOne arg_name={}", arg_name);
+
+                            }
+                            if let Some(input) = subcmd_matches.get_one::<RangeOrValue<u32>>("num-aaa") {
+                                println!("num-aaa={:?}", input);
+                                assert_eq!(&RangeOrValue::Value (111), input);
+                            } else {
+                                panic!("num-aaa not found");
+                            }
+
+                        } else if let Some(subcmd_matches) = m.subcommand_matches("NetTwo") {
+                            println!("NetTwo subcmd_matches={subcmd_matches:?}");
+                            for id in subcmd_matches.ids() {
+                                let arg_name = id.as_str();
+                                println!("NetTwo arg_name={}", arg_name);
+
+                            }
+
+                            if let Some(input) = subcmd_matches.get_one::<RangeOrValue<u32>>("num-bbb") {
+                                println!("num-bbb={:?}", input);
+                                assert_eq!(&RangeOrValue::Value (222), input);
+                            } else {
+                                panic!("num-bbb not found");
+                            }
+
+                        } else {
+                            panic!("TrainTestNet not found");
                         }
 
                     }
-                    Err(e) => eprintln!("Error: {}", e),
+                    Err(e) => panic!("Error: {}", e),
                 }
 
 
+            }
+            _ => {
+                panic!("Subcommand not implemented");
             }
         }
 
