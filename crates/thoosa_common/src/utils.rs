@@ -526,10 +526,10 @@ impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
 
 #[cfg(test)]
 pub mod tests {
-    use clap::{Arg, ArgAction, Command};
+    use clap::{Arg, ArgAction, ArgMatches, Command};
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
-    use crate::runs::Simple;
+    use crate::runs::{ConstConfigSource, GridRunConfigSource, OptRunConfigSource, Simple};
     use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore, TrainNodesValues};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
     use clap::{arg, command, Args, Parser, Subcommand};
@@ -546,8 +546,8 @@ pub mod tests {
     use tch::{IndexOp, Tensor};
     use thoosa_run_config_args::{ThoosaArgs, ThoosaArgsCommand};
     use thoosa_run_config_args_derive::{ThoosaArgs, ThoosaArgsCommand};
-    use thoosa_run_config_source::{GridConfig, OptConfig, ResourceConfigSource, RunConfigSource, RunConfigs, VecConfig};
-    use thoosa_run_config_source_derive::RunConfigSource;
+    use thoosa_run_config_source::{XGridConfig, XOptConfig, XResourceConfigSource, XRunConfigSource, XRunConfigs, XVecConfig};
+    use thoosa_run_config_source_derive::XRunConfigSource;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::ResourcesConfig;
     use thoosa_shared::val::Val::UInt;
@@ -769,65 +769,10 @@ pub mod tests {
             }
         }
 
-        struct GridRunConfigSource<CP, GP> {
-            const_params:CP,
-            grid_params:GP
-        }
-
-        impl GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
-
-            pub fn new(const_params:Vec<NamedVal>, grid_params:Vec<NamedRange>) -> Self {
-                Self {
-                    const_params,
-                    grid_params
-                }
-            }
-
-            fn const_params(&self) -> Vec<NamedVal> {
-                vec![]
-            }
-
-            fn grid_params(&self) -> Vec<NamedRange> {
-                vec![]
-            }
-
-            fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
-                vec![]
-            }
-
-        }
-
-        struct OptRunConfigSource<CP, GP, OP> {
-            grid_run_config_source: GridRunConfigSource<CP, GP>,
-            opt_params:OP
-        }
-
-        impl OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>  {
-
-            pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>>, opt_params:Vec<Hyperparameter>) -> Self {
-                Self {
-                    grid_run_config_source,
-                    opt_params
-                }
-            }
-
-            fn opt_params(&self) -> Vec<Hyperparameter> {
-                vec![]
-            }
-
-            fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
-                vec![]
-            }
-
-            pub fn grid_run_config_source(&self) -> &GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
-                &self.grid_run_config_source
-            }
-        }
-
         let run_config_source = OptRunConfigSource::new(
             GridRunConfigSource::new(
-            vec![],
-            vec![],
+                ConstConfigSource::new(vec![]),
+                vec![],
             ),
             vec![],
         );
@@ -926,14 +871,14 @@ pub mod tests {
     #[test]
     fn test_run_config_args(){
 
-        #[derive(ThoosaArgs)]
+        #[derive(ThoosaArgs, Debug)]
         struct SomeSubTrainConfig {
             ///learning rate
             #[run_config]
             lr: f64,
         }
 
-        #[derive(ThoosaArgs)]
+        #[derive(ThoosaArgs, Debug)]
         struct CommonTrainConfig {
 
             ///some beta
@@ -944,27 +889,114 @@ pub mod tests {
             sub_config:SomeSubTrainConfig
         }
 
-        #[derive(ThoosaArgs)]
-        enum NetType {
-            NetOne(NetOneConfig),
-            NetTwo(NetTwoConfig)
+        fn add_range_or_value<'a, V:'a>(name:&'a str, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>)
+            where Val: From<&'a V>,
+                  Hyperparameter: From<(&'a str, &'a std::ops::Range<V>)>{
+
+            match v {
+                RangeOrValue::Range { range, step: step_op } => {
+                    match step_op {
+                        None => {
+                            opt_params.push(
+                                (name, range).into()
+                            );
+                        }
+                        Some((step, mul)) => {
+                            grid_params.push(
+                                NamedRange::new(
+                                    name,
+                                    (&range.start).into()..(&range.end).into(),
+                                    (step.into(), *mul)
+                                )
+                            );
+                        }
+                    }
+                }
+                RangeOrValue::Value(v) => {
+                    const_params.push(NamedVal::from((name, v.into())));
+                }
+            }
         }
 
-        #[derive(ThoosaArgs)]
+        impl CommonTrainConfig {
+
+            pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+
+                if let Some(input) = matches.get_one::<RangeOrValue<f64>>("common-config-sub-config-lr") {
+                    add_range_or_value::<f64>("common-config-sub-config-lr", input, const_params, grid_params, opt_params);
+                } else {
+                    panic!("sub-config-lr not found");
+                }
+
+                if let Some(input) = matches.get_one::<RangeOrValue<f64>>("common-config-beta") {
+                    add_range_or_value::<f64>("common-config-beta", input, const_params, grid_params, opt_params);
+                } else {
+                    panic!("beta not found");
+                }
+            }
+        }
+
+        #[derive(ThoosaArgs, Debug)]
+        enum NetType {
+            #[arg_type(NetOneConfig)]
+            NetOne,
+            #[arg_type(NetTwoConfig)]
+            NetTwo
+        }
+
+        impl NetType {
+            pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+
+                if let Some(subcmd_matches) = matches.subcommand_matches("NetOne") {
+
+                    NetOneConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
+
+                } else if let Some(subcmd_matches) = matches.subcommand_matches("NetTwo") {
+
+                    NetTwoConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
+
+                } else {
+                    panic!("TrainTestNet not found");
+                }
+
+            }
+        }
+
+        #[derive(ThoosaArgs, Debug)]
         struct NetOneConfig {
             ///number of aaa
             #[run_config]
             num_aaa: u32,
         }
 
-        #[derive(ThoosaArgs)]
+        impl NetOneConfig {
+            pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+                if let Some(input) = matches.get_one::<RangeOrValue<u32>>("num-aaa") {
+                    add_range_or_value::<u32>("num-aaa", input, const_params, grid_params, opt_params);
+                } else {
+                    panic!("num-aaa not found");
+                }
+            }
+        }
+
+        #[derive(ThoosaArgs, Debug)]
         struct NetTwoConfig {
             ///number of bbb
             #[run_config]
             num_bbb: u32,
         }
 
-        #[derive(ThoosaArgs)]
+        impl NetTwoConfig {
+            pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+                if let Some(input) = matches.get_one::<RangeOrValue<u32>>("num-bbb") {
+                    assert_eq!(&RangeOrValue::Value(222), input);
+                } else {
+                    panic!("num-bbb not found");
+                }
+            }
+        }
+
+        #[derive(ThoosaArgs, Debug)]
         struct TrainLabelsRunConfig {
 
             #[run_config]
@@ -975,12 +1007,28 @@ pub mod tests {
 
         }
 
+        impl TrainLabelsRunConfig {
+            pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+
+                CommonTrainConfig::fill_run_configs(matches, const_params, grid_params, opt_params);
+
+                NetType::fill_run_configs(matches, const_params, grid_params, opt_params);
+            }
+        }
+
+
         #[derive(ThoosaArgs)]
         struct TrainMotifsRunConfig {
 
             #[run_config]
             common_config:CommonTrainConfig,
 
+        }
+
+        impl TrainMotifsRunConfig {
+            pub(crate) fn fill_run_configs(matches:&ArgMatches, Zconst_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+
+            }
         }
 
         #[derive(ThoosaArgsCommand)]
@@ -991,41 +1039,74 @@ pub mod tests {
 
         }
 
+        impl TopCommand {
+            fn grid_sources(matches:&ArgMatches) -> GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
+                let mut const_params = Vec::new();
+                let mut grid_params = Vec::new();
+                let mut opt_params = Vec::new();
+
+                TopCommandType::fill_run_configs(matches, &mut const_params, &mut grid_params, &mut opt_params);
+                if !opt_params.is_empty() {
+                    panic!("opt_params in grid");
+                }
+
+                GridRunConfigSource::new(
+                    ConstConfigSource::new(const_params),
+                    grid_params,
+                )
+            }
+
+
+
+            fn opt_sources(matches:&ArgMatches) -> OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>> {
+                let mut const_params = Vec::new();
+                let mut grid_params = Vec::new();
+                let mut opt_params = Vec::new();
+
+                TopCommandType::fill_run_configs(matches, &mut const_params, &mut grid_params, &mut opt_params);
+
+                OptRunConfigSource::new(
+                    GridRunConfigSource::new(
+                        ConstConfigSource::new(const_params),
+                        grid_params,
+                    ),
+                    opt_params,
+                )
+            }
+        }
 
         #[derive(ThoosaArgs)]
         enum TopCommandType {
-            TrainMotifs(TrainMotifsRunConfig),
-            TrainLabels(TrainLabelsRunConfig),
+            #[arg_type(TrainMotifsRunConfig)]
+            TrainMotifs,
+            #[arg_type(TrainLabelsRunConfig)]
+            TrainLabels,
         }
 
-        // impl TrainLabelRunConfig {
-        //     pub fn new_one(lr: f64, beta: f64, num_aaa: u32) -> Self {
-        //         Self {
-        //             common_config: CommonTrainConfig {
-        //                 lr,
-        //                 beta,
-        //             },
-        //             net_type: NetType::NetOne(NetOneConfig {
-        //                 num_aaa,
-        //             })
-        //         }
-        //     }
-        //     pub fn new_two(lr: f64, beta: f64, num_bbb: u32) -> Self {
-        //         Self {
-        //             common_config: CommonTrainConfig {
-        //                 lr,
-        //                 beta,
-        //             },
-        //             net_type: NetType::NetTwo(NetTwoConfig {
-        //                 num_bbb,
-        //             })
-        //         }
-        //     }
-        // }
+        impl TopCommandType {
 
-        // let train_cmd = TrainLabelRunConfig::command();
-        //
-        // debug!("test_run_config_args: config={train_cmd:?}");
+            pub(crate) fn selected(matches: &ArgMatches) -> Self {
+                if let Some(subcmd_matches) = matches.subcommand_matches("TrainMotifs") {
+                    TopCommandType::TrainMotifs
+                } else if let Some(subcmd_matches) = matches.subcommand_matches("TrainLabels") {
+                    TopCommandType::TrainLabels
+                } else {
+                    panic!("No selected TopCommandType in matches");
+                }
+            }
+
+            pub(crate) fn fill_run_configs(matches: &ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+
+                if let Some(subcmd_matches) = matches.subcommand_matches("TrainMotifs") {
+                    debug!("TrainMotifs");
+                    TrainMotifsRunConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
+                } else if let Some(subcmd_matches) = matches.subcommand_matches("TrainLabels") {
+                    debug!("TrainLabels");
+                    TrainLabelsRunConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
+                }
+            }
+
+        }
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -1046,10 +1127,43 @@ pub mod tests {
         }
 
         // let cli = TestCli::parse_from(["", "--some-field", "zzz"]);
-        let cli = TestCli::parse_from(["", "--some-field", "zzz", "TopCommand", "TrainLabels", "--common-config-sub-config-lr",  "0.01..0.03", "--common-config-beta", "0.3","NetOne", "--num-aaa", "111"  ]);
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "TopCommand", "TrainLabels", "--common-config-sub-config-lr",  "0.01..0.03", "--common-config-beta", "0.1..0.3:0.1", "NetOne", "--num-aaa", "111"  ]);
         // let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-net",  "--sub-config-lr", "0.01..0.03", "--beta", "0.3", "NetTwo", "--num-bbb", "222"]);
 
+
+
+
+        fn test_train_motifs(source:GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>>){
+
+        }
+
+        fn test_train_labels(run_config_source:OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>){
+            let const_vals = run_config_source.grid_run_config_source().const_params();
+            for grid_vals in run_config_source.grid_to_vals(run_config_source.grid_run_config_source().grid_params()) {
+
+
+                let mut opt = TPEOptimizer::new(|opt_vals| {
+
+                    debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
+                    0.0
+                },
+                        ConfigurationSpace::new(run_config_source.opt_params()),
+                        10,
+                        3,
+                );
+
+                let best_config = opt.optimize();
+
+                debug!("best_config={:?}", best_config);
+            }
+        }
+
+        fn test_train_label(run_config:TrainLabelsRunConfig){
+            debug!("run_config={:?}", run_config);
+        }
+
         match &cli.command {
+
             Commands::AutoCommand(args) => {
                 debug!("args={args:?}");
                 match TopCommand::command().try_get_matches_from(args) {
@@ -1060,49 +1174,23 @@ pub mod tests {
                             debug!("arg_name={}", arg_name);
                         }
 
-                        if let Some(subcmd_matches) = m.subcommand_matches("TrainMotifs") {
-                            debug!("TrainMotifs");
+                        match TopCommandType::selected(&m) {
+                            TopCommandType::TrainMotifs => {
+                                let run_config_source = TopCommand::grid_sources(&m);
 
-                        } else if let Some(subcmd_matches) = m.subcommand_matches("TrainLabels") {
-                            debug!("TrainLabels");
-                            for id in subcmd_matches.ids() {
-                                let arg_name = id.as_str();
-                                debug!("arg_name={}", arg_name);
+                                debug!("run_config_source={run_config_source:?}");
+
+                                test_train_motifs(run_config_source);
                             }
+                            TopCommandType::TrainLabels => {
+                                let run_config_source = TopCommand::opt_sources(&m);
 
-                            if let Some(input) = subcmd_matches.get_one::<RangeOrValue<f64>>("common-config-sub-config-lr") {
-                                assert_eq!(&RangeOrValue::Range { range: 0.01..0.03, step: None }, input);
-                            } else {
-                                panic!("sub-config-lr not found");
+                                debug!("run_config_source={run_config_source:?}");
+
+                                test_train_labels(run_config_source);
                             }
-
-                            if let Some(input) = subcmd_matches.get_one::<RangeOrValue<f64>>("common-config-beta") {
-                                assert_eq!(&RangeOrValue::Value(0.3), input);
-                            } else {
-                                panic!("beta not found");
-                            }
-
-                            if let Some(subcmd_matches) = subcmd_matches.subcommand_matches("NetOne") {
-                                if let Some(input) = subcmd_matches.get_one::<RangeOrValue<u32>>("num-aaa") {
-                                    assert_eq!(&RangeOrValue::Value(111), input);
-                                } else {
-                                    panic!("num-aaa not found");
-                                }
-
-                            } else if let Some(subcmd_matches) = subcmd_matches.subcommand_matches("NetTwo") {
-                                if let Some(input) = subcmd_matches.get_one::<RangeOrValue<u32>>("num-bbb") {
-                                    assert_eq!(&RangeOrValue::Value(222), input);
-                                } else {
-                                    panic!("num-bbb not found");
-                                }
-
-                            } else {
-                                panic!("TrainTestNet not found");
-                            }
-
-                        } else {
-                            panic!("No subcommand matched");
                         }
+
                     }
                     Err(e) => {
                         panic!("target: e={e:?}");
@@ -1142,7 +1230,7 @@ pub mod tests {
 
 
 
-        #[derive(Debug, Args, Clone, RunConfigSource)]//
+        #[derive(Debug, Args, Clone, XRunConfigSource)]//
         struct CommonTestArgs {
             #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "10")]
             #[run_config]
@@ -1153,7 +1241,7 @@ pub mod tests {
             pub lr: RangeOrValue<f64>,
         }
 
-        #[derive(Debug, Args, Clone, RunConfigSource)]//
+        #[derive(Debug, Args, Clone, XRunConfigSource)]//
         struct TestCommandArgs {
             #[arg(long,value_parser=parse_resources)]
             pub resources: ResourceType,
@@ -1177,7 +1265,7 @@ pub mod tests {
             common: CommonTestArgs
         }
 
-        impl ResourceConfigSource<Simple> for TestCommandArgs{
+        impl XResourceConfigSource<Simple> for TestCommandArgs{
             fn resource_config(&self) -> Simple {
                 Simple::new(
                     self.resources.clone()
@@ -1232,7 +1320,7 @@ pub mod tests {
         }
 
         fn run_step_2<R>(
-            run_config_source: RunConfigs<VecConfig<NamedVal>, VecConfig<NamedRange>, VecConfig<Hyperparameter>>,
+            run_config_source: XRunConfigs<XVecConfig<NamedVal>, XVecConfig<NamedRange>, XVecConfig<Hyperparameter>>,
             resource_config:&R
         ) where
             R: ResourcesConfig

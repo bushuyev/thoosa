@@ -12,7 +12,7 @@ fn type_to_string(ty: &syn::Type) -> String {
     // "".to_string()
 }
 
-#[proc_macro_derive(RunConfigSource, attributes(run_config))]
+#[proc_macro_derive(XRunConfigSource, attributes(run_config))]
 pub fn run_config_source_derive(input: TokenStream) -> TokenStream {
     let ast: syn::DeriveInput = syn::parse(input).unwrap();
 
@@ -224,12 +224,12 @@ pub fn run_config_source_derive(input: TokenStream) -> TokenStream {
     let gen = quote! {
 
 
-        impl RunConfigSource for #target_struct  {
-            type CC = VecConfig<NamedVal>;
-            type GC = VecConfig<NamedRange>;
-            type OC = VecConfig<Hyperparameter>;
+        impl XRunConfigSource for #target_struct  {
+            type CC = XVecConfig<NamedVal>;
+            type GC = XVecConfig<NamedRange>;
+            type OC = XVecConfig<Hyperparameter>;
 
-            fn to_run_configs(self) -> RunConfigs<Self::CC, Self::GC, Self::OC> {
+            fn to_run_configs(self) -> XRunConfigs<Self::CC, Self::GC, Self::OC> {
 
 
                 let (mut const_params, mut grid_params, mut opt_params):(Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>) = (vec![], vec![], vec![]);
@@ -237,7 +237,7 @@ pub fn run_config_source_derive(input: TokenStream) -> TokenStream {
 
                 #(#in_run_config_keys)*;
 
-                RunConfigs::new(
+                XRunConfigs::new(
                     const_params.into(),
                     if grid_params.is_empty() {None} else {Some(grid_params.into())},
                     if opt_params.is_empty() {None} else {Some(opt_params.into())},

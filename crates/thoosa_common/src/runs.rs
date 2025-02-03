@@ -6,7 +6,8 @@ use parking_lot::{Mutex, RwLock};
 use tch::nn::VarStore;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{ResourceType, ThoosaError};
-use thoosa_shared::val::Val;
+use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
 use crate::parzen::optimizer::ConfigurationSpace;
 use crate::ws::Workspace;
@@ -215,6 +216,78 @@ impl SavableOptResult for DummySavableOptResult {
 
     fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError> {
         Ok(0)
+    }
+}
+
+
+////
+#[derive(Debug)]
+pub struct ConstConfigSource<CP> {
+    const_params:CP,
+}
+impl ConstConfigSource<Vec<NamedVal>> {
+    pub fn new(const_params:Vec<NamedVal>) -> Self {
+        Self {
+            const_params,
+        }
+    }
+
+}
+
+#[derive(Debug)]
+pub struct GridRunConfigSource<CP, GP> {
+    const_config_source: ConstConfigSource<CP>,
+    grid_params:GP
+}
+
+impl GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
+
+    pub fn new(const_config_source:ConstConfigSource<Vec<NamedVal>>, grid_params:Vec<NamedRange>) -> Self {
+        Self {
+            const_config_source,
+            grid_params
+        }
+    }
+
+    pub fn const_params(&self) -> Vec<NamedVal> {
+        vec![]
+    }
+
+    pub fn grid_params(&self) -> Vec<NamedRange> {
+        vec![]
+    }
+
+    pub fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
+        vec![]
+    }
+
+}
+
+#[derive(Debug)]
+pub struct OptRunConfigSource<CP, GP, OP> {
+    grid_run_config_source: GridRunConfigSource<CP, GP>,
+    opt_params:OP
+}
+
+impl OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>  {
+
+    pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>>, opt_params:Vec<Hyperparameter>) -> Self {
+        Self {
+            grid_run_config_source,
+            opt_params
+        }
+    }
+
+    pub fn opt_params(&self) -> Vec<Hyperparameter> {
+        vec![]
+    }
+
+    pub fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
+        vec![]
+    }
+
+    pub fn grid_run_config_source(&self) -> &GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
+        &self.grid_run_config_source
     }
 }
 

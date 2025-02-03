@@ -3,46 +3,47 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::ResourcesConfig;
 use thoosa_shared::val::{NamedRange, NamedVal};
 
-pub trait ConstConfig {
+//TODO remove
+pub trait XConstConfig {
     fn consts(&self) -> &[NamedVal];
 }
 
-pub trait GridConfig {
+pub trait XGridConfig {
     fn grid(&self) -> &[NamedRange];
 }
 
-pub trait OptConfig {
+pub trait XOptConfig {
     fn opt(&self) -> &[Hyperparameter];
 }
 
-pub trait RunConfigSource {
-    type CC: ConstConfig;
-    type GC: GridConfig;
-    type OC: OptConfig;
+pub trait XRunConfigSource {
+    type CC: XConstConfig;
+    type GC: XGridConfig;
+    type OC: XOptConfig;
 
-    fn to_run_configs(self) -> RunConfigs<Self::CC, Self::GC, Self::OC>;
+    fn to_run_configs(self) -> XRunConfigs<Self::CC, Self::GC, Self::OC>;
 }
 
-pub trait ResourceConfigSource<R:ResourcesConfig>:Debug {
+pub trait XResourceConfigSource<R:ResourcesConfig>:Debug {
     fn resource_config(&self) -> R;
 }
 
 
-impl <V> From<Vec<V>> for VecConfig<V> {
+impl <V> From<Vec<V>> for XVecConfig<V> {
     fn from(value: Vec<V>) -> Self {
-        VecConfig::new(value)
+        XVecConfig::new(value)
     }
 }
 
 #[derive(Debug)]
-pub struct RunConfigs<CC: ConstConfig, GC: GridConfig, OC: OptConfig> {
+pub struct XRunConfigs<CC: XConstConfig, GC: XGridConfig, OC: XOptConfig> {
 
     pub const_config: CC,//TODO pub
     pub grid_config: Option<GC>,
     pub opt_config: Option<OC>,
 }
 
-impl <CC: ConstConfig, GC: GridConfig, OC: OptConfig> RunConfigs<CC, GC, OC> {
+impl <CC: XConstConfig, GC: XGridConfig, OC: XOptConfig> XRunConfigs<CC, GC, OC> {
 
     pub fn new(const_config: CC, grid_config: Option<GC>, opt_config: Option<OC>) -> Self {
         Self { const_config, grid_config, opt_config }
@@ -50,29 +51,29 @@ impl <CC: ConstConfig, GC: GridConfig, OC: OptConfig> RunConfigs<CC, GC, OC> {
 }
 
 #[derive(Debug)]
-pub struct VecConfig<V> {
+pub struct XVecConfig<V> {
     pub configs: Vec<V> //TODO pub
 }
 
-impl <V> VecConfig<V> {
+impl <V> XVecConfig<V> {
     pub fn new(const_configs: Vec<V>) -> Self {
         Self { configs: const_configs }
     }
 }
 
-impl ConstConfig for VecConfig<NamedVal> {
+impl XConstConfig for XVecConfig<NamedVal> {
     fn consts(&self) -> &[NamedVal] {
         self.configs.as_slice()
     }
 }
 
-impl GridConfig for VecConfig<NamedRange> {
+impl XGridConfig for XVecConfig<NamedRange> {
     fn grid(&self) -> &[NamedRange] {
         self.configs.as_slice()
     }
 }
 
-impl OptConfig for VecConfig<Hyperparameter> {
+impl XOptConfig for XVecConfig<Hyperparameter> {
     fn opt(&self) -> &[Hyperparameter] {
         self.configs.as_slice()
     }
