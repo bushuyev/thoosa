@@ -128,10 +128,10 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsP
 
         debug!("FindMotifsParams::to_run_configs: self.step={:?} self.window={:?}", self.step, self.window);
 
-        make_combos(vec![
+        make_combos([
             self.step.clone().into_iter(),
             self.window.clone().into_iter(),
-        ]).into_iter().map(|config_combo|{
+        ].into_iter()).into_iter().map(|config_combo|{
             debug!("FindMotifsParams::to_run_configs: config_combo={config_combo:?} ");
             FindMotifsRunConfig::new(None, config_combo[0], config_combo[1], self.dist_quantile, "".to_string(), None)
         }).collect()

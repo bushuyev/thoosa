@@ -184,10 +184,10 @@ impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for RunAllParam
             self.step, self.window
         );
 
-        make_combos(vec![
+        make_combos([
             self.step.clone().into_iter(),
             self.window.clone().into_iter(),
-        ])
+        ].into_iter())
         .into_iter()
         .map(|config_combo| {
             debug!("FindMotifsParams::to_run_configs: config_combo={config_combo:?} ");
@@ -252,7 +252,7 @@ impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> f
             )]
         } else {
             //TODO avoid collecting
-            let v = make_combos(vec![
+            let v = make_combos([
                 self.lr
                     .clone()
                     .into_iter()
@@ -265,7 +265,7 @@ impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> f
                     .map(|v| v.into())
                     .collect::<Vec<Val>>()
                     .into_iter(),
-            ])
+            ].into_iter())
             .into_iter()
             .map(|mut config_combo: Vec<Val>| {
                 debug!("TrainMotifsNodesParams::to_run_configs: config_combo={config_combo:?} ");
@@ -310,7 +310,7 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
             )]
         } else {
             //TODO avoid collecting
-            let v = make_combos(vec![
+            let v = make_combos([
                 self.lr
                     .clone()
                     .into_iter()
@@ -323,7 +323,7 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
                     .map(|v| v.into())
                     .collect::<Vec<Val>>()
                     .into_iter(),
-            ])
+            ].into_iter())
             .into_iter()
             .map(|mut config_combo: Vec<Val>| {
                 debug!("TrainLabelNodeParams::to_run_configs: config_combo={config_combo:?} ");
@@ -370,7 +370,7 @@ impl Params<TrainFinalNodeRunConfig, NetResources<Logits>, CommonTrainFinalNodeR
             )]
         } else {
             //TODO avoid collecting
-            let v = make_combos(vec![
+            let v = make_combos([
                 self.lr
                     .clone()
                     .into_iter()
@@ -383,7 +383,7 @@ impl Params<TrainFinalNodeRunConfig, NetResources<Logits>, CommonTrainFinalNodeR
                     .map(|v| v.into())
                     .collect::<Vec<Val>>()
                     .into_iter(),
-            ])
+            ].into_iter())
             .into_iter()
             .map(|mut config_combo: Vec<Val>| {
                 debug!("TrainFinalNodeParams::to_run_configs: config_combo={config_combo:?} ");
@@ -455,10 +455,10 @@ impl Params<SayHelloRunConfig, Simple, ()> for SayHelloParams {
             .collect::<Option<Vec<Hyperparameter>>>()
             .map(|v| ConfigurationSpace::new(v));
 
-        make_combos(vec![
+        make_combos([
             self.window.clone().into_iter(),
             self.step.clone().into_iter(),
-        ])
+        ].into_iter())
         .into_iter()
         .map(|config_combo| SayHelloRunConfig {
             window: config_combo[0],
