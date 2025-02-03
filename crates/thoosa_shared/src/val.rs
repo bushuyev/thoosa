@@ -364,6 +364,13 @@ impl From<&f32> for Val {
     }
 }
 
+impl From<&f64> for Val {
+    fn from(v: &f64) -> Self {
+        Val::Real(*v)
+    }
+}
+
+
 impl From<&usize> for Val {
     fn from(v: &usize) -> Self {
         Val::Int(*v as i64)

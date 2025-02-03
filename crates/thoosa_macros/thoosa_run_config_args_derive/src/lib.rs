@@ -1,10 +1,25 @@
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, DeriveInput, Field, Lit};
+use syn::{parse_macro_input, Attribute, DeriveInput, Field, Lit, Path};
 use thoosa_macros_utils::is_primitive;
 
+fn parse_arg_type(attr: &Attribute) -> Option<proc_macro2::Ident> {
+    if !attr.path().is_ident("arg_type") {
+        return None;
+    }
+    // Parse the tokens inside parentheses as a `Path` (e.g. `TrainLabelsRunConfig`)
+    let path = attr.parse_args::<Path>().expect("Failed to parse arg_type as Path");
 
-#[proc_macro_derive(ThoosaArgs, attributes(run_config))]
+    // If you know it's always a single ident (e.g. no module path),
+    // you can either use `path.get_ident()` or the last segment in `path.segments`.
+    path.get_ident().cloned().or_else(|| {
+        // If user wrote something like `some::module::MyRunConfig`,
+        // we can return the last segment as an Ident
+        path.segments.last().map(|seg| seg.ident.clone())
+    })
+}
+
+#[proc_macro_derive(ThoosaArgs, attributes(run_config, arg_type))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
@@ -79,17 +94,20 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 // eprintln!("variant={variant:?} ");
 
                 let variant_name = &variant.ident.to_string();
-                let struct_name  = if let syn::Fields::Unnamed(syn::FieldsUnnamed { unnamed, .. }) = &variant.fields {
-                    if let Some(syn::Field { ty: syn::Type::Path(type_path), .. }) = unnamed.first() {
-                        type_path.path.segments.last().map(|segment| &segment.ident).expect("ident")
-                    } else {
-                        panic!("can't parse subcommand ident")
-                    }
-                } else {
-                    panic!("can't parse subcommand")
-                };
+                eprintln!("variant.fields={:?}", variant);
+                for attr in &variant.attrs {
+                    eprintln!("variant.fields.attr={:?}", attr);
+                    if attr.path().is_ident("arg_type") {
 
-                eprintln!("struct_name={struct_name:?} ");
+                        eprintln!("arg_type={:?}", parse_arg_type(attr));
+                    }
+
+                }
+
+                let struct_name = variant.attrs.iter().find(|attr|attr.path().is_ident("arg_type")).map(|attr|parse_arg_type(attr)).expect("could not find arg_type");
+
+
+                eprintln!("struct_name={struct_name:?}");
 
                 quote! {
 
