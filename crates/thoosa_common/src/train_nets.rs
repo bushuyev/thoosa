@@ -224,10 +224,10 @@ impl Params<TrainLabelNodeRunConfig, NetResources<Labeled>, CommonTrainLabelNode
             ]
         } else {
             //TODO avoid collecting
-            let v = make_combos(vec![
+            let v = make_combos([
                 self.common.lr.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
                 // self.num_layers.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
-            ]).into_iter().map(|mut config_combo:Vec<Val>|{
+            ].into_iter()).into_iter().map(|mut config_combo:Vec<Val>|{
                 debug!("TrainLabelNodeParams::to_run_configs: config_combo={config_combo:?} ");
                 let num_layers = config_combo.pop().unwrap().try_into().unwrap();
                 let lr = config_combo.pop().unwrap().try_into().unwrap();
@@ -1527,10 +1527,10 @@ impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> f
 
         } else {
             //TODO avoid collecting
-            let v = make_combos(vec![
+            let v = make_combos([
                 self.common.lr.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
                 self.num_layers.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
-            ]).into_iter().map(|mut config_combo:Vec<Val>|{
+            ].into_iter()).into_iter().map(|mut config_combo:Vec<Val>|{
                 debug!("TrainMotifsNodesParams::to_run_configs: config_combo={config_combo:?} ");
                 let num_layers = config_combo.pop().unwrap().try_into().unwrap();
                 let lr = config_combo.pop().unwrap().try_into().unwrap();
@@ -2468,10 +2468,10 @@ impl Params<TrainFinalNodeRunConfig, NetResources<Logits>, CommonTrainFinalNodeR
 
         } else {
             //TODO avoid collecting
-            let v = make_combos(vec![
+            let v = make_combos([
                 self.lr.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
                 self.num_layers.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
-            ]).into_iter().map(|mut config_combo:Vec<Val>|{
+            ].into_iter()).into_iter().map(|mut config_combo:Vec<Val>|{
                 debug!("TrainFinalNodeParams::to_run_configs: config_combo={config_combo:?} ");
                 let num_layers = config_combo.pop().unwrap().try_into().unwrap();
                 let lr = config_combo.pop().unwrap().try_into().unwrap();

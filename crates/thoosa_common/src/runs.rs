@@ -5,7 +5,7 @@ use log::debug;
 use parking_lot::{Mutex, RwLock};
 use tch::nn::VarStore;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::{ResourceType, ThoosaError};
+use thoosa_shared::{make_combos, ResourceType, ThoosaError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
@@ -253,12 +253,13 @@ impl GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
         vec![]
     }
 
-    pub fn grid_params(&self) -> Vec<NamedRange> {
-        vec![]
-    }
 
-    pub fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
-        vec![]
+    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal>> {
+        make_combos(
+            self.grid_params.iter().map(|gp| {
+                gp.clone().into_iter()
+            })
+        )
     }
 
 }
@@ -278,12 +279,12 @@ impl OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>  {
         }
     }
 
-    pub fn opt_params(&self) -> Vec<Hyperparameter> {
-        vec![]
+    pub fn opt_params(&self) -> &Vec<Hyperparameter> {
+        &self.opt_params
     }
 
-    pub fn grid_to_vals(&self, grid:Vec<NamedRange>) -> Vec<Vec<NamedVal>> {
-        vec![]
+    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal>> {
+        self.grid_run_config_source.grid_to_vals()
     }
 
     pub fn grid_run_config_source(&self) -> &GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {

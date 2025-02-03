@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use num_traits::ToPrimitive;
-use crate::{RangeOrValue, ThoosaError};
+use crate::{round_to_digits, RangeOrValue, ThoosaError};
 
 
 #[derive(Debug, PartialEq, Clone)]
@@ -52,7 +52,7 @@ impl NamedVal {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct NamedRange{
     name: String,
     range:Range<Val>,
@@ -76,7 +76,162 @@ impl NamedRange {
     pub fn step(&self) -> &(Val, u32) {
         &self.step
     }
+
 }
+
+#[derive(PartialEq)]
+enum IterationKind {
+    Int,
+    UInt,
+    Real,
+    Bool,
+    Unsupported,
+}
+
+
+
+pub struct NamedRangeIter {
+    name: String,
+    // We'll store everything as floats internally:
+    current: f64,
+    end: f64,
+    step: f64,
+    digits: u32,
+    // Whether we should produce Int/UInt/Real/Bool on output:
+    iteration_kind: IterationKind,
+    // If done == true, we've finished iteration
+    done: bool,
+    // track whether step is forward (current < end) or backward (current > end)
+    forward: bool,
+}
+
+
+impl Iterator for NamedRangeIter {
+    type Item = NamedVal;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        // Check if we've passed beyond the half-open boundary
+        //   * If forward and current >= end => done
+        //   * If backward and current <= end => done
+        let out_of_bounds = if self.forward {
+            self.current >= self.end
+        } else {
+            self.current <= self.end
+        };
+
+        if out_of_bounds {
+            self.done = true;
+            return None;
+        }
+
+        // Produce the correct variant according to iteration_kind
+        let val = match self.iteration_kind {
+            IterationKind::Int => Val::Int(self.current as i64),
+            IterationKind::UInt => {
+                // guard against negative or large float => might be out-of-range
+                // but for simplicity, just cast:
+                Val::UInt(self.current as u32)
+            }
+            IterationKind::Real => {
+                let rounded = round_to_digits(self.current, self.digits);
+                Val::Real(rounded)
+            }
+            IterationKind::Bool => {
+                Val::Bool(self.current >= 0.5)
+            }
+            IterationKind::Unsupported => {
+                return None;
+            }
+        };
+
+        let item = NamedVal {
+            name: self.name.clone(),
+            val,
+        };
+
+        let next_val = self.current + self.step;
+
+        // Round if we are working in Real mode, so error doesn’t accumulate
+        let next_val = if matches!(self.iteration_kind, IterationKind::Real) {
+            round_to_digits(next_val, self.digits)
+        } else {
+            next_val
+        };
+        self.current = next_val;
+
+        Some(item)
+    }
+}
+
+impl IntoIterator for NamedRange {
+    type Item = NamedVal;
+    type IntoIter = NamedRangeIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let start_val = &self.range.start;
+        let end_val = &self.range.end;
+        let (step_val, digits) = &self.step;
+
+        // 1) Convert start/end/step into f64 if possible
+        // 2) Decide iteration_kind from the start type
+        //    (or unify to Real if there's a mismatch).
+        let (start_f, kind_start) = val_to_f64_and_kind(start_val);
+        let (end_f, kind_end) = val_to_f64_and_kind(end_val);
+        let (step_f, _) = val_to_f64_and_kind(step_val);
+
+        // If either is unsupported or there's a mismatch you can't handle:
+        let iteration_kind = if kind_start == IterationKind::Unsupported {
+            IterationKind::Unsupported
+        } else if kind_end == IterationKind::Unsupported {
+            // Alternatively, unify to Real or panic!
+            IterationKind::Unsupported
+        } else {
+            // If the start was Real, we use Real iteration
+            // Otherwise we keep the start's iteration kind
+            match kind_start {
+                IterationKind::Real => IterationKind::Real,
+                _ => {
+                    // If end or step is Real, unify all to Real
+                    // else keep start kind
+                    if kind_end == IterationKind::Real || matches!(step_val, Val::Real(_)) {
+                        IterationKind::Real
+                    } else {
+                        kind_start
+                    }
+                }
+            }
+        };
+
+        // If step_f == 0.0, you might handle that specially (avoid infinite loop).
+        // For demonstration, skip that check.
+
+        NamedRangeIter {
+            name: self.name,
+            current: start_f,
+            end: end_f,
+            step: step_f,
+            digits: *digits,
+            done: false,
+            forward: start_f < end_f,
+            iteration_kind,
+        }
+    }
+}
+
+fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
+    match v {
+        Val::Int(i)  => (*i as f64, IterationKind::Int),
+        Val::UInt(u) => (*u as f64, IterationKind::UInt),
+        Val::Real(r) => (*r, IterationKind::Real),
+        Val::Bool(b) => (if *b { 1.0 } else { 0.0 }, IterationKind::Bool),
+        Val::Str(_)  => (0.0, IterationKind::Unsupported),
+    }
+}
+
 //
 // impl From<(&str, u32)> for NamedVal {
 //     fn from((name, value): (&str, u32)) -> Self {
@@ -434,4 +589,52 @@ impl TryFrom<&NamedVal> for u32 {
     fn try_from(value: &NamedVal) -> Result<Self, Self::Error> {
         value.val.clone().try_into()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use log::debug;
+    use crate::val::{NamedRange, NamedVal, Val};
+
+
+    #[test]
+    fn test_named_range_int_iteration() {
+        let named_range = NamedRange {
+            name: "SomeName".to_string(),
+            range: Val::Int(-1)..Val::Int(3),
+            step: (Val::Int(1), 2),
+        };
+
+        let result: Vec<NamedVal> = named_range.into_iter().collect();
+
+        let expected = vec![
+            NamedVal { name: "SomeName".to_string(), val: Val::Int(-1) },
+            NamedVal { name: "SomeName".to_string(), val: Val::Int(0)  },
+            NamedVal { name: "SomeName".to_string(), val: Val::Int(1)  },
+            NamedVal { name: "SomeName".to_string(), val: Val::Int(2)  },
+        ];
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_named_range_float_iteration() {
+        let named_range = NamedRange {
+            name: "FloatRange".to_string(),
+            range: Val::Real(0.0)..Val::Real(1.0),
+            step: (Val::Real(0.3), 2),
+        };
+
+        let result: Vec<NamedVal> = named_range.into_iter().collect();
+
+        let expected = vec![
+            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.0)  },
+            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.3)  },
+            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.6)  },
+            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.9)  },
+        ];
+
+        assert_eq!(result, expected);
+    }
+
 }

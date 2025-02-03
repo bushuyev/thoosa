@@ -745,7 +745,7 @@ fn parse_range_str(range: &str) -> Result<((String, u8), (String, u8), Option<(S
 }
 
 
-pub fn make_combos<V:Clone>(iters: Vec<impl Iterator<Item=V>>) -> Vec<Vec<V>> {
+pub fn make_combos<V:Clone>(iters: impl Iterator<Item=impl Iterator<Item=V>>) -> Vec<Vec<V>> {
     let mut combos: Vec<Vec<V>> = vec![vec![]];
 
     for iter in iters {
@@ -782,6 +782,13 @@ pub fn make_combos<V:Clone>(iters: Vec<impl Iterator<Item=V>>) -> Vec<Vec<V>> {
 //     }
 // }
 
+pub fn round_to_digits(value: f64, digits: u32) -> f64 {
+    if digits == 0 {
+        return value;
+    }
+    let factor = 10_f64.powi(digits as i32);
+    (value * factor).round() / factor
+}
 
 #[cfg(test)]
 mod shared_tests {
@@ -1127,11 +1134,11 @@ mod shared_tests {
                ["a3", "b1", "c2"]
            ].into_iter().map(|v|v.to_vec()).collect::<Vec<_>>(),
             make_combos(
-               vec![
+               [
                    vec!["a1", "a2", "a3"].into_iter(),
                    vec!["b1"].into_iter(),
                    vec!["c1", "c2"].into_iter()
-               ]
+               ].into_iter()
            )
         );
 
@@ -1141,10 +1148,10 @@ mod shared_tests {
                 ["a2", "b1", ]
             ].into_iter().map(|v|v.to_vec()).collect::<Vec<_>>(),
             make_combos(
-                vec![
+                [
                     vec!["a1", "a2"].into_iter(),
                     vec!["b1"].into_iter(),
-                ]
+                ].into_iter()
             )
         );
 
@@ -1153,9 +1160,9 @@ mod shared_tests {
                 ["a1"]
             ].into_iter().map(|v|v.to_vec()).collect::<Vec<_>>(),
             make_combos(
-                vec![
+                [
                     vec!["a1"].into_iter(),
-                ]
+                ].into_iter()
             )
         );
 

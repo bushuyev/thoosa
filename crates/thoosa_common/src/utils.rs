@@ -530,7 +530,7 @@ pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::{ConstConfigSource, GridRunConfigSource, OptRunConfigSource, Simple};
-    use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore, TrainNodesValues};
+    use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore, TrainLabelNodeRunConfig, TrainNodesValues};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
     use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
@@ -778,7 +778,7 @@ pub mod tests {
         );
 
         let const_vals = run_config_source.grid_run_config_source().const_params();
-        for grid_vals in run_config_source.grid_to_vals(run_config_source.grid_run_config_source().grid_params()) {
+        for grid_vals in run_config_source.grid_to_vals() {
 
 
             let mut opt = TPEOptimizer::new(|opt_vals| {
@@ -786,7 +786,7 @@ pub mod tests {
                 debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
                 0.0
             },
-            ConfigurationSpace::new(run_config_source.opt_params()),
+            ConfigurationSpace::new(run_config_source.opt_params().clone()),
             10,
             3,
             );
@@ -1016,6 +1016,22 @@ pub mod tests {
             }
         }
 
+        impl From<&[NamedVal]> for TrainLabelsRunConfig {
+            fn from(value: &[NamedVal]) -> Self {
+                debug!("TrainLabelsRunConfig::from {:?}", value);
+
+                TrainLabelsRunConfig{
+                    common_config:CommonTrainConfig{
+                        beta: 0.0,
+                        sub_config: SomeSubTrainConfig {
+                            lr: 0.0,
+                        },
+                    },
+                    net_type: NetType::NetOne
+                }
+            }
+        }
+
 
         #[derive(ThoosaArgs)]
         struct TrainMotifsRunConfig {
@@ -1026,7 +1042,7 @@ pub mod tests {
         }
 
         impl TrainMotifsRunConfig {
-            pub(crate) fn fill_run_configs(matches:&ArgMatches, Zconst_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
 
             }
         }
@@ -1055,8 +1071,6 @@ pub mod tests {
                     grid_params,
                 )
             }
-
-
 
             fn opt_sources(matches:&ArgMatches) -> OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>> {
                 let mut const_params = Vec::new();
@@ -1131,23 +1145,22 @@ pub mod tests {
         // let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-net",  "--sub-config-lr", "0.01..0.03", "--beta", "0.3", "NetTwo", "--num-bbb", "222"]);
 
 
-
-
         fn test_train_motifs(source:GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>>){
 
         }
 
         fn test_train_labels(run_config_source:OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>){
             let const_vals = run_config_source.grid_run_config_source().const_params();
-            for grid_vals in run_config_source.grid_to_vals(run_config_source.grid_run_config_source().grid_params()) {
 
+            for grid_vals in run_config_source.grid_to_vals() {
 
                 let mut opt = TPEOptimizer::new(|opt_vals| {
 
                     debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
+                    test_train_label(opt_vals.into());
                     0.0
                 },
-                        ConfigurationSpace::new(run_config_source.opt_params()),
+                        ConfigurationSpace::new(run_config_source.opt_params().clone()),
                         10,
                         3,
                 );
@@ -1175,6 +1188,7 @@ pub mod tests {
                         }
 
                         match TopCommandType::selected(&m) {
+
                             TopCommandType::TrainMotifs => {
                                 let run_config_source = TopCommand::grid_sources(&m);
 
@@ -1182,6 +1196,7 @@ pub mod tests {
 
                                 test_train_motifs(run_config_source);
                             }
+
                             TopCommandType::TrainLabels => {
                                 let run_config_source = TopCommand::opt_sources(&m);
 
@@ -1190,13 +1205,11 @@ pub mod tests {
                                 test_train_labels(run_config_source);
                             }
                         }
-
                     }
                     Err(e) => {
                         panic!("target: e={e:?}");
                     }
                 }
-
             }
             _ => {
                 panic!("Subcommand not implemented");
