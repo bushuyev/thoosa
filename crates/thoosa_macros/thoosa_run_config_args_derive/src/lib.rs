@@ -1,23 +1,39 @@
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, Attribute, DeriveInput, Field, Lit, Path};
-use thoosa_macros_utils::is_primitive;
+use syn::{parse_macro_input, Attribute, DeriveInput, Field, Lit, Path, Variant};
+use thoosa_macros_utils::*;
 
 fn parse_arg_type(attr: &Attribute) -> Option<proc_macro2::Ident> {
     if !attr.path().is_ident("arg_type") {
         return None;
     }
     // Parse the tokens inside parentheses as a `Path` (e.g. `TrainLabelsRunConfig`)
-    let path = attr.parse_args::<Path>().expect("Failed to parse arg_type as Path");
+    if let Ok(path) = attr.parse_args::<Path>() {
+        eprintln!("parse_arg_type: path={path:?}");
 
-    // If you know it's always a single ident (e.g. no module path),
-    // you can either use `path.get_ident()` or the last segment in `path.segments`.
-    path.get_ident().cloned().or_else(|| {
-        // If user wrote something like `some::module::MyRunConfig`,
-        // we can return the last segment as an Ident
-        path.segments.last().map(|seg| seg.ident.clone())
-    })
+        // If you know it's always a single ident (e.g. no module path),
+        // you can either use `path.get_ident()` or the last segment in `path.segments`.
+        return path.get_ident().cloned().or_else(|| {
+            // If user wrote something like `some::module::MyRunConfig`,
+            // we can return the last segment as an Ident
+            path.segments.last().map(|seg| seg.ident.clone())
+        });
+    }
+
+    None
 }
+
+fn parse_enum_arg(variant: &Variant) -> Option<proc_macro2::Ident> {
+    if let syn::Fields::Unnamed(syn::FieldsUnnamed { unnamed, .. }) = &variant.fields {
+        if let Some(syn::Field { ty: syn::Type::Path(type_path), .. }) = unnamed.first() {
+            return type_path.path.segments.last().map(|segment| segment.ident.clone());
+        }
+    }
+
+    None
+}
+
+
 
 #[proc_macro_derive(ThoosaArgs, attributes(run_config, arg_type))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
@@ -39,10 +55,10 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         // eprintln!("field_name={field_name:?} field_type={field_type:?}");
 
                         let dynamic_long = quote! {
-                             let dynamic_long = match prefix {
-                                   Some(p) => format!("{}-{}", p, #field_name),
-                                   None =>#field_name.to_string(),
-                                };
+                            let dynamic_long = match prefix {
+                               Some(p) => format!("{}.{}", p, #field_name),
+                               None =>#field_name.to_string(),
+                            };
                         };
                         if is_primitive(&field_type) {
                             let descr = comment(&field, &field_name);
@@ -94,26 +110,44 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 // eprintln!("variant={variant:?} ");
 
                 let variant_name = &variant.ident.to_string();
-                eprintln!("variant.fields={:?}", variant);
-                for attr in &variant.attrs {
-                    eprintln!("variant.fields.attr={:?}", attr);
-                    if attr.path().is_ident("arg_type") {
+                eprintln!("variant_name={variant_name} variant.fields={:?}", variant);
+                // for attr in &variant.attrs {
+                //     eprintln!("variant.fields.attr={:?}", attr);
+                //     if attr.path().is_ident("arg_type") {
+                //
+                //         eprintln!("arg_type={:?}", parse_arg_type(attr));
+                //     }
+                //
+                // }
 
-                        eprintln!("arg_type={:?}", parse_arg_type(attr));
-                    }
+                let (struct_type, is_top) = parse_enum_arg(variant).map(|v|(v, false)).unwrap_or_else(||variant.attrs
+                    .iter()
+                    .find(|attr|attr.path().is_ident("arg_type"))
+                    .and_then(|attr|{
+                        parse_arg_type(attr)
+                    }).map(|v|(v, true)).expect("could not find arg_type"));
 
-                }
+                let struct_name = struct_type.to_string().replace("_", "-");
 
-                let struct_name = variant.attrs.iter().find(|attr|attr.path().is_ident("arg_type")).map(|attr|parse_arg_type(attr)).expect("could not find arg_type");
+                eprintln!("struct_name={struct_type:?} is_top={is_top}");
 
-
-                eprintln!("struct_name={struct_name:?}");
-
+                //TODO use is_top in gen.
                 quote! {
 
-                    let mut command = clap::Command::new(#variant_name);
 
-                    let (sub_args_op, commands_op) = #struct_name::args(None);
+                    let new_prefix = match prefix.clone() {
+                       Some(p) => format!("{}.{}", p, thoosa_shared::camel_to_snake(#struct_name)),
+                       None => thoosa_shared::camel_to_snake(#struct_name),
+                    };
+                    let command_name_static: &'static str = if #is_top {
+                        Box::leak(thoosa_shared::camel_to_snake(#variant_name).replace("_", "-").into_boxed_str())
+                    } else {
+                        Box::leak(format!("{}.{}", prefix.expect("no prefix"), thoosa_shared::camel_to_snake(#variant_name)).replace("_", "-").into_boxed_str())
+                    };
+                    debug!("command_name_static={command_name_static} variant_name={} is_top={}", #variant_name, #is_top);
+                    let mut command = clap::Command::new(command_name_static);
+
+                    let (sub_args_op, commands_op) = #struct_type::args(None);//if #is_top { None} else {Some(new_prefix.as_str())}
                     if let Some(sub_args) = sub_args_op {
                         command = command.args(sub_args.into_iter().map(|v|v.into()));
                     }
@@ -137,6 +171,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         impl ThoosaArgs for #target_struct_ident {
 
             fn args(prefix: Option<&str>) -> (Option<Vec<impl Into<Arg>>>, Option<Vec<Command>>){
+                debug!("ThoosaArgs for #target_struct_ident: prefix={prefix:?}");
+
                 let mut args:Vec<Arg> = vec![];
                 let mut commands:Vec<Command> = vec![];
 

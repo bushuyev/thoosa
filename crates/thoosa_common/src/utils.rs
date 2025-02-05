@@ -526,7 +526,7 @@ impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
 
 #[cfg(test)]
 pub mod tests {
-    use clap::{Arg, ArgAction, ArgMatches, Command};
+    use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::{ConstConfigSource, GridRunConfigSource, OptRunConfigSource, Simple};
@@ -540,6 +540,7 @@ pub mod tests {
     use std::path::PathBuf;
     use std::time::Instant;
     use std::{fs, mem};
+    use serde::{Deserialize, Serialize};
     use tch::kind::FLOAT_CPU;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
@@ -799,20 +800,9 @@ pub mod tests {
     }
 
     #[test]
-    fn test_z(){
-        fn some_args()->Vec<impl Into<Arg>> {
-            vec![
-                arg!(-x --xxx "xxx xxx xxx").action(clap::ArgAction::SetTrue)
-            ]
-        }
+    fn test_z() {
 
-        fn some_subcommands()->Vec<impl Into<Arg>> {
-            vec![
-                arg!(-x --xxx "xxx xxx xxx").action(clap::ArgAction::SetTrue)
-            ]
-        }
-
-        let option_a_sub_cmd = Command::new("option_a")
+        let option_0_a_sub_cmd = Command::new("option_0_a")
             .about("does testing things")
             .arg(
                 Arg::new("field_a")
@@ -822,7 +812,7 @@ pub mod tests {
                     .required(true)
             );
 
-        let option_b_sub_cmd = Command::new("option_b")
+        let option_0_b_sub_cmd = Command::new("option_0_b")
             .about("does testing things")
             .arg(
                 Arg::new("field_b")
@@ -832,6 +822,27 @@ pub mod tests {
                     .required(true)
             );
 
+        let option_1_a_sub_cmd = Command::new("option_1_a")
+            .about("does testing things")
+            .arg(
+                Arg::new("field_a")
+                    .long("field-a")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+        let option_1_b_sub_cmd = Command::new("option_1_b")
+            .about("does testing things")
+            .arg(
+                Arg::new("field_b")
+                    .long("field-b")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+
         let train_cmd = Command::new("test")
             .about("does testing things")
             .arg(
@@ -840,13 +851,17 @@ pub mod tests {
                     .action(ArgAction::Set),
             )
             .subcommands(vec![
-                option_a_sub_cmd,
-                option_b_sub_cmd,
+                option_0_a_sub_cmd,
+                option_0_b_sub_cmd,
             ])
-            .subcommand_required(true) ;
+            .subcommand_required(true)
+            .subcommands(vec![
+                option_1_a_sub_cmd,
+                option_1_b_sub_cmd,
+            ]);
 
 
-        let matches = train_cmd.get_matches_from(["test_cli", "--some-field", "zzz", "option_a", "--field-a", "10"]);//"option_b", "--field-b", "20"
+        let matches = train_cmd.get_matches_from(["test_cli", "--some-field", "zzz", "option_0_a", "--field-a", "10", "option_1_b", "--field-b", "20"]);//"option_b", "--field-b", "20"
 
         // Extract the value
         let some_field = matches.get_one::<String>("some_field").unwrap();
@@ -854,31 +869,143 @@ pub mod tests {
             println!("id={:?}", id);
 
         }
-        if let Some(option_a_match) = matches.subcommand_matches("option_a") {
+        if let Some(option_a_match) = matches.subcommand_matches("option_0_a") {
             for id in option_a_match.ids() {
                 println!("option_a_match: id={:?}", id);
             }
         }
-        if let Some(option_b_match) = matches.subcommand_matches("option_b") {
+        if let Some(option_b_match) = matches.subcommand_matches("option_1_b") {
             for id in option_b_match.ids() {
                 println!("option_b_match: id={:?}", id);
             }
         }
         assert_eq!(some_field, "zzz");
+    }
+
+    #[test]
+    fn test_z_gpt() {
+        fn some_args() -> Vec<impl Into<Arg>> {
+            vec![
+                arg!(-x --xxx "xxx xxx xxx").action(clap::ArgAction::SetTrue)
+            ]
+        }
+
+        fn some_subcommands() -> Vec<impl Into<Arg>> {
+            vec![
+                arg!(-x --xxx "xxx xxx xxx").action(clap::ArgAction::SetTrue)
+            ]
+        }
+
+        let option_0_a_sub_cmd = Command::new("option_0_a")
+            .about("does testing things")
+            .arg(
+                Arg::new("field_a")
+                    .long("field-a")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+        let option_0_b_sub_cmd = Command::new("option_0_b")
+            .about("does testing things")
+            .arg(
+                Arg::new("field_b")
+                    .long("field-b")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+        let option_1_a_sub_cmd = Command::new("option_1_a")
+            .about("does testing things")
+            .arg(
+                Arg::new("field_a")
+                    .long("field-a")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+        let option_1_b_sub_cmd = Command::new("option_1_b")
+            .about("does testing things")
+            .arg(
+                Arg::new("field_b")
+                    .long("field-b")
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u32))
+                    .required(true)
+            );
+
+        let mut option_0_cmd = Command::new("option_0")
+            .about("does testing things")
+            .subcommands(vec![
+                option_0_a_sub_cmd,
+                option_0_b_sub_cmd
+            ]).subcommand_required(true);
+
+        let mut option_1_cmd = Command::new("option_1")
+            .about("does testing things")
+            .subcommands(vec![
+                option_1_a_sub_cmd,
+                option_1_b_sub_cmd
+            ]);
+
+
+        let mut train_cmd = Command::new("test")
+            .about("does testing things")
+            .arg(
+                Arg::new("some_field")
+                    .long("some-field")
+                    .action(ArgAction::Set),
+            )
+            .subcommand(option_0_cmd)
+            .subcommand(option_1_cmd);
+
+
+        let args = ["test_cli", "--some-field", "zzz", "option_0", "option_0_a", "--field-a", "10", "option_1", "option_1_b", "--field-b", "20"];
+        // let matches = train_cmd.get_matches_from(args);//"option_b", "--field-b", "20"
+        let mut args_iter = args.into_iter();
+        let matches = train_cmd.try_get_matches_from_mut(args_iter.by_ref()).unwrap(); //"option_b", "--field-b", "20"
+
+        // Extract the value
+        let some_field = matches.get_one::<String>("some_field").unwrap();
+        for id in matches.ids() {
+            println!("id={:?}", id);
+        }
+        if let Some(option_0_matches) = matches.subcommand_matches("option_0") {
+            if let Some(option_a_match) = option_0_matches.subcommand_matches("option_0_a") {
+                for id in option_a_match.ids() {
+                    println!("option_a_match: id={:?}", id);
+                }
+            }
+        }
+        // // if let Some(option_b_match) = matches.subcommand_matches("option_1_b") {
+        //     if let Some(option_b_match) = option_1_cmd.try_get_matches_from(args_iter.by_ref()).unwrap() {
+        //         for id in option_b_match.ids() {
+        //             println!("option_b_match: id={:?}", id);
+        //         }
+        //     }
+        //     assert_eq!(some_field, "zzz");
 
     }
 
     #[test]
     fn test_run_config_args(){
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaArgs, Debug, Deserialize)]
         struct SomeSubTrainConfig {
             ///learning rate
             #[run_config]
             lr: f64,
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(Debug, Deserialize, Serialize)]
+        struct SomeSubTrainConfigRangeOrValue {
+            ///learning rate
+            lr: RangeOrValue<f64>,
+        }
+
+        #[derive(ThoosaArgs, Debug, Deserialize)]
         struct CommonTrainConfig {
 
             ///some beta
@@ -887,6 +1014,14 @@ pub mod tests {
 
             #[run_config]
             sub_config:SomeSubTrainConfig
+        }
+
+        #[derive(Debug, Deserialize, Serialize)]
+        struct CommonTrainConfigRangeOrValue {
+
+            beta: RangeOrValue<f64>,
+
+            sub_config:SomeSubTrainConfigRangeOrValue
         }
 
         fn add_range_or_value<'a, V:'a>(name:&'a str, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>)
@@ -922,88 +1057,143 @@ pub mod tests {
 
             pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
 
-                if let Some(input) = matches.get_one::<RangeOrValue<f64>>("common-config-sub-config-lr") {
-                    add_range_or_value::<f64>("common-config-sub-config-lr", input, const_params, grid_params, opt_params);
+                if let Some(input) = matches.get_one::<RangeOrValue<f64>>("common-config.sub-config.lr") {
+                    add_range_or_value::<f64>("common-config.sub-config.lr", input, const_params, grid_params, opt_params);
                 } else {
-                    panic!("sub-config-lr not found");
+                    panic!("sub-config.lr not found");
                 }
 
-                if let Some(input) = matches.get_one::<RangeOrValue<f64>>("common-config-beta") {
-                    add_range_or_value::<f64>("common-config-beta", input, const_params, grid_params, opt_params);
+                if let Some(input) = matches.get_one::<RangeOrValue<f64>>("common-config.beta") {
+                    add_range_or_value::<f64>("common-config.beta", input, const_params, grid_params, opt_params);
                 } else {
                     panic!("beta not found");
                 }
             }
+
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        impl From<&[&NamedVal]> for CommonTrainConfig {
+            fn from(value: &[&NamedVal]) -> Self {
+                CommonTrainConfig{
+                    beta: 0.0,
+                    sub_config: SomeSubTrainConfig {
+                        lr: 0.0,
+                    },
+                }
+            }
+        }
+
+        #[derive(ThoosaArgs, Debug, Deserialize)]
         enum NetType {
-            #[arg_type(NetOneConfig)]
-            NetOne,
-            #[arg_type(NetTwoConfig)]
-            NetTwo
+            #[arg_type]
+            NetOne(NetOneConfig),
+            #[arg_type]
+            NetTwo(NetTwoConfig)
+        }
+
+        #[derive(Debug, Deserialize, Serialize)]
+        enum NetTypeRangeOrValue {
+
+            NetOne(NetOneConfigRangeOrValue),
+
+            NetTwo(NetTwoConfigRangeOrValue)
         }
 
         impl NetType {
-            pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
 
-                if let Some(subcmd_matches) = matches.subcommand_matches("NetOne") {
+            pub(crate) fn fill_run_configs(prefix: Option<&str>, matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+                let net_one_name = add_prefix(prefix, "net-one");
+                let net_two_name = add_prefix(prefix, "net-two");
+
+                if let Some(subcmd_matches) = matches.subcommand_matches(net_one_name.as_str()) {
 
                     NetOneConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
 
-                } else if let Some(subcmd_matches) = matches.subcommand_matches("NetTwo") {
+                } else if let Some(subcmd_matches) = matches.subcommand_matches(net_two_name.as_str()) {
 
                     NetTwoConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
 
                 } else {
-                    panic!("TrainTestNet not found");
+                    panic!("TrainTestNet not found: prefix={prefix:?} matches={matches:?} net_one_name={net_one_name} net_two_name={net_two_name}");
                 }
 
             }
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        fn add_prefix(prefix: Option<&str>, field: &str) -> String {
+            prefix.map(|p| format!("{}.{}", p, field)).unwrap_or(field.to_string())
+        }
+
+        #[derive(ThoosaArgs, Debug, Deserialize)]
         struct NetOneConfig {
             ///number of aaa
             #[run_config]
             num_aaa: u32,
         }
 
+        #[derive(Debug, Deserialize, Serialize)]
+        struct NetOneConfigRangeOrValue {
+            ///number of aaa
+
+            num_aaa: RangeOrValue<u32>,
+        }
+
         impl NetOneConfig {
+
             pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
                 if let Some(input) = matches.get_one::<RangeOrValue<u32>>("num-aaa") {
                     add_range_or_value::<u32>("num-aaa", input, const_params, grid_params, opt_params);
-                } else {
-                    panic!("num-aaa not found");
                 }
             }
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaArgs, Debug, Deserialize)]
         struct NetTwoConfig {
             ///number of bbb
             #[run_config]
             num_bbb: u32,
         }
 
+        #[derive(Debug, Deserialize, Serialize)]
+        struct NetTwoConfigRangeOrValue {
+            ///number of bbb
+            num_bbb: RangeOrValue<u32>,
+        }
+
         impl NetTwoConfig {
             pub(crate) fn fill_run_configs(matches:&ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
                 if let Some(input) = matches.get_one::<RangeOrValue<u32>>("num-bbb") {
-                    assert_eq!(&RangeOrValue::Value(222), input);
-                } else {
-                    panic!("num-bbb not found");
+                    // assert_eq!(&RangeOrValue::Value(222), input);
+                    add_range_or_value::<u32>("num-bbb", input, const_params, grid_params, opt_params);
                 }
             }
         }
 
         #[derive(ThoosaArgs, Debug)]
         struct TrainLabelsRunConfig {
+            #[run_config]
+            some_prop:f32,
 
             #[run_config]
             common_config:CommonTrainConfig,
 
             #[run_config]
-            net_type: NetType
+            net_type_0: NetType,
+
+            #[run_config]
+            net_type_1: NetType
+
+        }
+
+        #[derive(Debug, Deserialize, Serialize)]
+        struct TrainLabelsRunConfigRangeOrValue {
+            some_prop:RangeOrValue<f32>,
+
+            common_config:CommonTrainConfigRangeOrValue,
+
+            net_type_0: NetTypeRangeOrValue,
+
+            net_type_1: NetTypeRangeOrValue
 
         }
 
@@ -1012,8 +1202,11 @@ pub mod tests {
 
                 CommonTrainConfig::fill_run_configs(matches, const_params, grid_params, opt_params);
 
-                NetType::fill_run_configs(matches, const_params, grid_params, opt_params);
+                NetType::fill_run_configs(Some("net-type-0"), matches, const_params, grid_params, opt_params);
+
+                // NetType::fill_run_configs(Some("net-type-1"), matches, const_params, grid_params, opt_params);
             }
+
         }
 
         impl From<&[NamedVal]> for TrainLabelsRunConfig {
@@ -1021,13 +1214,20 @@ pub mod tests {
                 debug!("TrainLabelsRunConfig::from {:?}", value);
 
                 TrainLabelsRunConfig{
-                    common_config:CommonTrainConfig{
+                    some_prop: 10.0,
+                    common_config: CommonTrainConfig{
                         beta: 0.0,
                         sub_config: SomeSubTrainConfig {
                             lr: 0.0,
                         },
                     },
-                    net_type: NetType::NetOne
+                    net_type_0: NetType::NetOne(NetOneConfig {
+                        num_aaa: 0,
+                    }),
+
+                    net_type_1: NetType::NetOne(NetOneConfig {
+                        num_aaa: 0,
+                    })
                 }
             }
         }
@@ -1049,7 +1249,6 @@ pub mod tests {
 
         #[derive(ThoosaArgsCommand)]
         struct TopCommand {
-
             #[run_config]
             command:TopCommandType,
 
@@ -1100,9 +1299,9 @@ pub mod tests {
         impl TopCommandType {
 
             pub(crate) fn selected(matches: &ArgMatches) -> Self {
-                if let Some(subcmd_matches) = matches.subcommand_matches("TrainMotifs") {
+                if let Some(subcmd_matches) = matches.subcommand_matches("train-motifs") {
                     TopCommandType::TrainMotifs
-                } else if let Some(subcmd_matches) = matches.subcommand_matches("TrainLabels") {
+                } else if let Some(subcmd_matches) = matches.subcommand_matches("train-labels") {
                     TopCommandType::TrainLabels
                 } else {
                     panic!("No selected TopCommandType in matches");
@@ -1111,12 +1310,14 @@ pub mod tests {
 
             pub(crate) fn fill_run_configs(matches: &ArgMatches, const_params: &mut Vec<NamedVal>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
 
-                if let Some(subcmd_matches) = matches.subcommand_matches("TrainMotifs") {
-                    debug!("TrainMotifs");
+                if let Some(subcmd_matches) = matches.subcommand_matches("train-motifs") {
+                    debug!("train-motifs");
                     TrainMotifsRunConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
-                } else if let Some(subcmd_matches) = matches.subcommand_matches("TrainLabels") {
-                    debug!("TrainLabels");
+
+                } else if let Some(subcmd_matches) = matches.subcommand_matches("train-labels") {
+                    debug!("train-labels");
                     TrainLabelsRunConfig::fill_run_configs(subcmd_matches, const_params, grid_params, opt_params);
+
                 }
             }
 
@@ -1140,9 +1341,35 @@ pub mod tests {
 
         }
 
+
+        let vv = TrainLabelsRunConfigRangeOrValue {
+            some_prop: RangeOrValue::Range { range: 0.1..1.0, step: Some((0.1,1)) },
+            common_config: CommonTrainConfigRangeOrValue {
+                beta: RangeOrValue::Range { range: 0.1..1.0, step: Some((0.1,1)) },
+                sub_config: SomeSubTrainConfigRangeOrValue {
+                    lr: RangeOrValue::Range { range: 0.1..1.0, step: Some((0.1,1)) },
+                }
+            },
+            net_type_0: NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {
+                num_aaa: RangeOrValue::Range { range: 1..10, step: Some((1,0)) },
+            }),
+            net_type_1: NetTypeRangeOrValue::NetTwo(NetTwoConfigRangeOrValue {
+                num_bbb: RangeOrValue::Range { range: 1..10, step: Some((1,0)) },
+            }),
+        };
+
+        debug!("vv: {:?}", serde_json5::to_string(&vv));
+        // let v:TrainLabelsRunConfigRangeOrValue = serde_json5::from_str(&"{some_prop:\"0.1\", common_config:{beta:\"0.1..0.3:0.1,1\", sub_config:{lr:\"0.01..0.03\"}}, net_type_0:{NetOne{num_aaa:\"0.1\"}}}").unwrap();
+        let v:TrainLabelsRunConfigRangeOrValue = serde_json5::from_str(&"{some_prop:\"0.1..1:0.1,1\",common_config:{beta:\"0.1..1:0.1,1\",sub_config:{lr:\"0.1..1:0.1,1\"}},net_type_0:{NetOne:{num_aaa:\"1..10:1,0\"}},net_type_1:{NetTwo:{num_bbb:\"1..10:1,0\"}}}").unwrap();
+        // let v:TrainLabelsRunConfigRangeOrValue = serde_json5::from_str(&"{some_prop:\"0.1\", common_config:{beta:\"0.1..0.3:0.1,1\", sub_config:{lr:\"0.01..0.03\"}} }").unwrap();
+
+        debug!("v={v:?}");
+
         // let cli = TestCli::parse_from(["", "--some-field", "zzz"]);
-        let cli = TestCli::parse_from(["", "--some-field", "zzz", "TopCommand", "TrainLabels", "--common-config-sub-config-lr",  "0.01..0.03", "--common-config-beta", "0.1..0.3:0.1", "NetOne", "--num-aaa", "111"  ]);
-        // let cli = TestCli::parse_from(["", "--some-field", "zzz", "train-test-net",  "--sub-config-lr", "0.01..0.03", "--beta", "0.3", "NetTwo", "--num-bbb", "222"]);
+        //
+        let cli = TestCli::parse_from(["", "--some-field", "zzz", "TopCommand", "train-labels", "{some_prop:0.1, common_config:{beta:0.1..0.3:0.1, sub_config:{lr:0.01..0.03}}, net_type_0:NetOne{num_aaa:0.1}, net_type_1:NetTwo{num_bbb:0.2}"]);
+        // let cli = TestCli::parse_from(["", "--some-field", "zzz", "TopCommand", "train-labels", "--some-prop", "0.1", "--common-config.sub-config.lr",  "0.01..0.03", "--common-config.beta", "0.1..0.3:0.1", "net-type-1.net-two", "--num-bbb", "222" ]);// "net-type-0.net-one", "--num-aaa", "111"
+        // let cli = TestCli::parse_from(["", "--some-field", "zzz", "TopCommand", "train-labels", "--some-prop", "0.2", "--common-config.sub-config.lr",  "0.01..0.03", "--common-config.beta", "0.1..0.3:0.1", "NetTwo", "--net-type.num-bbb", "222"  ]);
 
 
         fn test_train_motifs(source:GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>>){
@@ -1157,12 +1384,16 @@ pub mod tests {
                 let mut opt = TPEOptimizer::new(|opt_vals| {
 
                     debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
-                    test_train_label(opt_vals.into());
+                    test_train_label([
+                        const_vals.as_slice(),
+                        grid_vals.as_slice(),
+                        opt_vals
+                    ].concat().as_slice().into());
                     0.0
                 },
-                        ConfigurationSpace::new(run_config_source.opt_params().clone()),
-                        10,
-                        3,
+                    ConfigurationSpace::new(run_config_source.opt_params().clone()),
+                    10,
+                    3,
                 );
 
                 let best_config = opt.optimize();
@@ -1172,7 +1403,7 @@ pub mod tests {
         }
 
         fn test_train_label(run_config:TrainLabelsRunConfig){
-            debug!("run_config={:?}", run_config);
+            debug!("test_train_label: run_config={:?}", run_config);
         }
 
         match &cli.command {
@@ -1215,6 +1446,52 @@ pub mod tests {
                 panic!("Subcommand not implemented");
             }
         }
+
+    }
+
+    #[test]
+    fn test_des_range_or_value(){
+        use serde::Deserialize;
+        use serde::de::{
+            self, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess, SeqAccess,
+            VariantAccess, Visitor,
+        };
+        use serde_json::from_str;
+
+        // #[derive(Deserialize, PartialEq, Debug)]
+        // struct Test {
+        //     field_0: RangeOrValue<u32>,
+        // }
+        //
+        // let j = r#"
+        //     {
+        //         "field_0":{1},
+        //     }
+        // "#;
+        // let expected = Test {
+        //     field_0: RangeOrValue::Value(1),
+        // };
+        // assert_eq!(expected, from_str(j).unwrap());
+
+        // let v = RangeOrValue::Value(1);
+        //debug!("v={:?}", serde_json::to_string(&v).unwrap());
+        // let v:RangeOrValue<f32> = serde_json::from_str("\"1.0\"").unwrap();
+
+        let v = RangeOrValue::Range{range:0.01..0.03, step:Some((0.01, 2))};
+
+
+        let v_str = serde_json5::to_string(&v).unwrap();
+
+        debug!("v_str={v_str:?}");
+
+        let v:RangeOrValue<f32> = serde_json5::from_str(&v_str).unwrap();
+
+        debug!("v={v:?}");
+
+
+
+
+
 
     }
 

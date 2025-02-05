@@ -12,3 +12,5 @@ path = "src/lib.rs"
 [dependencies]
 clap.workspace = true
 syn.workspace = true
+thoosa_shared = {path = "../../thoosa_shared" }
+log = "0.4.22"
