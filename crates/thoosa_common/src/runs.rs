@@ -226,6 +226,7 @@ pub struct ConstConfigSource<CP> {
     const_params:CP,
 }
 impl ConstConfigSource<Vec<NamedVal>> {
+
     pub fn new(const_params:Vec<NamedVal>) -> Self {
         Self {
             const_params,
@@ -249,10 +250,9 @@ impl GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
         }
     }
 
-    pub fn const_params(&self) -> Vec<NamedVal> {
-        vec![]
+    pub fn const_params(&self) -> &Vec<NamedVal> {
+        &self.const_config_source.const_params
     }
-
 
     pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal>> {
         make_combos(

@@ -43,6 +43,13 @@ pub struct NamedVal{
 }
 
 impl NamedVal {
+    pub fn new<I:Into<Val>>(name: &str, val:I) -> Self {
+        Self {
+            name: name.to_string(),
+            val: val.into()
+        }
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -50,6 +57,8 @@ impl NamedVal {
     pub fn val(&self) -> &Val {
         &self.val
     }
+
+
 }
 
 #[derive(Clone, Debug)]

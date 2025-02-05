@@ -27,6 +27,7 @@ use clap::Subcommand;
 use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
 use num_traits::real::Real;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::resource::ResourceId;
 
 pub mod repeat_iter;
@@ -454,6 +455,63 @@ pub enum RangeOrValue<V> {
     Value(V)
 }
 
+impl<V: fmt::Display + Serialize> Serialize for RangeOrValue<V> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            RangeOrValue::Value(v) => serializer.serialize_str(&v.to_string()),
+            RangeOrValue::Range { range, step } => {
+                let mut s = format!("{}..{}", range.start, range.end);
+                if let Some((step_value, step_count)) = step {
+                    s.push_str(&format!(":{},{}", step_value, step_count));
+                }
+                serializer.serialize_str(&s)
+            }
+        }
+    }
+}
+
+impl<'de, V: FromStr + Deserialize<'de>> Deserialize<'de> for RangeOrValue<V>
+where
+    <V as FromStr>::Err: Display,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+
+        if let Some((range_part, step_part)) = s.split_once(':') {
+            let mut range_iter = range_part.split("..");
+
+            if let (Some(start), Some(end)) = (range_iter.next(), range_iter.next()) {
+
+                let start: V = start.parse().map_err(serde::de::Error::custom)?;
+                let end: V = end.parse().map_err(serde::de::Error::custom)?;
+
+                let mut step_iter = step_part.split(',');
+                if let (Some(step_value), Some(step_count)) = (step_iter.next(), step_iter.next()) {
+                    let step_value: V = step_value.parse().map_err(serde::de::Error::custom)?;
+                    let step_count: u32 = step_count.parse().map_err(serde::de::Error::custom)?;
+                    return Ok(RangeOrValue::Range { range: start..end, step: Some((step_value, step_count)) });
+                }
+            }
+        } else if let Some((start, end)) = s.split_once("..") {
+            let start: V = start.parse().map_err(serde::de::Error::custom)?;
+            let end: V = end.parse().map_err(serde::de::Error::custom)?;
+
+            return Ok(RangeOrValue::Range { range: start..end, step: None });
+        } else {
+            return Ok(RangeOrValue::Value(s.parse().map_err(serde::de::Error::custom)?));
+        }
+
+        Err(serde::de::Error::custom("Invalid format for RangeOrValue"))
+    }
+}
+
+
 impl IntoIterator for RangeOrValue<u32> {
     type Item = u32;
     type IntoIter = Box<dyn Iterator<Item = u32>>;
@@ -790,6 +848,31 @@ pub fn round_to_digits(value: f64, digits: u32) -> f64 {
     (value * factor).round() / factor
 }
 
+pub fn arg_prefix(prev_prefix:Option<&str>, prefix:&str) -> String {
+    prev_prefix.map(|v|v.to_string() + "-").unwrap_or("".to_string()) + prefix
+}
+
+pub fn camel_to_snake(input: &str) -> String {
+    let mut snake = String::new();
+
+    let mut chars = input.chars();
+
+    snake.push(
+        chars.next().expect("input should have at least one character")
+            .to_lowercase().next().unwrap()
+    );
+
+    for ch in chars {
+        if ch.is_uppercase()  {
+            snake.push('_');
+        }
+        snake.push(ch.to_lowercase().next().unwrap());
+    }
+
+    snake
+}
+
+
 #[cfg(test)]
 mod shared_tests {
     /*
@@ -810,7 +893,7 @@ mod shared_tests {
     use clap::{Args, Parser};
 
 
-    use crate::{batch_windows, clc_num_batches, group_slices, make_combos, parse_range_str, test_utils, RangeOrValue, ResourceType, ThoosaError};
+    use crate::{arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, test_utils, RangeOrValue, ResourceType, ThoosaError};
     use crate::pulse_v;
 
     #[ctor::ctor]
@@ -1168,4 +1251,35 @@ mod shared_tests {
 
     }
 
+    #[test]
+    fn test_arg_prefix(){
+        assert_eq!(
+            "aaa",
+            arg_prefix(None, "aaa")
+        );
+
+        assert_eq!(
+            "bbb-aaa",
+            arg_prefix(Some("bbb"), "aaa")
+        );
+    }
+
+
+    #[test]
+    fn test_camel_to_snake(){
+        assert_eq!(
+            camel_to_snake("Hello"),
+            "hello"
+        );
+
+        assert_eq!(
+            camel_to_snake("HelloTest"),
+            "hello_test"
+        );
+
+        assert_eq!(
+            camel_to_snake("HelloTestOne"),
+            "hello_test_one"
+        );
+    }
 }

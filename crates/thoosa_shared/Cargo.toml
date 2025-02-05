@@ -20,3 +20,4 @@ num-traits.workspace = true
 lazy_static = "1.5.0"
 plotters.workspace = true
 parking_lot.workspace = true
+serde.workspace = true
