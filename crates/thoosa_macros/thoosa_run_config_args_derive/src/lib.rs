@@ -168,31 +168,31 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
 
     let gen = quote! {
-        impl ThoosaArgs for #target_struct_ident {
-
-            fn args(prefix: Option<&str>) -> (Option<Vec<impl Into<Arg>>>, Option<Vec<Command>>){
-                debug!("ThoosaArgs for #target_struct_ident: prefix={prefix:?}");
-
-                let mut args:Vec<Arg> = vec![];
-                let mut commands:Vec<Command> = vec![];
-
-                #fields_code
-
-                (
-                    if args.is_empty() {
-                        None
-                    } else {
-                        Some(args)
-                    },
-
-                    if commands.is_empty() {
-                        None
-                    } else {
-                        Some(commands)
-                    }
-                )
-            }
-        }
+        // impl ThoosaArgs for #target_struct_ident {
+        //
+        //     fn args(prefix: Option<&str>) -> (Option<Vec<impl Into<Arg>>>, Option<Vec<Command>>){
+        //         debug!("ThoosaArgs for #target_struct_ident: prefix={prefix:?}");
+        //
+        //         let mut args:Vec<Arg> = vec![];
+        //         let mut commands:Vec<Command> = vec![];
+        //
+        //         #fields_code
+        //
+        //         (
+        //             if args.is_empty() {
+        //                 None
+        //             } else {
+        //                 Some(args)
+        //             },
+        //
+        //             if commands.is_empty() {
+        //                 None
+        //             } else {
+        //                 Some(commands)
+        //             }
+        //         )
+        //     }
+        // }
     };
 
     gen.into()
@@ -271,8 +271,8 @@ pub fn thoosa_args_command_derive(input: TokenStream) -> TokenStream {
         impl ThoosaArgsCommand for #target_struct_ident {
             fn command() -> clap::Command {
                 let mut command = clap::Command::new(#target_struct_name);
-                #fields_code
-
+        //         #fields_code
+        //
                 command
             }
         }
