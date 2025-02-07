@@ -34,34 +34,6 @@ mod tests {
 
     #[test]
     fn test_build_from_named_vals() {
-        trait Field: Debug {
-            fn eq(&self, other: &dyn Field) -> bool;
-            fn as_any(&self) -> &dyn Any;
-            fn build(&self, val: Val) {}
-        }
-
-        #[derive(Debug)]
-        struct FieldPath<'a> {
-            path: Box<dyn Field + 'a>,
-        }
-
-        impl<'a> PartialEq<Self> for FieldPath<'a> {
-            fn eq(&self, other: &FieldPath<'a>) -> bool {
-                self.path.eq(&*other.path)
-            }
-        }
-
-        impl<'a> Eq for FieldPath<'a> {}
-
-        impl<'a> Hash for FieldPath<'a> {
-            fn hash<H: Hasher>(&self, state: &mut H) {}
-        }
-
-        impl<'a> FieldPath<'a> {
-            pub fn new(path: impl Field + 'a) -> Self {
-                Self { path: Box::new(path) }
-            }
-        }
 
         #[derive(Debug)]
         struct PathVal<P> {
@@ -75,7 +47,7 @@ mod tests {
             }
         }
 
-        #[derive(Debug)]
+        #[derive(Debug, Clone)]
         struct SubStruct0 {
             field_a: u32,
         }
@@ -83,22 +55,28 @@ mod tests {
         enum SubStruct0Fields {
             FieldA
         }
+        #[derive(Debug, Default)]
         struct SubStruct0Builder {
             field_a: Option<u32>,
         }
 
-        // impl Field for SubStruct0Fields {
-        //     fn eq(&self, other: &dyn Field) -> bool {
-        //         // PartialEq::eq(&self as Field, other)
-        //         true
-        //     }
-        //
-        //     fn as_any(&self) -> &dyn Any {
-        //         self
-        //     }
-        // }
+        impl SubStruct0Builder {
+            fn build(&self)-> SubStruct0 {
+                SubStruct0 {
+                    field_a: self.field_a.expect("SubStruct0Fields::FieldA is required"),
+                }
+            }
 
-        #[derive(Debug, PartialEq)]
+            fn add_val(&mut self, path: SubStruct0Fields, val: Val)  {
+                match path {
+                    SubStruct0Fields::FieldA => {
+                        self.field_a = Some(val.try_into().expect("SubStruct0Fields::FieldA is required"));
+                    }
+                }
+            }
+        }
+
+        #[derive(Debug, PartialEq, Clone)]
         struct SubStruct1 {
             field_b: u32,
         }
@@ -107,17 +85,29 @@ mod tests {
         enum SubStruct1Fields {
             FieldB
         }
-        // impl Field for SubStruct1Fields {
-        //     fn eq(&self, other: &dyn Field) -> bool {
-        //         true
-        //     }
-        //
-        //     fn as_any(&self) -> &dyn Any {
-        //         self
-        //     }
-        // }
 
-        #[derive(Debug)]
+        #[derive(Debug, Default)]
+        struct SubStruct1Builder {
+            field_b:Option<u32>,
+        }
+
+        impl SubStruct1Builder {
+            fn build(&self)-> SubStruct1 {
+                SubStruct1 {
+                    field_b: self.field_b.expect("SubStruct1Fields::FieldB is required"),
+                }
+            }
+
+            fn add_val(&mut self, path: SubStruct1Fields, val: Val)  {
+                match path {
+                    SubStruct1Fields::FieldB => {
+                        self.field_b = Some(val.try_into().expect("SubStruct1Fields::FieldB is required"));
+                    }
+                }
+            }
+        }
+
+        #[derive(Debug, Clone)]
         enum SubEnum {
             Sub0(SubStruct0),
             Sub1(SubStruct1),
@@ -129,14 +119,51 @@ mod tests {
             Sub1(SubStruct1Fields),
         }
 
-        // impl Field for SubEnumFields {
-        //     fn eq(&self, other: &dyn Field) -> bool {
-        //         true
-        //     }
-        //     fn as_any(&self) -> &dyn Any {
-        //         self
-        //     }
-        // }
+        #[derive(Debug, Default)]
+        struct SubEnumBuilder {
+            sub_struct0_builder:SubStruct0Builder,
+            sub_struct1_builder:SubStruct1Builder,
+            sub_enum:Option<SubEnumBuilderEnum>
+
+        }
+        #[derive(Debug, PartialEq)]
+        enum SubEnumBuilderEnum {
+            Sub0,
+            Sub1
+        }
+
+        impl SubEnumBuilder {
+
+            fn build(&self)-> SubEnum{
+
+                match self.sub_enum.as_ref().expect("SubEnumBuilder::sub_enum is required") {
+                    SubEnumBuilderEnum::Sub0 => {
+                        SubEnum::Sub0(self.sub_struct0_builder.build())
+                    }
+                    SubEnumBuilderEnum::Sub1 => {
+                        SubEnum::Sub1(self.sub_struct1_builder.build())
+                    }
+                }
+            }
+
+            fn add_val(&mut self, path: SubEnumFields, val: Val)  {
+                match path {
+                    SubEnumFields::Sub0(path) => {
+                        let prev = self.sub_enum.replace(SubEnumBuilderEnum::Sub0);
+                        assert!(prev.as_ref().map(|p|p==&SubEnumBuilderEnum::Sub0).unwrap_or(true), "mixed fields from SubEnum: prev={prev:?} and Sub0, path={path:?} ");
+
+                        self.sub_struct0_builder.add_val(path, val);
+                    }
+                    SubEnumFields::Sub1(path) => {
+                        let prev = self.sub_enum.replace(SubEnumBuilderEnum::Sub1);
+                        assert!(prev.as_ref().map(|p|p==&SubEnumBuilderEnum::Sub1).unwrap_or(true), "mixed fields from SubEnum: prev={prev:?} and Sub1, path={path:?} ");
+
+                        self.sub_struct1_builder.add_val(path, val);
+                    }
+                }
+            }
+        }
+
 
         #[derive(Debug)]
         struct SubStructB {
@@ -187,7 +214,7 @@ mod tests {
             field_00: u32,
             field_01: f32,
             sub_struct: SubStructB,
-            // sub_enum: SubEnum
+            sub_enum: SubEnum
         }
 
         impl SomeStruct {
@@ -201,7 +228,7 @@ mod tests {
             Field00,
             Field01,
             SubStruct(SubStructBFields),
-            // SubEnum(SubEnumFields)
+            SubEnum(SubEnumFields)
         }
 
         #[derive(Debug, Default)]
@@ -209,12 +236,22 @@ mod tests {
             field_00: Option<u32>,
             field_01: Option<f32>,
             sub_struct_builder: SubStructBBuilder,
-            // sub_enum: Option<SubEnum>
+            sub_enum_builder: SubEnumBuilder
         }
 
         impl SomeStructBuilder {
+
+            fn add_path_vals( path_vals:impl IntoIterator<Item=PathVal<SomeStructFields>>) -> SomeStruct{
+                let mut builder = SomeStructBuilder::default();
+
+                for path_val in path_vals {
+                    builder.add_val(path_val.path, path_val.val);
+                }
+
+                builder.build()
+            }
+
             fn add_val(&mut self, path: SomeStructFields, val: Val) {
-                let mut sub_struct_b_builder = SubStructB::builder();
 
                 match path {
                     SomeStructFields::Field00 => {
@@ -226,6 +263,9 @@ mod tests {
                     SomeStructFields::SubStruct(sub_path) => {
                         self.sub_struct_builder.add_val(sub_path, val);
                     }
+                    SomeStructFields::SubEnum(sub_path) => {
+                        self.sub_enum_builder.add_val(sub_path, val)
+                    }
                 }
             }
 
@@ -234,96 +274,49 @@ mod tests {
                     field_00: self.field_00.expect("field_00"),
                     field_01: self.field_01.expect("field_01"),
                     sub_struct: self.sub_struct_builder.build(),
+                    sub_enum: self.sub_enum_builder.build()
                 }
             }
         }
 
-        impl Field for SomeStructFields {
-            fn eq(&self, other: &dyn Field) -> bool {
-                if let Some(other_ssf) = other.as_any().downcast_ref::<SomeStructFields>() {
-                    self == other_ssf
-                } else {
-                    false
-                }
-            }
-
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
-            fn build(&self, val: Val) {
-                let builder = SomeStructBuilder::default();
-
-                match self {
-                    SomeStructFields::Field00 => {
-                        // builder.field_00 =
-                    }
-                    SomeStructFields::Field01 => {}
-                    SomeStructFields::SubStruct(_) => {}
-                    // SomeStructFields::SubEnum(_) => {
-                    //
-                    // }
-                }
-            }
-        }
-
-        //--field-00 0 --field-01 0.1 --subfield_0.field_00 1 --subfield_0.field_01 0.1  --subfield_0.subfield_0.field_00 2...
-
-        #[derive(Debug)]
-        enum Node<'a> {
-            Field(Val),
-            SubType(HashMap<&'a str, Node<'a>>),
-        }
-
-        // let vals = [
-        //     NamedVal::new("field_00", 0), NamedVal::new("field_01", 0.1),
-        //     NamedVal::new("sub-type.field_a", 1),
-        // ];
 
         let path_vals = [
             PathVal::new(SomeStructFields::Field00, Val::Int(1)), PathVal::new(SomeStructFields::Field01, Val::Int(2)),
             PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
-            // PathVal::new(FieldPath::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA))), Val::UInt(1)),
+            PathVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), Val::UInt(1)),
         ];
 
-        debug!("vals={:?}", path_vals);
 
-        let mut builder: SomeStructBuilder = SomeStruct::builder();
+        let some_struct: SomeStruct = SomeStructBuilder::add_path_vals(path_vals);
 
-        for path_val in path_vals {
-            builder.add_val(path_val.path, path_val.val);
-        }
+        assert_eq!(some_struct.field_00, 1);
+        assert_eq!(some_struct.field_01, 2.0);
+        assert_eq!(some_struct.sub_struct.field_a, 3);
+        assert_eq!(some_struct.sub_struct.field_b, 4);
+        let SubEnum::Sub0(sub_struct_0) = some_struct.sub_enum else {
+            panic!("some_struct.sub_enum should be Sub0");
+        };
+        assert_eq!(sub_struct_0.field_a, 1);
 
-        let some_struct: SomeStruct = builder.build();
 
-        debug!("some_struct={some_struct:?}");
+        let path_vals = [
+            PathVal::new(SomeStructFields::Field00, Val::Int(1)), PathVal::new(SomeStructFields::Field01, Val::Int(2)),
+            PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
+            PathVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)), Val::UInt(2)),
+        ];
 
-        // let map:HashMap<FieldPath, Val> = vals.into_iter().fold(HashMap::new(), |mut acc, x| {
-        //     debug!("x={:?}", x.path);
-        //
-        //     acc.insert(x.path, x.val);
-        //
-        //
-        // //
-        // //     let keys = x.name().split(".");
-        // //     let  map = &mut acc;
-        // //     // if keys.len() == 1{
-        // //     //     map.insert(keys[0], x.val());
-        // //     // }
-        // //     for key in keys {
-        // //         debug!("{:?}", key);
-        // //     }
-        // //
-        //     acc
-        // });
 
-        // debug!("map={:?}", map);
+        let some_struct: SomeStruct = SomeStructBuilder::add_path_vals(path_vals);
+        assert_eq!(some_struct.field_00, 1);
+        assert_eq!(some_struct.field_01, 2.0);
+        assert_eq!(some_struct.sub_struct.field_a, 3);
+        assert_eq!(some_struct.sub_struct.field_b, 4);
+        let SubEnum::Sub1(sub_struct_1) = some_struct.sub_enum else {
+            panic!("some_struct.sub_enum should be Sub0");
+        };
+        assert_eq!(sub_struct_1.field_b, 2);
 
-        impl From<&[NamedVal]> for SomeStruct {
-            fn from(value: &[NamedVal]) -> Self {
-                todo!()
-            }
-        }
+
     }
 
 }
