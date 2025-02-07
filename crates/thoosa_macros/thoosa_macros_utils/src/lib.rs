@@ -33,66 +33,58 @@ mod tests {
     }
 
     #[test]
-    fn test_build_from_named_vals(){
-
+    fn test_build_from_named_vals() {
         trait Field: Debug {
             fn eq(&self, other: &dyn Field) -> bool;
             fn as_any(&self) -> &dyn Any;
-            fn build(&self, val:Val){
-
-            }
+            fn build(&self, val: Val) {}
         }
-
 
         #[derive(Debug)]
         struct FieldPath<'a> {
-            path:Box<dyn Field + 'a>
+            path: Box<dyn Field + 'a>,
         }
 
-        impl <'a> PartialEq<Self> for FieldPath<'a> {
+        impl<'a> PartialEq<Self> for FieldPath<'a> {
             fn eq(&self, other: &FieldPath<'a>) -> bool {
                 self.path.eq(&*other.path)
             }
         }
 
-        impl <'a> Eq for FieldPath<'a> {
-            
+        impl<'a> Eq for FieldPath<'a> {}
+
+        impl<'a> Hash for FieldPath<'a> {
+            fn hash<H: Hasher>(&self, state: &mut H) {}
         }
 
-        impl <'a> Hash for FieldPath<'a> {
-            fn hash<H: Hasher>(&self, state: &mut H) {
-                
-            }
-        }
-
-        impl <'a> FieldPath<'a> {
+        impl<'a> FieldPath<'a> {
             pub fn new(path: impl Field + 'a) -> Self {
                 Self { path: Box::new(path) }
             }
         }
 
         #[derive(Debug)]
-        struct PathVal<'a> {
-            path:FieldPath<'a>,
-            val:Val
+        struct PathVal<P> {
+            path: P,
+            val: Val,
         }
 
-        impl <'a> PathVal<'a> {
-            pub fn new(path: FieldPath<'a>, val: Val) -> Self {
+        impl<P> PathVal<P> {
+            pub fn new(path: P, val: Val) -> Self {
                 Self { path, val }
             }
         }
 
         #[derive(Debug)]
-        struct SubStruct0{
-            field_a:u32
+        struct SubStruct0 {
+            field_a: u32,
         }
         #[derive(Debug, Eq, PartialEq)]
         enum SubStruct0Fields {
             FieldA
         }
-        struct SubStruct0Builder{
-            field_a:Option<u32>
+        struct SubStruct0Builder {
+            field_a: Option<u32>,
         }
 
         // impl Field for SubStruct0Fields {
@@ -106,10 +98,9 @@ mod tests {
         //     }
         // }
 
-
         #[derive(Debug, PartialEq)]
-        struct SubStruct1{
-            field_b:u32
+        struct SubStruct1 {
+            field_b: u32,
         }
 
         #[derive(Debug, PartialEq)]
@@ -129,13 +120,13 @@ mod tests {
         #[derive(Debug)]
         enum SubEnum {
             Sub0(SubStruct0),
-            Sub1(SubStruct1)
+            Sub1(SubStruct1),
         }
 
         #[derive(Debug, PartialEq)]
         enum SubEnumFields {
             Sub0(SubStruct0Fields),
-            Sub1(SubStruct1Fields)
+            Sub1(SubStruct1Fields),
         }
 
         // impl Field for SubEnumFields {
@@ -148,21 +139,30 @@ mod tests {
         // }
 
         #[derive(Debug)]
-        struct SubStructB{
-            field_a:u32,
-            field_b:u32
+        struct SubStructB {
+            field_a: u32,
+            field_b: u32,
         }
 
         #[derive(Debug, Default)]
-        struct SubStructBBuilder{
-            field_a:Option<u32>,
-            field_b:Option<u32>
+        struct SubStructBBuilder {
+            field_a: Option<u32>,
+            field_b: Option<u32>,
         }
 
         impl SubStructBBuilder {
+            fn add_val(&mut self, path: SubStructBFields, val: Val) /*->SomeStruct*/ {
+                match path {
+                    SubStructBFields::FieldA => {
+                        self.field_a = Some(val.try_into().expect("field A not valid"));
+                    }
+                    SubStructBFields::FieldB => {
+                        self.field_b = Some(val.try_into().expect("field B not valid"));
+                    }
+                }
+            }
 
-            fn build(&mut self) -> SubStructB {
-
+            fn build(&self) -> SubStructB {
                 SubStructB {
                     field_a: self.field_a.expect("field_a"),
                     field_b: self.field_b.expect("field_b"),
@@ -179,19 +179,19 @@ mod tests {
         #[derive(Debug, PartialEq)]
         enum SubStructBFields {
             FieldA,
-            FieldB
+            FieldB,
         }
 
         #[derive(Debug)]
         struct SomeStruct {
-            field_00:u32,
-            field_01:f32,
-            sub_struct:SubStructB,
+            field_00: u32,
+            field_01: f32,
+            sub_struct: SubStructB,
             // sub_enum: SubEnum
         }
 
         impl SomeStruct {
-            fn builder()->SomeStructBuilder {
+            fn builder() -> SomeStructBuilder {
                 SomeStructBuilder::default()
             }
         }
@@ -206,28 +206,34 @@ mod tests {
 
         #[derive(Debug, Default)]
         struct SomeStructBuilder {
-            field_00:Option<u32>,
-            field_01:Option<f32>,
-            sub_struct:Option<SubStructB>,
+            field_00: Option<u32>,
+            field_01: Option<f32>,
+            sub_struct_builder: SubStructBBuilder,
             // sub_enum: Option<SubEnum>
         }
 
         impl SomeStructBuilder {
-
-            fn build(&mut self, path_vals:&[PathVal]) ->SomeStruct {
-
+            fn add_val(&mut self, path: SomeStructFields, val: Val) {
                 let mut sub_struct_b_builder = SubStructB::builder();
-                for path_val in path_vals {
-                    // match path_val.path {
-                    //
-                    // }
-                }
 
+                match path {
+                    SomeStructFields::Field00 => {
+                        self.field_00 = Some(val.try_into().expect("field 00 not valid"));
+                    }
+                    SomeStructFields::Field01 => {
+                        self.field_01 = Some(val.try_into().expect("field 01 not valid"));
+                    }
+                    SomeStructFields::SubStruct(sub_path) => {
+                        self.sub_struct_builder.add_val(sub_path, val);
+                    }
+                }
+            }
+
+            fn build(&self) -> SomeStruct {
                 SomeStruct {
                     field_00: self.field_00.expect("field_00"),
                     field_01: self.field_01.expect("field_01"),
-                    sub_struct: sub_struct_b_builder.build(),
-                    // sub_enum: (),
+                    sub_struct: self.sub_struct_builder.build(),
                 }
             }
         }
@@ -245,19 +251,15 @@ mod tests {
                 self
             }
 
-            fn build(&self, val:Val){
+            fn build(&self, val: Val) {
                 let builder = SomeStructBuilder::default();
 
                 match self {
                     SomeStructFields::Field00 => {
                         // builder.field_00 =
                     }
-                    SomeStructFields::Field01 => {
-
-                    }
-                    SomeStructFields::SubStruct(_) => {
-
-                    }
+                    SomeStructFields::Field01 => {}
+                    SomeStructFields::SubStruct(_) => {}
                     // SomeStructFields::SubEnum(_) => {
                     //
                     // }
@@ -278,15 +280,23 @@ mod tests {
         //     NamedVal::new("sub-type.field_a", 1),
         // ];
 
-        let vals = [
-            PathVal::new(FieldPath::new(SomeStructFields::Field00), Val::Int(1)),                                               PathVal::new(FieldPath::new(SomeStructFields::Field01), Val::Int(1)),
-            PathVal::new(FieldPath::new(SomeStructFields::SubStruct(SubStructBFields::FieldA)), Val::Int(1)),                   PathVal::new(FieldPath::new(SomeStructFields::SubStruct(SubStructBFields::FieldB)), Val::Int(1)),
+        let path_vals = [
+            PathVal::new(SomeStructFields::Field00, Val::Int(1)), PathVal::new(SomeStructFields::Field01, Val::Int(2)),
+            PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
             // PathVal::new(FieldPath::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA))), Val::UInt(1)),
         ];
 
-        debug!("vals={:?}", vals);
+        debug!("vals={:?}", path_vals);
 
-        let ss:SomeStruct = SomeStruct::builder().build(&vals);
+        let mut builder: SomeStructBuilder = SomeStruct::builder();
+
+        for path_val in path_vals {
+            builder.add_val(path_val.path, path_val.val);
+        }
+
+        let some_struct: SomeStruct = builder.build();
+
+        debug!("some_struct={some_struct:?}");
 
         // let map:HashMap<FieldPath, Val> = vals.into_iter().fold(HashMap::new(), |mut acc, x| {
         //     debug!("x={:?}", x.path);
@@ -309,13 +319,11 @@ mod tests {
 
         // debug!("map={:?}", map);
 
-
         impl From<&[NamedVal]> for SomeStruct {
             fn from(value: &[NamedVal]) -> Self {
                 todo!()
             }
         }
-
     }
 
 }
