@@ -40,7 +40,7 @@ thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args
 plotters.workspace = true
 
 chrono = { version = "0.4.32" }
-ctor = "0.2.6"
+ctor.workspace = true
 
 
 statrs = "0.16.0"
