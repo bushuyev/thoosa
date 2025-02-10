@@ -225,9 +225,9 @@ impl SavableOptResult for DummySavableOptResult {
 pub struct ConstConfigSource<CP> {
     const_params:CP,
 }
-impl ConstConfigSource<Vec<NamedVal>> {
+impl ConstConfigSource<Vec<NamedVal<String>>> {
 
-    pub fn new(const_params:Vec<NamedVal>) -> Self {
+    pub fn new(const_params:Vec<NamedVal<String>>) -> Self {
         Self {
             const_params,
         }
@@ -241,20 +241,20 @@ pub struct GridRunConfigSource<CP, GP> {
     grid_params:GP
 }
 
-impl GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
+impl GridRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange>> {
 
-    pub fn new(const_config_source:ConstConfigSource<Vec<NamedVal>>, grid_params:Vec<NamedRange>) -> Self {
+    pub fn new(const_config_source:ConstConfigSource<Vec<NamedVal<String>>>, grid_params:Vec<NamedRange>) -> Self {
         Self {
             const_config_source,
             grid_params
         }
     }
 
-    pub fn const_params(&self) -> &Vec<NamedVal> {
+    pub fn const_params(&self) -> &Vec<NamedVal<String>> {
         &self.const_config_source.const_params
     }
 
-    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal>> {
+    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal<String>>> {
         make_combos(
             self.grid_params.iter().map(|gp| {
                 gp.clone().into_iter()
@@ -270,9 +270,9 @@ pub struct OptRunConfigSource<CP, GP, OP> {
     opt_params:OP
 }
 
-impl OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>  {
+impl OptRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange>, Vec<Hyperparameter>>  {
 
-    pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>>, opt_params:Vec<Hyperparameter>) -> Self {
+    pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange>>, opt_params:Vec<Hyperparameter>) -> Self {
         Self {
             grid_run_config_source,
             opt_params
@@ -283,11 +283,11 @@ impl OptRunConfigSource<Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>>  {
         &self.opt_params
     }
 
-    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal>> {
+    pub fn grid_to_vals(&self) -> Vec<Vec<NamedVal<String>>> {
         self.grid_run_config_source.grid_to_vals()
     }
 
-    pub fn grid_run_config_source(&self) -> &GridRunConfigSource<Vec<NamedVal>, Vec<NamedRange>> {
+    pub fn grid_run_config_source(&self) -> &GridRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange>> {
         &self.grid_run_config_source
     }
 }

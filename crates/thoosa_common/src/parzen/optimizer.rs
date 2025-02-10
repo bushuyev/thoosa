@@ -1,7 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
-use std::fmt::Debug;
-
+use std::fmt::{Debug, Display};
+use std::marker::PhantomData;
 use log::{debug, trace};
 use rand::distributions::Uniform;
 use rand::Rng;
@@ -310,16 +310,17 @@ mod tree_structured_parzen_estimator_tests {
     }
 }
 #[allow(dead_code)]
-pub struct TPEOptimizer<F> where F: FnMut(&[NamedVal]) -> f32 {
+pub struct TPEOptimizer<F, T> where F: FnMut(&[NamedVal<T>]) -> f32, T:Display  + for<'a> From<&'a str> {
     obj_func:F,
     cs:ConfigurationSpace,
     n_init:usize,
     max_evals:usize,
     tpe_samplers:HashMap<String, TreeStructuredParzenEstimator>,
+    _pd:PhantomData<T>
 }
 
-impl <F> TPEOptimizer<F>
-    where F: FnMut(&[NamedVal]) -> f32 {
+impl <F, T:Display + for<'a> From<&'a str>> TPEOptimizer<F, T>
+    where F: FnMut(&[NamedVal<T>]) -> f32 {
 
     #[allow(dead_code)]
     pub fn new(obj_func:F, cs:ConfigurationSpace, max_evals: usize, n_init: usize) -> Self {
@@ -333,8 +334,9 @@ impl <F> TPEOptimizer<F>
             n_init,
             max_evals,
             tpe_samplers: HashMap::from([
-                ("loss".into(), estimator)
-            ])
+                ("loss".to_string(), estimator)
+            ]),
+            _pd:PhantomData::default()
         }
     }
 
@@ -354,7 +356,11 @@ impl <F> TPEOptimizer<F>
             };
 
             let loss = (self.obj_func)(
-                &eval_config.iter().zip(self.cs.hyperparameters.iter()).map(|(val, hp)|(hp.name(), val.clone()).into()).collect::<Vec<_>>().as_slice()
+                &eval_config.iter().zip(self.cs.hyperparameters.iter()).map(|(val, hp)|{
+                    // (hp.name(), val.clone()).into()
+                    // NamedVal::from((hp.name().into(), val.clone()))
+                    NamedVal::from((<&str as Into<T>>::into(hp.name()), val.clone()))
+                }).collect::<Vec<_>>().as_slice()
             );
             if loss < best_loss {
                 best_loss = loss;
@@ -555,12 +561,12 @@ mod tpe_optimizer_tests {
     }
 
 
-    fn sphere(d_x: i64) -> impl Fn(&[NamedVal]) -> f32 {
+    fn sphere(d_x: i64) -> impl Fn(&[NamedVal<String>]) -> f32 {
         move |params| {
             debug!("params={params:?}");
 
             let t: Tensor = ArgmTensor(Tensor::from_slice(
-                params.into_iter().map(|v|<&NamedVal as TryInto<f64>>::try_into(v).unwrap()).collect::<Vec<f64>>().as_slice()
+                params.into_iter().map(|v|<&NamedVal<String> as TryInto<f64>>::try_into(v).unwrap()).collect::<Vec<f64>>().as_slice()
             )).into();
             let loss = t.subtract_scalar(d_x).pow_tensor_scalar(2).sum(None).double_value(&[]) as f32;
 

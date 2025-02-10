@@ -173,10 +173,10 @@ impl TrainLabelNodesValues {
     }
 }
 
-impl TryFrom<&[NamedVal]> for TrainLabelNodesValues {
+impl TryFrom<&[NamedVal<String>]> for TrainLabelNodesValues {
     type Error = ();
 
-    fn try_from(value: &[NamedVal]) -> Result<Self, Self::Error> {
+    fn try_from(value: &[NamedVal<String>]) -> Result<Self, Self::Error> {
         todo!()
     }
 }
@@ -1386,12 +1386,12 @@ impl Display for TrainNodesValues {
     }
 }
 
-impl TryFrom<&[NamedVal]> for TrainNodesValues {
+impl TryFrom<&[NamedVal<String>]> for TrainNodesValues {
     type Error = ThoosaError;
 
-    fn try_from(value: &[NamedVal]) -> Result<Self, Self::Error> {
+    fn try_from(value: &[NamedVal<String>]) -> Result<Self, Self::Error> {
         let params_map = value.into_iter().try_fold(HashMap::new(), |mut a, x| {
-            a.insert(x.name(), x.val());
+            a.insert(x.name().as_str(), x.val());
             Ok::<HashMap<&str, &Val>, ThoosaError>(a)
         })?;
 
@@ -2044,8 +2044,8 @@ pub fn run_opt_train_motif(
 pub fn opt_train<F, V, N:Debug+Default>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, Option<V>, f32), ThoosaError>//Option<V> - Some if run config from opt
 where
     F: FnMut(&VarStore, &V, &mut PlotVecf32) -> Result<(f32, N), ThoosaError>,
-    for<'a> <V as TryFrom<&'a [NamedVal]>>::Error: Debug,//TODO remove Vec
-    V: Clone + Display + Debug + for<'a> TryFrom<&'a [NamedVal]>,
+    for<'a> <V as TryFrom<&'a [NamedVal<String>]>>::Error: Debug,//TODO remove Vec
+    V: Clone + Display + Debug + for<'a> TryFrom<&'a [NamedVal<String>]>,
 {
 
     match &run_config {
