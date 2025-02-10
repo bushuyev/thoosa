@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::{Debug, Display};
 use std::ops::Range;
 use num_traits::ToPrimitive;
 use crate::{round_to_digits, RangeOrValue, ThoosaError};
@@ -37,20 +38,20 @@ impl Val {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct NamedVal{
-    name: String,
+pub struct NamedVal<T:Display>{
+    name: T,
     val:Val
 }
 
-impl NamedVal {
-    pub fn new<I:Into<Val>>(name: &str, val:I) -> Self {
-        Self {
-            name: name.to_string(),
-            val: val.into()
-        }
-    }
+impl <T:Display> NamedVal<T> {
+    // pub fn new<I:Into<Val>>(name: &str, val:I) -> Self {
+    //     Self {
+    //         name: name,
+    //         val: val.into()
+    //     }
+    // }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &T {
         &self.name
     }
 
@@ -116,7 +117,7 @@ pub struct NamedRangeIter {
 
 
 impl Iterator for NamedRangeIter {
-    type Item = NamedVal;
+    type Item = NamedVal<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -177,7 +178,7 @@ impl Iterator for NamedRangeIter {
 }
 
 impl IntoIterator for NamedRange {
-    type Item = NamedVal;
+    type Item = NamedVal<String>;
     type IntoIter = NamedRangeIter;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -242,15 +243,19 @@ fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
 }
 
 //
-// impl From<(&str, u32)> for NamedVal {
-//     fn from((name, value): (&str, u32)) -> Self {
-//         NamedVal{name: name.to_string(), val:value.into()}
+// impl From<(String, u32)> for NamedVal<String> {
+//     fn from((name, value): (String, u32)) -> Self {
+//         NamedVal{name, val:value.into()}
 //     }
 // }
 
-impl From<(&str, Val)> for NamedVal {
-    fn from((name, val): (&str, Val)) -> Self {
-        NamedVal{name: name.to_string(), val}
+impl  <T:Display, I:Into<T>> From<(I, Val)> for NamedVal<T> {
+
+    fn from((name, val): (I, Val)) -> Self {
+        NamedVal{
+            name: name.into(),
+            val
+        }
     }
 }
 
@@ -279,7 +284,7 @@ impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange {
 }
 
 
-impl From<&NamedRange> for Vec<NamedVal> {
+impl From<&NamedRange> for Vec<NamedVal<String>> {
     fn from(value: &NamedRange) -> Self {
 
         let start:i64 = value.range.start.to_i64(value.step.1);
@@ -287,9 +292,9 @@ impl From<&NamedRange> for Vec<NamedVal> {
         let step:usize = value.step.0.to_i64(value.step.1) as usize;
 
         (start..end).step_by(step).map(|i| (
-            value.name.as_str(),
+            value.name.clone(),
             <Val as Into<Val>>::into(i.into())
-        ).into()).collect::<Vec<NamedVal>>()
+        ).into()).collect::<Vec<NamedVal<String>>>()
     }
 }
 
@@ -310,7 +315,7 @@ impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange {
     }
 }
 
-impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedVal {
+impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedVal<String> {
     type Error = ();
 
     fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
@@ -575,27 +580,27 @@ pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<S
 }
 
 
-impl TryFrom<&NamedVal> for f64 {
+impl <T:Display> TryFrom<&NamedVal<T>> for f64 {
     type Error = ThoosaError;
 
-    fn try_from(value: &NamedVal) -> Result<Self, Self::Error> {
+    fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
         value.val.clone().try_into()
     }
 }
 
 
-impl TryFrom<&NamedVal> for f32 {
+impl <T:Display> TryFrom<&NamedVal<T>> for f32 {
     type Error = ThoosaError;
 
-    fn try_from(value: &NamedVal) -> Result<Self, Self::Error> {
+    fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
         value.val.clone().try_into()
     }
 }
 
-impl TryFrom<&NamedVal> for u32 {
+impl <T:Display> TryFrom<&NamedVal<T>> for u32 {
     type Error = ThoosaError;
 
-    fn try_from(value: &NamedVal) -> Result<Self, Self::Error> {
+    fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
         value.val.clone().try_into()
     }
 }
@@ -614,7 +619,7 @@ mod tests {
             step: (Val::Int(1), 2),
         };
 
-        let result: Vec<NamedVal> = named_range.into_iter().collect();
+        let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
 
         let expected = vec![
             NamedVal { name: "SomeName".to_string(), val: Val::Int(-1) },
@@ -634,7 +639,7 @@ mod tests {
             step: (Val::Real(0.3), 2),
         };
 
-        let result: Vec<NamedVal> = named_range.into_iter().collect();
+        let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
 
         let expected = vec![
             NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.0)  },

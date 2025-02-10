@@ -225,14 +225,14 @@ pub fn run_config_source_derive(input: TokenStream) -> TokenStream {
 
 
         impl XRunConfigSource for #target_struct  {
-            type CC = XVecConfig<NamedVal>;
+            type CC = XVecConfig<NamedVal<String>>;
             type GC = XVecConfig<NamedRange>;
             type OC = XVecConfig<Hyperparameter>;
 
             fn to_run_configs(self) -> XRunConfigs<Self::CC, Self::GC, Self::OC> {
 
 
-                let (mut const_params, mut grid_params, mut opt_params):(Vec<NamedVal>, Vec<NamedRange>, Vec<Hyperparameter>) = (vec![], vec![], vec![]);
+                let (mut const_params, mut grid_params, mut opt_params):(Vec<NamedVal<String>>, Vec<NamedRange>, Vec<Hyperparameter>) = (vec![], vec![], vec![]);
 
 
                 #(#in_run_config_keys)*;
@@ -250,8 +250,8 @@ pub fn run_config_source_derive(input: TokenStream) -> TokenStream {
             #(#run_config_fields,)*
         }
 
-        impl From<&[NamedVal]> for #run_config_struct {
-            fn from(values: &[NamedVal]) -> Self {
+        impl From<&[NamedVal<String>]> for #run_config_struct {
+            fn from(values: &[NamedVal<String>]) -> Self {
                 let values_hash = values.iter().fold(HashMap::new(), |mut acc, x| {
                     acc.insert(x.name(), x.val().clone());
                     acc

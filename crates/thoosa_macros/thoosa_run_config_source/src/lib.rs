@@ -5,7 +5,7 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 
 //TODO remove
 pub trait XConstConfig {
-    fn consts(&self) -> &[NamedVal];
+    fn consts(&self) -> &[NamedVal<String>];
 }
 
 pub trait XGridConfig {
@@ -61,8 +61,8 @@ impl <V> XVecConfig<V> {
     }
 }
 
-impl XConstConfig for XVecConfig<NamedVal> {
-    fn consts(&self) -> &[NamedVal] {
+impl XConstConfig for XVecConfig<NamedVal<String>> {
+    fn consts(&self) -> &[NamedVal<String>] {
         self.configs.as_slice()
     }
 }
