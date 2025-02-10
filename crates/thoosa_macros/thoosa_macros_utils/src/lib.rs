@@ -21,11 +21,13 @@ pub fn is_primitive(ty: &Type) -> bool {
 mod tests {
     use std::any::Any;
     use std::collections::HashMap;
-    use std::fmt::Debug;
+    use std::fmt::{Debug, Display, Formatter};
     use std::hash::{Hash, Hasher};
     use std::path::Path;
     use log::debug;
-    use thoosa_shared::val::{NamedVal, Val};
+    use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::RangeOrValue;
+    use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
     #[ctor::ctor]
     fn init() {
@@ -51,6 +53,7 @@ mod tests {
         struct SubStruct0 {
             field_a: u32,
         }
+
         #[derive(Debug, Eq, PartialEq)]
         enum SubStruct0Fields {
             FieldA
@@ -217,6 +220,20 @@ mod tests {
             sub_enum: SubEnum
         }
 
+        #[derive(Debug)]
+        struct SomeStructRangeOrValue {
+            field_00: RangeOrValue<u32>,
+            field_01: RangeOrValue<f32>,
+            // sub_struct: SubStructB,
+            // sub_enum: SubEnum
+        }
+
+        impl SomeStructRangeOrValue {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&SomeStructFields>,  const_params: &mut Vec<NamedVal<SomeStructFields>>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
+                add_range_or_value::<f64, T>(add_prefix(prefix,"lr"), &self.lr, const_params, grid_params, opt_params);
+            }
+        }
+
         impl SomeStruct {
             fn builder() -> SomeStructBuilder {
                 SomeStructBuilder::default()
@@ -229,6 +246,27 @@ mod tests {
             Field01,
             SubStruct(SubStructBFields),
             SubEnum(SubEnumFields)
+        }
+
+        impl Display for SomeStructFields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                // write!(f, "({}, {})", self.longitude, self.latitude)
+                match self {
+                    SomeStructFields::Field00 => {
+                        write!(f, "SomeStructFields::Field00")
+                    }
+                    SomeStructFields::Field01 => {
+                        write!(f, "SomeStructFields::Field01")
+
+                    }
+                    SomeStructFields::SubStruct(_) => {
+                        write!(f, "SomeStructFields::SubStruct")
+                    }
+                    SomeStructFields::SubEnum(_) => {
+                        write!(f, "SomeStructFields::SubEnum")
+                    }
+                }
+            }
         }
 
         #[derive(Debug, Default)]

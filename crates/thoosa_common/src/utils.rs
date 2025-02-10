@@ -949,7 +949,7 @@ pub mod tests {
             _fd:PhantomData<T>,
         }
 
-        fn add_range_or_value<'a, V:'a, T:Display>(name:T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>)
+        pub fn add_range_or_value<'a, V:'a, T:Display>(name:T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>)
             where Val: From<&'a V>,
                   Hyperparameter: From<(T, &'a std::ops::Range<V>)>{
 
