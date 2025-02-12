@@ -166,13 +166,13 @@ impl RunAllParams {
         &self.valid_resource_group
     }
 
-    pub fn to_net_config_space(&self) -> Option<ConfigurationSpace> {
+    pub fn to_net_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
-            ("lr", &self.lr).try_into().ok(),
-            ("num_layers", &self.num_layers).try_into().ok(),
+            ("lr".to_string(), &self.lr).try_into().ok(),
+            ("num_layers".to_string(), &self.num_layers).try_into().ok(),
         ]
         .into_iter()
-        .collect::<Option<Vec<Hyperparameter>>>()
+        .collect::<Option<Vec<Hyperparameter<String>>>>()
         .map(|v| ConfigurationSpace::new(v))
     }
 }
@@ -445,14 +445,14 @@ pub struct SayHelloParams {
 pub struct SayHelloRunConfig {
     step: u32,
     window: u32,
-    cs: Option<ConfigurationSpace>,
+    cs: Option<ConfigurationSpace<String>>,
 }
 
 impl Params<SayHelloRunConfig, Simple, ()> for SayHelloParams {
     fn to_run_configs(&self) -> Vec<SayHelloRunConfig> {
-        let tpe_config_space = [("lr", &self.lr).try_into().ok()]
+        let tpe_config_space = [("lr".to_string(), &self.lr).try_into().ok()]
             .into_iter()
-            .collect::<Option<Vec<Hyperparameter>>>()
+            .collect::<Option<Vec<Hyperparameter<String>>>>()
             .map(|v| ConfigurationSpace::new(v));
 
         make_combos([
@@ -478,7 +478,7 @@ impl Params<SayHelloRunConfig, Simple, ()> for SayHelloParams {
 }
 
 impl RunConfig for SayHelloRunConfig {
-    fn config_space(&self) -> Option<&ConfigurationSpace> {
+    fn config_space(&self) -> Option<&ConfigurationSpace<String>> {
         self.cs.as_ref()
     }
 

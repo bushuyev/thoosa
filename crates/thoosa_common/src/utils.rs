@@ -553,7 +553,7 @@ pub mod tests {
     use thoosa_run_config_args_derive::{ThoosaArgs, ThoosaArgsCommand};
     use thoosa_run_config_source::{XGridConfig, XOptConfig, XResourceConfigSource, XRunConfigSource, XRunConfigs, XVecConfig};
     use thoosa_run_config_source_derive::XRunConfigSource;
-    use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::hyperparameter::{Hyperparameter, ParamName};
     use thoosa_shared::resource::ResourcesConfig;
     use thoosa_shared::val::Val::UInt;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -774,7 +774,7 @@ pub mod tests {
             }
         }
 
-        let run_config_source:OptRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange<String>>, Vec<Hyperparameter>, String> = OptRunConfigSource::new(
+        let run_config_source:OptRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange<String>>, Vec<Hyperparameter<String>>, String> = OptRunConfigSource::new(
             GridRunConfigSource::new(
                 ConstConfigSource::new(vec![]),
                 vec![],
@@ -896,7 +896,7 @@ pub mod tests {
             lr: f64,
         }
 
-        impl <T:Display+Debug>From<&[NamedVal<T>]> for SomeSubTrainConfig {
+        impl <T:ParamName>From<&[NamedVal<T>]> for SomeSubTrainConfig {
             fn from(value: &[NamedVal<T>]) -> Self {
                 debug!("SomeSubTrainConfig::from {:?}", value);
 
@@ -914,7 +914,7 @@ pub mod tests {
         }
 
         impl SomeSubTrainConfigRangeOrValue {
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
                 add_range_or_value::<f64, String>(add_prefix(prefix,"lr".into()), &self.lr, const_params, grid_params, opt_params);
             }
         }
@@ -931,7 +931,7 @@ pub mod tests {
         }
 
 
-        impl <T:Display+Debug> From<&[NamedVal<T>]> for CommonTrainConfig{
+        impl <T:ParamName> From<&[NamedVal<T>]> for CommonTrainConfig{
             fn from(value: &[NamedVal<T>]) -> Self {
                 CommonTrainConfig{
                     beta: 0.0,
@@ -952,7 +952,7 @@ pub mod tests {
 
         impl CommonTrainConfigRangeOrValue  {
 
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
 
                 add_range_or_value::<f64, String>(add_prefix(prefix,"beta".to_string()), &self.beta, const_params, grid_params, opt_params);
 
@@ -961,7 +961,7 @@ pub mod tests {
 
         }
 
-        impl <T:Display> From<&[&NamedVal<T>]> for CommonTrainConfig {
+        impl <T:ParamName> From<&[&NamedVal<T>]> for CommonTrainConfig {
             fn from(value: &[&NamedVal<T>]) -> Self {
                 CommonTrainConfig{
                     beta: 0.0,
@@ -990,7 +990,7 @@ pub mod tests {
 
         impl  NetTypeRangeOrValue {
 
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
 
                 match self {
                     NetTypeRangeOrValue::NetOne(net_1) => {
@@ -1021,7 +1021,7 @@ pub mod tests {
 
         impl  NetOneConfigRangeOrValue {
 
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
                 add_range_or_value::<u32, String>(add_prefix(prefix,"num-aaa".to_string()), &self.num_aaa, const_params, grid_params, opt_params);
             }
         }
@@ -1041,7 +1041,7 @@ pub mod tests {
         }
 
         impl  NetTwoConfigRangeOrValue {
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
                 add_range_or_value::<u32, String>(add_prefix(prefix,"num-bbb".to_string()), &self.num_bbb, const_params, grid_params, opt_params);
             }
         }
@@ -1075,7 +1075,7 @@ pub mod tests {
         }
 
         impl TrainLabelsRunConfigRangeOrValue {
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<String>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
 
                 add_range_or_value::<f32, String>(add_prefix(prefix, "some_prop".to_string()), &self.some_prop, const_params, grid_params, opt_params);
 
@@ -1086,7 +1086,7 @@ pub mod tests {
 
             }
 
-            fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange<String>>, Vec<Hyperparameter>, String> {
+            fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange<String>>, Vec<Hyperparameter<String>>, String> {
                 let mut const_params = Vec::new();
                 let mut grid_params = Vec::new();
                 let mut opt_params = Vec::new();
@@ -1119,7 +1119,7 @@ pub mod tests {
             }
         }
 
-        impl <T:Display + Debug> From<&[NamedVal<T>]> for TrainLabelsRunConfig {
+        impl <T:ParamName> From<&[NamedVal<T>]> for TrainLabelsRunConfig {
 
             fn from(value: &[NamedVal<T>]) -> Self {
                 debug!("TrainLabelsRunConfig::from {value:?}");
@@ -1151,7 +1151,7 @@ pub mod tests {
         }
 
         impl  TrainMotifsRunConfig {
-            pub(crate) fn fill_run_configs<T:Display>(matches:&ArgMatches, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs<T:ParamName>(matches:&ArgMatches, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
 
             }
         }
@@ -1211,7 +1211,7 @@ pub mod tests {
 
         }
 
-        fn test_train_labels<T:Display+Clone+Debug+ for<'a> From<&'a str>>(run_config_source:OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter>, T>){
+        fn test_train_labels<T:ParamName>(run_config_source:OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T>){
             let const_vals = run_config_source.grid_run_config_source().const_params();
 
             for grid_vals in run_config_source.grid_to_vals() {

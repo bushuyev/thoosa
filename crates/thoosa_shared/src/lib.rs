@@ -28,7 +28,7 @@ use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
 use num_traits::real::Real;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use crate::hyperparameter::Hyperparameter;
+use crate::hyperparameter::{Hyperparameter, ParamName};
 use crate::resource::ResourceId;
 use crate::val::{NamedRange, NamedVal, Val};
 
@@ -513,9 +513,9 @@ where
     }
 }
 
-pub fn add_range_or_value<'a, V:'a, T:Display>(name:T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter>)
+pub fn add_range_or_value<'a, V:'a, T:ParamName>(name:T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
 where Val: From<&'a V>,
-      Hyperparameter: From<(T, &'a Range<V>)>{
+      Hyperparameter<T>: From<(T, &'a Range<V>)>{
 
     match v {
         RangeOrValue::Range { range, step: step_op } => {
