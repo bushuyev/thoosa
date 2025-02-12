@@ -322,7 +322,6 @@ pub struct TPEOptimizer<F, T> where F: FnMut(&[NamedVal<T>]) -> f32, T:Display  
 impl <F, T:Display + for<'a> From<&'a str>> TPEOptimizer<F, T>
     where F: FnMut(&[NamedVal<T>]) -> f32 {
 
-    #[allow(dead_code)]
     pub fn new(obj_func:F, cs:ConfigurationSpace, max_evals: usize, n_init: usize) -> Self {
 
         debug!("TPEOptimizer:new: cs={cs:?}");
@@ -515,7 +514,7 @@ mod tpe_optimizer_tests {
     #[test]
     fn test_optimize_ctaegoric(){
 
-        let mut opt = TPEOptimizer::new(
+        let mut opt:TPEOptimizer<_, String> = TPEOptimizer::new(
             move |params| {
                 debug!("params={params:?}");
 

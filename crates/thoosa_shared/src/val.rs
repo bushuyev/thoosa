@@ -63,19 +63,19 @@ impl <T:Display> NamedVal<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct NamedRange{
-    name: String,
+pub struct NamedRange<T:Display>{
+    name: T,
     range:Range<Val>,
     step:(Val, u32)
 }
 
 
-impl NamedRange {
-    pub fn new(name: &str, range: Range<Val>, step: (Val, u32)) -> Self {
-        Self { name:name.into(), range, step }
+impl <T:Display> NamedRange<T> {
+    pub fn new(name: T, range: Range<Val>, step: (Val, u32)) -> Self {
+        Self { name, range, step }
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &T {
         &self.name
     }
 
@@ -100,8 +100,8 @@ enum IterationKind {
 
 
 
-pub struct NamedRangeIter {
-    name: String,
+pub struct NamedRangeIter<T:Display+Clone> {
+    name: T,
     // We'll store everything as floats internally:
     current: f64,
     end: f64,
@@ -116,8 +116,8 @@ pub struct NamedRangeIter {
 }
 
 
-impl Iterator for NamedRangeIter {
-    type Item = NamedVal<String>;
+impl <T:Display+Clone> Iterator for NamedRangeIter<T> {
+    type Item = NamedVal<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -177,9 +177,9 @@ impl Iterator for NamedRangeIter {
     }
 }
 
-impl IntoIterator for NamedRange {
-    type Item = NamedVal<String>;
-    type IntoIter = NamedRangeIter;
+impl <T:Display+Clone> IntoIterator for NamedRange<T> {
+    type Item = NamedVal<T>;
+    type IntoIter = NamedRangeIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         let start_val = &self.range.start;
@@ -266,7 +266,7 @@ impl  <T:Display, I:Into<T>> From<(I, Val)> for NamedVal<T> {
 //     }
 // }
 
-impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange {
+impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange<String> {
     type Error = ();
 
     fn try_from((name, value): (&str, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
@@ -284,8 +284,8 @@ impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange {
 }
 
 
-impl From<&NamedRange> for Vec<NamedVal<String>> {
-    fn from(value: &NamedRange) -> Self {
+impl From<&NamedRange<String>> for Vec<NamedVal<String>> {
+    fn from(value: &NamedRange<String>) -> Self {
 
         let start:i64 = value.range.start.to_i64(value.step.1);
         let end:i64 = value.range.end.to_i64(value.step.1);
@@ -298,7 +298,7 @@ impl From<&NamedRange> for Vec<NamedVal<String>> {
     }
 }
 
-impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange {
+impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange<String> {
     type Error = ();
 
     fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {

@@ -24,9 +24,10 @@ mod tests {
     use std::fmt::{Debug, Display, Formatter};
     use std::hash::{Hash, Hasher};
     use std::path::Path;
+    use std::str::FromStr;
     use log::debug;
     use thoosa_shared::hyperparameter::Hyperparameter;
-    use thoosa_shared::RangeOrValue;
+    use thoosa_shared::{add_prefix, add_range_or_value, RangeOrValue, ThoosaError};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
     #[ctor::ctor]
@@ -229,8 +230,8 @@ mod tests {
         }
 
         impl SomeStructRangeOrValue {
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&SomeStructFields>,  const_params: &mut Vec<NamedVal<SomeStructFields>>, grid_params: &mut Vec<NamedRange>, opt_params: &mut Vec<Hyperparameter>) {
-                add_range_or_value::<f64, T>(add_prefix(prefix,"lr"), &self.lr, const_params, grid_params, opt_params);
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&SomeStructFields>,  const_params: &mut Vec<NamedVal<SomeStructFields>>, grid_params: &mut Vec<NamedRange<SomeStructFields>>, opt_params: &mut Vec<Hyperparameter>) {
+                add_range_or_value::<u32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field00), &self.field_00, const_params, grid_params, opt_params);
             }
         }
 
@@ -266,6 +267,14 @@ mod tests {
                         write!(f, "SomeStructFields::SubEnum")
                     }
                 }
+            }
+        }
+
+        impl FromStr for SomeStructFields {
+            type Err = ThoosaError;
+
+            fn from_str(s: &str) -> Result<Self, ThoosaError> {
+                Ok(SomeStructFields::Field00)
             }
         }
 
