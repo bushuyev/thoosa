@@ -26,7 +26,7 @@ mod tests {
     use std::path::Path;
     use std::str::FromStr;
     use log::debug;
-    use thoosa_shared::hyperparameter::Hyperparameter;
+    use thoosa_shared::hyperparameter::{Hyperparameter, ParamName};
     use thoosa_shared::{add_prefix, add_range_or_value, RangeOrValue, ThoosaError};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
@@ -55,7 +55,7 @@ mod tests {
             field_a: u32,
         }
 
-        #[derive(Debug, Eq, PartialEq)]
+        #[derive(Debug, Clone, Eq, PartialEq)]
         enum SubStruct0Fields {
             FieldA
         }
@@ -85,7 +85,7 @@ mod tests {
             field_b: u32,
         }
 
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, Clone, PartialEq)]
         enum SubStruct1Fields {
             FieldB
         }
@@ -117,7 +117,7 @@ mod tests {
             Sub1(SubStruct1),
         }
 
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, Clone, PartialEq)]
         enum SubEnumFields {
             Sub0(SubStruct0Fields),
             Sub1(SubStruct1Fields),
@@ -207,7 +207,7 @@ mod tests {
             }
         }
 
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, Clone, PartialEq)]
         enum SubStructBFields {
             FieldA,
             FieldB,
@@ -230,7 +230,7 @@ mod tests {
         }
 
         impl SomeStructRangeOrValue {
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&SomeStructFields>,  const_params: &mut Vec<NamedVal<SomeStructFields>>, grid_params: &mut Vec<NamedRange<SomeStructFields>>, opt_params: &mut Vec<Hyperparameter>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&SomeStructFields>,  const_params: &mut Vec<NamedVal<SomeStructFields>>, grid_params: &mut Vec<NamedRange<SomeStructFields>>, opt_params: &mut Vec<Hyperparameter<SomeStructFields>>) {
                 add_range_or_value::<u32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field00), &self.field_00, const_params, grid_params, opt_params);
             }
         }
@@ -241,13 +241,15 @@ mod tests {
             }
         }
 
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, Clone, PartialEq)]
         enum SomeStructFields {
             Field00,
             Field01,
             SubStruct(SubStructBFields),
             SubEnum(SubEnumFields)
         }
+
+        impl ParamName for SomeStructFields {}
 
         impl Display for SomeStructFields {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
