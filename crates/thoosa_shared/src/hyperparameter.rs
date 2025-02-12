@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::ops::Range;
 use rand::distributions::Uniform;
 use rand::Rng;
@@ -7,15 +7,21 @@ use crate::opt_rng::opt_rnd;
 use crate::RangeOrValue;
 use crate::val::Val;
 
+pub trait ParamName: Display + Debug + Clone {
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Hyperparameter {
-    UniformFloat{name:String, lower:f64, upper:f64},
-    UniformInt{name:String, lower:i64, upper:i64},
-    Categorical{name:String, values:Vec<String>}
 }
 
-impl Hyperparameter {
+impl ParamName for String {}
+impl <'a> ParamName for &'a str {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Hyperparameter<T:ParamName> {
+    UniformFloat{name:T, lower:f64, upper:f64},
+    UniformInt{name:T, lower:i64, upper:i64},
+    Categorical{name:T, values:Vec<String>}
+}
+
+impl <T:ParamName> Hyperparameter<T> {
 
     pub fn random_sample(&self) -> Val {
         match self {
@@ -40,7 +46,7 @@ impl Hyperparameter {
         }
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &T {
         match self {
             Hyperparameter::UniformFloat { name, .. } => name,
             Hyperparameter::UniformInt { name, .. } => name,
@@ -50,54 +56,30 @@ impl Hyperparameter {
 
 }
 
-impl From<(&str, Range<f64>)> for Hyperparameter {
-    fn from(value: (&str, Range<f64>)) -> Self {
-        Hyperparameter::UniformFloat {
-            name: value.0.into(),
-            lower: value.1.start.into(),
-            upper: value.1.end.into()
-        }
-    }
-}
-
-impl From<(&str, Range<u32>)> for Hyperparameter {
-    fn from(value: (&str, Range<u32>)) -> Self {
-        Hyperparameter::UniformInt {
-            name: value.0.into(),
-            lower: value.1.start.into(),
-            upper: value.1.end.into()
-        }
-    }
-}
-
-
-
-
-impl <T:Display> From<(T, &Range<u32>)> for Hyperparameter {
-    fn from(value: (T, &Range<u32>)) -> Self {
-        Hyperparameter::UniformInt {
-            name: value.0.to_string(),
-            lower: value.1.start.into(),
-            upper: value.1.end.into()
-        }
-    }
-}
-
-
-impl <T:Display> From<(T, &Range<f64>)> for Hyperparameter {
+impl <T:ParamName> From<(T, &Range<f64>)> for Hyperparameter<T> {
     fn from(value: (T, &Range<f64>)) -> Self {
         Hyperparameter::UniformFloat {
-            name: value.0.to_string(),
+            name: value.0,
             lower: value.1.start.into(),
             upper: value.1.end.into()
         }
     }
 }
 
-impl <T:Display> From<(T, &Range<f32>)> for Hyperparameter {
+impl <T:ParamName> From<(T, &Range<u32>)> for Hyperparameter<T> {
+    fn from(value: (T, &Range<u32>)) -> Self {
+        Hyperparameter::UniformInt {
+            name: value.0,
+            lower: value.1.start.into(),
+            upper: value.1.end.into()
+        }
+    }
+}
+
+impl <T:ParamName> From<(T, &Range<f32>)> for Hyperparameter<T> {
     fn from(value: (T, &Range<f32>)) -> Self {
         Hyperparameter::UniformFloat {
-            name: value.0.to_string(),
+            name: value.0,
             lower: value.1.start.into(),
             upper: value.1.end.into()
         }
@@ -106,14 +88,14 @@ impl <T:Display> From<(T, &Range<f32>)> for Hyperparameter {
 
 
 
-impl TryFrom<(&str, &RangeOrValue<f64>)> for Hyperparameter {
+impl <T:ParamName> TryFrom<(T, &RangeOrValue<f64>)> for Hyperparameter<T> {
     type Error = ();
 
-    fn try_from((name, value): (&str, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range,step} = value {
             if step.is_none() {
                 return Ok(Hyperparameter::UniformFloat {
-                    name: name.into(),
+                    name,
                     lower: range.start,
                     upper: range.end
                 });
@@ -123,14 +105,14 @@ impl TryFrom<(&str, &RangeOrValue<f64>)> for Hyperparameter {
     }
 }
 
-impl TryFrom<(&str, &RangeOrValue<i32>)> for Hyperparameter {
+impl <T:ParamName> TryFrom<(T, &RangeOrValue<i32>)> for Hyperparameter<T> {
     type Error = ();
 
-    fn try_from((name, value): (&str, &RangeOrValue<i32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<i32>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range, step} = value {
             if step.is_none() {
                 return Ok(Hyperparameter::UniformInt {
-                    name: name.into(),
+                    name,
                     lower: range.start as i64, //TODO as i64
                     upper: range.end as i64
                 });
@@ -140,14 +122,14 @@ impl TryFrom<(&str, &RangeOrValue<i32>)> for Hyperparameter {
     }
 }
 
-impl TryFrom<(&str, &RangeOrValue<u32>)> for Hyperparameter {
+impl <T:ParamName> TryFrom<(T, &RangeOrValue<u32>)> for Hyperparameter<T> {
     type Error = ();
 
-    fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range, step} = value {
             if step.is_none() {
                 return Ok(Hyperparameter::UniformInt {
-                    name: name.into(),
+                    name,
                     lower: range.start as i64, //TODO as i64
                     upper: range.end as i64
                 });

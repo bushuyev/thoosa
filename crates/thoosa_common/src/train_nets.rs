@@ -93,17 +93,17 @@ impl TrainLabelNetsParams {
     }
 
     //TODO add explicit flag to enable optimization
-    pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
+    pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
             &[
-                ("lr", &self.common.lr).try_into().ok(),
+                ("lr".to_string(), &self.common.lr).try_into().ok(),
                 // (&self.num_layers).try_into().ok(),
                 // self.net.to_config_space()
             ],
-            adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter>>>().as_slice(),
+            adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter<String>>>>().as_slice(),
             // &[[LabelNodeType::MaxPadding, LabelNodeType::FixedNumSlices{slices_len:100}][..].try_into().ok()]//TODO LabelNodeType
         ].concat().into_iter()
-            .collect::<Option<Vec<Hyperparameter>>>()
+            .collect::<Option<Vec<Hyperparameter<String>>>>()
             .map(|v|ConfigurationSpace::new(v))
     }
 }
@@ -125,7 +125,7 @@ impl TrainLabelNodeRunConfig {
         }
     }
 
-    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace, opt_config: OptConfig) -> Self {
+    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
@@ -1341,7 +1341,7 @@ impl OptConfig {
 #[derive(Debug, Clone)]
 pub enum ValuesOrOptSpace<V:Display> {
     Values (V),
-    OptSpace{opt_space:ConfigurationSpace,opt_config:OptConfig}
+    OptSpace{opt_space:ConfigurationSpace<String>,opt_config:OptConfig}
 }
 
 #[derive(Clone, Debug)]
@@ -1353,14 +1353,14 @@ pub struct TrainMotifsNodesRunConfig {
 }
 
 // unsafe impl Sync for TrainMotifsNodesRunConfig{}
-pub fn adam_w_hyperparams() -> Vec<Hyperparameter>{
+pub fn adam_w_hyperparams() -> Vec<Hyperparameter<String>>{
     vec![
         Hyperparameter::UniformFloat {name: "beta1".to_string(), lower:0.5, upper: 0.99},
         Hyperparameter::UniformFloat {name: "beta2".to_string(), lower:0.9, upper: 0.9999}
     ]
 }
 
-pub fn basic_hyperparams() -> Vec<Hyperparameter>{
+pub fn basic_hyperparams() -> Vec<Hyperparameter<String>>{
     vec![
         Hyperparameter::UniformFloat {name: "lr".to_string(), lower:1e-6, upper: 1e-2},
         Hyperparameter::UniformInt {name: "num_layers".to_string(), lower:0, upper: 6}
@@ -1460,7 +1460,7 @@ impl TrainMotifsNodesRunConfig {
         }
     }
 
-    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace, opt_config: OptConfig) -> Self {
+    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
@@ -1592,12 +1592,12 @@ impl TrainMotifsNetsParams {
     }
 
     //TODO add explicit flag to enable optimization
-    pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
+    pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
-            ("lr", &self.common.lr).try_into().ok(),
-            ("num_layers", &self.num_layers).try_into().ok(),
+            ("lr".to_string(), &self.common.lr).try_into().ok(),
+            ("num_layers".to_string(), &self.num_layers).try_into().ok(),
         ].into_iter()
-            .collect::<Option<Vec<Hyperparameter>>>()
+            .collect::<Option<Vec<Hyperparameter<String>>>>()
             .map(|v|ConfigurationSpace::new(v))
     }
 }
@@ -2382,15 +2382,15 @@ impl TrainFinalNetParams {
     }
 
     //TODO add explicit flag to enable optimization
-    pub fn to_config_space(&self) -> Option<ConfigurationSpace> {
+    pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
             vec![
-                ("lr", &self.lr).try_into().ok(),
-                ("num_layers", &self.num_layers).try_into().ok(),
+                ("lr".to_string(), &self.lr).try_into().ok(),
+                ("num_layers".to_string(), &self.num_layers).try_into().ok(),
             ],
-            adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter>>>(),
+            adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter<String>>>>(),
         ].concat().into_iter()
-            .collect::<Option<Vec<Hyperparameter>>>()
+            .collect::<Option<Vec<Hyperparameter<String>>>>()
             .map(|v|ConfigurationSpace::new(v))
     }
 
@@ -2420,7 +2420,7 @@ impl TrainFinalNodeRunConfig {
         }
     }
 
-    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace, opt_config: OptConfig) -> Self {
+    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},

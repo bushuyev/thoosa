@@ -7,7 +7,7 @@ use rand::distributions::Uniform;
 use rand::Rng;
 use tch::{IndexOp, Tensor};
 use thoosa_shared::{RangeOrValue, ThoosaError};
-use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::hyperparameter::{Hyperparameter, ParamName};
 use thoosa_shared::val::{NamedVal, Val};
 use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
@@ -104,7 +104,7 @@ struct TreeStructuredParzenEstimator {
 
 impl TreeStructuredParzenEstimator {
 
-    pub fn new(cs:&ConfigurationSpace) -> Self {
+    pub fn new<T:ParamName>(cs:&ConfigurationSpace<T>) -> Self {
         Self {
             observations:BinaryHeap::new(),
             mvpe_lower:None,
@@ -115,7 +115,7 @@ impl TreeStructuredParzenEstimator {
 
                     Hyperparameter::UniformFloat { name, lower, upper } => {
                         Box::new(NumericalParzenEstimator::new(
-                            Some(name.clone()),
+                            Some(name.to_string()),
                             // Tensor::zeros(1, FLOAT_CPU),
                             *lower,
                             *upper,
@@ -127,7 +127,7 @@ impl TreeStructuredParzenEstimator {
                     }
                     Hyperparameter::UniformInt { name, lower, upper } => {
                         Box::new(NumericalParzenEstimator::new(
-                            Some(name.clone()),
+                            Some(name.to_string()),
                             // Tensor::zeros(1, FLOAT_CPU),
                             *lower as f64, //TODO
                             *upper as f64,
@@ -139,7 +139,7 @@ impl TreeStructuredParzenEstimator {
 
                     Hyperparameter::Categorical { name, values } => {
                         Box::new(CategoricalParzenEstimator::new(
-                            Some(name.clone()),
+                            Some(name.to_string()),
                             values.len(),
                             true
                         )) as Box<dyn ParzenEstimator>
@@ -243,9 +243,9 @@ mod tree_structured_parzen_estimator_tests {
 
 
     #[test]
-    fn test_0(){
+    fn test_configuration_space(){
 
-        let cs = ConfigurationSpace::new(vec![
+        let cs:ConfigurationSpace<String> = ConfigurationSpace::new(vec![
             Hyperparameter::UniformFloat {name:"x_0".into(), lower: -1.0, upper: 1.0},
             Hyperparameter::UniformFloat {name:"x_1".into(), lower: -2.0, upper: 2.0},
         ]);
@@ -270,7 +270,7 @@ mod tree_structured_parzen_estimator_tests {
 
     #[test]
     fn test_compute_probability_improvement(){
-        let cs = ConfigurationSpace::new(vec![
+        let cs:ConfigurationSpace<String> = ConfigurationSpace::new(vec![
             Hyperparameter::UniformFloat {name:"x_0".into(), lower: -3.0, upper: 3.0},
             Hyperparameter::UniformFloat {name:"x_1".into(), lower: -3.0, upper: 3.0},
             Hyperparameter::UniformFloat {name:"x_2".into(), lower: -3.0, upper: 3.0},
@@ -310,19 +310,19 @@ mod tree_structured_parzen_estimator_tests {
     }
 }
 #[allow(dead_code)]
-pub struct TPEOptimizer<F, T> where F: FnMut(&[NamedVal<T>]) -> f32, T:Display  + for<'a> From<&'a str> {
+pub struct TPEOptimizer<F, T> where F: FnMut(&[NamedVal<T>]) -> f32, T:ParamName {
     obj_func:F,
-    cs:ConfigurationSpace,
+    cs:ConfigurationSpace<T>,
     n_init:usize,
     max_evals:usize,
     tpe_samplers:HashMap<String, TreeStructuredParzenEstimator>,
     _pd:PhantomData<T>
 }
 
-impl <F, T:Display + for<'a> From<&'a str>> TPEOptimizer<F, T>
+impl <F, T:ParamName> TPEOptimizer<F, T>
     where F: FnMut(&[NamedVal<T>]) -> f32 {
 
-    pub fn new(obj_func:F, cs:ConfigurationSpace, max_evals: usize, n_init: usize) -> Self {
+    pub fn new(obj_func:F, cs:ConfigurationSpace<T>, max_evals: usize, n_init: usize) -> Self {
 
         debug!("TPEOptimizer:new: cs={cs:?}");
 
@@ -358,7 +358,7 @@ impl <F, T:Display + for<'a> From<&'a str>> TPEOptimizer<F, T>
                 &eval_config.iter().zip(self.cs.hyperparameters.iter()).map(|(val, hp)|{
                     // (hp.name(), val.clone()).into()
                     // NamedVal::from((hp.name().into(), val.clone()))
-                    NamedVal::from((<&str as Into<T>>::into(hp.name()), val.clone()))
+                    NamedVal::from((hp.name().clone(), val.clone()))
                 }).collect::<Vec<_>>().as_slice()
             );
             if loss < best_loss {
@@ -460,11 +460,11 @@ mod tpe_optimizer_tests {
     #[test]
     fn test_sphere(){
         let sphere = sphere(30)(&vec![
-            ("x", Val::Real(0.1)).into(),
-            ("x", Val::Real(0.2)).into(),
-            ("x", Val::Real(0.3)).into(),
-            ("x", Val::Real(0.4)).into(),
-            ("x", Val::Real(0.5)).into(),
+            ("x".to_string(), Val::Real(0.1)).into(),
+            ("x".to_string(), Val::Real(0.2)).into(),
+            ("x".to_string(), Val::Real(0.3)).into(),
+            ("x".to_string(), Val::Real(0.4)).into(),
+            ("x".to_string(), Val::Real(0.5)).into(),
         ]);
 
         assert_eq!(4410.55, sphere);
@@ -589,18 +589,18 @@ mod tpe_optimizer_tests {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConfigurationSpace {
-    hyperparameters:Vec<Hyperparameter>
+pub struct ConfigurationSpace<T:ParamName> {
+    hyperparameters:Vec<Hyperparameter<T>>
 }
 
-impl From<&[Hyperparameter]> for ConfigurationSpace {
-    fn from(value: &[Hyperparameter]) -> Self {
+impl <T:ParamName> From<&[Hyperparameter<T>]> for ConfigurationSpace<T> {
+    fn from(value: &[Hyperparameter<T>]) -> Self {
         ConfigurationSpace::new(value.to_vec())
     }
 }
 
-impl From<&ConfigurationSpace> for HashMap<String, Val> {
-    fn from(value: &ConfigurationSpace) -> Self {
+impl <T:ParamName> From<&ConfigurationSpace<T>> for HashMap<String, Val> {
+    fn from(value: &ConfigurationSpace<T>) -> Self {
         let mut map = HashMap::new();
         map.insert("config_space".into(), Val::Int(1));
 
@@ -626,14 +626,14 @@ impl From<&ConfigurationSpace> for HashMap<String, Val> {
 }
 
 #[allow(dead_code)]
-impl ConfigurationSpace {
+impl <T:ParamName> ConfigurationSpace<T> {
 
     pub fn empty() -> Self {
         Self {
             hyperparameters: vec![]
         }
     }
-    pub fn new(hyperparameters: Vec<Hyperparameter>) -> Self {
+    pub fn new(hyperparameters: Vec<Hyperparameter<T>>) -> Self {
         Self { hyperparameters }
     }
 
@@ -645,24 +645,24 @@ impl ConfigurationSpace {
         self.hyperparameters.len()
     }
 
-    fn iter(&self) -> CsIter {
+    fn iter(&self) -> CsIter<T> {
         CsIter(self.hyperparameters.iter())
     }
 }
 
-pub struct CsIter<'a>(std::slice::Iter<'a, Hyperparameter>);
+pub struct CsIter<'a, T:ParamName>(std::slice::Iter<'a, Hyperparameter<T>>);
 
-impl<'a> Iterator for CsIter<'a> {
-    type Item = &'a Hyperparameter;
+impl<'a, T:ParamName> Iterator for CsIter<'a, T> {
+    type Item = &'a Hyperparameter<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
 }
 
-impl<'a> IntoIterator for &'a ConfigurationSpace {
-    type Item = &'a Hyperparameter;
-    type IntoIter = CsIter<'a>;
+impl<'a, T:ParamName> IntoIterator for &'a ConfigurationSpace<T> {
+    type Item = &'a Hyperparameter<T>;
+    type IntoIter = CsIter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()

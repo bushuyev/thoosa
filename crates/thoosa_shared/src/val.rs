@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use std::ops::Range;
 use num_traits::ToPrimitive;
 use crate::{round_to_digits, RangeOrValue, ThoosaError};
-
+use crate::hyperparameter::ParamName;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Val {
@@ -38,12 +38,12 @@ impl Val {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct NamedVal<T:Display>{
+pub struct NamedVal<T:ParamName>{
     name: T,
     val:Val
 }
 
-impl <T:Display> NamedVal<T> {
+impl <T:ParamName> NamedVal<T> {
     // pub fn new<I:Into<Val>>(name: &str, val:I) -> Self {
     //     Self {
     //         name: name,
@@ -63,14 +63,14 @@ impl <T:Display> NamedVal<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct NamedRange<T:Display>{
+pub struct NamedRange<T:ParamName>{
     name: T,
     range:Range<Val>,
     step:(Val, u32)
 }
 
 
-impl <T:Display> NamedRange<T> {
+impl <T:ParamName> NamedRange<T> {
     pub fn new(name: T, range: Range<Val>, step: (Val, u32)) -> Self {
         Self { name, range, step }
     }
@@ -100,7 +100,7 @@ enum IterationKind {
 
 
 
-pub struct NamedRangeIter<T:Display+Clone> {
+pub struct NamedRangeIter<T:ParamName> {
     name: T,
     // We'll store everything as floats internally:
     current: f64,
@@ -116,7 +116,7 @@ pub struct NamedRangeIter<T:Display+Clone> {
 }
 
 
-impl <T:Display+Clone> Iterator for NamedRangeIter<T> {
+impl <T:ParamName> Iterator for NamedRangeIter<T> {
     type Item = NamedVal<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -177,7 +177,7 @@ impl <T:Display+Clone> Iterator for NamedRangeIter<T> {
     }
 }
 
-impl <T:Display+Clone> IntoIterator for NamedRange<T> {
+impl <T:ParamName> IntoIterator for NamedRange<T> {
     type Item = NamedVal<T>;
     type IntoIter = NamedRangeIter<T>;
 
@@ -249,11 +249,11 @@ fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
 //     }
 // }
 
-impl  <T:Display, I:Into<T>> From<(I, Val)> for NamedVal<T> {
+impl  <T:ParamName> From<(T, Val)> for NamedVal<T> {
 
-    fn from((name, val): (I, Val)) -> Self {
+    fn from((name, val): (T, Val)) -> Self {
         NamedVal{
-            name: name.into(),
+            name,
             val
         }
     }
@@ -580,7 +580,7 @@ pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<S
 }
 
 
-impl <T:Display> TryFrom<&NamedVal<T>> for f64 {
+impl <T:ParamName> TryFrom<&NamedVal<T>> for f64 {
     type Error = ThoosaError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
@@ -589,7 +589,7 @@ impl <T:Display> TryFrom<&NamedVal<T>> for f64 {
 }
 
 
-impl <T:Display> TryFrom<&NamedVal<T>> for f32 {
+impl <T:ParamName> TryFrom<&NamedVal<T>> for f32 {
     type Error = ThoosaError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
@@ -597,7 +597,7 @@ impl <T:Display> TryFrom<&NamedVal<T>> for f32 {
     }
 }
 
-impl <T:Display> TryFrom<&NamedVal<T>> for u32 {
+impl <T:ParamName> TryFrom<&NamedVal<T>> for u32 {
     type Error = ThoosaError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {

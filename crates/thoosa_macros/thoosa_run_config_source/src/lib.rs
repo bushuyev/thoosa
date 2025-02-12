@@ -13,7 +13,7 @@ pub trait XGridConfig {
 }
 
 pub trait XOptConfig {
-    fn opt(&self) -> &[Hyperparameter];
+    fn opt(&self) -> &[Hyperparameter<String>];
 }
 
 pub trait XRunConfigSource {
@@ -73,8 +73,8 @@ impl XGridConfig for XVecConfig<NamedRange<String>> {
     }
 }
 
-impl XOptConfig for XVecConfig<Hyperparameter> {
-    fn opt(&self) -> &[Hyperparameter] {
+impl XOptConfig for XVecConfig<Hyperparameter<String>> {
+    fn opt(&self) -> &[Hyperparameter<String>] {
         self.configs.as_slice()
     }
 }

@@ -7,7 +7,7 @@ use parking_lot::{Mutex, RwLock};
 use tch::nn::VarStore;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{make_combos, ResourceType, ThoosaError};
-use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::hyperparameter::{Hyperparameter, ParamName};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
 use crate::parzen::optimizer::ConfigurationSpace;
@@ -180,7 +180,7 @@ pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
 
 
 pub trait RunConfig:Debug {
-    fn config_space(&self) -> Option<&ConfigurationSpace> {
+    fn config_space(&self) -> Option<&ConfigurationSpace<String>> {
         None
     }
 
@@ -226,7 +226,7 @@ impl SavableOptResult for DummySavableOptResult {
 pub struct ConstConfigSource<CP> {
     const_params:CP,
 }
-impl <T:Display> ConstConfigSource<Vec<NamedVal<T>>> {
+impl <T:ParamName> ConstConfigSource<Vec<NamedVal<T>>> {
 
     pub fn new(const_params:Vec<NamedVal<T>>) -> Self {
         Self {
@@ -242,7 +242,7 @@ pub struct GridRunConfigSource<CP, GP> {
     grid_params:GP
 }
 
-impl <T:Display+Clone> GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
+impl <T:ParamName> GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
 
     pub fn new(const_config_source:ConstConfigSource<Vec<NamedVal<T>>>, grid_params:Vec<NamedRange<T>>) -> Self {
         Self {
@@ -272,9 +272,9 @@ pub struct OptRunConfigSource<CP, GP, OP, T> {
     _pd: PhantomData<T>,
 }
 
-impl <T:Display+Clone+Debug+ for<'a> From<&'a str>> OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter>, T>  {
+impl <T:ParamName> OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T>  {
 
-    pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>>, opt_params:Vec<Hyperparameter>) -> Self {
+    pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>>, opt_params:Vec<Hyperparameter<T>>) -> Self {
         Self {
             grid_run_config_source,
             opt_params,
@@ -282,7 +282,7 @@ impl <T:Display+Clone+Debug+ for<'a> From<&'a str>> OptRunConfigSource<Vec<Named
         }
     }
 
-    pub fn opt_params(&self) -> &Vec<Hyperparameter> {
+    pub fn opt_params(&self) -> &Vec<Hyperparameter<T>> {
         &self.opt_params
     }
 
