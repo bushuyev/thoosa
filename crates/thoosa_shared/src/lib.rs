@@ -28,7 +28,9 @@ use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
 use num_traits::real::Real;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use crate::hyperparameter::Hyperparameter;
 use crate::resource::ResourceId;
+use crate::val::{NamedRange, NamedVal, Val};
 
 pub mod repeat_iter;
 pub mod val;
@@ -511,6 +513,41 @@ where
     }
 }
 
+pub fn add_range_or_value<'a, V:'a, T:Display>(name:T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter>)
+where Val: From<&'a V>,
+      Hyperparameter: From<(T, &'a Range<V>)>{
+
+    match v {
+        RangeOrValue::Range { range, step: step_op } => {
+            match step_op {
+                None => {
+                    opt_params.push(
+                        (name, range).into()
+                    );
+                }
+                Some((step, mul)) => {
+                    grid_params.push(
+                        NamedRange::new(
+                            name,
+                            (&range.start).into()..(&range.end).into(),
+                            (step.into(), *mul)
+                        )
+                    );
+                }
+            }
+        }
+        RangeOrValue::Value(v) => {
+            const_params.push(NamedVal::from((name, v.into())));
+        }
+    }
+}
+
+pub fn add_prefix<T:Display+FromStr>(prefix: Option<&T>, field: T) -> T {
+    prefix.map(|p| format!("{}.{}", p, field))
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(field)
+
+}
 
 impl IntoIterator for RangeOrValue<u32> {
     type Item = u32;

@@ -9,7 +9,7 @@ pub trait XConstConfig {
 }
 
 pub trait XGridConfig {
-    fn grid(&self) -> &[NamedRange];
+    fn grid(&self) -> &[NamedRange<String>];
 }
 
 pub trait XOptConfig {
@@ -67,8 +67,8 @@ impl XConstConfig for XVecConfig<NamedVal<String>> {
     }
 }
 
-impl XGridConfig for XVecConfig<NamedRange> {
-    fn grid(&self) -> &[NamedRange] {
+impl XGridConfig for XVecConfig<NamedRange<String>> {
+    fn grid(&self) -> &[NamedRange<String>] {
         self.configs.as_slice()
     }
 }

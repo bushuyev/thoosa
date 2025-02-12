@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::ops::Range;
 use rand::distributions::Uniform;
 use rand::Rng;
@@ -70,36 +71,39 @@ impl From<(&str, Range<u32>)> for Hyperparameter {
 }
 
 
-impl From<(&str, &Range<f64>)> for Hyperparameter {
-    fn from(value: (&str, &Range<f64>)) -> Self {
-        Hyperparameter::UniformFloat {
-            name: value.0.into(),
-            lower: value.1.start.into(),
-            upper: value.1.end.into()
-        }
-    }
-}
-
-impl From<(&str, &Range<f32>)> for Hyperparameter {
-    fn from(value: (&str, &Range<f32>)) -> Self {
-        Hyperparameter::UniformFloat {
-            name: value.0.into(),
-            lower: value.1.start.into(),
-            upper: value.1.end.into()
-        }
-    }
-}
 
 
-impl From<(&str, &Range<u32>)> for Hyperparameter {
-    fn from(value: (&str, &Range<u32>)) -> Self {
+impl <T:Display> From<(T, &Range<u32>)> for Hyperparameter {
+    fn from(value: (T, &Range<u32>)) -> Self {
         Hyperparameter::UniformInt {
-            name: value.0.into(),
+            name: value.0.to_string(),
             lower: value.1.start.into(),
             upper: value.1.end.into()
         }
     }
 }
+
+
+impl <T:Display> From<(T, &Range<f64>)> for Hyperparameter {
+    fn from(value: (T, &Range<f64>)) -> Self {
+        Hyperparameter::UniformFloat {
+            name: value.0.to_string(),
+            lower: value.1.start.into(),
+            upper: value.1.end.into()
+        }
+    }
+}
+
+impl <T:Display> From<(T, &Range<f32>)> for Hyperparameter {
+    fn from(value: (T, &Range<f32>)) -> Self {
+        Hyperparameter::UniformFloat {
+            name: value.0.to_string(),
+            lower: value.1.start.into(),
+            upper: value.1.end.into()
+        }
+    }
+}
+
 
 
 impl TryFrom<(&str, &RangeOrValue<f64>)> for Hyperparameter {
