@@ -1,5 +1,6 @@
-use std::fmt::{Debug, Display};
-use std::ops::Range;
+use std::fmt::{Debug, Display, Formatter};
+use std::mem;
+use std::ops::{Add, Range};
 use rand::distributions::Uniform;
 use rand::Rng;
 use log::trace;
@@ -7,12 +8,57 @@ use crate::opt_rng::opt_rnd;
 use crate::RangeOrValue;
 use crate::val::Val;
 
-pub trait ParamName: Display + Debug + Clone {
+pub trait ParamName: Display + Debug + Clone  {//+ for<'a>  Add<&'a dyn AsRef<Self>>
 
 }
 
 impl ParamName for String {}
-impl <'a> ParamName for &'a str {}
+
+#[derive(Debug, Clone)]
+pub struct ParamsPath<T:ParamName> {
+    params:Vec<T>
+}
+
+impl <T:ParamName> ParamsPath<T> {
+    pub fn new(first:T) -> Self {
+        ParamsPath { params:vec![first] }
+    }
+
+    pub fn root()->Self {
+        ParamsPath { params:Vec::new() }
+    }
+}
+
+impl <T:ParamName> Display for ParamsPath<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.params.fmt(f)
+    }
+}
+
+impl <T:ParamName> ParamName for ParamsPath<T> {}
+
+impl <T:ParamName> Extend<T> for ParamsPath<T> {
+
+
+    fn extend<I: IntoIterator<Item=T>>(&mut self, iter: I) {
+        for item in iter {
+            self.params.push(item);
+        }
+    }
+}
+
+
+
+// impl <T:ParamName> MyAdd for T {
+//     type Output = T;
+//
+//     fn add(self, rhs: &T) -> Self::Output {
+//         todo!()
+//     }
+// }
+
+
+// impl <'a> ParamName for &'a str {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Hyperparameter<T:ParamName> {
