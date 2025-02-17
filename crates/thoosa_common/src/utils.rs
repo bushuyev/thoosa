@@ -1252,7 +1252,12 @@ pub mod tests {
 
                 let v:TrainLabelsRunConfigRangeOrValue = serde_json5::from_str(&train_labels_args.run_config_cnt).unwrap();
 
-                debug!("TrainLabelsRunConfigRangeOrValue:{:?}", v);
+                debug!("TrainLabelsRunConfigRangeOrValue: v={v:?}");
+
+
+                assert_eq!(RangeOrValue::Value(0.1), v.some_prop);
+                assert_eq!(RangeOrValue::Range{range: 0.1..1.0, step: None}, v.common_config.beta);
+                assert_eq!(RangeOrValue::Range{range: 0.1..1.0, step: Some((0.1,1))}, v.common_config.sub_config.lr);
 
                 test_train_labels(v.opt_sources());
             }

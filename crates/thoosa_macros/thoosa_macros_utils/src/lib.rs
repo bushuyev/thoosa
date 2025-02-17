@@ -26,7 +26,7 @@ mod tests {
     use std::path::Path;
     use std::str::FromStr;
     use log::debug;
-    use thoosa_shared::hyperparameter::{Hyperparameter, ParamName};
+    use thoosa_shared::hyperparameter::{Hyperparameter, ParamName, ParamsPath};
     use thoosa_shared::{add_prefix, add_range_or_value, RangeOrValue, ThoosaError};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
@@ -181,6 +181,7 @@ mod tests {
             field_b: Option<u32>,
         }
 
+
         impl SubStructBBuilder {
             fn add_val(&mut self, path: SubStructBFields, val: Val) /*->SomeStruct*/ {
                 match path {
@@ -201,6 +202,7 @@ mod tests {
             }
         }
 
+
         impl SubStructB {
             fn builder() -> SubStructBBuilder {
                 SubStructBBuilder::default()
@@ -211,6 +213,34 @@ mod tests {
         enum SubStructBFields {
             FieldA,
             FieldB,
+        }
+
+        impl Display for SubStructBFields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    SubStructBFields::FieldA => {
+                        write!(f, "SubStructBFields::FieldA")
+                    }
+                    SubStructBFields::FieldB => {
+                        write!(f, "SubStructBFields::FieldA")
+                    }
+                }
+            }
+        }
+
+        impl ParamName for SubStructBFields {}
+
+        #[derive(Debug)]
+        struct SubStructBRangeOrValue {
+            field_a: RangeOrValue<u32>,
+            field_b: RangeOrValue<u32>,
+        }
+
+        impl SubStructBRangeOrValue {
+            pub(crate) fn fill_run_configs<P:ParamName>(&self, prefix: Option<&P>, const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
+                // add_range_or_value::<u32, SubStructBFields>(add_prefix(prefix, SubStructBFields::FieldA), &self.field_a, const_params, grid_params, opt_params);
+                todo!()
+            }
         }
 
         #[derive(Debug)]
@@ -225,13 +255,19 @@ mod tests {
         struct SomeStructRangeOrValue {
             field_00: RangeOrValue<u32>,
             field_01: RangeOrValue<f32>,
-            // sub_struct: SubStructB,
+            sub_struct: SubStructBRangeOrValue,
             // sub_enum: SubEnum
         }
 
         impl SomeStructRangeOrValue {
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&SomeStructFields>,  const_params: &mut Vec<NamedVal<SomeStructFields>>, grid_params: &mut Vec<NamedRange<SomeStructFields>>, opt_params: &mut Vec<Hyperparameter<SomeStructFields>>) {
-                add_range_or_value::<u32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field00), &self.field_00, const_params, grid_params, opt_params);
+            pub(crate) fn fill_run_configs<P:ParamName>(&self, prefix: ParamsPath<P>,  const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
+                let mut param_path = ParamsPath::new(SomeStructFields::Field00);
+                param_path.extend(std::iter::once(SomeStructFields::Field01));
+                // add_range_or_value::<u32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field00), &self.field_00, const_params, grid_params, opt_params);
+                // add_range_or_value::<f32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field01), &self.field_01, const_params, grid_params, opt_params);
+                //
+                // self.sub_struct.fill_run_configs(Some(&SomeStructFields::SubStruct), const_params, grid_params, opt_params);
+                // todo!()
             }
         }
 
@@ -252,6 +288,7 @@ mod tests {
         impl ParamName for SomeStructFields {}
 
         impl Display for SomeStructFields {
+
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 // write!(f, "({}, {})", self.longitude, self.latitude)
                 match self {
@@ -272,13 +309,13 @@ mod tests {
             }
         }
 
-        impl FromStr for SomeStructFields {
-            type Err = ThoosaError;
-
-            fn from_str(s: &str) -> Result<Self, ThoosaError> {
-                Ok(SomeStructFields::Field00)
-            }
-        }
+        // impl FromStr for SomeStructFields {
+        //     type Err = ThoosaError;
+        //
+        //     fn from_str(s: &str) -> Result<Self, ThoosaError> {
+        //         Ok(SomeStructFields::Field00)
+        //     }
+        // }
 
         #[derive(Debug, Default)]
         struct SomeStructBuilder {
@@ -327,6 +364,23 @@ mod tests {
                 }
             }
         }
+
+        let some_struct_range_or_value = SomeStructRangeOrValue {
+            field_00: RangeOrValue::Value(1),
+            field_01: RangeOrValue::Value(0.1),
+            sub_struct: SubStructBRangeOrValue {
+                field_a: RangeOrValue::Value(2),
+                field_b: RangeOrValue::Value(3),
+            },
+        };
+
+
+        let mut const_params:Vec<NamedVal<SomeStructFields>> = Vec::new();
+        let mut grid_params:Vec<NamedRange<SomeStructFields>> = Vec::new();
+        let mut opt_params:Vec<Hyperparameter<SomeStructFields>> = Vec::new();
+
+        some_struct_range_or_value.fill_run_configs(ParamsPath::root(), &mut const_params, &mut grid_params, &mut opt_params);
+
 
 
         let path_vals = [

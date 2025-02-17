@@ -542,10 +542,10 @@ where Val: From<&'a V>,
     }
 }
 
-pub fn add_prefix<T:Display+FromStr>(prefix: Option<&T>, field: T) -> T {
-    prefix.map(|p| format!("{}.{}", p, field))
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(field)
+pub fn add_prefix<T:ParamName>(prefix: Option<&T>, field: T) -> T {
+    // prefix.map(|p| format!("{}.{}", p, field))
+    //     .unwrap_or(field)
+    todo!()
 
 }
 
