@@ -168,8 +168,8 @@ impl RunAllParams {
 
     pub fn to_net_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
-            ("lr".to_string(), &self.lr).try_into().ok(),
-            ("num_layers".to_string(), &self.num_layers).try_into().ok(),
+            ("lr".into(), &self.lr).try_into().ok(),
+            ("num_layers".into(), &self.num_layers).try_into().ok(),
         ]
         .into_iter()
         .collect::<Option<Vec<Hyperparameter<String>>>>()
@@ -450,7 +450,7 @@ pub struct SayHelloRunConfig {
 
 impl Params<SayHelloRunConfig, Simple, ()> for SayHelloParams {
     fn to_run_configs(&self) -> Vec<SayHelloRunConfig> {
-        let tpe_config_space = [("lr".to_string(), &self.lr).try_into().ok()]
+        let tpe_config_space = [("lr".into(), &self.lr).try_into().ok()]
             .into_iter()
             .collect::<Option<Vec<Hyperparameter<String>>>>()
             .map(|v| ConfigurationSpace::new(v));

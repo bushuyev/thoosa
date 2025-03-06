@@ -96,7 +96,7 @@ impl TrainLabelNetsParams {
     pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
             &[
-                ("lr".to_string(), &self.common.lr).try_into().ok(),
+                ("lr".into(), &self.common.lr).try_into().ok(),
                 // (&self.num_layers).try_into().ok(),
                 // self.net.to_config_space()
             ],
@@ -107,8 +107,6 @@ impl TrainLabelNetsParams {
             .map(|v|ConfigurationSpace::new(v))
     }
 }
-
-
 
 #[derive(Debug)]
 pub struct TrainLabelNodeRunConfig {
@@ -1355,15 +1353,15 @@ pub struct TrainMotifsNodesRunConfig {
 // unsafe impl Sync for TrainMotifsNodesRunConfig{}
 pub fn adam_w_hyperparams() -> Vec<Hyperparameter<String>>{
     vec![
-        Hyperparameter::UniformFloat {name: "beta1".to_string(), lower:0.5, upper: 0.99},
-        Hyperparameter::UniformFloat {name: "beta2".to_string(), lower:0.9, upper: 0.9999}
+        Hyperparameter::UniformFloat {name: "beta1".into(), lower:0.5, upper: 0.99},
+        Hyperparameter::UniformFloat {name: "beta2".into(), lower:0.9, upper: 0.9999}
     ]
 }
 
 pub fn basic_hyperparams() -> Vec<Hyperparameter<String>>{
     vec![
-        Hyperparameter::UniformFloat {name: "lr".to_string(), lower:1e-6, upper: 1e-2},
-        Hyperparameter::UniformInt {name: "num_layers".to_string(), lower:0, upper: 6}
+        Hyperparameter::UniformFloat {name: "lr".into(), lower:1e-6, upper: 1e-2},
+        Hyperparameter::UniformInt {name: "num_layers".into(), lower:0, upper: 6}
     ]
 }
 
@@ -1390,16 +1388,17 @@ impl TryFrom<&[NamedVal<String>]> for TrainNodesValues {
     type Error = ThoosaError;
 
     fn try_from(value: &[NamedVal<String>]) -> Result<Self, Self::Error> {
-        let params_map = value.into_iter().try_fold(HashMap::new(), |mut a, x| {
-            a.insert(x.name().as_str(), x.val());
-            Ok::<HashMap<&str, &Val>, ThoosaError>(a)
-        })?;
-
-        Ok(TrainNodesValues::new(
-            (*params_map.get("lr").expect("lr")).try_into()?,
-            (*params_map.get("num_layers").expect("num_layers")).try_into()?,
-            None//TODO
-        ))
+        // let params_map = value.into_iter().try_fold(HashMap::new(), |mut a, x| {
+        //     a.insert(x.name().as_str(), x.val());
+        //     Ok::<HashMap<&str, &Val>, ThoosaError>(a)
+        // })?;
+        //
+        // Ok(TrainNodesValues::new(
+        //     (*params_map.get("lr").expect("lr")).try_into()?,
+        //     (*params_map.get("num_layers").expect("num_layers")).try_into()?,
+        //     None//TODO
+        // ))
+        todo!()//replace with builder
     }
 }
 impl TryFrom<&Vec<Val>> for TrainNodesValues {
@@ -1594,8 +1593,8 @@ impl TrainMotifsNetsParams {
     //TODO add explicit flag to enable optimization
     pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
-            ("lr".to_string(), &self.common.lr).try_into().ok(),
-            ("num_layers".to_string(), &self.num_layers).try_into().ok(),
+            ("lr".into(), &self.common.lr).try_into().ok(),
+            ("num_layers".into(), &self.num_layers).try_into().ok(),
         ].into_iter()
             .collect::<Option<Vec<Hyperparameter<String>>>>()
             .map(|v|ConfigurationSpace::new(v))
@@ -2385,8 +2384,8 @@ impl TrainFinalNetParams {
     pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
         [
             vec![
-                ("lr".to_string(), &self.lr).try_into().ok(),
-                ("num_layers".to_string(), &self.num_layers).try_into().ok(),
+                ("lr".into(), &self.lr).try_into().ok(),
+                ("num_layers".into(), &self.num_layers).try_into().ok(),
             ],
             adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter<String>>>>(),
         ].concat().into_iter()
