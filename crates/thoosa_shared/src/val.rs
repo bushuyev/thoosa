@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use std::ops::Range;
 use num_traits::ToPrimitive;
 use crate::{round_to_digits, RangeOrValue, ThoosaError};
-use crate::hyperparameter::{FieldName, FieldsPath};
+use crate::hyperparameter::{FieldName};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Val {
@@ -39,12 +39,12 @@ impl Val {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct NamedVal<T: FieldName>{
-    path: FieldsPath<T>,
+    path: T,
     val:Val
 }
 
 impl <T: FieldName> NamedVal<T> {
-    pub fn new<P:Into<FieldsPath<T>>, V:Into<Val>>(into_path: P, val: V) -> Self {
+    pub fn new<P:Into<T>, V:Into<Val>>(into_path: P, val: V) -> Self {
         Self {
             path: into_path.into(),
             val: val.into()
@@ -56,13 +56,13 @@ impl <T: FieldName> NamedVal<T> {
     }
 
     pub fn path(&self) -> &T {
-        self.path.path()
+        &self.path
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct NamedRange<T: FieldName>{
-    name: FieldsPath<T>,
+    name: T,
     range:Range<Val>,
     step:(Val, u32)
 }
@@ -70,7 +70,7 @@ pub struct NamedRange<T: FieldName>{
 
 impl <T: FieldName> NamedRange<T> {
 
-    pub fn new(name: FieldsPath<T>, range: Range<Val>, step: (Val, u32)) -> Self {
+    pub fn new(name: T, range: Range<Val>, step: (Val, u32)) -> Self {
         Self { name, range, step }
     }
 
@@ -96,7 +96,7 @@ enum IterationKind {
 
 
 pub struct NamedRangeIter<T: FieldName> {
-    name: FieldsPath<T>,
+    name: T,
     // We'll store everything as floats internally:
     current: f64,
     end: f64,
@@ -244,9 +244,9 @@ fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
 //     }
 // }
 
-impl  <T: FieldName> From<(FieldsPath<T>, Val)> for NamedVal<T> {
+impl  <T: FieldName> From<(T, Val)> for NamedVal<T> {
 
-    fn from((name, val): (FieldsPath<T>, Val)) -> Self {
+    fn from((name, val): (T, Val)) -> Self {
         NamedVal{
             path: name,
             val
@@ -261,10 +261,10 @@ impl  <T: FieldName> From<(FieldsPath<T>, Val)> for NamedVal<T> {
 //     }
 // }
 
-impl <T: FieldName> TryFrom<(FieldsPath<T>, &RangeOrValue<f64>)> for NamedRange<T> {
+impl <T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for NamedRange<T> {
     type Error = ();
 
-    fn try_from((name, value): (FieldsPath<T>, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range,step} = value {
             if let Some(step) = step {
                 return Ok(NamedRange {
@@ -293,10 +293,10 @@ impl From<&NamedRange<String>> for Vec<NamedVal<String>> {
     }
 }
 
-impl <T: FieldName> TryFrom<(FieldsPath<T>, &RangeOrValue<u32>)> for NamedRange<T> {
+impl <T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for NamedRange<T> {
     type Error = ();
 
-    fn try_from((name, value): (FieldsPath<T>, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range,step} = value {
             if let Some(step) = step {
                 return Ok(NamedRange {
@@ -310,10 +310,10 @@ impl <T: FieldName> TryFrom<(FieldsPath<T>, &RangeOrValue<u32>)> for NamedRange<
     }
 }
 
-impl <T: FieldName> TryFrom<(FieldsPath<T>, &RangeOrValue<u32>)> for NamedVal<T> {
+impl <T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for NamedVal<T> {
     type Error = ();
 
-    fn try_from((name, value): (FieldsPath<T>, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (T, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Value(v) = value {
             return Ok(NamedVal {
                 path: name,
