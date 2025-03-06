@@ -917,6 +917,18 @@ pub fn camel_to_snake(input: &str) -> String {
     snake
 }
 
+pub fn snake_to_camel(s: &str) -> String {
+    s.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<String>()
+}
+
 
 #[cfg(test)]
 mod shared_tests {
@@ -937,7 +949,7 @@ mod shared_tests {
     use std::fmt::{Display, Formatter};
     use clap::{Args, Parser};
     use log::debug;
-    use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, test_utils, RangeOrValue, ResourceType, ThoosaError};
+    use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue, ResourceType, ThoosaError};
     use crate::hyperparameter::{FieldName};
     use crate::pulse_v;
     use crate::val::NamedVal;
@@ -1328,6 +1340,25 @@ mod shared_tests {
             "hello_test_one"
         );
     }
+
+    #[test]
+    fn test_snake_to_camel(){
+        assert_eq!(
+            snake_to_camel("hello"),
+            "Hello"
+        );
+
+        assert_eq!(
+            snake_to_camel("hello_test"),
+            "HelloTest"
+        );
+
+        assert_eq!(
+            snake_to_camel("hello_test_one"),
+            "HelloTestOne"
+        );
+    }
+
 
     //TODO replace ...Fields with Derive
     #[test]
