@@ -1,4 +1,4 @@
-use syn::{Type, Path};
+use syn::{Type, Path, Field, Lit};
 
 pub fn is_primitive(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
@@ -16,6 +16,22 @@ pub fn is_primitive(ty: &Type) -> bool {
     false
 }
 
+pub fn comment(field: &&Field, field_name: &String) -> String {
+    let mut descr = field_name.clone();
+    for attr in &field.attrs {
+        if attr.path().is_ident("doc") {
+            if let syn::Meta::NameValue(meta) = &attr.meta {
+                if let syn::Expr::Lit(lit_str) = &meta.value {
+                    // let doc_comment = lit_str.lit.to_string();
+                    if let Lit::Str(token) = &lit_str.lit {
+                        descr = token.value();
+                    }
+                }
+            }
+        }
+    }
+    descr
+}
 
 #[cfg(test)]
 mod tests {
@@ -317,13 +333,6 @@ mod tests {
             }
         }
 
-        // impl FromStr for SomeStructFields {
-        //     type Err = ThoosaError;
-        //
-        //     fn from_str(s: &str) -> Result<Self, ThoosaError> {
-        //         Ok(SomeStructFields::Field00)
-        //     }
-        // }
 
         #[derive(Debug, Default)]
         struct SomeStructBuilder {

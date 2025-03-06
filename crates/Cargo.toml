@@ -41,8 +41,8 @@ bytemuck = { version = "1.20.0", features = ["derive"] }
 cudarc = { version = "0.12.1", features = ["cuda-12060"] }
 ctor = "0.2.9"
 
-syn = {version="2.0.96", features=["full"]}
-quote = "1.0.38"
+syn = {version="2.0.99", features=["full"]}
+quote = "1.0.39"
 
 libloading = "0.8.6"
 plotters = { version = "0.3.7"}

@@ -550,7 +550,7 @@ pub mod tests {
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
     use thoosa_run_config_args::{ThoosaArgs, ThoosaArgsCommand};
-    use thoosa_run_config_args_derive::{ThoosaArgs, ThoosaArgsCommand};
+    use thoosa_run_config_args_derive::{ThoosaArgs};
     use thoosa_run_config_source::{XGridConfig, XOptConfig, XResourceConfigSource, XRunConfigSource, XRunConfigs, XVecConfig};
     use thoosa_run_config_source_derive::XRunConfigSource;
     use thoosa_shared::hyperparameter::{Hyperparameter, FieldName};
@@ -896,34 +896,6 @@ pub mod tests {
             lr: f64,
         }
 
-        #[derive(Debug, Clone)]
-        enum SomeSubTrainConfigFields {
-            Lr
-        }
-
-        impl <T: FieldName>From<&[NamedVal<T>]> for SomeSubTrainConfig {
-            fn from(value: &[NamedVal<T>]) -> Self {
-                debug!("SomeSubTrainConfig::from {:?}", value);
-
-                SomeSubTrainConfig {
-                    lr: 0.0,
-                }
-            }
-        }
-
-        #[derive(Debug, Deserialize, Serialize)]
-        struct SomeSubTrainConfigRangeOrValue{
-            ///learning rate
-            lr: RangeOrValue<f64>,
-
-        }
-
-        impl SomeSubTrainConfigRangeOrValue {
-            pub(crate) fn fill_run_configs<T:FieldName, F>(&self, append: F, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
-            where F:Fn(SomeSubTrainConfigFields)->T{
-                add_range_or_value::<f64, T>(append(SomeSubTrainConfigFields::Lr), &self.lr, const_params, grid_params, opt_params);
-            }
-        }
 
         #[derive(ThoosaArgs, Debug)]
         struct CommonTrainConfig {
@@ -934,44 +906,6 @@ pub mod tests {
 
             #[run_config]
             sub_config:SomeSubTrainConfig
-        }
-
-        #[derive(Debug, Clone)]
-        enum CommonTrainConfigFields {
-            Beta,
-            SubConfig(SomeSubTrainConfigFields)
-        }
-
-
-        impl <T: FieldName> From<&[NamedVal<T>]> for CommonTrainConfig{
-            fn from(value: &[NamedVal<T>]) -> Self {
-                CommonTrainConfig{
-                    beta: 0.0,
-                    sub_config: value.into(),
-                }
-            }
-        }
-
-        #[derive(Debug, Deserialize, Serialize)]
-        struct CommonTrainConfigRangeOrValue {
-
-            beta: RangeOrValue<f64>,
-
-            sub_config:SomeSubTrainConfigRangeOrValue,
-
-        }
-
-
-        impl CommonTrainConfigRangeOrValue  {
-
-            pub(crate) fn fill_run_configs<T:FieldName, F>(&self, append: F, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
-                where F:Fn(CommonTrainConfigFields)->T{
-
-                add_range_or_value::<f64, T>(append(CommonTrainConfigFields::Beta), &self.beta, const_params, grid_params, opt_params);
-
-                self.sub_config.fill_run_configs(|v| append(CommonTrainConfigFields::SubConfig(v)), const_params, grid_params, opt_params);
-            }
-
         }
 
         impl <T: FieldName> From<&[&NamedVal<T>]> for CommonTrainConfig {
@@ -987,40 +921,8 @@ pub mod tests {
 
         #[derive(ThoosaArgs, Debug, Deserialize)]
         enum NetType {
-            #[arg_type]
             NetOne(NetOneConfig),
-            #[arg_type]
             NetTwo(NetTwoConfig)
-        }
-
-        #[derive(Debug, Clone)]
-        enum NetTypeFields {
-            NetOne(NetOneConfigFields),
-            NetTwo(NetTwoConfigFields),
-        }
-
-        #[derive(Debug, Deserialize, Serialize)]
-        enum NetTypeRangeOrValue {
-
-            NetOne(NetOneConfigRangeOrValue),
-
-            NetTwo(NetTwoConfigRangeOrValue)
-        }
-
-        impl NetTypeRangeOrValue {
-
-            pub(crate) fn fill_run_configs<T:FieldName, F>(&self, append: F, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
-                where F:Fn(NetTypeFields)->T{
-
-                match self {
-                    NetTypeRangeOrValue::NetOne(net_1) => {
-                        net_1.fill_run_configs(|v|append(NetTypeFields::NetOne(v)), const_params, grid_params, opt_params);
-                    }
-                    NetTypeRangeOrValue::NetTwo(net_2) => {
-                        net_2.fill_run_configs(|v|append(NetTypeFields::NetTwo(v)), const_params, grid_params, opt_params);
-                    }
-                }
-            }
         }
 
 
@@ -1031,25 +933,6 @@ pub mod tests {
             num_aaa: u32,
         }
 
-        #[derive(Debug, Clone)]
-        enum NetOneConfigFields{
-            NumAaa
-        }
-
-        #[derive(Debug, Deserialize, Serialize)]
-        struct NetOneConfigRangeOrValue {
-            ///number of aaa
-            num_aaa: RangeOrValue<u32>,
-
-        }
-
-        impl NetOneConfigRangeOrValue {
-
-            pub(crate) fn fill_run_configs<T:FieldName, F>(&self, append: F, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
-            where F:Fn(NetOneConfigFields)->T{
-                add_range_or_value::<u32, T>(append(NetOneConfigFields::NumAaa), &self.num_aaa, const_params, grid_params, opt_params);
-            }
-        }
 
         #[derive(ThoosaArgs, Debug, Deserialize)]
         struct NetTwoConfig {
@@ -1058,24 +941,6 @@ pub mod tests {
             num_bbb: u32,
         }
 
-        #[derive(Debug, Clone)]
-        enum NetTwoConfigFields {
-            NumBbb
-        }
-
-        #[derive(Debug, Deserialize, Serialize)]
-        struct NetTwoConfigRangeOrValue {
-            ///number of bbb
-            num_bbb: RangeOrValue<u32>,
-
-        }
-
-        impl  NetTwoConfigRangeOrValue {
-            pub(crate) fn fill_run_configs<T:FieldName, F>(&self, append: F, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
-            where F:Fn(NetTwoConfigFields)->T{
-                add_range_or_value::<u32, T>(append(NetTwoConfigFields::NumBbb), &self.num_bbb, const_params, grid_params, opt_params);
-            }
-        }
 
         #[derive(ThoosaArgs, Debug)]
         struct TrainLabelsRunConfig {
@@ -1094,26 +959,26 @@ pub mod tests {
         }
 
         #[derive(Debug, Clone)]
-        enum TrainLabelsRunConfigFields {
+        enum TrainLabelsRunConfigFields_ {
             SomeProp,
             CommonConfig(CommonTrainConfigFields),
             NetType0(NetTypeFields),
             NetType1(NetTypeFields),
         }
 
-        impl Display for TrainLabelsRunConfigFields {
+        impl Display for TrainLabelsRunConfigFields_ {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 match self {
-                    TrainLabelsRunConfigFields::SomeProp => {
+                    TrainLabelsRunConfigFields_::SomeProp => {
                         write!(f, "SomeProp")
                     }
-                    TrainLabelsRunConfigFields::CommonConfig(_) => {
+                    TrainLabelsRunConfigFields_::CommonConfig(_) => {
                         write!(f, "CommonConfig")
                     }
-                    TrainLabelsRunConfigFields::NetType0(_) => {
+                    TrainLabelsRunConfigFields_::NetType0(_) => {
                         write!(f, "NetType0")
                     }
-                    TrainLabelsRunConfigFields::NetType1(_) => {
+                    TrainLabelsRunConfigFields_::NetType1(_) => {
                         write!(f, "NetType1")
                     }
                 }
@@ -1122,13 +987,13 @@ pub mod tests {
 
 
 
-        impl FieldName for TrainLabelsRunConfigFields {}
+        impl FieldName for TrainLabelsRunConfigFields_ {}
 
         #[derive(Debug, Deserialize, Serialize)]
-        struct TrainLabelsRunConfigRangeOrValue {
+        struct TrainLabelsRunConfigRangeOrValue_ {
             some_prop:RangeOrValue<f32>,
 
-            common_config:CommonTrainConfigRangeOrValue,
+            common_config: CommonTrainConfigRangeOrValue,
 
             net_type_0: NetTypeRangeOrValue,
 
@@ -1136,21 +1001,21 @@ pub mod tests {
 
         }
 
-        impl TrainLabelsRunConfigRangeOrValue {
+        impl TrainLabelsRunConfigRangeOrValue_ {
 
-            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<TrainLabelsRunConfigFields>>, grid_params: &mut Vec<NamedRange<TrainLabelsRunConfigFields>>, opt_params: &mut Vec<Hyperparameter<TrainLabelsRunConfigFields>>) {
+            pub(crate) fn fill_run_configs(&self, prefix: Option<&String>, const_params: &mut Vec<NamedVal<TrainLabelsRunConfigFields_>>, grid_params: &mut Vec<NamedRange<TrainLabelsRunConfigFields_>>, opt_params: &mut Vec<Hyperparameter<TrainLabelsRunConfigFields_>>) {
 
 
-                add_range_or_value::<f32, TrainLabelsRunConfigFields>(TrainLabelsRunConfigFields::SomeProp, &self.some_prop, const_params, grid_params, opt_params);
+                add_range_or_value::<f32, TrainLabelsRunConfigFields_>(TrainLabelsRunConfigFields_::SomeProp, &self.some_prop, const_params, grid_params, opt_params);
 
-                self.common_config.fill_run_configs(|v|TrainLabelsRunConfigFields::CommonConfig(v), const_params, grid_params, opt_params);
+                self.common_config.fill_run_configs(|v| TrainLabelsRunConfigFields_::CommonConfig(v), const_params, grid_params, opt_params);
 
-                self.net_type_0.fill_run_configs(|v|TrainLabelsRunConfigFields::NetType0(v), const_params, grid_params, opt_params);
-                self.net_type_1.fill_run_configs(|v|TrainLabelsRunConfigFields::NetType1(v), const_params, grid_params, opt_params);
+                self.net_type_0.fill_run_configs(|v| TrainLabelsRunConfigFields_::NetType0(v), const_params, grid_params, opt_params);
+                self.net_type_1.fill_run_configs(|v| TrainLabelsRunConfigFields_::NetType1(v), const_params, grid_params, opt_params);
 
             }
 
-            fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>, Vec<Hyperparameter<TrainLabelsRunConfigFields>>, TrainLabelsRunConfigFields> {
+            fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields_>>, Vec<NamedRange<TrainLabelsRunConfigFields_>>, Vec<Hyperparameter<TrainLabelsRunConfigFields_>>, TrainLabelsRunConfigFields_> {
                 let mut const_params = Vec::new();
                 let mut grid_params = Vec::new();
                 let mut opt_params = Vec::new();
@@ -1166,7 +1031,7 @@ pub mod tests {
                 )
             }
 
-            fn grid_sources(&self) -> GridRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>> {
+            fn grid_sources(&self) -> GridRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields_>>, Vec<NamedRange<TrainLabelsRunConfigFields_>>> {
                 let mut const_params = Vec::new();
                 let mut grid_params = Vec::new();
                 let mut opt_params = Vec::new();
@@ -1187,12 +1052,17 @@ pub mod tests {
 
             fn from(value: &[NamedVal<T>]) -> Self {
                 debug!("TrainLabelsRunConfig::from {value:?}");
+                //tested in test_build_from_named_vals
 
-                let s:SomeSubTrainConfig = value.into();
 
                 TrainLabelsRunConfig {
                     some_prop: 10.0,
-                    common_config: value.into(),
+                    common_config: CommonTrainConfig {
+                        beta: 0.1,
+                        sub_config: SomeSubTrainConfig {
+                            lr: 0.2,
+                        },
+                    },
 
                     net_type_0: NetType::NetOne(NetOneConfig {
                         num_aaa: 0,
@@ -1205,20 +1075,6 @@ pub mod tests {
             }
         }
 
-
-        #[derive(ThoosaArgs)]
-        struct TrainMotifsRunConfig {
-
-            #[run_config]
-            common_config:CommonTrainConfig,
-
-        }
-
-        impl TrainMotifsRunConfig {
-            pub(crate) fn fill_run_configs<T: FieldName>(matches:&ArgMatches, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<String>>, opt_params: &mut Vec<Hyperparameter<String>>) {
-
-            }
-        }
 
 
         #[derive(Parser, Clone)]
@@ -1271,10 +1127,6 @@ pub mod tests {
                 "#
         ]);
 
-        fn test_train_motifs(source:GridRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange<String>>>){
-
-        }
-
         fn test_train_labels<T: FieldName>(run_config_source:OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T>){
             let const_vals = run_config_source.grid_run_config_source().const_params();
 
@@ -1314,7 +1166,7 @@ pub mod tests {
             Commands::TrainLabels(train_labels_args) =>{
                 debug!("Commands::TrainLabels: train_labels_args={train_labels_args:?}");
 
-                let v:TrainLabelsRunConfigRangeOrValue = serde_json5::from_str(&train_labels_args.run_config_cnt).unwrap();
+                let v: TrainLabelsRunConfigRangeOrValue_ = serde_json5::from_str(&train_labels_args.run_config_cnt).unwrap();
 
                 debug!("TrainLabelsRunConfigRangeOrValue: v={v:?}");
 
@@ -1323,7 +1175,7 @@ pub mod tests {
                 assert_eq!(RangeOrValue::Range{range: 0.1..1.0, step: None}, v.common_config.beta);
                 assert_eq!(RangeOrValue::Range{range: 0.1..1.0, step: Some((0.1,1))}, v.common_config.sub_config.lr);
 
-                let (NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue{num_aaa: ref num_aaa_range_or_value})) = v.net_type_0 else {panic!("no NetOne/num_aaa")};
+                let (NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {num_aaa: ref num_aaa_range_or_value})) = v.net_type_0 else {panic!("no NetOne/num_aaa")};
                 assert_eq!(&RangeOrValue::Value(1), num_aaa_range_or_value);
 
                 test_train_labels(v.opt_sources());
