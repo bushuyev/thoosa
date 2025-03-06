@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use std::ops::Range;
 use num_traits::ToPrimitive;
 use crate::{round_to_digits, RangeOrValue, ThoosaError};
-use crate::hyperparameter::ParamName;
+use crate::hyperparameter::{FieldName, FieldsPath};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Val {
@@ -38,45 +38,40 @@ impl Val {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct NamedVal<T:ParamName>{
-    name: T,
+pub struct NamedVal<T: FieldName>{
+    path: FieldsPath<T>,
     val:Val
 }
 
-impl <T:ParamName> NamedVal<T> {
-    // pub fn new<I:Into<Val>>(name: &str, val:I) -> Self {
-    //     Self {
-    //         name: name,
-    //         val: val.into()
-    //     }
-    // }
-
-    pub fn name(&self) -> &T {
-        &self.name
+impl <T: FieldName> NamedVal<T> {
+    pub fn new<P:Into<FieldsPath<T>>, V:Into<Val>>(into_path: P, val: V) -> Self {
+        Self {
+            path: into_path.into(),
+            val: val.into()
+        }
     }
 
     pub fn val(&self) -> &Val {
         &self.val
     }
 
-
+    pub fn path(&self) -> &T {
+        self.path.path()
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct NamedRange<T:ParamName>{
-    name: T,
+pub struct NamedRange<T: FieldName>{
+    name: FieldsPath<T>,
     range:Range<Val>,
     step:(Val, u32)
 }
 
 
-impl <T:ParamName> NamedRange<T> {
-    pub fn new(name: T, range: Range<Val>, step: (Val, u32)) -> Self {
-        Self { name, range, step }
-    }
+impl <T: FieldName> NamedRange<T> {
 
-    pub fn name(&self) -> &T {
-        &self.name
+    pub fn new(name: FieldsPath<T>, range: Range<Val>, step: (Val, u32)) -> Self {
+        Self { name, range, step }
     }
 
     pub fn range(&self) -> &Range<Val> {
@@ -100,8 +95,8 @@ enum IterationKind {
 
 
 
-pub struct NamedRangeIter<T:ParamName> {
-    name: T,
+pub struct NamedRangeIter<T: FieldName> {
+    name: FieldsPath<T>,
     // We'll store everything as floats internally:
     current: f64,
     end: f64,
@@ -116,7 +111,7 @@ pub struct NamedRangeIter<T:ParamName> {
 }
 
 
-impl <T:ParamName> Iterator for NamedRangeIter<T> {
+impl <T: FieldName> Iterator for NamedRangeIter<T> {
     type Item = NamedVal<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -159,7 +154,7 @@ impl <T:ParamName> Iterator for NamedRangeIter<T> {
         };
 
         let item = NamedVal {
-            name: self.name.clone(),
+            path: self.name.clone(),
             val,
         };
 
@@ -177,7 +172,7 @@ impl <T:ParamName> Iterator for NamedRangeIter<T> {
     }
 }
 
-impl <T:ParamName> IntoIterator for NamedRange<T> {
+impl <T: FieldName> IntoIterator for NamedRange<T> {
     type Item = NamedVal<T>;
     type IntoIter = NamedRangeIter<T>;
 
@@ -249,11 +244,11 @@ fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
 //     }
 // }
 
-impl  <T:ParamName> From<(T, Val)> for NamedVal<T> {
+impl  <T: FieldName> From<(FieldsPath<T>, Val)> for NamedVal<T> {
 
-    fn from((name, val): (T, Val)) -> Self {
+    fn from((name, val): (FieldsPath<T>, Val)) -> Self {
         NamedVal{
-            name,
+            path: name,
             val
         }
     }
@@ -266,14 +261,14 @@ impl  <T:ParamName> From<(T, Val)> for NamedVal<T> {
 //     }
 // }
 
-impl TryFrom<(&str, &RangeOrValue<f64>)> for NamedRange<String> {
+impl <T: FieldName> TryFrom<(FieldsPath<T>, &RangeOrValue<f64>)> for NamedRange<T> {
     type Error = ();
 
-    fn try_from((name, value): (&str, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (FieldsPath<T>, &RangeOrValue<f64>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range,step} = value {
             if let Some(step) = step {
                 return Ok(NamedRange {
-                    name: name.into(),
+                    name,
                     range: Val::Real(range.start)..Val::Real(range.end),
                     step: (Val::Real(step.0), step.1)
                 })
@@ -298,14 +293,14 @@ impl From<&NamedRange<String>> for Vec<NamedVal<String>> {
     }
 }
 
-impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange<String> {
+impl <T: FieldName> TryFrom<(FieldsPath<T>, &RangeOrValue<u32>)> for NamedRange<T> {
     type Error = ();
 
-    fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (FieldsPath<T>, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Range{range,step} = value {
             if let Some(step) = step {
                 return Ok(NamedRange {
-                    name: name.into(),
+                    name,
                     range: Val::UInt(range.start)..Val::UInt(range.end),
                     step: (Val::UInt(step.0), step.1)
                 })
@@ -315,13 +310,13 @@ impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedRange<String> {
     }
 }
 
-impl TryFrom<(&str, &RangeOrValue<u32>)> for NamedVal<String> {
+impl <T: FieldName> TryFrom<(FieldsPath<T>, &RangeOrValue<u32>)> for NamedVal<T> {
     type Error = ();
 
-    fn try_from((name, value): (&str, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
+    fn try_from((name, value): (FieldsPath<T>, &RangeOrValue<u32>)) -> Result<Self, Self::Error> {
         if let RangeOrValue::Value(v) = value {
             return Ok(NamedVal {
-                name: name.into(),
+                path: name,
                 val: v.into()
             });
         }
@@ -580,7 +575,7 @@ pub fn unprefix_properties(prefix:&str, map: &HashMap<String, Val>) -> HashMap<S
 }
 
 
-impl <T:ParamName> TryFrom<&NamedVal<T>> for f64 {
+impl <T: FieldName> TryFrom<&NamedVal<T>> for f64 {
     type Error = ThoosaError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
@@ -589,7 +584,7 @@ impl <T:ParamName> TryFrom<&NamedVal<T>> for f64 {
 }
 
 
-impl <T:ParamName> TryFrom<&NamedVal<T>> for f32 {
+impl <T: FieldName> TryFrom<&NamedVal<T>> for f32 {
     type Error = ThoosaError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
@@ -597,7 +592,7 @@ impl <T:ParamName> TryFrom<&NamedVal<T>> for f32 {
     }
 }
 
-impl <T:ParamName> TryFrom<&NamedVal<T>> for u32 {
+impl <T: FieldName> TryFrom<&NamedVal<T>> for u32 {
     type Error = ThoosaError;
 
     fn try_from(value: &NamedVal<T>) -> Result<Self, Self::Error> {
@@ -614,7 +609,7 @@ mod tests {
     #[test]
     fn test_named_range_int_iteration() {
         let named_range = NamedRange {
-            name: "SomeName".to_string(),
+            name: "SomeName".into(),
             range: Val::Int(-1)..Val::Int(3),
             step: (Val::Int(1), 2),
         };
@@ -622,10 +617,10 @@ mod tests {
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
 
         let expected = vec![
-            NamedVal { name: "SomeName".to_string(), val: Val::Int(-1) },
-            NamedVal { name: "SomeName".to_string(), val: Val::Int(0)  },
-            NamedVal { name: "SomeName".to_string(), val: Val::Int(1)  },
-            NamedVal { name: "SomeName".to_string(), val: Val::Int(2)  },
+            NamedVal { path: "SomeName".into(), val: Val::Int(-1) },
+            NamedVal { path: "SomeName".into(), val: Val::Int(0)  },
+            NamedVal { path: "SomeName".into(), val: Val::Int(1)  },
+            NamedVal { path: "SomeName".into(), val: Val::Int(2)  },
         ];
 
         assert_eq!(result, expected);
@@ -634,7 +629,7 @@ mod tests {
     #[test]
     fn test_named_range_float_iteration() {
         let named_range = NamedRange {
-            name: "FloatRange".to_string(),
+            name: "FloatRange".into(),
             range: Val::Real(0.0)..Val::Real(1.0),
             step: (Val::Real(0.3), 2),
         };
@@ -642,10 +637,10 @@ mod tests {
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
 
         let expected = vec![
-            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.0)  },
-            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.3)  },
-            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.6)  },
-            NamedVal { name: "FloatRange".to_string(), val: Val::Real(0.9)  },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.0)  },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.3)  },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.6)  },
+            NamedVal { path: "FloatRange".into(), val: Val::Real(0.9)  },
         ];
 
         assert_eq!(result, expected);

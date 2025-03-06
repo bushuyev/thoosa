@@ -26,7 +26,7 @@ mod tests {
     use std::path::Path;
     use std::str::FromStr;
     use log::debug;
-    use thoosa_shared::hyperparameter::{Hyperparameter, ParamName, ParamsPath};
+    use thoosa_shared::hyperparameter::{Hyperparameter, FieldName, FieldsPath};
     use thoosa_shared::{add_prefix, add_range_or_value, RangeOrValue, ThoosaError};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
@@ -38,17 +38,6 @@ mod tests {
     #[test]
     fn test_build_from_named_vals() {
 
-        #[derive(Debug)]
-        struct PathVal<P> {
-            path: P,
-            val: Val,
-        }
-
-        impl<P> PathVal<P> {
-            pub fn new(path: P, val: Val) -> Self {
-                Self { path, val }
-            }
-        }
 
         #[derive(Debug, Clone)]
         struct SubStruct0 {
@@ -228,7 +217,7 @@ mod tests {
             }
         }
 
-        impl ParamName for SubStructBFields {}
+        impl FieldName for SubStructBFields {}
 
         #[derive(Debug)]
         struct SubStructBRangeOrValue {
@@ -237,7 +226,7 @@ mod tests {
         }
 
         impl SubStructBRangeOrValue {
-            pub(crate) fn fill_run_configs<P:ParamName>(&self, prefix: Option<&P>, const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
+            pub(crate) fn fill_run_configs<P: FieldName>(&self, prefix: Option<&P>, const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
                 // add_range_or_value::<u32, SubStructBFields>(add_prefix(prefix, SubStructBFields::FieldA), &self.field_a, const_params, grid_params, opt_params);
                 todo!()
             }
@@ -260,9 +249,10 @@ mod tests {
         }
 
         impl SomeStructRangeOrValue {
-            pub(crate) fn fill_run_configs<P:ParamName>(&self, prefix: ParamsPath<P>,  const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
-                let mut param_path = ParamsPath::new(SomeStructFields::Field00);
-                param_path.extend(std::iter::once(SomeStructFields::Field01));
+
+            pub(crate) fn fill_run_configs<P: FieldName>(&self, prefix: FieldsPath<P>, const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
+                let mut param_path = FieldsPath::new(SomeStructFields::Field00);
+                // param_path.extend(std::iter::once(SomeStructFields::Field01));
                 // add_range_or_value::<u32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field00), &self.field_00, const_params, grid_params, opt_params);
                 // add_range_or_value::<f32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field01), &self.field_01, const_params, grid_params, opt_params);
                 //
@@ -285,7 +275,7 @@ mod tests {
             SubEnum(SubEnumFields)
         }
 
-        impl ParamName for SomeStructFields {}
+        impl FieldName for SomeStructFields {}
 
         impl Display for SomeStructFields {
 
@@ -327,11 +317,11 @@ mod tests {
 
         impl SomeStructBuilder {
 
-            fn add_path_vals( path_vals:impl IntoIterator<Item=PathVal<SomeStructFields>>) -> SomeStruct{
+            fn add_path_vals(path_vals:impl IntoIterator<Item=NamedVal<SomeStructFields>>) -> SomeStruct{
                 let mut builder = SomeStructBuilder::default();
 
                 for path_val in path_vals {
-                    builder.add_val(path_val.path, path_val.val);
+                    // builder.add_val(path_val.path, path_val.val);
                 }
 
                 builder.build()
@@ -379,16 +369,13 @@ mod tests {
         let mut grid_params:Vec<NamedRange<SomeStructFields>> = Vec::new();
         let mut opt_params:Vec<Hyperparameter<SomeStructFields>> = Vec::new();
 
-        some_struct_range_or_value.fill_run_configs(ParamsPath::root(), &mut const_params, &mut grid_params, &mut opt_params);
-
-
+        some_struct_range_or_value.fill_run_configs(FieldsPath::root(), &mut const_params, &mut grid_params, &mut opt_params);
 
         let path_vals = [
-            PathVal::new(SomeStructFields::Field00, Val::Int(1)), PathVal::new(SomeStructFields::Field01, Val::Int(2)),
-            PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
-            PathVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), Val::UInt(1)),
+            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Int(2)),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
+            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), Val::UInt(1)),
         ];
-
 
         let some_struct: SomeStruct = SomeStructBuilder::add_path_vals(path_vals);
 
@@ -401,13 +388,11 @@ mod tests {
         };
         assert_eq!(sub_struct_0.field_a, 1);
 
-
         let path_vals = [
-            PathVal::new(SomeStructFields::Field00, Val::Int(1)), PathVal::new(SomeStructFields::Field01, Val::Int(2)),
-            PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), PathVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
-            PathVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)), Val::UInt(2)),
+            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Int(2)),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
+            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)), Val::UInt(2)),
         ];
-
 
         let some_struct: SomeStruct = SomeStructBuilder::add_path_vals(path_vals);
         assert_eq!(some_struct.field_00, 1);

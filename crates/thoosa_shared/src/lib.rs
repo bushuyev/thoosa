@@ -28,7 +28,7 @@ use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
 use num_traits::real::Real;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use crate::hyperparameter::{Hyperparameter, ParamName};
+use crate::hyperparameter::{Hyperparameter, FieldName, FieldsPath};
 use crate::resource::ResourceId;
 use crate::val::{NamedRange, NamedVal, Val};
 
@@ -513,9 +513,9 @@ where
     }
 }
 
-pub fn add_range_or_value<'a, V:'a, T:ParamName>(name:T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
+pub fn add_range_or_value<'a, V:'a, T: FieldName>(name: FieldsPath<T>, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
 where Val: From<&'a V>,
-      Hyperparameter<T>: From<(T, &'a Range<V>)>{
+      Hyperparameter<T>: From<(FieldsPath<T>, &'a Range<V>)>{
 
     match v {
         RangeOrValue::Range { range, step: step_op } => {
@@ -542,10 +542,18 @@ where Val: From<&'a V>,
     }
 }
 
-pub fn add_prefix<T:ParamName>(prefix: Option<&T>, field: T) -> T {
+pub fn add_prefix<T: FieldName>(prefix: Option<&FieldsPath<T>>, field: T) -> FieldsPath<T> {
     // prefix.map(|p| format!("{}.{}", p, field))
     //     .unwrap_or(field)
-    todo!()
+    match prefix {
+        None => {
+            field.into()
+        }
+        Some(prefix) => {
+            // prefix.extend(field)
+            field.into()
+        }
+    }
 
 }
 
@@ -926,12 +934,13 @@ mod shared_tests {
    group 3: x, y
    */
     use std::collections::HashSet;
-    use std::fmt::Display;
+    use std::fmt::{Display, Formatter};
     use clap::{Args, Parser};
-
-
-    use crate::{arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, test_utils, RangeOrValue, ResourceType, ThoosaError};
+    use log::debug;
+    use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, test_utils, RangeOrValue, ResourceType, ThoosaError};
+    use crate::hyperparameter::{FieldName, FieldsPath};
     use crate::pulse_v;
+    use crate::val::NamedVal;
 
     #[ctor::ctor]
     fn init() {
@@ -1319,4 +1328,139 @@ mod shared_tests {
             "hello_test_one"
         );
     }
+
+    //TODO replace ...Fields with Derive
+    #[test]
+    fn test_append_sub_field_enums(){
+        #[derive(Debug, Clone, PartialEq)]
+        enum SubStructFields {
+            FieldA,
+            FieldB,
+        }
+        impl Display for SubStructFields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "")
+            }
+        }
+        impl FieldName for SubStructFields {}
+
+        #[derive(Debug, Clone, PartialEq)]
+        enum ParentStructAFields {
+            Field0,
+            SubStructA(SubStructFields),
+            SubStructB (SubStructFields),
+        }
+
+        impl Display for ParentStructAFields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "")
+            }
+        }
+        impl FieldName for ParentStructAFields {}
+
+        #[derive(Debug, Clone, PartialEq)]
+        enum ParentStructBFields {
+            Field0,
+            SubStructB (SubStructFields),
+        }
+
+        impl Display for ParentStructBFields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "")
+            }
+        }
+        impl FieldName for ParentStructBFields {}
+
+        fn fill_parent_a(params: &mut Vec<NamedVal<ParentStructAFields>>){
+            params.push(NamedVal::new::<ParentStructAFields, i32>(ParentStructAFields::Field0.into(), 0.into()));
+            fill_sub_struct(params, |v| ParentStructAFields::SubStructA(v));
+        }
+
+        fn fill_parent_b(params: &mut Vec<NamedVal<ParentStructBFields>>){
+            params.push(NamedVal::new::<ParentStructBFields, i32>(ParentStructBFields::Field0.into(), 1.into()));
+            fill_sub_struct(params, |v| ParentStructBFields::SubStructB(v));
+        }
+
+        fn fill_sub_struct<T:FieldName, F>(params: &mut Vec<NamedVal<T>>, append:F) where F:Fn(SubStructFields)->T{
+            params.push(NamedVal::new::<T, i32>(append(SubStructFields::FieldA).into(), 0.into()));
+            params.push(NamedVal::new::<T, i32>(append(SubStructFields::FieldB).into(), 1.into()));
+        }
+
+        let mut params_a = vec![];
+        fill_parent_a(&mut params_a);
+
+        let mut params_b = vec![];
+        fill_parent_b(&mut params_b);
+
+        debug!("params_a: {params_a:?}");
+        debug!("params_b: {params_b:?}");
+
+        assert_eq!(
+            params_a[1].path(),
+            &ParentStructAFields::SubStructA(SubStructFields::FieldA),
+        );
+        assert_eq!(
+            params_a[2].path(),
+            &ParentStructAFields::SubStructA(SubStructFields::FieldB),
+        );
+
+        assert_eq!(
+            params_b[1].path(),
+            &ParentStructBFields::SubStructB(SubStructFields::FieldA),
+        );
+
+        assert_eq!(
+            params_b[2].path(),
+            &ParentStructBFields::SubStructB(SubStructFields::FieldB),
+        );
+
+    }
+
+    #[test]
+    fn test_append_sub_field_string(){
+
+        fn fill_parent_a(params: &mut Vec<NamedVal<String>>){
+            params.push(NamedVal::new::<String, i32>("Field0".to_string(), 0.into()));
+            fill_sub_struct(params, |v| "SubStructA.".to_string() + &v);
+        }
+
+        fn fill_parent_b(params: &mut Vec<NamedVal<String>>){
+            params.push(NamedVal::new::<String, i32>("Field0".to_string(), 1.into()));
+            fill_sub_struct(params, |v| "SubStructB.".to_string() + &v);
+        }
+
+        fn fill_sub_struct<F>(params: &mut Vec<NamedVal<String>>, append:F) where F:Fn(String)->String{
+            params.push(NamedVal::new::<String, i32>(append("FieldA".to_string()).into(), 0.into()));
+            params.push(NamedVal::new::<String, i32>(append("FieldB".to_string()).into(), 1.into()));
+        }
+
+        let mut params_a = vec![];
+        fill_parent_a(&mut params_a);
+
+        let mut params_b = vec![];
+        fill_parent_b(&mut params_b);
+
+        debug!("params_a: {params_a:?}");
+        debug!("params_b: {params_b:?}");
+
+        assert_eq!(
+            params_a[1].path(),
+            &"SubStructA.FieldA"
+        );
+        assert_eq!(
+            params_a[2].path(),
+            &"SubStructA.FieldB"
+        );
+
+        assert_eq!(
+            params_b[1].path(),
+            &"SubStructB.FieldA"
+        );
+        assert_eq!(
+            params_b[2].path(),
+            &"SubStructB.FieldB"
+        );
+
+    }
+
 }
