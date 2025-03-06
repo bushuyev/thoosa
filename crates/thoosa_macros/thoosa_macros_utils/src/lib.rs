@@ -26,7 +26,7 @@ mod tests {
     use std::path::Path;
     use std::str::FromStr;
     use log::debug;
-    use thoosa_shared::hyperparameter::{Hyperparameter, FieldName, FieldsPath};
+    use thoosa_shared::hyperparameter::{Hyperparameter, FieldName};
     use thoosa_shared::{add_prefix, add_range_or_value, RangeOrValue, ThoosaError};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
 
@@ -48,6 +48,13 @@ mod tests {
         enum SubStruct0Fields {
             FieldA
         }
+        impl Display for SubStruct0Fields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "SubStruct0Fields::FieldA")
+            }
+        }
+
+
         #[derive(Debug, Default)]
         struct SubStruct0Builder {
             field_a: Option<u32>,
@@ -60,7 +67,7 @@ mod tests {
                 }
             }
 
-            fn add_val(&mut self, path: SubStruct0Fields, val: Val)  {
+            fn add_val(&mut self, path: &SubStruct0Fields, val: &Val)  {
                 match path {
                     SubStruct0Fields::FieldA => {
                         self.field_a = Some(val.try_into().expect("SubStruct0Fields::FieldA is required"));
@@ -79,6 +86,12 @@ mod tests {
             FieldB
         }
 
+        impl Display for SubStruct1Fields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "SubStruct1Fields::FieldB")
+            }
+        }
+
         #[derive(Debug, Default)]
         struct SubStruct1Builder {
             field_b:Option<u32>,
@@ -91,7 +104,7 @@ mod tests {
                 }
             }
 
-            fn add_val(&mut self, path: SubStruct1Fields, val: Val)  {
+            fn add_val(&mut self, path: &SubStruct1Fields, val: &Val)  {
                 match path {
                     SubStruct1Fields::FieldB => {
                         self.field_b = Some(val.try_into().expect("SubStruct1Fields::FieldB is required"));
@@ -110,6 +123,19 @@ mod tests {
         enum SubEnumFields {
             Sub0(SubStruct0Fields),
             Sub1(SubStruct1Fields),
+        }
+
+        impl Display for SubEnumFields {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    SubEnumFields::Sub0(v) => {
+                        write!(f, "SubEnum::Sub0/{v}")
+                    }
+                    SubEnumFields::Sub1(v) => {
+                        write!(f, "SubEnum::Sub1/{v}")
+                    }
+                }
+            }
         }
 
         #[derive(Debug, Default)]
@@ -139,7 +165,7 @@ mod tests {
                 }
             }
 
-            fn add_val(&mut self, path: SubEnumFields, val: Val)  {
+            fn add_val(&mut self, path: &SubEnumFields, val: &Val)  {
                 match path {
                     SubEnumFields::Sub0(path) => {
                         let prev = self.sub_enum.replace(SubEnumBuilderEnum::Sub0);
@@ -172,7 +198,7 @@ mod tests {
 
 
         impl SubStructBBuilder {
-            fn add_val(&mut self, path: SubStructBFields, val: Val) /*->SomeStruct*/ {
+            fn add_val(&mut self, path: &SubStructBFields, val: &Val) /*->SomeStruct*/ {
                 match path {
                     SubStructBFields::FieldA => {
                         self.field_a = Some(val.try_into().expect("field A not valid"));
@@ -250,14 +276,8 @@ mod tests {
 
         impl SomeStructRangeOrValue {
 
-            pub(crate) fn fill_run_configs<P: FieldName>(&self, prefix: FieldsPath<P>, const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
-                let mut param_path = FieldsPath::new(SomeStructFields::Field00);
-                // param_path.extend(std::iter::once(SomeStructFields::Field01));
-                // add_range_or_value::<u32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field00), &self.field_00, const_params, grid_params, opt_params);
-                // add_range_or_value::<f32, SomeStructFields>(add_prefix(prefix, SomeStructFields::Field01), &self.field_01, const_params, grid_params, opt_params);
-                //
-                // self.sub_struct.fill_run_configs(Some(&SomeStructFields::SubStruct), const_params, grid_params, opt_params);
-                // todo!()
+            pub(crate) fn fill_run_configs<P: FieldName>(&self, const_params: &mut Vec<NamedVal<P>>, grid_params: &mut Vec<NamedRange<P>>, opt_params: &mut Vec<Hyperparameter<P>>) {
+                //TODO
             }
         }
 
@@ -280,20 +300,18 @@ mod tests {
         impl Display for SomeStructFields {
 
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                // write!(f, "({}, {})", self.longitude, self.latitude)
                 match self {
                     SomeStructFields::Field00 => {
                         write!(f, "SomeStructFields::Field00")
                     }
                     SomeStructFields::Field01 => {
                         write!(f, "SomeStructFields::Field01")
-
                     }
-                    SomeStructFields::SubStruct(_) => {
-                        write!(f, "SomeStructFields::SubStruct")
+                    SomeStructFields::SubStruct(v) => {
+                        write!(f, "SomeStructFields::SubStruct/{v}")
                     }
-                    SomeStructFields::SubEnum(_) => {
-                        write!(f, "SomeStructFields::SubEnum")
+                    SomeStructFields::SubEnum(v) => {
+                        write!(f, "SomeStructFields::SubEnum/{v}")
                     }
                 }
             }
@@ -321,13 +339,13 @@ mod tests {
                 let mut builder = SomeStructBuilder::default();
 
                 for path_val in path_vals {
-                    // builder.add_val(path_val.path, path_val.val);
+                    builder.add_val(path_val.path(), path_val.val());
                 }
 
                 builder.build()
             }
 
-            fn add_val(&mut self, path: SomeStructFields, val: Val) {
+            fn add_val(&mut self, path: &SomeStructFields, val: &Val) {
 
                 match path {
                     SomeStructFields::Field00 => {
@@ -369,10 +387,10 @@ mod tests {
         let mut grid_params:Vec<NamedRange<SomeStructFields>> = Vec::new();
         let mut opt_params:Vec<Hyperparameter<SomeStructFields>> = Vec::new();
 
-        some_struct_range_or_value.fill_run_configs(FieldsPath::root(), &mut const_params, &mut grid_params, &mut opt_params);
+        some_struct_range_or_value.fill_run_configs(&mut const_params, &mut grid_params, &mut opt_params);
 
         let path_vals = [
-            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Int(2)),
+            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
             NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
             NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), Val::UInt(1)),
         ];
@@ -389,7 +407,7 @@ mod tests {
         assert_eq!(sub_struct_0.field_a, 1);
 
         let path_vals = [
-            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Int(2)),
+            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
             NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
             NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)), Val::UInt(2)),
         ];

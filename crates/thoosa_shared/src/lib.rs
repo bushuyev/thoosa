@@ -28,7 +28,7 @@ use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
 use num_traits::real::Real;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use crate::hyperparameter::{Hyperparameter, FieldName, FieldsPath};
+use crate::hyperparameter::{Hyperparameter, FieldName};
 use crate::resource::ResourceId;
 use crate::val::{NamedRange, NamedVal, Val};
 
@@ -513,9 +513,9 @@ where
     }
 }
 
-pub fn add_range_or_value<'a, V:'a, T: FieldName>(name: FieldsPath<T>, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
+pub fn add_range_or_value<'a, V:'a, T: FieldName>(name: T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
 where Val: From<&'a V>,
-      Hyperparameter<T>: From<(FieldsPath<T>, &'a Range<V>)>{
+      Hyperparameter<T>: From<(T, &'a Range<V>)>{
 
     match v {
         RangeOrValue::Range { range, step: step_op } => {
@@ -542,7 +542,7 @@ where Val: From<&'a V>,
     }
 }
 
-pub fn add_prefix<T: FieldName>(prefix: Option<&FieldsPath<T>>, field: T) -> FieldsPath<T> {
+pub fn add_prefix<T: FieldName>(prefix: Option<&T>, field: T) -> T {
     // prefix.map(|p| format!("{}.{}", p, field))
     //     .unwrap_or(field)
     match prefix {
@@ -938,7 +938,7 @@ mod shared_tests {
     use clap::{Args, Parser};
     use log::debug;
     use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, test_utils, RangeOrValue, ResourceType, ThoosaError};
-    use crate::hyperparameter::{FieldName, FieldsPath};
+    use crate::hyperparameter::{FieldName};
     use crate::pulse_v;
     use crate::val::NamedVal;
 
