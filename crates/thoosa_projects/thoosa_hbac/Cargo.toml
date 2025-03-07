@@ -5,8 +5,6 @@ edition.workspace = true
 
 
 [dependencies]
-thoosa_run_config_source = {path = "../../thoosa_macros/thoosa_run_config_source" }
-thoosa_run_config_source_derive = {path = "../../thoosa_macros/thoosa_run_config_source_derive" }
 thoosa_common = {path = "../../thoosa_common" }
 thoosa_motifs = {path = "../../thoosa_motifs" }
 thoosa_store = {path = "../../thoosa_store" }

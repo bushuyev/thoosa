@@ -549,8 +549,7 @@ pub mod tests {
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
     use thoosa_run_config_args_derive::ThoosaRunConfig;
-    use thoosa_run_config_source::{XGridConfig, XOptConfig, XResourceConfigSource, XRunConfigSource, XRunConfigs, XVecConfig};
-    use thoosa_run_config_source_derive::XRunConfigSource;
+    
     use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
     use thoosa_shared::resource::ResourcesConfig;
     use thoosa_shared::val::Val::{Int, UInt};

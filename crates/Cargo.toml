@@ -8,8 +8,10 @@ members = [
     "thoosa_motifs",
     "thoosa_main",
     "thoosa_projects/thoosa_hbac",
-    "thoosa_macros/thoosa_run_config_source"
-, "thoosa_macros/thoosa_macros_utils"]
+    "thoosa_macros/thoosa_run_config_args",
+    "thoosa_macros/thoosa_run_config_args_derive",
+    "thoosa_macros/thoosa_macros_utils"
+]
 
 [workspace.package]
 version = "0.1.0"

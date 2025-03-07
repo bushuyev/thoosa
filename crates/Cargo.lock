@@ -2862,8 +2862,6 @@ dependencies = [
  "tch",
  "thoosa_run_config_args",
  "thoosa_run_config_args_derive",
- "thoosa_run_config_source",
- "thoosa_run_config_source_derive",
  "thoosa_shared",
  "thoosa_store",
  "torch-sys",
@@ -2894,8 +2892,6 @@ dependencies = [
  "thoosa_common",
  "thoosa_main",
  "thoosa_motifs",
- "thoosa_run_config_source",
- "thoosa_run_config_source_derive",
  "thoosa_shared",
  "thoosa_store",
  "torch-sys",
@@ -2994,24 +2990,6 @@ dependencies = [
  "thoosa_macros_utils",
  "thoosa_run_config_args",
  "thoosa_shared",
-]
-
-[[package]]
-name = "thoosa_run_config_source"
-version = "0.1.0"
-dependencies = [
- "thoosa_shared",
-]
-
-[[package]]
-name = "thoosa_run_config_source_derive"
-version = "0.1.0"
-dependencies = [
- "convert_case",
- "proc-macro2",
- "quote",
- "syn 2.0.99",
- "thoosa_run_config_source",
 ]
 
 [[package]]
