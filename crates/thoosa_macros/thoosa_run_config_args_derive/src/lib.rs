@@ -6,7 +6,7 @@ use thoosa_macros_utils::*;
 
 
 
-#[proc_macro_derive(ThoosaArgs, attributes(run_config, run_config_source))]
+#[proc_macro_derive(ThoosaRunConfig, attributes(run_config, run_config_source))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
