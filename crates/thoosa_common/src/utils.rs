@@ -549,7 +549,7 @@ pub mod tests {
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
     use thoosa_run_config_args_derive::ThoosaRunConfig;
-    
+
     use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
     use thoosa_shared::resource::ResourcesConfig;
     use thoosa_shared::val::Val::{Int, UInt};
@@ -896,7 +896,7 @@ pub mod tests {
         #[derive(ThoosaRunConfig, Debug)]
         struct CommonTrainConfig {
             #[run_config]
-            beta: i32,
+            beta: Option<i32>,
 
             #[run_config]
             sub_config:SomeSubTrainConfig
@@ -946,7 +946,7 @@ pub mod tests {
                 TrainLabelsRunConfig {
                     some_prop: 1,
                     common_config: CommonTrainConfig {
-                        beta: 1,
+                        beta: Some(1),
                         sub_config: SomeSubTrainConfig {
                             lr: 1,
                         },
@@ -1054,7 +1054,7 @@ pub mod tests {
 
 
                 assert_eq!(RangeOrValue::Value(1), v.some_prop);
-                assert_eq!(RangeOrValue::Range{range: 1..10, step: None}, v.common_config.beta);
+                assert_eq!(Some(RangeOrValue::Range{range: 1..10, step: None}), v.common_config.beta);
                 assert_eq!(RangeOrValue::Range{range: 0..10, step: Some((2,1))}, v.common_config.sub_config.lr);
 
                 let (NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {num_aaa: ref num_aaa_range_or_value})) = v.net_type_0 else {panic!("no NetOne/num_aaa")};
