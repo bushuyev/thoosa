@@ -34,32 +34,56 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         let camel_field_ident = Ident::new(&thoosa_shared::snake_to_camel(&field_ident.to_string()), fields_enum_ident.span());
                         let field_type = field.ty.clone();
 
-                        if field.attrs.iter().any(|attr| attr.path().is_ident("run_config")) {
-                            if is_primitive(&field_type) {
-                                a.0.push(quote! {
-                                    #field_ident: RangeOrValue<#field_type>,
-                                });
-                                a.1.push(quote! {
-                                    #camel_field_ident,
-                                });
-                                a.2.push(quote! {
-                                    thoosa_shared::add_range_or_value::<#field_type, T>(append(#fields_enum_ident::#camel_field_ident), &self.#field_ident, const_params, grid_params, opt_params);
-                                });
-                            } else {
-                                let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", field_type.to_token_stream().to_string()), camel_field_ident.span());
+                        eprintln!("field_type={}", field_type.to_token_stream());
 
-                                a.0.push(quote! {
+                        if field.attrs.iter().any(|attr| attr.path().is_ident("run_config")) {
+                            if let Some(inner_ty) = get_option_inner_ty(&field_type) {
+                                if is_primitive(&inner_ty) {
+                                    a.0.push(quote! {
+                                        #field_ident: Option<RangeOrValue<#inner_ty>>,
+                                    });
+                                    a.1.push(quote! {
+                                        #camel_field_ident,
+                                    });
+                                    a.2.push(quote! {
+                                        if let Some(v) = self.#field_ident.as_ref(){
+                                            thoosa_shared::add_range_or_value::<#inner_ty, T>(append(#fields_enum_ident::#camel_field_ident), v, const_params, grid_params, opt_params);
+                                        }
+                                    });
+
+                                } else {
+                                    //TODO
+                                }
+                            } else {
+                                if is_primitive(&field_type) {
+                                    a.0.push(quote! {
+                                        #field_ident: RangeOrValue<#field_type>,
+                                    });
+                                        a.1.push(quote! {
+                                        #camel_field_ident,
+                                    });
+                                        a.2.push(quote! {
+                                        thoosa_shared::add_range_or_value::<#field_type, T>(append(#fields_enum_ident::#camel_field_ident), &self.#field_ident, const_params, grid_params, opt_params);
+                                    });
+
+                                } else {
+                                    let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", field_type.to_token_stream().to_string()), camel_field_ident.span());
+
+                                    a.0.push(quote! {
                                         #field_ident: #field_type_range_or_value,
                                     });
 
-                                let field_type_fields = Ident::new(&format!("{}Fields", field_type.to_token_stream().to_string()), camel_field_ident.span());
-                                a.1.push(quote! {
+                                    let field_type_fields = Ident::new(&format!("{}Fields", field_type.to_token_stream().to_string()), camel_field_ident.span());
+                                    a.1.push(quote! {
                                         #camel_field_ident(#field_type_fields),
                                     });
-                                a.2.push(quote! {
+                                    a.2.push(quote! {
                                         self.#field_ident.fill_run_configs(|v| append(#fields_enum_ident::#camel_field_ident(v)), const_params, grid_params, opt_params);
                                     });
+                                }
+
                             }
+
                         } else {
                             a.0.push(quote! {});
                             a.1.push(quote! {});
@@ -186,8 +210,6 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             #range_or_value_fields
 
         }
-
-
 
         #[derive(Debug, PartialEq, Clone)]
         enum #fields_enum_ident {
