@@ -190,10 +190,24 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             #range_or_value_fields
         }
 
+
+
         #[derive(Debug, Clone)]
         enum #fields_enum_ident {
             #enum_fields
         }
+
+        impl Display for #fields_enum_ident {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    _=>{
+                        write!(f, "todo")
+                    }
+                }
+            }
+        }
+
+        impl FieldName for #fields_enum_ident {}
 
         impl #range_or_value_struct_ident {
             pub(crate) fn fill_run_configs<T:thoosa_shared::hyperparameter::FieldName, F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>)
