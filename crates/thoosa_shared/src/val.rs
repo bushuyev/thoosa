@@ -426,6 +426,21 @@ impl TryFrom<&Val> for u32 {
     }
 }
 
+impl TryFrom<&Val> for i32 {
+    type Error = ThoosaError;
+
+    fn try_from(value: &Val) -> Result<i32, ThoosaError> {
+        match value {
+            Val::Real(v)=> Ok(*v as i32), //TODO v.to_u32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::Int(v)=> (*v).to_i32().ok_or_else(|| ThoosaError::new(format!("can't convert {value:?}"))),
+            Val::UInt(v)=> Ok(*v as i32),
+            Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            _ => Err(ThoosaError::new(format!("can't convert {value:?}")))
+        }
+    }
+}
+
+
 
 impl TryFrom<&Val> for f32 {
     type Error = ThoosaError;

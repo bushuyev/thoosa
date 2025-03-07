@@ -29,6 +29,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
             match &data_struct.fields {
                 syn::Fields::Named(named_fields) => {
+
                     let (range_or_value_fields, enum_fields, add_range_or_value_calls) = named_fields.named.iter().fold((vec![], vec![], vec![]), |mut a, field| {
                         let field_ident = field.ident.as_ref().unwrap();
                         let camel_field_ident = Ident::new(&thoosa_shared::snake_to_camel(&field_ident.to_string()), fields_enum_ident.span());
