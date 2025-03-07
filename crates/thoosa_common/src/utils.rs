@@ -32,7 +32,6 @@ use tch::{Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_shared::{cdt, gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
 use torch_sys::*;
-use thoosa_run_config_args::ThoosaArgsCommand;
 
 use crate::my_tch::{LossFp, ThoModule};
 use thoosa_shared::opt_rng::opt_rnd;
@@ -529,7 +528,7 @@ pub mod tests {
     use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
-    use crate::runs::{ConstConfigSource, GridRunConfigSource, OptRunConfigSource, Simple};
+    use crate::runs::Simple;
     use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore, TrainLabelNodeRunConfig, TrainNodesValues};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
     use clap::{arg, command, Args, Parser, Subcommand};
@@ -549,15 +548,15 @@ pub mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
-    use thoosa_run_config_args::{ThoosaArgs, ThoosaArgsCommand};
-    use thoosa_run_config_args_derive::{ThoosaArgs};
+    use thoosa_run_config_args_derive::ThoosaArgs;
     use thoosa_run_config_source::{XGridConfig, XOptConfig, XResourceConfigSource, XRunConfigSource, XRunConfigs, XVecConfig};
     use thoosa_run_config_source_derive::XRunConfigSource;
-    use thoosa_shared::hyperparameter::{Hyperparameter, FieldName};
+    use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
     use thoosa_shared::resource::ResourcesConfig;
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{add_prefix, add_range_or_value, cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
+    use thoosa_shared::config_source::{ConstConfigSource, GridRunConfigSource, OptRunConfigSource};
 
     #[ctor::ctor]
     fn init() {
@@ -904,25 +903,26 @@ pub mod tests {
             sub_config:SomeSubTrainConfig
         }
 
-        #[derive(ThoosaArgs, Debug, Deserialize)]
+        #[derive(ThoosaArgs, Debug)]
         enum NetType {
             NetOne(NetOneConfig),
             NetTwo(NetTwoConfig)
         }
 
-        #[derive(ThoosaArgs, Debug, Deserialize)]
+        #[derive(ThoosaArgs, Debug)]
         struct NetOneConfig {
             #[run_config]
             num_aaa: u32,
         }
 
-        #[derive(ThoosaArgs, Debug, Deserialize)]
+        #[derive(ThoosaArgs, Debug)]
         struct NetTwoConfig {
             #[run_config]
             num_bbb: u32,
         }
 
         #[derive(ThoosaArgs, Debug)]
+        #[run_config_source]
         struct TrainLabelsRunConfig {
             #[run_config]
             some_prop:u32,
@@ -938,48 +938,11 @@ pub mod tests {
 
         }
 
-
-        impl TrainLabelsRunConfigRangeOrValue {
-
-            fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>, Vec<Hyperparameter<TrainLabelsRunConfigFields>>, TrainLabelsRunConfigFields> {
-                let mut const_params = Vec::new();
-                let mut grid_params = Vec::new();
-                let mut opt_params = Vec::new();
-
-                self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
-
-                OptRunConfigSource::new(
-                    GridRunConfigSource::new(
-                        ConstConfigSource::new(const_params),
-                        grid_params,
-                    ),
-                    opt_params,
-                )
-            }
-
-            fn grid_sources(&self) -> GridRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>> {
-                let mut const_params = Vec::new();
-                let mut grid_params = Vec::new();
-                let mut opt_params = Vec::new();
-
-                self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
-                if !opt_params.is_empty() {
-                    panic!("opt_params in grid");
-                }
-
-                GridRunConfigSource::new(
-                    ConstConfigSource::new(const_params),
-                    grid_params,
-                )
-            }
-        }
-
         impl <T: FieldName> From<&[NamedVal<T>]> for TrainLabelsRunConfig {
 
             fn from(value: &[NamedVal<T>]) -> Self {
                 debug!("TrainLabelsRunConfig::from {value:?}");
                 //tested in test_build_from_named_vals
-
 
                 TrainLabelsRunConfig {
                     some_prop: 1,
@@ -1000,8 +963,6 @@ pub mod tests {
                 }
             }
         }
-
-
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -1138,210 +1099,6 @@ pub mod tests {
         test_train_labels(opt_sources);
 
     }
-
-    #[test]
-    fn test_des_range_or_value(){
-        use serde::Deserialize;
-        use serde::de::{
-            self, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess, SeqAccess,
-            VariantAccess, Visitor,
-        };
-        use serde_json::from_str;
-
-        // #[derive(Deserialize, PartialEq, Debug)]
-        // struct Test {
-        //     field_0: RangeOrValue<u32>,
-        // }
-        //
-        // let j = r#"
-        //     {
-        //         "field_0":{1},
-        //     }
-        // "#;
-        // let expected = Test {
-        //     field_0: RangeOrValue::Value(1),
-        // };
-        // assert_eq!(expected, from_str(j).unwrap());
-
-        // let v = RangeOrValue::Value(1);
-        //debug!("v={:?}", serde_json::to_string(&v).unwrap());
-        // let v:RangeOrValue<f32> = serde_json::from_str("\"1.0\"").unwrap();
-
-        let v = RangeOrValue::Range{range:0.01..0.03, step:Some((0.01, 2))};
-
-
-        let v_str = serde_json5::to_string(&v).unwrap();
-
-        debug!("v_str={v_str:?}");
-
-        let v:RangeOrValue<f32> = serde_json5::from_str(&v_str).unwrap();
-
-        debug!("v={v:?}");
-    }
-
-    // #[test]
-    // fn test_param_ranges() {
-    //     set_max_level(Trace);
-    //     use thoosa_shared::parse_range_or_value;
-    //     use thoosa_shared::parse_resources;
-    //     use thoosa_run_config_source::*;
-    //
-    //
-    //     #[derive(Parser, Clone)]
-    //     #[command(version, about, long_about = None)]
-    //     struct TestCli {
-    //         #[arg(long)]
-    //         some_field: String,
-    //
-    //         #[command(subcommand)]
-    //         command: Option<Commands>,
-    //     }
-    //
-    //     #[derive(Debug, Subcommand, Clone)]
-    //     enum Commands {
-    //         TestCommand(TestCommandArgs),
-    //     }
-    //
-    //
-    //
-    //     #[derive(Debug, Args, Clone, XRunConfigSource)]//
-    //     struct CommonTestArgs {
-    //         #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "10")]
-    //         #[run_config]
-    //         pub batch_size: RangeOrValue<u32>,
-    //
-    //         #[arg(long, value_parser=parse_range_or_value::<f64>)]
-    //         #[run_config]
-    //         pub lr: RangeOrValue<f64>,
-    //     }
-    //
-    //     #[derive(Debug, Args, Clone, XRunConfigSource)]//
-    //     struct TestCommandArgs {
-    //         #[arg(long,value_parser=parse_resources)]
-    //         pub resources: ResourceType,
-    //
-    //         #[arg(long, value_parser=parse_range_or_value::<f64>)]
-    //         #[run_config]
-    //         window: RangeOrValue<f64>,
-    //
-    //         #[arg(long, value_parser=parse_range_or_value::<u32>)]
-    //         #[run_config]
-    //         step: RangeOrValue<u32>,
-    //
-    //         #[arg(long, value_parser=parse_range_or_value::<u32>)]
-    //         #[run_config]
-    //         some_const_param:RangeOrValue<u32>,
-    //
-    //         #[command(subcommand)]
-    //         input_filter: InputFilter,
-    //
-    //         #[command(flatten)]
-    //         common: CommonTestArgs
-    //     }
-    //
-    //     impl XResourceConfigSource<Simple> for TestCommandArgs{
-    //         fn resource_config(&self) -> Simple {
-    //             Simple::new(
-    //                 self.resources.clone()
-    //             )
-    //
-    //         }
-    //     }
-    //
-    //     #[derive(Debug, Subcommand, Clone)]
-    //     enum InputFilter {
-    //         Conv1(Conv1Args)
-    //     }
-    //
-    //     #[derive(Debug, Args, Clone)]
-    //     struct Conv1Args {
-    //         #[arg(long, value_parser=parse_range_or_value::<usize>)]
-    //         kernel:RangeOrValue<usize>
-    //     }
-    //
-    //     let cli = TestCli::parse_from(["", "--some-field", "zzz", "test-command", "--resources", "list:123", "--lr", "0.01", "--some-const-param", "77", "--window", "10..20:5", "--step", "1..10", "conv1", "--kernel", "10"]);
-    //     debug!("cli.some_field={:?}", cli.some_field);
-    //
-    //     assert_eq!("zzz", cli.some_field);
-    //
-    //     let Some(Commands::TestCommand(test_command_args)) = cli.command else {
-    //
-    //         panic!("no test command");
-    //     };
-    //
-    //     let resources = &test_command_args.resource_config();
-    //     let run_config_source = test_command_args.to_run_configs();
-    //
-    //     // let run_config_source = test_command_args.to_run_configs();
-    //     debug!("cmd.to_run_config={run_config_source:?}");
-    //
-    //     assert_eq!("some_const_param", run_config_source.const_config.configs[0].name());
-    //     assert_eq!(&UInt(77), run_config_source.const_config.configs[0].val());
-    //
-    //     assert_eq!(1, run_config_source.grid_config.as_ref().expect("grid_config").configs.len());
-    //     assert_eq!("window", run_config_source.grid_config.as_ref().expect("grid_config").configs[0].name());
-    //     assert_eq!(&(Val::Real(10.0)..Val::Real(20.0)), run_config_source.grid_config.as_ref().expect("grid_config").configs[0].range());
-    //     assert_eq!(&((Val::Real(5.0), 1)), run_config_source.grid_config.as_ref().expect("grid_config").configs[0].step());
-    //
-    //     assert_eq!(1, run_config_source.opt_config.as_ref().expect("opt_config").configs.len());
-    //     assert_eq!("step", run_config_source.opt_config.as_ref().expect("opt_config").configs[0].name());
-    //     assert_eq!(Hyperparameter::UniformInt { name: "step".to_string(), lower:1, upper:10}, run_config_source.opt_config.as_ref().expect("opt_config").configs[0]);
-    //
-    //     run_step_2(run_config_source, resources);
-    //
-    //     fn my_func(p:TestCommandRunConfig){
-    //         debug!("test_param_ranges: my_func: p={p:?}");
-    //     }
-    //
-    //     fn run_step_2<R, T:Display+Clone>(
-    //         run_config_source: XRunConfigs<XVecConfig<NamedVal<T>>, XVecConfig<NamedRange>, XVecConfig<Hyperparameter>>,
-    //         resource_config:&R
-    //     ) where
-    //         R: ResourcesConfig
-    //     {
-    //         let const_config = run_config_source.const_config;
-    //
-    //         let const_vals = const_config.configs;
-    //
-    //         let mut grid_configs: Vec<Vec<NamedVal<T>>> = vec![];
-    //
-    //         if let Some(grid_config) = run_config_source.grid_config {
-    //             for range in grid_config.grid() {
-    //                 let name_vals: Vec<NamedVal<T>> = range.into();
-    //                 grid_configs.push(name_vals);
-    //             }
-    //         }
-    //
-    //         let opt_config: Option<ConfigurationSpace> = run_config_source.opt_config.map(|opt_cfg| opt_cfg.opt().into());
-    //
-    //         for grid_vals in &grid_configs {
-    //             if let Some(config_space) = opt_config.as_ref() {
-    //                 let mut optimizer = TPEOptimizer::new(
-    //                     |opt_vals| {
-    //                         debug!("const_configs={const_vals:?} grid_vals={grid_vals:?} opt_vals={opt_vals:?}");
-    //
-    //                         let all_configs = [const_vals.clone(), grid_vals.clone(), opt_vals.to_vec()].concat();
-    //
-    //                         my_func(all_configs.as_slice().into());
-    //                         0.0
-    //                     },
-    //                     config_space.clone(),
-    //                     10,
-    //                     3
-    //                 );
-    //
-    //                 optimizer.optimize();
-    //             } else {
-    //                 debug!("const_configs={const_vals:?} grid_configs={grid_configs:?}");
-    //                 let all_configs = [const_vals.clone(), grid_vals.clone()].concat();
-    //
-    //                 my_func(all_configs.as_slice().into());
-    //             }
-    //         }
-    //     }
-    //
-    //
-    // }
 
 
     #[test]

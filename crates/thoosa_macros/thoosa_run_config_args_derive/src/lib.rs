@@ -6,7 +6,7 @@ use thoosa_macros_utils::*;
 
 
 
-#[proc_macro_derive(ThoosaArgs, attributes(run_config))]
+#[proc_macro_derive(ThoosaArgs, attributes(run_config, run_config_source))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
@@ -23,8 +23,10 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         target_struct_ident.span()
     );
 
+
     let (range_or_value_fields, enum_fields, add_range_or_value_calls, range_or_value_type) = match &ast.data {
         syn::Data::Struct(data_struct) => {
+
             match &data_struct.fields {
                 syn::Fields::Named(named_fields) => {
                     let (range_or_value_fields, enum_fields, add_range_or_value_calls) = named_fields.named.iter().fold((vec![], vec![], vec![]), |mut a, field| {
@@ -136,12 +138,53 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         }
     };
 
+    let sources_fns = if ast.attrs.iter().any(|attr| {
+        attr.path().is_ident("run_config_source")
+    }) {
+        quote! {
+             fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
+                let mut const_params = Vec::new();
+                let mut grid_params = Vec::new();
+                let mut opt_params = Vec::new();
+
+                self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
+
+                OptRunConfigSource::new(
+                    GridRunConfigSource::new(
+                        ConstConfigSource::new(const_params),
+                        grid_params,
+                    ),
+                    opt_params,
+                )
+            }
+
+            fn grid_sources(&self) -> GridRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>> {
+                let mut const_params = Vec::new();
+                let mut grid_params = Vec::new();
+                let mut opt_params = Vec::new();
+
+                self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
+                if !opt_params.is_empty() {
+                    panic!("opt_params in grid");
+                }
+
+                GridRunConfigSource::new(
+                    ConstConfigSource::new(const_params),
+                    grid_params,
+                )
+            }
+        }
+    } else {
+        quote! {}
+    };
+
 
     let gen = quote! {
 
         #[derive(Debug, serde::Deserialize, serde::Serialize)]
         #range_or_value_type #range_or_value_struct_ident {
             #range_or_value_fields
+
         }
 
 
@@ -169,6 +212,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                 #add_range_or_value_calls
             }
+
+            #sources_fns
         }
     };
 

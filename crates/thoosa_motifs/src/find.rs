@@ -80,24 +80,20 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long, default_value_t = 100)]
     pub chunk_size: u32,
 
-
     #[arg(long, default_value_t = false)]
     pub keep_slice_matches: bool,
 
     #[arg(long)]
     pub max_slices_k: Option<f32>,
 
-
     #[command(subcommand)]
     pub input_filter: Option<InputFilter>,
-
 
     #[arg(long, default_value_t = 0.01)]
     pub dist_quantile: f32,//TODO Option
 
     #[arg(long)]
     pub mean_k: Option<f32>,
-
 
 }
 
