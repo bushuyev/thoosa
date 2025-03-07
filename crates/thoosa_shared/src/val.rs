@@ -498,7 +498,7 @@ impl From<u32> for Val {
 
 impl From<&u32> for Val {
     fn from(v: &u32) -> Self {
-        Val::Int(*v as i64)
+        Val::UInt(*v)
     }
 }
 
@@ -533,7 +533,6 @@ impl From<&f64> for Val {
         Val::Real(*v)
     }
 }
-
 
 impl From<&usize> for Val {
     fn from(v: &usize) -> Self {

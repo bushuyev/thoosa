@@ -78,6 +78,17 @@ impl <T: FieldName> From<(T, &Range<u32>)> for Hyperparameter<T> {
     }
 }
 
+impl <T: FieldName> From<(T, &Range<i32>)> for Hyperparameter<T> {
+    fn from(value: (T, &Range<i32>)) -> Self {
+        Hyperparameter::UniformInt {
+            name: value.0,
+            lower: value.1.start.into(),
+            upper: value.1.end.into()
+        }
+    }
+}
+
+
 impl <T: FieldName> From<(T, &Range<f32>)> for Hyperparameter<T> {
     fn from(value: (T, &Range<f32>)) -> Self {
         Hyperparameter::UniformFloat {
