@@ -252,7 +252,6 @@ mod tests {
             field_b: Option<u32>,
         }
 
-
         impl SubStructBBuilder {
             fn add_val(&mut self, path: &SubStructBFields, val: &Val) /*->SomeStruct*/ {
                 match path {
@@ -272,7 +271,6 @@ mod tests {
                 }
             }
         }
-
 
         impl SubStructB {
             fn builder() -> SubStructBBuilder {
@@ -384,7 +382,7 @@ mod tests {
 
         impl SomeStructBuilder {
 
-            fn add_path_vals(path_vals:impl IntoIterator<Item=NamedVal<SomeStructFields>>) -> SomeStruct{
+            fn add_path_vals(path_vals: impl IntoIterator<Item=NamedVal<SomeStructFields>>) -> SomeStruct {
                 let mut builder = SomeStructBuilder::default();
 
                 for path_val in path_vals {
@@ -395,7 +393,6 @@ mod tests {
             }
 
             fn add_val(&mut self, path: &SomeStructFields, val: &Val) {
-
                 match path {
                     SomeStructFields::Field00 => {
                         self.field_00 = Some(val.try_into().expect("field 00 not valid"));
@@ -417,7 +414,7 @@ mod tests {
                     field_00: self.field_00.expect("field_00"),
                     field_01: self.field_01.expect("field_01"),
                     sub_struct: self.sub_struct_builder.build(),
-                    sub_enum: self.sub_enum_builder.build()
+                    sub_enum: self.sub_enum_builder.build(),
                 }
             }
         }

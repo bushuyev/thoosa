@@ -885,12 +885,34 @@ pub mod tests {
     }
 
     #[test]
-    fn test_run_config_args(){
+    fn test_run_config_args() {
 
         #[derive(ThoosaRunConfig, Debug)]
         struct SomeSubTrainConfig {
             #[run_config]
             lr: i32,
+        }
+
+        #[derive(Debug, Default)]
+        struct SomeSubTrainConfigBuilder {
+            lr: Option<i32>,
+        }
+
+        impl SomeSubTrainConfigBuilder {
+
+            fn add_val(&mut self, path: &SomeSubTrainConfigFields, val: &Val) {
+                match path {
+                    SomeSubTrainConfigFields::Lr => {
+                        self.lr = Some(val.try_into().expect(&format!("lr field value {val:?} is not valid")))
+                    }
+                }
+            }
+
+            fn build(&self) -> SomeSubTrainConfig {
+                SomeSubTrainConfig {
+                    lr: self.lr.expect("field_00")
+                }
+            }
         }
 
         #[derive(ThoosaRunConfig, Debug)]
@@ -902,10 +924,82 @@ pub mod tests {
             sub_config:SomeSubTrainConfig
         }
 
+        #[derive(Debug, Default)]
+        struct CommonTrainConfigBuilder {
+            beta: Option<i32>,
+            sub_config:SomeSubTrainConfigBuilder
+        }
+
+        impl CommonTrainConfigBuilder {
+
+            fn add_val(&mut self, path: &CommonTrainConfigFields, val: &Val) {
+                match path {
+                    CommonTrainConfigFields::Beta => {
+                        self.beta = Some(val.try_into().expect(&format!("lr field value {val:?} is not valid")));
+                    }
+                    CommonTrainConfigFields::SubConfig(sub_path) => {
+                        self.sub_config.add_val(sub_path, val);
+                    }
+                }
+            }
+
+            fn build(&self) -> CommonTrainConfig {
+                CommonTrainConfig {
+                    beta: self.beta,
+                    sub_config: self.sub_config.build(),
+                }
+            }
+        }
+
         #[derive(ThoosaRunConfig, Debug)]
         enum NetType {
             NetOne(NetOneConfig),
             NetTwo(NetTwoConfig)
+        }
+
+        #[derive(Debug, Default)]
+        struct NetTypeBuilder {
+            net_one:NetOneConfigBuilder,
+            net_two:NetTwoConfigBuilder,
+            net_type_builder_enum:Option<NetTypeBuilderEnum>
+        }
+
+        #[derive(Debug, PartialEq)]
+        enum NetTypeBuilderEnum{
+            NetOne,
+            NetTwo
+        }
+
+        impl NetTypeBuilder {
+            fn build(&self)-> NetType{
+
+                match self.net_type_builder_enum.as_ref().expect("NetType is required") {
+                    NetTypeBuilderEnum::NetOne => {
+                        NetType::NetOne(self.net_one.build())
+                    }
+                    NetTypeBuilderEnum::NetTwo => {
+                        NetType::NetTwo(self.net_two.build())
+                    }
+                }
+            }
+
+            fn add_val(&mut self, path: &NetTypeFields, val: &Val)  {
+                match path {
+                    NetTypeFields::NetOne(sub_path) => {
+                        let prev = self.net_type_builder_enum.replace(NetTypeBuilderEnum::NetOne);
+                        assert!(prev.as_ref().map(|p|p==&NetTypeBuilderEnum::NetOne).unwrap_or(true), "mixed fields from NetTypeBuilderEnum prev={prev:?} and Sub0, path={path:?} ");
+
+                        self.net_one.add_val(sub_path, val);
+                    }
+                    NetTypeFields::NetTwo(sub_path) => {
+                        let prev = self.net_type_builder_enum.replace(NetTypeBuilderEnum::NetTwo);
+                        assert!(prev.as_ref().map(|p|p==&NetTypeBuilderEnum::NetOne).unwrap_or(true), "mixed fields from NetTypeBuilderEnum prev={prev:?} and Sub0, path={path:?} ");
+
+                        self.net_two.add_val(sub_path, val);
+                    }
+                }
+            }
+
         }
 
         #[derive(ThoosaRunConfig, Debug)]
@@ -914,10 +1008,52 @@ pub mod tests {
             num_aaa: u32,
         }
 
+        #[derive(Debug, Default)]
+        struct NetOneConfigBuilder {
+            num_aaa: Option<u32>,
+        }
+
+        impl NetOneConfigBuilder {
+            fn build(&self)-> NetOneConfig {
+                NetOneConfig {
+                    num_aaa: self.num_aaa.unwrap()
+                }
+            }
+
+            fn add_val(&mut self, path: &NetOneConfigFields, val: &Val)  {
+                match path {
+                    NetOneConfigFields::NumAaa => {
+                        self.num_aaa = Some(val.try_into().expect(&format!("num_aaa field value {val:?} is not valid")));
+                    }
+                }
+            }
+        }
+
         #[derive(ThoosaRunConfig, Debug)]
         struct NetTwoConfig {
             #[run_config]
             num_bbb: u32,
+        }
+
+        #[derive(Debug, Default)]
+        struct NetTwoConfigBuilder {
+            num_bbb: Option<u32>,
+        }
+
+        impl NetTwoConfigBuilder {
+            fn build(&self)-> NetTwoConfig {
+                NetTwoConfig {
+                    num_bbb: self.num_bbb.unwrap()
+                }
+            }
+
+            fn add_val(&mut self, path: &NetTwoConfigFields, val: &Val)  {
+                match path {
+                    NetTwoConfigFields::NumBbb => {
+                        self.num_bbb = Some(val.try_into().expect(&format!("num_bbb field value {val:?} is not valid")));
+                    }
+                }
+            }
         }
 
         #[derive(ThoosaRunConfig, Debug)]
@@ -937,31 +1073,59 @@ pub mod tests {
 
         }
 
-        impl <T: FieldName> From<&[NamedVal<T>]> for TrainLabelsRunConfig {
+        impl <I:IntoIterator<Item=NamedVal<TrainLabelsRunConfigFields>>> From<I> for TrainLabelsRunConfig {
+            fn from(value: I) -> Self {
+                let mut builder = TrainLabelsRunConfigBuilder::default();
 
-            fn from(value: &[NamedVal<T>]) -> Self {
-                debug!("TrainLabelsRunConfig::from {value:?}");
-                //tested in test_build_from_named_vals
+                for path_val in value {
+                    builder.add_val(path_val.path(), path_val.val());
+                }
 
+                builder.build()
+
+            }
+        }
+
+        #[derive(Debug, Default)]
+        struct TrainLabelsRunConfigBuilder {
+            some_prop:Option<u32>,
+
+            common_config:CommonTrainConfigBuilder,
+
+            net_type_0: NetTypeBuilder,
+
+            net_type_1: NetTypeBuilder
+        }
+
+        impl TrainLabelsRunConfigBuilder {
+
+            fn build(&self)-> TrainLabelsRunConfig {
                 TrainLabelsRunConfig {
-                    some_prop: 1,
-                    common_config: CommonTrainConfig {
-                        beta: Some(1),
-                        sub_config: SomeSubTrainConfig {
-                            lr: 1,
-                        },
-                    },
+                    some_prop: self.some_prop.expect("TrainLabelsRunConfig::some_prop is required"),
+                    common_config: self.common_config.build(),
+                    net_type_0: self.net_type_0.build(),
+                    net_type_1: self.net_type_1.build(),
+                }
+            }
 
-                    net_type_0: NetType::NetOne(NetOneConfig {
-                        num_aaa: 0,
-                    }),
-
-                    net_type_1: NetType::NetTwo(NetTwoConfig {
-                        num_bbb: 0,
-                    })
+            fn add_val(&mut self, path: &TrainLabelsRunConfigFields, val: &Val)  {
+                match path {
+                    TrainLabelsRunConfigFields::SomeProp => {
+                        self.some_prop = Some(val.try_into().expect("some_prop is not valid"));
+                    }
+                    TrainLabelsRunConfigFields::CommonConfig(sub_path) => {
+                        self.common_config.add_val(sub_path, val);
+                    }
+                    TrainLabelsRunConfigFields::NetType0(sub_path) => {
+                        self.net_type_0.add_val(sub_path, val);
+                    }
+                    TrainLabelsRunConfigFields::NetType1(sub_path) => {
+                        self.net_type_1.add_val(sub_path, val);
+                    }
                 }
             }
         }
+
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -1013,7 +1177,7 @@ pub mod tests {
                 "#
         ]);
 
-        fn test_train_labels<T: FieldName>(run_config_source:OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T>){
+        fn test_train_labels(run_config_source:OptRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>, Vec<Hyperparameter<TrainLabelsRunConfigFields>>, TrainLabelsRunConfigFields>){
             let const_vals = run_config_source.grid_run_config_source().const_params();
 
             for grid_vals in run_config_source.grid_to_vals() {
@@ -1025,7 +1189,7 @@ pub mod tests {
                         const_vals.as_slice(),
                         grid_vals.as_slice(),
                         opt_vals
-                    ].concat().as_slice().into());
+                    ].concat().into_iter().into());
                     0.0
                 },
                     ConfigurationSpace::new(run_config_source.opt_params().clone()),
