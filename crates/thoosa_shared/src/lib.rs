@@ -457,7 +457,7 @@ pub enum RangeOrValue<V> {
     Value(V)
 }
 
-impl<V: fmt::Display + Serialize> Serialize for RangeOrValue<V> {
+impl<V: Display + Serialize> Serialize for RangeOrValue<V> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -513,10 +513,11 @@ where
     }
 }
 
-pub fn add_range_or_value<'a, V:'a, T: FieldName>(name: T, v:&'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
-where Val: From<&'a V>,
-      Hyperparameter<T>: From<(T, &'a Range<V>)>{
-
+pub fn add_range_or_value<'a, V: 'a, T: FieldName>(name: T, v: &'a RangeOrValue<V>, const_params: &mut Vec<NamedVal<T>>, grid_params: &mut Vec<NamedRange<T>>, opt_params: &mut Vec<Hyperparameter<T>>)
+where
+    Val: From<&'a V>,
+    Hyperparameter<T>: From<(T, &'a Range<V>)>,
+{
     match v {
         RangeOrValue::Range { range, step: step_op } => {
             match step_op {
@@ -530,7 +531,7 @@ where Val: From<&'a V>,
                         NamedRange::new(
                             name,
                             (&range.start).into()..(&range.end).into(),
-                            (step.into(), *mul)
+                            (step.into(), *mul),
                         )
                     );
                 }
