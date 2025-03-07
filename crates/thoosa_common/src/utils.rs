@@ -548,7 +548,7 @@ pub mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
-    use thoosa_run_config_args_derive::ThoosaArgs;
+    use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_run_config_source::{XGridConfig, XOptConfig, XResourceConfigSource, XRunConfigSource, XRunConfigs, XVecConfig};
     use thoosa_run_config_source_derive::XRunConfigSource;
     use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -888,13 +888,13 @@ pub mod tests {
     #[test]
     fn test_run_config_args(){
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaRunConfig, Debug)]
         struct SomeSubTrainConfig {
             #[run_config]
             lr: i32,
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaRunConfig, Debug)]
         struct CommonTrainConfig {
             #[run_config]
             beta: i32,
@@ -903,25 +903,25 @@ pub mod tests {
             sub_config:SomeSubTrainConfig
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaRunConfig, Debug)]
         enum NetType {
             NetOne(NetOneConfig),
             NetTwo(NetTwoConfig)
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaRunConfig, Debug)]
         struct NetOneConfig {
             #[run_config]
             num_aaa: u32,
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaRunConfig, Debug)]
         struct NetTwoConfig {
             #[run_config]
             num_bbb: u32,
         }
 
-        #[derive(ThoosaArgs, Debug)]
+        #[derive(ThoosaRunConfig, Debug)]
         #[run_config_source]
         struct TrainLabelsRunConfig {
             #[run_config]
