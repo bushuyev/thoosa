@@ -40,6 +40,7 @@ pub mod test_utils;
 pub mod colors_iter;
 pub mod hyperparameter;
 pub mod opt_rng;
+pub mod config_source;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
