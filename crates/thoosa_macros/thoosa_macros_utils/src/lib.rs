@@ -70,7 +70,6 @@ mod tests {
             }
         }
 
-
         #[derive(Debug, Default)]
         struct SubStruct0Builder {
             field_a: Option<u32>,
