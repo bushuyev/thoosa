@@ -23,14 +23,53 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         target_struct_ident.span()
     );
 
+    let builder_ident = Ident::new(
+        &format!("{}Builder", target_struct_ident),
+        target_struct_ident.span()
+    );
 
-    let (range_or_value_fields, enum_fields, add_range_or_value_calls, range_or_value_type) = match &ast.data {
+    struct TokenStreams {
+        range_or_value_fields:Vec<proc_macro2::TokenStream>,
+        range_or_value_add_calls:Vec<proc_macro2::TokenStream>,
+        enum_fields:Vec<proc_macro2::TokenStream>,
+
+        builder_fields:Vec<proc_macro2::TokenStream>,
+        builder_add_val_match_cases:Vec<proc_macro2::TokenStream>,
+        builder_assignments:Vec<proc_macro2::TokenStream>
+    }
+
+    impl TokenStreams {
+
+        pub fn new() -> Self {
+            Self {
+                range_or_value_fields:vec![],
+                range_or_value_add_calls:vec![],
+                enum_fields:vec![],
+
+                builder_fields:vec![],
+                builder_add_val_match_cases:vec![],
+                builder_assignments:vec![]
+            }
+        }
+    }
+
+
+    let (
+        range_or_value_fields,
+        enum_fields,
+        range_or_value_add_calls,
+        range_or_value_type,
+        //builder
+        builder_fields,
+        builder_add_val_match_cases,
+        builder_assignments
+    ) = match &ast.data {
         syn::Data::Struct(data_struct) => {
 
             match &data_struct.fields {
                 syn::Fields::Named(named_fields) => {
 
-                    let (range_or_value_fields, enum_fields, add_range_or_value_calls) = named_fields.named.iter().fold((vec![], vec![], vec![]), |mut a, field| {
+                    let  token_streams = named_fields.named.iter().fold(TokenStreams::new(), |mut a, field| {
                         let field_ident = field.ident.as_ref().unwrap();
                         let camel_field_ident = Ident::new(&thoosa_shared::snake_to_camel(&field_ident.to_string()), fields_enum_ident.span());
                         let field_type = field.ty.clone();
@@ -38,67 +77,109 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         eprintln!("field_type={}", field_type.to_token_stream());
 
                         if field.attrs.iter().any(|attr| attr.path().is_ident("run_config")) {
-                            if let Some(inner_ty) = get_option_inner_ty(&field_type) {
+
+                            if let Some(inner_ty) = get_option_inner_ty(&field_type) {//is Option
+
                                 if is_primitive(&inner_ty) {
-                                    a.0.push(quote! {
+                                    a.range_or_value_fields.push(quote! {
                                         #field_ident: Option<RangeOrValue<#inner_ty>>,
                                     });
-                                    a.1.push(quote! {
+                                    a.enum_fields.push(quote! {
                                         #camel_field_ident,
                                     });
-                                    a.2.push(quote! {
+                                    a.range_or_value_add_calls.push(quote! {
                                         if let Some(v) = self.#field_ident.as_ref(){
                                             thoosa_shared::add_range_or_value::<#inner_ty, T>(append(#fields_enum_ident::#camel_field_ident), v, const_params, grid_params, opt_params);
                                         }
                                     });
+
+                                    a.builder_fields.push(quote! {
+                                        #field_ident:Option<#inner_ty>,
+                                    });
+
+                                    a.builder_add_val_match_cases.push(quote! {
+                                        #fields_enum_ident::#camel_field_ident => {
+                                            self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
+                                        }
+                                    })
 
                                 } else {
                                     //TODO
                                 }
                             } else {
                                 if is_primitive(&field_type) {
-                                    a.0.push(quote! {
+                                    a.range_or_value_fields.push(quote! {
                                         #field_ident: RangeOrValue<#field_type>,
                                     });
-                                        a.1.push(quote! {
+                                    a.enum_fields.push(quote! {
                                         #camel_field_ident,
                                     });
-                                        a.2.push(quote! {
+                                    a.range_or_value_add_calls.push(quote! {
                                         thoosa_shared::add_range_or_value::<#field_type, T>(append(#fields_enum_ident::#camel_field_ident), &self.#field_ident, const_params, grid_params, opt_params);
                                     });
+
+                                    a.builder_fields.push(quote! {
+                                        #field_ident:Option<#field_type>,
+                                    });
+
+                                    a.builder_add_val_match_cases.push(quote! {
+                                        #fields_enum_ident::#camel_field_ident => {
+                                            self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
+                                        }
+                                    })
 
                                 } else {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", field_type.to_token_stream().to_string()), camel_field_ident.span());
 
-                                    a.0.push(quote! {
+                                    a.range_or_value_fields.push(quote! {
                                         #field_ident: #field_type_range_or_value,
                                     });
 
                                     let field_type_fields = Ident::new(&format!("{}Fields", field_type.to_token_stream().to_string()), camel_field_ident.span());
-                                    a.1.push(quote! {
+                                    a.enum_fields.push(quote! {
                                         #camel_field_ident(#field_type_fields),
                                     });
-                                    a.2.push(quote! {
+                                    a.range_or_value_add_calls.push(quote! {
                                         self.#field_ident.fill_run_configs(|v| append(#fields_enum_ident::#camel_field_ident(v)), const_params, grid_params, opt_params);
                                     });
+
+                                    let field_type_builder = Ident::new(&format!("{}Builder", field_type.to_token_stream().to_string()), camel_field_ident.span());
+                                    a.builder_fields.push(quote! {
+                                        #field_ident:#field_type_builder,
+                                    });
+
+                                    a.builder_add_val_match_cases.push(quote! {
+                                        #fields_enum_ident::#camel_field_ident(sub_path) => {
+                                            self.#field_ident.add_val(sub_path, val);
+                                        }
+                                    })
                                 }
 
                             }
 
                         } else {
-                            a.0.push(quote! {});
-                            a.1.push(quote! {});
-                            a.2.push(quote! {});
+                            a.range_or_value_fields.push(quote! {});
+                            a.enum_fields.push(quote! {});
+                            a.range_or_value_add_calls.push(quote! {});
                         }
 
                         a
                     });
+
+                    let range_or_value_fields = token_streams.range_or_value_fields;
+                    let enum_fields = token_streams.enum_fields;
+                    let builder_fields = token_streams.builder_fields;
+                    let add_range_or_value_calls = token_streams.range_or_value_add_calls;
+                    let add_val_match_cases = token_streams.builder_add_val_match_cases;
 
                     (
                         quote! { #(# range_or_value_fields)* },
                         quote! { #(# enum_fields)* },
                         quote! { #(# add_range_or_value_calls)* },
                         quote! {struct},
+                        quote! { #(# builder_fields)* },
+                        quote! { match path { #(# add_val_match_cases)*} },
+                        quote! {}
                     )
                 },
                 _ => {
@@ -108,12 +189,15 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         quote! {},
                         quote! {},
                         quote! {},
+                        quote! {},
+                        quote! {},
+                        quote! {}
                     )
                 }
             }
         },
         syn::Data::Enum(data_enum) => {
-            let (range_or_value_fields, enum_fields, add_range_or_value_calls) = data_enum.variants.iter().fold((vec![], vec![], vec![]), |mut a, variant| {
+            let token_streams = data_enum.variants.iter().fold(TokenStreams::new(), |mut a, variant| {
                 let variant_name = &variant.ident;
 
                 if let syn::Fields::Unnamed(fields) = &variant.fields {
@@ -122,18 +206,18 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                         let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", ty.to_token_stream().to_string()), variant.ident.span());
 
-                        a.0.push(quote! {
+                        a.range_or_value_fields.push(quote! {
                             #variant_name(#field_type_range_or_value),
 
                         });
 
                         let field_type_fields = Ident::new(&format!("{}Fields", ty.to_token_stream().to_string()), variant.ident.span());
 
-                        a.1.push(quote! {
+                        a.enum_fields.push(quote! {
                             #variant_name(#field_type_fields),
                         });
 
-                        a.2.push(quote! {
+                        a.range_or_value_add_calls.push(quote! {
                             #range_or_value_struct_ident::#variant_name(v) => {
                                 v.fill_run_configs(|v|append(#fields_enum_ident::#variant_name(v)), const_params, grid_params, opt_params);
                             }
@@ -146,15 +230,27 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 a
             });
 
+            let (
+                range_or_value_fields,
+                enum_fields,
+                add_range_or_value_calls
+            ) = (token_streams.range_or_value_fields, token_streams.enum_fields, token_streams.range_or_value_add_calls);
+
             (
                 quote! { #(# range_or_value_fields)* },
                 quote! { #(# enum_fields)* },
                 quote! {  match self {#(# add_range_or_value_calls)* }},
                 quote! {enum},
+                quote! {},
+                quote! {},
+                quote! {}
             )
         }
         _ => {
             (
+                quote! {},
+                quote! {},
+                quote! {},
                 quote! {},
                 quote! {},
                 quote! {},
@@ -233,11 +329,27 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             pub(crate) fn fill_run_configs<T:thoosa_shared::hyperparameter::FieldName, F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>)
                 where F:Fn(#fields_enum_ident)->T{
 
-                #add_range_or_value_calls
+                #range_or_value_add_calls
             }
 
             #sources_fns
         }
+
+        #[derive(Debug, Default)]
+        struct #builder_ident {
+            #builder_fields
+        }
+
+        impl #builder_ident{
+            fn add_val(&mut self, path: &#fields_enum_ident, val: &Val) {
+                #builder_add_val_match_cases
+            }
+
+            fn build(&self) -> #target_struct_ident {
+                todo!()
+            }
+        }
+
     };
 
     gen.into()

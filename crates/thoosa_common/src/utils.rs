@@ -894,11 +894,11 @@ pub mod tests {
         }
 
         #[derive(Debug, Default)]
-        struct SomeSubTrainConfigBuilder {
+        struct SomeSubTrainConfigBuilder_ {
             lr: Option<i32>,
         }
 
-        impl SomeSubTrainConfigBuilder {
+        impl SomeSubTrainConfigBuilder_ {
 
             fn add_val(&mut self, path: &SomeSubTrainConfigFields, val: &Val) {
                 match path {
@@ -925,12 +925,12 @@ pub mod tests {
         }
 
         #[derive(Debug, Default)]
-        struct CommonTrainConfigBuilder {
+        struct CommonTrainConfigBuilder_ {
             beta: Option<i32>,
-            sub_config:SomeSubTrainConfigBuilder
+            sub_config: SomeSubTrainConfigBuilder_
         }
 
-        impl CommonTrainConfigBuilder {
+        impl CommonTrainConfigBuilder_ {
 
             fn add_val(&mut self, path: &CommonTrainConfigFields, val: &Val) {
                 match path {
@@ -958,9 +958,9 @@ pub mod tests {
         }
 
         #[derive(Debug, Default)]
-        struct NetTypeBuilder {
-            net_one:NetOneConfigBuilder,
-            net_two:NetTwoConfigBuilder,
+        struct NetTypeBuilder_ {
+            net_one: NetOneConfigBuilder_,
+            net_two: NetTwoConfigBuilder_,
             net_type_builder_enum:Option<NetTypeBuilderEnum>
         }
 
@@ -970,7 +970,7 @@ pub mod tests {
             NetTwo
         }
 
-        impl NetTypeBuilder {
+        impl NetTypeBuilder_ {
             fn build(&self)-> NetType{
 
                 match self.net_type_builder_enum.as_ref().expect("NetType is required") {
@@ -1009,11 +1009,11 @@ pub mod tests {
         }
 
         #[derive(Debug, Default)]
-        struct NetOneConfigBuilder {
+        struct NetOneConfigBuilder_ {
             num_aaa: Option<u32>,
         }
 
-        impl NetOneConfigBuilder {
+        impl NetOneConfigBuilder_ {
             fn build(&self)-> NetOneConfig {
                 NetOneConfig {
                     num_aaa: self.num_aaa.unwrap()
@@ -1036,11 +1036,11 @@ pub mod tests {
         }
 
         #[derive(Debug, Default)]
-        struct NetTwoConfigBuilder {
+        struct NetTwoConfigBuilder_ {
             num_bbb: Option<u32>,
         }
 
-        impl NetTwoConfigBuilder {
+        impl NetTwoConfigBuilder_ {
             fn build(&self)-> NetTwoConfig {
                 NetTwoConfig {
                     num_bbb: self.num_bbb.unwrap()
@@ -1075,7 +1075,7 @@ pub mod tests {
 
         impl <I:IntoIterator<Item=NamedVal<TrainLabelsRunConfigFields>>> From<I> for TrainLabelsRunConfig {
             fn from(value: I) -> Self {
-                let mut builder = TrainLabelsRunConfigBuilder::default();
+                let mut builder = TrainLabelsRunConfigBuilder_::default();
 
                 for path_val in value {
                     builder.add_val(path_val.path(), path_val.val());
@@ -1087,17 +1087,17 @@ pub mod tests {
         }
 
         #[derive(Debug, Default)]
-        struct TrainLabelsRunConfigBuilder {
+        struct TrainLabelsRunConfigBuilder_ {
             some_prop:Option<u32>,
 
-            common_config:CommonTrainConfigBuilder,
+            common_config: CommonTrainConfigBuilder_,
 
-            net_type_0: NetTypeBuilder,
+            net_type_0: NetTypeBuilder_,
 
-            net_type_1: NetTypeBuilder
+            net_type_1: NetTypeBuilder_
         }
 
-        impl TrainLabelsRunConfigBuilder {
+        impl TrainLabelsRunConfigBuilder_ {
 
             fn build(&self)-> TrainLabelsRunConfig {
                 TrainLabelsRunConfig {
