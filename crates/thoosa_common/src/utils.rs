@@ -446,32 +446,22 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
     }
 }
 
-pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter:S, mut f:F, mut on_ok:OkF, max_attempts: i32) -> Result<(), ThoosaError>
+pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter: S, mut f: F, mut on_ok: OkF, max_attempts: i32) -> Result<(), ThoosaError>
 where
     F: FnMut(&mut V) -> Result<FR, ThoosaError>,
     S: Splitter<SIZE, S=V>,
-    OkF: FnMut(FR, &mut V) -> OkR
+    OkF: FnMut(FR, &mut V) -> OkR,
 {
-    let mut attempt = 0;
 
-    loop {
-        while let Some(mut split_0) = splitter.next() {
+    'out: while let Some(mut split_0) = splitter.next() {
+        for attempt in 0..max_attempts {
             match panic_to_err!(f(&mut split_0)) {
                 Ok(fr) => {
-                    attempt = 0;
                     on_ok(fr, &mut split_0);
+                    break 'out;
                 }
                 Err(e) if e.is_oom() => {
-                    debug!("run_split_on_oom: splitting on oom, attempt={attempt}");
-
-                    if attempt > max_attempts {
-                        attempt = 0;
-                        if let Err(e) = splitter.split(split_0) {
-                            return Err(e);
-                        }
-
-                    }
-                    attempt += 1;
+                    debug!("run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}");
                 }
                 Err(e) => {
                     debug!("run_split_on_oom: failed on oom {e:?}");
@@ -479,8 +469,13 @@ where
                 }
             }
         }
-        return Ok(())
+        if let Err(e) = splitter.split(split_0) {
+            return Err(e);
+        }
     }
+
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -731,160 +726,6 @@ pub mod tests {
     }
 
     #[test]
-    fn test_run_configs(){
-
-        pub struct TrainConfig {
-            lr: f64,
-            num_layers: u32,
-        }
-
-        struct MaxPaddingNet {
-            num_layers: u32,
-        }
-
-        struct FixedNumSlicesNet{
-            slices_len: u32,
-        }
-
-        enum NetType {
-            MaxPaddingNet(MaxPaddingNet),
-            FixedNumSlicesNet(FixedNumSlicesNet)
-        }
-
-        struct TrainLabelNodeRunConfig {
-            train_config: TrainConfig,
-            net_type: NetType
-        }
-
-        impl TrainLabelNodeRunConfig {
-
-        }
-
-        impl From<TrainConfig> for &[NamedVal<String>] {
-            fn from(value: TrainConfig) -> Self {
-                &[]
-            }
-        }
-
-        impl From<TrainLabelNodeRunConfig> for &[NamedVal<String>] {
-            fn from(value: TrainLabelNodeRunConfig) -> Self {
-                &[]
-            }
-        }
-
-        let run_config_source:OptRunConfigSource<Vec<NamedVal<String>>, Vec<NamedRange<String>>, Vec<Hyperparameter<String>>, String> = OptRunConfigSource::new(
-            GridRunConfigSource::new(
-                ConstConfigSource::new(vec![]),
-                vec![],
-            ),
-            vec![],
-        );
-
-        let const_vals = run_config_source.grid_run_config_source().const_params();
-        for grid_vals in run_config_source.grid_to_vals() {
-
-
-            let mut opt = TPEOptimizer::new(|opt_vals:&[NamedVal<String>]| {
-
-                debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
-                0.0
-            },
-            ConfigurationSpace::new(run_config_source.opt_params().clone()),
-            10,
-            3,
-            );
-
-            let best_config = opt.optimize();
-
-            debug!("best_config={:?}", best_config);
-        }
-
-    }
-
-    #[test]
-    fn test_z() {
-
-        let option_0_a_sub_cmd = Command::new("option_0_a")
-            .about("does testing things")
-            .arg(
-                Arg::new("field_a")
-                    .long("field-a")
-                    .action(ArgAction::Set)
-                    .value_parser(clap::value_parser!(u32))
-                    .required(true)
-            );
-
-        let option_0_b_sub_cmd = Command::new("option_0_b")
-            .about("does testing things")
-            .arg(
-                Arg::new("field_b")
-                    .long("field-b")
-                    .action(ArgAction::Set)
-                    .value_parser(clap::value_parser!(u32))
-                    .required(true)
-            );
-
-        let option_1_a_sub_cmd = Command::new("option_1_a")
-            .about("does testing things")
-            .arg(
-                Arg::new("field_a")
-                    .long("field-a")
-                    .action(ArgAction::Set)
-                    .value_parser(clap::value_parser!(u32))
-                    .required(true)
-            );
-
-        let option_1_b_sub_cmd = Command::new("option_1_b")
-            .about("does testing things")
-            .arg(
-                Arg::new("field_b")
-                    .long("field-b")
-                    .action(ArgAction::Set)
-                    .value_parser(clap::value_parser!(u32))
-                    .required(true)
-            );
-
-
-        let train_cmd = Command::new("test")
-            .about("does testing things")
-            .arg(
-                Arg::new("some_field")
-                    .long("some-field")
-                    .action(ArgAction::Set),
-            )
-            .subcommands(vec![
-                option_0_a_sub_cmd,
-                option_0_b_sub_cmd,
-            ])
-            .subcommand_required(true)
-            .subcommands(vec![
-                option_1_a_sub_cmd,
-                option_1_b_sub_cmd,
-            ]);
-
-
-        let matches = train_cmd.get_matches_from(["test_cli", "--some-field", "zzz", "option_0_a", "--field-a", "10", "option_1_b", "--field-b", "20"]);//"option_b", "--field-b", "20"
-
-        // Extract the value
-        let some_field = matches.get_one::<String>("some_field").unwrap();
-        for id in matches.ids(){
-            println!("id={:?}", id);
-
-        }
-        if let Some(option_a_match) = matches.subcommand_matches("option_0_a") {
-            for id in option_a_match.ids() {
-                println!("option_a_match: id={:?}", id);
-            }
-        }
-        if let Some(option_b_match) = matches.subcommand_matches("option_1_b") {
-            for id in option_b_match.ids() {
-                println!("option_b_match: id={:?}", id);
-            }
-        }
-        assert_eq!(some_field, "zzz");
-    }
-
-    #[test]
     fn test_run_config_args() {
 
         #[derive(ThoosaRunConfig, Debug)]
@@ -937,19 +778,6 @@ pub mod tests {
             net_type_1: NetType
 
         }
-
-        // impl <I:IntoIterator<Item=NamedVal<TrainLabelsRunConfigFields>>> From<I> for TrainLabelsRunConfig {
-        //     fn from(value: I) -> Self {
-        //         let mut builder = TrainLabelsRunConfigBuilder::default();
-        //
-        //         for path_val in value {
-        //             builder.add_val(path_val.path(), path_val.val());
-        //         }
-        //
-        //         builder.build()
-        //
-        //     }
-        // }
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]

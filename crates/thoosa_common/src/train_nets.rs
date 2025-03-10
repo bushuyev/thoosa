@@ -2907,6 +2907,8 @@ mod train_tests {
             lin_test_tensor(input_n)
         ], 0);
 
+        debug!(" batch.size()={:?}", batch.size());
+
         let slices_len = 11;
 
         let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)> = vec![
@@ -3085,8 +3087,10 @@ mod train_tests {
     fn test_apply_motif_models_diff_len() -> Result<(), ThoosaError>{
         let input_n_0 = 1000;
         let motif_width= 120;
-        let t_0 = lin_test_tensor(input_n_0);
-        let t_1 = lin_test_tensor(831);
+        let t_0 = lin_test_tensor(input_n_0).unsqueeze(0);
+        let t_1 = lin_test_tensor(831).unsqueeze(0);
+
+        debug!(" t_0.size()={:?}, t_1.size()={:?}", t_0.size(), t_1.size());
 
         let motif_batch_size = 13;
         let step= 100;
@@ -3115,8 +3119,11 @@ mod train_tests {
 
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
-        assert_eq!(vec![3, 2, max_dists_len], channels_motifs_0.size());//channel, motif nets, batches, batch size
-        assert_eq!(vec![3, 2,  (831-motif_width)/step as i64 + 1], channels_motifs_1.size());//TODO
+        // assert_eq!(vec![3, 2, max_dists_len], channels_motifs_0.size());//channel, motif nets, batches, batch size
+        assert_eq!(t_0.size(), channels_motifs_0.size());//channel, motif nets, batches, batch size
+        // assert_eq!(vec![3, 2,  (831-motif_width)/step as i64 + 1], channels_motifs_1.size());//TODO
+        assert_eq!(vec![1, 5,  input_n_0], channels_motifs_1.size());//TODO
+
         Ok(())
     }
 

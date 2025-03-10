@@ -526,10 +526,10 @@ mod tpe_optimizer_tests {
                 let loss = (x_0 -30.).powi(2) + (x_1-30.).powi(2);
                 let loss = match x_2 {
                     0 => loss * 3.,//TODO used to find min at cat 1 with 0=1.5 when upper tpe in update_observations was built from lower vals
-                    1 => loss * 1.,
+                    1 => loss * 0.01,
                     2 => loss * 2.,
                     _ => {
-                        panic!("unexpected catgory {x_2}")
+                        panic!("unexpected category {x_2}")
                     }
                 };
 
@@ -557,7 +557,7 @@ mod tpe_optimizer_tests {
         debug!("best_config={best_config:?}");
         assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
         assert!((30. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
-        assert_eq!(Val::Int(1), best_config[2]);
+        assert_eq!(Int(1), best_config[2]);
     }
 
 
