@@ -55,6 +55,7 @@ use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{Labeled, Params, RunConfig, SavableOptResult, Simple};
 use thoosa_common::train_nets::{FindMotifsRunConfig, InputFilter};
 use thoosa_common::ws::{FsWorkspace, Workspace};
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
@@ -95,6 +96,39 @@ pub struct FindMotifsParams {//TODO pub
     #[arg(long)]
     pub mean_k: Option<f32>,
 
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct FindMotifsParams2 {
+
+    #[arg(long,value_parser=parse_resources)]
+    pub resources: ResourceType,
+
+    #[arg(long)]
+    run_config_cnt:String,
+}
+
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug)]
+pub struct FindMotifsRunConfig2 {
+    // pub id:Option<usize>,
+
+    #[run_config]
+    pub step: u32,
+
+    #[run_config]
+    pub window: u32,
+
+    #[run_config]
+    pub dist_quantile: f32,
+
+    #[run_config]
+    pub min_tracker_step: Option<usize>,
+
+    #[run_config]
+    pub filter: Option<InputFilter>,
+
+    #[run_config]
+    pub descr: String,
 }
 
 #[derive(Debug)]

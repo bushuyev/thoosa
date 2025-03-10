@@ -32,6 +32,9 @@ ctor = "0.2.6"
 chrono = { version = "0.4.32" }
 rayon = "1.8.1"
 
+thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
+thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
+
 
 
 
