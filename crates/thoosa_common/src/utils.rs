@@ -938,18 +938,18 @@ pub mod tests {
 
         }
 
-        impl <I:IntoIterator<Item=NamedVal<TrainLabelsRunConfigFields>>> From<I> for TrainLabelsRunConfig {
-            fn from(value: I) -> Self {
-                let mut builder = TrainLabelsRunConfigBuilder::default();
-
-                for path_val in value {
-                    builder.add_val(path_val.path(), path_val.val());
-                }
-
-                builder.build()
-
-            }
-        }
+        // impl <I:IntoIterator<Item=NamedVal<TrainLabelsRunConfigFields>>> From<I> for TrainLabelsRunConfig {
+        //     fn from(value: I) -> Self {
+        //         let mut builder = TrainLabelsRunConfigBuilder::default();
+        //
+        //         for path_val in value {
+        //             builder.add_val(path_val.path(), path_val.val());
+        //         }
+        //
+        //         builder.build()
+        //
+        //     }
+        // }
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -1086,6 +1086,87 @@ pub mod tests {
         test_train_labels(opt_sources);
 
     }
+
+    #[test]
+    fn test_build_from_named_vals() {
+
+        #[derive(ThoosaRunConfig, Debug, Clone)]
+        struct SubStruct0 {
+            #[run_config]
+            field_a: u32,
+
+        }
+
+        #[derive(ThoosaRunConfig, Debug, PartialEq, Clone)]
+        struct SubStruct1 {
+            #[run_config]
+            field_b: u32,
+        }
+
+        #[derive(ThoosaRunConfig, Debug, Clone)]
+        enum SubEnum {
+            Sub0(SubStruct0),
+            Sub1(SubStruct1),
+        }
+
+        #[derive(ThoosaRunConfig, Debug)]
+        struct SubStructB {
+            #[run_config]
+            field_a: u32,
+            #[run_config]
+            field_b: u32,
+        }
+
+        #[derive(ThoosaRunConfig, Debug)]
+        #[run_config_source]
+        struct SomeStruct {
+            #[run_config]
+            field_00: u32,
+            #[run_config]
+            field_01: f32,
+            #[run_config]
+            sub_struct: SubStructB,
+            #[run_config]
+            sub_enum: SubEnum
+        }
+
+
+        let path_vals = [
+            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
+            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), Val::UInt(1)),
+        ];
+
+        let some_struct: SomeStruct = path_vals.into_iter().into();// SomeStructBuilder::add_path_vals(path_vals);
+
+        assert_eq!(some_struct.field_00, 1);
+        assert_eq!(some_struct.field_01, 2.0);
+        assert_eq!(some_struct.sub_struct.field_a, 3);
+        assert_eq!(some_struct.sub_struct.field_b, 4);
+        let SubEnum::Sub0(sub_struct_0) = some_struct.sub_enum else {
+            panic!("some_struct.sub_enum should be Sub0");
+        };
+        assert_eq!(sub_struct_0.field_a, 1);
+
+        let path_vals = [
+            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
+            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)), Val::UInt(2)),
+        ];
+
+        let some_struct: SomeStruct = path_vals.into_iter().into();// SomeStructBuilder_::add_path_vals(path_vals);
+        assert_eq!(some_struct.field_00, 1);
+        assert_eq!(some_struct.field_01, 2.0);
+        assert_eq!(some_struct.sub_struct.field_a, 3);
+        assert_eq!(some_struct.sub_struct.field_b, 4);
+        let SubEnum::Sub1(sub_struct_1) = some_struct.sub_enum else {
+            panic!("some_struct.sub_enum should be Sub0");
+        };
+        assert_eq!(sub_struct_1.field_b, 2);
+
+
+    }
+
 
     #[test]
     fn test_bool_tensor_iterator(){

@@ -333,44 +333,65 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         }
     };
 
-    let sources_fns = if ast.attrs.iter().any(|attr| {
+    let (sources_fns, into_impl) = if ast.attrs.iter().any(|attr| {
         attr.path().is_ident("run_config_source")
     }) {
-        quote! {
-             fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
-                let mut const_params = Vec::new();
-                let mut grid_params = Vec::new();
-                let mut opt_params = Vec::new();
+        (
+            quote! {
+                 fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
+                    let mut const_params = Vec::new();
+                    let mut grid_params = Vec::new();
+                    let mut opt_params = Vec::new();
 
-                self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
+                    self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
 
-                OptRunConfigSource::new(
+                    OptRunConfigSource::new(
+                        GridRunConfigSource::new(
+                            ConstConfigSource::new(const_params),
+                            grid_params,
+                        ),
+                        opt_params,
+                    )
+                }
+
+                fn grid_sources(&self) -> GridRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>> {
+                    let mut const_params = Vec::new();
+                    let mut grid_params = Vec::new();
+                    let mut opt_params = Vec::new();
+
+                    self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
+                    if !opt_params.is_empty() {
+                        panic!("opt_params in grid");
+                    }
+
                     GridRunConfigSource::new(
                         ConstConfigSource::new(const_params),
                         grid_params,
-                    ),
-                    opt_params,
-                )
-            }
+                    )
+                }
+            },
+            quote! {
 
-            fn grid_sources(&self) -> GridRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>> {
-                let mut const_params = Vec::new();
-                let mut grid_params = Vec::new();
-                let mut opt_params = Vec::new();
+                impl <I:IntoIterator<Item=NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
+                    fn from(value: I) -> Self {
+                        let mut builder = #builder_ident::default();
 
-                self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
-                if !opt_params.is_empty() {
-                    panic!("opt_params in grid");
+                        for path_val in value {
+                            builder.add_val(path_val.path(), path_val.val());
+                        }
+
+                        builder.build()
+
+                    }
                 }
 
-                GridRunConfigSource::new(
-                    ConstConfigSource::new(const_params),
-                    grid_params,
-                )
             }
-        }
+        )
     } else {
+        (
+        quote! {},
         quote! {}
+        )
     };
 
     eprintln!("range_or_value_type={}", range_or_value_type.to_string());
@@ -380,8 +401,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         quote! {
             #[derive(Debug, PartialEq)]
             enum #builder_enum_ident{
-                NetOne,
-                NetTwo
+                #builder_enum_variants
             }
         }
     } else {
@@ -446,6 +466,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
         #builder_enum
 
+        #into_impl
     };
 
     gen.into()
