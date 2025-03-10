@@ -775,7 +775,7 @@ pub mod tests {
             net_type_0: NetType,
 
             #[run_config]
-            net_type_1: NetType
+            net_type_1: Option<NetType>
 
         }
 
@@ -859,6 +859,7 @@ pub mod tests {
             debug!("test_train_label: run_config={:?}", run_config);
         }
 
+
         let opt_sources = match &cli.command {
 
             Commands::TrainLabels(train_labels_args) =>{
@@ -868,15 +869,17 @@ pub mod tests {
 
                 debug!("TrainLabelsRunConfigRangeOrValue: v={v:?}");
 
-
                 assert_eq!(RangeOrValue::Value(1), v.some_prop);
                 assert_eq!(Some(RangeOrValue::Range{range: 1..10, step: None}), v.common_config.beta);
                 assert_eq!(RangeOrValue::Range{range: 0..10, step: Some((2,1))}, v.common_config.sub_config.lr);
 
-                let (NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {num_aaa: ref num_aaa_range_or_value})) = v.net_type_0 else {panic!("no NetOne/num_aaa")};
+                let NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {num_aaa: ref num_aaa_range_or_value}) = v.net_type_0 else {panic!("no NetOne/num_aaa")};
                 assert_eq!(&RangeOrValue::Value(1), num_aaa_range_or_value);
 
-                // test_train_labels(v.opt_sources());
+                let Some(NetTypeRangeOrValue::NetTwo(NetTwoConfigRangeOrValue {num_bbb: ref num_bbb_range_or_value})) = v.net_type_1 else {panic!("no NetOne/num_bbb")};
+                assert_eq!(&RangeOrValue::Range{range: 10..100, step: Some((10,1))}, num_bbb_range_or_value);
+
+
                 v.opt_sources()
             }
 
@@ -884,6 +887,7 @@ pub mod tests {
                 panic!("Subcommand not implemented");
             }
         };
+
 
         debug!("const_params={:?}", opt_sources.grid_run_config_source().const_params());
         assert_eq!(
@@ -911,6 +915,7 @@ pub mod tests {
             &vec![Hyperparameter::UniformInt { name: TrainLabelsRunConfigFields::CommonConfig(CommonTrainConfigFields::Beta), lower: 1, upper: 10 }],
             opt_sources.opt_params()
         );
+
         test_train_labels(opt_sources);
 
     }
@@ -950,27 +955,39 @@ pub mod tests {
         struct SomeStruct {
             #[run_config]
             field_00: u32,
+
             #[run_config]
             field_01: f32,
+
             #[run_config]
             sub_struct: SubStructB,
+
+            #[run_config]
+            sub_struct_op: Option<SubStructB>,
+
             #[run_config]
             sub_enum: SubEnum
         }
 
-
         let path_vals = [
-            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
-            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
-            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), Val::UInt(1)),
+            NamedVal::new(SomeStructFields::Field00, Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
+            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Int(4)),
+            NamedVal::new(SomeStructFields::SubStructOp(SubStructBFields::FieldA), Int(5)), NamedVal::new(SomeStructFields::SubStructOp(SubStructBFields::FieldB), Int(6)),
+            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), UInt(1)),
         ];
 
         let some_struct: SomeStruct = path_vals.into_iter().into();// SomeStructBuilder::add_path_vals(path_vals);
+
+        debug!("some_struct={some_struct:?}");
 
         assert_eq!(some_struct.field_00, 1);
         assert_eq!(some_struct.field_01, 2.0);
         assert_eq!(some_struct.sub_struct.field_a, 3);
         assert_eq!(some_struct.sub_struct.field_b, 4);
+
+        assert_eq!(some_struct.sub_struct_op.as_ref().map(|v|v.field_a), Some(5));
+        assert_eq!(some_struct.sub_struct_op.as_ref().map(|v|v.field_b), Some(6));
+
         let SubEnum::Sub0(sub_struct_0) = some_struct.sub_enum else {
             panic!("some_struct.sub_enum should be Sub0");
         };
