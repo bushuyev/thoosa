@@ -302,7 +302,8 @@ pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
 
 
 pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
-    let n = t.size()[0] as i64;
+    let n = t.size()[0];
+    debug!("average_euclidean_distance: n={n}");
 
     // Step 2: Compute squared norms of each vector
     let squared_norms = t.f_pow_tensor_scalar(2)?
@@ -350,7 +351,7 @@ mod distance_tests {
     use chrono::Utc;
     use log::__private_api::enabled;
     use log::{debug, max_level, set_max_level, trace};
-    use log::LevelFilter::Trace;
+    use log::LevelFilter::{Debug, Trace};
     use parking_lot::Mutex;
     use plotters::prelude::{BLACK, GREEN, RED};
     use plotters::style::full_palette::ORANGE;
@@ -362,7 +363,7 @@ mod distance_tests {
     use tch::Tensor;
     use thoosa_common::builder::Node::Par;
     use thoosa_common::panic_to_err;
-    use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, SplitQueue, Splittable, SplittableTensor};
+    use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, Reducer, SplitQueue, Splittable, SplittableTensor};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
@@ -1488,7 +1489,7 @@ mod distance_tests {
 
     #[test]
     fn test_average_euclidean_distance_max_size() -> Result<(), ThoosaError> {
-        set_max_level(Trace);
+        set_max_level(Debug);
         use cudarc::driver::{CudaDevice};
         let _device = CudaDevice::new(0)?;
 
@@ -1503,7 +1504,7 @@ mod distance_tests {
         }
         debug!("Device 0 free_mem: {free_mem}, total_mem: {total_mem}");
 
-        let size = ((free_mem / size_of::<f32>()) as f64).sqrt() as i64 / 2;
+        let size = ((free_mem / size_of::<f32>()) as f64).sqrt() as i64 / 32;
         let mut big_t = Tensor::rand(size * size, FLOAT_CUDA).view((size, size));
 
         debug!("slices_t.size()={:?}", big_t.size());
@@ -1512,14 +1513,18 @@ mod distance_tests {
 
         run_split_on_oom(
             SplitQueue::<2, SplittableTensor::<0>>::new(SplittableTensor::<0>(big_t)),
+            // Reducer::new(SplittableTensor::<0>(big_t)),
             |t| {
-                average_euclidean_distance(&t.as_ref())
+                debug!("average_euclidean_distance 0");
+                let r = average_euclidean_distance(&t.as_ref());
+                debug!("average_euclidean_distance r={r:?}");
+                r
             },
             |v, t| {
                 debug!("v={v:?}");
                 avg_r = v;
             },
-            10,
+            2,
         )?;
 
         debug!("v={avg_r:?}");

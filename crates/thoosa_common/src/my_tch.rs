@@ -492,33 +492,6 @@ mod tch_tests {
         Ok(())
     }
 
-
-    #[test]
-    pub fn test_equalize() -> Result<(), ThoosaError>{
-        let mut vs = nn::VarStore::new(Cpu);
-
-
-
-        // let input = Tensor::rand(&[3, 11], FLOAT_CPU);
-        let length = 11;
-
-        let input = lin_t(length).view((1,length));
-        let num_features = length / 2;
-        debug!("num_features={num_features} input=\n{input}");
-        let splits= input.split(num_features, 1);
-        let res_seq = SeqBuilder::new(num_features, None).linear_s(1).end_seq().build_tch_module(&vs.root())?;
-
-        for (i, split) in splits.into_iter().enumerate() {
-            debug!("i={i} split=\n{split}");
-            let r = res_seq.tho_forward(&split, true);
-
-            debug!("r=\n{r}");
-        }
-
-
-        Ok(())
-    }
-
     #[test]
     pub fn test_save_load_net() -> Result<(), ThoosaError>{
         set_max_level(Info);
