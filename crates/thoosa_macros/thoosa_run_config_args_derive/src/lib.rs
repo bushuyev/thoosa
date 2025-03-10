@@ -1,7 +1,8 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
-use quote::{quote, ToTokens};
-use syn::{parse_macro_input, Attribute, DeriveInput, Field, Lit, Path, Variant};
+use quote::{format_ident, quote, ToTokens};
+use syn::{parse2, parse_macro_input, Attribute, DeriveInput, Field, Lit, Path, Variant};
+use syn::spanned::Spanned;
 use thoosa_macros_utils::*;
 
 
@@ -14,17 +15,20 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
     eprintln!("thoosa_args_derive: target_struct_ident={target_struct_ident:?}");
 
-    let range_or_value_struct_ident = Ident::new(
-        &format!("{}RangeOrValue", target_struct_ident),
-        target_struct_ident.span()
-    );
-    let fields_enum_ident = Ident::new(
+
+    let range_or_value_struct_ident = format_ident!("{}RangeOrValue", target_struct_ident);
+    let fields_enum_ident = Ident::new(//TODO format_ident
         &format!("{}Fields", target_struct_ident),
         target_struct_ident.span()
     );
 
     let builder_ident = Ident::new(
         &format!("{}Builder", target_struct_ident),
+        target_struct_ident.span()
+    );
+
+    let builder_enum_ident = Ident::new(
+        &format!("{}BuilderEnum", target_struct_ident),
         target_struct_ident.span()
     );
 
@@ -35,7 +39,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
         builder_fields:Vec<proc_macro2::TokenStream>,
         builder_add_val_match_cases:Vec<proc_macro2::TokenStream>,
-        builder_assignments:Vec<proc_macro2::TokenStream>
+        builder_assignments:Vec<proc_macro2::TokenStream>,
+        builder_enum_variants:Vec<proc_macro2::TokenStream>
     }
 
     impl TokenStreams {
@@ -48,7 +53,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                 builder_fields:vec![],
                 builder_add_val_match_cases:vec![],
-                builder_assignments:vec![]
+                builder_assignments:vec![],
+                builder_enum_variants:vec![]
             }
         }
     }
@@ -62,7 +68,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         //builder
         builder_fields,
         builder_add_val_match_cases,
-        builder_assignments
+        builder_assignments,
+        builder_enum_variants,
     ) = match &ast.data {
         syn::Data::Struct(data_struct) => {
 
@@ -101,7 +108,11 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                         #fields_enum_ident::#camel_field_ident => {
                                             self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
                                         }
-                                    })
+                                    });
+
+                                    a.builder_assignments.push(quote!{
+                                        #field_ident: self.#field_ident,
+                                    });
 
                                 } else {
                                     //TODO
@@ -126,7 +137,12 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                         #fields_enum_ident::#camel_field_ident => {
                                             self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
                                         }
-                                    })
+                                    });
+                                    let expect_msg = format!("no {}", field_ident);
+
+                                    a.builder_assignments.push(quote!{
+                                        #field_ident: self.#field_ident.expect(#expect_msg),
+                                    });
 
                                 } else {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", field_type.to_token_stream().to_string()), camel_field_ident.span());
@@ -152,7 +168,11 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                         #fields_enum_ident::#camel_field_ident(sub_path) => {
                                             self.#field_ident.add_val(sub_path, val);
                                         }
-                                    })
+                                    });
+
+                                    a.builder_assignments.push(quote!{
+                                        #field_ident: self.#field_ident.build(),
+                                    });
                                 }
 
                             }
@@ -171,6 +191,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                     let builder_fields = token_streams.builder_fields;
                     let add_range_or_value_calls = token_streams.range_or_value_add_calls;
                     let add_val_match_cases = token_streams.builder_add_val_match_cases;
+                    let builder_assignments = token_streams.builder_assignments;
 
                     (
                         quote! { #(# range_or_value_fields)* },
@@ -179,12 +200,19 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         quote! {struct},
                         quote! { #(# builder_fields)* },
                         quote! { match path { #(# add_val_match_cases)*} },
-                        quote! {}
+                        quote! {
+
+                            #target_struct_ident {
+                                #(# builder_assignments)*
+                            }
+                        },
+                        quote! {},
                     )
                 },
                 _ => {
                     println!("unnamed fields");
                     (
+                        quote! {},
                         quote! {},
                         quote! {},
                         quote! {},
@@ -197,32 +225,60 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             }
         },
         syn::Data::Enum(data_enum) => {
-            let token_streams = data_enum.variants.iter().fold(TokenStreams::new(), |mut a, variant| {
-                let variant_name = &variant.ident;
+            let builder_enum_field = Ident::new(&thoosa_shared::camel_to_snake(&builder_enum_ident.to_string()), data_enum.variants.span());
+
+            let mut token_streams = data_enum.variants.iter().fold(TokenStreams::new(), |mut a, variant| {
+                let variant_ident = &variant.ident;
 
                 if let syn::Fields::Unnamed(fields) = &variant.fields {
                     if fields.unnamed.len() == 1 {
                         let ty = &fields.unnamed.first().expect("no config type").ty;
 
-                        let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", ty.to_token_stream().to_string()), variant.ident.span());
+                        let ty_string = ty.to_token_stream().to_string();
+                        let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", ty_string), variant.ident.span());
 
                         a.range_or_value_fields.push(quote! {
-                            #variant_name(#field_type_range_or_value),
+                            #variant_ident(#field_type_range_or_value),
 
                         });
 
-                        let field_type_fields = Ident::new(&format!("{}Fields", ty.to_token_stream().to_string()), variant.ident.span());
+                        let field_type_fields = Ident::new(&format!("{}Fields", ty_string), variant.ident.span());
 
                         a.enum_fields.push(quote! {
-                            #variant_name(#field_type_fields),
+                            #variant_ident(#field_type_fields),
                         });
 
                         a.range_or_value_add_calls.push(quote! {
-                            #range_or_value_struct_ident::#variant_name(v) => {
-                                v.fill_run_configs(|v|append(#fields_enum_ident::#variant_name(v)), const_params, grid_params, opt_params);
+                            #range_or_value_struct_ident::#variant_ident(v) => {
+                                v.fill_run_configs(|v|append(#fields_enum_ident::#variant_ident(v)), const_params, grid_params, opt_params);
                             }
+                        });
+
+                        let field_type_builder = Ident::new(&format!("{}Builder", ty_string), variant_ident.span());
+                        let field_ident =  Ident::new(&thoosa_shared::camel_to_snake(&variant_ident.to_token_stream().to_string()), variant.ident.span());
+                        a.builder_fields.push(quote! {
+                            #field_ident:#field_type_builder,
+                        });
+
+                        a.builder_enum_variants.push(quote! {
+                            #variant_ident,
+                        });
+
+                        a.builder_assignments.push(quote!{
+                            // #field_ident: self.#field_ident.build(),
+                            #builder_enum_ident::#variant_ident => {
+                                #target_struct_ident::#variant_ident(self.#field_ident.build())
+                            }
+                        });
 
 
+                        a.builder_add_val_match_cases.push(quote!{
+                            #fields_enum_ident::#variant_ident(sub_path) => {
+                                let prev = self.#builder_enum_field.replace(#builder_enum_ident::#variant_ident);
+                                assert!(prev.as_ref().map(|p|p==&#builder_enum_ident::#variant_ident).unwrap_or(true), "mixed fields from {:?} prev={prev:?}, path={path:?} ", #builder_enum_ident::#variant_ident);
+
+                                self.#field_ident.add_val(sub_path, val);
+                            }
                         });
                     }
                 }
@@ -230,24 +286,42 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 a
             });
 
+            token_streams.builder_fields.push(quote! {
+                    #builder_enum_field:Option<#builder_enum_ident>,
+            });
+
             let (
                 range_or_value_fields,
                 enum_fields,
-                add_range_or_value_calls
-            ) = (token_streams.range_or_value_fields, token_streams.enum_fields, token_streams.range_or_value_add_calls);
-
+                add_range_or_value_calls,
+                builder_fields,
+                builder_enum_variants,
+                builder_assignments,
+                builder_add_val_match_cases
+            ) = (token_streams.range_or_value_fields, token_streams.enum_fields, token_streams.range_or_value_add_calls, token_streams.builder_fields, token_streams.builder_enum_variants, token_streams.builder_assignments, token_streams.builder_add_val_match_cases);
+            let expect_msg = format!("{} is required", target_struct_ident);
             (
                 quote! { #(# range_or_value_fields)* },
                 quote! { #(# enum_fields)* },
                 quote! {  match self {#(# add_range_or_value_calls)* }},
                 quote! {enum},
-                quote! {},
-                quote! {},
-                quote! {}
+                quote! { #(# builder_fields)* },
+                quote! {
+                    match path {
+                        #(#builder_add_val_match_cases)*
+                    }
+                },
+                quote! {
+                    match self.#builder_enum_field.as_ref().expect(#expect_msg) {
+                        #(#builder_assignments)*
+                    }
+                },
+                quote! { #(#builder_enum_variants)*}
             )
         }
         _ => {
             (
+                quote! {},
                 quote! {},
                 quote! {},
                 quote! {},
@@ -299,6 +373,24 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    eprintln!("range_or_value_type={}", range_or_value_type.to_string());
+    let builder_enum = if "enum" == &range_or_value_type.to_string() {
+        eprintln!("BuilderENum");
+
+        quote! {
+            #[derive(Debug, PartialEq)]
+            enum #builder_enum_ident{
+                NetOne,
+                NetTwo
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+
+
+
 
     let gen = quote! {
 
@@ -340,15 +432,19 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             #builder_fields
         }
 
-        impl #builder_ident{
+        impl #builder_ident {
+
             fn add_val(&mut self, path: &#fields_enum_ident, val: &Val) {
                 #builder_add_val_match_cases
             }
 
             fn build(&self) -> #target_struct_ident {
-                todo!()
+
+                #builder_assignments
             }
         }
+
+        #builder_enum
 
     };
 
