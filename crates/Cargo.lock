@@ -2965,6 +2965,8 @@ dependencies = [
  "simplelog",
  "tch",
  "thoosa_common",
+ "thoosa_run_config_args",
+ "thoosa_run_config_args_derive",
  "thoosa_shared",
  "thoosa_store",
  "torch-sys",
