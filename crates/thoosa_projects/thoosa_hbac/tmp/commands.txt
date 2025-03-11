@@ -16,7 +16,8 @@ export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --re
 
 
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test/  find-motifs --resources="group:pure group 100" --chunk-size=2 --window=100..1000:100 --step=100 --dist-quantile=0.01
-10049361
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test/  find-motifs2 --resources="group:pure group 100" --run-config=cnt="{step:'10',window:'1000',dist_quantile:'0.1',descr:'lalala'}"
+
 
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test/  find-motifs --resources="group:pure group 100" --chunk-size=2 --window=100..1000:100 --step=100 --dist-quantile=0.01
 17:12:50 [INFO] All done in 6699984 mls

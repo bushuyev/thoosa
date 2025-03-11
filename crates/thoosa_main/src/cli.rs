@@ -1,7 +1,4 @@
-use crate::cli::Commands::{
-    FindMotifs, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello,
-    SelectMotifs, TrainFinalNet, TrainLabelNets, TrainMotifsNets,
-};
+use crate::cli::Commands::{FindMotifs, FindMotifs2, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, TrainFinalNet, TrainLabelNets, TrainMotifsNets};
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
 use clap::{Args, Parser, Subcommand};
@@ -39,11 +36,7 @@ use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, lo
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{
-    find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label,
-    CommonFindMotifsConfig, FindMotifsParams, SelectMotifsParams,
-    SelectMotifsRunConfig,
-};
+use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsArgs, FindMotifsParams, FindMotifsRunConfig2, FindMotifsRunConfig2RangeOrValue, SelectMotifsParams, SelectMotifsRunConfig};
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams,
 };
@@ -508,6 +501,7 @@ impl RunConfig for SayHelloRunConfig {
 pub enum Commands {
     ImportResources(ImportResourcesParams),
     FindMotifs(FindMotifsParams),
+    FindMotifs2(FindMotifsArgs),
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
@@ -657,6 +651,17 @@ where
             )?;
 
             info!("FindMotifs done, run_ids={:?}", run_ids);
+        }
+
+        Some(FindMotifs2(find_motifs_args)) => {
+            debug!(
+                "FindMotifs2: find_motifs_args={:?} devices={:?}",
+                find_motifs_args, devices
+            );
+
+            let find_motifs_run_config2range_or_value: FindMotifsRunConfig2RangeOrValue = serde_json5::from_str(&find_motifs_args.run_config_cnt).expect("FindMotifsRunConfig2");
+
+            debug!("FindMotifs2: find_motifs_run_config2range_or_value={find_motifs_run_config2range_or_value:?}");
         }
 
         Some(SelectMotifs(select_motifs_params)) => {

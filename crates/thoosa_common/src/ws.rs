@@ -152,9 +152,8 @@ impl Workspace for FsWorkspace {
 
         fs::write(
             self.final_models_path.join(format!("{run_id}.json")),
-            serde_json::to_string(params)?
+            serde_json5::to_string(params)?
         )?;
-
 
         Ok(())
     }
@@ -170,7 +169,7 @@ impl Workspace for FsWorkspace {
 
         fs::write(
             channel_models.join(format!("{motif_id}_{motif_node_params_run_id}.json")),
-            serde_json::to_string(&params)?
+            serde_json5::to_string(&params)?
         )?;
 
         Ok(())
@@ -215,7 +214,7 @@ impl Workspace for FsWorkspace {
 
         fs::write(
             label_models_path.join(format!("{}.json", label_node_run_id)),
-            serde_json::to_string(params)?
+            serde_json5::to_string(params)?
         )?;
 
         Ok(())
