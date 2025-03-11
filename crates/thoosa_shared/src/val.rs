@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use std::ops::Range;
 use num_traits::ToPrimitive;
 use crate::{round_to_digits, RangeOrValue, ThoosaError};
-use crate::hyperparameter::{FieldName};
+use crate::hyperparameter::{FieldName, Hyperparameter};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Val {
@@ -237,12 +237,6 @@ fn val_to_f64_and_kind(v: &Val) -> (f64, IterationKind) {
     }
 }
 
-//
-// impl From<(String, u32)> for NamedVal<String> {
-//     fn from((name, value): (String, u32)) -> Self {
-//         NamedVal{name, val:value.into()}
-//     }
-// }
 
 impl  <T: FieldName> From<(T, Val)> for NamedVal<T> {
 
@@ -254,12 +248,6 @@ impl  <T: FieldName> From<(T, Val)> for NamedVal<T> {
     }
 }
 
-
-// impl From<(&str, &Val)> for NamedVal {
-//     fn from((name, val): (&str, &Val)) -> Self {
-//         NamedVal{name: name.to_string(), val:val.clone()}
-//     }
-// }
 
 impl <T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for NamedRange<T> {
     type Error = ();
@@ -321,6 +309,14 @@ impl <T: FieldName> TryFrom<(T, &RangeOrValue<u32>)> for NamedVal<T> {
             });
         }
         Err(())
+    }
+}
+
+impl <T: FieldName> TryFrom<&Hyperparameter<T>> for NamedVal<T> {
+    type Error = ();
+
+    fn try_from(value: &Hyperparameter<T>) -> Result<Self, Self::Error> {
+        Ok(NamedVal::new(value.name().clone(), value.random_sample()))
     }
 }
 
@@ -440,8 +436,6 @@ impl TryFrom<&Val> for i32 {
     }
 }
 
-
-
 impl TryFrom<&Val> for f32 {
     type Error = ThoosaError;
 
@@ -465,6 +459,7 @@ impl TryFrom<&Val> for String {
         }
     }
 }
+
 impl TryFrom<Val> for usize {
     type Error = ThoosaError;
 
@@ -473,6 +468,21 @@ impl TryFrom<Val> for usize {
             Val::Int(v)=> Ok(v as usize),
             Val::UInt(v)=> Ok(v as usize),
             Val::Str(v)=> v.parse().map_err(|e|ThoosaError::new(format!("e={e:?}"))),
+            _ => Err(ThoosaError::new(format!("can't convert {value:?}")))
+        }
+    }
+}
+
+
+
+impl TryFrom<&Val> for bool {
+    type Error = ThoosaError;
+
+    fn try_from(value: &Val) -> Result<Self, Self::Error> {
+        match value {
+            Val::Bool(val) => {
+                Ok(*val)
+            }
             _ => Err(ThoosaError::new(format!("can't convert {value:?}")))
         }
     }
@@ -516,6 +526,13 @@ impl From<&u32> for Val {
         Val::UInt(*v)
     }
 }
+
+impl From<&bool> for Val {
+    fn from(v: &bool) -> Self {
+        Val::Bool(*v)
+    }
+}
+
 
 
 impl From<f64> for Val {
@@ -613,6 +630,7 @@ impl <T: FieldName> TryFrom<&NamedVal<T>> for u32 {
         value.val.clone().try_into()
     }
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -524,7 +524,7 @@ pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
-    use crate::train_nets::{motif_node, MotifNodeParams, ThoModuleWithStore, TrainLabelNodeRunConfig, TrainNodesValues};
+    use crate::train_nets::{motif_node, InputFilter, MotifNodeParams, ThoModuleWithStore, TrainLabelNodeRunConfig, TrainNodesValues};
     use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
     use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
@@ -919,6 +919,93 @@ pub mod tests {
         test_train_labels(opt_sources);
 
     }
+
+    #[test]
+    fn test_run_config_option() {
+
+        #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+        #[run_config_source]
+        pub struct TestRunConfig {
+
+            #[run_config]
+            pub step: u32,
+
+            #[run_config]
+            pub window: u32,
+
+            #[run_config]
+            pub dist_quantile: f32,
+
+            #[run_config]
+            pub keep_slice_matches: bool,
+
+            #[run_config]
+            pub filter: Option<TestFilter>,
+
+            pub descr: String,
+        }
+
+        #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+        enum TestFilter {
+            Filter1(Filter1RunConfig),
+            Filter2(Filter2RunConfig)
+        }
+
+        #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+        struct Filter1RunConfig {
+            #[run_config]
+            pub param_a: u32,
+        }
+
+        #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+        struct Filter2RunConfig {
+            #[run_config]
+            pub param_b: u32,
+        }
+
+        let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
+            step:"1",
+            window:"10",
+            keep_slice_matches: "true",
+            dist_quantile: "0.1",
+            descr: "test"
+        } "#).unwrap();
+
+        let run_config = build_test_run_config(run_config_range_or_value);
+
+        debug!("run_config={run_config:?}");
+
+        assert_eq!(
+            TestRunConfig {
+                step: 1,
+                window: 10,
+                dist_quantile: 0.1,
+                keep_slice_matches: true,
+                descr: "test".to_string(),
+                filter:None
+            },
+            run_config
+        );
+
+        fn build_test_run_config(run_config_range_or_value: TestRunConfigRangeOrValue) -> TestRunConfig {
+            let run_config_source = run_config_range_or_value.opt_sources();
+
+            let const_vals: Vec<NamedVal<TestRunConfigFields>> = run_config_source.grid_run_config_source().const_params().clone();
+            let grid_vals: Vec<NamedVal<TestRunConfigFields>> = run_config_source.grid_to_vals()[0].clone();
+            let opt_vals: Vec<NamedVal<TestRunConfigFields>> = run_config_source.opt_params().into_iter().map(|opt_param| opt_param.try_into().unwrap()).collect();
+
+            [
+                const_vals.as_slice(),
+                grid_vals.as_slice(),
+                opt_vals.as_slice()
+            ]
+                .concat()
+                .into_iter()
+                .into()
+        }
+
+    }
+
 
     #[test]
     fn test_build_from_named_vals() {

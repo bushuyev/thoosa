@@ -98,6 +98,7 @@ pub struct FindMotifsParams {//TODO pub
 
 }
 
+/*
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams2 {
 
@@ -130,6 +131,7 @@ pub struct FindMotifsRunConfig2 {
     #[run_config]
     pub descr: String,
 }
+*/
 
 #[derive(Debug)]
 pub struct CommonFindMotifsConfig {
