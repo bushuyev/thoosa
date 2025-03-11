@@ -123,7 +123,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     a.range_or_value_fields.push(quote! {
                                         #field_ident: Option<#field_type_range_or_value>,
                                     });
-                                    //
+
                                     let field_type_fields = Ident::new(&format!("{}Fields", inner_ty.to_token_stream().to_string()), camel_field_ident.span());
                                     a.enum_fields.push(quote! {
                                         #camel_field_ident(#field_type_fields),
@@ -131,7 +131,6 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                     a.range_or_value_add_calls.push(quote! {
                                         if let Some(v) = self.#field_ident.as_ref(){
-                                            // thoosa_shared::add_range_or_value::<#inner_ty, T>(append(#fields_enum_ident::#camel_field_ident), v, const_params, grid_params, opt_params);
                                             v.fill_run_configs(|v| append(#fields_enum_ident::#camel_field_ident(v)), const_params, grid_params, opt_params);
                                         }
                                     });
@@ -139,7 +138,6 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     let field_type_builder = Ident::new(&format!("{}Builder", inner_ty.to_token_stream().to_string()), camel_field_ident.span());
                                     a.builder_fields.push(quote! {
                                         #field_ident:Option<#field_type_builder>,
-                                        // #field_ident:#field_type_builder,
                                     });
 
                                     a.builder_add_val_match_cases.push(quote! {
@@ -160,7 +158,6 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     a.builder_assignments.push(quote!{
                                         #field_ident: self.#field_ident.as_ref().map(|b|b.build()),
                                     });
-                                    //TODO
                                 }
                             } else {
                                 if is_primitive(&field_type) {
@@ -223,9 +220,33 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                             }
 
                         } else {
-                            a.range_or_value_fields.push(quote! {});
-                            a.enum_fields.push(quote! {});
-                            a.range_or_value_add_calls.push(quote! {});
+                            a.range_or_value_fields.push(quote! {
+                                #field_ident: #field_type,
+                            });
+                            a.enum_fields.push(quote! {
+                                #camel_field_ident,
+                            });
+
+                            a.range_or_value_add_calls.push(quote! {
+                                const_params.push(NamedVal::from((append(#fields_enum_ident::#camel_field_ident), self.#field_ident.clone().into())));
+                            });
+                            a.builder_fields.push(quote! {
+                                #field_ident:Option<#field_type>,
+                            });
+                            let field_type_str = field_type.to_token_stream().to_string();
+                            let field_ident_str = field_ident.to_string();
+                            a.builder_add_val_match_cases.push(quote! {
+                                #fields_enum_ident::#camel_field_ident => {
+                                    let v:#field_type = val.try_into().expect(&format!("can't convert val {:?}:{} to {}", val, #field_ident_str, #field_type_str));
+                                    self.#field_ident = Some(v.clone());
+                                }
+                            });
+
+                            let expect_msg = format!("no {}", field_ident);
+
+                            a.builder_assignments.push(quote!{
+                                #field_ident: self.#field_ident.clone().expect(#expect_msg),
+                            });
                         }
 
                         a
@@ -452,10 +473,6 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     } else {
         quote! {}
     };
-
-
-
-
 
     let gen = quote! {
 

@@ -14,7 +14,8 @@ fn _is_primitive(ident: &Ident) -> bool {
     match ident.to_string().as_str() {
         "i8" | "i16" | "i32" | "i64" | "i128" |
         "u8" | "u16" | "u32" | "u64" | "u128" |
-        "f32" | "f64" | "bool" | "char" => {
+        "usize" | "isize" |
+        "f32" | "f64" | "bool" | "char" | "str" => {
              true
         }
         _ => {

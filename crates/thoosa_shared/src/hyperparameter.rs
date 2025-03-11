@@ -7,6 +7,7 @@ use log::trace;
 use crate::opt_rng::opt_rnd;
 use crate::RangeOrValue;
 use crate::val::Val;
+use once_cell::sync::Lazy;
 
 pub trait FieldName: Display + Debug + Clone  {//+ for<'a>  Add<&'a dyn AsRef<Self>>
 
@@ -15,12 +16,15 @@ pub trait FieldName: Display + Debug + Clone  {//+ for<'a>  Add<&'a dyn AsRef<Se
 
 impl FieldName for String {}
 
+static TRUE_CAT: Lazy<String> = Lazy::new(|| String::from("TRUE_CAT"));
+static FALSE_CAT: Lazy<String> = Lazy::new(|| String::from("FALSE_CAT"));
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Hyperparameter<T: FieldName> {
     UniformFloat{name: T, lower:f64, upper:f64},
     UniformInt{name: T, lower:i64, upper:i64},
-    Categorical{name: T, values:Vec<String>}
+    Categorical{name: T, values:Vec<&'static str>}
 }
 
 impl <T: FieldName> Hyperparameter<T> {
@@ -88,7 +92,6 @@ impl <T: FieldName> From<(T, &Range<i32>)> for Hyperparameter<T> {
     }
 }
 
-
 impl <T: FieldName> From<(T, &Range<f32>)> for Hyperparameter<T> {
     fn from(value: (T, &Range<f32>)) -> Self {
         Hyperparameter::UniformFloat {
@@ -99,6 +102,15 @@ impl <T: FieldName> From<(T, &Range<f32>)> for Hyperparameter<T> {
     }
 }
 
+impl <T: FieldName> From<(T, &Range<bool>)> for Hyperparameter<T> {
+    fn from(value: (T, &Range<bool>)) -> Self {
+        Hyperparameter::Categorical {
+            name: value.0,
+
+            values: vec![&TRUE_CAT, &FALSE_CAT],
+        }
+    }
+}
 
 
 impl <T: FieldName> TryFrom<(T, &RangeOrValue<f64>)> for Hyperparameter<T> {
