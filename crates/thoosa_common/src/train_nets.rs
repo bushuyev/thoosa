@@ -44,6 +44,7 @@ use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, T
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::Hyperparameter;
 
 #[derive(Debug, Args, Clone)]
@@ -1629,7 +1630,7 @@ impl MotifNodeParams {
     }
 
     pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
-        serde_json::from_str::<MotifNodeParams>(
+        serde_json5::from_str::<MotifNodeParams>(
             fs::read_to_string(&path)?.as_str()
         ).map_err(|serde_err|ThoosaError::new(format!("err={}, path={path:?}", serde_err.to_string())))
     }
@@ -1703,7 +1704,7 @@ impl LabelNodeParams {
     }
 
     pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
-        serde_json::from_str::<LabelNodeParams>(
+        serde_json5::from_str::<LabelNodeParams>(
             fs::read_to_string(&path)?.as_str()
         ).map_err(|serde_err|ThoosaError::new(serde_err.to_string()))
     }
@@ -1872,7 +1873,7 @@ impl FinalNodeParams {
     }
 
     pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
-        serde_json::from_str::<FinalNodeParams>(
+        serde_json5::from_str::<FinalNodeParams>(
             fs::read_to_string(&path)?.as_str()
         ).map_err(|serde_err|ThoosaError::new(serde_err.to_string()))
     }
@@ -2641,20 +2642,23 @@ impl FindMotifsRunConfig {
     }
 }
 
-#[derive(Debug, Subcommand, PartialEq, Clone)]
+#[derive(ThoosaRunConfig, Deserialize, Debug, Subcommand, PartialEq, Clone)]
 pub enum InputFilter {
     Conv1(Conv1Params)
 }
 
-#[derive(Debug, Args, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, Deserialize, Debug, Args, PartialEq, Clone)] //PartialEq - for tests
 pub struct Conv1Params {
     #[arg(long)]
+    #[run_config]
     kernel: i64,
 
     #[arg(long, default_value_t = 1)]
+    #[run_config]
     stride: i64,
 
     #[arg(long, default_value_t = 0)]
+    #[run_config]
     padding: i64,
 }
 
@@ -3889,11 +3893,11 @@ mod train_tests {
     fn save_test_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, base_run_id: usize, channels: usize, max_motif_batches: i64, max_batch_size: i64, motif_node_params_run_id: usize, window: i64) -> Result<(), ThoosaError> {
         // fs::create_dir_all(models_path)?;
 
-        // fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(window))?)?;
+        // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
 
 
         save_test_label_model(&ws, base_run_id + 1, "seizure", 3, 4, max_motif_batches, max_batch_size)?;
-        // fs::write(models_path.join("motif_model.json"), serde_json::to_string(&MotifNodeParams::new(window))?)?;
+        // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
 
 
         save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;

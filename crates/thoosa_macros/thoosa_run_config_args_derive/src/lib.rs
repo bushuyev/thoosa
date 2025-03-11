@@ -227,26 +227,61 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 #camel_field_ident,
                             });
 
-                            a.range_or_value_add_calls.push(quote! {
-                                const_params.push(NamedVal::from((append(#fields_enum_ident::#camel_field_ident), self.#field_ident.clone().into())));
-                            });
-                            a.builder_fields.push(quote! {
-                                #field_ident:Option<#field_type>,
-                            });
-                            let field_type_str = field_type.to_token_stream().to_string();
-                            let field_ident_str = field_ident.to_string();
-                            a.builder_add_val_match_cases.push(quote! {
-                                #fields_enum_ident::#camel_field_ident => {
-                                    let v:#field_type = val.try_into().expect(&format!("can't convert val {:?}:{} to {}", val, #field_ident_str, #field_type_str));
-                                    self.#field_ident = Some(v.clone());
-                                }
-                            });
 
-                            let expect_msg = format!("no {}", field_ident);
 
-                            a.builder_assignments.push(quote!{
-                                #field_ident: self.#field_ident.clone().expect(#expect_msg),
-                            });
+                            if let Some(inner_ty) = get_option_inner_ty(&field_type) { //is Option
+                                a.builder_fields.push(quote! {
+                                    #field_ident:#field_type,
+                                });
+
+                                a.range_or_value_add_calls.push(quote! {
+
+                                    if let Some(v) = self.#field_ident.as_ref(){
+                                        const_params.push(thoosa_shared::val::NamedVal::from((append(#fields_enum_ident::#camel_field_ident), v.clone().into())));
+                                    }
+
+                                });
+
+                                let field_type_str = field_type.to_token_stream().to_string();
+                                let field_ident_str = field_ident.to_string();
+                                a.builder_add_val_match_cases.push(quote! {
+                                    #fields_enum_ident::#camel_field_ident => {
+                                        let v:#inner_ty = val.try_into().expect(&format!("can't convert val {:?}:{} to {}", val, #field_ident_str, #field_type_str));
+                                        self.#field_ident = Some(v);
+                                    }
+                                });
+
+                                let expect_msg = format!("no {}", field_ident);
+
+                                a.builder_assignments.push(quote!{
+                                    #field_ident: self.#field_ident.clone(),
+                                });
+
+                            } else {
+                                a.builder_fields.push(quote! {
+                                    #field_ident:Option<#field_type>,
+                                });
+
+                                a.range_or_value_add_calls.push(quote! {
+                                    const_params.push(thoosa_shared::val::NamedVal::from((append(#fields_enum_ident::#camel_field_ident), self.#field_ident.clone().into())));
+                                });
+
+                                let field_type_str = field_type.to_token_stream().to_string();
+                                let field_ident_str = field_ident.to_string();
+                                a.builder_add_val_match_cases.push(quote! {
+                                    #fields_enum_ident::#camel_field_ident => {
+                                        let v:#field_type = val.try_into().expect(&format!("can't convert val {:?}:{} to {}", val, #field_ident_str, #field_type_str));
+                                        self.#field_ident = Some(v.clone());
+                                    }
+                                });
+
+                                let expect_msg = format!("no {}", field_ident);
+
+                                a.builder_assignments.push(quote!{
+                                    #field_ident: self.#field_ident.clone().expect(#expect_msg),
+                                });
+                            }
+
                         }
 
                         a
@@ -412,16 +447,16 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident {
                 type P =  #fields_enum_ident;
 
-                fn opt_run_configs(&self) -> OptRunConfigs<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
+                fn opt_run_configs(&self) -> thoosa_shared::run_configs::OptRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
 
                     self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
 
-                    OptRunConfigs::new(
-                        GridRunConfigs::new(
-                            ConstConfigs::new(const_params),
+                    thoosa_shared::run_configs::OptRunConfigs::new(
+                        thoosa_shared::run_configs::GridRunConfigs::new(
+                            thoosa_shared::run_configs::ConstConfigs::new(const_params),
                             grid_params,
                         ),
                         opt_params,
@@ -434,7 +469,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             impl thoosa_run_config_args::GridRunConfigSource for #range_or_value_struct_ident {
                 type P =  #fields_enum_ident;
 
-                fn grid_run_configs(&self) -> GridRunConfigs<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>> {
+                fn grid_run_configs(&self) -> thoosa_shared::run_configs::GridRunConfigs<Vec<thoosa_shared::val::NamedVal<#fields_enum_ident>>, Vec<thoosa_shared::val::NamedRange<#fields_enum_ident>>> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
@@ -444,8 +479,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         panic!("opt_params in grid");
                     }
 
-                    GridRunConfigs::new(
-                        ConstConfigs::new(const_params),
+                    thoosa_shared::run_configs::GridRunConfigs::new(
+                        thoosa_shared::run_configs::ConstConfigs::new(const_params),
                         grid_params,
                     )
                 }
@@ -459,7 +494,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
     let into_impl = if has_run_config_opt || has_run_config_grid {
         quote! {
-            impl <I:IntoIterator<Item=NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
+            impl <I:IntoIterator<Item=thoosa_shared::val::NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
                 fn from(value: I) -> Self {
                     let mut builder = #builder_ident::default();
 
@@ -494,18 +529,18 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let gen = quote! {
 
         #[derive(Debug, serde::Deserialize, serde::Serialize)]
-        #range_or_value_type #range_or_value_struct_ident {
+        pub #range_or_value_type #range_or_value_struct_ident {
             #range_or_value_fields
 
         }
 
         #[derive(Debug, PartialEq, Clone)]
-        enum #fields_enum_ident {
+        pub enum #fields_enum_ident {
             #enum_fields
         }
 
         impl Display for #fields_enum_ident {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
                     _=>{
                         write!(f, "todo")
@@ -514,10 +549,10 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl FieldName for #fields_enum_ident {}
+        impl thoosa_shared::hyperparameter::FieldName for #fields_enum_ident {}
 
         impl #range_or_value_struct_ident {
-            pub(crate) fn fill_run_configs<T:thoosa_shared::hyperparameter::FieldName, F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>)
+            pub fn fill_run_configs<T:thoosa_shared::hyperparameter::FieldName, F>(&self, append: F, const_params: &mut Vec<thoosa_shared::val::NamedVal<T>>, grid_params: &mut Vec<thoosa_shared::val::NamedRange<T>>, opt_params: &mut Vec<thoosa_shared::hyperparameter::Hyperparameter<T>>)
                 where F:Fn(#fields_enum_ident)->T{
 
                 #range_or_value_add_calls
@@ -528,17 +563,17 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         #source_impl
 
         #[derive(Debug, Default)]
-        struct #builder_ident {
+        pub struct #builder_ident {
             #builder_fields
         }
 
         impl #builder_ident {
 
-            fn add_val(&mut self, path: &#fields_enum_ident, val: &Val) {
+            pub fn add_val(&mut self, path: &#fields_enum_ident, val: &Val) {
                 #builder_add_val_match_cases
             }
 
-            fn build(&self) -> #target_struct_ident {
+            pub fn build(&self) -> #target_struct_ident {
 
                 #builder_assignments
             }

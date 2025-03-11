@@ -24,6 +24,7 @@ parking_lot_mpsc.workspace = true
 crossbeam-channel.workspace = true
 cudarc.workspace = true
 libloading.workspace = true
+serde.workspace = true
 serde_json5.workspace = true
 
 sci-rs = "0.3.8"

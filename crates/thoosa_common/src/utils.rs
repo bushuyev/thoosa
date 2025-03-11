@@ -813,18 +813,18 @@ pub mod tests {
                 "--resources", "zzzz",
                 "--run-config-cnt", r#"
                     {
-                        some_prop:"1",
+                        some_prop:'1',
                         common_config:{
-                            beta:"1..10",
+                            beta:'1..10',
                             sub_config:{
-                                lr:"0..10:2,1"
+                                lr:'0..10:2,1'
                             }
                         },
                         net_type_0:{
-                            NetOne:{num_aaa:"1"}
+                            NetOne:{num_aaa:'1'}
                         },
                         net_type_1:{
-                            NetTwo:{num_bbb:"10..100:10,1"}
+                            NetTwo:{num_bbb:'10..100:10,1'}
                         }
                     }
                 "#
@@ -927,6 +927,7 @@ pub mod tests {
         #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
         #[run_config_opt]
         pub struct TestRunConfig {
+            pub id:Option<u32>,
 
             #[run_config]
             pub step: u32,
@@ -964,20 +965,17 @@ pub mod tests {
             pub param_b: u32,
         }
 
-        let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
-            step:"1",
-            window:"10",
-            keep_slice_matches: "true",
-            dist_quantile: "0.1",
-            descr: "test"
+        /*let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
+            step:'1',
+            window:'10',
+            keep_slice_matches: 'true',
+            dist_quantile: '0.1',
+            descr: 'test'
         } "#).unwrap();
-
-        let run_config = build_test_run_config(run_config_range_or_value);
-
-        debug!("run_config={run_config:?}");
 
         assert_eq!(
             TestRunConfig {
+                id:None,
                 step: 1,
                 window: 10,
                 dist_quantile: 0.1,
@@ -985,7 +983,36 @@ pub mod tests {
                 descr: "test".to_string(),
                 filter:None
             },
-            run_config
+            build_test_run_config(run_config_range_or_value)
+        );*/
+
+
+        let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
+            id:111,
+            step:'1',
+            window:'10',
+            keep_slice_matches: 'true',
+            dist_quantile: '0.1',
+            descr: 'test',
+            filter: {
+                Filter1: {
+                    param_a: '1'
+                }
+            }
+        } "#).unwrap();
+
+        debug!("run_config_range_or_value={run_config_range_or_value:?}");
+        assert_eq!(
+            TestRunConfig {
+                id: Some(111),
+                step: 1,
+                window: 10,
+                dist_quantile: 0.1,
+                keep_slice_matches: true,
+                descr: "test".to_string(),
+                filter: Some(TestFilter::Filter1(Filter1RunConfig { param_a: 1 })),
+            },
+            build_test_run_config(run_config_range_or_value)
         );
 
 

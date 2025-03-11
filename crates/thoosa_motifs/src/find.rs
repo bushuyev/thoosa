@@ -45,6 +45,7 @@ use plotters::prelude::BLACK;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge};
+use serde::Deserialize;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use tch::Device::{Cpu, Cuda};
 use thoosa_common::bool_iter::BoolTensorIterator;
@@ -53,7 +54,7 @@ use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{Labeled, Params, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{FindMotifsRunConfig, InputFilter};
+use thoosa_common::train_nets::*;
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::colors_iter::DistinctColorIter;
@@ -98,20 +99,21 @@ pub struct FindMotifsParams {//TODO pub
 
 }
 
-/*
+
 #[derive(Debug, Args, Clone)]
-pub struct FindMotifsParams2 {
+pub struct FindMotifsArgs {
 
     #[arg(long,value_parser=parse_resources)]
     pub resources: ResourceType,
 
     #[arg(long)]
-    run_config_cnt:String,
+    pub run_config_cnt:String,
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug)]
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_opt]
 pub struct FindMotifsRunConfig2 {
-    // pub id:Option<usize>,
+    pub id:Option<u32>,
 
     #[run_config]
     pub step: u32,
@@ -123,15 +125,14 @@ pub struct FindMotifsRunConfig2 {
     pub dist_quantile: f32,
 
     #[run_config]
-    pub min_tracker_step: Option<usize>,
+    pub min_tracker_step: Option<u32>,
 
     #[run_config]
     pub filter: Option<InputFilter>,
 
-    #[run_config]
     pub descr: String,
 }
-*/
+
 
 #[derive(Debug)]
 pub struct CommonFindMotifsConfig {
@@ -1502,7 +1503,7 @@ mod motif_find_tests {
 
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::clc_dist_d2;
-    use crate::find::select_motifs_by_corr;
+    use crate::find::{select_motifs_by_corr, FindMotifsRunConfig2, FindMotifsRunConfig2RangeOrValue};
     use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -3067,6 +3068,16 @@ mod motif_find_tests {
 
         assert_eq!(good_rates, vec![0.5714286, 0.71428573, 0.85714287, 1.0]);
 
+    }
+
+    #[test]
+    fn test_find_motifs_run_config2(){
+        // let run_config:FindMotifsRunConfig2 = serde_json5::from_str("{step:\"1\",window:'1000',dist_quantile:'0.1',descr:'lalala'}").unwrap();
+        let run_config:FindMotifsRunConfig2RangeOrValue = serde_json5::from_str(r#" {
+            step:'1'
+        } "#).unwrap();
+
+        debug!("run_config = {run_config:?}");
     }
 }
 
