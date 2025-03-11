@@ -543,6 +543,7 @@ pub mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
+    use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
 
     use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -550,7 +551,7 @@ pub mod tests {
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{add_prefix, add_range_or_value, cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
-    use thoosa_shared::config_source::{ConstConfigSource, GridRunConfigSource, OptRunConfigSource};
+    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs};
 
     #[ctor::ctor]
     fn init() {
@@ -763,7 +764,7 @@ pub mod tests {
         }
 
         #[derive(ThoosaRunConfig, Debug)]
-        #[run_config_source]
+        #[run_config_opt]
         struct TrainLabelsRunConfig {
             #[run_config]
             some_prop:u32,
@@ -829,7 +830,7 @@ pub mod tests {
                 "#
         ]);
 
-        fn test_train_labels(run_config_source:OptRunConfigSource<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>, Vec<Hyperparameter<TrainLabelsRunConfigFields>>, TrainLabelsRunConfigFields>){
+        fn test_train_labels(run_config_source: OptRunConfigs<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>, Vec<Hyperparameter<TrainLabelsRunConfigFields>>, TrainLabelsRunConfigFields>){
             let const_vals = run_config_source.grid_run_config_source().const_params();
 
             for grid_vals in run_config_source.grid_to_vals() {
@@ -880,7 +881,7 @@ pub mod tests {
                 assert_eq!(&RangeOrValue::Range{range: 10..100, step: Some((10,1))}, num_bbb_range_or_value);
 
 
-                v.opt_sources()
+                v.opt_run_configs()
             }
 
             _ => {
@@ -924,7 +925,7 @@ pub mod tests {
     fn test_run_config_option() {
 
         #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
-        #[run_config_source]
+        #[run_config_opt]
         pub struct TestRunConfig {
 
             #[run_config]
@@ -987,12 +988,17 @@ pub mod tests {
             run_config
         );
 
-        fn build_test_run_config(run_config_range_or_value: TestRunConfigRangeOrValue) -> TestRunConfig {
-            let run_config_source = run_config_range_or_value.opt_sources();
 
-            let const_vals: Vec<NamedVal<TestRunConfigFields>> = run_config_source.grid_run_config_source().const_params().clone();
-            let grid_vals: Vec<NamedVal<TestRunConfigFields>> = run_config_source.grid_to_vals()[0].clone();
-            let opt_vals: Vec<NamedVal<TestRunConfigFields>> = run_config_source.opt_params().into_iter().map(|opt_param| opt_param.try_into().unwrap()).collect();
+        fn build_test_run_config<P, S, R>(run_config_range_or_value: S) -> R
+        where P:FieldName, S:OptRunConfigSource<P=P>,
+            R:From<std::vec::IntoIter<NamedVal<P>>>
+
+        {
+            let run_config_source = run_config_range_or_value.opt_run_configs();
+
+            let const_vals: Vec<NamedVal<P>> = run_config_source.grid_run_config_source().const_params().clone();
+            let grid_vals: Vec<NamedVal<P>> = run_config_source.grid_to_vals()[0].clone();
+            let opt_vals: Vec<NamedVal<P>> = run_config_source.opt_params().into_iter().map(|opt_param| opt_param.try_into().unwrap()).collect();
 
             [
                 const_vals.as_slice(),
@@ -1038,7 +1044,7 @@ pub mod tests {
         }
 
         #[derive(ThoosaRunConfig, Debug)]
-        #[run_config_source]
+        #[run_config_opt]
         struct SomeStruct {
             #[run_config]
             field_00: u32,
