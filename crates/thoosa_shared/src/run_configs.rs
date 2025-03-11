@@ -5,11 +5,11 @@ use crate::val::{NamedRange, NamedVal};
 
 ////
 #[derive(Debug)]
-pub struct ConstConfigSource<CP> {
+pub struct ConstConfigs<CP> {
     const_params:CP,
 }
 
-impl <T: FieldName> ConstConfigSource<Vec<NamedVal<T>>> {
+impl <T: FieldName> ConstConfigs<Vec<NamedVal<T>>> {
 
     pub fn new(const_params:Vec<NamedVal<T>>) -> Self {
         Self {
@@ -20,14 +20,14 @@ impl <T: FieldName> ConstConfigSource<Vec<NamedVal<T>>> {
 }
 
 #[derive(Debug)]
-pub struct GridRunConfigSource<CP, GP> {
-    const_config_source: ConstConfigSource<CP>,
+pub struct GridRunConfigs<CP, GP> {
+    const_config_source: ConstConfigs<CP>,
     grid_params:GP
 }
 
-impl <T: FieldName> GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
+impl <T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
 
-    pub fn new(const_config_source:ConstConfigSource<Vec<NamedVal<T>>>, grid_params:Vec<NamedRange<T>>) -> Self {
+    pub fn new(const_config_source: ConstConfigs<Vec<NamedVal<T>>>, grid_params:Vec<NamedRange<T>>) -> Self {
         Self {
             const_config_source,
             grid_params
@@ -49,15 +49,15 @@ impl <T: FieldName> GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
 }
 
 #[derive(Debug)]
-pub struct OptRunConfigSource<CP, GP, OP, T> {
-    grid_run_config_source: GridRunConfigSource<CP, GP>,
+pub struct OptRunConfigs<CP, GP, OP, T> {
+    grid_run_config_source: GridRunConfigs<CP, GP>,
     opt_params:OP,
     _pd: PhantomData<T>,
 }
 
-impl <T: FieldName> OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T>  {
+impl <T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyperparameter<T>>, T>  {
 
-    pub fn new(grid_run_config_source: GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>>, opt_params:Vec<Hyperparameter<T>>) -> Self {
+    pub fn new(grid_run_config_source: GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>>, opt_params:Vec<Hyperparameter<T>>) -> Self {
         Self {
             grid_run_config_source,
             opt_params,
@@ -73,7 +73,7 @@ impl <T: FieldName> OptRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec
         self.grid_run_config_source.grid_to_vals()
     }
 
-    pub fn grid_run_config_source(&self) -> &GridRunConfigSource<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
+    pub fn grid_run_config_source(&self) -> &GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
         &self.grid_run_config_source
     }
 }

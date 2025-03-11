@@ -7,7 +7,7 @@ use thoosa_macros_utils::*;
 
 
 
-#[proc_macro_derive(ThoosaRunConfig, attributes(run_config, run_config_source))]
+#[proc_macro_derive(ThoosaRunConfig, attributes(run_config, run_config_opt, run_config_grid))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
@@ -399,28 +399,42 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         }
     };
 
-    let (sources_fns, into_impl) = if ast.attrs.iter().any(|attr| {
-        attr.path().is_ident("run_config_source")
-    }) {
-        (
-            quote! {
-                 fn opt_sources(&self) -> OptRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
+    let has_run_config_opt = ast.attrs.iter().any(|attr| {
+        attr.path().is_ident("run_config_opt")
+    });
+
+    let has_run_config_grid = ast.attrs.iter().any(|attr| {
+        attr.path().is_ident("run_config_grid")
+    });
+
+    let source_impl = if has_run_config_opt {
+        quote! {
+            impl thoosa_run_config_args::OptRunConfigSource for #range_or_value_struct_ident {
+                type P =  #fields_enum_ident;
+
+                fn opt_run_configs(&self) -> OptRunConfigs<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>, Vec<Hyperparameter<#fields_enum_ident>>, #fields_enum_ident> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
 
                     self.fill_run_configs(|v|v, &mut const_params, &mut grid_params, &mut opt_params);
 
-                    OptRunConfigSource::new(
-                        GridRunConfigSource::new(
-                            ConstConfigSource::new(const_params),
+                    OptRunConfigs::new(
+                        GridRunConfigs::new(
+                            ConstConfigs::new(const_params),
                             grid_params,
                         ),
                         opt_params,
                     )
                 }
+            }
+        }
+    } else if has_run_config_grid {
+        quote! {
+            impl thoosa_run_config_args::GridRunConfigSource for #range_or_value_struct_ident {
+                type P =  #fields_enum_ident;
 
-                fn grid_sources(&self) -> GridRunConfigSource<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>> {
+                fn grid_run_configs(&self) -> GridRunConfigs<Vec<NamedVal<#fields_enum_ident>>, Vec<NamedRange<#fields_enum_ident>>> {
                     let mut const_params = Vec::new();
                     let mut grid_params = Vec::new();
                     let mut opt_params = Vec::new();
@@ -430,34 +444,37 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         panic!("opt_params in grid");
                     }
 
-                    GridRunConfigSource::new(
-                        ConstConfigSource::new(const_params),
+                    GridRunConfigs::new(
+                        ConstConfigs::new(const_params),
                         grid_params,
                     )
                 }
-            },
-            quote! {
-
-                impl <I:IntoIterator<Item=NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
-                    fn from(value: I) -> Self {
-                        let mut builder = #builder_ident::default();
-
-                        for path_val in value {
-                            builder.add_val(path_val.path(), path_val.val());
-                        }
-
-                        builder.build()
-
-                    }
-                }
-
             }
-        )
+        }
     } else {
-        (
-        quote! {},
+        quote! {
+
+        }
+    };
+
+    let into_impl = if has_run_config_opt || has_run_config_grid {
+        quote! {
+            impl <I:IntoIterator<Item=NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
+                fn from(value: I) -> Self {
+                    let mut builder = #builder_ident::default();
+
+                    for path_val in value {
+                        builder.add_val(path_val.path(), path_val.val());
+                    }
+
+                    builder.build()
+
+                }
+            }
+
+        }
+    } else {
         quote! {}
-        )
     };
 
     eprintln!("range_or_value_type={}", range_or_value_type.to_string());
@@ -506,8 +523,9 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 #range_or_value_add_calls
             }
 
-            #sources_fns
         }
+
+        #source_impl
 
         #[derive(Debug, Default)]
         struct #builder_ident {
