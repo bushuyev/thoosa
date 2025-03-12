@@ -56,7 +56,9 @@ use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{Labeled, Params, RunConfig, SavableOptResult, Simple};
 use thoosa_common::train_nets::*;
 use thoosa_common::ws::{FsWorkspace, Workspace};
+
 use thoosa_run_config_args_derive::ThoosaRunConfig;
+
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
@@ -65,6 +67,7 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConf
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
+
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -107,41 +110,39 @@ pub struct FindMotifsArgs {
     #[arg(long,value_parser=parse_resources)]
     pub resources: ResourceType,
 
+
+    #[command(flatten)]
+    pub common: CommonFindMotifsConfig,
+
     #[arg(long)]
-    pub run_config_cnt:String,
+    pub run_config_cnt:String,//FindMotifsRunConfig
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
-#[run_config_opt]
-pub struct FindMotifsRunConfig2 {
-    pub id:Option<u32>,
+impl FindMotifsArgs {
+    pub fn resource_config(&self) -> Simple {
+        Simple::new(
+            self.resources.clone()
+        )
+    }
 
-    #[run_config]
-    pub step: u32,
-
-    #[run_config]
-    pub window: u32,
-
-    #[run_config]
-    pub dist_quantile: f32,
-
-    #[run_config]
-    pub min_tracker_step: Option<u32>,
-
-    #[run_config]
-    pub filter: Option<InputFilter>,
-
-    pub descr: String,
 }
 
+#[derive(Debug, Args, Clone)]
+pub struct CommonFindMotifsConfig {//TODO rename to Args
+    #[arg(long)]
+    pub min_tracker_step:Option<usize>,//TODO usize
 
-#[derive(Debug)]
-pub struct CommonFindMotifsConfig {
-    min_tracker_step:Option<usize>,
-    chunk_size:u32,
-    keep_slice_matches:bool, //sql
-    max_slices_k:Option<f32>,
-    mean_k: f32,
+    #[arg(long, default_value_t = 100)]
+    pub chunk_size:u32,
+
+    #[arg(long, default_value_t = false)]
+    pub keep_slice_matches:bool, //sql
+
+    #[arg(long)]
+    pub max_slices_k:Option<f32>,
+
+    #[arg(long, default_value_t = 0.01)]
+    pub mean_k: f32,
 }
 
 impl CommonFindMotifsConfig {
@@ -1005,6 +1006,28 @@ pub struct SelectMotifsParams {
 
 }
 
+
+#[derive(Debug, Args, Clone)]
+pub struct SelectMotifsArgs {
+
+    #[arg(long)]
+    pub find_motifs_run_ids: Vec<RunId>,
+
+    #[arg(long)]
+    pub resources_group: String,
+
+    #[arg(long)]
+    pub run_config_cnt:String,//SelectMotifsRunConfig
+}
+
+impl SelectMotifsArgs {
+
+    pub fn resource_config(&self) -> Labeled {
+        Labeled::new(self.resources_group.clone())
+    }
+
+}
+
 impl SelectMotifsParams {
 
     pub fn find_motifs_run_ids(&self) -> &Vec<RunId> {
@@ -1035,14 +1058,22 @@ impl Params<SelectMotifsRunConfig, Labeled, ()> for SelectMotifsParams {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
-enum MotifSelector {
-    ByLabelVariance//TODO
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize, Default)]
+struct ByLabelVarianceConfig {
+    _dummy: u32,//TODO fix ThoosaRunConfig to let empty configs
 }
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct SelectMotifsRunConfig{
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+enum MotifSelector {
+    ByLabelVariance(ByLabelVarianceConfig)//TODO
+}
+
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_grid]
+pub struct SelectMotifsRunConfig {
     id:Option<RunId>,
+
+    #[run_config]
     motif_selector: MotifSelector
 }
 
@@ -1050,7 +1081,7 @@ impl SelectMotifsRunConfig {
     pub fn new() -> Self {
         Self {
             id:None,
-            motif_selector: MotifSelector::ByLabelVariance
+            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default())
         }
     }
 }
@@ -1060,7 +1091,7 @@ impl RunConfig for SelectMotifsRunConfig {
     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         Self {
             id: Some(run_id),
-            motif_selector: MotifSelector::ByLabelVariance,
+            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default()),
         }
     }
 
@@ -1226,7 +1257,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 
                 match run_config.motif_selector {
                     //TODO other selectors
-                    MotifSelector::ByLabelVariance => {
+                    MotifSelector::ByLabelVariance(_) => {
 
                         let (good_motifs, motifs_rates) = select_motifs_by_label_variance(&labels_channels_motifs_counts, &motifs_tensors.channels_motifs_mask);
                         debug!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
@@ -1503,7 +1534,7 @@ mod motif_find_tests {
 
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::clc_dist_d2;
-    use crate::find::{select_motifs_by_corr, FindMotifsRunConfig2, FindMotifsRunConfig2RangeOrValue};
+    use crate::find::{select_motifs_by_corr};
     use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -3071,15 +3102,6 @@ mod motif_find_tests {
 
     }
 
-    #[test]
-    fn test_find_motifs_run_config2(){
-        // let run_config:FindMotifsRunConfig2 = serde_json5::from_str("{step:\"1\",window:'1000',dist_quantile:'0.1',descr:'lalala'}").unwrap();
-        let run_config:FindMotifsRunConfig2RangeOrValue = serde_json5::from_str(r#" {
-            step:'1'
-        } "#).unwrap();
-
-        debug!("run_config = {run_config:?}");
-    }
 }
 
 pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize, device: &Device) -> Result<(), ThoosaError> {

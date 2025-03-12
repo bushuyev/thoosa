@@ -1,11 +1,11 @@
-use crate::cli::Commands::{FindMotifs, FindMotifs2, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, TrainFinalNet, TrainLabelNets, TrainMotifsNets};
+use crate::cli::Commands::{FindMotifs, FindMotifs2, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, SelectMotifs2, TrainFinalNet, TrainLabelNets, TrainMotifsNets};
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
 use clap::{Args, Parser, Subcommand};
 use futures_util::{AsyncReadExt, StreamExt};
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn, Level, LevelFilter};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, RawMutex, RwLock};
 use plotters::prelude::BLACK;
 use polars::export::arrow::pushable::Pushable;
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
@@ -32,11 +32,11 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, InferParams, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsParams, TrainMotifsNodesRunConfig, TrainNodesValues};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferParams, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsParams, TrainMotifsNodesRunConfig, TrainNodesValues};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsArgs, FindMotifsParams, FindMotifsRunConfig2, FindMotifsRunConfig2RangeOrValue, SelectMotifsParams, SelectMotifsRunConfig};
+use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsArgs, FindMotifsParams, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams,
 };
@@ -55,6 +55,7 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
+use thoosa_run_config_args::GridRunConfigSource;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -506,6 +507,7 @@ pub enum Commands {
     PlotMotifSlices(PlotMotifSlicesParams),
     MotifsToTensor(MotifsToTensorParams),
     SelectMotifs(SelectMotifsParams),
+    SelectMotifs2(SelectMotifsArgs),
     TrainMotifsNets(TrainMotifsNetsParams),
     TrainLabelNets(TrainLabelNetsParams),
     TrainFinalNet(TrainFinalNetParams),
@@ -660,9 +662,45 @@ where
                 find_motifs_args, devices
             );
 
-            let find_motifs_run_config2range_or_value: FindMotifsRunConfig2RangeOrValue = serde_json5::from_str(&find_motifs_args.run_config_cnt).expect("FindMotifsRunConfig2");
+            let find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue = serde_json5::from_str(&find_motifs_args.run_config_cnt).expect("FindMotifsRunConfig2");
 
-            debug!("FindMotifs2: find_motifs_run_config2range_or_value={find_motifs_run_config2range_or_value:?}");
+            debug!("FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
+
+            let grid_run_configs = find_motifs_run_config_range_or_value.grid_run_configs();
+            debug!("FindMotifs2: grid_run_configs={grid_run_configs:?}");
+
+            let mut run_configs:Vec<FindMotifsRunConfig> = grid_run_configs.to_run_configs();
+            save_run_configs(&store, &mut run_configs, "find motifs");
+
+            debug!("FindMotifs2: run_configs={run_configs:?}");
+
+            let mut opt_run_configs_opt = find_motifs_by_euc_dist(
+                None,
+                run_configs,
+                &find_motifs_args.resource_config(),
+                &find_motifs_args.common,
+                &ws,
+                &store,
+                &loader,
+                devices
+            )?;
+
+            if let Some(mut opt_run_configs) = opt_run_configs_opt {
+                debug!(
+                    "run_step: saving opt_run_configs.len={}",
+                    opt_run_configs.len()
+                );
+                let mut opt_run_config_ids = vec![];
+                for mut opt_run_config in opt_run_configs {
+                    debug!("run_step: saving opt_run_config={opt_run_config:?}");
+
+                    let opt_run_config_id = opt_run_config.save(&store, &ws)?;
+
+                    opt_run_config_ids.push(opt_run_config_id);
+                }
+                // Ok(opt_run_config_ids)
+            };
+
         }
 
         Some(SelectMotifs(select_motifs_params)) => {
@@ -683,6 +721,37 @@ where
             )?;
 
             info!("SelectMotifs done, run_ids={:?}", run_ids);
+        }
+
+        Some(SelectMotifs2(select_motifs_args)) => {
+            debug!("select_motifs_args.run_config_cnt={:?}", select_motifs_args.run_config_cnt);
+
+            let select_motifs_run_config: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
+
+            debug!("select_motifs_run_config={select_motifs_run_config:?}");
+
+            let grid_run_configs = select_motifs_run_config.grid_run_configs();
+            debug!("FindMotifs2: grid_run_configs={grid_run_configs:?}");
+
+            let mut run_configs:Vec<SelectMotifsRunConfig> = grid_run_configs.to_run_configs();
+            debug!("FindMotifs2: run_configs={run_configs:?}");
+
+            save_run_configs(&store, &mut run_configs, "select motifs");
+
+            debug!("FindMotifs2: run_configs={run_configs:?}");
+
+            select_motifs_for_label(
+                Some(&select_motifs_args.find_motifs_run_ids),
+                run_configs,
+                &select_motifs_args.resource_config(),
+                &(),
+                &ws,
+                &store,
+                &loader,
+                devices.clone(),
+            )?;
+
+            info!("SelectMotifs done");
         }
 
         Some(TrainMotifsNets(train_on_motif_params)) => {
@@ -903,6 +972,24 @@ where
     }
 
     Ok(())
+}
+
+fn save_run_configs<R:RunConfig>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs: &mut Vec<R>, descr: &str) {
+    for mut run_config in run_configs {
+        let run_config_id = store
+            .lock()
+            .save_run_config(
+                None,
+                &<R>::type_name(),
+                descr,
+                &"todo",
+                run_config.to_properties_map(),
+            )
+            .unwrap();
+
+        // run_config_ids.push(run_config_id);
+        run_config.set_id(run_config_id);
+    }
 }
 
 pub fn run_train_final_node(
