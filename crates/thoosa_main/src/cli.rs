@@ -54,6 +54,7 @@ use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
+use thoosa_shared::run_configs::RunId;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -475,11 +476,11 @@ impl RunConfig for SayHelloRunConfig {
         self.cs.as_ref()
     }
 
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
 
-    fn set_id(&mut self, id: usize) {}
+    fn set_id(&mut self, id: RunId) {}
 
     fn type_name() -> &'static str {
         "Hello"
@@ -905,7 +906,7 @@ where
 }
 
 pub fn run_train_final_node(
-    train_label_nodes_run_ids: Option<&Vec<usize>>, //TODO use to filter label nets
+    train_label_nodes_run_ids: Option<&Vec<RunId>>, //TODO use to filter label nets
     run_configs: Vec<TrainFinalNodeRunConfig>,
     resource_config: &NetResources<Logits>,
     common_config: &CommonTrainFinalNodeRunConfig,
@@ -1023,9 +1024,9 @@ fn load_label_and_motif_models(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
     device: &Device,
-    train_label_nodes_run_ids: Option<&Vec<usize>>,
+    train_label_nodes_run_ids: Option<&Vec<RunId>>,
 ) -> (
-    HashMap<String, Vec<(usize, LabelNodeParams, ThoModuleWithStore)>>,
+    HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
     HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>,
 ) {
     debug!("load_label_and_motif_models: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
@@ -1054,7 +1055,7 @@ fn load_label_and_motif_models(
                 .get_input_run_ids(*label_run_id, Some(&SelectMotifsRunConfig::type_name()))
                 .expect("get_input_run_ids(motif_node_params_selection_run_ids")
                 .into_iter()
-                .collect::<HashSet<usize>>(); //TODO distinct in sql?
+                .collect::<HashSet<RunId>>(); //TODO distinct in sql?
 
             debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
 
@@ -1099,7 +1100,7 @@ fn load_label_and_motif_models(
 }
 
 pub fn run_train_label_nodes(
-    select_motifs_for_label_run_ids: Option<&Vec<usize>>,
+    select_motifs_for_label_run_ids: Option<&Vec<RunId>>,
     run_configs: Vec<TrainLabelNodeRunConfig>,
     resource_config: &NetResources<Labeled>,
     common_config: &CommonTrainLabelNodeRunConfig,
@@ -1134,7 +1135,7 @@ pub fn run_train_label_nodes(
             a
         });
 
-    let select_motifs_for_label_run_ids: &Vec<usize> =
+    let select_motifs_for_label_run_ids: &Vec<RunId> =
         select_motifs_for_label_run_ids.expect("select_motifs_for_label_run_ids");
 
     let chunk_len = max(1, train_labels_resource_keys.len() / devices.len());
@@ -1188,7 +1189,7 @@ pub fn run_train_label_nodes(
                 )),
             )
         })
-        .collect::<Vec<(usize, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>)>>();
+        .collect::<Vec<(RunId, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>)>>();
 
     devices__resources
         .into_par_iter()
@@ -1286,7 +1287,7 @@ pub fn run_train_label_nodes(
 returns motif_node_params_selection_run_id
 */
 fn run_train_motif_nodes_on_motif_selection(
-    motif_selection_run_ids: Option<&Vec<usize>>,
+    motif_selection_run_ids: Option<&Vec<RunId>>,
     train_motifs_nodes_run_configs: Vec<TrainMotifsNodesRunConfig>,
     _resource_config: &Empty,
     common_config: &CommonTrainMotifsNodesRunConfig,
@@ -1295,7 +1296,7 @@ fn run_train_motif_nodes_on_motif_selection(
     loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
-    let motif_selection_run_ids: &Vec<usize> =
+    let motif_selection_run_ids: &Vec<RunId> =
         motif_selection_run_ids.expect("motif_selection_run_ids");
 
     let chunk_len = max(1, motif_selection_run_ids.len() / devices.len());
@@ -1306,7 +1307,7 @@ fn run_train_motif_nodes_on_motif_selection(
         .into_iter()
         .cycle()
         .zip(motif_selection_run_ids.chunks(chunk_len).into_iter())
-        .collect::<Vec<(Device, &[usize])>>();
+        .collect::<Vec<(Device, &[RunId])>>();
 
     devices_motif_selection
         .into_par_iter()
@@ -1515,7 +1516,7 @@ fn run_plot_motif_slices(
 
 fn run_train_motif_nodes(
     motifs: &Vec<usize>,
-    find_motifs_run_id: usize,
+    find_motifs_run_id: RunId,
     train_on_motif_run_config: &TrainMotifsNodesRunConfig,
     common_config: &CommonTrainMotifsNodesRunConfig,
     find_motifs_run_config: &FindMotifsRunConfig,
@@ -1603,7 +1604,7 @@ fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) ->
 // ST - Step Fn
 // run each own run config with all input run configs
 pub fn run_step<'a, P, RC, R, CC, ST>(
-    input_run_ids: Option<Vec<usize>>,
+    input_run_ids: Option<Vec<RunId>>,
     params: &P,
     step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1611,10 +1612,10 @@ pub fn run_step<'a, P, RC, R, CC, ST>(
     exec: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     devices: Vec<Device>,
     descr: &str,
-) -> Result<Vec<usize>, ThoosaError>
+) -> Result<Vec<RunId>, ThoosaError>
 where
     ST: FnOnce(
-        Option<&Vec<usize>>,
+        Option<&Vec<RunId>>,
         Vec<RC>,
         &R,
         &CC,
@@ -1741,6 +1742,7 @@ mod cli_tests {
         cdt, cdt_for_dir, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp,
         sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoosaError,
     };
+    use thoosa_shared::run_configs::RunId;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
 
     #[ctor::ctor]
@@ -2080,7 +2082,7 @@ mod cli_tests {
         find_motifs_params: FindMotifsParams,
         param_set: Vec<FindMotifsRunConfig>,
         resource_label_key: &str,
-    ) -> Result<usize, ThoosaError> {
+    ) -> Result<RunId, ThoosaError> {
         // let resource_0_ids:Vec<ResourceId> = (0..10).map(|i| i as ResourceId).collect();
         let run_id = store.lock().save_run_config(
             None,

@@ -46,12 +46,13 @@ use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::run_configs::RunId;
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainLabelNetsParams {
 
     #[arg(long)]
-    pub select_motifs_for_label_run_ids: Vec<usize>,
+    pub select_motifs_for_label_run_ids: Vec<RunId>,
 
     #[arg(long)]
     train_resource_group: String,
@@ -70,7 +71,7 @@ pub struct TrainLabelNetsParams {
 impl TrainLabelNetsParams {
 
 
-    pub fn dummy( motif_node_params_selection_run_ids: Vec<usize>, train_resource_group: String, valid_resource_group: String, batch_size: usize, cycles: usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self {
+    pub fn dummy(motif_node_params_selection_run_ids: Vec<RunId>, train_resource_group: String, valid_resource_group: String, batch_size: usize, cycles: usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self {
         TrainLabelNetsParams {
             select_motifs_for_label_run_ids: motif_node_params_selection_run_ids,
 
@@ -111,20 +112,20 @@ impl TrainLabelNetsParams {
 
 #[derive(Debug)]
 pub struct TrainLabelNodeRunConfig {
-    id:Option<usize>,
+    id:Option<u32>,
     run_config_or_opt_space: ValuesOrOptSpace<TrainLabelNodesValues>
 }
 
 impl TrainLabelNodeRunConfig {
 
-    pub fn from_values(id: Option<usize>, lr: f64, num_layers: u32, node_type: LabelNetType) -> Self {
+    pub fn from_values(id: Option<u32>, lr: f64, num_layers: u32, node_type: LabelNetType) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::Values(TrainLabelNodesValues::new(node_type, TrainNodesValues {lr, num_layers, adam_w: None})),
         }
     }
 
-    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
+    pub fn from_opt_space(id: Option<u32>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
@@ -146,11 +147,11 @@ impl RunConfig for TrainLabelNodeRunConfig {
 
     }
 
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
 
-    fn set_id(&mut self, id: usize) {
+    fn set_id(&mut self, id: RunId) {
         self.id.replace(id);
     }
 
@@ -626,7 +627,7 @@ impl ClassTensorsLoaderData {
 
 #[derive(Debug)]
 pub struct TrainLabelNodesRunConfigResult {
-    train_label_nodes_run_config_id:usize,
+    train_label_nodes_run_config_id:u32,
     label:String,
     loss: f32,
     label_node_params: LabelNodeParams,
@@ -635,7 +636,7 @@ pub struct TrainLabelNodesRunConfigResult {
 }
 
 impl TrainLabelNodesRunConfigResult {
-    pub fn new(train_label_nodes_run_config_id:usize, label:String, loss: f32, label_node_params: LabelNodeParams, train_motifs_nodes_values: Option<TrainLabelNodesValues>, var_store: VarStore) -> Self {
+    pub fn new(train_label_nodes_run_config_id:u32, label:String, loss: f32, label_node_params: LabelNodeParams, train_motifs_nodes_values: Option<TrainLabelNodesValues>, var_store: VarStore) -> Self {
         Self {
             train_label_nodes_run_config_id,
             label,
@@ -652,7 +653,7 @@ impl SavableOptResult for TrainLabelNodesRunConfigResult {
         self.loss
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError> {
+    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
         let run_config_id = match self.train_label_nodes_values.as_ref(){
             None => self.train_label_nodes_run_config_id,
 
@@ -826,7 +827,7 @@ pub fn run_opt_train_final (
     valid_resources: Vec<(Resource, Vec<f32>)>,
     device: &Device,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-    mut label_models: HashMap<String, Vec<(usize, LabelNodeParams, ThoModuleWithStore)>>,
+    mut label_models: HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
     labels_channels_motifs_models:HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>,
 
 ) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
@@ -1000,7 +1001,7 @@ pub fn apply_channel_motifs_with_padding(input_slice_step: usize,
 
 pub fn apply_motif_and_label_nets(
     batch_t: &Tensor,
-    label_models: &mut HashMap<String, Vec<(usize, LabelNodeParams, ThoModuleWithStore)>>,
+    label_models: &mut HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
     labels_channels_motifs_models_rw: &HashMap<String, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>>,
     device: &Device,
     labels: &Vec<String>,
@@ -1047,7 +1048,7 @@ pub fn apply_motif_and_label_nets(
 
 #[derive(Debug)]
 struct TrainFinalNodesRunConfigResult {
-    train_final_nodes_run_config_id: usize,
+    train_final_nodes_run_config_id: u32,
     loss: f32,
     var_store: VarStore,
     final_node_params: FinalNodeParams,
@@ -1055,7 +1056,7 @@ struct TrainFinalNodesRunConfigResult {
 }
 
 impl TrainFinalNodesRunConfigResult {
-    pub fn new(train_final_nodes_run_config_id: usize, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: Option<TrainNodesValues>) -> Self {
+    pub fn new(train_final_nodes_run_config_id: u32, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: Option<TrainNodesValues>) -> Self {
         Self {
             train_final_nodes_run_config_id,
             loss,
@@ -1071,7 +1072,7 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
         self.loss
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError> {
+    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
         let run_config_id = match self.train_final_nodes_values.as_ref(){
             None => self.train_final_nodes_run_config_id,
 
@@ -1236,7 +1237,7 @@ pub fn load_motif_models(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, mot
 
 }
 
-pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nodes_run_ids: Option<&Vec<usize>>, device: &Device) -> Result<HashMap<String, Vec<(usize, LabelNodeParams, ThoModuleWithStore)>>, ThoosaError> {
+pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nodes_run_ids: Option<&Vec<RunId>>, device: &Device) -> Result<HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>, ThoosaError> {
     let label_models_paths = ws.read().label_models()?;
 
     debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
@@ -1248,7 +1249,7 @@ pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nod
 
     label_models_paths.into_iter().try_fold(HashMap::new(), |mut a, (label, paths)|{
 
-        let models:Vec<(usize, LabelNodeParams, ThoModuleWithStore)>  =  paths.into_iter().filter_map(|(model_path, params_path)|{
+        let models:Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>  =  paths.into_iter().filter_map(|(model_path, params_path)|{
             let run_id = FsWorkspace::model_path_to_run_id(&model_path);
             if train_label_nodes_run_ids_hash.as_ref().map(|set|!set.contains(&run_id)).unwrap_or(true) {
                 debug!("load_all_label_models_ws: skipping run_id={run_id}");
@@ -1276,7 +1277,7 @@ pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nod
     })
 }
 
-pub fn load_final_model(run_id:usize, ws:&Arc<RwLock<Box<dyn Workspace>>>, device: &Device)->Result<(usize, FinalNodeParams, ThoModuleWithStore), ThoosaError> {
+pub fn load_final_model(run_id: RunId, ws:&Arc<RwLock<Box<dyn Workspace>>>, device: &Device) ->Result<(RunId, FinalNodeParams, ThoModuleWithStore), ThoosaError> {
     let (model_path, params_path) = ws.read().final_model(run_id)?;
     debug!("load_final_model: params_path={model_path:?} run_id={run_id}");
 
@@ -1315,7 +1316,7 @@ struct CommonTrainingArgs {
 pub struct TrainMotifsNetsParams {
 
     #[arg(long)]
-    pub motif_selection_run_id: Vec<usize>,
+    pub motif_selection_run_id: Vec<RunId>,
 
     #[arg(long, value_parser=parse_range_or_value::<u32>)]
     pub num_layers: RangeOrValue<u32>,
@@ -1345,7 +1346,7 @@ pub enum ValuesOrOptSpace<V:Display> {
 
 #[derive(Clone, Debug)]
 pub struct TrainMotifsNodesRunConfig {
-    id:Option<usize>,
+    id:Option<RunId>,
 
     run_config_or_opt_space: ValuesOrOptSpace<TrainNodesValues>
 
@@ -1453,14 +1454,14 @@ pub struct CommonTrainMotifsNodesRunConfig {
 }
 
 impl TrainMotifsNodesRunConfig {
-    pub fn from_values(id: Option<usize>, lr: f64, num_layers: u32) -> Self {
+    pub fn from_values(id: Option<RunId>, lr: f64, num_layers: u32) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {lr, num_layers, adam_w: None}),
         }
     }
 
-    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
+    pub fn from_opt_space(id: Option<RunId>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
@@ -1487,7 +1488,7 @@ impl RunConfig for TrainMotifsNodesRunConfig{
         }
     }
 
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         let properties = unprefix_properties("TrainMotifsNodesRunConfig", &properties);
 
         if properties.contains_key("config_space") {
@@ -1505,7 +1506,7 @@ impl RunConfig for TrainMotifsNodesRunConfig{
         }
     }
 
-    fn set_id(&mut self, id: usize) {
+    fn set_id(&mut self, id: RunId) {
         self.id.replace(id);
     }
 
@@ -1562,7 +1563,7 @@ impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> f
 
 impl TrainMotifsNetsParams {
 
-    pub fn dummy(motif_selection_run_id:Vec<usize>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self{
+    pub fn dummy(motif_selection_run_id:Vec<RunId>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self{
 
         let lr = lr.into();
 
@@ -1952,11 +1953,11 @@ pub struct TrainMotifsNodesRunConfigResult {
     vs:VarStore,
     params:MotifNodeParams,
     run_config_values: Option<TrainNodesValues>,
-    train_motifs_nodes_run_config_id:usize
+    train_motifs_nodes_run_config_id: RunId
 }
 
 impl TrainMotifsNodesRunConfigResult {
-    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, train_motifs_nodes_run_config_id:usize, params: MotifNodeParams, run_config_values: Option<TrainNodesValues>) -> Self {
+    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, train_motifs_nodes_run_config_id: RunId, params: MotifNodeParams, run_config_values: Option<TrainNodesValues>) -> Self {
         Self { loss, channel, motif_id, vs, params, run_config_values,train_motifs_nodes_run_config_id }
     }
 }
@@ -1967,7 +1968,7 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult {
         self.loss
     }
 
-    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError> {
+    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
         let run_config_id = match self.run_config_values.as_ref() {
             None => self.train_motifs_nodes_run_config_id,
             Some(run_config_values) => {
@@ -2338,7 +2339,7 @@ fn apply_motif_nets_with_padding(
 #[derive(Debug, Args, Clone)]
 pub struct TrainFinalNetParams {
     #[arg(long)]
-    pub train_labels_run_ids: Vec<usize>,
+    pub train_labels_run_ids: Vec<RunId>,
 
     #[arg(long,  default_value_t = 100)]
     batch_size: usize,
@@ -2367,7 +2368,7 @@ pub struct TrainFinalNetParams {
 
 impl TrainFinalNetParams {
 
-    pub fn dummy(train_labels_run_ids: Vec<usize>, batch_size: usize, train_resource_group:String, valid_resource_group:String, cycles: usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self {
+    pub fn dummy(train_labels_run_ids: Vec<RunId>, batch_size: usize, train_resource_group:String, valid_resource_group:String, cycles: usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self {
         TrainFinalNetParams {
             train_labels_run_ids,
             cycles,
@@ -2407,20 +2408,20 @@ impl TrainFinalNetParams {
 
 #[derive(Debug)]
 pub struct TrainFinalNodeRunConfig {
-    id:Option<usize>,
+    id:Option<RunId>,
     run_config_or_opt_space: ValuesOrOptSpace<TrainNodesValues>
 }
 
 impl TrainFinalNodeRunConfig {
 
-    pub fn from_values(id: Option<usize>, lr: f64, num_layers: u32) -> Self {
+    pub fn from_values(id: Option<RunId>, lr: f64, num_layers: u32) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {lr, num_layers, adam_w: None}),
         }
     }
 
-    pub fn from_opt_space(id: Option<usize>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
+    pub fn from_opt_space(id: Option<RunId>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
         Self {
             id,
             run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
@@ -2429,11 +2430,11 @@ impl TrainFinalNodeRunConfig {
 }
 
 impl RunConfig for crate::train_nets::TrainFinalNodeRunConfig {
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
 
-    fn set_id(&mut self, id: usize) {
+    fn set_id(&mut self, id: RunId) {
         self.id.replace(id);
     }
 
@@ -2507,7 +2508,7 @@ impl Params<TrainFinalNodeRunConfig, NetResources<Logits>, CommonTrainFinalNodeR
 #[derive(Debug, Args, Clone)]
 pub struct InferParams {
     #[arg(long)]
-    pub final_run_id:usize,
+    pub final_run_id: RunId,
 
     #[arg(long,  default_value_t = 1000)]
     pub input_slice_step: usize,
@@ -2529,7 +2530,7 @@ impl InferParams {
         &self.output_dir
     }
 
-    pub fn new(final_run_id: usize, input_data: String, output: String, input_slice_step: usize) -> Self {
+    pub fn new(final_run_id: RunId, input_data: String, output: String, input_slice_step: usize) -> Self {
         Self { final_run_id, input_slice_step, input_dir: input_data, output_dir: output }
     }
 }
@@ -2560,11 +2561,11 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct FindMotifsRunConfig {
-    pub id:Option<usize>,
+    pub id:Option<RunId>,
     pub step: u32,
     pub window: u32,
     pub dist_quantile: f32,
-    pub min_tracker_step: Option<usize>,
+    pub min_tracker_step: Option<u32>,
     pub filter: Option<InputFilter>,
     pub descr: String,
 }
@@ -2587,7 +2588,7 @@ impl RunConfig for FindMotifsRunConfig {
     }
 
     //TODO set id
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         debug!("FindMotifsRunConfig::from_properties_map: run_id={run_id} properties={properties:?}");
 
         let properties = unprefix_properties("FindMotifsRunConfig", &properties);
@@ -2605,7 +2606,7 @@ impl RunConfig for FindMotifsRunConfig {
         find_motifs_run_config
     }
 
-    fn set_id(&mut self, id:usize) {
+    fn set_id(&mut self, id: RunId) {
         self.id.replace(id);
     }
 
@@ -2615,7 +2616,7 @@ impl RunConfig for FindMotifsRunConfig {
 }
 
 impl FindMotifsRunConfig {
-    pub fn new(id: Option<usize>,
+    pub fn new(id: Option<u32>,
                step: u32,
                window: u32,
                dist_quantile: f32, //TODO move to common
@@ -2788,6 +2789,7 @@ mod train_tests {
     use torch_sys::at_autocast_clear_cache;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, ThoosaError};
+    use thoosa_shared::run_configs::RunId;
     use thoosa_shared::val::Val;
     use thoosa_store::SqlStore;
     use crate::runs::Params;
@@ -3890,7 +3892,7 @@ mod train_tests {
 
     //6 corrs 4 motif models
     //TODO remove?
-    fn save_test_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, base_run_id: usize, channels: usize, max_motif_batches: i64, max_batch_size: i64, motif_node_params_run_id: usize, window: i64) -> Result<(), ThoosaError> {
+    fn save_test_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, base_run_id: RunId, channels: usize, max_motif_batches: i64, max_batch_size: i64, motif_node_params_run_id: usize, window: i64) -> Result<(), ThoosaError> {
         // fs::create_dir_all(models_path)?;
 
         // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
@@ -3962,7 +3964,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: usize, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
+    fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: RunId, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
         let label_node_params = LabelNodeParams::new(channels as i64, max_motif_nets, 0, 0);//TODO slices_len, motif_layers
 
         let mut vs_0 = nn::VarStore::new(Cpu);

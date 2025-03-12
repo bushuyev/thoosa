@@ -8,6 +8,7 @@ use tch::nn::VarStore;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{make_combos, ResourceType, ThoosaError};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
+use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
 use crate::parzen::optimizer::ConfigurationSpace;
@@ -178,7 +179,6 @@ pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
     fn common_config(&self) -> CommonConfig;
 }
 
-
 pub trait RunConfig:Debug {
     fn config_space(&self) -> Option<&ConfigurationSpace<String>> {
         None
@@ -188,17 +188,16 @@ pub trait RunConfig:Debug {
         HashMap::new()//TODO
     }
 
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self;
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self;
 
-    fn set_id(&mut self, id:usize);
+    fn set_id(&mut self, id: RunId);
 
     fn type_name()->&'static str;
 }
 
-
 pub trait SavableOptResult:Sync+Send+Debug{
     fn value(&self)->f32;
-    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError>;
+    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError>;
 }
 
 #[derive(Debug)]
@@ -215,7 +214,7 @@ impl SavableOptResult for DummySavableOptResult {
         0.
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<usize, ThoosaError> {
+    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
         Ok(0)
     }
 }

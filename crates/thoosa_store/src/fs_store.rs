@@ -14,11 +14,12 @@ use zstd_framed::{ZstdReader, ZstdWriter};
 use zstd_framed::table::{ZstdFrame, ZstdSeekTable};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::{group_slices, TensorIdSliceIdx, ThoosaError};
+use thoosa_shared::run_configs::RunId;
 use crate::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMatch, Store};
 
 
 pub struct FileMotifTrackerStore {
-    run_id: usize,
+    run_id: RunId,
     channel: usize,
     writer: ZstdWriter<'static, File>,
     path: PathBuf,
@@ -32,7 +33,7 @@ impl Debug for FileMotifTrackerStore {
 
 impl FileMotifTrackerStore {
 
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: usize, channel: usize) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: usize) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
 
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -98,7 +99,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
     }
 
 
-    fn run_id(&self) -> usize {
+    fn run_id(&self) -> RunId {
         self.run_id
     }
 
