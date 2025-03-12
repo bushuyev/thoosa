@@ -62,6 +62,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
+use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 
@@ -226,7 +227,7 @@ impl FindMotifsParams {
 }
 
 pub fn find_motifs_by_euc_dist(
-    _: Option<&Vec<usize>>,//first step, no input run ids
+    _: Option<&Vec<RunId>>, //first step, no input run ids
     mut run_configs: Vec<FindMotifsRunConfig>,
     resource_config: &Simple,
     common_config: &CommonFindMotifsConfig,
@@ -239,11 +240,11 @@ pub fn find_motifs_by_euc_dist(
     let mut resource_keys = resource_config.to_resources(store)?;
     // resource_keys.shuffle(&mut thread_rng());
 
-    let run_config_ids:Vec<usize> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
+    let run_config_ids:Vec<RunId> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
     debug!("find_motifs_by_euc_dist: resource_keys={resource_keys:?} run_config_ids={run_config_ids:?} channels={}", ws.read().channels());
 
-    let run_config__channels_trackers: HashMap<usize, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
+    let run_config__channels_trackers: HashMap<RunId, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
 
         let slices_counts = resource_keys.iter().map(|r|(r.length()-run_config.window)/run_config.step + 1).sum::<u32>();
         let max_slices_counts = common_config.max_slices_k.map(|k| (k * slices_counts as f32) as u32);
@@ -479,7 +480,6 @@ where
     Ok(())
 }
 
-
 fn chunk_and_slice_2x<G, C>(
     resources: Vec <Resource>,
     chunk_size: usize,
@@ -491,7 +491,7 @@ fn chunk_and_slice_2x<G, C>(
 ) -> Result<(), ThoosaError>
 where
     G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfig>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
-    C: Fn(usize, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
+    C: Fn(RunId, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
 {
     debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={run_configs:?}");
     trace!("chunk_and_slice_2x: resources={resources:?}");
@@ -503,7 +503,7 @@ where
 
         resource_chunks.push(vec![]); //to get last window processed
 
-        let (tx, rx) = crossbeam_channel::unbounded::<(usize, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
+        let (tx, rx) = crossbeam_channel::unbounded::<(RunId, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
         let trackers_pool = rayon::ThreadPoolBuilder::new().num_threads(32).spawn_handler(|thread_builder| {
             let b = thread::Builder::new();
             b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
@@ -664,12 +664,12 @@ where
 
 
         trackers_pool.scope(|s| {
-            for (run_config_it, t, chunk_0, chunk_1) in rx.iter() {
+            for (run_config_id, t, chunk_0, chunk_1) in rx.iter() {
 
                 num_tasks.fetch_add(1, Relaxed);
                 let num_tasks = Arc::clone(&num_tasks);
                 s.spawn(move |scope| {
-                    cpu_fn(run_config_it, t, chunk_0, chunk_1);
+                    cpu_fn(run_config_id, t, chunk_0, chunk_1);
                     num_tasks.fetch_sub(1, Relaxed);
                 });
             }
@@ -998,7 +998,7 @@ TODO  selects motifs based on correlation to a label only
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
     #[arg(long)]
-    find_motifs_run_ids: Vec<usize>,
+    find_motifs_run_ids: Vec<RunId>,
 
     #[arg(long)]
     pub resources_group: String,
@@ -1007,11 +1007,11 @@ pub struct SelectMotifsParams {
 
 impl SelectMotifsParams {
 
-    pub fn find_motifs_run_ids(&self) -> &Vec<usize> {
+    pub fn find_motifs_run_ids(&self) -> &Vec<RunId> {
         &self.find_motifs_run_ids
     }
 
-    pub fn dummy(run_ids: Vec<usize>, resources_group: String) -> Self {
+    pub fn dummy(run_ids: Vec<RunId>, resources_group: String) -> Self {
         SelectMotifsParams {
             find_motifs_run_ids: run_ids,
             resources_group,
@@ -1042,7 +1042,7 @@ enum MotifSelector {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct SelectMotifsRunConfig{
-    id:Option<usize>,
+    id:Option<RunId>,
     motif_selector: MotifSelector
 }
 
@@ -1057,14 +1057,14 @@ impl SelectMotifsRunConfig {
 
 impl RunConfig for SelectMotifsRunConfig {
 
-    fn from_properties_map(run_id: usize, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         Self {
             id: Some(run_id),
             motif_selector: MotifSelector::ByLabelVariance,
         }
     }
 
-    fn set_id(&mut self, id: usize) {
+    fn set_id(&mut self, id: RunId) {
         assert!(self.id.replace(id).is_none());
     }
 
@@ -1105,7 +1105,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 }
 
  pub fn select_motifs_for_label(
-     input_run_ids:Option<&Vec<usize>>,
+     input_run_ids:Option<&Vec<RunId>>,
      select_motif_run_configs: Vec<SelectMotifsRunConfig>,
      resource_config: &Labeled,
      common_config: &(),
@@ -1247,7 +1247,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
         } else {
             warn!("no label motif matches for cfg={find_motif_run_cfg:?}");
         }
-        Ok::<Vec<usize>, ThoosaError>(a)
+        Ok::<Vec<RunId>, ThoosaError>(a)
     })?;
 
     Ok(None)
@@ -1512,6 +1512,7 @@ mod motif_find_tests {
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
+    use thoosa_shared::run_configs::RunId;
     use thoosa_shared::val::Val;
     use thoosa_shared::val::Val::UInt;
     use thoosa_store::{IdSlice, SlicesMatch, SqlStore, Store};
@@ -2398,7 +2399,7 @@ mod motif_find_tests {
             todo!()
         }
 
-        fn run_id(&self) -> usize {
+        fn run_id(&self) -> RunId {
             todo!()
         }
 

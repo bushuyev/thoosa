@@ -15,6 +15,7 @@ use tch::nn::VarStore;
 use tch::{Device, TchError, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::{cdt_for_dir, recurse_files, ThoosaError};
+use thoosa_shared::run_configs::RunId;
 
 pub struct FsWorkspace {
     base_path:PathBuf,
@@ -87,8 +88,8 @@ impl FsWorkspace {
         motif_selection_run_id/channel/motif_id
      */
 
-    pub fn model_path_to_run_id(model_path:&Path) -> usize {
-        model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<usize>().ok())).expect("can't parse run_id from {model_path}")
+    pub fn model_path_to_run_id(model_path:&Path) -> RunId {
+        model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<RunId>().ok())).expect("can't parse run_id from {model_path}")
     }
 }
 
@@ -112,7 +113,7 @@ impl Workspace for FsWorkspace {
         &self.store_path
     }
 
-    fn tmp_run_store_path(&self, run_id: u32, channel: u32) -> PathBuf {
+    fn tmp_run_store_path(&self, run_id: RunId, channel: u32) -> PathBuf {
         self.tmp_path.join(format!("{run_id}_{channel}.db3"))
     }
 
@@ -143,7 +144,7 @@ impl Workspace for FsWorkspace {
     fn final_models_path(&self) -> &PathBuf {
         &self.final_models_path
     }
-    fn save_final_model(&self, run_id: usize, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
+    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
         debug!("save_final_model: run_id={run_id}  params={params:?} final_models_path={:?}", self.final_models_path);
 
         fs::create_dir_all(&self.final_models_path)?;
@@ -201,7 +202,7 @@ impl Workspace for FsWorkspace {
         })
     }
 
-    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
         let label_models_path = self.labels_models_path.join(format!("{}", label));
 
         fs::create_dir_all(&label_models_path)?;
@@ -240,7 +241,7 @@ impl Workspace for FsWorkspace {
     }
 
     /// returns (safetensors_path, json_path)
-    fn final_model(&self, id: usize) -> Result<(PathBuf, PathBuf), ThoosaError> {
+    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError> {
         let safetensors_path = self.final_models_path.join(format!("{id}.safetensors"));
         let json_path = self.final_models_path.join(format!("{id}.json"));
 
@@ -292,7 +293,7 @@ pub trait Workspace:Sync + Send {
     fn store_path(&self) -> &PathBuf;
     fn log_path(&self) -> &PathBuf;
     fn tmp_path(&self) -> &PathBuf;
-    fn tmp_run_store_path(&self, run_id:u32, channel:u32) -> PathBuf;
+    fn tmp_run_store_path(&self, run_id: RunId, channel:u32) -> PathBuf;
     fn tensors_path(&self) -> &PathBuf;
     fn tensor_path(&self, key: &Resource) -> PathBuf;
     fn models_path(&self) -> &PathBuf;
@@ -300,15 +301,15 @@ pub trait Workspace:Sync + Send {
     fn motifs_models_path(&self) -> &PathBuf;
     fn labels_models_path(&self) -> &PathBuf;
     fn final_models_path(&self) -> &PathBuf;
-    fn save_final_model(&self, run_id: usize, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError>;
+    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError>;
     fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError>;
     /**
     returns Vec<safetensors_path, config jsonpath>
      */
     fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
-    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError>;
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
-    fn final_model(&self, id: usize) -> Result<(PathBuf, PathBuf), ThoosaError>;
+    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>;
 
     #[inline]
     fn channels(&self) -> usize;
@@ -354,7 +355,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn tmp_run_store_path(&self, run_id: u32, channel: u32) -> PathBuf {
+    fn tmp_run_store_path(&self, run_id: RunId, channel: u32) -> PathBuf {
         self.base.join(format!("{run_id}_{channel}.db3"))
     }
 
@@ -391,7 +392,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_final_model(&self, run_id: usize, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
+    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
         todo!()
     }
 
@@ -403,7 +404,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_label_model(&self, label_node_run_id: usize, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
         todo!()
     }
 
@@ -411,7 +412,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn final_model(&self, id: usize) -> Result<(PathBuf, PathBuf), ThoosaError>{
+    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>{
         todo!()
     }
 

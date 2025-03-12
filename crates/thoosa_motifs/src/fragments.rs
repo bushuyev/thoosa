@@ -25,6 +25,7 @@ use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
+use thoosa_shared::run_configs::RunId;
 
 #[derive(Debug, Args)]
 pub struct MotifsToFragmentsParams {
@@ -255,7 +256,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum MotifsBy {
     MotifId(usize),
-    RunId(usize)
+    RunId(RunId)
 }
 
 impl From<&str> for MotifsBy {
@@ -374,7 +375,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
 pub struct MotifsToTensorParams {
 
     #[arg(long)]
-    run_id: usize,
+    run_id: RunId,
 
     #[arg(long, default_value_t = 1000)]
     window: i64,
@@ -385,7 +386,7 @@ impl MotifsToTensorParams {
     pub fn window(&self) -> i64 {
         self.window
     }
-    pub fn run_id(&self) -> usize {
+    pub fn run_id(&self) -> RunId {
         self.run_id
     }
 }

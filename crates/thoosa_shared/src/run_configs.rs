@@ -77,3 +77,5 @@ impl <T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hype
         &self.grid_run_config_source
     }
 }
+
+pub type RunId = u32;
