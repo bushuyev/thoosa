@@ -46,6 +46,21 @@ impl <T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
         )
     }
 
+    pub fn to_run_configs<R>(&self) ->Vec<R>
+    where R:From<std::vec::IntoIter<NamedVal<T>>>{
+
+        self.grid_to_vals().into_iter().map(|grid_vals|{
+            [
+                self.const_config_source.const_params.as_slice(),
+                grid_vals.as_slice(),
+            ]
+            .concat()
+            .into_iter()
+            .into()
+        }).collect()
+
+    }
+
 }
 
 #[derive(Debug)]

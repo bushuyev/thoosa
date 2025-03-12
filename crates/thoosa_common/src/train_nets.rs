@@ -2559,14 +2559,26 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
 
 
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug)]
+#[run_config_grid]
 pub struct FindMotifsRunConfig {
     pub id:Option<RunId>,
+
+    #[run_config]
     pub step: u32,
+
+    #[run_config]
     pub window: u32,
+
+    #[run_config]
     pub dist_quantile: f32,
+
+    #[run_config]
     pub min_tracker_step: Option<u32>,
+
+    #[run_config]
     pub filter: Option<InputFilter>,
+
     pub descr: String,
 }
 
