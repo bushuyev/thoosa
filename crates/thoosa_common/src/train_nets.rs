@@ -1292,22 +1292,25 @@ pub fn load_final_model(run_id: RunId, ws:&Arc<RwLock<Box<dyn Workspace>>>, devi
 
 
 #[derive(Args, Debug, Clone)]
-struct CommonTrainingArgs {
+pub struct CommonTrainingArgs {
     #[arg(long, default_value_t = 1000)]
     pub cycles: usize,
 
     #[arg(long, default_value_t = 10)]
     pub batch_size: usize,//number of the motif slices in a batch
 
+    //TODO remove
     #[arg(long, value_parser=parse_range_or_value::<f64>)]
     pub lr: RangeOrValue<f64>,
 
     #[arg(long, default_value_t = 0.2)]
     pub max_loss: f32,
 
+    //TODO move
     #[arg(long, default_value_t = 10)]
     pub opt_max_evals: u32,
 
+    //TODO move
     #[arg(long, default_value_t = 3)] //TODO validate opt_n_init < opt_max_evals
     pub opt_n_init: u32,
 }
@@ -1331,6 +1334,8 @@ pub struct TrainMotifsNetsArgs {
     #[arg(long)]
     pub motif_selection_run_id: Vec<RunId>,
 
+    #[command(flatten)]
+    pub common: CommonTrainingArgs, //CommonTrainMotifsNodesRunConfig
 
     #[arg(long)]
     pub run_config_cnt:String,//TrainMotifsNetsRunConfig
@@ -1338,7 +1343,7 @@ pub struct TrainMotifsNetsArgs {
 
 impl TrainMotifsNetsArgs {
 
-    fn resource_config(&self) -> Empty {
+    pub fn resource_config(&self) -> Empty {
         Empty {}
     }
 
@@ -1348,7 +1353,10 @@ impl TrainMotifsNetsArgs {
 #[run_config_opt]
 pub struct TrainMotifsNetsRunConfig {
     #[run_config]
-    common_training_args:CommonTrainingRunConfig
+    common_training_args:CommonTrainingRunConfig,
+
+    #[run_config]
+    num_layers:u32
 }
 
 #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
@@ -1963,7 +1971,7 @@ pub fn final_node(params:&FinalNodeParams) -> Node {
         .end_seq()
 }
 
-struct PlotVecf32 {
+pub struct PlotVecf32 {
     id:String,
     data:Vec<f32>
 }
@@ -2003,6 +2011,51 @@ impl TrainListener for PlotVecf32 {
         }
 
         ListenerResponse::Nope
+    }
+}
+
+
+
+#[derive(Debug)]
+pub struct TrainMotifsNodesRunConfigResult2 {
+    loss:f32,
+    channel:u32,
+    motif_id:usize,
+    vs:VarStore,
+    params:MotifNodeParams,
+    run_config_values: Option<TrainMotifsNetsRunConfig>,
+    train_motifs_nodes_run_config_id: RunId
+}
+
+impl TrainMotifsNodesRunConfigResult2 {
+    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, train_motifs_nodes_run_config_id: RunId, params: MotifNodeParams, run_config_values: Option<TrainMotifsNetsRunConfig>) -> Self {
+        Self { loss, channel, motif_id, vs, params, run_config_values,train_motifs_nodes_run_config_id }
+    }
+}
+
+impl SavableOptResult for TrainMotifsNodesRunConfigResult2 {
+
+    fn value(&self) -> f32 {
+        self.loss
+    }
+
+    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+        let run_config_id = match self.run_config_values.as_ref() {
+            None => self.train_motifs_nodes_run_config_id,
+            Some(run_config_values) => {
+                store.lock().save_run_config(
+                    Some(&[self.train_motifs_nodes_run_config_id]),
+                    &TrainMotifsNodesRunConfig::type_name(),
+                    "descr",
+                    "todo",
+                    run_config_values.to_properties_map()
+                )?
+            }
+        };
+
+        ws.read().save_motif_model(&self.channel, &run_config_id, &self.motif_id, &self.vs, &self.params)?;
+
+        Ok(run_config_id)
     }
 }
 
@@ -2104,18 +2157,21 @@ pub fn run_opt_train_motif(
 
 pub fn opt_train_2<P, R, F, N: Debug + Default>( //N node parameters
     mut train: F,
-    run_config_source: OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
+    run_config_source: &OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
     device: Device,
     descr: &str,
-)
+) -> Result<(VarStore, N, Option<R>, f32), ThoosaError>
 where
     P: FieldName,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>>,
     F: FnMut(&VarStore, &R, &mut dyn TrainListener) -> Result<(f32, N), ThoosaError>,
 {
     let const_vals = run_config_source.grid_run_config_source().const_params();
+    let mut min_loss = f32::MAX;
+    let mut min_var_store: Option<(VarStore, N, Option<R>, f32)> = None;
+    info!("running opt train {descr}");
 
-    for grid_vals in run_config_source.grid_to_vals() {
+    run_config_source.grid_to_vals().into_iter().for_each(|grid_vals| {
 
         let mut opt = TPEOptimizer::new(|opt_vals| {
             let vs = VarStore::new(device);
@@ -2125,13 +2181,27 @@ where
                 opt_vals
             ].concat().into_iter().into();
 
-            let mut listener = PlotVecf32::new(format!("_params_{:?}", run_config).as_str()); //motif_id ?
+                let vs = VarStore::new(device);
 
-            debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
+                let mut listener = PlotVecf32::new(format!("_params_{:?}", run_config).as_str()); //motif_id ?
+                let (loss, node_params) =  match panic_to_err!(train(&vs, &run_config, &mut listener)){
+                    Ok(v) => {
+                        v
+                    }
+                    Err(e) => {
+                        warn!("opt_train failed with {e:?} on {run_config:?}");
+                        (f32::MAX, Default::default())
+                    }
+                };
+                listener.plot();
 
-            let (loss, node_params) = train(&vs, &run_config, &mut listener).unwrap();
-
-            loss
+                debug!("opt_train: descr={descr} run_config_values={run_config:?} loss={loss}");
+                if loss < min_loss {
+                    min_loss = loss;
+                    min_var_store.replace((vs, node_params, Some(run_config), min_loss));
+                }
+                print!(".");
+                loss
         },
             ConfigurationSpace::new(run_config_source.opt_params().clone()),
             10,
@@ -2141,7 +2211,14 @@ where
         let best_config = opt.optimize();
 
         debug!("best_config={:?}", best_config);
-    }
+        let best_config = opt.optimize();
+        trace!("done opt {descr}");
+        info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
+
+        // min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
+    });
+
+    min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
 }
 
 
@@ -2213,6 +2290,30 @@ where
         }
     }
 
+}
+
+pub fn run_train_motif_2(motif_width: i64, run_config: &TrainMotifsNetsRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, listener: &mut dyn TrainListener) -> Result<(f32, MotifNodeParams), ThoosaError> {
+    let node_params = MotifNodeParams::new(motif_width, run_config.num_layers as i64);
+
+    let loss=  train(
+        &device,
+        batch as &mut dyn DataBatch,
+        &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
+        |pred: &Tensor, target: &Tensor| {
+            let pred_y = pred.i((.., 0));
+
+            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
+            debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
+
+            loss
+        },
+        run_config.common_training_args.cycles as usize,
+        AdamW::default().build(&vs, run_config.common_training_args.lr).unwrap(),
+        |t| t,
+        Some(listener),
+    )?;
+
+    Ok((loss, node_params))
 }
 
 fn run_train_motif(motif_width: i64, common_config: &CommonTrainMotifsNodesRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, run_config_vals:&TrainNodesValues, listener: &mut PlotVecf32) -> Result<(f32, MotifNodeParams), ThoosaError> {
