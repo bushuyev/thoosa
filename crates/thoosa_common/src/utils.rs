@@ -921,7 +921,7 @@ pub mod tests {
             opt_sources.opt_params()
         );
 
-        opt_train_2(test_train_label, opt_sources, Cpu, "test");
+        opt_train_2(test_train_label, &opt_sources, Cpu, "test").unwrap();
 
     }
 

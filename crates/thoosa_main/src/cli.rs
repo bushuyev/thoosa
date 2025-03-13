@@ -32,8 +32,8 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, run_opt_train_final, run_opt_train_label_nodes, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferParams, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsArgs, TrainMotifsNetsParams, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNodesRunConfig, TrainNodesValues};
-use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, opt_train_2, run_opt_train_final, run_opt_train_label_nodes, run_train_motif_2, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, CommonTrainingArgs, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferParams, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsArgs, TrainMotifsNetsParams, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNodesRunConfig, TrainMotifsNodesRunConfigResult, TrainMotifsNodesRunConfigResult2, TrainNodesValues};
+use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsArgs, FindMotifsParams, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
@@ -41,7 +41,7 @@ use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorParams, PlotMotifSlicesParams,
 };
 use thoosa_shared::{parse_range_or_value, slices_len};
-use thoosa_shared::val::{prefix_properties, unprefix_properties, Val};
+use thoosa_shared::val::{prefix_properties, unprefix_properties, NamedRange, NamedVal, Val};
 use thoosa_shared::{
     batch_windows, cdt, cdt_for_dir, clc_num_batches, make_combos, RangeOrValue, ResourceType,
     TensorIdSliceIdx, ThoosaError,
@@ -52,9 +52,9 @@ use torch_sys::at_grad_set_enabled;
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
-use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 
 #[derive(Parser, Clone, Debug)]
@@ -793,6 +793,17 @@ where
             save_run_configs(&store, &mut run_configs, "select motifs");
 
             debug!("TrainMotifsNets2: run_configs={run_configs:?}");
+
+            run_train_motif_nodes_on_motif_selection_2(
+                Some(&train_motif_nets_args.motif_selection_run_id.clone()),
+                opt_run_configs,
+                &train_motif_nets_args.resource_config(),
+                &train_motif_nets_args.common,
+                &ws,
+                &store,
+                &loader,
+                devices.clone(),
+            )?;
         }
 
         Some(TrainLabelNets(train_on_label_params)) => {
@@ -1389,6 +1400,76 @@ pub fn run_train_label_nodes(
         .flat_map(|v|v.into_iter())
         .collect::<Vec<Box<dyn SavableOptResult>>>()).map(|v|Some(v))
 }
+/**
+returns motif_node_params_selection_run_id
+*/
+fn run_train_motif_nodes_on_motif_selection_2(
+    motif_selection_run_ids: Option<&Vec<RunId>>,
+    train_motifs_nodes_run_configs: OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
+    _resource_config: &Empty,
+    common_config: &CommonTrainingArgs,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    devices: Vec<Device>,
+) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
+    let motif_selection_run_ids: &Vec<RunId> =
+        motif_selection_run_ids.expect("motif_selection_run_ids");
+
+    let chunk_len = max(1, motif_selection_run_ids.len() / devices.len());
+
+    debug!("run_train_motif_nodes_on_motif_selection: motif_selection_run_ids={motif_selection_run_ids:?} train_motifs_nodes_run_config={train_motifs_nodes_run_configs:?} devices={devices:?} chunk_len={chunk_len}");
+
+    let devices_motif_selection = devices
+        .into_iter()
+        .cycle()
+        .zip(motif_selection_run_ids.chunks(chunk_len).into_iter())
+        .collect::<Vec<(Device, &[RunId])>>();
+
+    devices_motif_selection
+        .into_par_iter()
+        .map( |(device_i, motif_selection_run_ids_chunk)| {
+
+            motif_selection_run_ids_chunk.iter().map(|motif_selection_run_id| {
+
+                let find_motifs_run_ids = store.lock().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
+                assert_eq!(find_motifs_run_ids.len(), 1);//selection has single input
+                let find_motifs_run_id = find_motifs_run_ids[0];
+
+                let motifs = store.lock().list_selected_motifs(*motif_selection_run_id, ws.read().channels() as u32).expect("list_selected_motifs")
+                    .into_iter()
+                    .flat_map(|channel_motifs| channel_motifs.into_iter())
+                    .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>();
+
+                let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(find_motifs_run_id, store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"));
+
+                // train_motifs_nodes_run_configs.iter().map(move | train_motifs_nodes_run_config | {
+
+                    debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
+
+                    run_train_motif_nodes_2(
+                        &motifs,
+                        find_motifs_run_ids[0],
+                        &train_motifs_nodes_run_configs,
+                        common_config,
+                        &find_motifs_run_config,
+                        ws,
+                        Arc::clone(store),
+                        loader,
+                        device_i
+                    )
+                // })
+            }).collect::<Result<Vec<Vec<Box<dyn SavableOptResult>>>, ThoosaError>>()
+
+        })
+        .collect::<Result<Vec<Vec<Vec<Box<dyn SavableOptResult>>>>, ThoosaError>>()
+        .map(|v| v.into_iter()
+            .flat_map(|v|v.into_iter()
+                .flat_map(|v|v.into_iter()))
+            .collect::<Vec<Box<dyn SavableOptResult>>>()).map(|v|Some(v)
+    )
+}
+
 
 /**
 returns motif_node_params_selection_run_id
@@ -1620,6 +1701,102 @@ fn run_plot_motif_slices(
 
     Ok(())
 }
+
+fn run_train_motif_nodes_2(
+    motifs: &Vec<usize>,
+    find_motifs_run_id: RunId,
+    train_motifs_nodes_run_configs: &OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
+    common_config: &CommonTrainingArgs,
+    find_motifs_run_config: &FindMotifsRunConfig,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    device: Device,
+) -> Result<Vec<Box<dyn SavableOptResult>>, ThoosaError> {
+    debug!("train_on_motifs: device={device:?}, find_motifs_run_id={find_motifs_run_id}");
+
+    motifs.into_iter().map(|motif_id| {
+        let (all_slices_0, all_slices_1, channel) = {
+            let mut store_guard = store.lock();
+
+            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, None, None)?;
+
+            assert_eq!(run_id, find_motifs_run_id);
+
+            debug!("train_on_motif: 1. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
+            trace!("train_on_motif: 1. slices={slices:?}, resources_map={resources_map:?}");
+
+            let all_slices_1 = train_nets::slices_in_all_resources(
+                load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
+            );
+
+            //list motifs which are NOT motif_id and NOT from run_id
+            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
+
+            debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
+            trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
+
+            let all_slices_0 = train_nets::slices_in_all_resources(
+                load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
+            );
+
+            debug!("train_on_motif: 0. run_id={}, done", run_id);
+
+            (all_slices_0, all_slices_1, channel)
+        };
+
+        assert!(all_slices_1.len() > 0, "all_slices_1.len(), motif={motif_id}");
+        assert!(all_slices_0.len() > 0, "all_slices_0.len(), motif={motif_id}");
+
+        let batch_size = common_config.batch_size; //TODO, purge small motifs
+        if all_slices_1.len() < batch_size {
+            warn!("num of motif_id {motif_id} all_slices_1.len()={} in channel {channel} is less than {batch_size}", all_slices_1.len());
+            return Err(ThoosaError::new("skip"));
+        }
+
+        if all_slices_0.len() < batch_size {
+            warn!("num of not motif_id {motif_id} all_slices_0.len()={} in channel {channel} is less than {batch_size}", all_slices_0.len());
+            return Err(ThoosaError::new("skip"));
+        }
+
+        debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
+
+
+        /*train_nets::run_opt_train_motif(
+            *motif_id,
+            channel as u32,
+            all_slices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(), //TODO change ClassTensorsDataBatch to accept refs
+            all_slices_1.iter().map(|v|Box::new(v.shallow_clone())).collect(),
+            train_on_motif_run_config,
+            find_motifs_run_config.window(),
+            common_config,
+            device,
+        )*/
+        let mut batch = TensorsDataBatch::new(
+            vec![
+                all_slices_0,
+                all_slices_1
+            ],
+            common_config.batch_size,
+            0.8,//TODO config
+            device
+        );
+
+        opt_train_2(
+            |vs:&VarStore, run_config:&TrainMotifsNetsRunConfig, listener: &mut dyn TrainListener|{
+                run_train_motif_2(find_motifs_run_config.window(), run_config, &device, &mut batch, vs, listener)
+            },
+            train_motifs_nodes_run_configs,
+            device,
+            "motifs"
+        ).map(|(var_store, motif_node_params, train_motifs_nodes_values, min_loss)|{
+            Box::new(TrainMotifsNodesRunConfigResult2::new(min_loss, channel as u32, *motif_id, var_store, 0/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nodes_values)) as Box<dyn SavableOptResult>
+
+        })
+
+    }).filter(|v|v.is_ok()).collect()
+}
+
 
 fn run_train_motif_nodes(
     motifs: &Vec<usize>,
