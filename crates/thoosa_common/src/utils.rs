@@ -523,9 +523,9 @@ pub mod tests {
     use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
-    use crate::runs::Simple;
-    use crate::train_nets::{motif_node, InputFilter, MotifNodeParams, ThoModuleWithStore, TrainLabelNodeRunConfig, TrainNodesValues};
-    use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor};
+    use crate::runs::{RunConfig, Simple};
+    use crate::train_nets::{motif_node, opt_train_2, InputFilter, MotifNodeParams, ThoModuleWithStore, TrainLabelNodeRunConfig, TrainNodesValues};
+    use crate::utils::{hist_1_dim, CompositeReducer, ListenerResponse, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
     use log::LevelFilter::{Info, Trace};
@@ -543,6 +543,7 @@ pub mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{IndexOp, Tensor};
+    use tch::nn::VarStore;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
 
@@ -551,7 +552,7 @@ pub mod tests {
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{add_prefix, add_range_or_value, cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
-    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs};
+    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunId};
 
     #[ctor::ctor]
     fn init() {
@@ -780,6 +781,20 @@ pub mod tests {
 
         }
 
+        impl RunConfig for TrainLabelsRunConfig {
+            fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+                todo!()
+            }
+
+            fn set_id(&mut self, id: RunId) {
+                todo!()
+            }
+
+            fn type_name() -> &'static str {
+                todo!()
+            }
+        }
+
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
         struct TestCli {
@@ -830,34 +845,24 @@ pub mod tests {
                 "#
         ]);
 
-        fn test_train_labels(run_config_source: OptRunConfigs<Vec<NamedVal<TrainLabelsRunConfigFields>>, Vec<NamedRange<TrainLabelsRunConfigFields>>, Vec<Hyperparameter<TrainLabelsRunConfigFields>>, TrainLabelsRunConfigFields>){
-            let const_vals = run_config_source.grid_run_config_source().const_params();
 
-            for grid_vals in run_config_source.grid_to_vals() {
+        #[derive(Debug, Default)]
+        struct TestNodeParams {
+            layers:u32
+        }
 
-                let mut opt = TPEOptimizer::new(|opt_vals| {
+        struct DummyListener;
 
-                    debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
-                    test_train_label([
-                        const_vals.as_slice(),
-                        grid_vals.as_slice(),
-                        opt_vals
-                    ].concat().into_iter().into());
-                    0.0
-                },
-                    ConfigurationSpace::new(run_config_source.opt_params().clone()),
-                    10,
-                    3,
-                );
-
-                let best_config = opt.optimize();
-
-                debug!("best_config={:?}", best_config);
+        impl TrainListener for DummyListener {
+            fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
+                ListenerResponse::Nope
             }
         }
 
-        fn test_train_label(run_config:TrainLabelsRunConfig){
+        fn test_train_label(vs:&VarStore, run_config:&TrainLabelsRunConfig, ls:&mut dyn TrainListener)->Result<(f32, TestNodeParams), ThoosaError>{
             debug!("test_train_label: run_config={:?}", run_config);
+
+            Ok((0.1, TestNodeParams{ layers: 0 }))
         }
 
 
@@ -889,7 +894,6 @@ pub mod tests {
             }
         };
 
-
         debug!("const_params={:?}", opt_sources.grid_run_config_source().const_params());
         assert_eq!(
             &vec![
@@ -917,7 +921,7 @@ pub mod tests {
             opt_sources.opt_params()
         );
 
-        test_train_labels(opt_sources);
+        opt_train_2(test_train_label, opt_sources, Cpu, "test");
 
     }
 
@@ -965,7 +969,7 @@ pub mod tests {
             pub param_b: u32,
         }
 
-        /*let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
+        let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
             step:'1',
             window:'10',
             keep_slice_matches: 'true',
@@ -984,7 +988,7 @@ pub mod tests {
                 filter:None
             },
             build_test_run_config(run_config_range_or_value)
-        );*/
+        );
 
 
         let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {

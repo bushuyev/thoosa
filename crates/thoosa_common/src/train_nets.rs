@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
-use crate::parzen::optimizer::ConfigurationSpace;
+use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
 use crate::{panic_to_err, train_nets};
 use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
@@ -38,15 +38,15 @@ use clap::Subcommand;
 use thoosa_shared::{clc_step, parse_key_val, slices_len};
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::resource::{Resource, ResourceId};
-use thoosa_shared::val::{NamedVal, Val};
+use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::val::{prefix_properties, unprefix_properties};
 use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, ThoosaError};
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::hyperparameter::Hyperparameter;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
+use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainLabelNetsParams {
@@ -1325,6 +1325,67 @@ pub struct TrainMotifsNetsParams {
     common: CommonTrainingArgs,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct TrainMotifsNetsArgs {
+
+    #[arg(long)]
+    pub motif_selection_run_id: Vec<RunId>,
+
+
+    #[arg(long)]
+    pub run_config_cnt:String,//TrainMotifsNetsRunConfig
+}
+
+impl TrainMotifsNetsArgs {
+
+    fn resource_config(&self) -> Empty {
+        Empty {}
+    }
+
+}
+
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_opt]
+pub struct TrainMotifsNetsRunConfig {
+    #[run_config]
+    common_training_args:CommonTrainingRunConfig
+}
+
+#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+pub struct CommonTrainingRunConfig {
+    #[run_config]
+    pub cycles: u32,
+
+    #[run_config]
+    pub batch_size: u32,//number of the motif slices in a batch
+
+    #[run_config]
+    pub lr: f64,
+
+    #[run_config]
+    pub max_loss: f32,
+
+    #[run_config]
+    pub opt_max_evals: u32,
+
+    #[run_config]
+    pub opt_n_init: u32,
+}
+
+impl RunConfig for TrainMotifsNetsRunConfig {
+    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+        todo!()
+    }
+
+    fn set_id(&mut self, id: RunId) {
+        todo!()
+    }
+
+    fn type_name() -> &'static str {
+        "TrainMotifsNetsRunConfig"
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OptConfig {
     pub max_evals:u32,
@@ -2040,6 +2101,49 @@ pub fn run_opt_train_motif(
     })
 
 }
+
+pub fn opt_train_2<P, R, F, N: Debug + Default>( //N node parameters
+    mut train: F,
+    run_config_source: OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
+    device: Device,
+    descr: &str,
+)
+where
+    P: FieldName,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>>,
+    F: FnMut(&VarStore, &R, &mut dyn TrainListener) -> Result<(f32, N), ThoosaError>,
+{
+    let const_vals = run_config_source.grid_run_config_source().const_params();
+
+    for grid_vals in run_config_source.grid_to_vals() {
+
+        let mut opt = TPEOptimizer::new(|opt_vals| {
+            let vs = VarStore::new(device);
+            let run_config = [
+                const_vals.as_slice(),
+                grid_vals.as_slice(),
+                opt_vals
+            ].concat().into_iter().into();
+
+            let mut listener = PlotVecf32::new(format!("_params_{:?}", run_config).as_str()); //motif_id ?
+
+            debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
+
+            let (loss, node_params) = train(&vs, &run_config, &mut listener).unwrap();
+
+            loss
+        },
+            ConfigurationSpace::new(run_config_source.opt_params().clone()),
+            10,
+            3,
+        );
+
+        let best_config = opt.optimize();
+
+        debug!("best_config={:?}", best_config);
+    }
+}
+
 
 
 pub fn opt_train<F, V, N:Debug+Default>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, Option<V>, f32), ThoosaError>//Option<V> - Some if run config from opt
