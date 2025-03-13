@@ -282,7 +282,6 @@ pub fn find_motifs_by_euc_dist(
         .map(|rc|Arc::new(rc))
         .collect::<Vec<_>>();
 
-    // debug!("find_motifs_by_euc_dist_: records_num={records_num} resource_keys={resource_keys:?} run_config_ids={run_config_ids:?}");
     let devices_2x = devices.clone();
 
     let mut means_acc = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Float, devices[0])));
