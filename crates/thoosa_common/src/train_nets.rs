@@ -137,11 +137,15 @@ impl RunConfig for TrainLabelNodeRunConfig {
     fn to_properties_map(&self) -> HashMap<String, Val> {
         match &self.run_config_or_opt_space {
             ValuesOrOptSpace::Values(values) => {
-                // values.to_properties_map()
-                todo!()
+                values.to_properties_map()
             },
             ValuesOrOptSpace::OptSpace { .. } => {
-                todo!()
+                // let mut map = HashMap::from([
+                //     ("FindMotifsRunConfig.step".into(), UInt(self.step)),
+                //     ("FindMotifsRunConfig.window".into(), UInt(self.window)),
+                //     ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
+                //     ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
+                // ]);
             }
         }
 
@@ -1459,17 +1463,16 @@ impl TryFrom<&[NamedVal<String>]> for TrainNodesValues {
     type Error = ThoosaError;
 
     fn try_from(value: &[NamedVal<String>]) -> Result<Self, Self::Error> {
-        // let params_map = value.into_iter().try_fold(HashMap::new(), |mut a, x| {
-        //     a.insert(x.name().as_str(), x.val());
-        //     Ok::<HashMap<&str, &Val>, ThoosaError>(a)
-        // })?;
-        //
-        // Ok(TrainNodesValues::new(
-        //     (*params_map.get("lr").expect("lr")).try_into()?,
-        //     (*params_map.get("num_layers").expect("num_layers")).try_into()?,
-        //     None//TODO
-        // ))
-        todo!()//replace with builder
+        let params_map = value.into_iter().try_fold(HashMap::new(), |mut a, x| {
+            a.insert(x.path().as_str(), x.val());
+            Ok::<HashMap<&str, &Val>, ThoosaError>(a)
+        })?;
+
+        Ok(TrainNodesValues::new(
+            (*params_map.get("lr").expect("lr")).try_into()?,
+            (*params_map.get("num_layers").expect("num_layers")).try_into()?,
+            None//TODO
+        ))
     }
 }
 impl TryFrom<&Vec<Val>> for TrainNodesValues {
@@ -2174,38 +2177,37 @@ where
     run_config_source.grid_to_vals().into_iter().for_each(|grid_vals| {
 
         let mut opt = TPEOptimizer::new(|opt_vals| {
-            let vs = VarStore::new(device);
             let run_config = [
                 const_vals.as_slice(),
                 grid_vals.as_slice(),
                 opt_vals
             ].concat().into_iter().into();
 
-                let vs = VarStore::new(device);
+            let vs = VarStore::new(device);
 
-                let mut listener = PlotVecf32::new(format!("_params_{:?}", run_config).as_str()); //motif_id ?
-                let (loss, node_params) =  match panic_to_err!(train(&vs, &run_config, &mut listener)){
-                    Ok(v) => {
-                        v
-                    }
-                    Err(e) => {
-                        warn!("opt_train failed with {e:?} on {run_config:?}");
-                        (f32::MAX, Default::default())
-                    }
-                };
-                listener.plot();
-
-                debug!("opt_train: descr={descr} run_config_values={run_config:?} loss={loss}");
-                if loss < min_loss {
-                    min_loss = loss;
-                    min_var_store.replace((vs, node_params, Some(run_config), min_loss));
+            let mut listener = PlotVecf32::new(format!("_params_{:?}", "id"/*TODO run_config.get_id()*/).as_str()); //motif_id ?
+            let (loss, node_params) = match panic_to_err!(train(&vs, &run_config, &mut listener)) {
+                Ok(v) => {
+                    v
                 }
-                print!(".");
-                loss
+                Err(e) => {
+                    warn!("opt_train failed with {e:?} on {run_config:?}");
+                    (f32::MAX, Default::default())
+                }
+            };
+            listener.plot();
+
+            debug!("opt_train: descr={descr} run_config_values={run_config:?} loss={loss}");
+            if loss < min_loss {
+                min_loss = loss;
+                min_var_store.replace((vs, node_params, Some(run_config), min_loss));
+            }
+            print!(".");
+            loss
         },
-            ConfigurationSpace::new(run_config_source.opt_params().clone()),
-            10,
-            3,
+                                        ConfigurationSpace::new(run_config_source.opt_params().clone()),
+                                        10,
+                                        3,
         );
 
         let best_config = opt.optimize();

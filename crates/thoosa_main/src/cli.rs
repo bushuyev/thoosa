@@ -55,7 +55,7 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
+use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -667,40 +667,54 @@ where
 
             debug!("FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
-            let grid_run_configs = find_motifs_run_config_range_or_value.grid_run_configs();
-            debug!("FindMotifs2: grid_run_configs={grid_run_configs:?}");
+            // let grid_run_configs = find_motifs_run_config_range_or_value.grid_run_configs();
+            // debug!("FindMotifs2: grid_run_configs={grid_run_configs:?}");
+            //
+            // let mut run_configs:Vec<FindMotifsRunConfig> = grid_run_configs.to_run_configs();
+            // save_run_configs(&store, &mut run_configs, "find motifs");
+            //
+            // debug!("FindMotifs2: run_configs={run_configs:?}");
+            //
+            // let mut opt_run_configs_opt = find_motifs_by_euc_dist(
+            //     None,
+            //     run_configs,
+            //     &find_motifs_args.resource_config(),
+            //     &find_motifs_args.common,
+            //     &ws,
+            //     &store,
+            //     &loader,
+            //     devices
+            // )?;
+            //
+            // if let Some(mut opt_run_configs) = opt_run_configs_opt {
+            //     debug!(
+            //         "run_step: saving opt_run_configs.len={}",
+            //         opt_run_configs.len()
+            //     );
+            //     let mut opt_run_config_ids = vec![];
+            //     for mut opt_run_config in opt_run_configs {
+            //         debug!("run_step: saving opt_run_config={opt_run_config:?}");
+            //
+            //         let opt_run_config_id = opt_run_config.save(&store, &ws)?;
+            //
+            //         opt_run_config_ids.push(opt_run_config_id);
+            //     }
+            //     // Ok(opt_run_config_ids)
+            // };
 
-            let mut run_configs:Vec<FindMotifsRunConfig> = grid_run_configs.to_run_configs();
-            save_run_configs(&store, &mut run_configs, "find motifs");
 
-            debug!("FindMotifs2: run_configs={run_configs:?}");
-
-            let mut opt_run_configs_opt = find_motifs_by_euc_dist(
+            run_all_grid_step(
                 None,
-                run_configs,
-                &find_motifs_args.resource_config(),
+                find_motifs_run_config_range_or_value,
                 &find_motifs_args.common,
+                &find_motifs_args.resource_config(),
+                find_motifs_by_euc_dist,
                 &ws,
                 &store,
                 &loader,
-                devices
+                devices.clone(),
+                "FindMotifs",
             )?;
-
-            if let Some(mut opt_run_configs) = opt_run_configs_opt {
-                debug!(
-                    "run_step: saving opt_run_configs.len={}",
-                    opt_run_configs.len()
-                );
-                let mut opt_run_config_ids = vec![];
-                for mut opt_run_config in opt_run_configs {
-                    debug!("run_step: saving opt_run_config={opt_run_config:?}");
-
-                    let opt_run_config_id = opt_run_config.save(&store, &ws)?;
-
-                    opt_run_config_ids.push(opt_run_config_id);
-                }
-                // Ok(opt_run_config_ids)
-            };
 
         }
 
@@ -1004,8 +1018,8 @@ where
     Ok(())
 }
 
-fn save_run_configs<R:RunConfig>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs: &mut Vec<R>, descr: &str) {
-    for mut run_config in run_configs {
+fn save_run_configs<R:RunConfig>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs: &mut Vec<R>, descr: &str) -> Vec<RunId>{
+    run_configs.into_iter().map(|run_config| {
         let run_config_id = store
             .lock()
             .save_run_config(
@@ -1019,7 +1033,9 @@ fn save_run_configs<R:RunConfig>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs
 
         // run_config_ids.push(run_config_id);
         run_config.set_id(run_config_id);
-    }
+
+        run_config_id
+    }).collect()
 }
 
 pub fn run_train_final_node(
@@ -1881,6 +1897,56 @@ fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) ->
         .unwrap()
 }
 
+pub fn run_all_grid_step<RC, RCRV, R, CC, ST>(
+    input_run_ids: Option<Vec<RunId>>,
+    rcrv:RCRV,
+    common_config:&CC,
+    resource_config:&R,
+    grid_step: ST,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    devices: Vec<Device>,
+    descr: &str,
+) -> Result<Vec<RunId>, ThoosaError>
+where
+    ST: FnOnce(
+        Option<&Vec<RunId>>,
+        Vec<RC>,
+        &R,
+        &CC,
+        &Arc<RwLock<Box<dyn Workspace>>>,
+        &Arc<Mutex<Box<dyn Store>>>,
+        &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+        Vec<Device>,
+    ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError>,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>,
+    RCRV:GridRunConfigSource,
+    R: ResourcesConfig,
+{
+
+    let grid_run_configs = rcrv.grid_run_configs();
+    debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
+
+    let mut run_configs:Vec<RC> = grid_run_configs.to_run_configs();
+    let run_config_ids = save_run_configs(&store, &mut run_configs, "find motifs");
+
+    debug!("FindMotifs2: run_configs={run_configs:?}");
+
+    grid_step(
+        None,
+        run_configs,
+        resource_config,
+        common_config,
+        ws,
+        store,
+        loader,
+        devices
+    )?;
+
+    Ok(run_config_ids)
+}
+
 // P - params
 // RC - RunConfig
 // R  - Resources Config
@@ -1974,11 +2040,7 @@ where
 #[cfg(test)]
 mod cli_tests {
     use crate::cli::Commands::FindMotifs;
-    use crate::cli::{
-        import_resources, resource_path, run_infer, run_plot_motif_slices, run_step,
-        run_train_final_node, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, Cli,
-        RunAllParams,
-    };
+    use crate::cli::{import_resources, resource_path, run_all_grid_step, run_infer, run_plot_motif_slices, run_step, run_train_final_node, run_train_label_nodes, run_train_motif_nodes_on_motif_selection, Cli, RunAllParams};
     use crate::data::ParquetLoader;
     use log::LevelFilter::{Debug, Trace, Warn};
     use log::{debug, info, trace, LevelFilter};
@@ -2005,9 +2067,9 @@ mod cli_tests {
     use tch::{nn, Device, IndexOp, Tensor};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::runs::RunConfig;
+    use thoosa_common::runs::{RunConfig, Simple};
     use thoosa_common::runs::Params;
-    use thoosa_common::train_nets::{motif_node, FindMotifsRunConfig, InferParams, MotifNodeParams, TrainFinalNetParams, TrainLabelNetsParams, TrainMotifsNetsParams};
+    use thoosa_common::train_nets::{motif_node, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InferParams, MotifNodeParams, TrainFinalNetParams, TrainLabelNetsParams, TrainMotifsNetsParams};
     use thoosa_common::utils::{
         from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
         three_sigs_tensor, vec_f32_from,
@@ -2015,10 +2077,7 @@ mod cli_tests {
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::find::{
-        find_motifs_by_euc_dist, select_motifs_for_label, FindMotifsParams,
-        SelectMotifsParams,
-    };
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesParams};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::val::unprefix_properties;
@@ -2549,20 +2608,38 @@ mod cli_tests {
         // log::set_max_level(Trace);
         reset_print_options();
 
-        let find_motifs_run_ids = run_step(
+        // let find_motifs_run_ids = run_step(
+        //     None,
+        //     &FindMotifsParams::dummy(
+        //         100,
+        //         800,
+        //         group_name.clone(),
+        //         2,
+        //         0.5,
+        //         None,
+        //         None,
+        //         false,
+        //         None,
+        //         Some(0.2),
+        //     ),
+        //     find_motifs_by_euc_dist,
+        //     &ws,
+        //     &store,
+        //     &loader,
+        //     devices.clone(),
+        //     "Test/FindMotifs",
+        // )?;
+
+        let find_motifs_run_ids = run_all_grid_step(
             None,
-            &FindMotifsParams::dummy(
-                100,
-                800,
-                group_name.clone(),
-                2,
-                0.5,
-                None,
-                None,
-                false,
-                None,
-                Some(0.2),
-            ),
+            serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(&r#"{
+                step:"100",
+                window:"800",
+                dist_quantile: "0.5",
+                descr: "find_motifs"
+            }"#).unwrap(),
+            &CommonFindMotifsConfig::new(None, 2, false, None, Some(0.2)),
+            &Simple::new(ResourceType::Group(group_name.clone())),
             find_motifs_by_euc_dist,
             &ws,
             &store,
