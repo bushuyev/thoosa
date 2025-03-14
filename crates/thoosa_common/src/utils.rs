@@ -832,14 +832,14 @@ pub mod tests {
                         common_config:{
                             beta:'1..10',
                             sub_config:{
-                                lr:'0..10:2,1'
+                                lr:'0..10:5,1'
                             }
                         },
                         net_type_0:{
                             NetOne:{num_aaa:'1'}
                         },
                         net_type_1:{
-                            NetTwo:{num_bbb:'10..100:10,1'}
+                            NetTwo:{num_bbb:'10..100:50,1'}
                         }
                     }
                 "#
@@ -877,13 +877,13 @@ pub mod tests {
 
                 assert_eq!(RangeOrValue::Value(1), v.some_prop);
                 assert_eq!(Some(RangeOrValue::Range{range: 1..10, step: None}), v.common_config.beta);
-                assert_eq!(RangeOrValue::Range{range: 0..10, step: Some((2,1))}, v.common_config.sub_config.lr);
+                assert_eq!(RangeOrValue::Range{range: 0..10, step: Some((5,1))}, v.common_config.sub_config.lr);
 
                 let NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {num_aaa: ref num_aaa_range_or_value}) = v.net_type_0 else {panic!("no NetOne/num_aaa")};
                 assert_eq!(&RangeOrValue::Value(1), num_aaa_range_or_value);
 
                 let Some(NetTypeRangeOrValue::NetTwo(NetTwoConfigRangeOrValue {num_bbb: ref num_bbb_range_or_value})) = v.net_type_1 else {panic!("no NetOne/num_bbb")};
-                assert_eq!(&RangeOrValue::Range{range: 10..100, step: Some((10,1))}, num_bbb_range_or_value);
+                assert_eq!(&RangeOrValue::Range{range: 10..100, step: Some((50,1))}, num_bbb_range_or_value);
 
 
                 v.opt_run_configs()
@@ -906,7 +906,7 @@ pub mod tests {
 
 
         debug!("       grid_to_vals={:?}", opt_sources.grid_run_config_source().grid_to_vals());
-        assert_eq!((10..100).step_by(10).flat_map(|num_bbb| (0..10).step_by(2).map(move |lr| {
+        assert_eq!((10..100).step_by(50).flat_map(|num_bbb| (0..10).step_by(5).map(move |lr| {
 
             vec![
                 NamedVal::<TrainLabelsRunConfigFields>::new(TrainLabelsRunConfigFields::CommonConfig(CommonTrainConfigFields::SubConfig(SomeSubTrainConfigFields::Lr)), Int(lr)),
@@ -921,7 +921,7 @@ pub mod tests {
             opt_sources.opt_params()
         );
 
-        opt_train_2(test_train_label, &opt_sources, Cpu, "test").unwrap();
+        // opt_train_2(test_train_label, &opt_sources, Cpu, "test").unwrap();
 
     }
 

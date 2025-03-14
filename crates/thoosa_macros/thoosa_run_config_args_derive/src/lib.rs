@@ -531,6 +531,9 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         #[derive(Debug, serde::Deserialize, serde::Serialize)]
         pub #range_or_value_type #range_or_value_struct_ident {
             #range_or_value_fields
+        }
+
+        impl thoosa_run_config_args::RunConfigRangeOrValue for #range_or_value_struct_ident {
 
         }
 

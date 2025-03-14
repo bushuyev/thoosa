@@ -179,6 +179,7 @@ pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
     fn common_config(&self) -> CommonConfig;
 }
 
+//TODO move to thoosa_run_config_args::
 pub trait RunConfig:Debug {
     fn config_space(&self) -> Option<&ConfigurationSpace<String>> {
         None
