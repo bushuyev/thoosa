@@ -42,6 +42,7 @@ ctor.workspace = true
 statrs = "0.16.0"
 regex.workspace = true
 serde_json5.workspace = true
+serde_json.workspace = true
 
 #linfa = "0.7.0"
 argmin = "0.10.0"

@@ -3,7 +3,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
-use crate::runs::{Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
+use crate::runs::{Empty, Labeled, Logits, NetResources, Params, SavableOptResult, Simple};
 use crate::{panic_to_err, train_nets};
 use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
 use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
@@ -44,6 +44,7 @@ use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, T
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
+use thoosa_run_config_args::RunConfig;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
@@ -137,7 +138,8 @@ impl RunConfig for TrainLabelNodeRunConfig {
     fn to_properties_map(&self) -> HashMap<String, Val> {
         match &self.run_config_or_opt_space {
             ValuesOrOptSpace::Values(values) => {
-                values.to_properties_map()
+                // values.to_properties_map()
+                todo!()
             },
             ValuesOrOptSpace::OptSpace { .. } => {
                 // let mut map = HashMap::from([
@@ -146,6 +148,7 @@ impl RunConfig for TrainLabelNodeRunConfig {
                 //     ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
                 //     ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
                 // ]);
+                todo!()
             }
         }
 
@@ -1382,20 +1385,6 @@ pub struct CommonTrainingRunConfig {
 
     #[run_config]
     pub opt_n_init: u32,
-}
-
-impl RunConfig for TrainMotifsNetsRunConfig {
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-        todo!()
-    }
-
-    fn set_id(&mut self, id: RunId) {
-        todo!()
-    }
-
-    fn type_name() -> &'static str {
-        "TrainMotifsNetsRunConfig"
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -2636,7 +2625,7 @@ impl TrainFinalNodeRunConfig {
     }
 }
 
-impl RunConfig for crate::train_nets::TrainFinalNodeRunConfig {
+impl RunConfig for TrainFinalNodeRunConfig {
     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
@@ -2790,49 +2779,49 @@ pub struct FindMotifsRunConfig {
 }
 
 
-impl RunConfig for FindMotifsRunConfig {
-    fn to_properties_map(&self) -> HashMap<String, Val> {
-        let mut map = HashMap::from([
-            ("FindMotifsRunConfig.step".into(), UInt(self.step)),
-            ("FindMotifsRunConfig.window".into(), UInt(self.window)),
-            ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
-            ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
-        ]);
-
-        if let Some(filter) = self.filter.as_ref() {
-            map.extend(thoosa_shared::val::prefix_properties("FindMotifsRunConfig.filter", filter.to_properties_map()).into_iter());
-        }
-
-        map
-    }
-
-    //TODO set id
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-        debug!("FindMotifsRunConfig::from_properties_map: run_id={run_id} properties={properties:?}");
-
-        let properties = unprefix_properties("FindMotifsRunConfig", &properties);
-        let find_motifs_run_config = FindMotifsRunConfig::new(
-            None,
-            properties.get("step").expect("no step").try_into().expect("step as_u32"),
-            properties.get("window").expect("no window").try_into().expect("window as_u32"),
-            properties.get("dist_quantile").expect("no dist_quantile").try_into().expect("dist_quantile as_f32"),
-            <&Val as TryInto<String>>::try_into(properties.get("descr").expect("no descr")).expect("descr as_str"),
-            InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
-        );
-
-        debug!("FindMotifsRunConfig::from_properties_map: find_motifs_run_config={find_motifs_run_config:?}");
-
-        find_motifs_run_config
-    }
-
-    fn set_id(&mut self, id: RunId) {
-        self.id.replace(id);
-    }
-
-    fn type_name() -> &'static str {
-        "FindMotifs"
-    }
-}
+// impl RunConfig for FindMotifsRunConfig {
+//     fn to_properties_map(&self) -> HashMap<String, Val> {
+//         let mut map = HashMap::from([
+//             ("FindMotifsRunConfig.step".into(), UInt(self.step)),
+//             ("FindMotifsRunConfig.window".into(), UInt(self.window)),
+//             ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
+//             ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
+//         ]);
+//
+//         if let Some(filter) = self.filter.as_ref() {
+//             map.extend(thoosa_shared::val::prefix_properties("FindMotifsRunConfig.filter", filter.to_properties_map()).into_iter());
+//         }
+//
+//         map
+//     }
+//
+//     //TODO set id
+//     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+//         debug!("FindMotifsRunConfig::from_properties_map: run_id={run_id} properties={properties:?}");
+//
+//         let properties = unprefix_properties("FindMotifsRunConfig", &properties);
+//         let find_motifs_run_config = FindMotifsRunConfig::new(
+//             None,
+//             properties.get("step").expect("no step").try_into().expect("step as_u32"),
+//             properties.get("window").expect("no window").try_into().expect("window as_u32"),
+//             properties.get("dist_quantile").expect("no dist_quantile").try_into().expect("dist_quantile as_f32"),
+//             <&Val as TryInto<String>>::try_into(properties.get("descr").expect("no descr")).expect("descr as_str"),
+//             InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
+//         );
+//
+//         debug!("FindMotifsRunConfig::from_properties_map: find_motifs_run_config={find_motifs_run_config:?}");
+//
+//         find_motifs_run_config
+//     }
+//
+//     fn set_id(&mut self, id: RunId) {
+//         self.id.replace(id);
+//     }
+//
+//     fn type_name() -> &'static str {
+//         "FindMotifs"
+//     }
+// }
 
 impl FindMotifsRunConfig {
     pub fn new(id: Option<u32>,

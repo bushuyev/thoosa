@@ -537,6 +537,18 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
         }
 
+        impl thoosa_run_config_args::RunConfig for #target_struct_ident {
+             fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+                todo!()
+            }
+
+            fn set_id(&mut self, id: RunId) {}
+
+            fn type_name() -> &'static str {
+                "Hello"
+            }
+        }
+
         #[derive(Debug, PartialEq, Clone)]
         pub enum #fields_enum_ident {
             #enum_fields

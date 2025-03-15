@@ -53,10 +53,10 @@ use thoosa_common::{loader, panic_to_err};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
-use thoosa_common::runs::{Labeled, Params, RunConfig, SavableOptResult, Simple};
+use thoosa_common::runs::{Labeled, Params, SavableOptResult, Simple};
 use thoosa_common::train_nets::*;
 use thoosa_common::ws::{FsWorkspace, Workspace};
-
+use thoosa_run_config_args::RunConfig;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 
 use thoosa_shared::colors_iter::DistinctColorIter;
@@ -1085,23 +1085,23 @@ impl SelectMotifsRunConfig {
     }
 }
 
-impl RunConfig for SelectMotifsRunConfig {
-
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-        Self {
-            id: Some(run_id),
-            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default()),
-        }
-    }
-
-    fn set_id(&mut self, id: RunId) {
-        assert!(self.id.replace(id).is_none());
-    }
-
-    fn type_name() -> &'static str {
-        "SelectMotifs"
-    }
-}
+// impl RunConfig for SelectMotifsRunConfig {
+//
+//     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+//         Self {
+//             id: Some(run_id),
+//             motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default()),
+//         }
+//     }
+//
+//     fn set_id(&mut self, id: RunId) {
+//         assert!(self.id.replace(id).is_none());
+//     }
+//
+//     fn type_name() -> &'static str {
+//         "SelectMotifs"
+//     }
+// }
 
 fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask: &Tensor) -> (Tensor, Tensor) {
     debug!("select_motifs_by_label_variance: labels_channels_motifs_counts={:?}", labels_channels_motifs_counts.size());
@@ -1533,13 +1533,14 @@ mod motif_find_tests {
 
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::clc_dist_d2;
-    use crate::find::{select_motifs_by_corr};
+    use crate::find::select_motifs_by_corr;
     use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::runs::{Params, RunConfig, Simple};
+    use thoosa_common::runs::{Params, Simple};
     use thoosa_common::train_nets::{Conv1Params, FindMotifsRunConfig, InputFilter};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
+    use thoosa_run_config_args::RunConfig;
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::run_configs::RunId;
