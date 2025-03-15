@@ -932,6 +932,13 @@ pub fn snake_to_camel(s: &str) -> String {
         .collect::<String>()
 }
 
+pub fn conc_str(prefix: &str, field: &str) -> String {
+    let mut s = String::with_capacity(prefix.len() + field.len());
+    s.push_str(prefix);
+    s.push_str(field);
+    s
+}
+
 
 #[cfg(test)]
 mod shared_tests {
