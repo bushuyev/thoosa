@@ -5,6 +5,7 @@ use std::sync::Arc;
 use log::debug;
 use parking_lot::{Mutex, RwLock};
 use tch::nn::VarStore;
+use thoosa_run_config_args::RunConfig;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{make_combos, ResourceType, ThoosaError};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -177,23 +178,6 @@ pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
     fn to_run_configs(&self) ->Vec<C>;
     fn resource_config(&self) -> R;
     fn common_config(&self) -> CommonConfig;
-}
-
-//TODO move to thoosa_run_config_args::
-pub trait RunConfig:Debug {
-    fn config_space(&self) -> Option<&ConfigurationSpace<String>> {
-        None
-    }
-
-    fn to_properties_map(&self) -> HashMap<String, Val> {
-        HashMap::new()//TODO
-    }
-
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self;
-
-    fn set_id(&mut self, id: RunId);
-
-    fn type_name()->&'static str;
 }
 
 pub trait SavableOptResult:Sync+Send+Debug{

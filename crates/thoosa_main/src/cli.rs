@@ -31,7 +31,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
-use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, RunConfig, SavableOptResult, Simple};
+use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, Params, SavableOptResult, Simple};
 use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, opt_train_2, run_opt_train_final, run_opt_train_label_nodes, run_train_motif_2, train_label_nodes, CommonTrainFinalNodeRunConfig, CommonTrainLabelNodeRunConfig, CommonTrainMotifsNodesRunConfig, CommonTrainingArgs, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferParams, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetParams, TrainFinalNodeRunConfig, TrainLabelNetsParams, TrainLabelNodeRunConfig, TrainMotifsNetsArgs, TrainMotifsNetsParams, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNodesRunConfig, TrainMotifsNodesRunConfigResult, TrainMotifsNodesRunConfigResult2, TrainNodesValues};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
@@ -55,7 +55,7 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
+use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfig, RunConfigRangeOrValue};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -473,9 +473,9 @@ impl Params<SayHelloRunConfig, Simple, ()> for SayHelloParams {
 }
 
 impl RunConfig for SayHelloRunConfig {
-    fn config_space(&self) -> Option<&ConfigurationSpace<String>> {
-        self.cs.as_ref()
-    }
+    // fn config_space(&self) -> Option<&ConfigurationSpace<String>> {
+    //     self.cs.as_ref()
+    // }
 
     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
@@ -2067,7 +2067,7 @@ mod cli_tests {
     use tch::{nn, Device, IndexOp, Tensor};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::runs::{RunConfig, Simple};
+    use thoosa_common::runs::Simple;
     use thoosa_common::runs::Params;
     use thoosa_common::train_nets::{motif_node, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InferParams, MotifNodeParams, TrainFinalNetParams, TrainLabelNetsParams, TrainMotifsNetsParams};
     use thoosa_common::utils::{
@@ -2079,6 +2079,7 @@ mod cli_tests {
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesParams};
+    use thoosa_run_config_args::RunConfig;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::val::unprefix_properties;
     use thoosa_shared::{
