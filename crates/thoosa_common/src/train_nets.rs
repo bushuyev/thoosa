@@ -44,6 +44,7 @@ use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, T
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args::RunConfig;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -135,7 +136,7 @@ impl TrainLabelNodeRunConfig {
 }
 
 impl RunConfig for TrainLabelNodeRunConfig {
-    fn to_properties_map(&self) -> HashMap<String, Val> {
+    fn to_properties_map_(&self) -> HashMap<String, Val> {
         match &self.run_config_or_opt_space {
             ValuesOrOptSpace::Values(values) => {
                 // values.to_properties_map()
@@ -154,7 +155,7 @@ impl RunConfig for TrainLabelNodeRunConfig {
 
     }
 
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
 
@@ -670,7 +671,7 @@ impl SavableOptResult for TrainLabelNodesRunConfigResult {
                     &TrainLabelNodeRunConfig::type_name(),
                     "Label",
                     "todo",
-                    TrainLabelNodeRunConfig::from_values(Some(self.train_label_nodes_run_config_id), train_motifs_nodes_values.train_nodes_values.lr, train_motifs_nodes_values.train_nodes_values.num_layers, train_motifs_nodes_values.label_node_type.clone()).to_properties_map()//TODO make from_values to take train_motifs_nodes_values
+                    TrainLabelNodeRunConfig::from_values(Some(self.train_label_nodes_run_config_id), train_motifs_nodes_values.train_nodes_values.lr, train_motifs_nodes_values.train_nodes_values.num_layers, train_motifs_nodes_values.label_node_type.clone()).to_properties_map_() //TODO make from_values to take train_motifs_nodes_values
                 )?
             }
         };
@@ -1089,7 +1090,7 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
                     &TrainLabelNodeRunConfig::type_name(),
                     "Final",
                     "todo",
-                    TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNetType::FixedNumSlices(FixedNumSlicesNetParams{slices_len: 100.into(), num_layers: 3.into()})).to_properties_map()
+                    TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNetType::FixedNumSlices(FixedNumSlicesNetParams{slices_len: 100.into(), num_layers: 3.into()})).to_properties_map_()
                 )?
             }
         };
@@ -1359,6 +1360,8 @@ impl TrainMotifsNetsArgs {
 #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
 pub struct TrainMotifsNetsRunConfig {
+    pub id:Option<RunId>,
+
     #[run_config]
     common_training_args:CommonTrainingRunConfig,
 
@@ -1368,6 +1371,7 @@ pub struct TrainMotifsNetsRunConfig {
 
 #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
 pub struct CommonTrainingRunConfig {
+
     #[run_config]
     pub cycles: u32,
 
@@ -1532,7 +1536,7 @@ impl TrainMotifsNodesRunConfig {
 
 impl RunConfig for TrainMotifsNodesRunConfig{
 
-    fn to_properties_map(&self) -> HashMap<String, Val> {
+    fn to_properties_map_(&self) -> HashMap<String, Val> {
         match &self.run_config_or_opt_space {
             ValuesOrOptSpace::Values(TrainNodesValues { lr, num_layers , ..}) => {
                  HashMap::from([
@@ -1549,7 +1553,7 @@ impl RunConfig for TrainMotifsNodesRunConfig{
         }
     }
 
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         let properties = unprefix_properties("TrainMotifsNodesRunConfig", &properties);
 
         if properties.contains_key("config_space") {
@@ -2040,7 +2044,7 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult2 {
                     &TrainMotifsNodesRunConfig::type_name(),
                     "descr",
                     "todo",
-                    run_config_values.to_properties_map()
+                    run_config_values.to_properties_map_()
                 )?
             }
         };
@@ -2083,7 +2087,7 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult {
                     &TrainMotifsNodesRunConfig::type_name(),
                     "descr",
                     "todo",
-                    TrainMotifsNodesRunConfig::from_values(Some(self.train_motifs_nodes_run_config_id), run_config_values.lr, run_config_values.num_layers).to_properties_map()
+                    TrainMotifsNodesRunConfig::from_values(Some(self.train_motifs_nodes_run_config_id), run_config_values.lr, run_config_values.num_layers).to_properties_map_()
                 )?
             }
         };
@@ -2626,7 +2630,7 @@ impl TrainFinalNodeRunConfig {
 }
 
 impl RunConfig for TrainFinalNodeRunConfig {
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
 
@@ -2755,27 +2759,34 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
 
 
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
 #[run_config_grid]
 pub struct FindMotifsRunConfig {
+    #[in_map]
     pub id:Option<RunId>,
 
     #[run_config]
+    #[in_map]
     pub step: u32,
 
     #[run_config]
+    #[in_map]
     pub window: u32,
 
     #[run_config]
+    #[in_map]
     pub dist_quantile: f32,
 
     #[run_config]
+    #[in_map]
     pub min_tracker_step: Option<u32>,
 
     #[run_config]
+    #[in_map]
     pub filter: Option<InputFilter>,
 
-    pub descr: String,
+    // #[in_map]
+    // pub descr: String,
 }
 
 
@@ -2838,7 +2849,7 @@ impl FindMotifsRunConfig {
             dist_quantile,
             filter,
             min_tracker_step: None,//TODO
-            descr: descr.into(),
+            // descr: descr.into(),
         }
     }
 
@@ -2851,71 +2862,74 @@ impl FindMotifsRunConfig {
     }
 }
 
-#[derive(ThoosaRunConfig, Deserialize, Debug, Subcommand, PartialEq, Clone)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Subcommand, PartialEq, Clone)]
 pub enum InputFilter {
-    Conv1(Conv1Params)
+    Conv1(Conv1Params),
 }
 
-#[derive(ThoosaRunConfig, Deserialize, Debug, Args, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Args, PartialEq, Clone)] //PartialEq - for tests
 pub struct Conv1Params {
+    #[in_map]
     #[arg(long)]
     #[run_config]
     kernel: i64,
 
+    #[in_map]
     #[arg(long, default_value_t = 1)]
     #[run_config]
     stride: i64,
 
+    #[in_map]
     #[arg(long, default_value_t = 0)]
     #[run_config]
     padding: i64,
 }
 
-impl InputFilter {
-    pub fn to_properties_map(&self) -> HashMap<String, Val> {
-        match self {
-            Self::Conv1(conv1_params) => {
-                conv1_params.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v| {
-                    a.insert(format!("conv_1.{}", v.0), v.1);
-                    a
-                })
-            }
-        }
-    }
-
-    pub fn from_properties_map(properties: &HashMap<String, Val>) -> Option<Self> {
-        let conv_1_props = thoosa_shared::val::unprefix_properties("conv_1", &properties);
-        if conv_1_props.len() > 0 {
-            assert!(conv_1_props.len() == 3);
-            Conv1Params::from_properties_map(conv_1_props).map(|props| InputFilter::Conv1(props)).ok()
-        } else {
-            None
-        }
-    }
-}
+// impl InputFilter {
+//     pub fn to_properties_map(&self) -> HashMap<String, Val> {
+//         match self {
+//             Self::Conv1(conv1_params) => {
+//                 conv1_params.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v| {
+//                     a.insert(format!("conv_1.{}", v.0), v.1);
+//                     a
+//                 })
+//             }
+//         }
+//     }
+//
+//     pub fn from_properties_map(properties: &HashMap<String, Val>) -> Option<Self> {
+//         let conv_1_props = thoosa_shared::val::unprefix_properties("conv_1", &properties);
+//         if conv_1_props.len() > 0 {
+//             assert!(conv_1_props.len() == 3);
+//             Conv1Params::from_properties_map(conv_1_props).map(|props| InputFilter::Conv1(props)).ok()
+//         } else {
+//             None
+//         }
+//     }
+// }
 
 impl Conv1Params {
     pub fn new(kernel: i64, stride: i64, padding: i64) -> Self {
         Self { kernel, stride, padding }
     }
 
-    pub fn to_properties_map(&self) -> HashMap<String, Val> {
-        HashMap::from([
-            ("Conv1Params.kernel".into(), self.kernel.into()),
-            ("Conv1Params.stride".into(), self.stride.into()),
-            ("Conv1Params.padding".into(), self.padding.into()),
-        ])
-    }
-
-    pub fn from_properties_map(properties: HashMap<String, Val>) -> Result<Self, ThoosaError> {
-        let properties = thoosa_shared::val::unprefix_properties("Conv1Params", &properties);
-
-        Ok(Conv1Params {
-            kernel: properties.get("kernel").expect("kernel").try_into().expect("kernel as_i64"),
-            stride: properties.get("stride").expect("stride").try_into().expect("stride as_i64"),
-            padding: properties.get("padding").expect("padding").try_into().expect("padding as_i64"),
-        })
-    }
+    // pub fn to_properties_map(&self) -> HashMap<String, Val> {
+    //     HashMap::from([
+    //         ("Conv1Params.kernel".into(), self.kernel.into()),
+    //         ("Conv1Params.stride".into(), self.stride.into()),
+    //         ("Conv1Params.padding".into(), self.padding.into()),
+    //     ])
+    // }
+    //
+    // pub fn from_properties_map(properties: HashMap<String, Val>) -> Result<Self, ThoosaError> {
+    //     let properties = thoosa_shared::val::unprefix_properties("Conv1Params", &properties);
+    //
+    //     Ok(Conv1Params {
+    //         kernel: properties.get("kernel").expect("kernel").try_into().expect("kernel as_i64"),
+    //         stride: properties.get("stride").expect("stride").try_into().expect("stride as_i64"),
+    //         padding: properties.get("padding").expect("padding").try_into().expect("padding as_i64"),
+    //     })
+    // }
 }
 
 #[derive(Debug, Subcommand, Clone)]

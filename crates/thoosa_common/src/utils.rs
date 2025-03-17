@@ -733,52 +733,64 @@ pub mod tests {
     #[test]
     fn test_run_config_args() {
 
-        #[derive(ThoosaRunConfig, Debug)]
+        #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         struct SomeSubTrainConfig {
+            #[in_map]
             #[run_config]
             lr: i32,
         }
 
-        #[derive(ThoosaRunConfig, Debug)]
+        #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         struct CommonTrainConfig {
+            #[in_map]
             #[run_config]
             beta: Option<i32>,
 
+            #[in_map]
             #[run_config]
             sub_config:SomeSubTrainConfig
         }
 
-        #[derive(ThoosaRunConfig, Debug)]
+        #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         enum NetType {
             NetOne(NetOneConfig),
             NetTwo(NetTwoConfig)
         }
 
 
-        #[derive(ThoosaRunConfig, Debug)]
+        #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         struct NetOneConfig {
+            #[in_map]
             #[run_config]
             num_aaa: u32,
         }
 
-        #[derive(ThoosaRunConfig, Debug)]
+        #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         struct NetTwoConfig {
+            #[in_map]
             #[run_config]
             num_bbb: u32,
         }
 
-        #[derive(ThoosaRunConfig, Debug)]
+        #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         #[run_config_opt]
         struct TrainLabelsRunConfig {
+            #[in_map]
+            pub id:Option<RunId>,
+
+            #[in_map]
             #[run_config]
             some_prop:u32,
 
+            #[in_map]
             #[run_config]
             common_config:CommonTrainConfig,
 
+            #[in_map]
             #[run_config]
             net_type_0: NetType,
 
+            #[in_map]
             #[run_config]
             net_type_1: Option<NetType>
 
@@ -1080,6 +1092,8 @@ pub mod tests {
         #[derive(ThoosaRunConfig, Debug)]
         #[run_config_opt]
         struct SomeStruct {
+            pub id:Option<RunId>,
+            
             #[run_config]
             field_00: u32,
 

@@ -477,7 +477,7 @@ impl RunConfig for SayHelloRunConfig {
     //     self.cs.as_ref()
     // }
 
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
         todo!()
     }
 
@@ -1027,7 +1027,7 @@ fn save_run_configs<R:RunConfig>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs
                 &<R>::type_name(),
                 descr,
                 &"todo",
-                run_config.to_properties_map(),
+                run_config.to_properties_map_(),
             )
             .unwrap();
 
@@ -1196,7 +1196,7 @@ fn load_label_and_motif_models(
 
             let find_motifs_for_label_run_ids = store.lock().get_input_run_ids(*motif_selection_run_ids.iter().next().unwrap(), Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for motif_selection_run_ids={motif_selection_run_ids:?} not found").as_str());
             assert_eq!(find_motifs_for_label_run_ids.len(), 1);
-            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(find_motifs_for_label_run_ids[0], store.lock().list_run_config_values(find_motifs_for_label_run_ids[0]).expect("list_run_params"));
+            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(find_motifs_for_label_run_ids[0], store.lock().list_run_config_values(find_motifs_for_label_run_ids[0]).expect("list_run_params"));
 
 
             let channels_motifs_models = store
@@ -1282,7 +1282,7 @@ pub fn run_train_label_nodes(
 
             let find_motifs_run_config_ids = store.lock().get_input_run_ids(*select_motifs_for_label_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_for_label_run_id={select_motifs_for_label_run_id:?} not found").as_str());
             assert_eq!(find_motifs_run_config_ids.len(), 1);
-            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(find_motifs_run_config_ids[0], store.lock().list_run_config_values(find_motifs_run_config_ids[0]).expect("list_run_params"));
+            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(find_motifs_run_config_ids[0], store.lock().list_run_config_values(find_motifs_run_config_ids[0]).expect("list_run_params"));
 
             (
                 *select_motifs_for_label_run_id,
@@ -1358,7 +1358,7 @@ pub fn run_train_label_nodes(
                 selected_motifs_for_label_run_ids__channels_motifs_models.iter().flat_map(move |(select_motifs_for_label_run_id, channels_motifs_models)| {
                     let find_motifs_for_label_run_ids = store.lock().get_input_run_ids(*select_motifs_for_label_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_for_label_run_id={select_motifs_for_label_run_id} not found").as_str());
                     assert_eq!(find_motifs_for_label_run_ids.len(), 1);
-                    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(find_motifs_for_label_run_ids[0], store.lock().list_run_config_values(find_motifs_for_label_run_ids[0]).expect("list_run_params"));
+                    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(find_motifs_for_label_run_ids[0], store.lock().list_run_config_values(find_motifs_for_label_run_ids[0]).expect("list_run_params"));
 
 
                     let motif_width = find_motifs_run_config.window(); //channels_motifs_models.read().iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
@@ -1457,7 +1457,7 @@ fn run_train_motif_nodes_on_motif_selection_2(
                     .flat_map(|channel_motifs| channel_motifs.into_iter())
                     .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>();
 
-                let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(find_motifs_run_id, store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"));
+                let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(find_motifs_run_id, store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"));
 
                 // train_motifs_nodes_run_configs.iter().map(move | train_motifs_nodes_run_config | {
 
@@ -1528,7 +1528,7 @@ fn run_train_motif_nodes_on_motif_selection(
                 .flat_map(|channel_motifs| channel_motifs.into_iter())
                 .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>();
 
-            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(find_motifs_run_id, store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"));
+            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(find_motifs_run_id, store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"));
 
             train_motifs_nodes_run_configs.iter().map(move | train_motifs_nodes_run_config | {
 
@@ -1994,7 +1994,7 @@ where
                     &RC::type_name(),
                     descr,
                     &resources_serialized,
-                    run_config.to_properties_map(),
+                    run_config.to_properties_map_(),
                 )
                 .unwrap();
 
@@ -2437,7 +2437,7 @@ mod cli_tests {
             )
             .as_str(),
             "".into(), //&resource_0_ids,
-            param_set[0].to_properties_map(),
+            param_set[0].to_properties_map_(),
         )?;
 
         let slices = resource_0_ids

@@ -23,11 +23,11 @@ pub trait GridRunConfigSource {
 //TODO move to thoosa_run_config_args::
 pub trait RunConfig:Debug {
 
-    fn to_properties_map(&self) -> HashMap<String, Val> {
+    fn to_properties_map_(&self) -> HashMap<String, Val> {
         HashMap::new()//TODO
     }
 
-    fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self;
+    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self;
 
     fn set_id(&mut self, id: RunId);
 

@@ -1156,7 +1156,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
         let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
         trace!("select_motifs_for_label_2: resource_id_motif_slices={resource_id_motif_slices:?}");
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(*find_motif_run_id, store.lock().list_run_config_values(*find_motif_run_id)?);
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.lock().list_run_config_values(*find_motif_run_id)?);
 
         motifs_to_tensor(
             resource_id_motif_slices,
@@ -2123,7 +2123,7 @@ mod motif_find_tests {
         common_config.keep_slice_matches = file_motif_tracker;
         let mut run_configs = params.to_run_configs();
         run_configs.iter_mut().for_each(|c| {
-            let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", c.to_properties_map()).unwrap();
+            let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", c.to_properties_map_()).unwrap();
             c.set_id(id);
         });
         (common_config, run_configs)
@@ -2720,7 +2720,7 @@ mod motif_find_tests {
     fn test_filter_and_slicer_params() {
         let params = FindMotifsRunConfig::new(None, 10, 10, 1.0, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
 
-        let properties: HashMap<String, Val> = params.to_properties_map();
+        let properties: HashMap<String, Val> = params.to_properties_map_();
 
         debug!("properties={:?}", properties);
 
@@ -2743,7 +2743,7 @@ mod motif_find_tests {
         // }
         assert_eq!(sample_properties, properties);
 
-        let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map(0, properties);
+        let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map_(0, properties);
 
         debug!("loaded_params={:?}", loaded_params);
 
@@ -3111,7 +3111,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
     //     return Ok(())
     // }
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(run_id, store.lock().list_run_config_values(run_id)?);
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(run_id, store.lock().list_run_config_values(run_id)?);
 
     let resources_slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
 
