@@ -88,3 +88,7 @@ mod tests {
     }
 
 }
+
+pub fn has_attr(field: &Field, name: &str) -> bool {
+    field.attrs.iter().any(|attr| attr.path().is_ident(name))
+}

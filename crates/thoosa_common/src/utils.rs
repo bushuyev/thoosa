@@ -1229,77 +1229,48 @@ pub mod tests {
     #[test]
     fn test_to_from_hashmap(){
 
-        #[derive(Debug, PartialEq)]
-        struct MyEmpty {
-            _dummy:u32,
-        }
-
-        impl MyEmpty {
-            pub fn new() -> Self {
-                Self {
-                    _dummy: 0
-                }
-            }
-        }
-
-        impl ToHashmap for MyEmpty{
-            fn to_properties_iter(&self, parent: Option<String>) -> impl Iterator<Item=(String, thoosa_shared::val::Val)> {
-                let prefix = parent.unwrap_or("MyEmpty::".to_string());
-                [
-                    (thoosa_shared::conc_str(&prefix, "_dummy"), self._dummy.into())
-                ].into_iter()
-            }
-        }
-
-        impl FromHashmap for MyEmpty {
-            fn from_properties_map(parent: Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError> {
-                Ok(MyEmpty::new())
-            }
-        }
-
-        #[derive(Debug, PartialEq)]
+        #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct TestTopStruct {
+            #[in_map]
             field_a:u32,
-            field_b:i32,
-            field_o:Option<i32>,
-            sub_struct:AnotherTestStruct,
-            sub_struct_o:Option<AnotherTestStruct>,
-            sub_enum:SomeEnum,
 
+            #[in_map]
+            field_b:i32,
+
+            #[in_map]
+            field_o:Option<i32>,
+
+            #[in_map]
+            sub_struct:AnotherTestStruct,
+
+            #[in_map]
+            sub_struct_o:Option<AnotherTestStruct>,
+
+            #[in_map]
+            sub_enum:SomeEnum
         }
 
-        impl ToHashmap for TestTopStruct {
+        /*impl ToHashmap for TestTopStruct {
 
-            fn to_properties_iter(&self, parent: Option<String>) -> impl Iterator<Item=(String, thoosa_shared::val::Val)> {
-                let chain = [
-                    ("TestTopStruct::field_a".to_string(), Some(self.field_a.into())),
-                    ("TestTopStruct::field_b".to_string(), Some(self.field_b.into())),
-                    ("TestTopStruct::field_o".to_string(), self.field_o.map(|v| v.into())),
+            fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, Val)>> {
+                let prefix = parent.unwrap_or("TestTopStruct::".to_string());
+
+                Box::new([
+                    (thoosa_shared::conc_str(&prefix, "field_a"), Some(self.field_a.into())),
+                    (thoosa_shared::conc_str(&prefix, "field_b"), Some(self.field_b.into())),
+                    (thoosa_shared::conc_str(&prefix, "field_o"), self.field_o.map(|v| v.into())),
                 ]
                     .into_iter()
-                    .filter_map(|v| v.1.map(|val| (v.0, val)))
-                    .chain(self.sub_struct.to_properties_iter(Some("TestTopStruct::sub_struct.".to_string())));
-
-                if let Some(v) =  self.sub_struct_o.as_ref() {
-                        [
-                            v.to_properties_iter(Some("TestTopStruct::sub_struct_o.".to_string())).into_iter(),
-                            self.sub_enum.to_properties_iter(Some("TestTopStruct::sub_enum.".to_string())).into_iter()
-                        ]
-                        .into_iter().flatten()
-                } else {
-                    chain
-                        .chain(self.sub_enum.to_properties_iter(Some("TestTopStruct::sub_enum.".to_string())))
-                }
-
+                    .filter_map(|v|v.1.map(|val|(v.0, val)))
+                    .chain(self.sub_struct.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "sub_struct."))))
+                    .chain(self.sub_struct_o.as_ref().map(|s|s.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "sub_struct_o.")))).unwrap_or(Box::new(std::iter::empty::<(String, Val)>())))
+                    // .chain(self.sub_enum.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "sub_enum."))))
+                )
             }
         }
 
-        fn glue_cains<I: Iterator<Item=(String, thoosa_shared::val::Val)>>(i_0:I, i_1:I) -> I {
-            i_0.chain(i_1)
-        }
-
-
         impl FromHashmap for TestTopStruct {
+
             fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError> {
                 let prefix = parent.unwrap_or("TestTopStruct::".to_string());
                 Ok(TestTopStruct {
@@ -1315,63 +1286,44 @@ pub mod tests {
                     field_o: properties.get(&thoosa_shared::conc_str(&prefix, "field_o"))
                         .map(|v|v.try_into().expect(&format!("can't convert field_a: value={v:?}"))),
 
-                    sub_struct: AnotherTestStruct::from_properties_map(Some("TestTopStruct::sub_struct.".to_string()), &properties)?,
+                    sub_struct: AnotherTestStruct::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "sub_struct.")), &properties)?,
 
-                    sub_struct_o: AnotherTestStruct::from_properties_map(Some("TestTopStruct::sub_struct_o.".to_string()), &properties).ok(),
+                    sub_struct_o: AnotherTestStruct::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "sub_struct_o.")), &properties).ok(),
 
-                    sub_enum: SomeEnum::from_properties_map(Some("TestTopStruct::sub_enum.".to_string()), &properties)?,
-
+                    // sub_enum: SomeEnum::from_properties_map(Some("TestTopStruct::sub_enum.".to_string()), &properties)?,
                 })
             }
-        }
+        }*/
 
 
-        #[derive(Debug, PartialEq)]
+        #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         enum SomeEnum {
             VariantA(VariantA),
             VariantB(VariantB)
         }
 
-        enum SomeEnumIter<TA:Iterator<Item=(String, Val)>, TB:Iterator<Item=(String, Val)>> {
-            VariantA(TA),
-            VariantB(TB),
-        }
-
-        impl <TA:Iterator<Item=(String, Val)>, TB:Iterator<Item=(String, Val)>> Iterator for SomeEnumIter<TA, TB> {
-            type Item = (String, Val);
-
-            fn next(&mut self) -> Option<Self::Item> {
-                match self {
-                    SomeEnumIter::VariantA(iter_a) => iter_a.next(),
-                    SomeEnumIter::VariantB(iter_b) => iter_b.next(),
-                }
-            }
-        }
-
-
-        impl ToHashmap for SomeEnum {
-            fn to_properties_iter(&self, parent: Option<String>) -> impl Iterator<Item=(String, thoosa_shared::val::Val)> {
+       /* impl ToHashmap for SomeEnum {
+            fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
                 let prefix = parent.unwrap_or("SomeEnum::".to_string());
                 match &self {
                     SomeEnum::VariantA(v) => {
-                        [
+                        Box::new([
                             (thoosa_shared::conc_str(&prefix, "variant_a"), Val::Bool(true)),
                         ]
                             .into_iter()
                             .chain(
-                                SomeEnumIter::VariantA(v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_a.")))))
+                                v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_a.")))))
                     }
                     SomeEnum::VariantB(v) => {
-                        [
+                        Box::new([
                             (thoosa_shared::conc_str(&prefix, "variant_b"), Val::Bool(true)),
                         ]
                             .into_iter()
                             .chain(
-                                SomeEnumIter::VariantB(v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_b.")))))
+                                v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_b.")))))
                     }
                 }
             }
-
         }
 
         impl FromHashmap for SomeEnum {
@@ -1389,19 +1341,20 @@ pub mod tests {
                     unreachable!()
                 }
             }
-        }
+        }*/
 
-        #[derive(Debug, PartialEq)]
+        #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct VariantA {
+            #[in_map]
             some_field:u32
         }
 
-        impl ToHashmap for VariantA {
-            fn to_properties_iter(&self, parent: Option<String>) -> impl Iterator<Item=(String, thoosa_shared::val::Val)> {
+        /*impl ToHashmap for VariantA {
+            fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
                 let prefix = parent.unwrap_or("VariantA::".to_string());
-                [
+                Box::new([
                     (thoosa_shared::conc_str(&prefix, "some_field").to_string(), Val::UInt(self.some_field)),
-                ].into_iter()
+                ].into_iter())
             }
         }
 
@@ -1417,19 +1370,20 @@ pub mod tests {
                 })
             }
 
-        }
+        }*/
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct VariantB {
+            #[in_map]
             another_field:u32
         }
 
-        impl ToHashmap for VariantB {
-            fn to_properties_iter(&self, parent: Option<String>) -> impl Iterator<Item=(String, thoosa_shared::val::Val)> {
+        /*impl ToHashmap for VariantB {
+            fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
                 let prefix = parent.unwrap_or("VariantB::".to_string());
-                [
+                Box::new([
                     (thoosa_shared::conc_str(&prefix, "another_field"), Val::UInt(self.another_field)),
-                ].into_iter()
+                ].into_iter())
             }
         }
 
@@ -1444,21 +1398,23 @@ pub mod tests {
                 })
             }
 
-        }
+        }*/
 
-        #[derive(Debug, PartialEq)]
+        #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct AnotherTestStruct {
+            #[in_map]
             field_c:u32,
+            #[in_map]
             field_d:i32,
         }
 
-        impl ToHashmap for AnotherTestStruct {
-            fn to_properties_iter(&self, parent: Option<String>) -> impl Iterator<Item=(String, thoosa_shared::val::Val)> {
+        /*impl ToHashmap for AnotherTestStruct {
+            fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, Val)>> {
                 let prefix = parent.unwrap_or("AnotherTestStruct::".to_string());
-                [
+                Box::new([
                     (thoosa_shared::conc_str(&prefix, "field_c"), self.field_c.into()),
                     (thoosa_shared::conc_str(&prefix, "field_d"), self.field_d.into())
-                ].into_iter()
+                ].into_iter())
             }
         }
 
@@ -1478,7 +1434,7 @@ pub mod tests {
                 })
             }
 
-        }
+        }*/
 
         let run_config = TestTopStruct {
             field_a: 1,
@@ -1509,78 +1465,6 @@ pub mod tests {
 
     }
 
-    #[test]
-    fn test_eee() {
-        // 1) A minimal "trait" so our two variants each have "get an iterator" capability:
-        trait XIter {
-            fn to_iter_enum(&self) -> impl Iterator<Item=String>;
-        }
-
-        // 2) The single enum that can hold *either* array-iterator type:
-        enum TestIter<TA:Iterator<Item=String>, TB:Iterator<Item=String>> {
-            A(TA),
-            B(TB),
-        }
-
-        impl <TA:Iterator<Item=String>, TB:Iterator<Item=String>> Iterator for TestIter<TA, TB> {
-            type Item = String;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                match self {
-                    // We forward `next()` to whichever array-iterator we hold:
-                    TestIter::A(iter_a) => iter_a.next(),
-                    TestIter::B(iter_b) => iter_b.next(),
-                }
-            }
-        }
-
-        // 3) Our variants:
-        struct VariantA;
-        struct VariantB;
-
-        // 4) Implement the trait for VariantA:
-        impl XIter for VariantA {
-            // Return a single known array-iterator (size = 3)
-            fn to_iter_enum(&self) -> impl Iterator<Item=String> {
-                let arr = [
-                    "aaa_0".to_string(),
-                    "aaa_1".to_string(),
-                    "aaa_2".to_string(),
-                ];
-                arr.into_iter()
-            }
-        }
-
-        // 5) Implement the trait for VariantB:
-        impl XIter for VariantB {
-            // Return a single known array-iterator (size = 2)
-            fn to_iter_enum(&self) -> impl Iterator<Item=String> {
-                let arr = ["bbb_0".to_string(), "bbb_1".to_string()];
-                arr.into_iter()
-            }
-        }
-
-        // 6) Then define the enum that can be A or B:
-        enum Test {
-            VariantA(VariantA),
-            VariantB(VariantB),
-        }
-
-        // 7) Implement the same trait for Test:
-        impl XIter for Test {
-            fn to_iter_enum(&self) -> impl Iterator<Item=String> {
-                match self {
-                    Test::VariantA(a) =>TestIter::A(a.to_iter_enum()),
-                    Test::VariantB(b) => TestIter::B(b.to_iter_enum()),
-                }
-            }
-        }
-
-        // 8) Now you can test it:
-        for x in Test::VariantA(VariantA).to_iter_enum() {
-            println!("x={x}");
-        }
-    }
 }
 
 pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {

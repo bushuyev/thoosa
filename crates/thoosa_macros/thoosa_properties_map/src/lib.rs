@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 pub trait ToHashmap {
-    fn to_properties_iter(&self, parent: Option<String>) -> impl Iterator<Item=(String, thoosa_shared::val::Val)>;
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>>;
 }
 
 pub trait FromHashmap {

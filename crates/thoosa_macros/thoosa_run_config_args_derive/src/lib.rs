@@ -5,7 +5,7 @@ use syn::{parse2, parse_macro_input, Attribute, DeriveInput, Field, Lit, Path, V
 use syn::spanned::Spanned;
 use thoosa_macros_utils::*;
 
-
+const RUN_CONFIG_ATTR: &'static str = "run_config";
 
 #[proc_macro_derive(ThoosaRunConfig, attributes(run_config, run_config_opt, run_config_grid))]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
@@ -83,7 +83,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                         eprintln!("field_type={}", field_type.to_token_stream());
 
-                        if field.attrs.iter().any(|attr| attr.path().is_ident("run_config")) {
+                        if has_attr(field, RUN_CONFIG_ATTR) {
 
                             if let Some(inner_ty) = get_option_inner_ty(&field_type) {//is Option
 
@@ -601,3 +601,4 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
     gen.into()
 }
+
