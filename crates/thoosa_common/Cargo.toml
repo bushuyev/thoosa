@@ -33,6 +33,10 @@ thoosa_store = {path = "../thoosa_store" }
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
 
+
+thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
+thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
+
 plotters.workspace = true
 
 chrono = { version = "0.4.32" }
