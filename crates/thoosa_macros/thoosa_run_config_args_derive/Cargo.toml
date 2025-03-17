@@ -17,7 +17,7 @@ thoosa_macros_utils = {path = "../thoosa_macros_utils" }
 thoosa_shared = {path = "../../thoosa_shared" }
 proc-macro2 = { version = "1.0.93" }
 clap.workspace = true
-log = "0.4.25"
+log.workspace = true
 
 [dev-dependencies]
 ctor.workspace = true
