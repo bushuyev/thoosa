@@ -41,6 +41,10 @@ lazy_static = "1.5.0"
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
 
+
+thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
+thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
+
 [dev-dependencies]
 rand_chacha = "0.3.1"
 approx = "0.5.1"

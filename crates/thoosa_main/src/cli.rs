@@ -1018,7 +1018,7 @@ where
     Ok(())
 }
 
-fn save_run_configs<R:RunConfig>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs: &mut Vec<R>, descr: &str) -> Vec<RunId>{
+fn save_run_configs<R:RunConfig+thoosa_properties_map::ToHashmap>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs: &mut Vec<R>, descr: &str) -> Vec<RunId>{
     run_configs.into_iter().map(|run_config| {
         let run_config_id = store
             .lock()
@@ -1027,7 +1027,7 @@ fn save_run_configs<R:RunConfig>(store: &Arc<Mutex<Box<dyn Store>>>, run_configs
                 &<R>::type_name(),
                 descr,
                 &"todo",
-                run_config.to_properties_map_(),
+                run_config.to_properties_iter(None).collect(),
             )
             .unwrap();
 
@@ -1920,7 +1920,7 @@ where
         &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
         Vec<Device>,
     ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError>,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>> + thoosa_properties_map::ToHashmap,
     RCRV:GridRunConfigSource,
     R: ResourcesConfig,
 {

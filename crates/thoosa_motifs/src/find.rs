@@ -67,7 +67,8 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConf
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
-
+use thoosa_properties_map::FromHashmap;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsParams {//TODO pub
@@ -1057,21 +1058,24 @@ impl Params<SelectMotifsRunConfig, Labeled, ()> for SelectMotifsParams {
     }
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize, Default)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 struct ByLabelVarianceConfig {
+    #[in_map]
     _dummy: u32,//TODO fix ThoosaRunConfig to let empty configs
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap,  Clone, PartialEq, Debug, Deserialize)]
 enum MotifSelector {
     ByLabelVariance(ByLabelVarianceConfig)//TODO
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_grid]
 pub struct SelectMotifsRunConfig {
+    #[in_map]
     id:Option<RunId>,
 
+    #[in_map]
     #[run_config]
     motif_selector: MotifSelector
 }
@@ -3111,7 +3115,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
     //     return Ok(())
     // }
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(run_id, store.lock().list_run_config_values(run_id)?);
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, &store.lock().list_run_config_values(run_id)?)?;
 
     let resources_slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
 
