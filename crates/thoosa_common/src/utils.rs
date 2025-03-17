@@ -1250,51 +1250,6 @@ pub mod tests {
             sub_enum:SomeEnum
         }
 
-        /*impl ToHashmap for TestTopStruct {
-
-            fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, Val)>> {
-                let prefix = parent.unwrap_or("TestTopStruct::".to_string());
-
-                Box::new([
-                    (thoosa_shared::conc_str(&prefix, "field_a"), Some(self.field_a.into())),
-                    (thoosa_shared::conc_str(&prefix, "field_b"), Some(self.field_b.into())),
-                    (thoosa_shared::conc_str(&prefix, "field_o"), self.field_o.map(|v| v.into())),
-                ]
-                    .into_iter()
-                    .filter_map(|v|v.1.map(|val|(v.0, val)))
-                    .chain(self.sub_struct.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "sub_struct."))))
-                    .chain(self.sub_struct_o.as_ref().map(|s|s.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "sub_struct_o.")))).unwrap_or(Box::new(std::iter::empty::<(String, Val)>())))
-                    // .chain(self.sub_enum.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "sub_enum."))))
-                )
-            }
-        }
-
-        impl FromHashmap for TestTopStruct {
-
-            fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError> {
-                let prefix = parent.unwrap_or("TestTopStruct::".to_string());
-                Ok(TestTopStruct {
-
-                    field_a: properties.get(&thoosa_shared::conc_str(&prefix, "field_a"))
-                        .map(|v|v.try_into().expect(&format!("can't convert field_a: value={v:?}")))
-                        .ok_or_else(||ThoosaError::new(format!("no {} in properties", thoosa_shared::conc_str(&prefix, "field_a"))))?,
-
-                    field_b: properties.get(&thoosa_shared::conc_str(&prefix, "field_b"))
-                        .map(|v|v.try_into().expect(&format!("can't convert field_a: value={v:?}")))
-                        .ok_or_else(||ThoosaError::new(format!("no {} in properties", thoosa_shared::conc_str(&prefix, "field_b"))))?,
-
-                    field_o: properties.get(&thoosa_shared::conc_str(&prefix, "field_o"))
-                        .map(|v|v.try_into().expect(&format!("can't convert field_a: value={v:?}"))),
-
-                    sub_struct: AnotherTestStruct::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "sub_struct.")), &properties)?,
-
-                    sub_struct_o: AnotherTestStruct::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "sub_struct_o.")), &properties).ok(),
-
-                    // sub_enum: SomeEnum::from_properties_map(Some("TestTopStruct::sub_enum.".to_string()), &properties)?,
-                })
-            }
-        }*/
-
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         enum SomeEnum {
@@ -1302,46 +1257,6 @@ pub mod tests {
             VariantB(VariantB)
         }
 
-       /* impl ToHashmap for SomeEnum {
-            fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
-                let prefix = parent.unwrap_or("SomeEnum::".to_string());
-                match &self {
-                    SomeEnum::VariantA(v) => {
-                        Box::new([
-                            (thoosa_shared::conc_str(&prefix, "variant_a"), Val::Bool(true)),
-                        ]
-                            .into_iter()
-                            .chain(
-                                v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_a.")))))
-                    }
-                    SomeEnum::VariantB(v) => {
-                        Box::new([
-                            (thoosa_shared::conc_str(&prefix, "variant_b"), Val::Bool(true)),
-                        ]
-                            .into_iter()
-                            .chain(
-                                v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_b.")))))
-                    }
-                }
-            }
-        }
-
-        impl FromHashmap for SomeEnum {
-
-            fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError>{
-                let prefix = parent.unwrap_or("TestTopStruct::".to_string());
-
-                if properties.get(&thoosa_shared::conc_str(&prefix, "variant_a")).is_some() {
-                    Ok(SomeEnum::VariantA(VariantA::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "variant_a.")), properties)?))
-
-                } else if properties.get(&thoosa_shared::conc_str(&prefix, "variant_b")).is_some() {
-                    Ok(SomeEnum::VariantB(VariantB::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "variant_b.")), properties)?))
-
-                } else {
-                    unreachable!()
-                }
-            }
-        }*/
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct VariantA {
@@ -1349,56 +1264,11 @@ pub mod tests {
             some_field:u32
         }
 
-        /*impl ToHashmap for VariantA {
-            fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
-                let prefix = parent.unwrap_or("VariantA::".to_string());
-                Box::new([
-                    (thoosa_shared::conc_str(&prefix, "some_field").to_string(), Val::UInt(self.some_field)),
-                ].into_iter())
-            }
-        }
-
-        impl FromHashmap for VariantA {
-            fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError> {
-                let prefix = parent.unwrap_or("VariantA::".to_string());
-
-                Ok(VariantA {
-
-                    some_field: properties.get(&thoosa_shared::conc_str(&prefix, "some_field"))
-                        .map(|v|v.try_into().expect(&format!("can't convert some_field: value={v:?}")))
-                        .ok_or_else(||ThoosaError::new(format!("no {} in properties", thoosa_shared::conc_str(&prefix, "some_field"))))?,
-                })
-            }
-
-        }*/
-
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct VariantB {
             #[in_map]
             another_field:u32
         }
-
-        /*impl ToHashmap for VariantB {
-            fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
-                let prefix = parent.unwrap_or("VariantB::".to_string());
-                Box::new([
-                    (thoosa_shared::conc_str(&prefix, "another_field"), Val::UInt(self.another_field)),
-                ].into_iter())
-            }
-        }
-
-        impl FromHashmap for VariantB {
-            fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError>{
-                let prefix = parent.unwrap_or("VariantB::".to_string());
-
-                Ok(VariantB {
-                    another_field: properties.get(&thoosa_shared::conc_str(&prefix, "another_field"))
-                        .map(|v|v.try_into().expect(&format!("can't convert another_field: value={v:?}")))
-                        .ok_or_else(||ThoosaError::new(format!("no {} in properties", thoosa_shared::conc_str(&prefix, "another_field"))))?,
-                })
-            }
-
-        }*/
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct AnotherTestStruct {
@@ -1407,34 +1277,6 @@ pub mod tests {
             #[in_map]
             field_d:i32,
         }
-
-        /*impl ToHashmap for AnotherTestStruct {
-            fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, Val)>> {
-                let prefix = parent.unwrap_or("AnotherTestStruct::".to_string());
-                Box::new([
-                    (thoosa_shared::conc_str(&prefix, "field_c"), self.field_c.into()),
-                    (thoosa_shared::conc_str(&prefix, "field_d"), self.field_d.into())
-                ].into_iter())
-            }
-        }
-
-        impl FromHashmap for AnotherTestStruct {
-            fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError> {
-                let prefix = parent.unwrap_or("AnotherTestStruct::".to_string());
-
-
-                Ok(AnotherTestStruct {
-                    field_c: properties.get(&thoosa_shared::conc_str(&prefix, "field_c"))
-                        .map(|v|v.try_into().expect(&format!("can't convert field_c: value={v:?}")))
-                        .ok_or_else(||ThoosaError::new(format!("no {} in properties", thoosa_shared::conc_str(&prefix, "field_c"))))?,
-
-                    field_d: properties.get(&thoosa_shared::conc_str(&prefix, "field_d"))
-                        .map(|v|v.try_into().expect(&format!("can't convert field_d: value={v:?}")))
-                        .ok_or_else(||ThoosaError::new(format!("no {} in properties", thoosa_shared::conc_str(&prefix, "field_d"))))?,
-                })
-            }
-
-        }*/
 
         let run_config = TestTopStruct {
             field_a: 1,
