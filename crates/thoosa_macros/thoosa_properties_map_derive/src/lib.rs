@@ -169,7 +169,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
             variants_in_from_properties.push(quote! {
                 else {
-                    panic!("Unexpected variant {properties:?} prefix={prefix}");
+                    Err(ThoosaError::new("Unexpected variant prefix={prefix} in {properties:?} "))
                 }
             });
 

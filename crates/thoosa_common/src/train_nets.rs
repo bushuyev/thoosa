@@ -1357,36 +1357,45 @@ impl TrainMotifsNetsArgs {
 
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
 pub struct TrainMotifsNetsRunConfig {
+    #[in_map]
     pub id:Option<RunId>,
 
+    #[in_map]
     #[run_config]
     common_training_args:CommonTrainingRunConfig,
 
+    #[in_map]
     #[run_config]
     num_layers:u32
 }
 
-#[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct CommonTrainingRunConfig {
 
+    #[in_map]
     #[run_config]
     pub cycles: u32,
 
+    #[in_map]
     #[run_config]
     pub batch_size: u32,//number of the motif slices in a batch
 
+    #[in_map]
     #[run_config]
     pub lr: f64,
 
+    #[in_map]
     #[run_config]
     pub max_loss: f32,
 
+    #[in_map]
     #[run_config]
     pub opt_max_evals: u32,
 
+    #[in_map]
     #[run_config]
     pub opt_n_init: u32,
 }

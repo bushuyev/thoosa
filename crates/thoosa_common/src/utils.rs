@@ -1093,7 +1093,7 @@ pub mod tests {
         #[run_config_opt]
         struct SomeStruct {
             pub id:Option<RunId>,
-            
+
             #[run_config]
             field_00: u32,
 
@@ -1261,7 +1261,10 @@ pub mod tests {
             sub_struct_o:Option<AnotherTestStruct>,
 
             #[in_map]
-            sub_enum:SomeEnum
+            sub_enum:SomeEnum,
+
+            #[in_map]
+            sub_enum_o:Option<SomeEnum>
         }
 
 
@@ -1299,6 +1302,7 @@ pub mod tests {
             sub_struct: AnotherTestStruct { field_c: 3, field_d: 4 },
             sub_struct_o: Some(AnotherTestStruct { field_c: 30, field_d: 40 }),
             sub_enum: SomeEnum::VariantA(VariantA{ some_field: 5 }),
+            sub_enum_o: Some(SomeEnum::VariantB(VariantB{ another_field: 50 })),
         };
 
         let props:HashMap<String, Val> = run_config.to_properties_iter(None).collect();
@@ -1313,6 +1317,7 @@ pub mod tests {
             sub_struct: AnotherTestStruct { field_c: 3, field_d: 4 },
             sub_struct_o: None,
             sub_enum: SomeEnum::VariantA(VariantA{ some_field: 5 }),
+            sub_enum_o: None
         };
 
         let props:HashMap<String, Val> = run_config.to_properties_iter(None).collect();
