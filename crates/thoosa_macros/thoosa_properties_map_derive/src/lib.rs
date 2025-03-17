@@ -1,4 +1,5 @@
 use proc_macro::TokenStream;
+use log::warn;
 use quote::{format_ident, quote, ToTokens};
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 use thoosa_macros_utils::{get_option_inner_ty, has_attr, is_primitive};
@@ -132,18 +133,24 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 let variant_path = thoosa_shared::conc_str(&variant_name, ".");
                 if let syn::Fields::Unnamed(fields) = &variant.fields {
                     if fields.unnamed.len() == 1 {
-                        // let ty = fields.unnamed.first().expect("no config type").ty.clone();
+                        //TODO proper Type to Ident
                         let ty = format_ident!("{}", &fields.unnamed.first().expect("no config type").ty.to_token_stream().to_string());
                         variants_in_to_properties.push(quote! {
                             #target_ident::#variant_ident(v) => {
                                 Box::new([
                                     (thoosa_shared::conc_str(&prefix, #variant_name), Val::Bool(true)),
                                 ]
-                                    .into_iter()
-                                    .chain(
-                                        v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #variant_path)))))
+                                .into_iter()
+                                .chain(
+                                    v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #variant_path)))))
                             }
                         });
+
+                        if !variants_in_from_properties.is_empty() {
+                            variants_in_from_properties.push(quote! {
+                                else
+                            });
+                        }
 
                         variants_in_from_properties.push(quote! {
                             if properties.get(&thoosa_shared::conc_str(&prefix, #variant_name)).is_some() {
@@ -151,9 +158,20 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                             }
                         });
+
+
+                    } else {
+                        warn!("Can't handle more than one field")
                     }
                 }
+
             }
+
+            variants_in_from_properties.push(quote! {
+                else {
+                    panic!("Unexpected variant {properties:?} prefix={prefix}");
+                }
+            });
 
             quote!{
                  impl ToHashmap for #target_ident {
