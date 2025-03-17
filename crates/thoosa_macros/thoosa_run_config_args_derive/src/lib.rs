@@ -12,25 +12,14 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
     let target_struct_ident = &ast.ident;
+    let target_struct_name = &ast.ident.to_string();
 
     eprintln!("thoosa_args_derive: target_struct_ident={target_struct_ident:?}");
 
-
     let range_or_value_struct_ident = format_ident!("{}RangeOrValue", target_struct_ident);
-    let fields_enum_ident = Ident::new(//TODO format_ident
-        &format!("{}Fields", target_struct_ident),
-        target_struct_ident.span()
-    );
-
-    let builder_ident = Ident::new(
-        &format!("{}Builder", target_struct_ident),
-        target_struct_ident.span()
-    );
-
-    let builder_enum_ident = Ident::new(
-        &format!("{}BuilderEnum", target_struct_ident),
-        target_struct_ident.span()
-    );
+    let fields_enum_ident = format_ident!("{}Fields", target_struct_ident);
+    let builder_ident = format_ident!("{}Builder", target_struct_ident);
+    let builder_enum_ident = format_ident!("{}BuilderEnum", target_struct_ident);
 
     struct TokenStreams {
         range_or_value_fields:Vec<proc_macro2::TokenStream>,
@@ -492,8 +481,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         }
     };
 
-    let into_impl = if has_run_config_opt || has_run_config_grid {
-        quote! {
+    let (into_impl, set_id) = if has_run_config_opt || has_run_config_grid {
+        (quote! {
             impl <I:IntoIterator<Item=thoosa_shared::val::NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
                 fn from(value: I) -> Self {
                     let mut builder = #builder_ident::default();
@@ -507,9 +496,13 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 }
             }
 
-        }
+        }, quote!{
+            self.id.replace(id);
+        })
     } else {
-        quote! {}
+        (quote! {}, quote! {
+            panic!("set id should not be called on run config sub")
+        })
     };
 
     eprintln!("range_or_value_type={}", range_or_value_type.to_string());
@@ -538,14 +531,16 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         }
 
         impl thoosa_run_config_args::RunConfig for #target_struct_ident {
-             fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+             fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
                 todo!()
             }
 
-            fn set_id(&mut self, id: RunId) {}
+            fn set_id(&mut self, id: RunId) {
+                #set_id
+            }
 
             fn type_name() -> &'static str {
-                "Hello"
+                #target_struct_name
             }
         }
 
@@ -554,6 +549,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             #enum_fields
         }
 
+        //TODO remove?
         impl Display for #fields_enum_ident {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {

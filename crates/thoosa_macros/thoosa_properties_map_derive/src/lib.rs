@@ -90,7 +90,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
 
                     let gen = quote! {
-                        impl ToHashmap for #target_ident {
+                        impl thoosa_properties_map::ToHashmap for #target_ident {
                             fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, Val)>> {
                                 let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
                                 Box::new(
@@ -104,7 +104,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                             }
                         }
 
-                        impl FromHashmap for #target_ident {
+                        impl thoosa_properties_map::FromHashmap for #target_ident {
                             fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError> {
                                 let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
 
@@ -174,7 +174,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             });
 
             quote!{
-                 impl ToHashmap for #target_ident {
+                 impl thoosa_properties_map::ToHashmap for #target_ident {
                     fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
                         let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
                         match &self {
@@ -183,7 +183,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                impl FromHashmap for #target_ident {
+                impl thoosa_properties_map::FromHashmap for #target_ident {
                      fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError>{
                         let prefix = parent.unwrap_or("TestTopStruct::".to_string());
                         #(#variants_in_from_properties)*
