@@ -1227,7 +1227,6 @@ pub mod tests {
     fn test_to_from_hashmap(){
 
 
-        //TODO implement TryFrom for other types
         trait ToHashmap {
             fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, Val)>>;
         }
@@ -1300,19 +1299,19 @@ pub mod tests {
                 match &self {
                     SomeEnum::VariantA(v) => {
                         Box::new([
-                            ((prefix.clone() + "variant_a").to_string(), Val::Bool(true)),
+                            (thoosa_shared::conc_str(&prefix, "variant_a"), Val::Bool(true)),
                         ]
                             .into_iter()
                             .chain(
-                        v.to_properties_iter(Some((prefix.clone() + "variant_a.").to_string()))))
+                        v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_a.")))))
                     }
                     SomeEnum::VariantB(v) => {
                         Box::new([
-                            ((prefix.clone() + "variant_b").to_string(), Val::Bool(true)),
+                            (thoosa_shared::conc_str(&prefix, "variant_b"), Val::Bool(true)),
                         ]
                             .into_iter()
                             .chain(
-                                v.to_properties_iter(Some((prefix.clone() + "variant_b.").to_string()))))
+                                v.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, "variant_b.")))))
                     }
                 }
             }
@@ -1324,10 +1323,10 @@ pub mod tests {
                 let prefix = parent.unwrap_or("TestTopStruct::".to_string());
 
                 if properties.get(&thoosa_shared::conc_str(&prefix, "variant_a")).is_some() {
-                    Ok(SomeEnum::VariantA(VariantA::from_properties_map(Some(prefix.clone() + "variant_a."), properties)?))
+                    Ok(SomeEnum::VariantA(VariantA::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "variant_a.")), properties)?))
 
                 } else if properties.get(&thoosa_shared::conc_str(&prefix, "variant_b")).is_some() {
-                    Ok(SomeEnum::VariantB(VariantB::from_properties_map(Some(prefix.clone() + "variant_b."), properties)?))
+                    Ok(SomeEnum::VariantB(VariantB::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "variant_b.")), properties)?))
 
                 } else {
                     unreachable!()
@@ -1339,6 +1338,7 @@ pub mod tests {
         struct VariantA {
             some_field:u32
         }
+
         impl ToHashmap for VariantA {
             fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
                 let prefix = parent.unwrap_or("VariantA::".to_string());
@@ -1371,7 +1371,7 @@ pub mod tests {
             fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
                 let prefix = parent.unwrap_or("VariantB::".to_string());
                 Box::new([
-                    ((prefix.clone()+"another_field").to_string(), Val::UInt(self.another_field)),
+                    (thoosa_shared::conc_str(&prefix, "another_field"), Val::UInt(self.another_field)),
                 ].into_iter())
             }
         }
@@ -1389,7 +1389,6 @@ pub mod tests {
 
         }
 
-
         #[derive(Debug, PartialEq)]
         struct AnotherTestStruct {
             field_c:u32,
@@ -1400,8 +1399,8 @@ pub mod tests {
             fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, Val)>> {
                 let prefix = parent.unwrap_or("AnotherTestStruct::".to_string());
                 Box::new([
-                    ((prefix.clone()+"field_c").to_string(), self.field_c.into()),
-                    ((prefix.clone()+"field_d").to_string(), self.field_d.into())
+                    (thoosa_shared::conc_str(&prefix, "field_c"), self.field_c.into()),
+                    (thoosa_shared::conc_str(&prefix, "field_d"), self.field_d.into())
                 ].into_iter())
             }
         }
