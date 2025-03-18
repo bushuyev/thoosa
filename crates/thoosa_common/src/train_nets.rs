@@ -44,8 +44,9 @@ use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, T
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
+use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_run_config_args::RunConfig;
+use thoosa_shared::run_configs::RunConfig;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
@@ -135,29 +136,35 @@ impl TrainLabelNodeRunConfig {
     }
 }
 
-impl RunConfig for TrainLabelNodeRunConfig {
-    fn to_properties_map_(&self) -> HashMap<String, Val> {
-        match &self.run_config_or_opt_space {
-            ValuesOrOptSpace::Values(values) => {
-                // values.to_properties_map()
-                todo!()
-            },
-            ValuesOrOptSpace::OptSpace { .. } => {
-                // let mut map = HashMap::from([
-                //     ("FindMotifsRunConfig.step".into(), UInt(self.step)),
-                //     ("FindMotifsRunConfig.window".into(), UInt(self.window)),
-                //     ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
-                //     ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
-                // ]);
-                todo!()
-            }
-        }
-
-    }
-
-    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+impl ToHashmap for TrainLabelNodeRunConfig {
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
         todo!()
     }
+}
+
+impl RunConfig for TrainLabelNodeRunConfig {
+    // fn to_properties_map_(&self) -> HashMap<String, Val> {
+    //     match &self.run_config_or_opt_space {
+    //         ValuesOrOptSpace::Values(values) => {
+    //             // values.to_properties_map()
+    //             todo!()
+    //         },
+    //         ValuesOrOptSpace::OptSpace { .. } => {
+    //             // let mut map = HashMap::from([
+    //             //     ("FindMotifsRunConfig.step".into(), UInt(self.step)),
+    //             //     ("FindMotifsRunConfig.window".into(), UInt(self.window)),
+    //             //     ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
+    //             //     ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
+    //             // ]);
+    //             todo!()
+    //         }
+    //     }
+    //
+    // }
+    //
+    // fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+    //     todo!()
+    // }
 
     fn set_id(&mut self, id: RunId) {
         self.id.replace(id);
@@ -666,13 +673,14 @@ impl SavableOptResult for TrainLabelNodesRunConfigResult {
             None => self.train_label_nodes_run_config_id,
 
             Some(train_motifs_nodes_values) => {
-                store.lock().save_run_config(
-                    Some(&[self.train_label_nodes_run_config_id]),
-                    &TrainLabelNodeRunConfig::type_name(),
-                    "Label",
-                    "todo",
-                    TrainLabelNodeRunConfig::from_values(Some(self.train_label_nodes_run_config_id), train_motifs_nodes_values.train_nodes_values.lr, train_motifs_nodes_values.train_nodes_values.num_layers, train_motifs_nodes_values.label_node_type.clone()).to_properties_map_() //TODO make from_values to take train_motifs_nodes_values
-                )?
+                // store.lock().save_run_config(
+                //     Some(&[self.train_label_nodes_run_config_id]),
+                //     &TrainLabelNodeRunConfig::type_name(),
+                //     "Label",
+                //     "todo",
+                //     TrainLabelNodeRunConfig::from_values(Some(self.train_label_nodes_run_config_id), train_motifs_nodes_values.train_nodes_values.lr, train_motifs_nodes_values.train_nodes_values.num_layers, train_motifs_nodes_values.label_node_type.clone()).to_properties_map_() //TODO make from_values to take train_motifs_nodes_values
+                // )?//TODO
+                0
             }
         };
 
@@ -1085,13 +1093,14 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
             None => self.train_final_nodes_run_config_id,
 
             Some(train_final_nodes_values) => {
-                store.lock().save_run_config(
-                    Some(&[self.train_final_nodes_run_config_id]),
-                    &TrainLabelNodeRunConfig::type_name(),
-                    "Final",
-                    "todo",
-                    TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNetType::FixedNumSlices(FixedNumSlicesNetParams{slices_len: 100.into(), num_layers: 3.into()})).to_properties_map_()
-                )?
+                // store.lock().save_run_config(
+                //     Some(&[self.train_final_nodes_run_config_id]),
+                //     &TrainLabelNodeRunConfig::type_name(),
+                //     "Final",
+                //     "todo",
+                //     TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNetType::FixedNumSlices(FixedNumSlicesNetParams{slices_len: 100.into(), num_layers: 3.into()})).to_properties_map_()
+                // )?
+                0//TODO
             }
         };
 
@@ -1333,7 +1342,7 @@ pub struct TrainMotifsNetsParams {
     pub num_layers: RangeOrValue<u32>,
 
     #[command(flatten)]
-    common: CommonTrainingArgs,
+    common: CommonTrainingArgs
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1342,8 +1351,6 @@ pub struct TrainMotifsNetsArgs {
     #[arg(long)]
     pub motif_selection_run_id: Vec<RunId>,
 
-    #[command(flatten)]
-    pub common: CommonTrainingArgs, //CommonTrainMotifsNodesRunConfig
 
     #[arg(long)]
     pub run_config_cnt:String,//TrainMotifsNetsRunConfig
@@ -1365,7 +1372,7 @@ pub struct TrainMotifsNetsRunConfig {
 
     #[in_map]
     #[run_config]
-    common_training_args:CommonTrainingRunConfig,
+    pub common_training_args:CommonTrainingRunConfig,
 
     #[in_map]
     #[run_config]
@@ -1400,6 +1407,7 @@ pub struct CommonTrainingRunConfig {
     pub opt_n_init: u32,
 }
 
+
 #[derive(Debug, Clone)]
 pub struct OptConfig {
     pub max_evals:u32,
@@ -1425,6 +1433,13 @@ pub struct TrainMotifsNodesRunConfig {
 
     run_config_or_opt_space: ValuesOrOptSpace<TrainNodesValues>
 
+}
+
+impl ToHashmap for TrainMotifsNodesRunConfig {
+
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
+        todo!()
+    }
 }
 
 // unsafe impl Sync for TrainMotifsNodesRunConfig{}
@@ -1545,40 +1560,40 @@ impl TrainMotifsNodesRunConfig {
 
 impl RunConfig for TrainMotifsNodesRunConfig{
 
-    fn to_properties_map_(&self) -> HashMap<String, Val> {
-        match &self.run_config_or_opt_space {
-            ValuesOrOptSpace::Values(TrainNodesValues { lr, num_layers , ..}) => {
-                 HashMap::from([
-                    ("TrainMotifsNodesRunConfig.lr".into(), (*lr).into()),
-                    ("TrainMotifsNodesRunConfig.num_layers".into(), (*num_layers).into()),
-                ])
-            }
-            ValuesOrOptSpace::OptSpace{opt_space, opt_config} => {
-                prefix_properties("TrainMotifsNodesRunConfig_opt_space", opt_space.into())
-                //     .into_iter().chain(prefix_properties("TrainMotifsNodesRunConfig_opt_config", opt_config.into())
-                // ).collect()
-
-            }
-        }
-    }
-
-    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-        let properties = unprefix_properties("TrainMotifsNodesRunConfig", &properties);
-
-        if properties.contains_key("config_space") {
-            todo!()
-        } else {
-            TrainMotifsNodesRunConfig {
-                id:Some(run_id),
-
-                run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {
-                    lr: <&Val as TryInto<f64>>::try_into(properties.get("lr").expect("no lr")).expect("lr as f32"),
-                    num_layers: <&Val as TryInto<u32>>::try_into(properties.get("num_layers").expect("no num_layers")).expect("num_layers as u32"),
-                    adam_w: None,
-                }),
-            }
-        }
-    }
+    // fn to_properties_map_(&self) -> HashMap<String, Val> {
+    //     match &self.run_config_or_opt_space {
+    //         ValuesOrOptSpace::Values(TrainNodesValues { lr, num_layers , ..}) => {
+    //              HashMap::from([
+    //                 ("TrainMotifsNodesRunConfig.lr".into(), (*lr).into()),
+    //                 ("TrainMotifsNodesRunConfig.num_layers".into(), (*num_layers).into()),
+    //             ])
+    //         }
+    //         ValuesOrOptSpace::OptSpace{opt_space, opt_config} => {
+    //             prefix_properties("TrainMotifsNodesRunConfig_opt_space", opt_space.into())
+    //             //     .into_iter().chain(prefix_properties("TrainMotifsNodesRunConfig_opt_config", opt_config.into())
+    //             // ).collect()
+    //
+    //         }
+    //     }
+    // }
+    //
+    // fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+    //     let properties = unprefix_properties("TrainMotifsNodesRunConfig", &properties);
+    //
+    //     if properties.contains_key("config_space") {
+    //         todo!()
+    //     } else {
+    //         TrainMotifsNodesRunConfig {
+    //             id:Some(run_id),
+    //
+    //             run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {
+    //                 lr: <&Val as TryInto<f64>>::try_into(properties.get("lr").expect("no lr")).expect("lr as f32"),
+    //                 num_layers: <&Val as TryInto<u32>>::try_into(properties.get("num_layers").expect("no num_layers")).expect("num_layers as u32"),
+    //                 adam_w: None,
+    //             }),
+    //         }
+    //     }
+    // }
 
     fn set_id(&mut self, id: RunId) {
         self.id.replace(id);
@@ -1589,7 +1604,7 @@ impl RunConfig for TrainMotifsNodesRunConfig{
     }
 }
 
-impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> for TrainMotifsNetsParams {
+impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainingArgs> for TrainMotifsNetsParams {
 
     fn to_run_configs(&self) -> Vec<TrainMotifsNodesRunConfig> {
 
@@ -1626,11 +1641,14 @@ impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainMotifsNodesRunConfig> f
         Empty{}
     }
 
-    fn common_config(&self) -> CommonTrainMotifsNodesRunConfig {
-        CommonTrainMotifsNodesRunConfig {
+    fn common_config(&self) -> CommonTrainingArgs {
+        CommonTrainingArgs {
             batch_size: self.common.batch_size,
             cycles: self.common.cycles,
-            max_loss: self.common.max_loss
+            max_loss: self.common.max_loss,
+            opt_max_evals: 0,
+            lr: 0.01.into(),
+            opt_n_init: 0,
         }
     }
 }
@@ -2048,13 +2066,14 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult2 {
         let run_config_id = match self.run_config_values.as_ref() {
             None => self.train_motifs_nodes_run_config_id,
             Some(run_config_values) => {
-                store.lock().save_run_config(
-                    Some(&[self.train_motifs_nodes_run_config_id]),
-                    &TrainMotifsNodesRunConfig::type_name(),
-                    "descr",
-                    "todo",
-                    run_config_values.to_properties_map_()
-                )?
+                // store.lock().save_run_config(
+                //     Some(&[self.train_motifs_nodes_run_config_id]),
+                //     &TrainMotifsNodesRunConfig::type_name(),
+                //     "descr",
+                //     "todo",
+                //     run_config_values.to_properties_map_()
+                // )?
+                0//TODO
             }
         };
 
@@ -2091,13 +2110,14 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult {
         let run_config_id = match self.run_config_values.as_ref() {
             None => self.train_motifs_nodes_run_config_id,
             Some(run_config_values) => {
-                store.lock().save_run_config(
-                    Some(&[self.train_motifs_nodes_run_config_id]),
-                    &TrainMotifsNodesRunConfig::type_name(),
-                    "descr",
-                    "todo",
-                    TrainMotifsNodesRunConfig::from_values(Some(self.train_motifs_nodes_run_config_id), run_config_values.lr, run_config_values.num_layers).to_properties_map_()
-                )?
+                // store.lock().save_run_config(
+                //     Some(&[self.train_motifs_nodes_run_config_id]),
+                //     &TrainMotifsNodesRunConfig::type_name(),
+                //     "descr",
+                //     "todo",
+                //     TrainMotifsNodesRunConfig::from_values(Some(self.train_motifs_nodes_run_config_id), run_config_values.lr, run_config_values.num_layers).to_properties_map_()
+                // )?//TODO
+                0
             }
         };
 
@@ -2114,7 +2134,7 @@ pub fn run_opt_train_motif(
     all_slices_1:Vec<Box<Tensor>>,
     train_motifs_run_config: &TrainMotifsNodesRunConfig,
     motif_width: i64,
-    common_config: &CommonTrainMotifsNodesRunConfig,
+    common_config: &CommonTrainingArgs,
     device: Device
 ) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
 
@@ -2142,8 +2162,8 @@ pub fn run_opt_train_motif(
             all_slices_0,
             all_slices_1
         ],
-        common_config.batch_size,
-        0.8,//TODO config
+        common_config.batch_size as u32,
+        0.8, //TODO config
         device
     );
 
@@ -2207,9 +2227,9 @@ where
             print!(".");
             loss
         },
-                                        ConfigurationSpace::new(run_config_source.opt_params().clone()),
-                                        10,
-                                        3,
+            ConfigurationSpace::new(run_config_source.opt_params().clone()),
+            10,
+            3,
         );
 
         let best_config = opt.optimize();
@@ -2320,7 +2340,7 @@ pub fn run_train_motif_2(motif_width: i64, run_config: &TrainMotifsNetsRunConfig
     Ok((loss, node_params))
 }
 
-fn run_train_motif(motif_width: i64, common_config: &CommonTrainMotifsNodesRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, run_config_vals:&TrainNodesValues, listener: &mut PlotVecf32) -> Result<(f32, MotifNodeParams), ThoosaError> {
+fn run_train_motif(motif_width: i64, common_config: &CommonTrainingArgs, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, run_config_vals:&TrainNodesValues, listener: &mut PlotVecf32) -> Result<(f32, MotifNodeParams), ThoosaError> {
     let node_params = MotifNodeParams::new(motif_width, run_config_vals.num_layers as i64);
 
     let loss=  train(
@@ -2353,13 +2373,13 @@ pub fn slices_in_all_resources <ResourceId>(slices: Vec<(ResourceId, Vec<Box<Ten
 pub struct TensorsDataBatch {
     train :Vec<Vec<Box<Tensor>>>,//index - class
     val :Vec<Vec<Box<Tensor>>>,
-    batch_size: usize,
+    batch_size: u32,
     device:Device
 }
 
 impl TensorsDataBatch {
 
-    pub fn new(classes_tensors: Vec<Vec<Box<Tensor>>>, batch_size: usize, train_valid_split:f32, device:Device) -> Self {
+    pub fn new(classes_tensors: Vec<Vec<Box<Tensor>>>, batch_size: u32, train_valid_split:f32, device:Device) -> Self {
 
         let classes_len = classes_tensors.len();
         assert!(classes_len > 0);
@@ -2376,16 +2396,16 @@ impl TensorsDataBatch {
     }
 
 
-    fn choose_for_batch(class_tensors: &Vec<Vec<Box<Tensor>>>, batch_size: usize, device:&Device) -> (Tensor, Tensor) {
+    fn choose_for_batch(class_tensors: &Vec<Vec<Box<Tensor>>>, batch_size: u32, device:&Device) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
-        let per_class_len = batch_size / class_tensors.len();//TODO make balanced
+        let per_class_len = batch_size / class_tensors.len() as u32;//TODO make balanced
         debug!("TensorsDataBatch::choose_for_batch: class_tensors={} per_class_len={per_class_len}", class_tensors.len());
 
         let mut x_y_vecs = class_tensors.iter().enumerate().fold(vec![], |mut x_y_acc, (class, tensors)| {
             assert!(tensors.len() > 0, "no tensors for class={class} in ClassTensorsDataBatch");
 
-            tensors.choose_multiple(&mut rng, per_class_len).for_each(|t| {
+            tensors.choose_multiple(&mut rng, per_class_len as usize).for_each(|t| {
 
                 x_y_acc.push((t.shallow_clone(), class as i64));
             });
@@ -2399,7 +2419,7 @@ impl TensorsDataBatch {
         assert!(x_y_vecs.len() > 0);
 
         //TODO throw if not enough tensors for batch?
-        (x_y_vecs.len()..batch_size).for_each(|i|{
+        (x_y_vecs.len()..batch_size as usize).for_each(|i|{
             x_y_vecs.push(
                 (
                     x_y_vecs[i-x_y_vecs.len()].0.shallow_clone(),
@@ -2638,10 +2658,20 @@ impl TrainFinalNodeRunConfig {
     }
 }
 
-impl RunConfig for TrainFinalNodeRunConfig {
-    fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+impl ToHashmap for TrainFinalNodeRunConfig {
+    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
         todo!()
     }
+}
+
+impl RunConfig for TrainFinalNodeRunConfig {
+    // fn to_properties_map_(&self) -> HashMap<String, Val> {
+    //     todo!()
+    // }
+    //
+    // fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+    //     todo!()
+    // }
 
     fn set_id(&mut self, id: RunId) {
         self.id.replace(id);
@@ -2772,7 +2802,7 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
 #[run_config_grid]
 pub struct FindMotifsRunConfig {
     #[in_map]
-    pub id:Option<RunId>,
+    pub id:Option<RunId>,//TODO move to RunConfigHolder
 
     #[run_config]
     #[in_map]
@@ -2796,6 +2826,17 @@ pub struct FindMotifsRunConfig {
 
     // #[in_map]
     // pub descr: String,
+}
+
+impl FindMotifsRunConfig {
+
+    //TODO RunConfigHolder
+    pub fn from_properties_map__(id:RunId, properties: &HashMap<String, Val>) -> Result<FindMotifsRunConfig, thoosa_shared::ThoosaError> {
+        let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, properties)?;
+        find_motifs_run_config.set_id(id);
+
+        Ok(find_motifs_run_config)
+    }
 }
 
 

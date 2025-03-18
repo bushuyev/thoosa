@@ -169,7 +169,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
             variants_in_from_properties.push(quote! {
                 else {
-                    Err(ThoosaError::new("Unexpected variant prefix={prefix} in {properties:?} "))
+                    Err(ThoosaError::new(format!("Unexpected variant prefix={prefix} in {properties:?} ")))
                 }
             });
 
@@ -184,8 +184,11 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 }
 
                 impl thoosa_properties_map::FromHashmap for #target_ident {
-                     fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError>{
-                        let prefix = parent.unwrap_or("TestTopStruct::".to_string());
+
+                    fn from_properties_map(parent:Option<String>, properties: &HashMap<String, Val>) -> Result<Self, ThoosaError>{
+                        log::debug!("{}from_properties_map: parent={parent:?} properties={properties:?}", #target_ident_prefix);
+
+                        let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
                         #(#variants_in_from_properties)*
                     }
                 }
