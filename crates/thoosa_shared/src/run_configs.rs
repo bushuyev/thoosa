@@ -1,8 +1,9 @@
 use std::marker::PhantomData;
-use log::debug;
+use std::fmt::Debug;
+use std::collections::HashMap;
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::make_combos;
-use crate::val::{NamedRange, NamedVal};
+use crate::val::{NamedRange, NamedVal, Val};
 
 ////
 #[derive(Debug)]
@@ -149,3 +150,30 @@ impl <T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hype
 }
 
 pub type RunId = u32;
+
+pub trait RunConfig:Debug {
+
+    fn set_id(&mut self, id: RunId);
+
+    fn type_name()->&'static str;
+}
+
+pub struct RunConfigHolder<R:RunConfig> {
+    id:RunId,
+    run_config: R,
+    descr:String,
+    // ran_on:std::time::SystemTime TODO for each run X resource
+}
+
+impl<R:RunConfig> RunConfigHolder<R> {
+
+    pub fn new(id:RunId, run_config: R, descr:&str) -> Self {
+        Self {
+            id,
+            run_config,
+            descr: "".to_string(),
+            // ran_on,
+        }
+    }
+}
+

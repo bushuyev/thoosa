@@ -5,7 +5,8 @@ use std::sync::Arc;
 use log::debug;
 use parking_lot::{Mutex, RwLock};
 use tch::nn::VarStore;
-use thoosa_run_config_args::RunConfig;
+use thoosa_properties_map::FromHashmap;
+use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{make_combos, ResourceType, ThoosaError};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -204,4 +205,16 @@ impl SavableOptResult for DummySavableOptResult {
     }
 }
 
-
+// impl <T> RunConfig for T where T:FromHashmap{
+//     fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+//         todo!()
+//     }
+//
+//     fn set_id(&mut self, id: RunId) {
+//         todo!()
+//     }
+//
+//     fn type_name() -> &'static str {
+//         todo!()
+//     }
+// }
