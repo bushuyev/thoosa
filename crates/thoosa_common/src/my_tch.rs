@@ -65,12 +65,15 @@ impl ThoModule for MySequential {
                 }
                 Some((dim, num_features)) => {
                     let splits= t.split(num_features, dim);
+                    debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}", splits.iter().map(|t|t.size()).collect::<Vec<_>>());
+
                     let split_r = Tensor::concat(splits.into_iter().enumerate().filter_map(| (i, split) | {
                         if split.size()[dim as usize] == num_features {
                             let r = self.run_layers(&split, train);
                             debug!("MySequential::tho_forward i={i} split={:?} r.size()={:?}", split.size(), r.size());
                             Some(r)
                         } else {
+                            //TODO ok skipping?
                             debug!("MySequential::tho_forward skipping i={i} split.size={:?}", split.size());
 
                             None
