@@ -1065,6 +1065,62 @@ fn view_for_label_model(t: Tensor, channels: i64, max_motif_nets: i64, motif_bat
     t
 }
 
+pub fn run_opt_train_final_2 (
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    train_final_run_config: &OptRunConfigs<Vec<NamedVal<TrainFinalNetsRunConfigFields>>, Vec<NamedRange<TrainFinalNetsRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetsRunConfigFields>>, TrainFinalNetsRunConfigFields>,
+    train_resources:Vec<(Resource, Vec<f32>)>,
+    valid_resources: Vec<(Resource, Vec<f32>)>,
+    device: &Device,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    mut label_models: HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
+    labels_channels_motifs_models:HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>,
+
+) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
+    let labels_len = labels_channels_motifs_models.len();
+
+    let labels_channels_motifs_models_rw = labels_channels_motifs_models.into_iter().fold(HashMap::new(), |mut a, v|{
+        a.insert(v.0, Arc::new(RwLock::new(v.1)));
+        a
+    });
+    let device = device.clone();
+
+    let labels = store.lock().list_labels()?;
+    let max_input = ws.read().max_input() as u32;
+
+
+    opt_train_2(
+        |vs:&VarStore, run_config_values:&TrainFinalNetsRunConfig, listener: &mut dyn TrainListener|{
+            let batch = Rc::new(Box::new(ClassTensorsLoaderData::new(
+                train_resources.clone(),
+                valid_resources.clone(),
+                run_config_values.common_training_args.batch_size as usize,
+                Arc::clone(&loader),
+                device.clone(),
+                // Some( Box::new(move |t:Box<Tensor>| {
+                //     apply_motif_and_label_nets(&t, &label_models, &labels_channels_motifs_models_rw, &device, &labels, max_input)
+                //
+                // }))
+                None
+            )));
+
+            train_final_node_2(
+                ws, run_config_values, &mut BatchTransform::new(Rc::clone(&batch), |t|{
+                    apply_motif_and_label_nets(&Box::new(t), &mut label_models, &labels_channels_motifs_models_rw, &device, &labels, max_input)
+                }), &device, labels_len, vs
+            )
+        },
+        &train_final_run_config,
+        device,
+        "final"
+    ).map(|(var_store, final_node_params, train_final_nodes_values, min_loss)| {
+        debug!("run_opt_train_final: done, min_loss={min_loss} final_node_params={final_node_params:?}");
+        Box::new(TrainFinalNodesRunConfigResult2::new(0/*train_final_run_config.id.expect("run_config.id.")*/, min_loss, var_store, final_node_params, train_final_nodes_values)) as Box<dyn SavableOptResult>
+    })
+
+}
+
+
 pub fn run_opt_train_final (
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
@@ -1355,6 +1411,97 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult {
         Ok(run_config_id)
     }
 }
+
+
+
+
+#[derive(Debug)]
+struct TrainFinalNodesRunConfigResult2 {
+    train_final_nodes_run_config_id: u32,
+    loss: f32,
+    var_store: VarStore,
+    final_node_params: FinalNodeParams,
+    train_final_nodes_values: Option<TrainFinalNetsRunConfig>
+}
+
+impl TrainFinalNodesRunConfigResult2 {
+    pub fn new(train_final_nodes_run_config_id: u32, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: Option<TrainFinalNetsRunConfig>) -> Self {
+        Self {
+            train_final_nodes_run_config_id,
+            loss,
+            var_store,
+            final_node_params,
+            train_final_nodes_values,
+        }
+    }
+}
+
+impl SavableOptResult for TrainFinalNodesRunConfigResult2 {
+    fn value(&self) -> f32 {
+        self.loss
+    }
+
+    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+        let run_config_id = match self.train_final_nodes_values.as_ref(){
+            None => self.train_final_nodes_run_config_id,
+
+            Some(train_final_nodes_values) => {
+                // store.lock().save_run_config(
+                //     Some(&[self.train_final_nodes_run_config_id]),
+                //     &TrainLabelNodeRunConfig::type_name(),
+                //     "Final",
+                //     "todo",
+                //     TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNetType::FixedNumSlices(FixedNumSlicesNetParams{slices_len: 100.into(), num_layers: 3.into()})).to_properties_map_()
+                // )?
+                0//TODO
+            }
+        };
+
+        ws.read().save_final_model(run_config_id, &self.var_store, &self.final_node_params).expect("save_final_model failed");
+
+        Ok(run_config_id)
+    }
+}
+
+pub fn train_final_node_2(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainFinalNetsRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
+    let final_node_params= FinalNodeParams::new(labels_len as i64, run_config_values.net.num_layers);
+
+    let mut optimizer = nn::Adam::default();
+   /* if let Some(adam_w) = run_config_values.adam_w {
+        debug!("train_final_nodes: setting adam_w={adam_w:?}");
+        optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
+    }*/
+
+    let loss = train(
+        device,
+        batch,
+        &final_node(&final_node_params).build_tch_module(&vs_0.root())?, //TODO features?
+        |pred: &Tensor, target: &Tensor| {
+
+
+
+            debug!("train_final: pred.size={:?} target.size={:?}", pred.size(), target.size());
+            trace!("train_final: pred=\n{pred} target=\n{target}");
+            let pred= pad_to(&pred, &target.size()).expect("pad_to failed");
+            debug!("train_final: padded pred.size={:?}", pred.size());
+
+            pred.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0)
+
+        },
+        run_config_values.common_training_args.cycles as usize,
+        optimizer.build(&vs_0, run_config_values.common_training_args.lr)?,
+        |t:Tensor|{
+            trace!("train_final: t=\n{t}");
+            debug!("train_final: t.size={:?} ", t.size());
+
+            t.squeeze()
+        },
+        None
+    )?;
+
+    Ok((loss, final_node_params))
+}
+
 
 pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainNodesValues, common_train_final_run_config: &CommonTrainFinalNodeRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
     let final_node_params= FinalNodeParams::new(labels_len as i64, run_config_values.num_layers);
@@ -2804,6 +2951,47 @@ fn apply_motif_nets_with_padding(
 
     channels_motifs
 }
+
+
+#[derive(Args, Debug, Clone)]
+pub struct TrainFinalNetsArgs {
+    #[arg(long)]
+    pub train_labels_run_ids: Vec<RunId>,
+
+    #[arg(long)]
+    train_resource_group: String,
+
+    #[arg(long)]
+    valid_resource_group: String,
+
+    #[arg(long)]
+    pub run_config_cnt:String,//TrainLabelNetsRunConfig
+}
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_opt]
+pub struct TrainFinalNetsRunConfig {
+    #[in_map]
+    pub id:Option<RunId>,
+
+    #[in_map]
+    #[run_config]
+    pub common_training_args:CommonTrainingRunConfig,
+
+    #[in_map]
+    #[run_config]
+    pub net: FinalNetParams,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+struct FinalNetParams {
+    #[in_map]
+    #[run_config]
+    pub num_layers: u32,
+}
+
+
 
 #[derive(Debug, Args, Clone)]
 pub struct TrainFinalNetParams {
