@@ -1,0 +1,23 @@
+[package]
+name = "thoosa_properties_map_derive"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+
+#paste = "1.0.6"
+convert_case = "0.7.1"
+thoosa_properties_map = {path = "../thoosa_properties_map" }
+thoosa_macros_utils = {path = "../thoosa_macros_utils" }
+thoosa_shared = {path = "../../thoosa_shared" }
+proc-macro2 = { version = "1.0.93" }
+clap.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+ctor.workspace = true

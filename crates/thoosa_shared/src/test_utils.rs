@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
-use log::{debug, LevelFilter};
+use log::{debug, error, LevelFilter};
 use std::env;
 use std::env::VarError;
 use std::str::FromStr;
@@ -36,5 +36,11 @@ pub fn init_test_logging() {
 
         env::set_var("POLARS_FMT_MAX_COLS", "100");
         env::set_var("POLARS_FMT_MAX_ROWS", "100");
+
+        std::panic::set_hook(Box::new(|panic_info| {
+            let backtrace = std::backtrace::Backtrace::capture();
+            error!("Panic info: {:?}", panic_info);
+            error!("Backtrace: {:?}", backtrace);
+        }));
     }
 }
