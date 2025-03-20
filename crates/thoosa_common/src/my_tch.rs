@@ -309,7 +309,8 @@ impl ThoModule for MyLinear{
     }
 
     fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        debug!("Module for MyLinear::forward: ws={:?} bs={:?} xs={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), t.device());
+        debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), t.device());
+        debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}", self.ws.size(), self.bs.as_ref().map(|bs|bs.size()), t.size());
         match t.f_linear(&self.ws, self.bs.as_ref()) {//TODO error
             Ok(t) => t,
             Err(e) => {

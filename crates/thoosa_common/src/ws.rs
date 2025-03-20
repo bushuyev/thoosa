@@ -91,7 +91,9 @@ impl FsWorkspace {
     pub fn model_path_to_run_id(model_path:&Path) -> RunId {
         model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<RunId>().ok())).expect("can't parse run_id from {model_path}")
     }
+
 }
+
 
 impl Workspace for FsWorkspace {
 
@@ -189,11 +191,7 @@ impl Workspace for FsWorkspace {
         })?.into_iter().try_fold(vec![], |mut a, safetensors_path| {
             debug!("motif_models: safetensors_path={safetensors_path:?}");
 
-            let parent = safetensors_path.parent().expect("parent");
-            // let channel = parent.file_stem().expect("channel");
-            let file_stem = safetensors_path.file_stem().expect("file_stem").to_str().expect("to_str");
-            let json = format!("{}.json", file_stem);
-            let json = parent.join(json);
+            let (file_stem, json) = thoosa_shared::replace_extension(&safetensors_path, "json");
 
             debug!("motif_models: channel={channel} safetensors_path={safetensors_path:?} file_stem={file_stem} json={json:?}  {}", json.exists());
 
@@ -202,7 +200,7 @@ impl Workspace for FsWorkspace {
         })
     }
 
-    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<PathBuf, ThoosaError> {
         let label_models_path = self.labels_models_path.join(format!("{}", label));
 
         fs::create_dir_all(&label_models_path)?;
@@ -213,12 +211,15 @@ impl Workspace for FsWorkspace {
 
         vs.save(vs_path)?;
 
+        let path = label_models_path.join(format!("{}.json", label_node_run_id));
         fs::write(
-            label_models_path.join(format!("{}.json", label_node_run_id)),
+            &path,
             serde_json5::to_string(params)?
         )?;
 
-        Ok(())
+        debug!("save_label_model: all saved, path={path:?}");
+
+        Ok(path)
     }
 
     /// returns vec of (safetensors_path, json_path)
@@ -307,7 +308,7 @@ pub trait Workspace:Sync + Send {
     returns Vec<safetensors_path, config jsonpath>
      */
     fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
-    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError>;
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<PathBuf, ThoosaError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
     fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>;
 
@@ -404,7 +405,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<(), ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<PathBuf, ThoosaError> {
         todo!()
     }
 
@@ -495,10 +496,10 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
 
-        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 20, 10))?;
-        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 20, 10))?;
-        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 20, 10))?;
-        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 20, 10))?;
+        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 10, 20))?;
+        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 10, 20))?;
+        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 10, 20))?;
+        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 10, 20))?;
 
         let models =  ws.label_models()?;
         // for mm in &models{

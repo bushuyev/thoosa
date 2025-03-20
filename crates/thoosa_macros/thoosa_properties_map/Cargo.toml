@@ -1,0 +1,13 @@
+[package]
+name = "thoosa_properties_map"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+
+
+[dependencies]
+thoosa_shared = {path = "../../thoosa_shared" }
+clap.workspace = true

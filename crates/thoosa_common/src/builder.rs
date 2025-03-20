@@ -74,7 +74,7 @@ impl Node {
 
                 let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, (i, node)| {
                     kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
-                    // kids.push(node.build_tch_module(&(vs))?);
+
                     Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
                 })?;
 

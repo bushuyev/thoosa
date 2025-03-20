@@ -29,7 +29,7 @@ use lazy_static::lazy_static;
 use num_traits::{Num, PrimInt};
 use num_traits::real::Real;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use crate::hyperparameter::{Hyperparameter, FieldName};
+use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::resource::ResourceId;
 use crate::val::{NamedRange, NamedVal, Val};
 
@@ -960,7 +960,7 @@ mod shared_tests {
     use clap::{Args, Parser};
     use log::debug;
     use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue, ResourceType, ThoosaError};
-    use crate::hyperparameter::{FieldName};
+    use crate::hyperparameter::FieldName;
     use crate::pulse_v;
     use crate::val::NamedVal;
 
@@ -1504,4 +1504,12 @@ mod shared_tests {
 
     }
 
+}
+
+pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a str, PathBuf) {
+    let parent = path.parent().expect("parent");
+    let file_stem = path.file_stem().expect("file_stem").to_str().expect("to_str");
+    let json = format!("{}.{}", file_stem, new_extension);
+    let json = parent.join(json);
+    (file_stem, json)
 }
