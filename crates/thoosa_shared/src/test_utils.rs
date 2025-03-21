@@ -40,7 +40,10 @@ pub fn init_test_logging() {
         std::panic::set_hook(Box::new(|panic_info| {
             let backtrace = std::backtrace::Backtrace::capture();
             error!("Panic info: {:?}", panic_info);
-            error!("Backtrace: {:?}", backtrace);
+            for frame in backtrace.frames() {
+                error!("{:?}", frame);
+            }
+
         }));
     }
 }

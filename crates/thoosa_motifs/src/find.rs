@@ -1028,35 +1028,35 @@ impl SelectMotifsArgs {
 
 }
 
-impl SelectMotifsParams {
-
-    pub fn find_motifs_run_ids(&self) -> &Vec<RunId> {
-        &self.find_motifs_run_ids
-    }
-
-    pub fn dummy(run_ids: Vec<RunId>, resources_group: String) -> Self {
-        SelectMotifsParams {
-            find_motifs_run_ids: run_ids,
-            resources_group,
-        }
-    }
 
 
-}
 
-impl Params<SelectMotifsRunConfig, Labeled, ()> for SelectMotifsParams {
-    fn to_run_configs(&self) -> Vec<SelectMotifsRunConfig> {
-        vec![SelectMotifsRunConfig::new()]
-    }
 
-    fn resource_config(&self) -> Labeled {
-        Labeled::new(self.resources_group.clone())
-    }
 
-    fn common_config(&self) -> () {
-        ()
-    }
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 struct ByLabelVarianceConfig {
@@ -1089,23 +1089,23 @@ impl SelectMotifsRunConfig {
     }
 }
 
-// impl RunConfig for SelectMotifsRunConfig {
-//
-//     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-//         Self {
-//             id: Some(run_id),
-//             motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default()),
-//         }
-//     }
-//
-//     fn set_id(&mut self, id: RunId) {
-//         assert!(self.id.replace(id).is_none());
-//     }
-//
-//     fn type_name() -> &'static str {
-//         "SelectMotifs"
-//     }
-// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask: &Tensor) -> (Tensor, Tensor) {
     debug!("select_motifs_by_label_variance: labels_channels_motifs_counts={:?}", labels_channels_motifs_counts.size());
@@ -1851,28 +1851,17 @@ mod motif_find_tests {
             ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
             ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
+        let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, 0.01, "test", None);
 
+        let run_config_id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
 
-        let params = FindMotifsParams {
-            step: 100.into(),
-            window: 100.into(),
-            resources: ResourceType::List(eeg_id_series),
-            min_tracker_step: Some(3),
-            chunk_size: 2,
-            dist_quantile: 0.01,
-            keep_slice_matches: false,
-            max_slices_k: None,
-            mean_k: None,
-            input_filter: None,
-        };
+        let run_ids = vec![1];
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
-        let run_ids = run_configs.iter().map(|run_config|run_config.id.expect("id")).collect::<Vec<_>>();
         find_motifs_by_euc_dist(
             None,
-            run_configs,
-            &Simple::new(params.resources),
-            &common_config,
+            vec![run_config],
+            &Simple::new(ResourceType::List(eeg_id_series)),
+            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &executor_rc,

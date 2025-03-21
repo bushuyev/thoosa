@@ -101,14 +101,7 @@ impl <T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hype
     {
 
         self.grid_run_config_source.grid_to_vals().into_iter().map(|grid_vals|{
-           /* let mut opt = TPEOptimizer::new(|opt_vals| {
 
-            },
-                ConfigurationSpace::new(run_config_source.opt_params().clone()),
-                10,
-                3,
-
-            );*/
             [
                 self.grid_run_config_source.const_config_source.const_params.as_slice(),
                 grid_vals.as_slice(),
@@ -119,35 +112,6 @@ impl <T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hype
         }).collect()
 
     }
-
-    fn run(&self){
-        let const_vals = self.grid_run_config_source().const_params();
-
-        for grid_vals in self.grid_run_config_source.grid_to_vals() {
-
-           /* let mut opt = TPEOptimizer::new(|opt_vals| {
-
-                    debug!("const_vals={const_vals:?} grid_vals={grid_vals:?}   opt_vals={opt_vals:?}");
-                    test_train_label([
-                        const_vals.as_slice(),
-                        grid_vals.as_slice(),
-                        opt_vals
-                    ].concat().into_iter().into());
-                    0.0
-                },
-                ConfigurationSpace::new(run_config_source.opt_params().clone()),
-                10,
-                3,
-            );
-
-            let best_config = opt.optimize();
-
-            debug!("best_config={:?}", best_config);
-
-            */
-        }
-    }
-
 }
 
 pub type RunId = u32;

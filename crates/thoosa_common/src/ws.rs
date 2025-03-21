@@ -437,7 +437,7 @@ impl Workspace for DummyWorkspace {
 #[cfg(test)]
 mod tests {
     use super::{DummyWorkspace, FsWorkspace, Workspace};
-    use crate::train_nets::{LabelNodeParams, MotifNodeParams};
+    use crate::train_nets::{LabelNodeParams, MaxPaddingNetParams2, MotifNodeParams};
     use log::debug;
     use std::fs;
     use std::path::Path;
@@ -496,10 +496,10 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
 
-        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 10, 20))?;
-        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 10, 20))?;
-        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 10, 20))?;
-        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 10, 20))?;
+        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
 
         let models =  ws.label_models()?;
         // for mm in &models{

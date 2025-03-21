@@ -524,7 +524,7 @@ pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
-    use crate::train_nets::{label_node, motif_node, opt_train_2, InputFilter, LabelNodeParams, MotifNodeParams, ThoModuleWithStore, TrainLabelNodeRunConfig, TrainNodesValues};
+    use crate::train_nets::{motif_node, opt_train_2, InputFilter, LabelNodeParams, MotifNodeParams, ThoModuleWithStore, TrainNodesValues};
     use crate::utils::{hist_1_dim, CompositeReducer, ListenerResponse, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
@@ -1189,20 +1189,6 @@ pub mod tests {
             hist
         )
     }
-
-    #[test]
-    fn test_load()->Result<(), ThoosaError> {
-
-
-        let motif_node_params = LabelNodeParams::from_file(&PathBuf::from("/tmp/2025-03-20T07_04_45.436_01_00_2049775321/models/labels/Label_1/23.json"))?;
-
-        let mut module = ThoModuleWithStore::load(label_node(&motif_node_params), "/tmp/2025-03-20T07_04_45.436_01_00_2049775321/models/labels/Label_1/23.safetensors".into(), Cpu)?;
-
-        debug!("module={module:?}  module.var_store().variables().len()={}", module.var_store().variables().len());
-
-        Ok(())
-    }
-
 
     // #[test]
     fn test_mem_track()->Result<(), ThoosaError>{//TODO util
