@@ -531,16 +531,6 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         }
 
         impl thoosa_shared::run_configs::RunConfig for #target_struct_ident {
-            // fn to_properties_map_(&self) -> HashMap<String, Val> {
-            //     todo!();
-            // }
-            //
-            // fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-            //     // let me = Self::from_properties_map(None, properties);
-            //     //
-            //     // me
-            //     todo!();
-            // }
 
             fn set_id(&mut self, id: RunId) {
                 #set_id

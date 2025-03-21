@@ -1,5 +1,5 @@
+#![feature(backtrace_frames)]
 // #![feature(unboxed_closures)]
-// #![feature(backtrace_frames)]
 
 
 use std::backtrace::Backtrace;
@@ -669,6 +669,13 @@ impl  From<f64> for RangeOrValue<f64>  {
         RangeOrValue::Value(value)
     }
 }
+
+impl  From<f32> for RangeOrValue<f32>  {
+    fn from(value: f32) -> Self {
+        RangeOrValue::Value(value)
+    }
+}
+
 
 impl  From<u32> for RangeOrValue<u32>  {
     fn from(value: u32) -> Self {
