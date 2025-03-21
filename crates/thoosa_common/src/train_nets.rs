@@ -54,7 +54,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
     #[arg(long)]
-    pub select_motifs_for_label_run_ids: Vec<RunId>,
+    pub motif_selection_run_id: Vec<RunId>,
 
     #[arg(long)]
     train_resource_group: String,
@@ -64,6 +64,16 @@ pub struct TrainLabelNetsArgs {
 
     #[arg(long)]
     pub run_config_cnt:String,//TrainLabelNetsRunConfig
+}
+
+impl TrainLabelNetsArgs {
+
+    pub fn resource_config(&self) -> NetResources<Labeled> {
+        NetResources::new(
+            Labeled::new(self.train_resource_group.clone()), Labeled::new(self.valid_resource_group.clone())
+        )
+    }
+
 }
 
 
@@ -1071,7 +1081,7 @@ pub fn run_opt_train_final_2 (
     train_label_nodes_run_ids: Option<&Vec<RunId>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    train_final_run_config: &OptRunConfigs<Vec<NamedVal<TrainFinalNetsRunConfigFields>>, Vec<NamedRange<TrainFinalNetsRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetsRunConfigFields>>, TrainFinalNetsRunConfigFields>,
+    train_final_run_config: &OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
     train_resources:Vec<(Resource, Vec<f32>)>,
     valid_resources: Vec<(Resource, Vec<f32>)>,
     device: &Device,
@@ -1098,7 +1108,7 @@ pub fn run_opt_train_final_2 (
 
 
     opt_train_2(
-        |vs:&VarStore, run_config_values:&TrainFinalNetsRunConfig, listener: &mut dyn TrainListener|{
+        |vs:&VarStore, run_config_values:&TrainFinalNetRunConfig, listener: &mut dyn TrainListener|{
             let batch = Rc::new(Box::new(ClassTensorsLoaderData::new(
                 train_resources.clone(),
                 valid_resources.clone(),
@@ -1432,11 +1442,11 @@ struct TrainFinalNodesRunConfigResult2 {
     loss: f32,
     var_store: VarStore,
     final_node_params: FinalNodeParams,
-    train_final_nodes_values: Option<TrainFinalNetsRunConfig>
+    train_final_nodes_values: Option<TrainFinalNetRunConfig>
 }
 
 impl TrainFinalNodesRunConfigResult2 {
-    pub fn new(train_label_nodes_run_ids: Option<&Vec<RunId>>, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: Option<TrainFinalNetsRunConfig>) -> Self {
+    pub fn new(train_label_nodes_run_ids: Option<&Vec<RunId>>, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: Option<TrainFinalNetRunConfig>) -> Self {
         Self {
             train_label_nodes_run_ids: train_label_nodes_run_ids.expect("train_label_nodes_run_ids").clone(),
             loss,
@@ -1459,7 +1469,7 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult2 {
             Some(train_final_nodes_values) => {
                 store.lock().save_run_config(
                     Some(&self.train_label_nodes_run_ids),
-                    &TrainFinalNetsRunConfig::type_name(),
+                    &TrainFinalNetRunConfig::type_name(),
                     "Final",
                     "todo",
                     train_final_nodes_values.to_properties_iter(None).collect()
@@ -1473,7 +1483,7 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult2 {
     }
 }
 
-pub fn train_final_node_2(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainFinalNetsRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
+pub fn train_final_node_2(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainFinalNetRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
     let final_node_params= FinalNodeParams::new(labels_len as i64, run_config_values.net.num_layers);
 
     let mut optimizer = nn::Adam::default();
@@ -2164,12 +2174,13 @@ pub struct LabelNodeParams {
     channels:i64,
     motif_nodes:i64,
     motif_layers:i64,
-    slices_len:i64
+    slices_len:i64,
+    net_type: LabelNetType2
 }
 
 impl LabelNodeParams {
     pub fn new(channels: i64, max_motif_nodes: i64, motif_layers:i64, slices_len:i64) -> Self {
-        Self { channels, motif_nodes: max_motif_nodes, slices_len, motif_layers }
+        Self { channels, motif_nodes: max_motif_nodes, slices_len, motif_layers, net_type: crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 }) }
     }
 
     pub fn to_properties_map(&self) -> HashMap<String, Val> {
@@ -2625,7 +2636,7 @@ where
             loss
         },
             ConfigurationSpace::new(run_config_source.opt_params().clone()),
-            10,
+            10,//TODO
             3,
         );
 
@@ -2964,7 +2975,7 @@ fn apply_motif_nets_with_padding(
 
 
 #[derive(Args, Debug, Clone)]
-pub struct TrainFinalNetsArgs {
+pub struct TrainFinalNetArgs {
     #[arg(long)]
     pub train_labels_run_ids: Vec<RunId>,
 
@@ -2978,10 +2989,20 @@ pub struct TrainFinalNetsArgs {
     pub run_config_cnt:String,//TrainLabelNetsRunConfig
 }
 
+impl TrainFinalNetArgs {
+
+    pub fn resource_config(&self) -> NetResources<Logits> {
+        NetResources::new(
+            Logits::new(self.train_resource_group.clone()), Logits::new(self.valid_resource_group.clone())
+        )
+    }
+
+}
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
-pub struct TrainFinalNetsRunConfig {
+pub struct TrainFinalNetRunConfig {
     #[in_map]
     pub id:Option<RunId>,
 
@@ -3278,50 +3299,6 @@ impl FindMotifsRunConfig {
 }
 
 
-// impl RunConfig for FindMotifsRunConfig {
-//     fn to_properties_map(&self) -> HashMap<String, Val> {
-//         let mut map = HashMap::from([
-//             ("FindMotifsRunConfig.step".into(), UInt(self.step)),
-//             ("FindMotifsRunConfig.window".into(), UInt(self.window)),
-//             ("FindMotifsRunConfig.dist_quantile".into(), self.dist_quantile.into()),
-//             ("FindMotifsRunConfig.descr".into(), self.descr.as_str().into()),
-//         ]);
-//
-//         if let Some(filter) = self.filter.as_ref() {
-//             map.extend(thoosa_shared::val::prefix_properties("FindMotifsRunConfig.filter", filter.to_properties_map()).into_iter());
-//         }
-//
-//         map
-//     }
-//
-//     //TODO set id
-//     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-//         debug!("FindMotifsRunConfig::from_properties_map: run_id={run_id} properties={properties:?}");
-//
-//         let properties = unprefix_properties("FindMotifsRunConfig", &properties);
-//         let find_motifs_run_config = FindMotifsRunConfig::new(
-//             None,
-//             properties.get("step").expect("no step").try_into().expect("step as_u32"),
-//             properties.get("window").expect("no window").try_into().expect("window as_u32"),
-//             properties.get("dist_quantile").expect("no dist_quantile").try_into().expect("dist_quantile as_f32"),
-//             <&Val as TryInto<String>>::try_into(properties.get("descr").expect("no descr")).expect("descr as_str"),
-//             InputFilter::from_properties_map(&thoosa_shared::val::unprefix_properties("filter", &properties)),
-//         );
-//
-//         debug!("FindMotifsRunConfig::from_properties_map: find_motifs_run_config={find_motifs_run_config:?}");
-//
-//         find_motifs_run_config
-//     }
-//
-//     fn set_id(&mut self, id: RunId) {
-//         self.id.replace(id);
-//     }
-//
-//     fn type_name() -> &'static str {
-//         "FindMotifs"
-//     }
-// }
-
 impl FindMotifsRunConfig {
     pub fn new(id: Option<u32>,
                step: u32,
@@ -3373,57 +3350,26 @@ pub struct Conv1Params {
     padding: i64,
 }
 
-// impl InputFilter {
-//     pub fn to_properties_map(&self) -> HashMap<String, Val> {
-//         match self {
-//             Self::Conv1(conv1_params) => {
-//                 conv1_params.to_properties_map().into_iter().fold(HashMap::new(), |mut a, v| {
-//                     a.insert(format!("conv_1.{}", v.0), v.1);
-//                     a
-//                 })
-//             }
-//         }
-//     }
-//
-//     pub fn from_properties_map(properties: &HashMap<String, Val>) -> Option<Self> {
-//         let conv_1_props = thoosa_shared::val::unprefix_properties("conv_1", &properties);
-//         if conv_1_props.len() > 0 {
-//             assert!(conv_1_props.len() == 3);
-//             Conv1Params::from_properties_map(conv_1_props).map(|props| InputFilter::Conv1(props)).ok()
-//         } else {
-//             None
-//         }
-//     }
-// }
 
 impl Conv1Params {
     pub fn new(kernel: i64, stride: i64, padding: i64) -> Self {
         Self { kernel, stride, padding }
     }
 
-    // pub fn to_properties_map(&self) -> HashMap<String, Val> {
-    //     HashMap::from([
-    //         ("Conv1Params.kernel".into(), self.kernel.into()),
-    //         ("Conv1Params.stride".into(), self.stride.into()),
-    //         ("Conv1Params.padding".into(), self.padding.into()),
-    //     ])
-    // }
-    //
-    // pub fn from_properties_map(properties: HashMap<String, Val>) -> Result<Self, ThoosaError> {
-    //     let properties = thoosa_shared::val::unprefix_properties("Conv1Params", &properties);
-    //
-    //     Ok(Conv1Params {
-    //         kernel: properties.get("kernel").expect("kernel").try_into().expect("kernel as_i64"),
-    //         stride: properties.get("stride").expect("stride").try_into().expect("stride as_i64"),
-    //         padding: properties.get("padding").expect("padding").try_into().expect("padding as_i64"),
-    //     })
-    // }
 }
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Clone, PartialEq)]
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LabelNetType2 {
     MaxPadding(MaxPaddingNetParams2),
 
     FixedNumSlices(FixedNumSlicesNetParams2),
+}
+
+//TODO remove
+impl Default for LabelNetType2 {
+    fn default() -> LabelNetType2 {
+        crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })
+    }
 }
 
 #[derive(Debug, Subcommand, Clone)]
@@ -3441,7 +3387,7 @@ pub struct MaxPaddingNetParams {
     num_layers: RangeOrValue<u32>,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize,  Debug, Clone, PartialEq)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize,  Debug, Clone, PartialEq)]
 pub struct MaxPaddingNetParams2 {
     #[in_map]
     #[run_config]
@@ -3458,7 +3404,7 @@ pub struct FixedNumSlicesNetParams {
     pub slices_len: RangeOrValue<u32>,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Clone, PartialEq)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct  FixedNumSlicesNetParams2 {
     #[in_map]
     #[run_config]
