@@ -1923,8 +1923,8 @@ fn run_train_motif_nodes_2(
             train_motifs_nodes_run_configs,
             device,
             "motifs"
-        ).map(|(var_store, motif_node_params, train_motifs_nodes_values, min_loss)|{
-            Box::new(TrainMotifsNetsRunConfigResult2::new(min_loss, channel as u32, *motif_id, var_store, find_motifs_run_id/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nodes_values)) as Box<dyn SavableOptResult>
+        ).map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)|{
+            Box::new(TrainMotifsNetsRunConfigResult2::new(min_loss, channel as u32, *motif_id, var_store, find_motifs_run_id/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)) as Box<dyn SavableOptResult>
 
         })
 

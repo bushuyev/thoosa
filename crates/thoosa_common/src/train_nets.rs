@@ -690,12 +690,12 @@ pub struct TrainLabelNetsRunConfigResult2 {
     label:String,
     loss: f32,
     label_node_params: LabelNodeParams,
-    train_label_nets_run_config: Option<TrainLabelNetsRunConfig>,
+    train_label_nets_run_config: TrainLabelNetsRunConfig,
     var_store: VarStore
 }
 
 impl TrainLabelNetsRunConfigResult2 {
-    pub fn new(find_motifs_run_id:RunId, label:String, loss: f32, label_node_params: LabelNodeParams, train_motifs_nodes_values: Option<TrainLabelNetsRunConfig>, var_store: VarStore) -> Self {
+    pub fn new(find_motifs_run_id:RunId, label:String, loss: f32, label_node_params: LabelNodeParams, train_motifs_nodes_values: TrainLabelNetsRunConfig, var_store: VarStore) -> Self {
         Self {
             select_motifs_for_label_run_id: find_motifs_run_id,
             label,
@@ -713,19 +713,13 @@ impl SavableOptResult for TrainLabelNetsRunConfigResult2 {
     }
 
     fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        let run_config_id = match self.train_label_nets_run_config.as_ref(){
-            None => self.select_motifs_for_label_run_id,
-
-            Some(train_motifs_nodes_values) => {
-                store.lock().save_run_config(
-                    Some(&[self.select_motifs_for_label_run_id]),
-                    &TrainLabelNetsRunConfig::type_name(),
-                    "Label",
-                    "todo",
-                    train_motifs_nodes_values.to_properties_iter(None).collect()
-                )?
-            }
-        };
+        let run_config_id =  store.lock().save_run_config(
+            Some(&[self.select_motifs_for_label_run_id]),
+            &TrainLabelNetsRunConfig::type_name(),
+            "Label",
+            "todo",
+            self.train_label_nets_run_config.to_properties_iter(None).collect()
+        )?;
 
         ws.read().save_label_model(run_config_id, &self.label, &self.var_store, &self.label_node_params).expect("save_label_model failed");
 
@@ -1442,17 +1436,17 @@ struct TrainFinalNodesRunConfigResult2 {
     loss: f32,
     var_store: VarStore,
     final_node_params: FinalNodeParams,
-    train_final_nodes_values: Option<TrainFinalNetRunConfig>
+    train_final_net_run_config: TrainFinalNetRunConfig
 }
 
 impl TrainFinalNodesRunConfigResult2 {
-    pub fn new(train_label_nodes_run_ids: Option<&Vec<RunId>>, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: Option<TrainFinalNetRunConfig>) -> Self {
+    pub fn new(train_label_nodes_run_ids: Option<&Vec<RunId>>, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: TrainFinalNetRunConfig) -> Self {
         Self {
             train_label_nodes_run_ids: train_label_nodes_run_ids.expect("train_label_nodes_run_ids").clone(),
             loss,
             var_store,
             final_node_params,
-            train_final_nodes_values,
+            train_final_net_run_config: train_final_nodes_values,
         }
     }
 }
@@ -1463,19 +1457,13 @@ impl SavableOptResult for TrainFinalNodesRunConfigResult2 {
     }
 
     fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        let run_config_id = match self.train_final_nodes_values.as_ref(){
-            None => panic!("no train_final_nodes_values"),
-
-            Some(train_final_nodes_values) => {
-                store.lock().save_run_config(
-                    Some(&self.train_label_nodes_run_ids),
-                    &TrainFinalNetRunConfig::type_name(),
-                    "Final",
-                    "todo",
-                    train_final_nodes_values.to_properties_iter(None).collect()
-                )?
-            }
-        };
+        let run_config_id =                 store.lock().save_run_config(
+            Some(&self.train_label_nodes_run_ids),
+            &TrainFinalNetRunConfig::type_name(),
+            "Final",
+            "todo",
+            self.train_final_net_run_config.to_properties_iter(None).collect()
+        )?;
 
         ws.read().save_final_model(run_config_id, &self.var_store, &self.final_node_params).expect("save_final_model failed");
 
@@ -2453,12 +2441,12 @@ pub struct TrainMotifsNetsRunConfigResult2 {
     motif_id:usize,
     vs:VarStore,
     params:MotifNodeParams,
-    run_config_values: Option<TrainMotifsNetsRunConfig>,
+    run_config_values: TrainMotifsNetsRunConfig,
     find_motifs_run_id: RunId
 }
 
 impl TrainMotifsNetsRunConfigResult2 {
-    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, find_motifs_run_id: RunId, params: MotifNodeParams, run_config_values: Option<TrainMotifsNetsRunConfig>) -> Self {
+    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, find_motifs_run_id: RunId, params: MotifNodeParams, run_config_values: TrainMotifsNetsRunConfig) -> Self {
         Self { loss, channel, motif_id, vs, params, run_config_values, find_motifs_run_id }
     }
 }
@@ -2470,20 +2458,13 @@ impl SavableOptResult for TrainMotifsNetsRunConfigResult2 {
     }
 
     fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        let run_config_id = match self.run_config_values.as_ref() {
-            None => {
-                panic!("no pre saved run configs")//TODO
-            },
-            Some(run_config_values) => {
-                store.lock().save_run_config(
-                    Some(&[self.find_motifs_run_id]),
-                    &TrainMotifsNodesRunConfig::type_name(),
-                    "TrainMotifsNetsRunConfigResult2",
-                    "todo",
-                    run_config_values.to_properties_iter(None).collect()
-                )?
-            }
-        };
+        let run_config_id = store.lock().save_run_config(
+            Some(&[self.find_motifs_run_id]),
+            &TrainMotifsNodesRunConfig::type_name(),
+            "TrainMotifsNetsRunConfigResult2",
+            "todo",
+            self.run_config_values.to_properties_iter(None).collect()
+        )?;
 
         ws.read().save_motif_model(&self.channel, &run_config_id, &self.motif_id, &self.vs, &self.params)?;
 
@@ -2593,7 +2574,7 @@ pub fn opt_train_2<P, R, F, N: Debug + Default>( //N node parameters
     run_config_source: &OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
     device: Device,
     descr: &str,
-) -> Result<(VarStore, N, Option<R>, f32), ThoosaError>
+) -> Result<(VarStore, N, R, f32), ThoosaError>
 where
     P: FieldName,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>>,
@@ -2601,7 +2582,7 @@ where
 {
     let const_vals = run_config_source.grid_run_config_source().const_params();
     let mut min_loss = f32::MAX;
-    let mut min_var_store: Option<(VarStore, N, Option<R>, f32)> = None;
+    let mut min_var_store: Option<(VarStore, N, R, f32)> = None;
     info!("running opt train {descr}");
 
     run_config_source.grid_to_vals().into_iter().for_each(|grid_vals| {
@@ -2630,7 +2611,7 @@ where
             debug!("opt_train: descr={descr} run_config_values={run_config:?} loss={loss}");
             if loss < min_loss {
                 min_loss = loss;
-                min_var_store.replace((vs, node_params, Some(run_config), min_loss));
+                min_var_store.replace((vs, node_params, run_config, min_loss));
             }
             print!(".");
             loss
