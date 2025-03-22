@@ -175,7 +175,7 @@ impl <R:ResourcesConfig> Display for NetResources<R> {
     }
 }
 
-pub trait SavableOptResult:Sync+Send+Debug{
+pub trait SavableResult:Sync+Send+Debug{
     fn value(&self)->f32;
     fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError>;
 }
@@ -184,12 +184,12 @@ pub trait SavableOptResult:Sync+Send+Debug{
 pub struct DummySavableOptResult;
 
 impl DummySavableOptResult {
-    pub fn new() -> Box<dyn SavableOptResult> {
+    pub fn new() -> Box<dyn SavableResult> {
        Box::new(Self)
     }
 }
 
-impl SavableOptResult for DummySavableOptResult {
+impl SavableResult for DummySavableOptResult {
     fn value(&self) -> f32 {
         0.
     }
