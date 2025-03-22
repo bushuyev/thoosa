@@ -1386,28 +1386,6 @@ impl OptConfig {
     }
 }
 
-
-#[derive(Debug, Clone)]
-pub enum ValuesOrOptSpace<V:Display> {
-    Values (V),
-    OptSpace{opt_space:ConfigurationSpace<String>,opt_config:OptConfig}
-}
-
-#[derive(Clone, Debug)]
-pub struct TrainMotifsNodesRunConfig {
-    id:Option<RunId>,
-
-    run_config_or_opt_space: ValuesOrOptSpace<TrainNodesValues>
-
-}
-
-impl ToHashmap for TrainMotifsNodesRunConfig {
-
-    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
-        todo!()
-    }
-}
-
 // unsafe impl Sync for TrainMotifsNodesRunConfig{}
 pub fn adam_w_hyperparams() -> Vec<Hyperparameter<String>>{
     vec![
@@ -1501,33 +1479,6 @@ impl From<TrainNodesValues> for HashMap<String, Val>   {
     }
 }
 
-impl TrainMotifsNodesRunConfig {
-    pub fn from_values(id: Option<RunId>, lr: f64, num_layers: u32) -> Self {
-        Self {
-            id,
-            run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {lr, num_layers, adam_w: None}),
-        }
-    }
-
-    pub fn from_opt_space(id: Option<RunId>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
-        Self {
-            id,
-            run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
-        }
-    }
-}
-
-impl RunConfig for TrainMotifsNodesRunConfig{
-
-
-    fn set_id(&mut self, id: RunId) {
-        self.id.replace(id);
-    }
-
-    fn type_name() -> &'static str {
-        "MotifNode"
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNodeParams {
@@ -1903,7 +1854,7 @@ impl SavableOptResult for TrainMotifsNetsRunConfigResult2 {
     fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
         let run_config_id = store.lock().save_run_config(
             Some(&[self.find_motifs_run_id]),
-            &TrainMotifsNodesRunConfig::type_name(),
+            &TrainMotifsNetsRunConfig::type_name(),
             "TrainMotifsNetsRunConfigResult2",
             "todo",
             self.run_config_values.to_properties_iter(None).collect()
@@ -2559,7 +2510,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNodesValues, TrainNodesValues, ValuesOrOptSpace};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNodesValues, TrainNodesValues};
     use crate::train_nets::{load_label_models_ws, load_motif_models, CommonTrainLabelNodeRunConfig, InferArgs, LabelNodeParams, MotifNodeParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
