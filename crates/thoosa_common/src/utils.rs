@@ -524,7 +524,7 @@ pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
-    use crate::train_nets::{motif_node, opt_train_2, InputFilter, LabelNodeParams, MotifNodeParams, ThoModuleWithStore, TrainNodesValues};
+    use crate::train_nets::{motif_node, opt_train, InputFilter, LabelNodeParams, MotifNodeParams, ThoModuleWithStore, TrainNodesValues};
     use crate::utils::{hist_1_dim, CompositeReducer, ListenerResponse, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;

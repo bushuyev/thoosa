@@ -53,7 +53,7 @@ use thoosa_common::{loader, panic_to_err};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
-use thoosa_common::runs::{Labeled, Params, SavableOptResult, Simple};
+use thoosa_common::runs::{Labeled, SavableOptResult, Simple};
 use thoosa_common::train_nets::*;
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::run_configs::RunConfig;
@@ -70,39 +70,6 @@ use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 
-#[derive(Debug, Args, Clone)]
-pub struct FindMotifsParams {//TODO pub
-    #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "1000")]
-    pub step: RangeOrValue<u32>,
-
-    #[arg(long, value_parser=parse_range_or_value::<u32>, default_value = "1000")]
-    pub window: RangeOrValue<u32>,
-
-    #[arg(long,value_parser=parse_resources)]
-    pub resources: ResourceType,
-
-    #[arg(long)]
-    pub min_tracker_step: Option<usize>,
-
-    #[arg(long, default_value_t = 100)]
-    pub chunk_size: u32,
-
-    #[arg(long, default_value_t = false)]
-    pub keep_slice_matches: bool,
-
-    #[arg(long)]
-    pub max_slices_k: Option<f32>,
-
-    #[command(subcommand)]
-    pub input_filter: Option<InputFilter>,
-
-    #[arg(long, default_value_t = 0.01)]
-    pub dist_quantile: f32,//TODO Option
-
-    #[arg(long)]
-    pub mean_k: Option<f32>,
-
-}
 
 
 #[derive(Debug, Args, Clone)]
@@ -157,75 +124,6 @@ impl CommonFindMotifsConfig {
             mean_k: mean_k.unwrap_or(0.01),
         }
     }
-}
-
-impl Params<FindMotifsRunConfig, Simple, CommonFindMotifsConfig> for FindMotifsParams {
-    fn to_run_configs(&self) -> Vec<FindMotifsRunConfig> {
-
-        debug!("FindMotifsParams::to_run_configs: self.step={:?} self.window={:?}", self.step, self.window);
-
-        make_combos([
-            self.step.clone().into_iter(),
-            self.window.clone().into_iter(),
-        ].into_iter()).into_iter().map(|config_combo|{
-            debug!("FindMotifsParams::to_run_configs: config_combo={config_combo:?} ");
-            FindMotifsRunConfig::new(None, config_combo[0], config_combo[1], self.dist_quantile, "".to_string(), None)
-        }).collect()
-    }
-
-    fn resource_config(&self) -> Simple {
-        Simple::new(
-            self.resources.clone()
-        )
-    }
-
-    fn common_config(&self) -> CommonFindMotifsConfig {
-
-        CommonFindMotifsConfig {
-            chunk_size: self.chunk_size,
-            min_tracker_step: self.min_tracker_step,
-            keep_slice_matches: self.keep_slice_matches,
-            max_slices_k: self.max_slices_k,
-            mean_k: self.mean_k.unwrap_or(0.01),
-        }
-    }
-}
-
-
-impl FindMotifsParams {
-    // #[cfg(test)]
-    pub fn dummy(step: u32, window: impl Into<RangeOrValue<u32>>, group: String, chunk_size: u32, dist_quantile: f32, input_filter: Option<&InputFilter>, min_tracker_step: Option<usize>, keep_slice_matches: bool, max_slices_k: Option<f32>, mean_k: Option<f32>) -> Self {
-        FindMotifsParams {
-            step:step.into(),
-
-            window:window.into(),
-
-            resources: ResourceType::Group(group),
-
-            min_tracker_step,
-
-            chunk_size,
-
-            dist_quantile,
-
-            keep_slice_matches,
-
-            max_slices_k,
-
-            mean_k,
-
-            input_filter: input_filter.cloned(),
-        }
-    }
-
-    pub fn resources(&self) -> &ResourceType {
-        &self.resources
-    }
-
-    pub fn max_dist_k(&self) -> f32 {
-        self.dist_quantile
-    }
-
 }
 
 pub fn find_motifs_by_euc_dist(
@@ -1539,10 +1437,10 @@ mod motif_find_tests {
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::clc_dist_d2;
     use crate::find::select_motifs_by_corr;
-    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsParams, MotifTrackerStore};
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::runs::{Params, Simple};
+    use thoosa_common::runs::{Simple};
     use thoosa_common::train_nets::{Conv1Params, FindMotifsRunConfig, InputFilter};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_properties_map::ToHashmap;
@@ -1954,35 +1852,22 @@ mod motif_find_tests {
         ]))?;
 
 
-        let params = FindMotifsParams {
-            step: 100.into(),
-            window: 100.into(),
-            resources: ResourceType::List(eeg_id_series),
-            min_tracker_step: Some(3),
-            chunk_size: 2,
-            dist_quantile: 0.1,
-            keep_slice_matches: false,
-            max_slices_k: None,
-            mean_k: None,
-            input_filter: None,
-        };
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        run_config.set_id(id);
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
-        let run_ids = run_configs.iter().map(|run_config|run_config.id.expect("id")).collect::<Vec<_>>();
-
-
-        find_motifs_by_euc_dist(
+        let run_ids = find_motifs_by_euc_dist(
             None,
-            run_configs,
-            &Simple::new(params.resources),
-            &common_config,
+            vec![run_config],
+            &Simple::new(ResourceType::List(eeg_id_series)),
+            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &loader,
             vec![Cpu]
         )?;
 
-        let slices = store.lock().list_motifs_slices(run_ids[0])?;
+        let slices = store.lock().list_motifs_slices(id)?;
 
         let motif_id_set = slices
             .iter()
@@ -2113,17 +1998,6 @@ mod motif_find_tests {
         store.lock().list_resources_by_file_stems(&vec!["1111", "2222", "3333"])
     }
 
-    fn to_test_run_config(store: &Arc<Mutex<Box<dyn Store>>>, params: &FindMotifsParams, file_motif_tracker: bool) -> (CommonFindMotifsConfig, Vec<FindMotifsRunConfig>) {
-        let mut common_config = params.common_config();
-        common_config.keep_slice_matches = file_motif_tracker;
-        let mut run_configs = params.to_run_configs();
-        run_configs.iter_mut().for_each(|c| {
-            let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", c.to_properties_iter(None).collect()).unwrap();
-            c.set_id(id);
-        });
-        (common_config, run_configs)
-    }
-
     #[test]
     fn test_find_motifs_by_euc_dist_with_smooth_kernel() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -2152,7 +2026,7 @@ mod motif_find_tests {
          ).unwrap();
          */
 
-        let executor_rc = Arc::new(RwLock::new(LoadRunner::new(
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
                 let sig = match key.file_stem() {
                     "1111" => &sig_0,
@@ -2179,31 +2053,18 @@ mod motif_find_tests {
             ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
 
-        let params = FindMotifsParams {
-            step: 100.into(),
-            window: 100.into(),
-            resources: ResourceType::List(eeg_id_series),
-            min_tracker_step: Some(3),
-            chunk_size: 2,
-            dist_quantile: 0.0001,
-            keep_slice_matches: false,
-            max_slices_k: None,
-            mean_k: None,
-            input_filter: Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))),
-        };
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        run_config.set_id(id);
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
-
-        let run_ids = run_configs.iter().map(|run_config|run_config.id.expect("id")).collect::<Vec<_>>();
-
-        find_motifs_by_euc_dist(
+        let run_ids = find_motifs_by_euc_dist(
             None,
-            run_configs,
-            &Simple::new(params.resources),
-            &common_config,
+            vec![run_config],
+            &Simple::new(ResourceType::List(eeg_id_series)),
+            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
-            &executor_rc,
+            &loader,
             vec![Cpu]
         )?;
 
@@ -2211,7 +2072,7 @@ mod motif_find_tests {
         debug!("run_ids={:?}", run_ids);
 
         debug!("{:?}", store.lock().list_run_resources(1)?);
-        let slices = store.lock().list_motifs_slices(run_ids[0])?;
+        let slices = store.lock().list_motifs_slices(id)?;
         debug!("0: {:?}", slices.get(&resources[0]));
         debug!("1: {:?}", slices.get(&resources[1]));
         debug!("2: {:?}", slices.get(&resources[2]));
@@ -2280,27 +2141,16 @@ mod motif_find_tests {
             ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
 
-        let params = FindMotifsParams {
-            step: 50.into(),
-            window: 100.into(),
-            resources: ResourceType::List(eeg_id_series),
-            min_tracker_step: Some(3),
-            chunk_size: 2,
-            dist_quantile: 0.0001,
-            keep_slice_matches: false,
-            max_slices_k: None,
-            mean_k: None,
-            input_filter: None,
-        };
 
-
-        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        run_config.set_id(id);
 
         let run_ids = find_motifs_by_euc_dist(
             None,
-            run_configs,
-            &Simple::new(params.resources),
-            &common_config,
+            vec![run_config],
+            &Simple::new(ResourceType::List(eeg_id_series)),
+            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &loader,
@@ -2364,26 +2214,16 @@ mod motif_find_tests {
             a
         }))?;
 
-        let params = FindMotifsParams {
-            step: 100.into(),
-            window: 100.into(),
-            resources: ResourceType::List((0..tensors_len).map(|v| format!("{}", v)).collect()),
-            min_tracker_step: None,
-            chunk_size: 3,
-            dist_quantile: 0.01,
-            keep_slice_matches: false,
-            max_slices_k: None,
-            mean_k: None,
-            input_filter: None,
-        };
 
-        let (common_config, run_configs) = to_test_run_config(&store, &params, false);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        run_config.set_id(id);
 
         let run_ids = find_motifs_by_euc_dist(
             None,
-            run_configs,
-            &Simple::new(params.resources),
-            &common_config,
+            vec![run_config],
+            &Simple::new(ResourceType::List((0..tensors_len).map(|v| format!("{}", v)).collect())),
+            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &loader,
@@ -2712,31 +2552,10 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_filter_and_slicer_params() {
-        let params = FindMotifsRunConfig::new(None, 10, 10, 1.0, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
+    fn test_find_motifs_run_config_to_from_map() {
+        let params = FindMotifsRunConfig::new(Some(0), 10, 10, 1.0, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
 
         let properties: HashMap<String, Val> = params.to_properties_iter(None).collect();
-
-        debug!("properties={:?}", properties);
-
-        let sample_properties: HashMap<String, Val> = HashMap::from([
-            ("FindMotifsRunConfig.window".into(), UInt(10)),
-            ("FindMotifsRunConfig.step".into(), UInt(10)),
-            ("FindMotifsRunConfig.dist_quantile".into(), 1.0.into()),
-            ("FindMotifsRunConfig.descr".into(), "test".into()),
-            ("FindMotifsRunConfig.filter.conv_1.Conv1Params.padding".into(), 1.into()),
-            ("FindMotifsRunConfig.filter.conv_1.Conv1Params.stride".into(), 1.into()),
-            ("FindMotifsRunConfig.filter.conv_1.Conv1Params.kernel".into(), 10.into()),
-        ]);
-
-        //
-        // assert_eq!(sample_properties.len(), properties.len(), "len is not same");
-        // for (key, val) in sample_properties.iter() {
-        //     if properties.get(key).expect(key).ne(val) {
-        //         debug!("wrong val key={key:?} sample_val={val:?} properties_val={:?} ", properties.get(key));
-        //     }
-        // }
-        assert_eq!(sample_properties, properties);
 
         let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map__(0, &properties).unwrap();
 
