@@ -3,7 +3,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
-use crate::runs::{Empty, Labeled, Logits, NetResources, Params, SavableOptResult, Simple};
+use crate::runs::{Empty, Labeled, Logits, NetResources, SavableOptResult, Simple};
 use crate::{panic_to_err, train_nets};
 use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
 use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
@@ -586,62 +586,7 @@ impl SavableOptResult for TrainLabelNetsRunConfigResult2 {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//TODO renamed to nets
-pub fn run_opt_train_label_nodes_2 (
+pub fn run_opt_train_label_nets(
     select_motifs_for_label_run_id:&RunId,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
@@ -667,7 +612,7 @@ pub fn run_opt_train_label_nodes_2 (
 
     debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} slices_len={slices_len} channels={channels} cuda_mem={:?}", cuda_mem());
 
-    opt_train_2(
+    opt_train(
         |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, _listener: &mut dyn TrainListener|{//TODO add _listener to train_label_nodes_2
 
             let batch = Rc::new(Box::new(LoadingTensorsDataBatch::new(
@@ -791,7 +736,7 @@ fn view_for_label_model(t: Tensor, channels: i64, max_motif_nets: i64, motif_bat
     t
 }
 
-pub fn run_opt_train_final_2 (
+pub fn run_opt_train_final_net(
     train_label_nodes_run_ids: Option<&Vec<RunId>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
@@ -821,7 +766,7 @@ pub fn run_opt_train_final_2 (
     let max_input = ws.read().max_input() as u32;
 
 
-    opt_train_2(
+    opt_train(
         |vs:&VarStore, run_config_values:&TrainFinalNetRunConfig, listener: &mut dyn TrainListener|{
             let batch = Rc::new(Box::new(ClassTensorsLoaderData::new(
                 train_resources.clone(),
@@ -1359,18 +1304,6 @@ pub struct CommonTrainingArgs {
     pub opt_n_init: u32,
 }
 
-#[derive(Args, Debug, Clone)]
-pub struct TrainMotifsNetsParams {
-
-    #[arg(long)]
-    pub motif_selection_run_id: Vec<RunId>,
-
-    #[arg(long, value_parser=parse_range_or_value::<u32>)]
-    pub num_layers: RangeOrValue<u32>,
-
-    #[command(flatten)]
-    common: CommonTrainingArgs
-}
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
@@ -1596,96 +1529,6 @@ impl RunConfig for TrainMotifsNodesRunConfig{
     }
 }
 
-impl Params<TrainMotifsNodesRunConfig, Empty, CommonTrainingArgs> for TrainMotifsNetsParams {
-
-    fn to_run_configs(&self) -> Vec<TrainMotifsNodesRunConfig> {
-
-        if let Some(config_space) = self.to_config_space() {
-
-            debug!("TrainMotifsNodesParams::to_run_configs: config_space={config_space:?}");
-            vec![
-                TrainMotifsNodesRunConfig::from_opt_space(None, config_space, OptConfig::new(self.common.opt_max_evals, self.common.opt_n_init))
-            ]
-
-        } else {
-            //TODO avoid collecting
-            let v = make_combos([
-                self.common.lr.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
-                self.num_layers.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
-            ].into_iter()).into_iter().map(|mut config_combo:Vec<Val>|{
-                debug!("TrainMotifsNodesParams::to_run_configs: config_combo={config_combo:?} ");
-                let num_layers = config_combo.pop().unwrap().try_into().unwrap();
-                let lr = config_combo.pop().unwrap().try_into().unwrap();
-                TrainMotifsNodesRunConfig::from_values(
-                    None,
-                    lr,
-                    num_layers,
-                )
-            }).collect();
-
-            debug!("TrainMotifsNodesParams::to_run_configs: self.lr={:?} self.num_layers={:?} v={v:?}", self.common.lr, self.num_layers);
-
-            v
-        }
-    }
-
-    fn resource_config(&self) -> Empty {
-        Empty{}
-    }
-
-    fn common_config(&self) -> CommonTrainingArgs {
-        CommonTrainingArgs {
-            batch_size: self.common.batch_size,
-            cycles: self.common.cycles,
-            max_loss: self.common.max_loss,
-            opt_max_evals: 0,
-            lr: 0.01.into(),
-            opt_n_init: 0,
-        }
-    }
-}
-
-impl TrainMotifsNetsParams {
-
-    pub fn dummy(motif_selection_run_id:Vec<RunId>, cycles: usize, max_loss: f32, batch_size:usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self{
-
-        let lr = lr.into();
-
-        if let RangeOrValue::Range{range, step} = &lr{
-            assert!(range.end > range.start);
-        }
-
-        TrainMotifsNetsParams {
-            motif_selection_run_id,
-
-            num_layers: num_layers.into(),
-
-            common: CommonTrainingArgs {
-                cycles,
-
-                lr,
-
-                max_loss,
-
-                batch_size,
-
-                opt_max_evals,
-
-                opt_n_init,
-            }
-        }
-    }
-
-    //TODO add explicit flag to enable optimization
-    pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
-        [
-            ("lr".into(), &self.common.lr).try_into().ok(),
-            ("num_layers".into(), &self.num_layers).try_into().ok(),
-        ].into_iter()
-            .collect::<Option<Vec<Hyperparameter<String>>>>()
-            .map(|v|ConfigurationSpace::new(v))
-    }
-}
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNodeParams {
     num_features: i64,
@@ -1745,7 +1588,6 @@ pub fn motif_node(params: &MotifNodeParams) -> Node {
             net = net.linear_s(params.num_features * 2)
                 .func(Tensor::relu);
         }
-
 
     net
         // .linear_s(180)
@@ -2118,63 +1960,11 @@ impl SavableOptResult for TrainMotifsNodesRunConfigResult {
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-pub fn opt_train_2<P, R, F, N: Debug + Default>( //N node parameters
-    mut train: F,
-    run_config_source: &OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
-    device: Device,
-    descr: &str,
+pub fn opt_train<P, R, F, N: Debug + Default>( //N node parameters
+                                               mut train: F,
+                                               run_config_source: &OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
+                                               device: Device,
+                                               descr: &str,
 ) -> Result<(VarStore, N, R, f32), ThoosaError>
 where
     P: FieldName,
@@ -2235,78 +2025,7 @@ where
     min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
 }
 
-
-
-pub fn opt_train<F, V, N:Debug+Default>(mut train: F, run_config: &ValuesOrOptSpace<V>, device: Device, descr: &str) -> Result<(VarStore, N, Option<V>, f32), ThoosaError>//Option<V> - Some if run config from opt
-where
-    F: FnMut(&VarStore, &V, &mut PlotVecf32) -> Result<(f32, N), ThoosaError>,
-    for<'a> <V as TryFrom<&'a [NamedVal<String>]>>::Error: Debug,//TODO remove Vec
-    V: Clone + Display + Debug + for<'a> TryFrom<&'a [NamedVal<String>]>,
-{
-
-    match &run_config {
-
-        ValuesOrOptSpace::Values(v) => {
-            let vs = VarStore::new(device);
-
-            debug!("opt_train no opt: v={v:?}");
-            let mut listener = PlotVecf32::new(format!("_params_{}", v).as_str()); //motif_id ?
-            let (loss, node_params) = train(&vs, v, &mut listener)?;
-            listener.plot();
-
-            debug!("opt_train: done no opt, descr={descr} loss={loss}");
-            Ok((vs, node_params, None, loss))
-        }
-
-        ValuesOrOptSpace::OptSpace{opt_space,opt_config} => {
-            let mut min_loss = f32::MAX;
-            let mut min_var_store: Option<(VarStore, N, Option<V>, f32)> = None;
-            info!("running opt train {descr}");
-
-            let mut opt = crate::parzen::optimizer::TPEOptimizer::new(
-                |params| {
-                    let run_config_values: V = params.try_into().expect("can't convert params into TrainNodesValues"); //TODO handle
-
-                    let vs = VarStore::new(device);
-
-                    let mut listener = PlotVecf32::new(format!("_params_{}", run_config_values).as_str()); //motif_id ?
-                    let (loss, node_params) =  match panic_to_err!(train(&vs, &run_config_values, &mut listener)){
-                        Ok(v) => {
-                           v
-                        }
-                        Err(e) => {
-                            warn!("opt_train failed with {e:?} on {run_config_values:?}");
-                            (f32::MAX, Default::default())
-                        }
-                    };
-                    listener.plot();
-
-                    debug!("opt_train: descr={descr} params={params:?} run_config_values={run_config_values:?} loss={loss}");
-                    if loss < min_loss {
-                        min_loss = loss;
-                        min_var_store.replace((vs, node_params, Some(run_config_values), min_loss));
-                    }
-                    print!(".");
-                    loss
-                },
-                opt_space.clone(),
-                opt_config.max_evals as usize, //common_config.opt_max_evals as usize,
-                opt_config.n_init as usize, //common_config.opt_n_init as usize,
-
-            );
-
-            let best_config = opt.optimize();
-            trace!("done opt {descr}");
-            info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
-
-            min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
-            // min_var_store.unwrap_or_else(|| (VarStore::new(Cpu), Default::default(), Some(vec![]), f32::MAX))
-        }
-    }
-
-}
-
-pub fn run_train_motif_2(motif_width: i64, run_config: &TrainMotifsNetsRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, listener: &mut dyn TrainListener) -> Result<(f32, MotifNodeParams), ThoosaError> {
+pub fn run_train_motif_net(motif_width: i64, run_config: &TrainMotifsNetsRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, listener: &mut dyn TrainListener) -> Result<(f32, MotifNodeParams), ThoosaError> {
     let node_params = MotifNodeParams::new(motif_width, run_config.num_layers as i64);
 
     let loss=  train(
@@ -2323,30 +2042,6 @@ pub fn run_train_motif_2(motif_width: i64, run_config: &TrainMotifsNetsRunConfig
         },
         run_config.common_training_args.cycles as usize,
         AdamW::default().build(&vs, run_config.common_training_args.lr).unwrap(),
-        |t| t,
-        Some(listener),
-    )?;
-
-    Ok((loss, node_params))
-}
-
-fn run_train_motif(motif_width: i64, common_config: &CommonTrainingArgs, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, run_config_vals:&TrainNodesValues, listener: &mut PlotVecf32) -> Result<(f32, MotifNodeParams), ThoosaError> {
-    let node_params = MotifNodeParams::new(motif_width, run_config_vals.num_layers as i64);
-
-    let loss=  train(
-        &device,
-        batch as &mut dyn DataBatch,
-        &motif_node(&node_params).build_tch_module(&vs.root()).unwrap(),
-        |pred: &Tensor, target: &Tensor| {
-            let pred_y = pred.i((.., 0));
-
-            let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean);
-            debug!("train_on_motif: pred_y ={pred_y} target={target} loss={loss}");
-
-            loss
-        },
-        common_config.cycles,
-        AdamW::default().build(&vs, run_config_vals.lr).unwrap(),
         |t| t,
         Some(listener),
     )?;
@@ -2616,189 +2311,8 @@ impl TrainFinalNetRunConfig {
     }
 }
 
-
-
 #[derive(Debug, Args, Clone)]
-pub struct TrainFinalNetParams {
-    #[arg(long)]
-    pub train_labels_run_ids: Vec<RunId>,
-
-    #[arg(long,  default_value_t = 100)]
-    batch_size: usize,
-
-    #[arg(long, default_value_t = 1000)]
-    cycles: usize,
-
-    #[arg(long, value_parser=parse_range_or_value::<f64>)]
-    pub lr: RangeOrValue<f64>,
-
-    #[arg(long, value_parser=parse_range_or_value::<u32>)]
-    pub num_layers: RangeOrValue<u32>,
-
-    #[arg(long)]
-    train_resource_group: String,
-
-    #[arg(long)]
-    valid_resource_group: String,
-
-    #[arg(long, default_value_t = 10)]
-    pub opt_max_evals: u32,
-
-    #[arg(long, default_value_t = 3)] //TODO validate opt_n_init < opt_max_evals
-    pub opt_n_init: u32,
-}
-
-impl TrainFinalNetParams {
-
-    pub fn dummy(train_labels_run_ids: Vec<RunId>, batch_size: usize, train_resource_group:String, valid_resource_group:String, cycles: usize, lr: impl Into<RangeOrValue<f64>>, num_layers:impl Into<RangeOrValue<u32>>, opt_max_evals: u32, opt_n_init: u32) ->Self {
-        TrainFinalNetParams {
-            train_labels_run_ids,
-            cycles,
-            batch_size,
-            lr:lr.into(),
-            num_layers:num_layers.into(),
-            train_resource_group,
-            valid_resource_group,
-            opt_max_evals,
-            opt_n_init,
-        }
-    }
-
-    //TODO add explicit flag to enable optimization
-    pub fn to_config_space(&self) -> Option<ConfigurationSpace<String>> {
-        [
-            vec![
-                ("lr".into(), &self.lr).try_into().ok(),
-                ("num_layers".into(), &self.num_layers).try_into().ok(),
-            ],
-            adam_w_hyperparams().into_iter().map(|v|Some(v)).collect::<Vec<Option<Hyperparameter<String>>>>(),
-        ].concat().into_iter()
-            .collect::<Option<Vec<Hyperparameter<String>>>>()
-            .map(|v|ConfigurationSpace::new(v))
-    }
-
-
-    pub fn train_resource_group(&self) -> &str {
-        &self.train_resource_group
-    }
-
-    pub fn valid_resource_group(&self) -> &str {
-        &self.valid_resource_group
-    }
-
-}
-
-#[derive(Debug)]
-pub struct TrainFinalNodeRunConfig {
-    id:Option<RunId>,
-    run_config_or_opt_space: ValuesOrOptSpace<TrainNodesValues>
-}
-
-impl TrainFinalNodeRunConfig {
-
-    pub fn from_values(id: Option<RunId>, lr: f64, num_layers: u32) -> Self {
-        Self {
-            id,
-            run_config_or_opt_space: ValuesOrOptSpace::Values(TrainNodesValues {lr, num_layers, adam_w: None}),
-        }
-    }
-
-    pub fn from_opt_space(id: Option<RunId>, opt_space:ConfigurationSpace<String>, opt_config: OptConfig) -> Self {
-        Self {
-            id,
-            run_config_or_opt_space: ValuesOrOptSpace::OptSpace {opt_space, opt_config},
-        }
-    }
-}
-
-impl ToHashmap for TrainFinalNodeRunConfig {
-    fn to_properties_iter(&self, parent: Option<String>) -> Box<dyn Iterator<Item=(String, Val)>> {
-        todo!()
-    }
-}
-
-impl RunConfig for TrainFinalNodeRunConfig {
-    // fn to_properties_map_(&self) -> HashMap<String, Val> {
-    //     todo!()
-    // }
-    //
-    // fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-    //     todo!()
-    // }
-
-    fn set_id(&mut self, id: RunId) {
-        self.id.replace(id);
-    }
-
-    fn type_name() -> &'static str {
-        "FinalNode"
-    }
-}
-
-
-#[derive(Debug)]
-pub struct CommonTrainFinalNodeRunConfig_ {
-    pub cycles:usize,
-    pub batch_size:usize,
-}
-
-impl CommonTrainFinalNodeRunConfig_ {
-    pub fn new(cycles: usize, batch_size:usize) -> Self {
-        Self { cycles, batch_size }
-    }
-}
-
-impl Params<TrainFinalNodeRunConfig, NetResources<Logits>, CommonTrainFinalNodeRunConfig_> for TrainFinalNetParams {
-
-    fn to_run_configs(&self) -> Vec<TrainFinalNodeRunConfig> {
-
-        if let Some(config_space) = self.to_config_space() {
-
-            debug!("TrainFinalNodeParams::to_run_configs: config_space={config_space:?}");
-            vec![
-                TrainFinalNodeRunConfig::from_opt_space(None, config_space, OptConfig::new(self.opt_max_evals, self.opt_n_init))
-            ]
-
-        } else {
-            //TODO avoid collecting
-            let v = make_combos([
-                self.lr.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
-                self.num_layers.clone().into_iter().map(|v| v.into()).collect::<Vec<Val>>().into_iter(),
-            ].into_iter()).into_iter().map(|mut config_combo:Vec<Val>|{
-                debug!("TrainFinalNodeParams::to_run_configs: config_combo={config_combo:?} ");
-                let num_layers = config_combo.pop().unwrap().try_into().unwrap();
-                let lr = config_combo.pop().unwrap().try_into().unwrap();
-                TrainFinalNodeRunConfig::from_values(
-                    None,
-                    lr,
-                    num_layers,
-                )
-            }).collect();
-
-            debug!("TrainFinalNodeParams::to_run_configs: self.lr={:?} self.num_layers={:?} v={v:?}", self.lr, self.num_layers);
-
-            v
-        }
-    }
-
-    fn resource_config(&self) -> NetResources<Logits> {
-        NetResources::new(
-            Logits::new(self.train_resource_group.clone()),
-            Logits::new(self.valid_resource_group.clone())
-        )
-    }
-
-    fn common_config(&self) -> CommonTrainFinalNodeRunConfig_ {
-        CommonTrainFinalNodeRunConfig_::new(
-            self.cycles,
-            self.batch_size
-        )
-    }
-}
-
-
-#[derive(Debug, Args, Clone)]
-pub struct InferParams {
+pub struct InferArgs {
     #[arg(long)]
     pub final_run_id: RunId,
 
@@ -2812,7 +2326,7 @@ pub struct InferParams {
     pub output_dir: String,
 }
 
-impl InferParams {
+impl InferArgs {
 
 
     pub fn input_data(&self) -> &str {
@@ -3045,8 +2559,8 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, opt_train_2, BatchTransform, ClassTensorsLoaderData, CommonTrainFinalNodeRunConfig_, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNodesValues, TrainMotifsNetsParams, TrainNodesValues, ValuesOrOptSpace};
-    use crate::train_nets::{load_label_models_ws, load_motif_models, CommonTrainLabelNodeRunConfig, InferParams, LabelNodeParams, MotifNodeParams, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetParams};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNodesValues, TrainNodesValues, ValuesOrOptSpace};
+    use crate::train_nets::{load_label_models_ws, load_motif_models, CommonTrainLabelNodeRunConfig, InferArgs, LabelNodeParams, MotifNodeParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
     use crate::ws::{DummyWorkspace, FsWorkspace, Workspace};
@@ -3075,7 +2589,6 @@ mod train_tests {
     use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::SqlStore;
-    use crate::runs::Params;
 
     #[ctor::ctor]
     fn test_init() {
@@ -4033,7 +3546,7 @@ mod train_tests {
         let batch = DummyLabelBatch::new();
         let common_train_label_node_run_config = CommonTrainLabelNodeRunConfig::new(BATCH_SIZE, 10);
 
-        let r= opt_train_2(
+        let r= opt_train(
 
             |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, listener: &mut dyn TrainListener|{
                 let mut r = None::<(f32, LabelNodeParams)>;
@@ -4080,20 +3593,6 @@ mod train_tests {
 
 
         Ok(())
-    }
-
-    #[test]
-    fn test_train_train_motifs_nodes_params() {
-        let train_motifs_nodes_params = TrainMotifsNetsParams::dummy(vec![1], 10, 0.1, 10, 0.1, 1, 10, 30);
-
-        let run_config = train_motifs_nodes_params.to_run_configs();
-
-        debug!("test_train_motifs_nodes_params: run_config={run_config:?}");
-
-        // let train_nodes_values = TrainNodesValues::new(0.1, 3, Some(AdamW::default()));
-        // let train_nodes_values_map:HashMap<String, Val> = train_nodes_values.into();
-
-        // debug!("test_train_nodes_values_to_hashmap:{train_nodes_values_map:#?}");
     }
 
     fn dummy_labels_net_input(labels:&[bool], channels:usize,  max_motif_nets:usize, slices_len:usize) ->Tensor{

@@ -272,14 +272,14 @@ impl From<&str> for MotifsBy {
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct PlotMotifSlicesParams {
+pub struct PlotMotifSlicesArgs {
 
     #[arg(long, value_enum)]
     motifs_by: MotifsBy,
 
 }
 
-impl PlotMotifSlicesParams {
+impl PlotMotifSlicesArgs {
 
     pub fn motifs_by(&self) -> MotifsBy {
         self.motifs_by
@@ -372,7 +372,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
 
 
 #[derive(Debug, Args, Clone)]
-pub struct MotifsToTensorParams {
+pub struct MotifsToTensorArgs {
 
     #[arg(long)]
     run_id: RunId,
@@ -381,7 +381,7 @@ pub struct MotifsToTensorParams {
     window: i64,
 }
 
-impl MotifsToTensorParams {
+impl MotifsToTensorArgs {
 
     pub fn window(&self) -> i64 {
         self.window

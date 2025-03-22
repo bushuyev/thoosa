@@ -37,13 +37,17 @@ pub fn init_test_logging() {
         env::set_var("POLARS_FMT_MAX_COLS", "100");
         env::set_var("POLARS_FMT_MAX_ROWS", "100");
 
-        std::panic::set_hook(Box::new(|panic_info| {
-            let backtrace = std::backtrace::Backtrace::capture();
-            error!("Panic info: {:?}", panic_info);
-            for frame in backtrace.frames() {
-                error!("{:?}", frame);
-            }
 
-        }));
     }
+}
+
+pub fn set_panic_hook() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let backtrace = std::backtrace::Backtrace::capture();
+        error!("Panic info: {:?}", panic_info);
+        for frame in backtrace.frames() {
+            error!("{:?}", frame);
+        }
+
+    }));
 }

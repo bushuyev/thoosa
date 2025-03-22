@@ -175,12 +175,6 @@ impl <R:ResourcesConfig> Display for NetResources<R> {
     }
 }
 
-pub trait Params<C:RunConfig, R:ResourcesConfig, CommonConfig>:Debug {
-    fn to_run_configs(&self) ->Vec<C>;
-    fn resource_config(&self) -> R;
-    fn common_config(&self) -> CommonConfig;
-}
-
 pub trait SavableOptResult:Sync+Send+Debug{
     fn value(&self)->f32;
     fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError>;
@@ -205,16 +199,3 @@ impl SavableOptResult for DummySavableOptResult {
     }
 }
 
-// impl <T> RunConfig for T where T:FromHashmap{
-//     fn from_properties_map_(run_id: RunId, properties: HashMap<String, Val>) -> Self {
-//         todo!()
-//     }
-//
-//     fn set_id(&mut self, id: RunId) {
-//         todo!()
-//     }
-//
-//     fn type_name() -> &'static str {
-//         todo!()
-//     }
-// }
