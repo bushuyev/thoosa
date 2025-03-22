@@ -3,7 +3,7 @@ use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
-use crate::runs::{Empty, Labeled, Logits, NetResources, SavableOptResult, Simple};
+use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use crate::{panic_to_err, train_nets};
 use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
 use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
@@ -544,7 +544,7 @@ impl ClassTensorsLoaderData {
 
 
 #[derive(Debug)]
-pub struct TrainLabelNetsRunConfigResult2 {
+pub struct TrainLabelNetsRunConfigResult {
     select_motifs_for_label_run_id:u32,
     label:String,
     loss: f32,
@@ -553,7 +553,7 @@ pub struct TrainLabelNetsRunConfigResult2 {
     var_store: VarStore
 }
 
-impl TrainLabelNetsRunConfigResult2 {
+impl TrainLabelNetsRunConfigResult {
     pub fn new(find_motifs_run_id:RunId, label:String, loss: f32, label_node_params: LabelNodeParams, train_motifs_nodes_values: TrainLabelNetsRunConfig, var_store: VarStore) -> Self {
         Self {
             select_motifs_for_label_run_id: find_motifs_run_id,
@@ -566,7 +566,7 @@ impl TrainLabelNetsRunConfigResult2 {
     }
 }
 
-impl SavableOptResult for TrainLabelNetsRunConfigResult2 {
+impl SavableResult for TrainLabelNetsRunConfigResult {
     fn value(&self) -> f32 {
         self.loss
     }
@@ -599,7 +599,7 @@ pub fn run_opt_train_label_nets(
     max_nets:i64,
     label: &String,
     slices_len: i64
-) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
+) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
     let max_nets = channels_motifs_nodes.read().iter().map(|nets| nets.1.len()).sum::<usize>() as i64;
     if max_nets <= 0 {
@@ -657,7 +657,7 @@ pub fn run_opt_train_label_nets(
         device,
         "label"
     ).map(|(var_store, label_node_params, run_config, min_loss)| {
-        Box::new(TrainLabelNetsRunConfigResult2::new(*select_motifs_for_label_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableOptResult>
+        Box::new(TrainLabelNetsRunConfigResult::new(*select_motifs_for_label_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
     })
 }
 
@@ -748,7 +748,7 @@ pub fn run_opt_train_final_net(
     mut label_models: HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
     labels_channels_motifs_models:HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>,
 
-) -> Result<Box<dyn SavableOptResult>, ThoosaError> {
+) -> Result<Box<dyn SavableResult>, ThoosaError> {
     let labels_len = labels_channels_motifs_models.len();
 
     let labels_channels_motifs_models_rw = labels_channels_motifs_models.into_iter().fold(HashMap::new(), |mut a, v|{
@@ -797,7 +797,7 @@ pub fn run_opt_train_final_net(
         "final"
     ).map(|(var_store, final_node_params, train_final_nodes_values, min_loss)| {
         debug!("run_opt_train_final: done, min_loss={min_loss} final_node_params={final_node_params:?}");
-        Box::new(TrainFinalNodesRunConfigResult2::new(train_label_nodes_run_ids, min_loss, var_store, final_node_params, train_final_nodes_values)) as Box<dyn SavableOptResult>
+        Box::new(TrainFinalNodesRunConfigResult::new(train_label_nodes_run_ids, min_loss, var_store, final_node_params, train_final_nodes_values)) as Box<dyn SavableResult>
     })
 
 }
@@ -994,54 +994,6 @@ pub fn apply_motif_and_label_nets(
 
 #[derive(Debug)]
 struct TrainFinalNodesRunConfigResult {
-    train_final_nodes_run_config_id: u32,
-    loss: f32,
-    var_store: VarStore,
-    final_node_params: FinalNodeParams,
-    train_final_nodes_values: Option<TrainNodesValues>
-}
-
-impl TrainFinalNodesRunConfigResult {
-    pub fn new(train_final_nodes_run_config_id: u32, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: Option<TrainNodesValues>) -> Self {
-        Self {
-            train_final_nodes_run_config_id,
-            loss,
-            var_store,
-            final_node_params,
-            train_final_nodes_values,
-        }
-    }
-}
-
-impl SavableOptResult for TrainFinalNodesRunConfigResult {
-    fn value(&self) -> f32 {
-        self.loss
-    }
-
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        let run_config_id = match self.train_final_nodes_values.as_ref(){
-            None => self.train_final_nodes_run_config_id,
-
-            Some(train_final_nodes_values) => {
-                // store.lock().save_run_config(
-                //     Some(&[self.train_final_nodes_run_config_id]),
-                //     &TrainLabelNodeRunConfig::type_name(),
-                //     "Final",
-                //     "todo",
-                //     TrainLabelNodeRunConfig::from_values(Some(self.train_final_nodes_run_config_id), train_final_nodes_values.lr, train_final_nodes_values.num_layers, LabelNetType::FixedNumSlices(FixedNumSlicesNetParams{slices_len: 100.into(), num_layers: 3.into()})).to_properties_map_()
-                // )?
-                0//TODO
-            }
-        };
-
-        ws.read().save_final_model(run_config_id, &self.var_store, &self.final_node_params).expect("save_final_model failed");
-
-        Ok(run_config_id)
-    }
-}
-
-#[derive(Debug)]
-struct TrainFinalNodesRunConfigResult2 {
     train_label_nodes_run_ids: Vec<RunId>,
     loss: f32,
     var_store: VarStore,
@@ -1049,7 +1001,7 @@ struct TrainFinalNodesRunConfigResult2 {
     train_final_net_run_config: TrainFinalNetRunConfig
 }
 
-impl TrainFinalNodesRunConfigResult2 {
+impl TrainFinalNodesRunConfigResult {
     pub fn new(train_label_nodes_run_ids: Option<&Vec<RunId>>, loss: f32, var_store: VarStore, final_node_params: FinalNodeParams, train_final_nodes_values: TrainFinalNetRunConfig) -> Self {
         Self {
             train_label_nodes_run_ids: train_label_nodes_run_ids.expect("train_label_nodes_run_ids").clone(),
@@ -1061,7 +1013,7 @@ impl TrainFinalNodesRunConfigResult2 {
     }
 }
 
-impl SavableOptResult for TrainFinalNodesRunConfigResult2 {
+impl SavableResult for TrainFinalNodesRunConfigResult {
     fn value(&self) -> f32 {
         self.loss
     }
@@ -1829,7 +1781,7 @@ impl TrainListener for PlotVecf32 {
 
 
 #[derive(Debug)]
-pub struct TrainMotifsNetsRunConfigResult2 {
+pub struct TrainMotifsNetsRunConfigResult {
     loss:f32,
     channel:u32,
     motif_id:usize,
@@ -1839,13 +1791,13 @@ pub struct TrainMotifsNetsRunConfigResult2 {
     find_motifs_run_id: RunId
 }
 
-impl TrainMotifsNetsRunConfigResult2 {
+impl TrainMotifsNetsRunConfigResult {
     pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, find_motifs_run_id: RunId, params: MotifNodeParams, run_config_values: TrainMotifsNetsRunConfig) -> Self {
         Self { loss, channel, motif_id, vs, params, run_config_values, find_motifs_run_id }
     }
 }
 
-impl SavableOptResult for TrainMotifsNetsRunConfigResult2 {
+impl SavableResult for TrainMotifsNetsRunConfigResult {
 
     fn value(&self) -> f32 {
         self.loss
@@ -1883,7 +1835,7 @@ impl TrainMotifsNodesRunConfigResult {
     }
 }
 
-impl SavableOptResult for TrainMotifsNodesRunConfigResult {
+impl SavableResult for TrainMotifsNodesRunConfigResult {
 
     fn value(&self) -> f32 {
         self.loss

@@ -31,8 +31,8 @@ use tch::{Device, Kind, Tensor};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
-use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableOptResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_train_motif_net, CommonTrainLabelNodeRunConfig, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferArgs, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainLabelNetsArgs, TrainLabelNetsRunConfigFields, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNodesRunConfigResult, TrainMotifsNetsRunConfigResult2, TrainNodesValues, run_opt_train_label_nets, TrainFinalNetRunConfigFields, run_opt_train_final_net, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainFinalNetArgs, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue};
+use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_train_motif_net, CommonTrainLabelNodeRunConfig, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferArgs, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainLabelNetsArgs, TrainLabelNetsRunConfigFields, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNodesRunConfigResult, TrainMotifsNetsRunConfigResult, TrainNodesValues, run_opt_train_label_nets, TrainFinalNetRunConfigFields, run_opt_train_final_net, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainFinalNetArgs, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -536,7 +536,7 @@ pub fn run_train_final_nets(
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     devices: Vec<Device>,
-) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
+) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
     debug!("run_train_final_node_2: run_configs.len={run_configs:?} resource_config={resource_config:?}");
     let (train_resource_keys, valid_resource_keys) = resource_config.to_resources(store)?;
 
@@ -728,7 +728,7 @@ pub fn run_train_label_nets(
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     devices: Vec<Device>,
-) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
+) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
     debug!("run_train_label_nodes: run_configs={run_configs:?} resource_config={resource_config:?} cuda_mem={:?}", cuda_mem());
 
     let (train_labels_resource_keys, valid_label_resource_keys) = resource_config.to_resources(store)?;
@@ -885,9 +885,9 @@ pub fn run_train_label_nets(
                 })
             }).collect::<Result<Vec<_>, ThoosaError>>()
         })
-        .collect::<Result<Vec<Vec<Box<dyn SavableOptResult>>>, ThoosaError>>().map(|v| v.into_iter()
+        .collect::<Result<Vec<Vec<Box<dyn SavableResult>>>, ThoosaError>>().map(|v| v.into_iter()
         .flat_map(|v|v.into_iter())
-        .collect::<Vec<Box<dyn SavableOptResult>>>()).map(|v|Some(v))
+        .collect::<Vec<Box<dyn SavableResult>>>()).map(|v|Some(v))
 }
 
 /**
@@ -902,7 +902,7 @@ fn run_train_motif_nodes_on_motif_selection(
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     devices: Vec<Device>,
-) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError> {
+) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
     let motif_selection_run_ids: &Vec<RunId> =
         motif_selection_run_ids.expect("motif_selection_run_ids");
 
@@ -949,14 +949,14 @@ fn run_train_motif_nodes_on_motif_selection(
                         device_i
                     )
                 // })
-            }).collect::<Result<Vec<Vec<Box<dyn SavableOptResult>>>, ThoosaError>>()
+            }).collect::<Result<Vec<Vec<Box<dyn SavableResult>>>, ThoosaError>>()
 
         })
-        .collect::<Result<Vec<Vec<Vec<Box<dyn SavableOptResult>>>>, ThoosaError>>()
+        .collect::<Result<Vec<Vec<Vec<Box<dyn SavableResult>>>>, ThoosaError>>()
         .map(|v| v.into_iter()
             .flat_map(|v|v.into_iter()
                 .flat_map(|v|v.into_iter()))
-            .collect::<Vec<Box<dyn SavableOptResult>>>()).map(|v|Some(v)
+            .collect::<Vec<Box<dyn SavableResult>>>()).map(|v|Some(v)
     )
 }
 
@@ -1201,7 +1201,7 @@ fn run_train_motif_nets(
     store: Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     device: Device,
-) -> Result<Vec<Box<dyn SavableOptResult>>, ThoosaError> {
+) -> Result<Vec<Box<dyn SavableResult>>, ThoosaError> {
     debug!("train_on_motifs: device={device:?}, find_motifs_run_id={find_motifs_run_id}");
 
     motifs.into_iter().map(|motif_id| {
@@ -1251,27 +1251,6 @@ fn run_train_motif_nets(
         debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
 
 
-        /*train_nets::run_opt_train_motif(
-            *motif_id,
-            channel as u32,
-            all_slices_0.iter().map(|v|Box::new(v.shallow_clone())).collect(), //TODO change ClassTensorsDataBatch to accept refs
-            all_slices_1.iter().map(|v|Box::new(v.shallow_clone())).collect(),
-            train_on_motif_run_config,
-            find_motifs_run_config.window(),
-            common_config,
-            device,
-        )*/
-        /*let mut batch = TensorsDataBatch::new(
-            vec![
-                all_slices_0,
-                all_slices_1
-            ],
-            common_config.batch_size,
-            0.8,//TODO config
-            device
-        );*/
-
-
         opt_train(
             move |vs:&VarStore, run_config:&TrainMotifsNetsRunConfig, listener: &mut dyn TrainListener|{
                 //TODO batch size
@@ -1294,87 +1273,12 @@ fn run_train_motif_nets(
             device,
             "motifs"
         ).map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)|{
-            Box::new(TrainMotifsNetsRunConfigResult2::new(min_loss, channel as u32, *motif_id, var_store, find_motifs_run_id/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)) as Box<dyn SavableOptResult>
+            Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, channel as u32, *motif_id, var_store, find_motifs_run_id/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)) as Box<dyn SavableResult>
 
         })
 
     }).filter(|v|v.is_ok()).collect()
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) -> String {
     //TODO change to impl AsRef<Path> + in ParquetLoader
@@ -1391,9 +1295,9 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     common_config:&CC,
     resource_config:&R,
     opt_step: ST,
-    ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
-    store: &Arc<parking_lot::Mutex<Box<dyn Store>>>,
-    loader: &Arc<parking_lot::RwLock<LoadRunner<Box<Tensor>>>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     devices: Vec<Device>,
     descr: &str,
 ) -> Result<Vec<RunId>, ThoosaError>
@@ -1407,7 +1311,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
             &Arc<Mutex<Box<dyn Store>>>,
             &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
             Vec<Device>,
-        ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError>,//TODO remove Option & Vec
+        ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,//TODO remove Option & Vec
         RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap,
         RCRV:OptRunConfigSource,
         R: ResourcesConfig,
@@ -1465,7 +1369,7 @@ where
         &Arc<Mutex<Box<dyn Store>>>,
         &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
         Vec<Device>,
-    ) -> Result<Option<Vec<Box<dyn SavableOptResult>>>, ThoosaError>,
+    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>> + thoosa_properties_map::ToHashmap,
     RCRV:GridRunConfigSource,
     R: ResourcesConfig,
