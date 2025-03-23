@@ -97,84 +97,6 @@ impl TrainLabelNetsRunConfig {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#[derive(Debug, Clone)]
-pub struct TrainLabelNodesValues {
-    label_node_type: LabelNetType,//TODO use enum with LabelNodeParams for each ndoe type
-    train_nodes_values: TrainNodesValues
-}
-
-impl TrainLabelNodesValues {
-    pub fn new(label_node_type: LabelNetType, train_nodes_values:TrainNodesValues) -> Self {
-        Self{label_node_type, train_nodes_values}
-    }
-}
-
-impl TryFrom<&[NamedVal<String>]> for TrainLabelNodesValues {
-    type Error = ();
-
-    fn try_from(value: &[NamedVal<String>]) -> Result<Self, Self::Error> {
-        todo!()
-    }
-}
-impl TryFrom<&Vec<Val>> for TrainLabelNodesValues {
-    type Error =ThoosaError;
-
-    fn try_from(value: &Vec<Val>) -> Result<Self, Self::Error> {
-
-        Ok(Self {
-            label_node_type: LabelNetType::MaxPadding(MaxPaddingNetParams{ num_layers: 10.into() }),
-            train_nodes_values: (&value[..value.len()-1].to_vec()).try_into()?,//TODO to_vec
-        })
-    }
-}
-
-impl Display for TrainLabelNodesValues {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}, {})", self.label_node_type, self.train_nodes_values)
-    }
-}
-
-
-#[derive(Debug)]
-pub struct CommonTrainLabelNodeRunConfig {
-    pub label_batch_size:usize,
-    pub cycles:usize,
-}
-
-impl CommonTrainLabelNodeRunConfig {
-
-    pub fn new(label_batch_size:usize, cycles:usize) -> Self {
-        Self {  label_batch_size, cycles}
-    }
-}
-
-
 struct BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(Tensor) -> Tensor + Sync + Send{
     inner: Rc<Box<B>>,
     transform_fn:Rc<RefCell<F>>
@@ -966,10 +888,18 @@ pub fn apply_motif_and_label_nets(
         let channels_motifs_models = labels_channels_motifs_models_rw.get(label).expect(format!("no {label} label in labels_channels_motifs_models").as_str());
         debug!("apply_motif_and_label_nets: len={} channels_motifs_models={channels_motifs_models:?}", channels_motifs_models.read().len());
 
-        let motif_nets_t = apply_motif_nets(&batch_t, Arc::clone(channels_motifs_models), &device, 100);
-
+        // let motif_nets_t = apply_motif_nets(&batch_t, Arc::clone(channels_motifs_models), &device, 100);
 
         for (label_node_run_id, label_node_params, label_node) in label_nodes.iter_mut() {
+            let motif_nets_t = match &label_node_params.net_type {
+                LabelNetType2::MaxPadding(params) => {
+                    apply_motif_nets_with_padding(&batch_t, Arc::clone(&channels_motifs_models), &device, max_input)
+                }
+                LabelNetType2::FixedNumSlices(params) => {
+                    apply_motif_nets(&batch_t, Arc::clone(&channels_motifs_models), &device, params.slices_len)
+                }
+            };
+
             debug!("apply_motif_and_label_nets: label_node_params={label_node_params:?} label_node_run_id={label_node_run_id} t_net.size()={:?}", motif_nets_t.size());
 
             let t_net_view = motif_nets_t.shallow_clone(); //view_for_label_model(motif_nets_t.unsqueeze(0), channels, label_node_params.max_motif_nodes, 0, label_nodes[0].1.slices_len as u32); //.view((t.size()[0], -1));
@@ -1818,51 +1748,6 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
     }
 }
 
-#[derive(Debug)]
-pub struct TrainMotifsNodesRunConfigResult {
-    loss:f32,
-    channel:u32,
-    motif_id:usize,
-    vs:VarStore,
-    params:MotifNodeParams,
-    run_config_values: Option<TrainNodesValues>,
-    train_motifs_nodes_run_config_id: RunId
-}
-
-impl TrainMotifsNodesRunConfigResult {
-    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, train_motifs_nodes_run_config_id: RunId, params: MotifNodeParams, run_config_values: Option<TrainNodesValues>) -> Self {
-        Self { loss, channel, motif_id, vs, params, run_config_values,train_motifs_nodes_run_config_id }
-    }
-}
-
-impl SavableResult for TrainMotifsNodesRunConfigResult {
-
-    fn value(&self) -> f32 {
-        self.loss
-    }
-
-    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        let run_config_id = match self.run_config_values.as_ref() {
-            None => self.train_motifs_nodes_run_config_id,
-            Some(run_config_values) => {
-                // store.lock().save_run_config(
-                //     Some(&[self.train_motifs_nodes_run_config_id]),
-                //     &TrainMotifsNodesRunConfig::type_name(),
-                //     "descr",
-                //     "todo",
-                //     TrainMotifsNodesRunConfig::from_values(Some(self.train_motifs_nodes_run_config_id), run_config_values.lr, run_config_values.num_layers).to_properties_map_()
-                // )?//TODO
-                0
-            }
-        };
-
-        ws.read().save_motif_model(&self.channel, &run_config_id, &self.motif_id, &self.vs, &self.params)?;
-
-        Ok(run_config_id)
-    }
-}
-
-
 pub fn opt_train<P, R, F, N: Debug + Default>( //N node parameters
                                                mut train: F,
                                                run_config_source: &OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
@@ -2462,8 +2347,8 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNodesValues, TrainNodesValues};
-    use crate::train_nets::{load_label_models_ws, load_motif_models, CommonTrainLabelNodeRunConfig, InferArgs, LabelNodeParams, MotifNodeParams, TensorsDataBatch, ThoModuleWithStore};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainNodesValues};
+    use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNodeParams, MotifNodeParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
     use crate::ws::{DummyWorkspace, FsWorkspace, Workspace};
@@ -3447,7 +3332,6 @@ mod train_tests {
         impl SplittableDataBatch for DummyLabelBatch{}
 
         let batch = DummyLabelBatch::new();
-        let common_train_label_node_run_config = CommonTrainLabelNodeRunConfig::new(BATCH_SIZE, 10);
 
         let r= opt_train(
 
