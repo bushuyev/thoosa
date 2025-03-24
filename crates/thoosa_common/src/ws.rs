@@ -1,4 +1,4 @@
-use crate::train_nets::{FinalNodeParams, LabelNodeParams, MotifNodeParams};
+use crate::train_nets::{FinalNodeParams, LabelNetParams, MotifNetParams};
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
@@ -160,7 +160,7 @@ impl Workspace for FsWorkspace {
 
         Ok(())
     }
-    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError> {
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError> {
         let channel_models = self.motifs_models_path.join(format!("{}", channel));
         fs::create_dir_all(&channel_models)?;
 
@@ -200,7 +200,7 @@ impl Workspace for FsWorkspace {
         })
     }
 
-    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<PathBuf, ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNetParams) -> Result<PathBuf, ThoosaError> {
         let label_models_path = self.labels_models_path.join(format!("{}", label));
 
         fs::create_dir_all(&label_models_path)?;
@@ -303,12 +303,12 @@ pub trait Workspace:Sync + Send {
     fn labels_models_path(&self) -> &PathBuf;
     fn final_models_path(&self) -> &PathBuf;
     fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError>;
-    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError>;
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError>;
     /**
     returns Vec<safetensors_path, config jsonpath>
      */
     fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
-    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<PathBuf, ThoosaError>;
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNetParams) -> Result<PathBuf, ThoosaError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
     fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>;
 
@@ -397,7 +397,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNodeParams) -> Result<(), ThoosaError> {
+    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError> {
         todo!()
     }
 
@@ -405,7 +405,7 @@ impl Workspace for DummyWorkspace {
         todo!()
     }
 
-    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNodeParams) -> Result<PathBuf, ThoosaError> {
+    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNetParams) -> Result<PathBuf, ThoosaError> {
         todo!()
     }
 
@@ -437,7 +437,7 @@ impl Workspace for DummyWorkspace {
 #[cfg(test)]
 mod tests {
     use super::{DummyWorkspace, FsWorkspace, Workspace};
-    use crate::train_nets::{LabelNodeParams, MaxPaddingNetParams2, MotifNodeParams};
+    use crate::train_nets::{LabelNetParams, MaxPaddingNetParams2, MotifNetParams};
     use log::debug;
     use std::fs;
     use std::path::Path;
@@ -466,14 +466,14 @@ mod tests {
         assert!(ws.store_path().ends_with("main_db.db3"));
 
 
-        ws.save_motif_model(&0, &0, &0, &VarStore::new(Cpu), &MotifNodeParams::new(10, 1))?;
-        ws.save_motif_model(&1, &1, &0, &VarStore::new(Cpu), &MotifNodeParams::new(20, 1))?;
+        ws.save_motif_model(&0, &0, &0, &VarStore::new(Cpu), &MotifNetParams::new(10, 1))?;
+        ws.save_motif_model(&1, &1, &0, &VarStore::new(Cpu), &MotifNetParams::new(20, 1))?;
 
-        ws.save_motif_model(&1, &2, &2, &VarStore::new(Cpu), &MotifNodeParams::new(30, 1))?;
-        ws.save_motif_model(&1, &3, &2, &VarStore::new(Cpu), &MotifNodeParams::new(40, 1))?;
-        ws.save_motif_model(&1, &4, &2, &VarStore::new(Cpu), &MotifNodeParams::new(50, 1))?;
+        ws.save_motif_model(&1, &2, &2, &VarStore::new(Cpu), &MotifNetParams::new(30, 1))?;
+        ws.save_motif_model(&1, &3, &2, &VarStore::new(Cpu), &MotifNetParams::new(40, 1))?;
+        ws.save_motif_model(&1, &4, &2, &VarStore::new(Cpu), &MotifNetParams::new(50, 1))?;
 
-        ws.save_motif_model(&1, &3, &4, &VarStore::new(Cpu), &MotifNodeParams::new(50, 1))?;
+        ws.save_motif_model(&1, &3, &4, &VarStore::new(Cpu), &MotifNetParams::new(50, 1))?;
 
 
         let models = ws.motif_models(&0, 0)?;
@@ -496,10 +496,10 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400)?;
 
 
-        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(10, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
-        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNodeParams::new(20, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
-        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(30, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
-        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNodeParams::new(40, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(10, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(20, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(30, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(40, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
 
         let models =  ws.label_models()?;
         // for mm in &models{

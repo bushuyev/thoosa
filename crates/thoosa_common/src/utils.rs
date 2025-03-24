@@ -524,7 +524,7 @@ pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
-    use crate::train_nets::{motif_node, opt_train, InputFilter, LabelNodeParams, MotifNodeParams, ThoModuleWithStore, TrainNodesValues};
+    use crate::train_nets::{motif_node, opt_train, InputFilter, LabelNetParams, MotifNetParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, CompositeReducer, ListenerResponse, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
@@ -1210,7 +1210,7 @@ pub mod tests {
         };
 
         set_max_level(Info);
-        let motif_node_params = MotifNodeParams::from_file(&PathBuf::from("/tmp/ws_test/models/motifs/0/31211_366.json"))?;
+        let motif_node_params = MotifNetParams::from_file(&PathBuf::from("/tmp/ws_test/models/motifs/0/31211_366.json"))?;
 
         let inst_0 = Instant::now();
         let mut module = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cpu)?;
