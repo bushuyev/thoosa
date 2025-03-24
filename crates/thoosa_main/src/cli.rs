@@ -1,4 +1,4 @@
-use crate::cli::Commands::{ FindMotifs2, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs2, TrainFinalNet, TrainMotifsNets2};
+use crate::cli::Commands::{FindMotifs2, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, TrainFinalNet, TrainMotifsNets};
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
 use clap::{Args, Parser, Subcommand};
@@ -36,7 +36,7 @@ use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, lo
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, FindMotifsArgs, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
+use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, FixedFindMotifsConfig, FindMotifsArgs, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs,
 };
@@ -116,9 +116,9 @@ pub enum Commands {
     FindMotifs2(FindMotifsArgs),
     PlotMotifSlices(PlotMotifSlicesArgs),
     MotifsToTensor(MotifsToTensorArgs),
-    SelectMotifs2(SelectMotifsArgs),
-    TrainMotifsNets2(TrainMotifsNetsArgs),
-    TrainLabelNets2(TrainLabelNetsArgs),
+    SelectMotifs(SelectMotifsArgs),
+    TrainMotifsNets(TrainMotifsNetsArgs),
+    TrainLabelNets(TrainLabelNetsArgs),
     TrainFinalNet(TrainFinalNetArgs),
     RunAll(RunAllArgs),
     Infer(InferArgs),
@@ -260,7 +260,7 @@ where
             run_all_grid_step(
                 None,
                 find_motifs_run_config_range_or_value,
-                &find_motifs_args.common,
+                &find_motifs_args.fixed_config,
                 &find_motifs_args.resource_config(),
                 find_motifs_by_euc_dist,
                 &ws,
@@ -272,7 +272,7 @@ where
 
         }
 
-        Some(SelectMotifs2(select_motifs_args)) => {
+        Some(SelectMotifs(select_motifs_args)) => {
             debug!("SelectMotifs2: select_motifs_args.run_config_cnt={:?}", select_motifs_args.run_config_cnt);
 
             let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
@@ -295,14 +295,14 @@ where
         }
 
 
-        Some(TrainMotifsNets2(train_motif_nets_args)) => {
+        Some(TrainMotifsNets(train_motif_nets_args)) => {
             debug!("TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}", train_motif_nets_args.run_config_cnt);
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
 
-            run_opt_step::<TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, (),  Empty,  _>(
+            run_opt_step::<TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, OptConfig,  Empty,  _>(
                 Some(train_motif_nets_args.motif_selection_run_id.clone()),
                 train_motif_nets_run_config_range_or_value,
-                &(),
+                &train_motif_nets_args.fixed_config,
                 &train_motif_nets_args.resource_config(),
                 run_train_motif_nodes_on_motif_selection,
                 &ws,
@@ -316,15 +316,15 @@ where
         }
 
 
-        Some(Commands::TrainLabelNets2(train_label_nets_args)) => {
+        Some(Commands::TrainLabelNets(train_label_nets_args)) => {
             debug!("TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}", train_label_nets_args.run_config_cnt);
             let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets2\
             ");
 
-            run_opt_step::<TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, (), NetResources<Labeled>, _>(
+            run_opt_step::<TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, OptConfig, NetResources<Labeled>, _>(
                 Some(train_label_nets_args.motif_selection_run_id.clone()),
                 train_label_nets_run_config_range_or_value,
-                &(),
+                &train_label_nets_args.fixed_config,
                 &train_label_nets_args.resource_config(),
                 run_train_label_nets,
                 &ws,
@@ -341,10 +341,10 @@ where
             debug!("TrainFinalNet: train_motif_nets_args.run_config_cnt={:?}", train_final_net_args.run_config_cnt);
             let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = serde_json5::from_str(&train_final_net_args.run_config_cnt).expect("TrainFinalNet");
 
-            run_opt_step::<TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, (), NetResources<Logits>, _>(
+            run_opt_step::<TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, OptConfig, NetResources<Logits>, _>(
                 Some(train_final_net_args.train_labels_run_ids.clone()),
                 train_final_net_run_config_range_or_value,
-                &(),
+                &train_final_net_args.fixed_config,
                 &train_final_net_args.resource_config(),
                 run_train_final_nets,
                 &ws,
@@ -530,7 +530,7 @@ fn save_run_configs<R:RunConfig+thoosa_properties_map::ToHashmap>(input_run_ids:
 pub fn run_train_final_nets(
     train_label_nodes_run_ids: Option<&Vec<RunId>>, //TODO use to filter label nets
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
-    _common_config: &(),
+    fixed_config: &OptConfig,
     resource_config: &NetResources<Logits>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
@@ -550,15 +550,16 @@ pub fn run_train_final_nets(
 
     run_opt_train_final_net(
         train_label_nodes_run_ids,
-        ws,
-        store,
         &run_configs,
         train_resource_keys.clone(),
         valid_resource_keys.clone(),
-        &devices[0],
-        loader,
         label_models,
         labels_channels_motifs_models,
+        fixed_config,
+        ws,
+        store,
+        loader,
+        &devices[0],
     ).map(|v| Some(vec![v]))
 }
 
@@ -722,7 +723,7 @@ fn load_label_and_motif_models(
 pub fn run_train_label_nets(
     selected_motifs_for_label_run_ids: Option<&Vec<RunId>>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
-    _common_config: &(),
+    fixed_config: &OptConfig,
     resource_config: &NetResources<Labeled>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
@@ -874,12 +875,13 @@ pub fn run_train_label_nets(
                         // common_config,
                         Rc::clone(&train_labels_resources_clone),
                         Rc::clone(&valid_labels_resources_clone),
-                        &device_i,
                         Arc::clone(&channels_motifs_models_arc),
                         label,
+                        fixed_config,
                         slices_len,
                         ws,
                         &loader,
+                        &device_i,
                     )
                 })
             }).collect::<Result<Vec<_>, ThoosaError>>()
@@ -895,7 +897,7 @@ returns motif_node_params_selection_run_id
 fn run_train_motif_nodes_on_motif_selection(
     motif_selection_run_ids: Option<&Vec<RunId>>,
     train_motifs_nodes_run_configs: OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
-    _cc:&(),
+    fixed_config:&OptConfig,
     _resource_config: &Empty,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
@@ -942,6 +944,7 @@ fn run_train_motif_nodes_on_motif_selection(
                         find_motifs_run_ids[0],
                         &train_motifs_nodes_run_configs,
                         &find_motifs_run_config,
+                        fixed_config,
                         ws,
                         Arc::clone(store),
                         loader,
@@ -1196,6 +1199,7 @@ fn run_train_motif_nets(
     find_motifs_run_id: RunId,
     train_motifs_nodes_run_configs: &OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
     find_motifs_run_config: &FindMotifsRunConfig,
+    fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
@@ -1251,6 +1255,7 @@ fn run_train_motif_nets(
 
 
         opt_train(
+            fixed_config,
             move |vs:&VarStore, run_config:&TrainMotifsNetsRunConfig, listener: &mut dyn TrainListener|{
                 //TODO batch size
                 let all_slices_0_cl = all_slices_0.iter().map(|v|Box::new(v.shallow_clone())).collect::<Vec<_>>();
@@ -1346,10 +1351,10 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     }
 }
 
-pub fn run_all_grid_step<RC, RCRV, R, CC, ST>(
+pub fn run_all_grid_step<RC, RCRV, R, FC, ST>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv:RCRV,
-    common_config:&CC,
+    fixed_config:&FC,
     resource_config:&R,
     grid_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -1363,7 +1368,7 @@ where
         Option<&Vec<RunId>>,
         Vec<RC>,
         &R,
-        &CC,
+        &FC,
         &Arc<RwLock<Box<dyn Workspace>>>,
         &Arc<Mutex<Box<dyn Store>>>,
         &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
@@ -1386,7 +1391,7 @@ where
         input_run_ids.as_ref(),
         run_configs,
         resource_config,
-        common_config,
+        fixed_config,
         ws,
         store,
         loader,
@@ -1427,7 +1432,7 @@ mod cli_tests {
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
-    use thoosa_common::train_nets::{motif_node, CommonTrainingRunConfig, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InferArgs, MotifNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+    use thoosa_common::train_nets::{motif_node, CommonTrainingRunConfig, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InferArgs, MotifNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
     use thoosa_common::utils::{
         from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
         three_sigs_tensor, vec_f32_from,
@@ -1435,7 +1440,7 @@ mod cli_tests {
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, CommonFindMotifsConfig, SelectMotifsParams, SelectMotifsRunConfigRangeOrValue};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, FixedFindMotifsConfig, SelectMotifsParams, SelectMotifsRunConfigRangeOrValue};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesArgs};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::run_configs::RunConfig;
@@ -1599,7 +1604,7 @@ mod cli_tests {
                 dist_quantile: "0.01",
                 descr: "find_motifs"
             }"#).unwrap(),
-            &CommonFindMotifsConfig::new(None, 2, false, None, Some(0.2)),
+            &FixedFindMotifsConfig::new(None, 2, false, None, Some(0.2)),
             &Simple::new(ResourceType::List(vec![
                 "t_0_0".into(),
                 "t_0_1".into(),
@@ -1944,7 +1949,7 @@ mod cli_tests {
                 dist_quantile: "0.5",
                 descr: "find_motifs"
             }"#).unwrap(),
-            &CommonFindMotifsConfig::new(None, 2, false, None, Some(0.2)),
+            &FixedFindMotifsConfig::new(None, 2, false, None, Some(0.2)),
             &Simple::new(ResourceType::Group(group_name.clone())),
             find_motifs_by_euc_dist,
             &ws,
@@ -2002,7 +2007,7 @@ mod cli_tests {
         //TODO check if motifs match signals
 
 
-        let train_motif_nodes_run_ids = run_opt_step::<TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, (),  Empty, _>(
+        let train_motif_nodes_run_ids = run_opt_step::<TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, OptConfig,  Empty, _>(
             Some(select_motifs_for_label_run_ids.clone()),
             serde_json5::from_str::<TrainMotifsNetsRunConfigRangeOrValue>(&r#"{
                 common_training_args: {
@@ -2015,7 +2020,7 @@ mod cli_tests {
                 },
                 num_layers: "3"
             }"#).unwrap(),
-            &(),
+            &OptConfig::new(opt_max_evals, opt_n_init),
             &Empty{},
             run_train_motif_nodes_on_motif_selection,
             &ws,
@@ -2036,7 +2041,7 @@ mod cli_tests {
         }
         */
 
-        let train_label_nodes_run_ids = run_opt_step::<TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, (), NetResources<Labeled>, _>(
+        let train_label_nodes_run_ids = run_opt_step::<TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, OptConfig, NetResources<Labeled>, _>(
             Some(select_motifs_for_label_run_ids.clone()),
             serde_json5::from_str::<TrainLabelNetsRunConfigRangeOrValue>(&r#"{
                 common_training_args: {
@@ -2053,7 +2058,7 @@ mod cli_tests {
                     }
                 }
             }"#).unwrap(),
-            &(),
+            &OptConfig::new(opt_max_evals, opt_n_init),
             &NetResources::new(
                 Labeled::new(group_name.clone()), Labeled::new(group_name.clone())
             ),
@@ -2068,7 +2073,7 @@ mod cli_tests {
 
         debug!("train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
-        let train_final_nodes_run_ids = run_opt_step::<TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, (), NetResources<Logits>, _>(
+        let train_final_nodes_run_ids = run_opt_step::<TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, OptConfig, NetResources<Logits>, _>(
             Some(train_label_nodes_run_ids.clone()),
             serde_json5::from_str::<TrainFinalNetRunConfigRangeOrValue>(&r#"{
                 common_training_args: {
@@ -2083,7 +2088,7 @@ mod cli_tests {
                     num_layers: "2"
                 }
             }"#).unwrap(),
-            &(),
+            &OptConfig::new(opt_max_evals, opt_n_init),
             &NetResources::new(
                 Logits::new(group_name.clone()),
                 Logits::new(group_name.clone())

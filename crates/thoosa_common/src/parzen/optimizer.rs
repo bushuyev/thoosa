@@ -314,8 +314,8 @@ pub struct TPEOptimizer<F, T> where F: FnMut(&[NamedVal<T>]) -> f32, T: FieldNam
 {
     obj_func:F,
     cs:ConfigurationSpace<T>,
-    n_init:usize,
-    max_evals:usize,
+    n_init:u32,
+    max_evals:u32,
     tpe_samplers:HashMap<String, TreeStructuredParzenEstimator>,
     _pd:PhantomData<T>
 }
@@ -323,7 +323,7 @@ pub struct TPEOptimizer<F, T> where F: FnMut(&[NamedVal<T>]) -> f32, T: FieldNam
 impl <F, T: FieldName> TPEOptimizer<F, T>
     where F: FnMut(&[NamedVal<T>]) -> f32 {
 
-    pub fn new(obj_func:F, cs:ConfigurationSpace<T>, max_evals: usize, n_init: usize) -> Self {
+    pub fn new(obj_func:F, cs:ConfigurationSpace<T>, max_evals: u32, n_init: u32) -> Self {
 
         debug!("TPEOptimizer:new: cs={cs:?}");
 
