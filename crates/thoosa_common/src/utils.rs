@@ -23,7 +23,7 @@ use rand::Rng;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
 use tch::display::PrinterOptions;
-use tch::kind::FLOAT_CPU;
+use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::Optimizer;
 use tch::nn::{Module, VarStore};
 use tch::Device::{Cpu, Cuda};
@@ -516,6 +516,21 @@ impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
     fn as_ref(&self) -> &Tensor {
         &self.0
     }
+}
+
+pub fn kick_register_cuda_hooks(){
+    unsafe {
+        //TODO to kick REGISTER_CUDA_HOOKS(CUDAHooks); in
+        // ATen   cuda
+        //     │ │ │   detail
+        //     │ │ │ │ │ 󰙲 CUDAHooks.cpp
+        let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        // let func: libloading::Symbol<unsafe extern fn() -> u32> = lib.get(b"my_func")?;
+        // Ok(func())
+        println!("lib={lib:?}"); //logging is not set up yet
+        let t = Tensor::rand(1_000_000, FLOAT_CUDA);
+        let buf = Vec::<f32>::try_from(&t).unwrap();
+    };
 }
 
 #[cfg(test)]

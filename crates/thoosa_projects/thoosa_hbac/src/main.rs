@@ -5,23 +5,13 @@ use log::{debug, error, info};
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CUDA;
 use tch::Tensor;
+use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
 
 fn main()  {
-    let t1 = Instant::now();
+    kick_register_cuda_hooks();
 
-    unsafe {
-        //TODO to kick REGISTER_CUDA_HOOKS(CUDAHooks); in
-        // ATen   cuda
-        //     │ │ │   detail
-        //     │ │ │ │ │ 󰙲 CUDAHooks.cpp
-        let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        // let func: libloading::Symbol<unsafe extern fn() -> u32> = lib.get(b"my_func")?;
-        // Ok(func())
-        println!("lib={lib:?}"); //logging is not set up yet
-        let t = Tensor::rand(1_000_000, FLOAT_CUDA);
-        let buf = Vec::<f32>::try_from(&t).unwrap();
-    };
+    let t1 = Instant::now();
 
     /*
    sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
@@ -35,7 +25,7 @@ fn main()  {
     match run_cli(
         |source_path|data::labeled_resourses(source_path.as_ref().join("train.csv")),
         |source_path, key| thoosa_main::data::parquet_to_tensor_by_path(source_path.as_ref().join("train_eegs").join(format!("{}.parquet", key)), Cpu),
-        vec![
+        &[
             "seizure",
             "lpd",
             "gpd",

@@ -1,4 +1,4 @@
-use crate::cli::Commands::{FindMotifs2, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, TrainFinalNet, TrainMotifsNets};
+use crate::cli::Commands::{FindMotifs, ImportResources, Infer, MotifsToTensor, PlotMotifSlices, RunAll, SayHello, SelectMotifs, TrainFinalNet, TrainMotifsNets};
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
 use clap::{Args, Parser, Subcommand};
@@ -113,7 +113,7 @@ pub struct SayHelloArgs {
 #[derive(Debug, Subcommand, Clone)]
 pub enum Commands {
     ImportResources(ImportResourcesArgs),
-    FindMotifs2(FindMotifsArgs),
+    FindMotifs(FindMotifsArgs),
     PlotMotifSlices(PlotMotifSlicesArgs),
     MotifsToTensor(MotifsToTensorArgs),
     SelectMotifs(SelectMotifsArgs),
@@ -141,7 +141,7 @@ fn set_oom_score_adj(score: i32) {
 pub fn run_cli<F, R>(
     labeled_resources: F,
     resource_to_tensor: R,
-    labels: Vec<&str>,
+    labels: &[&str],
     channels: usize,
     max_input: usize,
 ) -> Result<(), ThoosaError>
@@ -246,7 +246,7 @@ where
         }
 
 
-        Some(FindMotifs2(find_motifs_args)) => {
+        Some(FindMotifs(find_motifs_args)) => {
             debug!(
                 "FindMotifs2: find_motifs_args={:?} devices={:?}",
                 find_motifs_args, devices
@@ -1062,7 +1062,7 @@ fn motifs_to_tensor_cmd(
 pub fn import_resources<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    labels: Vec<&str>,
+    labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
     insert_label: bool,
@@ -1534,7 +1534,7 @@ mod cli_tests {
         let resources = import_resources(
             &ws,
             &store,
-            vec!["label_0", "label_1"],
+            &["label_0", "label_1"],
             || {
                 Ok(HashMap::from([
                     ("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)]),
@@ -2172,7 +2172,7 @@ mod cli_tests {
         let imported = import_resources(
             &ws,
             &store,
-            vec!["label_0", "label_1"],
+            &["label_0", "label_1"],
             || {
                 Ok(HashMap::from([
                     ("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)]),
