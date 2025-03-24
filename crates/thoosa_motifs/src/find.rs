@@ -78,7 +78,6 @@ pub struct FindMotifsArgs {
     #[arg(long,value_parser=parse_resources)]
     pub resources: ResourceType,
 
-
     #[command(flatten)]
     pub common: CommonFindMotifsConfig,
 

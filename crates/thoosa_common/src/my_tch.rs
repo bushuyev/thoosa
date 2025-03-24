@@ -18,7 +18,7 @@ use thoosa_shared::ThoosaError;
 use crate::builder::Node;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
-use crate::train_nets::{MotifNodeParams, ThoModuleWithStore};
+use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
 use crate::utils::*;
 
 #[derive(Debug)]
@@ -422,7 +422,7 @@ mod tch_tests {
     use crate::builder::{clc_conv1d_out, Node};
     use crate::builder::SeqBuilder;
     use crate::my_tch::ThoModule;
-    use crate::train_nets::{MotifNodeParams, ThoModuleWithStore};
+    use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
     use crate::utils;
     use crate::utils::*;
 

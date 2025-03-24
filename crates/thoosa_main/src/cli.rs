@@ -32,7 +32,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferArgs, InputFilter, LabelNetType, LabelNodeParams, MotifNodeParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainLabelNetsArgs, TrainLabelNetsRunConfigFields, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult, TrainNodesValues, run_opt_train_label_nets, TrainFinalNetRunConfigFields, run_opt_train_final_net, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainFinalNetArgs, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferArgs, InputFilter, LabelNetType, LabelNetParams, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainLabelNetsArgs, TrainLabelNetsRunConfigFields, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult, run_opt_train_label_nets, TrainFinalNetRunConfigFields, run_opt_train_final_net, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainFinalNetArgs, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -646,8 +646,8 @@ fn load_label_and_motif_models(
     device: &Device,
     train_label_nodes_run_ids: Option<&Vec<RunId>>,
 ) -> (
-    HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
-    HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>,
+    HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>,
+    HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>,
 ) {
     debug!("load_label_and_motif_models: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
@@ -657,7 +657,7 @@ fn load_label_and_motif_models(
 
     let mut labels_channels_motifs_models: HashMap<
         String,
-        Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>,
+        Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>,
     > = HashMap::new();
 
     for (label, label_run_id_nodes) in label_models.iter() {
@@ -800,7 +800,7 @@ pub fn run_train_label_nets(
                 )),
             )
         })
-        .collect::<Vec<(RunId, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>)>>();
+        .collect::<Vec<(RunId, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>)>>();
 
     let chunk_len = max(1, train_labels_resource_keys.len() / devices.len());
 
@@ -869,18 +869,17 @@ pub fn run_train_label_nets(
                     let valid_labels_resources_clone = Rc::clone(&valid_labels_resources_rc);
 
                     run_opt_train_label_nets(
-                            select_motifs_for_label_run_id,
-                            ws,
-                            &run_configs_arc,
-                            // common_config,
-                            Rc::clone(&train_labels_resources_clone),
-                            Rc::clone(&valid_labels_resources_clone),
-                            &device_i,
-                            &loader,
-                            Arc::clone(&channels_motifs_models_arc),
-                            max_nets,
-                            label,
-                            slices_len,
+                        select_motifs_for_label_run_id,
+                        &run_configs_arc,
+                        // common_config,
+                        Rc::clone(&train_labels_resources_clone),
+                        Rc::clone(&valid_labels_resources_clone),
+                        &device_i,
+                        Arc::clone(&channels_motifs_models_arc),
+                        label,
+                        slices_len,
+                        ws,
+                        &loader,
                     )
                 })
             }).collect::<Result<Vec<_>, ThoosaError>>()
@@ -1428,7 +1427,7 @@ mod cli_tests {
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
-    use thoosa_common::train_nets::{motif_node, CommonTrainingRunConfig, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InferArgs, MotifNodeParams,  TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+    use thoosa_common::train_nets::{motif_node, CommonTrainingRunConfig, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InferArgs, MotifNetParams, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
     use thoosa_common::utils::{
         from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
         three_sigs_tensor, vec_f32_from,
@@ -1800,62 +1799,6 @@ mod cli_tests {
             .concat()
             .as_slice(),
         )])
-    }
-
-    #[test]
-    fn test_zzz() -> Result<(), ()> {
-
-        trait Serializable {
-            type C;
-            fn save(&self) -> Result<Self::C, ()> where Self: Sized;
-            fn load(ctx:Self::C) -> Result<Self, ()> where Self: Sized;
-        }
-
-        trait Feature {
-
-        }
-
-        trait HashmapLoad {
-            fn load_from_hashmap(props:HashMap<String, String>) -> Result<Self, ()> where Self: Sized;
-            fn save_to_hashmap(&self) -> Result<HashMap<String, String>, ()> where Self: Sized;
-        }
-
-        #[derive(Debug)]
-        struct MyStruct {
-
-        }
-
-        impl HashmapLoad for MyStruct {
-            fn load_from_hashmap(props:HashMap<String, String>) -> Result<Self, ()>{
-                Ok(MyStruct {
-
-                })
-            }
-
-            fn save_to_hashmap(&self) -> Result<HashMap<String, String>, ()>{
-                Ok(HashMap::new())
-            }
-        }
-
-        impl <T> Serializable for T where T:HashmapLoad {
-            type C = HashMap<String, String>;
-
-            fn save(&self) -> Result<Self::C, ()>
-            where
-                Self: Sized
-            {
-                self.save_to_hashmap()
-            }
-
-            fn load(map:HashMap<String, String>) -> Result<Self, ()>{
-                T::load_from_hashmap(map)
-            }
-        }
-
-        let ms = MyStruct::load(HashMap::new())?;
-
-        Ok(())
-
     }
 
     /*

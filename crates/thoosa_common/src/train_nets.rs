@@ -470,13 +470,13 @@ pub struct TrainLabelNetsRunConfigResult {
     select_motifs_for_label_run_id:u32,
     label:String,
     loss: f32,
-    label_node_params: LabelNodeParams,
+    label_node_params: LabelNetParams,
     train_label_nets_run_config: TrainLabelNetsRunConfig,
     var_store: VarStore
 }
 
 impl TrainLabelNetsRunConfigResult {
-    pub fn new(find_motifs_run_id:RunId, label:String, loss: f32, label_node_params: LabelNodeParams, train_motifs_nodes_values: TrainLabelNetsRunConfig, var_store: VarStore) -> Self {
+    pub fn new(find_motifs_run_id:RunId, label:String, loss: f32, label_node_params: LabelNetParams, train_motifs_nodes_values: TrainLabelNetsRunConfig, var_store: VarStore) -> Self {
         Self {
             select_motifs_for_label_run_id: find_motifs_run_id,
             label,
@@ -510,25 +510,24 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
 
 pub fn run_opt_train_label_nets(
     select_motifs_for_label_run_id:&RunId,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
     // comon_label_node_params:&CommonTrainLabelNodeRunConfig,
     train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
     valid_labels_resources: Rc<Vec<(i64, Vec <Resource>)>>,
     device: &Device,
-    executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-    channels_motifs_nodes:Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>,
-    max_nets:i64,
+    channels_motifs_nets:Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>,
     label: &String,
-    slices_len: i64
+    slices_len: i64,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
-    let max_nets = channels_motifs_nodes.read().iter().map(|nets| nets.1.len()).sum::<usize>() as i64;
-    if max_nets <= 0 {
+    let nets_count = channels_motifs_nets.read().iter().map(|nets| nets.1.len()).sum::<usize>() as i64;
+    if nets_count <= 0 {
         panic!("no motif nets found");//TODO skip?
     }
 
-    let channels = channels_motifs_nodes.read().len() as i64;
+    let channels = channels_motifs_nets.read().len() as i64;
     let device = device.clone();
     let max_input = ws.read().max_input();
 
@@ -541,29 +540,29 @@ pub fn run_opt_train_label_nets(
                 train_labels_resources.clone(),
                 valid_labels_resources.clone(),
                 run_config.common_training_args.batch_size as usize,
-                Arc::clone(&executor),
+                Arc::clone(&loader),
                 device.clone(),
                 None
 
             )));
 
 
-            let mut result = None::<(f32, LabelNodeParams)>;
+            let mut result = None::<(f32, LabelNetParams)>;
             run_split_on_oom(
                 Reducer::new(BatchTransform::new(Rc::clone(&batch), |t|{
                     match &run_config.net {
                         LabelNetType2::MaxPadding(params) => {
-                            apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nodes), &device, max_input as u32)
+                            apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nets), &device, max_input as u32)
                         }
                         LabelNetType2::FixedNumSlices(params) => {
-                            apply_motif_nets(&t, Arc::clone(&channels_motifs_nodes), &device, params.slices_len)
+                            apply_motif_nets(&t, Arc::clone(&channels_motifs_nets), &device, params.slices_len)
                         }
                     }
 
                 })),
                 |b|{
                     train_label_net(
-                        ws, run_config, b, &device, channels, max_nets, vs, slices_len
+                        ws, run_config, b, &device, channels, nets_count, vs, slices_len
                     )
                 },
                 |v, i|{
@@ -593,15 +592,15 @@ pub fn train_label_net<B:DataBatch> (
     max_nets:i64,
     vs_0: &VarStore,
     slices_len: i64
-) ->  Result<(f32, LabelNodeParams), ThoosaError> {
+) ->  Result<(f32, LabelNetParams), ThoosaError> {
 
     let label_node_params = match &run_config.net {//TODO return net params from net builder
         LabelNetType2::MaxPadding(config) => {
 
-            LabelNodeParams::new(channels, max_nets, config.num_layers as i64, slices_len, run_config.net.clone())
+            LabelNetParams::new(channels, max_nets, config.num_layers as i64, slices_len, run_config.net.clone())
         }
         LabelNetType2::FixedNumSlices(config) => {
-            LabelNodeParams::new(channels, max_nets, config.num_layers as i64, config.slices_len as i64, run_config.net.clone())
+            LabelNetParams::new(channels, max_nets, config.num_layers as i64, config.slices_len as i64, run_config.net.clone())
 
         }
     };
@@ -667,8 +666,8 @@ pub fn run_opt_train_final_net(
     valid_resources: Vec<(Resource, Vec<f32>)>,
     device: &Device,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-    mut label_models: HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
-    labels_channels_motifs_models:HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>,
+    mut label_models: HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>,
+    labels_channels_motifs_models:HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>,
 
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
     let labels_len = labels_channels_motifs_models.len();
@@ -696,14 +695,11 @@ pub fn run_opt_train_final_net(
                 run_config_values.common_training_args.batch_size as usize,
                 Arc::clone(&loader),
                 device.clone(),
-                // Some( Box::new(move |t:Box<Tensor>| {
-                //     apply_motif_and_label_nets(&t, &label_models, &labels_channels_motifs_models_rw, &device, &labels, max_input)
-                //
-                // }))
+
                 None
             )));
 
-            train_final_node_2(
+            train_final_node(
                 ws,
                 run_config_values,
                 &mut BatchTransform::new(Rc::clone(&batch), |t|{
@@ -736,7 +732,7 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
  # returns Tensor nodes x batches x batch size
 */
 pub fn apply_channel_motifs(
-    motif_nodes: &mut [(MotifNodeParams, ThoModuleWithStore)],
+    motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
     batch_channel: Tensor,
     motif_width: i64,
     sum_motif_nodes: i64,
@@ -800,12 +796,12 @@ pub fn apply_channel_motifs(
 }
 
 pub fn apply_channel_motifs_with_padding(input_slice_step: usize,
-                            motif_nodes: &mut [(MotifNodeParams, ThoModuleWithStore)],
-                            channel: Tensor,//batch , data
-                            motif_width: i64,
-                            max_motif_nodes: i64,
-                            slices_len: i64,
-                            device: &Device
+                                         motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
+                                         channel: Tensor, //batch , data
+                                         motif_width: i64,
+                                         max_motif_nodes: i64,
+                                         slices_len: i64,
+                                         device: &Device
 ) -> Result<Tensor, ThoosaError> {
 
     trace!("apply_channel_motifs_with_padding: motif_nodes={motif_nodes:?}");
@@ -869,8 +865,8 @@ pub fn apply_channel_motifs_with_padding(input_slice_step: usize,
 
 pub fn apply_motif_and_label_nets(
     batch_t: &Tensor,
-    label_models: &mut HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>,
-    labels_channels_motifs_models_rw: &HashMap<String, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>>,
+    label_models: &mut HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>,
+    labels_channels_motifs_models_rw: &HashMap<String, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>>,
     device: &Device,
     labels: &Vec<String>,
     max_input: u32
@@ -963,7 +959,7 @@ impl SavableResult for TrainFinalNodesRunConfigResult {
     }
 }
 
-pub fn train_final_node_2(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainFinalNetRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
+pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainFinalNetRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
     let final_node_params= FinalNodeParams::new(labels_len as i64, run_config_values.net.num_layers);
 
     let mut optimizer = nn::Adam::default();
@@ -1007,14 +1003,14 @@ struct LabelModels {
     label_model:Mutex<Box<dyn Module>>,
     motif_models:Vec<Vec<Mutex<Box<dyn Module>>>>,
     #[allow(dead_code)]
-    motif_node_params:MotifNodeParams,
+    motif_node_params: MotifNetParams,
     #[allow(dead_code)]
-    label_node_params:LabelNodeParams
+    label_node_params: LabelNetParams
 }
 
 impl LabelModels {
 
-    pub fn new(label:String, corr_model: Box<dyn Module>, motif_models: Vec<Vec<Box<dyn Module>>>,  motif_node_params:MotifNodeParams, label_node_params:LabelNodeParams) -> Self {
+    pub fn new(label:String, corr_model: Box<dyn Module>, motif_models: Vec<Vec<Box<dyn Module>>>, motif_node_params: MotifNetParams, label_node_params: LabelNetParams) -> Self {
         Self {
             label,
             label_model: Mutex::new(corr_model),
@@ -1082,7 +1078,7 @@ impl ThoModuleWithStore {
 }
 
 
-pub fn load_motif_models(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<(MotifNodeParams, ThoModuleWithStore)>, ThoosaError> {
+pub fn load_motif_models(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, motif_id:usize, device: &Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError> {
     debug!("load_motif_models_ws: channel={channel} motif_selection_run_id={motif_id}");
 
     let channel_motif_models_paths = ws.read().motif_models(&channel, motif_id)?;
@@ -1090,7 +1086,7 @@ pub fn load_motif_models(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, mot
     channel_motif_models_paths.into_iter().map(|(model, config)|{
 
         // let mut vs = VarStore::new(device.clone());
-        let motif_node_params = MotifNodeParams::from_file(&config)?;
+        let motif_node_params = MotifNetParams::from_file(&config)?;
 
         debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
 
@@ -1106,7 +1102,7 @@ pub fn load_motif_models(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, mot
 
 }
 
-pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nodes_run_ids: Option<&Vec<RunId>>, device: &Device) -> Result<HashMap<String, Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>>, ThoosaError> {
+pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nodes_run_ids: Option<&Vec<RunId>>, device: &Device) -> Result<HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>, ThoosaError> {
     let label_models_paths = ws.read().label_models()?;
 
     debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
@@ -1118,18 +1114,18 @@ pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nod
 
     label_models_paths.into_iter().try_fold(HashMap::new(), |mut a, (label, paths)|{
 
-        let models:Vec<(RunId, LabelNodeParams, ThoModuleWithStore)>  =  paths.into_iter().filter_map(|(model_path, params_path)|{
+        let models:Vec<(RunId, LabelNetParams, ThoModuleWithStore)>  =  paths.into_iter().filter_map(|(model_path, params_path)|{
             let run_id = FsWorkspace::model_path_to_run_id(&model_path);
             if train_label_nodes_run_ids_hash.as_ref().map(|set|!set.contains(&run_id)).unwrap_or(true) {
                 debug!("load_all_label_models_ws: skipping run_id={run_id}");
                 return None;
             }
 
-            let label_node_params = LabelNodeParams::from_file(&params_path).expect(format!("no {params_path:?}").as_str());
+            let label_node_params = LabelNetParams::from_file(&params_path).expect(format!("no {params_path:?}").as_str());
 
             debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
 
-            let node = ThoModuleWithStore::load(LabelNodeParams::label_node(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str());
+            let node = ThoModuleWithStore::load(LabelNetParams::label_node(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str());
 
             debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} loaded");
             // vs.load(&model_path).expect(format!("no {model_path:?}").as_str());
@@ -1193,9 +1189,12 @@ pub struct TrainMotifsNetsArgs {
     #[arg(long)]
     pub motif_selection_run_id: Vec<RunId>,
 
+    #[command(flatten)]
+    pub opt_config: OptConfig,
 
     #[arg(long)]
     pub run_config_cnt:String,//TrainMotifsNetsRunConfig
+
 }
 
 impl TrainMotifsNetsArgs {
@@ -1255,120 +1254,30 @@ impl CommonTrainingRunConfig {
     }
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Args, Debug, Clone)]
 pub struct OptConfig {
-    pub max_evals:u32,
-    pub n_init:u32
+
+    #[arg(long, default_value_t = 100)]
+    pub opt_max_evals:u32,
+
+    #[arg(long, default_value_t = 10)]
+    pub opt_num_init:u32
 }
 
 impl OptConfig {
     pub fn new(max_evals: u32, n_init: u32) -> Self {
-        Self { max_evals, n_init }
-    }
-}
-
-// unsafe impl Sync for TrainMotifsNodesRunConfig{}
-pub fn adam_w_hyperparams() -> Vec<Hyperparameter<String>>{
-    vec![
-        Hyperparameter::UniformFloat {name: "beta1".into(), lower:0.5, upper: 0.99},
-        Hyperparameter::UniformFloat {name: "beta2".into(), lower:0.9, upper: 0.9999}
-    ]
-}
-
-pub fn basic_hyperparams() -> Vec<Hyperparameter<String>>{
-    vec![
-        Hyperparameter::UniformFloat {name: "lr".into(), lower:1e-6, upper: 1e-2},
-        Hyperparameter::UniformInt {name: "num_layers".into(), lower:0, upper: 6}
-    ]
-}
-
-#[derive(Debug, Clone)]
-pub struct TrainNodesValues {
-    lr: f64,
-    num_layers: u32,
-    adam_w: Option<AdamW>
-}
-
-impl TrainNodesValues {
-    pub fn new(lr: f64, num_layers: u32, adam_w: Option<AdamW>) -> Self {
-        Self { lr, num_layers, adam_w }
-    }
-}
-
-impl Display for TrainNodesValues {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}, {})", self.lr, self.num_layers)
-    }
-}
-
-impl TryFrom<&[NamedVal<String>]> for TrainNodesValues {
-    type Error = ThoosaError;
-
-    fn try_from(value: &[NamedVal<String>]) -> Result<Self, Self::Error> {
-        let params_map = value.into_iter().try_fold(HashMap::new(), |mut a, x| {
-            a.insert(x.path().as_str(), x.val());
-            Ok::<HashMap<&str, &Val>, ThoosaError>(a)
-        })?;
-
-        Ok(TrainNodesValues::new(
-            (*params_map.get("lr").expect("lr")).try_into()?,
-            (*params_map.get("num_layers").expect("num_layers")).try_into()?,
-            None//TODO
-        ))
-    }
-}
-impl TryFrom<&Vec<Val>> for TrainNodesValues {
-    type Error =ThoosaError;
-
-    fn try_from(value: &Vec<Val>) -> Result<Self, Self::Error> {
-        debug!("TrainNodesValues::try_from: value={:?}", value);
-
-        let num_layers:f32 = (&value[1]).try_into()?;//TODO opt can't produce ints
-        Ok(Self {
-            lr: (&value[0]).try_into()?,
-            num_layers: num_layers as u32,
-            adam_w: if value.len() > 2 {Some(AdamW::default()
-                .beta1((&value[2]).try_into()?)
-                .beta2((&value[3]).try_into()?)
-            )} else {
-                None
-            },
-        })
-    }
-}
-
-impl From<TrainNodesValues> for HashMap<String, Val>   {
-    fn from(v: TrainNodesValues) -> Self {
-
-        let mut h = HashMap::from([
-
-                ("TrainNodesValues.lr".into(), (v.lr).into()),
-                ("TrainNodesValues.num_layers".into(), (v.num_layers).into()),
-            ]
-        );
-
-        if let Some(adam_w) = v.adam_w {
-            h.extend(HashMap::from([
-                ("AdamW.beta1".into(), adam_w.beta1.into()),
-                ("AdamW.beta2".into(), adam_w.beta2.into()),
-                ("AdamW.wd".into(), adam_w.wd.into()),
-                ("AdamW.eps".into(), adam_w.eps.into()),
-                ("AdamW.amsgrad".into(), adam_w.amsgrad.into())
-            ]));
-        }
-        h
+        Self { opt_max_evals: max_evals, opt_num_init: n_init }
     }
 }
 
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct MotifNodeParams {
+pub struct MotifNetParams {
     num_features: i64,
     num_layers:i64
 }
 
-impl MotifNodeParams {
+impl MotifNetParams {
 
     pub fn new(num_features: i64, num_layers: i64) -> Self {
         Self {
@@ -1385,13 +1294,13 @@ impl MotifNodeParams {
 
     pub fn from_properties_map(properties:HashMap<String, Val>) -> Self {
 
-        MotifNodeParams::new(
+        MotifNetParams::new(
             properties.get("num_features").expect(format !("no num_features in {:?}", properties).as_str()).try_into().expect("num_features as_i64"), 1,
         )
     }
 
     pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
-        serde_json5::from_str::<MotifNodeParams>(
+        serde_json5::from_str::<MotifNetParams>(
             fs::read_to_string(&path)?.as_str()
         ).map_err(|serde_err|ThoosaError::new(format!("err={}, path={path:?}", serde_err.to_string())))
     }
@@ -1408,7 +1317,7 @@ impl MotifNodeParams {
     }
 }
 
-pub fn motif_node(params: &MotifNodeParams) -> Node {
+pub fn motif_node(params: &MotifNetParams) -> Node {
     debug!("motif_node: params={params:?}");
     let mut builder = SeqBuilder::new(params.num_features, None);
     let mut net = builder
@@ -1431,7 +1340,7 @@ pub fn motif_node(params: &MotifNodeParams) -> Node {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LabelNodeParams {
+pub struct LabelNetParams {
     channels:i64,
     motif_nodes:i64,
     motif_layers:i64,
@@ -1439,13 +1348,13 @@ pub struct LabelNodeParams {
     net_type: LabelNetType2
 }
 
-impl LabelNodeParams {
+impl LabelNetParams {
     pub fn new(channels: i64, max_motif_nodes: i64, motif_layers:i64, slices_len:i64, net_type: LabelNetType2/*TODO should be Params Enum*/) -> Self {
         Self { channels, motif_nodes: max_motif_nodes, slices_len, motif_layers, net_type }
     }
 
     pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
-        serde_json5::from_str::<LabelNodeParams>(
+        serde_json5::from_str::<LabelNetParams>(
             fs::read_to_string(&path)?.as_str()
         ).map_err(|serde_err|ThoosaError::new(serde_err.to_string()))
     }
@@ -1454,15 +1363,15 @@ impl LabelNodeParams {
     pub fn label_node(&self) -> Node {
         match &self.net_type {
             LabelNetType2::MaxPadding(max_padding_params) => {
-                LabelNodeParams::label_node_max_padding(&self, max_padding_params)
+                LabelNetParams::label_node_max_padding(&self, max_padding_params)
             }
             LabelNetType2::FixedNumSlices(fixed_num_slices_params) => {
-                LabelNodeParams::label_node_fixed_num_slices(&self, fixed_num_slices_params)
+                LabelNetParams::label_node_fixed_num_slices(&self, fixed_num_slices_params)
             }
         }
     }
 
-    fn label_node_fixed_num_slices(params:&LabelNodeParams, fixed_num_slices_params: &FixedNumSlicesNetParams2) -> Node {
+    fn label_node_fixed_num_slices(params:&LabelNetParams, fixed_num_slices_params: &FixedNumSlicesNetParams2) -> Node {
         debug!("label_node_fixed_num_slices: params={:?}", params);
 
         let channels_motifs=  params.channels * params.motif_nodes;
@@ -1530,7 +1439,7 @@ impl LabelNodeParams {
 
     }
 
-    fn label_node_max_padding(params:&LabelNodeParams, max_padding_params: &MaxPaddingNetParams2) -> Node {
+    fn label_node_max_padding(params:&LabelNetParams, max_padding_params: &MaxPaddingNetParams2) -> Node {
         debug!("label_node_max_padding: params={:?}", params);
 
         let max_motif_nets=  params.motif_nodes;
@@ -1596,7 +1505,7 @@ impl LabelNodeParams {
 
 }
 
-pub fn flat_label_node(params: &LabelNodeParams, slices_len:i64) -> Node {
+pub fn flat_label_node(params: &LabelNetParams, slices_len:i64) -> Node {
     debug!("motif_node: params={params:?}");
     let num_features = params.channels * params.motif_nodes * slices_len;
     let mut builder = SeqBuilder::new(slices_len, None);
@@ -1716,13 +1625,13 @@ pub struct TrainMotifsNetsRunConfigResult {
     channel:u32,
     motif_id:usize,
     vs:VarStore,
-    params:MotifNodeParams,
+    params: MotifNetParams,
     run_config_values: TrainMotifsNetsRunConfig,
     find_motifs_run_id: RunId
 }
 
 impl TrainMotifsNetsRunConfigResult {
-    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, find_motifs_run_id: RunId, params: MotifNodeParams, run_config_values: TrainMotifsNetsRunConfig) -> Self {
+    pub fn new(loss:f32, channel:u32, motif_id:usize, vs: VarStore, find_motifs_run_id: RunId, params: MotifNetParams, run_config_values: TrainMotifsNetsRunConfig) -> Self {
         Self { loss, channel, motif_id, vs, params, run_config_values, find_motifs_run_id }
     }
 }
@@ -1813,8 +1722,8 @@ where
     min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
 }
 
-pub fn run_train_motif_net(motif_width: i64, run_config: &TrainMotifsNetsRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, listener: &mut dyn TrainListener) -> Result<(f32, MotifNodeParams), ThoosaError> {
-    let node_params = MotifNodeParams::new(motif_width, run_config.num_layers as i64);
+pub fn run_train_motif_net(motif_width: i64, run_config: &TrainMotifsNetsRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, listener: &mut dyn TrainListener) -> Result<(f32, MotifNetParams), ThoosaError> {
+    let node_params = MotifNetParams::new(motif_width, run_config.num_layers as i64);
 
     let loss=  train(
         &device,
@@ -1960,7 +1869,7 @@ fn split_train_val<T>(classes_tensors: Vec<Vec<T>>, train_valid_split: f32) -> (
 /// returns Tensor channels x nets x batches x batch size
 fn apply_motif_nets(
     batch_t: &Tensor,
-    channels_motifs_nodes: Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>,
+    channels_motifs_nodes: Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>,
     device: &Device,
     slices_len: u32
 ) -> Tensor {
@@ -2001,7 +1910,7 @@ fn apply_motif_nets(
 /// returns batch x channels x motif_nets x slices
 fn apply_motif_nets_with_padding(
     input_t: &Tensor,
-    channels_motifs_nodes: Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)>>>,
+    channels_motifs_nodes: Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>,
     device: &Device,
     input_n: u32
 ) -> Tensor {
@@ -2347,8 +2256,8 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainNodesValues};
-    use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNodeParams, MotifNodeParams, TensorsDataBatch, ThoModuleWithStore};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
     use crate::ws::{DummyWorkspace, FsWorkspace, Workspace};
@@ -2501,18 +2410,18 @@ mod train_tests {
 
         let slices_len = 11;
 
-        let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)> = vec![
+        let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)> = vec![
             (//channel 0 nets
              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
              vec![
-                 (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
-                 (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
+                 (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
+                 (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
              ]
             ),
             (//channel 1 nets&mut DummyLabelBatch::new(),
              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
              vec![
-                 (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
+                 (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
              ]
             )
         ];
@@ -2587,18 +2496,18 @@ mod train_tests {
 
 
 
-        let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNodeParams, ThoModuleWithStore)>)> = vec![
+        let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)> = vec![
             (//channel 0 nets
              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
              vec![
-                 (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
-                 (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
+                 (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
+                 (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
              ]
             ),
             (//channel 1 nets&mut DummyLabelBatch::new(),
              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
              vec![
-                 (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
+                 (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
              ]
             ),
             (//channel 2 nets&mut DummyLabelBatch::new(),
@@ -2676,7 +2585,7 @@ mod train_tests {
         trace!("unfolded=\n{unfolded} \nsums=\n{}", sums);
 
         let mut motif_nets = vec![
-            (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cuda(0))?))
+            (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cuda(0))?))
         ];
 
         let channel_1_t = apply_channel_motifs(&mut motif_nets, channel, motif_width, 1, max_dists_len, &Cuda(0))?.view(max_dists_len);
@@ -2704,10 +2613,10 @@ mod train_tests {
         let motif_nets = Arc::new(RwLock::new(vec![
             (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
              vec![
-                 (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)), (MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?))
+                 (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)), (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?))
              ]),
             (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
-             vec![(MotifNodeParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))], //channel 1 nets
+             vec![(MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))], //channel 1 nets
             ),
             (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
              vec![]
@@ -2756,10 +2665,10 @@ mod train_tests {
         debug!("test_dir={test_dir:?}");
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000)?));
 
-        let params = LabelNodeParams::new(3, 19, 2, 100, train_nets::LabelNetType2::FixedNumSlices(FixedNumSlicesNetParams2::new(10, 100)));
+        let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetType2::FixedNumSlices(FixedNumSlicesNetParams2::new(10, 100)));
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net = LabelNodeParams::label_node(&params).build_tch_module(&vs_0.root())?;
+        let net = LabelNetParams::label_node(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let _ = net.tho_forward(&Tensor::rand([11, 3 * 19, 100], FLOAT_CPU), false);
@@ -2769,7 +2678,7 @@ mod train_tests {
         debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
 
-        let loaded_module = ThoModuleWithStore::load(LabelNodeParams::label_node(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
+        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_node(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(),loaded_module.var_store().variables());
@@ -2786,10 +2695,10 @@ mod train_tests {
         let slices_len = 23;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as usize, 1000)?));
-        let params = LabelNodeParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2::new(3)));
+        let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2::new(3)));
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net = LabelNodeParams::label_node(&params).build_tch_module(&vs_0.root())?;
+        let net = LabelNetParams::label_node(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let batch = 11i64;
@@ -2801,7 +2710,7 @@ mod train_tests {
         debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
 
-        let loaded_module = ThoModuleWithStore::load(LabelNodeParams::label_node(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
+        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_node(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(),loaded_module.var_store().variables());
@@ -3336,7 +3245,7 @@ mod train_tests {
         let r= opt_train(
 
             |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, listener: &mut dyn TrainListener|{
-                let mut r = None::<(f32, LabelNodeParams)>;
+                let mut r = None::<(f32, LabelNetParams)>;
                 run_split_on_oom(
                     Reducer::new(batch.clone()),
                     |batch|{
@@ -3424,7 +3333,7 @@ mod train_tests {
         arr
     }
 
-    fn load_test_channels_motifs_models(ws1: &Arc<RwLock<Box<dyn Workspace>>>, channels_motif_ids: Vec<(usize, usize)>) -> Vec<(MotifNodeParams, ThoModuleWithStore)> {
+    fn load_test_channels_motifs_models(ws1: &Arc<RwLock<Box<dyn Workspace>>>, channels_motif_ids: Vec<(usize, usize)>) -> Vec<(MotifNetParams, ThoModuleWithStore)> {
 
         channels_motif_ids.into_iter().flat_map(|(channel, motif_id)| load_motif_models(ws1, channel, motif_id, &Cpu).expect("load_motif_models")).collect()
     }
@@ -3461,7 +3370,7 @@ mod train_tests {
             }
         }
 
-        let (loss, final_params) = super::train_final_node_2(
+        let (loss, final_params) = super::train_final_node(
             &Arc::new(RwLock::new(DummyWorkspace::new(0, 100)?)),
             &TrainFinalNetRunConfig::new(Some(1), CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3), FinalNetParams::new(3)),
             &mut DummyLabelBatch::new(),
@@ -3615,10 +3524,10 @@ mod train_tests {
     }
 
     fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: RunId, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
-        let label_node_params = LabelNodeParams::new(channels as i64, max_motif_nets, 0, 0, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 }));//TODO slices_len, motif_layers
+        let label_node_params = LabelNetParams::new(channels as i64, max_motif_nets, 0, 0, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 }));//TODO slices_len, motif_layers
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _ = LabelNodeParams::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
+        let _ = LabelNetParams::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
         debug!("save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}", channels, max_motif_nets, max_motif_batches, motif_batch_size, vs_0.variables());
 
@@ -3629,7 +3538,7 @@ mod train_tests {
     fn save_test_motif_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, channel: &str, motif_id: usize, window: i64, motif_node_params_run_id: usize) -> Result<(), ThoosaError> {
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _test_motif_model = train_nets::motif_node(&MotifNodeParams::new(window, 1)).build_tch_module(&vs_0.root())?;
+        let _test_motif_model = train_nets::motif_node(&MotifNetParams::new(window, 1)).build_tch_module(&vs_0.root())?;
 
         let test_motif_model = SeqBuilder::new(100, None)
             .linear_s_with_conf(1, LinearConfig {
@@ -3642,7 +3551,7 @@ mod train_tests {
 
         vs_0.freeze();
         debug!("save_test_motif_model: channel={channel} vs_0.variables()={:?}", vs_0.variables());
-        ws.write().save_motif_model(&channel, &motif_node_params_run_id, &motif_id, &vs_0, &MotifNodeParams::new(100, 1))?;
+        ws.write().save_motif_model(&channel, &motif_node_params_run_id, &motif_id, &vs_0, &MotifNetParams::new(100, 1))?;
         Ok(())
     }
 
