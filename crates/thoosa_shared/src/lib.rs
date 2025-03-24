@@ -822,9 +822,7 @@ where F:Fn(&PathBuf)->bool{
 
             if meta.is_file() {
                 let path = entry.path();
-                debug!("path={path:?} path.ends_with(safetensors)={} ", path.ends_with("safetensors"));
-                // if path.extension().map(|e|e.eq("safetensors")).unwrap_or(false) { //TODO param
-                if filter(&path) { //TODO param
+                if filter(&path) {
                     buf.push(path);
                 }
             }

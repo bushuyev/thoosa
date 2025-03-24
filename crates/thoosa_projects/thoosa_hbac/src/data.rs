@@ -676,7 +676,7 @@ mod tests {
     use thoosa_common::ResourceLoader;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
-    use thoosa_main::cli::Commands::{FindMotifs2, SelectMotifs, TrainFinalNet, TrainLabelNets};
+    use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{import_resources, Cli};
     use thoosa_motifs::find::{find_motifs_by_euc_dist, SelectMotifsParams};
@@ -941,10 +941,10 @@ mod tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
 
-        import_resources(
+        let _resources = import_resources(
             &ws,
             &store,
-            vec![
+            &[
                 "seizure",
                 "lpd",
                 "gpd",

@@ -7,12 +7,15 @@ members = [
     "thoosa_store",
     "thoosa_motifs",
     "thoosa_main",
-    "thoosa_projects/thoosa_hbac",
+
     "thoosa_macros/thoosa_macros_utils",
     "thoosa_macros/thoosa_run_config_args",
     "thoosa_macros/thoosa_run_config_args_derive",
     "thoosa_macros/thoosa_properties_map",
     "thoosa_macros/thoosa_properties_map_derive",
+
+    "thoosa_projects/thoosa_hbac",
+    "thoosa_projects/thoosa_bird_clef",
 ]
 
 [workspace.package]
