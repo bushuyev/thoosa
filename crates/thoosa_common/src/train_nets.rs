@@ -61,6 +61,9 @@ pub struct TrainLabelNetsArgs {
     #[arg(long)]
     valid_resource_group: String,
 
+    #[command(flatten)]
+    pub fixed_config:OptConfig,
+
     #[arg(long)]
     pub run_config_cnt:String,//TrainLabelNetsRunConfig
 }
@@ -511,15 +514,15 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
 pub fn run_opt_train_label_nets(
     select_motifs_for_label_run_id:&RunId,
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
-    // comon_label_node_params:&CommonTrainLabelNodeRunConfig,
     train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
     valid_labels_resources: Rc<Vec<(i64, Vec <Resource>)>>,
-    device: &Device,
     channels_motifs_nets:Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>,
     label: &String,
+    fixed_config: &OptConfig,
     slices_len: i64,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    device: &Device
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
     let nets_count = channels_motifs_nets.read().iter().map(|nets| nets.1.len()).sum::<usize>() as i64;
@@ -534,6 +537,7 @@ pub fn run_opt_train_label_nets(
     debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} slices_len={slices_len} channels={channels} cuda_mem={:?}", cuda_mem());
 
     opt_train(
+        fixed_config,
         |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, _listener: &mut dyn TrainListener|{//TODO add _listener to train_label_nodes_2
 
             let batch = Rc::new(Box::new(LoadingTensorsDataBatch::new(
@@ -659,16 +663,16 @@ fn view_for_label_model(t: Tensor, channels: i64, max_motif_nets: i64, motif_bat
 
 pub fn run_opt_train_final_net(
     train_label_nodes_run_ids: Option<&Vec<RunId>>,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
     train_final_run_config: &OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
     train_resources:Vec<(Resource, Vec<f32>)>,
     valid_resources: Vec<(Resource, Vec<f32>)>,
-    device: &Device,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     mut label_models: HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>,
     labels_channels_motifs_models:HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>,
-
+    fixed_config: &OptConfig,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    device: &Device,
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
     let labels_len = labels_channels_motifs_models.len();
 
@@ -688,6 +692,7 @@ pub fn run_opt_train_final_net(
 
 
     opt_train(
+        fixed_config,
         |vs:&VarStore, run_config_values:&TrainFinalNetRunConfig, listener: &mut dyn TrainListener|{
             let batch = Rc::new(Box::new(ClassTensorsLoaderData::new(
                 train_resources.clone(),
@@ -1190,7 +1195,7 @@ pub struct TrainMotifsNetsArgs {
     pub motif_selection_run_id: Vec<RunId>,
 
     #[command(flatten)]
-    pub opt_config: OptConfig,
+    pub fixed_config: OptConfig,
 
     #[arg(long)]
     pub run_config_cnt:String,//TrainMotifsNetsRunConfig
@@ -1218,6 +1223,8 @@ pub struct TrainMotifsNetsRunConfig {
     #[in_map]
     #[run_config]
     num_layers:u32
+
+
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
@@ -1657,11 +1664,12 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
     }
 }
 
-pub fn opt_train<P, R, F, N: Debug + Default>( //N node parameters
-                                               mut train: F,
-                                               run_config_source: &OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
-                                               device: Device,
-                                               descr: &str,
+pub fn opt_train<P, R, F, N: Debug + Default>(
+    opt_config: &OptConfig, //N node parameters
+    mut train: F,
+    run_config_source: &OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>,
+    device: Device,
+    descr: &str,
 ) -> Result<(VarStore, N, R, f32), ThoosaError>
 where
     P: FieldName,
@@ -1705,8 +1713,8 @@ where
             loss
         },
             ConfigurationSpace::new(run_config_source.opt_params().clone()),
-            10,//TODO
-            3,
+                                        opt_config.opt_max_evals,//TODO
+                                        opt_config.opt_num_init,
         );
 
         let best_config = opt.optimize();
@@ -1958,6 +1966,9 @@ pub struct TrainFinalNetArgs {
 
     #[arg(long)]
     valid_resource_group: String,
+
+    #[command(flatten)]
+    pub fixed_config: OptConfig,
 
     #[arg(long)]
     pub run_config_cnt:String,//TrainLabelNetsRunConfig
@@ -2256,7 +2267,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
     use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
@@ -3243,7 +3254,7 @@ mod train_tests {
         let batch = DummyLabelBatch::new();
 
         let r= opt_train(
-
+            &OptConfig::new(10, 3),
             |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, listener: &mut dyn TrainListener|{
                 let mut r = None::<(f32, LabelNetParams)>;
                 run_split_on_oom(

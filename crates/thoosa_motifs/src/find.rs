@@ -79,7 +79,7 @@ pub struct FindMotifsArgs {
     pub resources: ResourceType,
 
     #[command(flatten)]
-    pub common: CommonFindMotifsConfig,
+    pub fixed_config: FixedFindMotifsConfig,
 
     #[arg(long)]
     pub run_config_cnt:String,//FindMotifsRunConfig
@@ -95,7 +95,7 @@ impl FindMotifsArgs {
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct CommonFindMotifsConfig {//TODO rename to Args
+pub struct FixedFindMotifsConfig {//TODO rename to Args
     #[arg(long)]
     pub min_tracker_step:Option<usize>,//TODO usize
 
@@ -112,7 +112,7 @@ pub struct CommonFindMotifsConfig {//TODO rename to Args
     pub mean_k: f32,
 }
 
-impl CommonFindMotifsConfig {
+impl FixedFindMotifsConfig {
 
     pub fn new(min_tracker_step: Option<usize>, chunk_size: u32, keep_slice_matches: bool, max_slices_k: Option<f32>, mean_k: Option<f32>) -> Self {
         Self {
@@ -129,7 +129,7 @@ pub fn find_motifs_by_euc_dist(
     _: Option<&Vec<RunId>>, //first step, no input run ids
     mut run_configs: Vec<FindMotifsRunConfig>,
     resource_config: &Simple,
-    common_config: &CommonFindMotifsConfig,
+    common_config: &FixedFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
@@ -926,35 +926,6 @@ impl SelectMotifsArgs {
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
 struct ByLabelVarianceConfig {
     #[in_map]
@@ -985,23 +956,6 @@ impl SelectMotifsRunConfig {
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask: &Tensor) -> (Tensor, Tensor) {
@@ -1436,7 +1390,7 @@ mod motif_find_tests {
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::clc_dist_d2;
     use crate::find::select_motifs_by_corr;
-    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, CommonFindMotifsConfig, MotifTrackerStore};
+    use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, FixedFindMotifsConfig, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Simple};
@@ -1758,7 +1712,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &executor_rc,
@@ -1859,7 +1813,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &loader,
@@ -2060,7 +2014,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &loader,
@@ -2149,7 +2103,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &loader,
@@ -2222,7 +2176,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List((0..tensors_len).map(|v| format!("{}", v)).collect())),
-            &CommonFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
             &ws,
             &store,
             &loader,
