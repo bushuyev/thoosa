@@ -288,7 +288,9 @@ impl ResourceStore for SqlStore {
 
 }
 
+//TODO move out all prepare stmts
 impl Store for SqlStore {
+
     fn save_import(&self, descr: String, t: &Transaction) -> Result<u32, ThoosaError> {
         t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
 
@@ -515,6 +517,7 @@ impl Store for SqlStore {
         Ok(resource_ids)
     }
 
+    //TODO used in tests only, remove?
     fn save_resources_set(&mut self, descr: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -641,34 +644,36 @@ impl Store for SqlStore {
     }
 
     fn save_pure_sets(&self, max_len: usize, only_unused: bool, t: &Transaction) -> Result<(), ThoosaError> {
-        {
-            let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), t)?;
 
-            let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?; //TODO replace with Self::list_labels
-            let mut resource_resources_set_stmt = t.prepare(
-                if only_unused {
-                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
-                        SELECT lr.resource_id FROM labeled_resources lr LEFT JOIN resource_resources_set rrs ON rrs.resource_id=lr.resource_id \
-                        GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? AND rrs.set_id IS NULL ORDER BY lr.resource_id\
-                    ) LIMIT ?"
-                } else {
-                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
-                        SELECT lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id\
-                    ) LIMIT ?"
-                }
-            )?;
+        let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), t)?;
 
-            let mut rows = stmt.query(())?;
-            while let Some(label_row) = rows.next()? {
-                debug!("row={:?}", label_row);
-                let label_id = label_row.get::<usize, usize>(0)?;
-                t.execute("INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, max_len), group_id, label_id])?;
 
-                let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
-
-                resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
+        let mut resource_resources_set_stmt = t.prepare(
+            if only_unused {
+                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                    SELECT lr.resource_id FROM labeled_resources lr LEFT JOIN resource_resources_set rrs ON rrs.resource_id=lr.resource_id \
+                    GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? AND rrs.set_id IS NULL ORDER BY lr.resource_id\
+                ) LIMIT ?"
+            } else {
+                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                    SELECT lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id\
+                ) LIMIT ?"
             }
+        )?;
+
+        //TODO replace with Self::list_labels
+        let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
+        let mut rows = stmt.query(())?;
+        while let Some(label_row) = rows.next()? {
+            debug!("row={:?}", label_row);
+            let label_id = label_row.get::<usize, usize>(0)?;
+            t.execute("INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)", params![format!("{}/{}", label_row.get::<usize, String>(1)?, max_len), group_id, label_id])?;
+
+            let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
+
+            resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
         }
+
 
         Ok(())
     }
@@ -726,6 +731,7 @@ impl Store for SqlStore {
     }
 
 
+    //TODO not used, remove?
     fn save_set_by_labels(&mut self, conds: Vec<(String, SetCond)>, _only_unused: bool, limit: usize) -> Result<(), ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
