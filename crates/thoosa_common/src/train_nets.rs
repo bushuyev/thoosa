@@ -2089,18 +2089,12 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
-    pub dist_quantile: f32,
-
-    #[run_config]
-    #[in_map]
     pub min_tracker_step: Option<u32>,
 
     #[run_config]
     #[in_map]
     pub filter: Option<InputFilter>,
 
-    // #[in_map]
-    // pub descr: String,
 }
 
 impl FindMotifsRunConfig {
@@ -2119,18 +2113,14 @@ impl FindMotifsRunConfig {
     pub fn new(id: Option<u32>,
                step: u32,
                window: u32,
-               dist_quantile: f32, //TODO move to common
-               descr: impl Into<String>,
                filter: Option<InputFilter>,
     ) -> Self {
         Self {
             id,
             step,
             window,
-            dist_quantile,
             filter,
             min_tracker_step: None,//TODO
-            // descr: descr.into(),
         }
     }
 
@@ -2422,16 +2412,16 @@ mod train_tests {
         let slices_len = 11;
 
         let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)> = vec![
-            (//channel 0 nets
-             FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
-             vec![
+            ( //channel 0 nets
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
              ]
             ),
-            (//channel 1 nets&mut DummyLabelBatch::new(),
-             FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
-             vec![
+            ( //channel 1 nets&mut DummyLabelBatch::new(),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
              ]
             )
@@ -2508,22 +2498,22 @@ mod train_tests {
 
 
         let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)> = vec![
-            (//channel 0 nets
-             FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
-             vec![
+            ( //channel 0 nets
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
              ]
             ),
-            (//channel 1 nets&mut DummyLabelBatch::new(),
-             FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
-             vec![
+            ( //channel 1 nets&mut DummyLabelBatch::new(),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
              ]
             ),
-            (//channel 2 nets&mut DummyLabelBatch::new(),
-             FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
-             vec![
+            ( //channel 2 nets&mut DummyLabelBatch::new(),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              vec![
              ]
             )
         ];
@@ -2577,7 +2567,7 @@ mod train_tests {
     }
 
     #[test]
-    fn slow_test_apply_motif_models_2() -> Result<(), ThoosaError> {
+    fn slow_test_apply_motif_models() -> Result<(), ThoosaError> {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -2622,14 +2612,14 @@ mod train_tests {
         let step= 100;
 
         let motif_nets = Arc::new(RwLock::new(vec![
-            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
+            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
              vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)), (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?))
              ]),
-            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
+            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
              vec![(MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))], //channel 1 nets
             ),
-            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, 0.1, "test", None),
+            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
              vec![]
             )
         ]));

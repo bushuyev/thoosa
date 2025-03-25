@@ -141,6 +141,7 @@ pub fn find_motifs_by_euc_dist(
 
     let run_config_ids:Vec<RunId> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
+    debug!("find_motifs_by_euc_dist: run_configs={run_configs:?}");
     debug!("find_motifs_by_euc_dist: resource_keys={resource_keys:?} run_config_ids={run_config_ids:?} channels={}", ws.read().channels());
 
     let run_config__channels_trackers: HashMap<RunId, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
@@ -1702,7 +1703,7 @@ mod motif_find_tests {
             ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
             ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
-        let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, 0.01, "test", None);
+        let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, None);
 
         let run_config_id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
 
@@ -1805,7 +1806,7 @@ mod motif_find_tests {
         ]))?;
 
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -2006,7 +2007,7 @@ mod motif_find_tests {
             ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -2095,7 +2096,7 @@ mod motif_find_tests {
         ]))?;
 
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -2168,7 +2169,7 @@ mod motif_find_tests {
         }))?;
 
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, 0.0001, "zzz", None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -2506,7 +2507,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_find_motifs_run_config_to_from_map() {
-        let params = FindMotifsRunConfig::new(Some(0), 10, 10, 1.0, "test", Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
+        let params = FindMotifsRunConfig::new(Some(0), 10, 10, Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
 
         let properties: HashMap<String, Val> = params.to_properties_iter(None).collect();
 
@@ -2543,7 +2544,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, 1.0, "", None))],
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None))],
             // HashMap::new(),
             move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");

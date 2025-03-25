@@ -99,6 +99,7 @@ impl <'a> MaskMaker<'a> {
 /*
     t_0, t_1 - channels x slices x slice_len
 */
+/// returns bool mask and if with_distances is true distances
 pub fn clc_dist_d2_and_mask(
     t_0: Tensor,
     t_1: Tensor,
