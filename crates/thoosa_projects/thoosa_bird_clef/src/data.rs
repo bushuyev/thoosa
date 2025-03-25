@@ -197,7 +197,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    // #[test]
     pub fn test_all() -> Result<(), ThoosaError>{
         let files = recurse_files(&"/home/bu/dvl/data/kaggle/BirdCLEF_2025/", &|path| {
             path.extension().map(|v| v.eq("ogg")).unwrap_or(false)

@@ -270,7 +270,7 @@ pub fn find_motifs_by_euc_dist(
     run_config__channels_trackers_vec.chunks(num_trackers_per_thread).par_bridge().for_each(|chunk| {
         for mt in chunk {
             mt.lock().build_groups(store).expect("build_groups");
-            info!(" {} trackers done ", trackers_done.fetch_add(1, Relaxed));
+            info!(" {} trackers done", trackers_done.fetch_add(1, Relaxed)+1);
         }
     });
 

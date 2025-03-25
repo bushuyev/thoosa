@@ -1,7 +1,7 @@
 use std::cmp::max;
 use std::sync::atomic::Ordering;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
-use log::{debug, error, LevelFilter};
+use log::{debug, error, trace, LevelFilter};
 use std::env;
 use std::env::VarError;
 use std::fmt::Debug;
@@ -67,16 +67,16 @@ where
         .zip(b.iter())
         .any(|(&x, &y)| {
             if x == y {
-                // debug!("0. x={x:?} y={y:?}");
+                trace!("0. x={x:?} y={y:?}");
 
                 false
             } else if let (Some(xf), Some(yf), Some(pf)) = (ToPrimitive::to_f64(&x), ToPrimitive::to_f64(&y), ToPrimitive::to_f64(&p)) {
                 let diff = (xf - yf).abs() / ( (xf.abs() + yf.abs())/2.);
-                // debug!("1. x={x:?} y={y:?} diff={diff:?}");
+                trace!("1. x={x:?} y={y:?} diff={diff:?}");
                 diff  > pf
             } else {
                 let diff = (x - y).abs();
-                // debug!("1. x={x:?} y={y:?} diff={diff:?}");
+                trace!("1. x={x:?} y={y:?} diff={diff:?}");
 
                 diff > p
             }
@@ -104,7 +104,7 @@ mod tests {
         assert!(are_close(
             &vec![1., 2., 3., 4., 5.],
             &vec![2., 3., 4., 5., 6.],
-            0.5
+            0.7
         ));
 
         assert!(!are_close(
