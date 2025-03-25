@@ -1066,7 +1066,7 @@ pub fn import_resources<F, R>(
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
     insert_label: bool,
-) -> Result<Vec<Resource>, ThoosaError>
+) -> Result<Vec<ResourceId>, ThoosaError>
 where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
     R: Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send,
@@ -1105,8 +1105,8 @@ where
                     .and_then(|t| ws_guard.import_tensor(t, import_id, resource_key.as_str()))
                 {
                     Ok(stats) => {
+                        //resource keys should not repeat
                         assert!(a.0.insert(resource_key.clone(), (stats, probs)).is_none());
-                        //resource key should not repeat
                     }
                     Err(err) => {
                         error!("Can't load {resource_key}: {err:?}");
@@ -1126,20 +1126,11 @@ where
 
     let resource_ids = store_guard.save_resources_labels(&imported_tensors_stats, import_id, &t)?;
 
-    let imported_resources: Vec<Resource> = imported_tensors_stats
-        .keys()
-        .zip(resource_ids.into_iter())
-        .map(|(resource_key, resource_id)| {
-            Resource::new(resource_id, import_id, resource_key.clone(), 0)
-        })
-        .collect();
-
-    trace!("import_resources: imported_resources={imported_resources:?}, failed_tensors={failed_tensors:?}");
 
     info!(
         "Import id: {}, imported {} tensors to {:?}, failed {}",
         import_id,
-        imported_resources.len(),
+        resource_ids.len(),
         ws_guard.tensors_path(),
         failed_tensors.len()
     );
@@ -1153,7 +1144,10 @@ where
     store_guard.save_groups_by_label_cnt(100, &t)?;
     t.commit()?;
 
-    Ok(imported_resources) //for tests
+
+    trace!("import_resources: resource_ids={resource_ids:?}, failed_tensors={failed_tensors:?}");
+
+    Ok(resource_ids) //for tests
 }
 
 fn run_plot_motif_slices(
@@ -1531,7 +1525,7 @@ mod cli_tests {
 
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
-        let resources = import_resources(
+        let imported_ids = import_resources(
             &ws,
             &store,
             &["label_0", "label_1"],
@@ -1550,6 +1544,8 @@ mod cli_tests {
             },
             true,
         )?;
+
+        let resources = store.lock().list_resources_by_ids(&imported_ids)?;
 
         let resources_0_0 = resources
             .iter()
@@ -2169,7 +2165,7 @@ mod cli_tests {
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
         // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
 
-        let imported = import_resources(
+        let imported_ids = import_resources(
             &ws,
             &store,
             &["label_0", "label_1"],
@@ -2185,8 +2181,10 @@ mod cli_tests {
             true,
         )?;
 
-        debug!("imported={imported:?}");
-        let mut imported_keys = imported
+        let imported_resources = store.lock().list_resources_by_ids(&imported_ids)?;
+
+        debug!("imported={imported_resources:?}");
+        let mut imported_keys = imported_resources
             .into_iter()
             .map(|r| r.file_stem().to_string())
             .collect::<Vec<_>>();

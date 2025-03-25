@@ -2,3 +2,6 @@ export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --bin
 
 
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --bin thoosa_bird_clef --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_clef/  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'10',window:'1000',dist_quantile:'0.1',descr:'lalala'}"
+
+
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --bin thoosa_bird_clef --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_clef/ plot-motif-slices --motifs-by=run_id:9

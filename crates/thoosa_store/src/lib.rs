@@ -693,11 +693,11 @@ impl Store for SqlStore {
         Ok(r)
     }
 
-    fn list_resources_by_ids(&mut self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoosaError>{
+    fn list_resources_by_ids(&mut self, resource_ids: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoosaError>{
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
-        let (mut q, params) = file_stem.into_iter().fold((vec!["SELECT id, import_id, key, length FROM resources WHERE id IN ("], vec![]), |mut a, v| {
+        let (mut q, params) = resource_ids.into_iter().fold((vec!["SELECT id, import_id, key, length FROM resources WHERE id IN ("], vec![]), |mut a, v| {
             a.0.push("?");
             a.0.push(",");
             a.1.push(*v);
