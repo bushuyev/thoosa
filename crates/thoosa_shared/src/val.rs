@@ -64,7 +64,7 @@ impl <T: FieldName> NamedVal<T> {
 pub struct NamedRange<T: FieldName>{
     name: T,
     range:Range<Val>,
-    step:(Val, u32)
+    step:(Val, u32)//for NamedRangeIter step/digits -> round_to_digits(value: f64, digits: u32)
 }
 
 
@@ -618,7 +618,9 @@ impl <T: FieldName> TryFrom<&NamedVal<T>> for u32 {
 #[cfg(test)]
 mod tests {
     use log::debug;
+    use crate::RangeOrValue;
     use crate::val::{NamedRange, NamedVal, Val};
+
 
 
     #[test]
@@ -626,7 +628,7 @@ mod tests {
         let named_range = NamedRange {
             name: "SomeName".into(),
             range: Val::Int(-1)..Val::Int(3),
-            step: (Val::Int(1), 2),
+            step: (Val::Int(1), 0),
         };
 
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect();
@@ -646,7 +648,7 @@ mod tests {
         let named_range = NamedRange {
             name: "FloatRange".into(),
             range: Val::Real(0.0)..Val::Real(1.0),
-            step: (Val::Real(0.3), 2),
+            step: (Val::Real(0.3), 1),
         };
 
         let result: Vec<NamedVal<String>> = named_range.into_iter().collect();

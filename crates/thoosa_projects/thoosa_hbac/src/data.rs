@@ -145,27 +145,6 @@ pub fn labeled_resourses(path: impl AsRef<Path>) -> Result<HashMap<String, Vec<(
 
 }
 
-#[allow(dead_code)]
-pub fn read_eeg_index(motif_dir:&str)->Result<(Option<String>, Vec<String>), ThoosaError> {
-    // motif_dir
-    let files:Vec<DirEntry> = fs::read_dir(motif_dir)?.into_iter().map(|p|p.unwrap()).filter(|p|p.file_name().to_str().unwrap().ends_with("txt")).collect();
-    assert_eq!(files.len(), 1);
-
-
-    debug!("files={:?}", files);
-    let cnt = fs::read_to_string(files[0].path())?;
-    debug!("{:?}", cnt);
-
-    let re: Regex = Regex::new(r#""(?<id>\w+)""#)?;
-
-    Ok(
-        (
-            files[0].path().file_name().and_then(|f|f.to_str()).map(|f|f.to_string()),
-            re.captures_iter(cnt.as_str()).map(|caps| caps["id"].into()).collect::<Vec<String>>()
-        )
-    )
-
-}
 
 // #[test] TODO
 #[allow(dead_code)]
@@ -862,43 +841,6 @@ mod tests {
 
             ], "EEG", (10_000, 480), &"0.png"
         ).unwrap();
-
-        Ok(())
-    }
-
-
-    #[test]
-    fn test_read_eeg_index() -> Result<(), ThoosaError>  {
-        let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
-        std::fs::create_dir_all(dir.clone())?;
-
-        let filename = format!("{}/test_eegs.txt", dir);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(false)
-            .open(filename.clone())
-            .unwrap();
-
-        let vec_1:Vec<String> = vec!["1123".into(), "34534".into(), "99877".into()];
-        write!(file, "{:?}", vec_1)?;
-
-        assert_eq!(vec_1, super::read_eeg_index(dir.as_str())?.1);
-        Ok(())
-
-    }
-
-    // #[test] TODO to util
-    #[allow(dead_code)]
-    fn index_eegs_to_pt() -> Result<(), ThoosaError> {
-
-        for eeg_file in super::read_eeg_index("../../data_down/14_02_results/2024-02-14T17:36:36Z/")?.1{
-            debug!("{:?}", eeg_file);
-
-            let t = super::parquet_to_tensor("../../data/", eeg_file.as_str(), Device::Cpu)?;
-
-            t.save(format!("../../data_local/seizure_vote_eegs_pts/{}.pt", eeg_file))?;
-        }
 
         Ok(())
     }

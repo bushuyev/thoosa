@@ -92,6 +92,10 @@ impl FsWorkspace {
         model_path.file_stem().and_then(|s|s.to_str().and_then(|v|v.parse::<RunId>().ok())).expect("can't parse run_id from {model_path}")
     }
 
+    pub fn resource_tensor_path(tensors_path:&PathBuf, resource:&Resource)->PathBuf {
+        tensors_path.join(format!("{}_{}.pt", resource.import_id(), resource.file_stem()))
+    }
+
 }
 
 

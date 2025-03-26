@@ -381,6 +381,8 @@ pub fn pulse_v_fit(μ: f32, σ: f32, n: i64, f: f32, max_x:f32, max_y:f32) -> Ve
 pub fn sin_v(n: i64, p: f32) -> Vec<f32> {
     (0..n).map(|x| 4. * (PI * (x as f32)/ p).sin()).collect::<Vec<f32>>()
 }
+
+
 pub fn comp_sin(n: i64) -> impl Iterator<Item=f32> {
     (0..n).map(|x|x as f32).map(move |x|
         30. * (PI / 100. * x).sin() +
@@ -855,7 +857,6 @@ fn parse_range_str(range: &str) -> Result<((String, u8), (String, u8), Option<(S
 
 }
 
-
 pub fn make_combos<V:Clone>(iters: impl Iterator<Item=impl Iterator<Item=V>>) -> Vec<Vec<V>> {
     let mut combos: Vec<Vec<V>> = vec![vec![]];
 
@@ -873,25 +874,6 @@ pub fn make_combos<V:Clone>(iters: impl Iterator<Item=impl Iterator<Item=V>>) ->
 
     combos
 }
-
-// pub fn make_combos<V: Clone>(mut iters: Vec<impl Iterator<Item=V>>) -> Vec<Vec<V>> {
-//     if let Some(first_iter) = iters.pop() {
-//         let rest_combos = make_combos(iters);
-//         first_iter
-//             .flat_map(|item| {
-//                 rest_combos
-//                     .iter()
-//                     .map(move |combo| {
-//                         let mut new_combo = combo.clone();
-//                         new_combo.push(item.clone());
-//                         new_combo
-//                     })
-//             })
-//             .collect()
-//     } else {
-//         vec![vec![]]
-//     }
-// }
 
 pub fn round_to_digits(value: f64, digits: u32) -> f64 {
     if digits == 0 {
@@ -1162,6 +1144,7 @@ mod shared_tests {
         Ok(())
     }
 
+    //TODO when deserialized by serde range with step requires number of decimals - 1.01..2.2:0.1*,1*
     #[test]
     fn test_parse_range_or_value_range_with_step() -> Result<(), ThoosaError>{
         use crate::parse_range_or_value;

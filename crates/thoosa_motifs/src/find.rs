@@ -108,19 +108,16 @@ pub struct FixedFindMotifsConfig {//TODO rename to Args
     #[arg(long)]
     pub max_slices_k:Option<f32>,
 
-    #[arg(long, default_value_t = 0.01)]
-    pub mean_k: f32,
 }
 
 impl FixedFindMotifsConfig {
 
-    pub fn new(min_tracker_step: Option<usize>, chunk_size: u32, keep_slice_matches: bool, max_slices_k: Option<f32>, mean_k: Option<f32>) -> Self {
+    pub fn new(min_tracker_step: Option<usize>, chunk_size: u32, keep_slice_matches: bool, max_slices_k: Option<f32>) -> Self {
         Self {
             min_tracker_step,
             chunk_size,
             keep_slice_matches,
             max_slices_k,
-            mean_k: mean_k.unwrap_or(0.01),
         }
     }
 }
@@ -196,9 +193,9 @@ pub fn find_motifs_by_euc_dist(
 
             let mask_tril = chunk_sliced_0.resource_ids[0].eq(&chunk_sliced_1.resource_ids[0]) && !chunk_sliced_1.is_split();
             let mask_makers = if mask_tril {
-                &mut [LocalMin, LeMean { k: common_config.mean_k, avg: &mut means_acc, total_samples: &mut total_samples }, Tril][..]
+                &mut [LocalMin, LeMean { k: find_motifs_run_config.mean_k, avg: &mut means_acc, total_samples: &mut total_samples }, Tril][..]
             } else {
-                &mut [LocalMin, LeMean { k: common_config.mean_k, avg: &mut means_acc, total_samples: &mut total_samples }][..]
+                &mut [LocalMin, LeMean { k: find_motifs_run_config.mean_k, avg: &mut means_acc, total_samples: &mut total_samples }][..]
             };
 
             let (mask, _) = clc_dist_d2_and_mask(
@@ -244,7 +241,7 @@ pub fn find_motifs_by_euc_dist(
                             mt.lock().track(
                                 slice_0.clone(),
                                 slice_1.clone(),
-                                0.0,
+                                0.0,//actual distances are not kept
                             );
                         }
                     });
@@ -1703,7 +1700,7 @@ mod motif_find_tests {
             ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
             ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
-        let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, None);
+        let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, None, None);
 
         let run_config_id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
 
@@ -1713,7 +1710,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None),
             &ws,
             &store,
             &executor_rc,
@@ -1806,7 +1803,7 @@ mod motif_find_tests {
         ]))?;
 
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, None);
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -1814,7 +1811,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None),
             &ws,
             &store,
             &loader,
@@ -2007,7 +2004,7 @@ mod motif_find_tests {
             ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
         ]))?;
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, Some(0.01));
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -2015,7 +2012,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None),
             &ws,
             &store,
             &loader,
@@ -2096,7 +2093,7 @@ mod motif_find_tests {
         ]))?;
 
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, Some(0.01));
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -2104,7 +2101,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List(eeg_id_series)),
-            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None),
             &ws,
             &store,
             &loader,
@@ -2169,7 +2166,7 @@ mod motif_find_tests {
         }))?;
 
 
-        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None);
+        let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, Some(0.01));
         let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
@@ -2177,7 +2174,7 @@ mod motif_find_tests {
             None,
             vec![run_config],
             &Simple::new(ResourceType::List((0..tensors_len).map(|v| format!("{}", v)).collect())),
-            &FixedFindMotifsConfig::new(Some(3), 2, false, None, None),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None),
             &ws,
             &store,
             &loader,
@@ -2507,11 +2504,11 @@ mod motif_find_tests {
 
     #[test]
     fn test_find_motifs_run_config_to_from_map() {
-        let params = FindMotifsRunConfig::new(Some(0), 10, 10, Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))));
+        let params = FindMotifsRunConfig::new(Some(0), 10, 10, Some(InputFilter::Conv1(Conv1Params::new(10, 1, 1))), Some(0.01));
 
         let properties: HashMap<String, Val> = params.to_properties_iter(None).collect();
 
-        let loaded_params = crate::find::FindMotifsRunConfig::from_properties_map__(0, &properties).unwrap();
+        let loaded_params = FindMotifsRunConfig::from_properties_map__(0, &properties).unwrap();
 
         debug!("loaded_params={:?}", loaded_params);
 
@@ -2544,7 +2541,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None))],
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)))],
             // HashMap::new(),
             move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
@@ -2912,6 +2909,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
     }?;
 
     // check_slices(&all_sices, 0.9);
+
     let mut color_iter = DistinctColorIter::new();
     plot_series(
         all_slices.into_iter().enumerate().map(|(i, t)| {
@@ -2921,6 +2919,31 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
         (2000, 1000),
         &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
     )?;
+
+    Ok(())
+}
+
+pub fn plot_resource<>(resource_config: Simple, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
+    let tensors_path = ws.read().tensors_path().clone();
+    let channel = 0; //TODO
+
+    let resources = resource_config.to_resources(store)?;
+    let all_tensors = resources.iter().map(|r| {
+        Tensor::load(
+            // tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
+            FsWorkspace::resource_tensor_path(&tensors_path, r)
+        ).unwrap().i((channel, ..))
+    });
+    let mut color_iter = DistinctColorIter::new();
+    plot_series(
+        all_tensors.into_iter().enumerate().map(|(i, t)| {
+            (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+        }).collect(),
+        format!("Resources={resource_config:?}").as_str(),
+        (2000, 1000),
+        &ws.read().plots_path().join(format!("resources_{:?}.png", resources.iter().map(|r| r.file_stem()).collect::<String>()))
+    )?;
+
 
     Ok(())
 }

@@ -120,7 +120,7 @@ mod tests {
     use std::time::UNIX_EPOCH;
     use log::{debug, warn};
     use log::LevelFilter::Trace;
-    use parking_lot::{Mutex, RwLock};
+    use parking_lot::{Mutex, RawRwLock, RwLock};
     use plotters::prelude::{BLACK, RED};
     use tch::{Device, IndexOp, TchError, Tensor};
     use tch::Device::Cpu;
@@ -128,18 +128,19 @@ mod tests {
     use tempfile::NamedTempFile;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
+    use thoosa_common::runs::Simple;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{import_resources, Cli};
-    use thoosa_motifs::find::{find_motifs_by_euc_dist, SelectMotifsParams};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, plot_resource, SelectMotifsParams};
     use thoosa_common::ws::Workspace;
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_shared::{cdt_for_dir, recurse_files, ThoosaError};
-    use thoosa_shared::resource::Resource;
+    use thoosa_shared::{cdt_for_dir, recurse_files, ResourceType, ThoosaError};
+    use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};
     use thoosa_store::SqlStore;
     use crate::data::{clc_tracks, labeled_resourses, ogg_to_tensor};
@@ -331,11 +332,32 @@ mod tests {
 
     }
 
-
     #[test]
     fn test_import_resources() -> Result<(), ThoosaError>{
 
         debug!("labels={LABELS:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_plot_resource() -> Result<(), ThoosaError> {
+        let ws = Arc::new(RwLock::new(FsWorkspace::new("/tmp/ws_test_clef", 1, 999)?));
+
+        let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
+
+        plot_resource(
+
+            Simple::new(ResourceType::List(vec![
+                "piepuf1_XC769654.ogg".into(),
+                // "crbtan1_XC137679.ogg".into(),
+                // "whfant1_XC669571.ogg".into(),
+                // "blhpar1_XC116438.ogg".into(),
+            ])),
+            &ws,
+            &store
+        )?;
+
+
         Ok(())
     }
 }

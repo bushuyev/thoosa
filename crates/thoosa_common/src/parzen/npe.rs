@@ -384,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn test_0() {
+    fn test_npe() {
         StdRng::seed_from_u64(42);
 
         let npe = NumericalParzenEstimator::new(
