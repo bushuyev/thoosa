@@ -2095,6 +2095,10 @@ pub struct FindMotifsRunConfig {
     #[in_map]
     pub filter: Option<InputFilter>,
 
+    #[run_config]
+    #[in_map]
+    pub mean_k: f32,
+
 }
 
 impl FindMotifsRunConfig {
@@ -2114,6 +2118,7 @@ impl FindMotifsRunConfig {
                step: u32,
                window: u32,
                filter: Option<InputFilter>,
+               mean_k: Option<f32>,
     ) -> Self {
         Self {
             id,
@@ -2121,6 +2126,7 @@ impl FindMotifsRunConfig {
             window,
             filter,
             min_tracker_step: None,//TODO
+            mean_k: mean_k.unwrap_or(0.5)
         }
     }
 
@@ -2413,14 +2419,14 @@ mod train_tests {
 
         let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)> = vec![
             ( //channel 0 nets
-              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
               vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
              ]
             ),
             ( //channel 1 nets&mut DummyLabelBatch::new(),
-              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
               vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
              ]
@@ -2499,20 +2505,20 @@ mod train_tests {
 
         let mut motif_nets: Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)> = vec![
             ( //channel 0 nets
-              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
               vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)),
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 2., Cpu)?))
              ]
             ),
             ( //channel 1 nets&mut DummyLabelBatch::new(),
-              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
               vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))
              ]
             ),
             ( //channel 2 nets&mut DummyLabelBatch::new(),
-              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+              FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
               vec![
              ]
             )
@@ -2612,14 +2618,14 @@ mod train_tests {
         let step= 100;
 
         let motif_nets = Arc::new(RwLock::new(vec![
-            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
              vec![
                  (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?)), (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cpu)?))
              ]),
-            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
              vec![(MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 10., Cpu)?))], //channel 1 nets
             ),
-            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None),
+            (FindMotifsRunConfig::new(Some(1), step as u32, motif_width as u32, None, None),
              vec![]
             )
         ]));

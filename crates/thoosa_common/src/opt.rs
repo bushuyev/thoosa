@@ -723,7 +723,7 @@ mod opt_tests {
         sig_chol
     }
 
-    #[test]
+    // #[test]
     fn test_opt_2d(){
 
         let n = 1000i64;

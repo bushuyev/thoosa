@@ -206,7 +206,8 @@ where
     let loader = Arc::new(RwLock::new(LoadRunner::new(
         move |key: &Resource| {
             let tensor = Tensor::load_multi_with_device(
-                tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
+                // tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
+                FsWorkspace::resource_tensor_path(&tensors_path, key),
                 Cpu,
             ) //Cuda(0))
             .map_err(|e| ThoosaError::new(e.to_string()))
@@ -257,7 +258,7 @@ where
             debug!("FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
 
-            run_all_grid_step(
+            let run_ids = run_all_grid_step(
                 None,
                 find_motifs_run_config_range_or_value,
                 &find_motifs_args.fixed_config,
@@ -270,6 +271,8 @@ where
                 "FindMotifs",
             )?;
 
+            info!("FindMotifs done, run_ids={run_ids:?}");
+
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
@@ -278,7 +281,7 @@ where
             let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
 
 
-            run_all_grid_step(
+            let run_ids = run_all_grid_step(
                 Some(select_motifs_args.find_motifs_run_ids.clone()),
                 select_motifs_run_config_range_or_value,
                 &(),
@@ -291,7 +294,7 @@ where
                 "SelectMotifs",
             )?;
 
-            info!("SelectMotifs done");
+            info!("SelectMotifs done, run_ids={run_ids:?}");
         }
 
 
@@ -299,7 +302,7 @@ where
             debug!("TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}", train_motif_nets_args.run_config_cnt);
             let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
 
-            run_opt_step::<TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, OptConfig,  Empty,  _>(
+            let run_ids= run_opt_step::<TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, OptConfig,  Empty,  _>(
                 Some(train_motif_nets_args.motif_selection_run_id.clone()),
                 train_motif_nets_run_config_range_or_value,
                 &train_motif_nets_args.fixed_config,
@@ -312,7 +315,7 @@ where
                 "TrainMotifsNets2",
             )?;
 
-            info!("TrainMotifsNets done");
+            info!("TrainMotifsNets done, run_ids={run_ids:?}");
         }
 
 
@@ -1597,10 +1600,10 @@ mod cli_tests {
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(&r#"{
                 step:"200",
                 window:"1000",
-                dist_quantile: "0.01",
-                descr: "find_motifs"
+                mean_k: "0.2"
+
             }"#).unwrap(),
-            &FixedFindMotifsConfig::new(None, 2, false, None, Some(0.2)),
+            &FixedFindMotifsConfig::new(None, 2, false, None),
             &Simple::new(ResourceType::List(vec![
                 "t_0_0".into(),
                 "t_0_1".into(),
@@ -1942,10 +1945,9 @@ mod cli_tests {
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(&r#"{
                 step:"100",
                 window:"800",
-                dist_quantile: "0.5",
-                descr: "find_motifs"
+                mean_k: "0.2"
             }"#).unwrap(),
-            &FixedFindMotifsConfig::new(None, 2, false, None, Some(0.2)),
+            &FixedFindMotifsConfig::new(None, 2, false, None),
             &Simple::new(ResourceType::Group(group_name.clone())),
             find_motifs_by_euc_dist,
             &ws,
