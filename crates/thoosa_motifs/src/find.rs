@@ -1012,7 +1012,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
         motifs_to_tensor(
             resource_id_motif_slices,
             loader,
-            find_motifs_run_config.window(),
+            &find_motifs_run_config,
             ws.read().channels() as i64,
             Cpu,
             motifs_area,
@@ -1834,7 +1834,7 @@ mod motif_find_tests {
         let motifs_tensors = motifs_to_tensor(
             slices.clone(),
             &loader,
-            100,
+            &FindMotifsRunConfig::new(None, 10, 100, None, None),
             ws.read().channels() as i64,
             Cpu,
             0,
