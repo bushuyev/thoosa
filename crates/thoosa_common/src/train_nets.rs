@@ -49,6 +49,7 @@ use thoosa_shared::run_configs::{Applicable, RunConfig};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use crate::transforms::filters::{*};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -2234,6 +2235,7 @@ impl FindMotifsRunConfig {
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum InputFilter {
     Conv1(Conv1Params),
+    BandPassFilter(BandPassFilterParams),
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
