@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
-use crate::loader::{LoadRunner, Loader};
+use crate::loader::{LoadRunner, Loader, SyncWrapper};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -45,7 +45,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_shared::run_configs::RunConfig;
+use thoosa_shared::run_configs::{Applicable, RunConfig};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
@@ -319,7 +319,7 @@ impl Splittable<1> for LoadingTensorsDataBatch {
         Self: Sized
     {
         let mut batch = self.clone();
-        batch.batch_size = batch.batch_size/2;
+        batch.batch_size = batch.batch_size/2;//TODO param
 
         if batch.batch_size > 0 {
             debug!("Splittable<1> for LoadingTensorsDataBatch: batch.batch_size={}", batch.batch_size);
@@ -550,7 +550,6 @@ pub fn run_opt_train_label_nets(
 
             )));
 
-
             let mut result = None::<(f32, LabelNetParams)>;
             run_split_on_oom(
                 Reducer::new(BatchTransform::new(Rc::clone(&batch), |t|{
@@ -736,6 +735,69 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
 
  # returns Tensor nodes x batches x batch size
 */
+pub fn apply_channel_motifs_2(
+    motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
+    batch_channel: Tensor,
+    motif_width: i64,
+    sum_motif_nodes: i64,
+    slices_len: i64,
+    device: &Device
+) -> Result<Tensor, ThoosaError> {
+
+    trace!("apply_channel_motifs: motif_nodes={motif_nodes:?}");
+    debug!("apply_channel_motifs: batch_channel={batch_channel:?} motif_width={motif_width} max_motif_nodes={sum_motif_nodes} slices_len={slices_len} device={device:?}");
+
+    if motif_nodes.is_empty() {
+        return Ok(Tensor::zeros([batch_channel.size()[0], sum_motif_nodes, slices_len], (Float, *device)));
+    }
+
+    let (input_slice_step, pad) = clc_step(batch_channel.size()[1], motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
+
+    let unfolded = batch_channel
+        .pad([0, pad], "constant", 0.)//pad: last dimension [0 - padding left, pad - padding right]
+        .unfold(1, motif_width, input_slice_step);
+
+    debug!("apply_channel_motifs: channel.size={:?} motif_width={motif_width} input_slice_step={input_slice_step} pad={pad}  unfolded.size()={:?}", batch_channel.size(), unfolded.size());
+
+    let motif_dists = motif_nodes.iter_mut().map(|(_params, net)| {
+        net.set_device(device.clone());
+
+        let mut motif_distance_splits = vec![];
+        run_split_on_oom(
+            SplitQueue::<2, _>::new(SplittableTensor::<0>(unfolded.shallow_clone())),
+            |t|{
+                let t = t.as_ref();
+                trace!("apply_channel_motifs: forward: t=\n{t}");
+                let r = net.infer(&t.to_device(device.clone()));
+                debug!("apply_channel_motifs: forward: size={:?} r.size={:?}", t.as_ref().size(), r.size());
+                trace!("apply_channel_motifs: forward: r=\n{r}");
+
+                Ok(r)
+            },
+            |v, t|{
+                debug!("v={v:?}");
+                motif_distance_splits.push(v);
+            },
+            10//TODO config
+        ).unwrap();//TODO unwrap
+
+        net.set_device(Cpu);
+
+        debug!("apply_channel_motifs: motif_distance_splits={motif_distance_splits:?}");
+        if motif_distance_splits.len() > 0 {
+            Ok(Tensor::concat(&motif_distance_splits, 0))
+
+        } else if motif_distance_splits.len() == 1 {
+            Ok(motif_distance_splits.pop().unwrap())
+
+        } else {
+            Err(ThoosaError::new("no motif distances "))
+
+        }
+    }).collect::<Result<Vec<_>, ThoosaError>>()?;
+
+    Ok(Tensor::stack(motif_dists.as_slice(), 1).view((batch_channel.size()[0], motif_nodes.len() as i64, -1)))
+}
 pub fn apply_channel_motifs(
     motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
     batch_channel: Tensor,
@@ -2112,6 +2174,36 @@ impl FindMotifsRunConfig {
     }
 }
 
+impl Applicable<&[SyncWrapper<Box<Tensor>>], Vec<Tensor>> for FindMotifsRunConfig {
+
+    fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>]) -> Result<Vec<Tensor>, ThoosaError> {
+        let mut slices = Vec::with_capacity(tensors_chunk.len());
+
+        for tensor in tensors_chunk {
+            let input_length = tensor.size()[1];
+
+            if input_length >= self.window as i64 {
+
+                let unfolded = tensor.unfold(1, self.window as i64, self.step as i64);
+                // channels x num_slices x window, transpose  to num_slices x channels x window
+                let unfolded = unfolded.transpose(0, 1);
+
+                debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
+                slices.push(unfolded);
+            } else {
+                warn!("skipping tensor")
+            }
+        }
+        Ok(slices)
+    }
+}
+
+impl Applicable<&Tensor, Tensor> for FindMotifsRunConfig {
+    fn apply(&self, subject: &Tensor) -> Result<Tensor, ThoosaError> {
+        todo!()
+    }
+}
+
 
 impl FindMotifsRunConfig {
     pub fn new(id: Option<u32>,
@@ -2139,25 +2231,22 @@ impl FindMotifsRunConfig {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Subcommand, PartialEq, Clone)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum InputFilter {
     Conv1(Conv1Params),
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Args, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct Conv1Params {
     #[in_map]
-    #[arg(long)]
     #[run_config]
     kernel: i64,
 
     #[in_map]
-    #[arg(long, default_value_t = 1)]
     #[run_config]
     stride: i64,
 
     #[in_map]
-    #[arg(long, default_value_t = 0)]
     #[run_config]
     padding: i64,
 }

@@ -364,6 +364,7 @@ mod distance_tests {
     use tch::Tensor;
     use thoosa_common::builder::Node::Par;
     use thoosa_common::panic_to_err;
+    use thoosa_common::train_nets::FindMotifsRunConfig;
     use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, Reducer, SplitQueue, Splittable, SplittableTensor};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
@@ -447,12 +448,12 @@ mod distance_tests {
         //t_label_tensor_channel
         let window = 1000;
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            200, window,
+            &FindMotifsRunConfig::new(None, 200, window, None, None),
             &vec![t_0.into()], //sig_0 at idx 0
             vec![0], Cpu
         ).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            200, window,
+            &FindMotifsRunConfig::new(None, 200, window, None, None),
             &vec![t_1.into()], //sig_0 at idx 2000
             vec![0], Cpu
         ).t;
@@ -546,8 +547,8 @@ mod distance_tests {
         ]);
 
 
-        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_0.into()], vec![0], Cpu).t;
-        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(1, 3, &vec![t_1.into()], vec![0], Cpu).t;
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None), &vec![t_0.into()], vec![0], Cpu).t;
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None),&vec![t_1.into()], vec![0], Cpu).t;
 
         let (mask, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &mut [])? else {
             panic!("no distances")

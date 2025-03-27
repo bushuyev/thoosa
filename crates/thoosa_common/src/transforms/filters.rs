@@ -1,7 +1,35 @@
 use log::debug;
+use serde::Deserialize;
 use tch::{Tensor, Kind, Device};
 use tch::kind::FLOAT_CPU;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use crate::utils::from;
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+pub struct BandPassFilterParams {
+    #[in_map]
+    #[run_config]
+    low_hz: i64,
+
+    #[in_map]
+    #[run_config]
+    high_hz: i64,
+
+    #[in_map]
+    #[run_config]
+    kernel_size: i64,
+
+    #[in_map]
+    #[run_config]
+    stride: i64,
+
+    #[in_map]
+    #[run_config]
+    padding: i64,
+}
+
 
 /// Create a sinc-based band-pass filter
 pub fn band_pass_filter(

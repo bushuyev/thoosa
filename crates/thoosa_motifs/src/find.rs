@@ -342,8 +342,7 @@ where
             // .par_bridge() //TODO spread among devices
             .for_each(|(run_config_with_ctx, device)| {
                 let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-                    run_config_with_ctx.0.step,
-                    run_config_with_ctx.0.window,
+                    &run_config_with_ctx.0,
                     &window_0_tensors.read(),
                     window_0_0_clone.clone(),
                     Cpu
@@ -462,8 +461,7 @@ where
                 let run_configs_applied_to_chunk_0:Vec<Arc<ChunkOfSlicedTensors>> = run_configs.par_iter().enumerate()
                     .map(|(i, run_config)| {
                         Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
-                            run_config.step,
-                            run_config.window,
+                            run_config,
                             &window_0_tensors.read(),
                             window_0_0_clone.clone(),
                             Cpu,
@@ -510,8 +508,7 @@ where
 
                             run_split_on_oom(
                                 ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-                                    run_config.step,
-                                    run_config.window,
+                                    run_config,
                                     &window_1_tensors.read(),
                                     window_1_0_clone.clone(),
                                     Cpu
@@ -2789,8 +2786,7 @@ mod motif_find_tests {
         let t_0= clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(
-                100,
-                1000,
+                &FindMotifsRunConfig::new(None, 100, 1000, None, None),
                 &vec![t_0_0.into(), t_0_1.into()],
                     vec![0, 1],
                     Cpu
@@ -2804,8 +2800,7 @@ mod motif_find_tests {
         let t_1 = clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(
-                100,
-                1000,
+                &FindMotifsRunConfig::new(None, 100, 1000, None, None),
                 &vec![t_1_0.into(), t_1_1.into()],
                 vec![0, 1],
                 Cpu
