@@ -112,8 +112,6 @@ pub fn motifs_to_tensor(
                     let channel_t = channel_t.view([1, -1]);
 
                     let motif_slice_t = channel_t.narrow(1, motif_slice.slice_idx, window);
-                    // let motif_slice_t = t.i((motif_slice.channel, motif_slice.slice_idx..motif_slice.slice_idx+window));
-                    // let motif_slice_t = t.copy((channel_t, motif_slice.slice_idx..motif_slice.slice_idx+window));
 
                     let mut write_guard = channels_motifs_slices_arc.write();
                     let  channels_motifs = write_guard.entry(motif_slice.channel).or_insert_with(||HashMap::new());
@@ -121,7 +119,6 @@ pub fn motifs_to_tensor(
 
 
                     motif_slices.push(SyncWrapper::new_tb(Box::new(motif_slice_t)));
-                    // motifs_slices_map_arc.write().insert(motif_slice.motif_id(), motif_slice);
                 }
             }
 
@@ -332,7 +329,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
 
                     all_slices.write().push(
                         (tensor_idx_id,
-                         slices.into_iter().filter(|slice_idx| {
+                         slices.into_iter().filter(|slice_idx| {//TODO filter_map
                              let slice_ok = t.size()[1] >= (*slice_idx) as i64 + widow;
 
                              if !slice_ok {
