@@ -974,10 +974,14 @@ fn motifs_to_tensor_cmd(
 ) -> Result<(), ThoosaError> {
     let mut store_guard = store.lock();
 
+    let find_motif_run_id = choose_fragments_params.run_id();
+
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motif_run_id, &store.lock().list_run_config_values(find_motif_run_id)?)?;
+
     let t = motifs_to_tensor(
-        store_guard.list_motifs_slices(choose_fragments_params.run_id())?,
+        store_guard.list_motifs_slices(find_motif_run_id)?,
         executor,
-        choose_fragments_params.window(),
+        &find_motifs_run_config,
         20,
         device,
         0,
