@@ -653,6 +653,7 @@ mod tests {
     use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
+    use thoosa_common::train_nets::FindMotifsRunConfig;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
@@ -701,12 +702,12 @@ mod tests {
 
         let window = 1000;
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            100, window,
+            &FindMotifsRunConfig::new(None, 100, window, None, None),
             &vec![t_0_0.into()], //sig_0 at idx 0
             vec![0], Cpu
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            100, window,
+            &FindMotifsRunConfig::new(None, 100, window, None, None),
             &vec![t_1_0.into()], //sig_0 at idx 2000
             vec![0], Cpu
         ).t;

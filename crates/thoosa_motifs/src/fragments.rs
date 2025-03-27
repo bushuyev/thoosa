@@ -328,8 +328,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
                     let tensor_idx_id = resource.id();
                     let t = LoadRunner::<Box<Tensor>>::load_future(loader, resource, 0).await;
 
-                    let take = t.size()[1] / widow;
-                    debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?} take={}", slices.len(), t.size(),  take  );
+                    debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
 
                     all_slices.write().push(
                         (tensor_idx_id,

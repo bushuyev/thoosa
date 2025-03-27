@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::fmt::Debug;
 use std::collections::HashMap;
 use crate::hyperparameter::{FieldName, Hyperparameter};
-use crate::make_combos;
+use crate::{make_combos, ThoosaError};
 use crate::val::{NamedRange, NamedVal, Val};
 
 ////
@@ -121,6 +121,11 @@ pub trait RunConfig:Debug {
     fn set_id(&mut self, id: RunId);
 
     fn type_name()->&'static str;
+}
+
+pub trait Applicable<S, R>:Debug {
+
+    fn apply(&self, subject:S) ->Result<R, ThoosaError>;
 }
 
 pub struct RunConfigHolder<R:RunConfig> {
