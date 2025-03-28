@@ -932,7 +932,7 @@ pub fn conc_str(prefix: &str, field: &str) -> String {
     s
 }
 
-pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<f64> {
+pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<(f64, u32)> {
     // Edge cases: empty data or zero bins
     if values.is_empty() || n_bins == 0 {
         return Vec::new();
@@ -948,14 +948,14 @@ pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<f64> {
 
     // If all values are the same, place them all in the first bin
     if min_value == max_value {
-        return vec![min_value];
+        return vec![(min_value, values.len() as u32)];
     }
 
     // Determine bin size based on overall range and number of bins
     let bin_size = (max_value - min_value) / n_bins as f64;
 
     // Create a vector of counts initialized to 0
-    let mut count_bins = vec![0; n_bins];
+    let mut count_bins = vec![0u32; n_bins];
     let mut value_bins = vec![vec![]; n_bins];
 
     // Increment the appropriate bin for each value
@@ -972,7 +972,12 @@ pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<f64> {
         value_bins[bin_index].push(value);
     }
 
-    count_bins.into_iter().zip(value_bins).map(|(count, v)| v.into_iter().sum::<f64>() / (count as f64 + f64::epsilon())).collect()
+    count_bins.into_iter().zip(value_bins).map(|(count, v)| {
+        (
+            v.into_iter().sum::<f64>() / (count as f64 + f64::epsilon()),
+            count
+        )
+    }).collect()
 }
 
 
@@ -1540,7 +1545,6 @@ mod shared_tests {
         );
 
     }
-
 
     #[test]
     pub fn test_hist(){

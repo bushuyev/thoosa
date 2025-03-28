@@ -15,7 +15,7 @@ pub struct BandPassFilterParams {
 
     #[in_map]
     #[run_config]
-    pub high_hz: f64,
+    pub band_hz: f64,
 
     #[in_map]
     #[run_config]
@@ -75,11 +75,13 @@ pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) 
     let ranked= absolutes.argsort(0, true);
 
 
-    from::<Vec<f32>>(&ranked)
-        .into_iter()
-        .take(take)
-        .map(|i|(freq.double_value(&[i as i64]), absolutes.double_value(&[i as i64])))
-        .collect()
+    let mut i:Box<dyn Iterator<Item=f32>> = Box::new(from::<Vec<f32>>(&ranked).into_iter());
+    if take > 0 {
+        i = Box::new(i.take(take));
+    }
+
+    i.map(|i|(freq.double_value(&[i as i64]), absolutes.double_value(&[i as i64])))
+    .collect()
 }
 
 
@@ -157,6 +159,52 @@ mod tests {
                 (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&input_signal_1_fft)).collect::<Vec<(f32, f32)>>()),//no matches
             ], "distance", (2000, 1000), &format!("/tmp/plots/filter_fft_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         )?;*/
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_band_pass_filter_mult_channels() -> Result<(), ThoosaError> {
+        let samples = 16000;
+        let sample_rate = 16000.0;
+        let kernel_size = 101;
+        let low_hz = 5.0;
+        let high_hz = 15.0;
+
+        let t = Tensor::arange(samples, (Kind::Float, Device::Cpu)) / sample_rate;
+        let input_signal_0 = sin_t(&t, 10.);
+
+        let input_signal_1 = sin_t(&t, 300.);
+
+        let input_signal = input_signal_0 + input_signal_1;
+        let input_freqs = clc_frequencies(&input_signal, samples, sample_rate, 2);
+        let input = input_signal.view((1,1,-1)); // batch x channel for conv1d
+        debug!("0. input={input:?}");
+        let input = input.repeat([10, 3, 1]); // [out_channels, in_channels/groups, kernel_size]
+        debug!("1. input={input:?}");
+
+
+        let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6);
+        debug!("1. kernel={kernel:?}");
+        // let kernel = kernel.repeat([3,1,1]);
+        let kernel = kernel.view([1,1,-1]).expand([3,1,-1], true);
+        debug!("1. kernel={kernel:?}");
+
+        //apply filter
+        let output = input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 3);
+
+        let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5);
+
+
+        debug!("input_freqs={input_freqs:?}");
+        debug!("output_freqs={output_freqs:?}");
+
+        assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());
+        //output_freqs -[(10.0, 0.4967866837978363), (300.0, 0.26481497287750244)
+        assert!(
+            are_close(&[0.5, 0.2648], &[output_freqs[0].1, output_freqs[1].1], 1e-2)
+        );
+
 
         Ok(())
     }

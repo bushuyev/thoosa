@@ -2210,11 +2210,11 @@ impl FindMotifsRunConfigApplicable {
                     InputFilter::BandPassFilter(band_pass_filter_config) => {
                         let kernel = band_pass_filter(
                             band_pass_filter_config.low_hz,
-                            band_pass_filter_config.low_hz+band_pass_filter_config.high_hz,
+                            band_pass_filter_config.low_hz + band_pass_filter_config.band_hz,
                             band_pass_filter_config.kernel_size,
-                            32_000.0,//TODO
+                            32_000.0, //TODO
                             1e-6
-                        ).view((1, 1, -1));
+                        ).view((1, 1, -1)).expand([3,1,-1], true);
 
 
                         Self {
@@ -2237,7 +2237,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>> for FindMotifsRunConfigApplicable {
                 input.shallow_clone()
             }
             Some(kernel) => {
-                input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 1)
+                input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 3)
             }
         };
 
@@ -3785,7 +3785,7 @@ mod train_tests {
             min_tracker_step: None,
             filter: Some(InputFilterRangeOrValue::BandPassFilter(BandPassFilterParamsRangeOrValue{
                 low_hz: (10. ..100. ).into(),
-                high_hz: (300. ..400. ).into(),
+                band_hz: (300. ..400. ).into(),
                 kernel_size: (12000i64).into(),
                 stride: (1i64).into(),
                 padding: (1i64).into(),
