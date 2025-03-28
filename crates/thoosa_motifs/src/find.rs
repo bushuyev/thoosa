@@ -28,7 +28,7 @@ use tch::{Device, IndexOp, Kind, Tensor};
 use std::panic::AssertUnwindSafe;
 
 use thoosa_common::utils::*;
-use thoosa_shared::parse_key_val;
+use thoosa_shared::{avg_hist, parse_key_val};
 use thoosa_shared::val::Val;
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::{make_combos, RangeOrValue, ResourceType, ThoosaError};
@@ -461,6 +461,7 @@ where
 
                 let run_configs_applied_to_chunk_0:Vec<Arc<ChunkOfSlicedTensors>> = run_configs.par_iter().enumerate()
                     .map(|(i, run_config)| {
+
                         Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
                             run_config,
                             &window_0_tensors.read(),
@@ -2930,9 +2931,12 @@ pub fn plot_resource<>(resource_config: Simple, ws: &Arc<RwLock<Box<dyn Workspac
             FsWorkspace::resource_tensor_path(&tensors_path, r)
         ).unwrap().i((channel, ..));
 
-        let freqs = clc_frequencies(&t, t.size()[0], 32000f64, 10);
-
+        let freqs = clc_frequencies(&t, t.size()[0], 32000f64, 100);
         debug!("plot_resource: r={r:?} freqs={freqs:?}");
+
+        let freqs_bins = avg_hist(&freqs.iter().map(|v|v.0).collect::<Vec<f64>>(), 10);
+
+        debug!("plot_resource: freqs_bins={freqs_bins:?}");
 
         t
     });
