@@ -1969,7 +1969,7 @@ mod cli_tests {
          FixedNumSlices: {
             num_layers: "2",
             slices_len: "100"
-        }
+         }
         */
 
         let train_label_nodes_run_ids = run_opt_step::<TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, OptConfig, NetResources<Labeled>, _>(
@@ -1984,8 +1984,9 @@ mod cli_tests {
                         opt_n_init: "3"
                 },
                 net: {
-                    MaxPadding: {
+                    FixedNumSlices: {
                         num_layers: "2",
+                        slices_len: "100"
                     }
                 }
             }"#).unwrap(),

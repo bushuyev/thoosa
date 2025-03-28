@@ -348,10 +348,19 @@ mod tests {
         plot_resource(
 
             Simple::new(ResourceType::List(vec![
-                "piepuf1_XC769654.ogg".into(),
+                // "piepuf1_XC769654.ogg".into(),
                 // "crbtan1_XC137679.ogg".into(),
                 // "whfant1_XC669571.ogg".into(),
                 // "blhpar1_XC116438.ogg".into(),
+
+                "bugtan_XC946265.ogg".into(),
+                "bugtan_XC946266.ogg".into(),
+                "bugtan_XC946267.ogg".into(),
+                "bugtan_XC953345.ogg".into(),
+                "bugtan_XC959312.ogg".into(),
+                "bugtan_XC959322.ogg".into(),
+                "bugtan_XC962679.ogg".into(),
+
             ])),
             &ws,
             &store

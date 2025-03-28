@@ -691,6 +691,12 @@ impl  From<i32> for RangeOrValue<i32>  {
     }
 }
 
+impl  From<i64> for RangeOrValue<i64>  {
+    fn from(value: i64) -> Self {
+        RangeOrValue::Value(value)
+    }
+}
+
 
 impl <V>  From<Range<V>> for RangeOrValue<V> where V:PartialEq + Into<RangeOrValue<V>> {
     fn from(r: Range<V>) -> Self {
@@ -926,6 +932,49 @@ pub fn conc_str(prefix: &str, field: &str) -> String {
     s
 }
 
+pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<f64> {
+    // Edge cases: empty data or zero bins
+    if values.is_empty() || n_bins == 0 {
+        return Vec::new();
+    }
+
+    // Find the minimum and maximum in the data
+    let min_value = values
+        .iter()
+        .fold(f64::INFINITY, |a, &b| a.min(b));
+    let max_value = values
+        .iter()
+        .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    // If all values are the same, place them all in the first bin
+    if min_value == max_value {
+        return vec![min_value];
+    }
+
+    // Determine bin size based on overall range and number of bins
+    let bin_size = (max_value - min_value) / n_bins as f64;
+
+    // Create a vector of counts initialized to 0
+    let mut count_bins = vec![0; n_bins];
+    let mut value_bins = vec![vec![]; n_bins];
+
+    // Increment the appropriate bin for each value
+    for &value in values {
+        // Identify the bin index by its relative distance from min_value
+        let mut bin_index = ((value - min_value) / bin_size) as usize;
+
+        // Handle edge case where `value` might be exactly max_value
+        // (floating-point math can push it into the next bin)
+        if bin_index == n_bins {
+            bin_index = n_bins - 1;
+        }
+        count_bins[bin_index] += 1;
+        value_bins[bin_index].push(value);
+    }
+
+    count_bins.into_iter().zip(value_bins).map(|(count, v)| v.into_iter().sum::<f64>() / (count as f64 + f64::epsilon())).collect()
+}
+
 
 #[cfg(test)]
 mod shared_tests {
@@ -946,7 +995,7 @@ mod shared_tests {
     use std::fmt::{Display, Formatter};
     use clap::{Args, Parser};
     use log::debug;
-    use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue, ResourceType, ThoosaError};
+    use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, avg_hist, make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue, ResourceType, ThoosaError};
     use crate::hyperparameter::FieldName;
     use crate::pulse_v;
     use crate::val::NamedVal;
@@ -1492,6 +1541,17 @@ mod shared_tests {
 
     }
 
+
+    #[test]
+    pub fn test_hist(){
+        let data = vec![1.2, 2.4, 2.5, 2.8, 3.1, 4.7, 2.1, 2.4, 1.9, 3.0];
+        let n_bins = 5;
+
+        let hist = avg_hist(&data, n_bins);
+
+        // Print out the histogram
+        println!("Histogram counts in each bin: {:?}", hist);
+    }
 }
 
 pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a str, PathBuf) {
@@ -1501,3 +1561,4 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
     let json = parent.join(json);
     (file_stem, json)
 }
+

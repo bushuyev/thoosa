@@ -11,23 +11,23 @@ use crate::utils::from;
 pub struct BandPassFilterParams {
     #[in_map]
     #[run_config]
-    low_hz: i64,
+    pub low_hz: f64,
 
     #[in_map]
     #[run_config]
-    high_hz: i64,
+    pub high_hz: f64,
 
     #[in_map]
     #[run_config]
-    kernel_size: i64,
+    pub kernel_size: i64,
 
     #[in_map]
     #[run_config]
-    stride: i64,
+    pub stride: i64,
 
     #[in_map]
     #[run_config]
-    padding: i64,
+    pub padding: i64,
 }
 
 
@@ -41,8 +41,8 @@ pub fn band_pass_filter(
 ) -> Tensor {
     let n = Tensor::arange(kernel_size, (Kind::Float, Device::Cpu)) - (kernel_size - 1) as f64 / 2.0;
 
-    let low = 2.0 * std::f64::consts::PI * low_hz / sample_rate;
-    let high = 2.0 * std::f64::consts::PI * high_hz / sample_rate;
+    let low = std::f64::consts::TAU * low_hz / sample_rate;
+    let high = std::f64::consts::TAU * high_hz / sample_rate;
 
     let sinc = |x: &Tensor| {
         let x_eps = x + eps;
@@ -160,5 +160,6 @@ mod tests {
 
         Ok(())
     }
+
 
 }
