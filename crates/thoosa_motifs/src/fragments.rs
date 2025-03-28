@@ -25,7 +25,8 @@ use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
-use thoosa_common::train_nets::FindMotifsRunConfig;
+use thoosa_common::train_nets::{DummyFindMotifsRunConfigCtx, FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
+use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
 
 #[derive(Debug, Args)]
@@ -83,7 +84,8 @@ impl MotifsTensors {
 */
 pub fn motifs_to_tensor(
     resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, find_motifs_run_config: &FindMotifsRunConfig, channels: i64, device: Device,
-    area: u64
+    area: u64,
+    ws:&Arc<RwLock<Box<dyn Workspace>>>
 ) -> Result<MotifsTensors, ThoosaError> {
 
     debug!("motifs_to_tensor: resource_id_motif_slices.len={} device={device:?} find_motifs_run_config={find_motifs_run_config:?}", resource_id_motif_slices.len());
@@ -98,7 +100,7 @@ pub fn motifs_to_tensor(
     let wg = WaitGroup::new();
     let wg_1 = wg.clone();
 
-    let find_motifs_run_config_for_loader = find_motifs_run_config.clone();
+    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()));
 
     loader.write().exec(move |loader, _| {
         async move {
@@ -107,13 +109,13 @@ pub fn motifs_to_tensor(
                 debug!("motifs_to_tensor: resource={resource:?}");
                 let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, area).await;
                 debug!("motifs_to_tensor: t.size={:?}", t.size());
-                let applied = find_motifs_run_config_for_loader.to_applicable().apply(&t).expect("find_motifs_run_config_for_loader.apply");
+                let applied = find_motifs_run_config_applicable.apply(&t).expect("find_motifs_run_config_for_loader.apply");
                 debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
 
                 for motif_slice in motif_slices {
                     debug!("motifs_to_tensor: motif_slice={motif_slice:?}");
 
-                    let motif_slice_t = applied.i((motif_slice.channel as i64, motif_slice.slice_idx/find_motifs_run_config_for_loader.step as i64, ..)); //channel_t.narrow(1, motif_slice.slice_idx, find_motifs_run_config_for_loader.window as i64);
+                    let motif_slice_t = applied.i((motif_slice.channel as i64, motif_slice.slice_idx/ find_motifs_run_config_applicable.step() as i64, ..)); //channel_t.narrow(1, motif_slice.slice_idx, find_motifs_run_config_for_loader.window as i64);
 
                     debug!("motifs_to_tensor: motif_slice_t.size={:?}", motif_slice_t.size());
 
@@ -412,6 +414,7 @@ mod motifs_tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::train_nets::FindMotifsRunConfig;
     use thoosa_common::utils::*;
+    use thoosa_common::ws::DummyWorkspace;
     use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::MotifSlice;
     use thoosa_shared::TensorIdSliceIdx;
@@ -427,6 +430,7 @@ mod motifs_tests {
     fn test_motifs_to_tensor() -> Result<(), ThoosaError>{
         let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
         debug!("dir={}", dir);
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
 
         let mut slices_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
@@ -477,7 +481,8 @@ mod motifs_tests {
             &FindMotifsRunConfig::new(None, 10, 10, None, None),
             2,
             Device::Cpu,
-            1
+            1,
+            &ws
         )?;
 
         debug!("slices_t={}", motifs_tensors.channels_motifs_slices);

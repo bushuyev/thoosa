@@ -13,7 +13,7 @@ use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use futures::StreamExt;
 use log::{debug, info, log_enabled, trace, warn, Log};
-use parking_lot::{Mutex, RawRwLock, RwLock};
+use parking_lot::{Mutex, RawRwLock, RwLock, RwLockReadGuard};
 use plotters::prelude::BLACK;
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
@@ -865,7 +865,7 @@ pub fn apply_channel_motifs(
     Ok(Tensor::stack(motif_dists.as_slice(), 1).view((batch_channel.size()[0], motif_nodes.len() as i64, -1)))
 }
 
-pub fn apply_channel_motifs_with_padding(input_slice_step: usize,
+pub fn apply_channel_motifs_with_padding(input_slice_step: u32,
                                          motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
                                          channel: Tensor, //batch , data
                                          motif_width: i64,
@@ -1996,10 +1996,10 @@ fn apply_motif_nets_with_padding(
             .iter_mut()
             .enumerate()
             .map(|(channel, (find_motifs_cfg, motif_nodes))| {
-                let slices_len = slices_len(input_n as i64, find_motifs_cfg.window as i64, find_motifs_cfg.step as usize);
+                let slices_len = slices_len(input_n as i64, find_motifs_cfg.window as i64, find_motifs_cfg.step);
                 debug!("apply_motif_nets: slices_len={slices_len} input_n={input_n} motif_width={} step={}", find_motifs_cfg.window, find_motifs_cfg.step);
                 apply_channel_motifs_with_padding(
-                    find_motifs_cfg.step as usize,
+                    find_motifs_cfg.step,
                     motif_nodes,
                     input_t.i((.., channel as i64, ..)),//batch, channel, data
                     find_motifs_cfg.window as i64,
@@ -2176,29 +2176,60 @@ impl FindMotifsRunConfig {
         Ok(find_motifs_run_config)
     }
 
-    pub fn to_applicable(&self) -> FindMotifsRunConfigApplicable {
-        FindMotifsRunConfigApplicable::new(&self)
+    pub fn to_applicable<C:FindMotifsRunConfigCtx>(&self, ctx:C) -> FindMotifsRunConfigApplicable {
+        FindMotifsRunConfigApplicable::new(&self, ctx)
     }
-
 }
 
+//TODO use workspace directly
+pub struct FindMotifsRunConfigWsCtx {
+    channels:u32,
+    sample_rate:u32
+}
+
+impl From<RwLockReadGuard<'_, Box<dyn Workspace>>> for FindMotifsRunConfigWsCtx {
+    fn from(value: RwLockReadGuard<'_, Box<dyn Workspace>>) -> Self {
+        FindMotifsRunConfigWsCtx {
+            channels: value.channels() as u32,
+            sample_rate: value.sample_rate(),
+        }
+    }
+}
+
+pub trait FindMotifsRunConfigCtx {
+    fn channels(&self) -> u32;
+    fn sample_rate(&self) -> u32;
+}
+
+
+impl FindMotifsRunConfigCtx for FindMotifsRunConfigWsCtx {
+    fn channels(&self) -> u32 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+}
 
 #[derive(Debug)]
 pub struct FindMotifsRunConfigApplicable {
     run_config:FindMotifsRunConfig,
-    kernel:Option<Box<Tensor>>
+    kernel:Option<SyncWrapper<Box<Tensor>>>,
+    groups:i64
 }
 
 impl FindMotifsRunConfigApplicable {
 
-    pub fn new(run_config:&FindMotifsRunConfig) -> Self {
+    pub fn new<C:FindMotifsRunConfigCtx>(run_config:&FindMotifsRunConfig, ctx:C) -> Self {
 
         match &run_config.filter {
             None => {
 
                 Self {
                     run_config: run_config.clone(),
-                    kernel:None
+                    kernel:None,
+                    groups:0
                 }
             }
 
@@ -2212,20 +2243,33 @@ impl FindMotifsRunConfigApplicable {
                             band_pass_filter_config.low_hz,
                             band_pass_filter_config.low_hz + band_pass_filter_config.band_hz,
                             band_pass_filter_config.kernel_size,
-                            32_000.0, //TODO
+                            ctx.sample_rate() as f64, //TODO
                             1e-6
-                        ).view((1, 1, -1)).expand([3,1,-1], true);
+                        ).view((1, 1, -1)).expand([ctx.channels() as i64,1,-1], true);
 
 
                         Self {
                             run_config: run_config.clone(),
-                            kernel:Some(Box::new(kernel))
+                            kernel:Some(kernel.to_device(Cuda(0)).into()),
+                            groups: ctx.channels() as i64
                         }
                     }
                 }
             }
         }
 
+    }
+
+    pub fn id(&self) -> RunId {
+        self.run_config.id.expect("no run id")
+    }
+
+    pub  fn step(&self) -> u32{
+        self.run_config.step()
+    }
+
+    pub  fn mean_k(&self) -> f32{
+        self.run_config.mean_k
     }
 }
 
@@ -2234,10 +2278,10 @@ impl Applicable<&Box<Tensor>, Box<Tensor>> for FindMotifsRunConfigApplicable {
 
         let t = match self.kernel.as_ref() {
             None => {
-                input.shallow_clone()
+                input.to_device(Cuda(0)).shallow_clone()
             }
             Some(kernel) => {
-                input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 3)
+                input.to_device(Cuda(0)).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
             }
         };
 
@@ -2316,8 +2360,8 @@ impl FindMotifsRunConfig {
         self.window as i64//TODO
     }
 
-    pub fn step(&self) -> usize {
-        self.step as usize //TODO
+    pub fn step(&self) -> u32 {
+        self.step
     }
 }
 
@@ -2675,7 +2719,7 @@ mod train_tests {
         reset_print_options();
         let input_n = 1000;
         let motif_width = 100;
-        let step = (motif_width / 1) as usize;//1 - step==motif_width slices do not overlap so net output - sum(slice)*k
+        let step = (motif_width / 1) as u32;//1 - step==motif_width slices do not overlap so net output - sum(slice)*k
 
         let t = lin_test_tensor(input_n).unsqueeze(0);
         let slices_len = slices_len(input_n, motif_width, step);
@@ -2851,7 +2895,7 @@ mod train_tests {
     fn test_save_load_label_model_fixed_num_slices() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, 32000)?));
 
         let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetType2::FixedNumSlices(FixedNumSlicesNetParams2::new(10, 100)));
 
@@ -2882,7 +2926,7 @@ mod train_tests {
         let max_motif_nodes = 19;
         let slices_len = 23;
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as usize, 1000)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as usize, 1000, 32000)?));
         let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2::new(3)));
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2910,7 +2954,7 @@ mod train_tests {
     #[test]
     fn test_train_label() -> Result<(), ThoosaError> {
         set_max_level(Debug);
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1000)?));
 
         const BATCH_SIZE:usize = 10;
         const CHANNELS:usize = 2;
@@ -3376,7 +3420,7 @@ mod train_tests {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1000)?));
 
         const BATCH_SIZE:usize = 1;
         const CHANNELS:usize = 2;
@@ -3559,7 +3603,7 @@ mod train_tests {
         }
 
         let (loss, final_params) = super::train_final_node(
-            &Arc::new(RwLock::new(DummyWorkspace::new(0, 100)?)),
+            &Arc::new(RwLock::new(DummyWorkspace::new(0, 1000, 100)?)),
             &TrainFinalNetRunConfig::new(Some(1), CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3), FinalNetParams::new(3)),
             &mut DummyLabelBatch::new(),
             &Cpu,
@@ -3795,4 +3839,16 @@ mod train_tests {
         debug!("{:#}", serde_json5::to_string(&rc).unwrap());
     }
 
+}
+
+// #[cfg(test)]
+pub struct DummyFindMotifsRunConfigCtx;
+impl FindMotifsRunConfigCtx for DummyFindMotifsRunConfigCtx {
+    fn channels(&self) -> u32 {
+        30
+    }
+
+    fn sample_rate(&self) -> u32 {
+        1000
+    }
 }

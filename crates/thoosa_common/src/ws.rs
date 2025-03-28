@@ -30,12 +30,13 @@ pub struct FsWorkspace {
     tmp_path:PathBuf,
 
     channels:usize, //TODO move into input meta
+    sample_rate:u32,
     max_input:usize //TODO move into input meta
 }
 
 impl FsWorkspace {
 
-    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize) -> Result<Box<dyn Workspace>, ThoosaError> {
+    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize, sample_rate: u32) -> Result<Box<dyn Workspace>, ThoosaError> {
 
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
@@ -79,6 +80,7 @@ impl FsWorkspace {
             log_path,
             tmp_path,
             channels,
+            sample_rate,
             max_input
         }))
     }
@@ -258,6 +260,10 @@ impl Workspace for FsWorkspace {
         self.channels
     }
 
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
     #[inline]
     fn max_input(&self) -> usize {
         self.max_input
@@ -289,6 +295,7 @@ impl Workspace for FsWorkspace {
     fn log_path(&self) -> &PathBuf {
         &self.log_path
     }
+
 }
 
 pub trait Workspace:Sync + Send {
@@ -318,25 +325,29 @@ pub trait Workspace:Sync + Send {
 
     #[inline]
     fn channels(&self) -> usize;
+    fn sample_rate(&self) -> u32;
     #[inline]
     fn max_input(&self) -> usize;
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError>;
+
 }
 
 #[derive(Debug)]
 pub struct DummyWorkspace {
     base:PathBuf,
     channels:usize,
+    sample_rate:u32,
     n:usize
 }
 
 impl DummyWorkspace {
-    pub fn new(channels: usize, n: usize) ->Result<Box<dyn Workspace>, ThoosaError> {
+    pub fn new(channels: usize, sample_rate: u32, n: usize) ->Result<Box<dyn Workspace>, ThoosaError> {
         let base = Path::new("/tmp").join(cdt_for_dir());
         fs::create_dir_all(&base)?;
 
         Ok(Box::new(Self {
             channels,
+            sample_rate,
             base,
             n
         }))
@@ -425,6 +436,7 @@ impl Workspace for DummyWorkspace {
         self.channels
     }
 
+
     fn max_input(&self) -> usize {
         todo!()
     }
@@ -435,6 +447,10 @@ impl Workspace for DummyWorkspace {
 
     fn log_path(&self) -> &PathBuf {
         todo!()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 }
 
@@ -462,7 +478,7 @@ mod tests {
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
         let tensors_path = Some(test_dir.join("tensors"));
-        let ws = FsWorkspace::new(test_dir, 2, 684400)?;
+        let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
 
 
         debug!("store_path={:?}", ws.store_path());
@@ -497,7 +513,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = FsWorkspace::new(test_dir, 20, 684400)?;
+        let ws = FsWorkspace::new(test_dir, 20, 684400, 32000)?;
 
 
         ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(10, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;

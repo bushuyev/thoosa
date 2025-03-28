@@ -774,7 +774,7 @@ pub const fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, ba
     (positions + batch_size - 1) / batch_size
 }
 
-pub const fn slices_len(input_n: i64, motif_width: i64, step: usize) -> i64 {
+pub const fn slices_len(input_n: i64, motif_width: i64, step: u32) -> i64 {
     (input_n - motif_width) / step as i64 + 1
 }
 
@@ -1557,6 +1557,7 @@ mod shared_tests {
         println!("Histogram counts in each bin: {:?}", hist);
     }
 }
+
 
 pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a str, PathBuf) {
     let parent = path.parent().expect("parent");

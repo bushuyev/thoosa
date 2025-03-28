@@ -20,7 +20,8 @@ fn main()  {
         resource_to_tensor,
         &LABELS,
         1,
-        usize::MAX
+        usize::MAX,
+        32000
     ) {
 
         Ok(_) => {
