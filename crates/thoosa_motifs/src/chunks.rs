@@ -68,70 +68,22 @@ impl  ChunkOfSlicedTensors {
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk(run_config:&FindMotifsRunConfig, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors
-    {
+    pub fn slice_tensors_chunk(run_config:&FindMotifsRunConfig, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
-        let mut slices = run_config.apply(tensors_chunk).expect("ChunkOfSlicedTensors apply failed");
+        let  (tensor, sizes) = run_config.to_applicable().apply(tensors_chunk).expect("ChunkOfSlicedTensors apply failed");
 
-        let tensor= if slices.is_empty() {
-            //channels
-            Tensor::zeros(&[0, tensors_chunk[0].size()[0], run_config.window as i64], (Kind::Float, device))
-        } else {
-            //slices x channels x window -> channels x slices x window
-            Tensor::cat(&slices, 0).transpose(0, 1)
-        };
+
         debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
 
         ChunkOfSlicedTensors::new(
             keys,
-            slices.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
+            sizes,
             run_config.step,
             tensor,
         )
     }
-
-
-    // /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    // pub fn slice_tensors_chunk(step: u32, window: u32, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors {
-    //
-    //     debug!("ChunkOfSlicedTensors::slice_tensors_chunk: step={step} window={window} tensors_chunk.len={}", tensors_chunk.len());
-    //
-    //     let mut slices = Vec::with_capacity(tensors_chunk.len());
-    //
-    //     for tensor in tensors_chunk {
-    //         let input_length = tensor.size()[1];
-    //
-    //         if input_length >= window as i64 {
-    //
-    //             let unfolded = tensor.unfold(1, window as i64, step as i64);
-    //             // channels x num_slices x window, transpose  to num_slices x channels x window
-    //             let unfolded = unfolded.transpose(0, 1);
-    //
-    //             debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
-    //             slices.push(unfolded);
-    //         } else {
-    //             warn!("skipping tensor")
-    //         }
-    //     }
-    //
-    //     let tensor= if slices.is_empty() {
-    //                                 //channels
-    //         Tensor::zeros(&[0, tensors_chunk[0].size()[0], window as i64], (Kind::Float, device))
-    //     } else {
-    //         //slices x channels x window -> channels x slices x window
-    //         Tensor::cat(&slices, 0).transpose(0, 1)
-    //     };
-    //     debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
-    //
-    //     ChunkOfSlicedTensors::new(
-    //         keys,
-    //         slices.iter().map(|t| t.size()[0]).collect::<Vec<_>>(), //num slices in each tensor,
-    //         step,
-    //         tensor,
-    //     )
-    // }
 
     pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue<2, ChunkOfSlicedTensors>{
         SplitQueue::new(chunk)

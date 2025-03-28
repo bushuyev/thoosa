@@ -55,6 +55,7 @@ use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{Labeled, SavableResult, Simple};
 use thoosa_common::train_nets::*;
+use thoosa_common::transforms::filters::clc_frequencies;
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -280,7 +281,7 @@ fn chunk_and_slice<G, CTX>(
     chunk_size: usize,
     run_configs:&mut Vec<(FindMotifsRunConfig, CTX)>,
     mut callback: G,
-    exec: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
@@ -294,12 +295,12 @@ where
     resource_chunks.push(vec![]); //to get last window processed
 
 
-    let area_0 = exec.write().get_available_cache_area();
+    let area_0 = loader.write().get_available_cache_area();
 
-    exec.write().preload(&resource_chunks[0], area_0);
+    loader.write().preload(&resource_chunks[0], area_0);
 
     if resource_chunks.len() > chunk_size {
-        exec.write().preload(&resource_chunks[chunk_size], area_0);
+        loader.write().preload(&resource_chunks[chunk_size], area_0);
     }
 
     //first element in each window to be loaded and processed, second - preloaded
@@ -308,7 +309,7 @@ where
         debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={window_0:?}");
 
         if window_0[1].len() > 0 {
-            exec.write().preload(&window_0[1],  area_0);
+            loader.write().preload(&window_0[1], area_0);
         }
 
         let wg_0 = WaitGroup::new();
@@ -320,7 +321,7 @@ where
         let window_0_tensors = Arc::new(RwLock::new(vec![]));
         let window_0_tensors_arc = Arc::clone(&window_0_tensors);
 
-        exec.write().exec(|loader, keys_purge| {
+        loader.write().exec(|loader, keys_purge| {
             async move {
 
                 for key in &window_0_0 {
@@ -369,7 +370,7 @@ where
 
         let i_1 = Instant::now();
 
-        exec.write().purge_cache_keys(window_0[0].clone(), area_0);
+        loader.write().purge_cache_keys(window_0[0].clone(), area_0);
         info!("done {chunk_i_0} chunks out of {} in {} mls", resource_chunks.len(), i_1.elapsed().as_millis());
     }
     Ok(())
@@ -1764,14 +1765,14 @@ mod motif_find_tests {
 
 
         let x = lin_t(n);
-        plot_series(
+        /*plot_series(
              vec![
                  (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
                  (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
                  (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
              ], "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join(format!("0_{:?}.png", chrono::Utc::now().to_rfc3339()))
-        ).unwrap();
+        ).unwrap();*/
 
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
@@ -1834,7 +1835,7 @@ mod motif_find_tests {
         let motifs_tensors = motifs_to_tensor(
             slices.clone(),
             &loader,
-            &FindMotifsRunConfig::new(None, 10, 100, None, None),
+            &FindMotifsRunConfig::new(None, 50, 100, None, None),
             ws.read().channels() as i64,
             Cpu,
             0,
@@ -2924,10 +2925,16 @@ pub fn plot_resource<>(resource_config: Simple, ws: &Arc<RwLock<Box<dyn Workspac
 
     let resources = resource_config.to_resources(store)?;
     let all_tensors = resources.iter().map(|r| {
-        Tensor::load(
+        let t = Tensor::load(
             // tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
             FsWorkspace::resource_tensor_path(&tensors_path, r)
-        ).unwrap().i((channel, ..))
+        ).unwrap().i((channel, ..));
+
+        let freqs = clc_frequencies(&t, t.size()[0], 32000f64, 10);
+
+        debug!("plot_resource: r={r:?} freqs={freqs:?}");
+
+        t
     });
     let mut color_iter = DistinctColorIter::new();
     plot_series(

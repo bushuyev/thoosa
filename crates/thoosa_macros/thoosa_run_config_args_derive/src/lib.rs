@@ -82,7 +82,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                                 if is_primitive(&inner_ty) {
                                     a.range_or_value_fields.push(quote! {
-                                        #field_ident: Option<thoosa_shared::RangeOrValue<#inner_ty>>,
+                                        pub #field_ident: Option<thoosa_shared::RangeOrValue<#inner_ty>>,
                                     });
 
                                     a.enum_fields.push(quote! {
@@ -115,7 +115,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", inner_ty.to_token_stream().to_string()), camel_field_ident.span());
 
                                     a.range_or_value_fields.push(quote! {
-                                        #field_ident: Option<#field_type_range_or_value>,
+                                        pub #field_ident: Option<#field_type_range_or_value>,
                                     });
 
                                     let field_type_fields = Ident::new(&format!("{}Fields", inner_ty.to_token_stream().to_string()), camel_field_ident.span());
@@ -157,7 +157,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                             } else {
                                 if is_primitive(&field_type) {
                                     a.range_or_value_fields.push(quote! {
-                                        #field_ident: thoosa_shared::RangeOrValue<#field_type>,
+                                        pub #field_ident: thoosa_shared::RangeOrValue<#field_type>,
                                     });
                                     a.enum_fields.push(quote! {
                                         #camel_field_ident
@@ -187,7 +187,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     let field_type_range_or_value = Ident::new(&format!("{}RangeOrValue", field_type.to_token_stream().to_string()), camel_field_ident.span());
 
                                     a.range_or_value_fields.push(quote! {
-                                        #field_ident: #field_type_range_or_value,
+                                        pub #field_ident: #field_type_range_or_value,
                                     });
 
                                     let field_type_fields = Ident::new(&format!("{}Fields", field_type.to_token_stream().to_string()), camel_field_ident.span());
@@ -220,7 +220,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                         } else {
                             a.range_or_value_fields.push(quote! {
-                                #field_ident: #field_type,
+                                pub #field_ident: #field_type,
                             });
                             a.enum_fields.push(quote! {
                                 #camel_field_ident

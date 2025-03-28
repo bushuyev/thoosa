@@ -12,7 +12,7 @@ use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use futures::StreamExt;
-use log::{debug, info, trace, warn, Log};
+use log::{debug, info, log_enabled, trace, warn, Log};
 use parking_lot::{Mutex, RawRwLock, RwLock};
 use plotters::prelude::BLACK;
 use rand::prelude::SliceRandom;
@@ -26,6 +26,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::{fmt, fs};
 use std::hash::Hash;
 use std::iter::Map;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -43,6 +44,7 @@ use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use log::Level::Debug as DebugLevel;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_shared::run_configs::{Applicable, RunConfig};
@@ -2173,37 +2175,124 @@ impl FindMotifsRunConfig {
 
         Ok(find_motifs_run_config)
     }
+
+    pub fn to_applicable(&self) -> FindMotifsRunConfigApplicable {
+        FindMotifsRunConfigApplicable::new(&self)
+    }
+
 }
 
-impl Applicable<&[SyncWrapper<Box<Tensor>>], Vec<Tensor>> for FindMotifsRunConfig {
 
-    fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>]) -> Result<Vec<Tensor>, ThoosaError> {
-        let mut slices = Vec::with_capacity(tensors_chunk.len());
+#[derive(Debug)]
+pub struct FindMotifsRunConfigApplicable {
+    run_config:FindMotifsRunConfig,
+    kernel:Option<Box<Tensor>>
+}
 
-        for tensor in tensors_chunk {
-            let input_length = tensor.size()[1];
+impl FindMotifsRunConfigApplicable {
 
-            if input_length >= self.window as i64 {
+    pub fn new(run_config:&FindMotifsRunConfig) -> Self {
 
-                let unfolded = tensor.unfold(1, self.window as i64, self.step as i64);
-                // channels x num_slices x window, transpose  to num_slices x channels x window
-                let unfolded = unfolded.transpose(0, 1);
+        match &run_config.filter {
+            None => {
 
-                debug!("ChunkOfSlicedTensors::slice_tensors_chunk tensor.size={:?} unfolded.size={:?}", tensor.size(), unfolded.size());
-                slices.push(unfolded);
-            } else {
-                warn!("skipping tensor")
+                Self {
+                    run_config: run_config.clone(),
+                    kernel:None
+                }
+            }
+
+            Some(filter) => {
+                match filter {
+                    InputFilter::Conv1(_) => {
+                        todo!()
+                    }
+                    InputFilter::BandPassFilter(band_pass_filter_config) => {
+                        let kernel = band_pass_filter(
+                            band_pass_filter_config.low_hz,
+                            band_pass_filter_config.low_hz+band_pass_filter_config.high_hz,
+                            band_pass_filter_config.kernel_size,
+                            32_000.0,//TODO
+                            1e-6
+                        ).view((1, 1, -1));
+
+
+                        Self {
+                            run_config: run_config.clone(),
+                            kernel:Some(Box::new(kernel))
+                        }
+                    }
+                }
             }
         }
-        Ok(slices)
+
     }
 }
 
-impl Applicable<&Tensor, Tensor> for FindMotifsRunConfig {
-    fn apply(&self, subject: &Tensor) -> Result<Tensor, ThoosaError> {
-        todo!()
+impl Applicable<&Box<Tensor>, Box<Tensor>> for FindMotifsRunConfigApplicable {
+    fn apply(&self, input: &Box<Tensor>) -> Result<Box<Tensor>, ThoosaError> {
+
+        let t = match self.kernel.as_ref() {
+            None => {
+                input.shallow_clone()
+            }
+            Some(kernel) => {
+                input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 1)
+            }
+        };
+
+        let input_length = t.size()[1];
+
+        if input_length >= self.run_config.window as i64 {
+
+            let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
+
+            debug!("Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
+
+            Ok(Box::new(unfolded))
+        } else {
+            Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
+        }
     }
 }
+
+impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>)> for FindMotifsRunConfigApplicable {
+
+    //TODO first cat then apply?
+    fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>]) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+        let mut slices = Vec::with_capacity(tensors_chunk.len());
+        let mut slice_sizes = Vec::with_capacity(tensors_chunk.len());
+        if log_enabled!(DebugLevel) {
+            debug!("Applicable for FindMotifsRunConfigApplicable::apply tensors_chunk.sizes={:?}", tensors_chunk.iter().map(|t| t.size()).collect::<Vec<_>>());
+        }
+
+        for tensor_wrapped in tensors_chunk {
+            match self.apply(tensor_wrapped.deref()){
+                Ok(t) => {
+                    slice_sizes.push(t.size()[1]);
+                    slices.push(t);
+
+                }
+                Err(e) => {
+                    warn!("Applicable for FindMotifsRunConfigApplicable::apply: skipping tensor, e={e:?}");
+                }
+            };
+        }
+
+        let tensor= if slices.is_empty() {
+            //channels
+            Tensor::zeros(&[0, tensors_chunk[0].size()[0], self.run_config.window as i64], (Float, Cpu))
+        } else {
+            //channels x slices x window
+            Tensor::cat(&slices, 1)//cat along slices
+        };
+
+        Ok(
+            (tensor, slice_sizes) //num slices in each tensor,
+        )
+    }
+}
+
 
 
 impl FindMotifsRunConfig {
@@ -2354,7 +2443,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, InputFilterRangeOrValue, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
     use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
@@ -2384,6 +2473,7 @@ mod train_tests {
     use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::SqlStore;
+    use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
 
     #[ctor::ctor]
     fn test_init() {
@@ -3684,6 +3774,25 @@ mod train_tests {
         }));
 
         //TODO
+    }
+
+    #[test]
+    fn test_find_motifs_run_config(){
+        let rc = FindMotifsRunConfigRangeOrValue {
+            id: None,
+            step: 100.into(),
+            window: 200.into(),
+            min_tracker_step: None,
+            filter: Some(InputFilterRangeOrValue::BandPassFilter(BandPassFilterParamsRangeOrValue{
+                low_hz: (10. ..100. ).into(),
+                high_hz: (300. ..400. ).into(),
+                kernel_size: (12000i64).into(),
+                stride: (1i64).into(),
+                padding: (1i64).into(),
+            })),
+            mean_k: 0.01.into(),
+        };
+        debug!("{:#}", serde_json5::to_string(&rc).unwrap());
     }
 
 }
