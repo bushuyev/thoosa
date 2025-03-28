@@ -144,6 +144,7 @@ pub fn run_cli<F, R>(
     labels: &[&str],
     channels: usize,
     max_input: usize,
+    sample_rate: u32,
 ) -> Result<(), ThoosaError>
 where
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
@@ -161,6 +162,7 @@ where
         cli.ws_path.clone(),
         channels,
         max_input,
+        sample_rate,
     )?));
 
     let logfile = match File::create(
@@ -472,6 +474,7 @@ where
                 &store,
                 *devices.first().expect("first device"),
                 choose_fragments_params,
+                &ws,
                 &loader,
             )?;
         }
@@ -970,7 +973,8 @@ fn motifs_to_tensor_cmd(
     store: &Arc<Mutex<Box<dyn Store>>>,
     device: Device,
     choose_fragments_params: &MotifsToTensorArgs,
-    executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    ws:&Arc<RwLock<Box<dyn Workspace>>>,
+    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
 ) -> Result<(), ThoosaError> {
     let mut store_guard = store.lock();
 
@@ -980,11 +984,12 @@ fn motifs_to_tensor_cmd(
 
     let t = motifs_to_tensor(
         store_guard.list_motifs_slices(find_motif_run_id)?,
-        executor,
+        loader,
         &find_motifs_run_config,
         20,
         device,
         0,
+        ws
     )?;
 
     let out = Path::new(&cli.ws_path).join("out");
@@ -1411,6 +1416,7 @@ mod cli_tests {
             test_dir.clone(),
             3,
             n as usize,
+            32000,
         )?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;
@@ -2015,6 +2021,7 @@ mod cli_tests {
             test_dir.clone(),
             3,
             3 * n as usize,
+            32000,
         )?));
         let ws_runner = Arc::clone(&ws);
 
@@ -2209,7 +2216,7 @@ mod cli_tests {
     fn test_import_resources() -> Result<(), ThoosaError> {
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, 32000)?));
 
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());

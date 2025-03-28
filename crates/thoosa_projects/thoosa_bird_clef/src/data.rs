@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_plot_resource() -> Result<(), ThoosaError> {
-        let ws = Arc::new(RwLock::new(FsWorkspace::new("/tmp/ws_test_clef", 1, 999)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new("/tmp/ws_test_clef", 1, 999, 32000)?));
 
         let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
