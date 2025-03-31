@@ -175,14 +175,13 @@ pub fn find_motifs_by_euc_dist(
         a
     });
 
+
+    let mut means_acc = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Float, devices[0])));//TODO move
+    let mut total_samples = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Int64, devices[0])));
+
     let run_configs_arcs = run_configs.into_iter().zip(devices.into_iter().cycle())
         .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), Cpu)))
         .collect::<Vec<_>>();
-
-    let devices_2x = devices.clone();
-
-    let mut means_acc = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Float, devices[0])));
-    let mut total_samples = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Int64, devices[0])));
 
     chunk_and_slice_2x(
         resource_keys,
@@ -251,8 +250,7 @@ pub fn find_motifs_by_euc_dist(
             });
 
         },
-        loader,
-        &devices
+        loader
     )?;
 
     //TODO
@@ -346,7 +344,7 @@ where
                     &run_config_with_ctx.0.to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
                     &window_0_tensors.read(),
                     window_0_0_clone.clone(),
-                    Cpu
+                    None
                 ));
                 while let Some(mut chunk_0_split) = split_queue.next() {
                     match callback(
@@ -382,8 +380,7 @@ fn chunk_and_slice_2x<G, C>(
     run_configs:&Vec<Arc<FindMotifsRunConfigApplicable>>,
     mut gpu_fn: G,
     mut cpu_fn: &C,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
-    devices:&[Device]
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>
 ) -> Result<(), ThoosaError>
 where
     G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfigApplicable>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
@@ -469,7 +466,7 @@ where
                             &run_config_applicable,
                             &window_0_tensors.read(),
                             window_0_0_clone.clone(),
-                            Cpu,
+                            Some(Cpu),
                         ))//.into()
 
 
@@ -523,7 +520,7 @@ where
                                     &run_config,
                                     &window_1_tensors.read(),
                                     window_1_0_clone.clone(),
-                                    Cuda(0)//TODO
+                                    None//TODO
                                 )),
                                 |chunk_1_split|{
                                     let num_tasks_v = num_tasks_arc.load(Relaxed);
@@ -2565,8 +2562,7 @@ mod motif_find_tests {
             &|run_config_id, t, chunk_0, chunk_1|{
 
             },
-            &executor_rc,
-            &[Cpu]
+            &executor_rc
         )?;
 
         let mut chunks_0 = vec![];
@@ -2801,7 +2797,7 @@ mod motif_find_tests {
                 &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
                 &vec![t_0_0.into(), t_0_1.into()],
                 vec![0, 1],
-                Cpu
+                None
             ).t,
             &Tensor::from_slice(&[1, 1, 1]).view((3, 1)),
             &Tensor::from_slice(&[1.0, 1.0, 1.0]).view((3, 1)),
@@ -2815,7 +2811,7 @@ mod motif_find_tests {
                 &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
                 &vec![t_1_0.into(), t_1_1.into()],
                 vec![0, 1],
-                Cpu
+                None
             ).t,
             &Tensor::from_slice(&[1, 1, 1]).view((3, 1)),
             &Tensor::from_slice(&[1.0, 1.0, 1.0]).view((3, 1)),
