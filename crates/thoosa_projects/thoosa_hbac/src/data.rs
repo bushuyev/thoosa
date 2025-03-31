@@ -702,12 +702,12 @@ mod tests {
 
         let window = 1000;
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_0_0.into()], //sig_0 at idx 0
             vec![0], Cpu
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_1_0.into()], //sig_0 at idx 2000
             vec![0], Cpu
         ).t;

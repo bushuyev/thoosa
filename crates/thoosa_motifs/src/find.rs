@@ -175,8 +175,8 @@ pub fn find_motifs_by_euc_dist(
         a
     });
 
-    let run_configs_arcs = run_configs.into_iter()
-        .map(|rc|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()))))
+    let run_configs_arcs = run_configs.into_iter().zip(devices.into_iter().cycle())
+        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), Cpu)))
         .collect::<Vec<_>>();
 
     let devices_2x = devices.clone();
@@ -201,8 +201,8 @@ pub fn find_motifs_by_euc_dist(
 
             let (mask, _) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
-                chunk_sliced_0.t.to_device(devices_2x[0]),
-                chunk_sliced_1.t.to_device(devices_2x[0]),
+                chunk_sliced_0.t.to_device(find_motifs_run_config.device()),
+                chunk_sliced_1.t.to_device(find_motifs_run_config.device()),
                 false,
                 mask_makers,
                 //remove diagonal if same chunk_0 and chunk_1 point to same tensors
@@ -343,7 +343,7 @@ where
             // .par_bridge() //TODO spread among devices
             .for_each(|(run_config_with_ctx, device)| {
                 let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-                    &run_config_with_ctx.0.to_applicable(DummyFindMotifsRunConfigCtx),
+                    &run_config_with_ctx.0.to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
                     &window_0_tensors.read(),
                     window_0_0_clone.clone(),
                     Cpu
@@ -451,7 +451,7 @@ where
                         for key in &window_0_0 {
                             debug!("0. exec:callback_arc: key={key:?}");
 
-                            let sync_wrapper = SyncWrapper::new_tb( //TODO remove SyncWrapper? it goes only to run_configs_applied_to_chunk_0
+                            let sync_wrapper = SyncWrapper::new_tb(
                                 Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
                             );
                             window_0_tensors_arc.write().push(sync_wrapper);
@@ -463,15 +463,20 @@ where
                 wg_0.wait();
 
                 let run_configs_applied_to_chunk_0:Vec<Arc<ChunkOfSlicedTensors>> = run_configs.par_iter().enumerate()
-                    .map(|(i, run_config)| {
+                    .map(|(i, run_config_applicable)| {
 
                         Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
-                            &run_config,
+                            &run_config_applicable,
                             &window_0_tensors.read(),
                             window_0_0_clone.clone(),
                             Cpu,
                         ))//.into()
+
+
+
                     }).collect::<Vec<_>>();
+
+
 
                 drop(window_0_tensors);
 
@@ -498,7 +503,9 @@ where
                             for key in &window_1_0 {
                                 debug!("chunk_and_slice: 1. exec:callback_arc: key={key:?}");
 
-                                let sync_wrapper = SyncWrapper::new_tb(Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_1).await);
+                                let sync_wrapper = SyncWrapper::new_tb(
+                                    Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_1).await
+                                );
                                 window_1_tensors_arc.write().push(sync_wrapper);
                             }
                             drop(wg_1_clone);
@@ -516,7 +523,7 @@ where
                                     &run_config,
                                     &window_1_tensors.read(),
                                     window_1_0_clone.clone(),
-                                    Cpu
+                                    Cuda(0)//TODO
                                 )),
                                 |chunk_1_split|{
                                     let num_tasks_v = num_tasks_arc.load(Relaxed);
@@ -1648,12 +1655,10 @@ mod motif_find_tests {
     fn test_find_motifs_by_euc_dist() -> Result<(), ThoosaError> {
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
 
-        // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        // let mut store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_db.db3")?));
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
+
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
         
         
@@ -2545,7 +2550,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(DummyFindMotifsRunConfigCtx))],
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(DummyFindMotifsRunConfigCtx, Cpu))],
             // HashMap::new(),
             move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
@@ -2793,10 +2798,10 @@ mod motif_find_tests {
         let t_0= clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(
-                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
                 &vec![t_0_0.into(), t_0_1.into()],
-                    vec![0, 1],
-                    Cpu
+                vec![0, 1],
+                Cpu
             ).t,
             &Tensor::from_slice(&[1, 1, 1]).view((3, 1)),
             &Tensor::from_slice(&[1.0, 1.0, 1.0]).view((3, 1)),
@@ -2807,7 +2812,7 @@ mod motif_find_tests {
         let t_1 = clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(
-                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
                 &vec![t_1_0.into(), t_1_1.into()],
                 vec![0, 1],
                 Cpu

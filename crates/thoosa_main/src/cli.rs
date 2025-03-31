@@ -1507,32 +1507,7 @@ mod cli_tests {
             .expect("t_1_1");
 
         debug!("test_motifs: resources_0_0={resources_0_0:?}");
-        /*let run_ids = run_step(
-            None,
-            &FindMotifsParams {
-                step: 200.into(),
-                window: (n as u32).into(),
-                resources: ResourceType::List(vec![
-                    "t_0_0".into(),
-                    "t_0_1".into(),
-                    "t_1_0".into(),
-                    "t_1_1".into(),
-                ]),
-                min_tracker_step: Some(3),
-                chunk_size: 2,
-                dist_quantile: 0.01,
-                keep_slice_matches: false,
-                max_slices_k: Some(0.1),
-                mean_k: Some(0.1),
-                input_filter: None,
-            },
-            find_motifs_by_euc_dist,
-            &ws_rc,
-            &store,
-            &loader,
-            vec![Cpu],
-            "Test/FindMotifs",
-        )?;*/
+
 
         let run_ids = run_all_grid_step(
             None,
