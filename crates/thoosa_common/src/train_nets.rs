@@ -2176,8 +2176,8 @@ impl FindMotifsRunConfig {
         Ok(find_motifs_run_config)
     }
 
-    pub fn to_applicable<C:FindMotifsRunConfigCtx>(&self, ctx:C) -> FindMotifsRunConfigApplicable {
-        FindMotifsRunConfigApplicable::new(&self, ctx)
+    pub fn to_applicable<C:FindMotifsRunConfigCtx>(&self, ctx:C, device: Device) -> FindMotifsRunConfigApplicable {
+        FindMotifsRunConfigApplicable::new(&self, ctx, device)
     }
 }
 
@@ -2216,12 +2216,13 @@ impl FindMotifsRunConfigCtx for FindMotifsRunConfigWsCtx {
 pub struct FindMotifsRunConfigApplicable {
     run_config:FindMotifsRunConfig,
     kernel:Option<SyncWrapper<Box<Tensor>>>,
-    groups:i64
+    groups:i64,
+    device:Device
 }
 
 impl FindMotifsRunConfigApplicable {
 
-    pub fn new<C:FindMotifsRunConfigCtx>(run_config:&FindMotifsRunConfig, ctx:C) -> Self {
+    pub fn new<C:FindMotifsRunConfigCtx>(run_config:&FindMotifsRunConfig, ctx:C, device:Device) -> Self {
 
         match &run_config.filter {
             None => {
@@ -2229,7 +2230,8 @@ impl FindMotifsRunConfigApplicable {
                 Self {
                     run_config: run_config.clone(),
                     kernel:None,
-                    groups:0
+                    groups:0,
+                    device
                 }
             }
 
@@ -2243,21 +2245,26 @@ impl FindMotifsRunConfigApplicable {
                             band_pass_filter_config.low_hz,
                             band_pass_filter_config.low_hz + band_pass_filter_config.band_hz,
                             band_pass_filter_config.kernel_size,
-                            ctx.sample_rate() as f64, //TODO
-                            1e-6
+                            ctx.sample_rate() as f64,
+                            1e-6//TODO config?
                         ).view((1, 1, -1)).expand([ctx.channels() as i64,1,-1], true);
 
 
                         Self {
                             run_config: run_config.clone(),
-                            kernel:Some(kernel.to_device(Cuda(0)).into()),
-                            groups: ctx.channels() as i64
+                            kernel:Some(kernel.to_device(device).into()),
+                            groups: ctx.channels() as i64,
+                            device
                         }
                     }
                 }
             }
         }
 
+    }
+
+    pub fn device(&self) -> Device {
+        self.device
     }
 
     pub fn id(&self) -> RunId {

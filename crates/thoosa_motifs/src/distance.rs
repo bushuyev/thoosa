@@ -255,8 +255,6 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&m
     let mut total_samples_guard = total_samples.lock();
     debug!("new_total_means: 1. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
 
-
-
     *means_guard = (means_guard.multiply(&total_samples_guard)  + mean_t * counts_t.shallow_clone())/counts_t.f_add(&total_samples_guard).unwrap();
     *total_samples_guard += counts_t;
 
@@ -348,6 +346,7 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
 mod distance_tests {
     use std::f32::consts::PI;
     use std::fmt::Display;
+    use std::ops::Deref;
     use std::sync::atomic::AtomicI64;
     use chrono::Utc;
     use log::__private_api::enabled;
@@ -359,7 +358,7 @@ mod distance_tests {
     use sci_rs::na::SimdBool;
     use tch::Device::{Cpu, Cuda};
     use tch::{Device, IndexOp, Kind};
-    use tch::Kind::{Bool, Float, Int};
+    use tch::Kind::{Bool, Float, Int, Int64};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
     use tch::Tensor;
     use thoosa_common::builder::Node::Par;
@@ -368,7 +367,7 @@ mod distance_tests {
     use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, Reducer, SplitQueue, Splittable, SplittableTensor};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
-    use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, slice_t, z_normalized_euclidean, MaskMaker};
+    use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, mean_mask, slice_t, z_normalized_euclidean, MaskMaker};
     use crate::chunks::{ChunkOfSlicedTensors};
     use crate::distance::MaskMaker::{Diagonal, LocalMin, LeQuantile, Tril, LE, LeMean};
 
@@ -448,12 +447,12 @@ mod distance_tests {
         //t_label_tensor_channel
         let window = 1000;
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_0.into()], //sig_0 at idx 0
             vec![0], Cpu
         ).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_1.into()], //sig_0 at idx 2000
             vec![0], Cpu
         ).t;
@@ -547,8 +546,8 @@ mod distance_tests {
         ]);
 
 
-        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx), &vec![t_0.into()], vec![0], Cpu).t;
-        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx),&vec![t_1.into()], vec![0], Cpu).t;
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_0.into()], vec![0], Cpu).t;
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_1.into()], vec![0], Cpu).t;
 
         let (mask, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &mut [])? else {
             panic!("no distances")
@@ -994,6 +993,113 @@ mod distance_tests {
         // );
     }
 
+    #[test]
+    fn test_mean_mask(){
+        log::set_max_level(Trace);
+
+        const CHANNELS:i64 = 1;
+
+        let mut means_acc = Mutex::new(Tensor::zeros([CHANNELS,1], INT64_CPU));
+        let mut total_samples = Mutex::new(Tensor::zeros([CHANNELS,1], INT64_CPU));
+
+        let mask = mean_mask(
+            0.5,
+            &Tensor::from_slice(&[
+                // distances 3x2 slices
+                0.2, 0.2,
+                0.2, 0.2,
+                0.2, 0.2
+            ]).view((CHANNELS, 3, 2)),
+            None,
+            &mut means_acc,
+            &mut total_samples
+        );
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, false,
+                false, false,
+                false, false,
+            ]).view((1,3,2)).totype(Bool),
+            mask
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[0.2]).view((1,-1)).totype(Float),
+            means_acc.lock().deref()
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[6]).view((1,-1)).totype(Int64),
+            total_samples.lock().deref()
+        );
+
+
+        let mask = mean_mask(
+            0.5,
+            &Tensor::from_slice(&[
+                // distances 3x2 slices
+                0.4, 0.4,
+                0.4, 0.4,
+                0.4, 0.4
+            ]).view((CHANNELS, 3, 2)),
+            None,
+            &mut means_acc,
+            &mut total_samples
+        );
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, false,
+                false, false,
+                false, false,
+            ]).view((1,3,2)).totype(Bool),
+            mask
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[0.3]).view((1,-1)).totype(Float),
+            means_acc.lock().deref()
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[12]).view((1,-1)).totype(Int64),
+            total_samples.lock().deref()
+        );
+
+        let mask = mean_mask(
+            0.5,
+            &Tensor::from_slice(&[
+                // distances 3x2 slices
+                0.2, 0.2,
+                0.2, 0.1,
+                0.1, 0.1
+            ]).view((CHANNELS, 3, 2)),
+            None,
+            &mut means_acc,
+            &mut total_samples
+        );
+
+        assert_eq!(
+            Tensor::from_slice(&[
+                false, false,//0.2 > 0.25 * 0.5
+                false, true,
+                true, true,  //0.1 < 0.25 * 0.5
+            ]).view((1,3,2)).totype(Bool),
+            mask
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[0.25]).view((1,-1)).totype(Float),
+            means_acc.lock().deref()
+        );
+
+        assert_eq!(
+            &Tensor::from_slice(&[18]).view((1,-1)).totype(Int64),
+            total_samples.lock().deref()
+        );
+
+    }
 
     #[test]
     fn test_quantile_mask(){

@@ -25,6 +25,7 @@ use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
+use tch::Device::Cpu;
 use thoosa_common::train_nets::{DummyFindMotifsRunConfigCtx, FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
@@ -100,7 +101,7 @@ pub fn motifs_to_tensor(
     let wg = WaitGroup::new();
     let wg_1 = wg.clone();
 
-    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()));
+    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), Cpu);
 
     loader.write().exec(move |loader, _| {
         async move {
