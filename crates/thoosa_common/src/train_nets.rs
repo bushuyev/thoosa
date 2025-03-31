@@ -2358,13 +2358,13 @@ impl FindMotifsRunConfig {
             step,
             window,
             filter,
-            min_tracker_step: None,//TODO
+            min_tracker_step: None,
             mean_k: mean_k.unwrap_or(0.5)
         }
     }
 
     pub fn window(&self) -> i64 {
-        self.window as i64//TODO
+        self.window as i64
     }
 
     pub fn step(&self) -> u32 {

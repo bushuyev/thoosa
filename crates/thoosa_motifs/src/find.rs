@@ -1657,8 +1657,7 @@ mod motif_find_tests {
 
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
-        
-        
+
         let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
@@ -1676,12 +1675,12 @@ mod motif_find_tests {
                  (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
                  (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
-             ], "test_find_motifs_by_euc_dist", (1000, 500), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+             ], "test_find_motifs_by_euc_dist", (1000, 500), &test_dir.join(format!("0_{:?}.png", chrono::Utc::now().to_rfc3339()))
         ).unwrap();
-        */
+         */
 
 
-        let  executor_rc = Arc::new(RwLock::new(LoadRunner::new(
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
                 let sig = match key.file_stem() {
                     "1111" => &sig_0,
@@ -1718,7 +1717,7 @@ mod motif_find_tests {
             &FixedFindMotifsConfig::new(Some(3), 2, false, None),
             &ws,
             &store,
-            &executor_rc,
+            &loader,
             vec![Cpu]
         )?;
 
@@ -1749,8 +1748,6 @@ mod motif_find_tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
-
-
         // let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
@@ -1771,6 +1768,7 @@ mod motif_find_tests {
 
 
 
+
         let x = lin_t(n);
         /*plot_series(
              vec![
@@ -1779,7 +1777,7 @@ mod motif_find_tests {
                  (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
 
              ], "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join(format!("0_{:?}.png", chrono::Utc::now().to_rfc3339()))
-        ).unwrap();*/
+        )?; */
 
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
