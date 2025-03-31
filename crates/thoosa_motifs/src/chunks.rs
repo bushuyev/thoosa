@@ -68,7 +68,7 @@ impl  ChunkOfSlicedTensors {
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk(run_config:&FindMotifsRunConfigApplicable, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Device) -> ChunkOfSlicedTensors {
+    pub fn slice_tensors_chunk(run_config:&FindMotifsRunConfigApplicable, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
@@ -81,7 +81,7 @@ impl  ChunkOfSlicedTensors {
             keys,
             sizes,
             run_config.step(),
-            tensor.to_device(device),
+            device.map(|d|tensor.to_device(d)).unwrap_or(tensor),
         )
     }
 
@@ -188,7 +188,7 @@ mod tests {
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor_a.into(), tensor_b.into()], vec![0, 1],
-            Cpu
+            None
         );
 
         debug!("result={}", chunk.t);
@@ -229,7 +229,7 @@ mod tests {
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor.into()], vec![0],
-            Cpu
+            None
         );
 
         let expected = Tensor::stack(&[
@@ -258,7 +258,7 @@ mod tests {
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor.into()], vec![0],
-            Cpu
+            None
         );
 
         let slices = chunk.to_vec().into_iter().collect::<Vec<_>>();
@@ -283,7 +283,7 @@ mod tests {
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor.into()], vec![0],
-            Cpu
+            None
         );
 
         let unsplit_slices = chunk.t.shallow_clone();
@@ -357,7 +357,7 @@ mod tests {
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor_aaa.into(), tensor_bbb.into()], vec![0, 1],
-            Cpu
+            None
         );
 
         let unsplit_slices = chunk.t.shallow_clone();

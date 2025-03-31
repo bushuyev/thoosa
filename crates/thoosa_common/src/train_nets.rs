@@ -2285,10 +2285,10 @@ impl Applicable<&Box<Tensor>, Box<Tensor>> for FindMotifsRunConfigApplicable {
 
         let t = match self.kernel.as_ref() {
             None => {
-                input.to_device(Cuda(0)).shallow_clone()
+                input.to_device(self.device).shallow_clone()
             }
             Some(kernel) => {
-                input.to_device(Cuda(0)).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+                input.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
             }
         };
 

@@ -255,8 +255,10 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&m
     let mut total_samples_guard = total_samples.lock();
     debug!("new_total_means: 1. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
 
-    *means_guard = (means_guard.multiply(&total_samples_guard)  + mean_t * counts_t.shallow_clone())/counts_t.f_add(&total_samples_guard).unwrap();
-    *total_samples_guard += counts_t;
+    let means_device = total_samples_guard.device();
+
+    *means_guard = ((means_guard.multiply(&total_samples_guard)  + mean_t * counts_t.shallow_clone())/counts_t.f_add(&total_samples_guard).expect("counts_t._add")).to_device(means_device);
+    *total_samples_guard += counts_t.to_device(means_device);
 
     debug!("new_total_means: 2. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
 
@@ -449,12 +451,12 @@ mod distance_tests {
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_0.into()], //sig_0 at idx 0
-            vec![0], Cpu
+            vec![0], None
         ).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_1.into()], //sig_0 at idx 2000
-            vec![0], Cpu
+            vec![0], None
         ).t;
         reset_print_options();
         let (mask, Some(distances)) = clc_dist_d2_and_mask(
@@ -546,8 +548,8 @@ mod distance_tests {
         ]);
 
 
-        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_0.into()], vec![0], Cpu).t;
-        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_1.into()], vec![0], Cpu).t;
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_0.into()], vec![0], None).t;
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_1.into()], vec![0], None).t;
 
         let (mask, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &mut [])? else {
             panic!("no distances")
