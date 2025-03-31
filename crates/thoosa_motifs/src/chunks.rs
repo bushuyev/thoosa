@@ -81,7 +81,7 @@ impl  ChunkOfSlicedTensors {
             keys,
             sizes,
             run_config.step(),
-            tensor,
+            tensor.to_device(device),
         )
     }
 
@@ -186,7 +186,7 @@ mod tests {
 
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor_a.into(), tensor_b.into()], vec![0, 1],
             Cpu
         );
@@ -227,7 +227,7 @@ mod tests {
         ]).view([2, 3]).totype(Float);
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor.into()], vec![0],
             Cpu
         );
@@ -256,7 +256,7 @@ mod tests {
 
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor.into()], vec![0],
             Cpu
         );
@@ -281,7 +281,7 @@ mod tests {
         debug!("tensor={tensor}");
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor.into()], vec![0],
             Cpu
         );
@@ -355,7 +355,7 @@ mod tests {
         debug!("tensor_bbb={tensor_bbb}");
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![tensor_aaa.into(), tensor_bbb.into()], vec![0, 1],
             Cpu
         );
