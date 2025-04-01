@@ -2632,7 +2632,7 @@ mod train_tests {
 
     #[test]
     fn test_apply_motif_models() -> Result<(), ThoosaError>{
-        set_max_level(Trace);
+        // set_max_level(Trace);
         reset_print_options();
 
         let input_n = 1000;

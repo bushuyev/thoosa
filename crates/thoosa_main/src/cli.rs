@@ -36,7 +36,7 @@ use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, lo
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, FixedFindMotifsConfig, FindMotifsArgs, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
+use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, FixedFindMotifsConfig, FindMotifsArgs, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, find_min_euc_dist};
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs,
 };
@@ -265,7 +265,8 @@ where
                 find_motifs_run_config_range_or_value,
                 &find_motifs_args.fixed_config,
                 &find_motifs_args.resource_config(),
-                find_motifs_by_euc_dist,
+                find_min_euc_dist,
+                // find_motifs_by_euc_dist,
                 &ws,
                 &store,
                 &loader,

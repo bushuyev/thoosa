@@ -965,7 +965,7 @@ mod distance_tests {
 
     #[test]
     fn test_acc_mean_mask(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let dists_t = tensor_3_7_5_lin();
         let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
@@ -1006,7 +1006,7 @@ mod distance_tests {
 
     #[test]
     fn test_mean_mask_two_chunks(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let dists_t = tensor_3_7_5_lin();
 
@@ -1054,7 +1054,7 @@ mod distance_tests {
 
     #[test]
     fn test_mean_mask(){
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         const CHANNELS:i64 = 1;
 
@@ -1164,7 +1164,7 @@ mod distance_tests {
     #[test]
     fn test_local_min_mask(){
 
-        set_max_level(Trace);
+        // set_max_level(Trace);
 
         let distances = Tensor::from_slice(&[
             // distances 2x3 slices

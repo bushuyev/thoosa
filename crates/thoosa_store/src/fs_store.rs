@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_two_parts() -> Result<(), ThoosaError>{
-        log::set_max_level(Trace);
+        // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_no_matches() -> Result<(), ThoosaError>{
-        log::set_max_level(Trace);
+        // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
