@@ -26,7 +26,8 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
 use tch::Device::Cpu;
-use thoosa_common::train_nets::{DummyFindMotifsRunConfigCtx, FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
+use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
 
@@ -281,6 +282,8 @@ pub struct PlotMotifSlicesArgs {
     #[arg(long, value_enum)]
     motifs_by: MotifsBy,
 
+    #[arg(long, value_enum)]
+    pub limit: Option<u32>,
 }
 
 impl PlotMotifSlicesArgs {
@@ -290,7 +293,7 @@ impl PlotMotifSlicesArgs {
     }
 
     pub fn new(motifs_by: MotifsBy) -> Self {
-        Self { motifs_by }
+        Self { motifs_by, limit: None }
     }
 }
 
@@ -413,7 +416,7 @@ mod motifs_tests {
     use tch::kind::FLOAT_CPU;
     use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::train_nets::FindMotifsRunConfig;
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::*;
     use thoosa_common::ws::DummyWorkspace;
     use thoosa_shared::resource::{Resource, ResourceId};

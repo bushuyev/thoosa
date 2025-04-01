@@ -184,7 +184,7 @@ where D: Display {
         debug!("ThoosaError::from: value={}", value);
         let msg = value.to_string();
 
-        if msg.contains("out of memory") {
+        if msg.contains("out of memory") || msg.contains("can't allocate memory") {
             ThoosaError::oom()
         } else {
             ThoosaError::new(msg)

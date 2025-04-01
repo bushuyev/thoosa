@@ -651,9 +651,10 @@ mod tests {
     use tch::{Device, IndexOp, TchError, Tensor};
     use tch::Device::Cpu;
     use tch::Kind::Float;
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
-    use thoosa_common::train_nets::{DummyFindMotifsRunConfigCtx, FindMotifsRunConfig};
+    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};

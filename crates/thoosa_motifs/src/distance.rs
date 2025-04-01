@@ -374,16 +374,17 @@ mod distance_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
     use tch::Tensor;
     use thoosa_common::builder::Node::Par;
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::SyncWrapper;
     use thoosa_common::panic_to_err;
-    use thoosa_common::train_nets::{DummyFindMotifsRunConfigCtx, FindMotifsRunConfig};
+    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, Reducer, SplitQueue, Splittable, SplittableTensor};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::run_configs::Applicable;
     use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, local_min_mask, mean_mask, slice_t, z_normalized_euclidean, MaskMaker};
-    use crate::chunks::{ChunkOfSlicedTensors};
-    use crate::distance::MaskMaker::{Diagonal, LocalMin, LeQuantile, Tril, Le, LeRunningMean};
+    use crate::chunks::ChunkOfSlicedTensors;
+    use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeRunningMean, LocalMin, Tril};
 
     #[ctor::ctor]
     fn init() {
