@@ -539,7 +539,7 @@ pub mod tests {
     use crate::bool_iter::BoolTensorIterator;
     use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
     use crate::runs::Simple;
-    use crate::train_nets::{motif_node, opt_train, InputFilter, LabelNetParams, MotifNetParams, ThoModuleWithStore};
+    use crate::train_nets::{motif_node, opt_train, LabelNetParams, MotifNetParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, CompositeReducer, ListenerResponse, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
     use cudarc::driver::CudaDevice;
@@ -571,6 +571,7 @@ pub mod tests {
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{add_prefix, add_range_or_value, cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
     use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunConfig, RunId};
+    use crate::find_motifs_run_config::InputFilter;
 
     #[ctor::ctor]
     fn init() {

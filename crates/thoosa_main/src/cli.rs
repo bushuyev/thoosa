@@ -32,11 +32,11 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InferArgs, InputFilter, LabelNetType, LabelNetParams, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainLabelNetsArgs, TrainLabelNetsRunConfigFields, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult, run_opt_train_label_nets, TrainFinalNetRunConfigFields, run_opt_train_final_net, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainFinalNetArgs, TrainLabelNetsRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, FixedNumSlicesNetParams, InferArgs, LabelNetParams, LabelNetType, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, FixedFindMotifsConfig, FindMotifsArgs, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, find_min_euc_dist};
+use thoosa_motifs::find::{find_min_euc_dist, find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs, SelectMotifsParams, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs,
 };
@@ -48,7 +48,7 @@ use thoosa_shared::{
 };
 use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
-
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter};
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
@@ -175,7 +175,7 @@ where
             panic!("Can't create logfile in {:?}", cli.ws_path);
         }
     };
-    CombinedLogger::init(vec![
+    if let Err(e) = CombinedLogger::init(vec![
         TermLogger::new(
             LevelFilter::from_str(cli.term_logger_level.as_str())?,
             Config::default(),
@@ -187,8 +187,11 @@ where
             Config::default(),
             logfile,
         ),
-    ])
-    .expect("failed to init logging");
+    ])  {
+        //attempted to set a logger after the logging system was already initialized - no #[cfg(test)] on tests mod
+        panic!("Can't init log: {:?}", e.to_string());
+    }
+
 
     let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
@@ -265,8 +268,8 @@ where
                 find_motifs_run_config_range_or_value,
                 &find_motifs_args.fixed_config,
                 &find_motifs_args.resource_config(),
-                find_min_euc_dist,
-                // find_motifs_by_euc_dist,
+                // find_min_euc_dist,
+                find_motifs_by_euc_dist,
                 &ws,
                 &store,
                 &loader,
@@ -1103,7 +1106,7 @@ fn run_plot_motif_slices(
         MotifsBy::MotifId(motif_id) => {
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
-            find::plot_motif_slices(ws, store, loader, motif_id, device)?;
+            find::plot_motif_slices(ws, store, loader, motif_id, plot_motif_slices_params.limit, device)?;
         }
         MotifsBy::RunId(run_id) => {
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
@@ -1118,7 +1121,7 @@ fn run_plot_motif_slices(
                 .for_each(|motif_id| {
                     //TODO par in devices
                     debug!("run_plot_motif_slices: motif_id={motif_id}");
-                    find::plot_motif_slices(ws, store, loader, motif_id, device).unwrap();
+                    find::plot_motif_slices(ws, store, loader, motif_id, plot_motif_slices_params.limit, device).unwrap();
                     let done = done_cnt.fetch_add(1, Relaxed);
                     if done % 10 == 0 {
                         info!("done {done} from  {motifs_len}");
@@ -1159,7 +1162,7 @@ fn run_train_motif_nets(
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
-            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len()), Some((find_motifs_run_id, channel as usize)))?;
+            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as usize)))?;
 
             debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
             trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
@@ -1365,10 +1368,11 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Device::{Cpu, Cuda};
     use tch::{nn, Device, IndexOp, Tensor};
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
-    use thoosa_common::train_nets::{motif_node, CommonTrainingRunConfig, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InferArgs, MotifNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+    use thoosa_common::train_nets::{motif_node, CommonTrainingRunConfig, InferArgs, MotifNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
     use thoosa_common::utils::{
         from, lin_t, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1,
         three_sigs_tensor, vec_f32_from,
@@ -1515,7 +1519,7 @@ mod cli_tests {
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(&r#"{
                 step:"200",
                 window:"1000",
-                mean_k: "0.2"
+                slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
 
             }"#).unwrap(),
             &FixedFindMotifsConfig::new(None, 2, false, None),

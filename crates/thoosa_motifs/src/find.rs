@@ -37,8 +37,8 @@ use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
-use crate::distance::MaskMaker::{Diagonal, LeRunningMean, LeQuantile, LocalMin, Tril, Le};
-use crate::distance::{average_euclidean_distance, clc_dist_d2, slice_t};
+use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeRunningMean, LocalMin, Tril};
+use crate::distance::{average_euclidean_distance, clc_dist_d2, slice_t, MaskMaker};
 use crate::distance::{clc_dist_d2_and_mask, dist_d2};
 use crate::fragments::{load_motif_slices, motifs_to_tensor, MotifsTensors};
 use plotters::prelude::BLACK;
@@ -48,9 +48,10 @@ use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelB
 use serde::Deserialize;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use tch::Device::{Cpu, Cuda};
-use tch::Kind::Bool;
+use tch::Kind::{Bool, Float};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigWsCtx, SlicesFilter};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
@@ -270,12 +271,12 @@ pub fn find_motifs_by_euc_dist(
         a
     });
 
-
+    //TODO needed only for SlicesFilter::DistanceRunningMeanK, move somewhere
     let mut means_acc = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Float, devices[0])));//TODO move
     let mut total_samples = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Int64, devices[0])));
 
     let run_configs_arcs = run_configs.into_iter().zip(devices.into_iter().cycle())
-        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), Cpu)))
+        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), device)))
         .collect::<Vec<_>>();
 
     chunk_and_slice_2x(
@@ -287,7 +288,16 @@ pub fn find_motifs_by_euc_dist(
             debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
             let mask_tril = chunk_sliced_0.resource_ids[0].eq(&chunk_sliced_1.resource_ids[0]) && !chunk_sliced_1.is_split();
-            let mut mask_makers = vec![LocalMin, LeRunningMean { k: find_motifs_run_config.mean_k(), avg: &mut means_acc, total_samples: &mut total_samples }];
+
+            let mut mask_makers = match &find_motifs_run_config.run_config().slices_filter {
+                SlicesFilter::DistanceRunningMeanK(v) => {
+                    vec![LocalMin, LeRunningMean { k: v.mean, avg: &mut means_acc, total_samples: &mut total_samples }]
+                }
+                SlicesFilter::MaxDistance(v) => {
+                    vec![Le { v: Tensor::full(&[ws.read().channels() as i64, 1], v.distance as f64, (Float, find_motifs_run_config.device())) } ]
+                }
+            };
+
             if mask_tril {
                 mask_makers.push(Tril);
             };
@@ -314,20 +324,22 @@ pub fn find_motifs_by_euc_dist(
         },
         &|run_config_id, mask_dists_cpu:(SyncWrapper<Box<Tensor>>, SyncWrapper<Box<Tensor>>), chunk_0, chunk_1| {
             let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
-            let (mask_cpu, disks) = mask_dists_cpu;
+            let (mask_cpu, dists) = mask_dists_cpu;
 
-            debug!("find_motifs_by_euc_dist: mask_cpu.size={:?}", mask_cpu.size());
+            debug!("find_motifs_by_euc_dist: mask_cpu.size={:?} dists.size={:?}", mask_cpu.size(), dists.size());
 
             channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
                 let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
+                let dists_flattened = dists.i((channel as i64, .., ..)).flatten(0, 1);
                 let mut channel_mask:BoolTensorIterator = (&mask_cpu_flattened).into();
+                let mut dists_and_mask_iter = channel_mask.zip(dists_flattened.iter::<f64>().unwrap());
                 debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}", mask_cpu_flattened.size());
                 trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
 
                 chunk_0.iter().for_each(|slice_0|{
                     chunk_1.iter().for_each(|slice_1|{
 
-                        let mask = channel_mask.next().unwrap();
+                        let (mask, dist) = dists_and_mask_iter.next().unwrap();
                         trace!("find_motifs_by_euc_dist: run_config_id={run_config_id} slice_0={slice_0:?} slice_1={slice_1:?} channel={channel} mask={mask}");
 
                         if mask
@@ -336,7 +348,7 @@ pub fn find_motifs_by_euc_dist(
                             mt.lock().track(
                                 slice_0.clone(),
                                 slice_1.clone(),
-                                0.0,//actual distances are not kept
+                                dist as f32, //actual distances are not kept
                             );
                         }
                     });
@@ -1482,6 +1494,7 @@ mod motif_find_tests {
     use tch::Device::Cpu;
     use tch::Kind::{Bool, Float, Int};
     use tch::{Device, IndexOp, Kind, Tensor};
+    use thoosa_common::find_motifs_run_config::{Conv1Params, FindMotifsRunConfig, InputFilter};
     use thoosa_common::utils::*;
     use thoosa_shared::*;
 
@@ -1491,8 +1504,8 @@ mod motif_find_tests {
     use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, FixedFindMotifsConfig, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::runs::{Simple};
-    use thoosa_common::train_nets::{Conv1Params, DummyFindMotifsRunConfigCtx, FindMotifsRunConfig, InputFilter};
+    use thoosa_common::runs::Simple;
+    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::run_configs::RunConfig;
@@ -2023,7 +2036,7 @@ mod motif_find_tests {
             .collect::<HashSet<_>>();
 
         for motif_id in motif_id_set {
-            plot_motif_slices(&ws, &store, &loader, motif_id, &Cpu)?;
+            plot_motif_slices(&ws, &store, &loader, motif_id, None, &Cpu)?;
         }
         debug!("run_ids={run_ids:?} slices: {slices:?}");
         debug!("0: {:?}", slices.get(&resources[0]));
@@ -3064,8 +3077,8 @@ mod motif_find_tests {
 
 }
 
-pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, executor: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize, device: &Device) -> Result<(), ThoosaError> {
-    let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, None, None)?;
+pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
+    let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, limit, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
     //     return Ok(())
@@ -3073,7 +3086,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(run_id, &store.lock().list_run_config_values(run_id)?)?;
 
-    let resources_slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, executor); //TODO Into for TensorSliceIdx
+    let resources_slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, loader); //TODO Into for TensorSliceIdx
 
     let all_slices = resources_slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 
