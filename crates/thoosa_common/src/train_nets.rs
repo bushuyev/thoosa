@@ -2135,9 +2135,6 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
     Ok(t_1.flatten(0, (t_1.size().len() - 1) as i64).iter::<f64>()?.find(|v| v > &0.).is_some())
 }
 
-
-
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
 #[run_config_grid]
 pub struct FindMotifsRunConfig {
@@ -2278,6 +2275,7 @@ impl FindMotifsRunConfigApplicable {
     pub  fn mean_k(&self) -> f32{
         self.run_config.mean_k
     }
+
 }
 
 impl Applicable<&Box<Tensor>, Box<Tensor>> for FindMotifsRunConfigApplicable {

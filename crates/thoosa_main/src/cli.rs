@@ -457,8 +457,7 @@ where
 
         Some(Infer(infer_params)) => {
             run_infer(&ws, &store, infer_params, devices[0], |path| {
-                // Ok(Tensor::load(path)?) TODO config
-                data::parquet_to_tensor_by_path(
+                data::parquet_to_tensor_by_path(//TODO move load_tensor to project params
                     <Path as AsRef<Path>>::as_ref(path),
                     *devices.first().expect("first device"),
                 )
@@ -1079,9 +1078,10 @@ where
 
     store_guard.save_pure_sets(3, true, &t)?;
     store_guard.save_pure_sets(10, true, &t)?;
+    store_guard.save_pure_sets(50, true, &t)?;
     store_guard.save_pure_sets(100, true, &t)?;
+    store_guard.save_pure_sets(150, true, &t)?;
     store_guard.save_pure_sets(200, true, &t)?;
-    store_guard.save_pure_sets(400, true, &t)?;
 
     store_guard.save_groups_by_label_cnt(100, &t)?;
     t.commit()?;

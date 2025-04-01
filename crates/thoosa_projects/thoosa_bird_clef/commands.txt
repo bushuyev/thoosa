@@ -1,4 +1,4 @@
-export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --bin thoosa_bird_clef  -- --term-logger-level=DEBUG --write-logger-level=DEBUG  --ws-path="/tmp/ws_test_clef" import-resources --source-path=/home/bu/dvl/data/kaggle/BirdCLEF_202
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --bin thoosa_bird_clef  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/tmp/ws_test_clef" import-resources --source-path=/home/bu/dvl/data/kaggle/BirdCLEF_2025
 
 
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/  && cargo run --bin thoosa_bird_clef --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_clef/  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'10',window:'1000'}"
