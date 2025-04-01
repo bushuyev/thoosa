@@ -37,7 +37,7 @@ use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
-use crate::distance::MaskMaker::{Diagonal, LeMean, LeQuantile, LocalMin, Tril, LE};
+use crate::distance::MaskMaker::{Diagonal, LeRunningMean, LeQuantile, LocalMin, Tril, Le};
 use crate::distance::{average_euclidean_distance, clc_dist_d2, slice_t};
 use crate::distance::{clc_dist_d2_and_mask, dist_d2};
 use crate::fragments::{load_motif_slices, motifs_to_tensor, MotifsTensors};
@@ -153,7 +153,7 @@ pub fn find_min_euc_dist(
 
     let mut min_dists_gpu = Arc::clone(&min_dists);
 
-    let run_configs_arcs = run_configs.into_iter().zip(devices.into_iter().cycle())
+    let run_configs_arcs = run_configs.iter().zip(devices.into_iter().cycle())
         .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), device)))
         .collect::<Vec<_>>();
 
@@ -208,8 +208,8 @@ pub fn find_min_euc_dist(
         loader
     )?;
 
-    for e in min_dists.iter(){
-        info!("find_min_euc_dist: e=\n{:?}", e);
+    for rc in run_configs.iter(){
+        info!("find_min_euc_dist: rc={:?} min_dist={:?}", rc, min_dists.get(&rc.id.expect("id")).expect("min_dist").read().deref().deref());
     }
 
     info!("find_min_euc_dist: done");
@@ -287,10 +287,9 @@ pub fn find_motifs_by_euc_dist(
             debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
             let mask_tril = chunk_sliced_0.resource_ids[0].eq(&chunk_sliced_1.resource_ids[0]) && !chunk_sliced_1.is_split();
-            let mask_makers = if mask_tril {
-                &mut [LocalMin, LeMean { k: find_motifs_run_config.mean_k(), avg: &mut means_acc, total_samples: &mut total_samples }, Tril][..]
-            } else {
-                &mut [LocalMin, LeMean { k: find_motifs_run_config.mean_k(), avg: &mut means_acc, total_samples: &mut total_samples }][..]
+            let mut mask_makers = vec![LocalMin, LeRunningMean { k: find_motifs_run_config.mean_k(), avg: &mut means_acc, total_samples: &mut total_samples }];
+            if mask_tril {
+                mask_makers.push(Tril);
             };
 
             let (mask, dists) = clc_dist_d2_and_mask(
@@ -298,7 +297,7 @@ pub fn find_motifs_by_euc_dist(
                 chunk_sliced_0.t.to_device(find_motifs_run_config.device()),
                 chunk_sliced_1.t.to_device(find_motifs_run_config.device()),
                 true,
-                mask_makers,
+                &mut mask_makers,
                 //remove diagonal if same chunk_0 and chunk_1 point to same tensors
             )?;
 
@@ -1170,7 +1169,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                     chunk.t.to_device(devices[0]),
                     false,
                     //compare distances between tensor and motifs to motif's average distance
-                    &mut [LE {v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
+                    &mut [Le {v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
                 )?;
                 let mask = mask.to_device(Cpu);
                 trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");

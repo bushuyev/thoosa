@@ -39,11 +39,11 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 #[derive(Debug)]
 pub enum MaskMaker<'a> {
     LeQuantile {q:f32, with_mask:bool},
-    LeMean {k:f32, avg:&'a mut Mutex<Tensor>, total_samples:&'a mut Mutex<Tensor>},
+    LeRunningMean {k:f32, avg:&'a mut Mutex<Tensor>, total_samples:&'a mut Mutex<Tensor>},
     Diagonal,
     Tril,
-    LE {v:Tensor},//channels x thresholds
-    GT {v:Tensor}, //channels x thresholds
+    Le {v:Tensor},//channels x thresholds
+    Gt {v:Tensor}, //channels x thresholds
     LocalMin
 }
 
@@ -70,16 +70,16 @@ impl <'a> MaskMaker<'a> {
                 let prev = prev_mask.unwrap_or(Tensor::ones(dists.size(), (Bool, dists.device())));
                 prev.triu(1)
             }
-            MaskMaker::LE { v } => {
+            MaskMaker::Le { v } => {
                 Self::apply_prev(&prev_mask, dists.le_tensor(v))
             }
-            MaskMaker::GT { v } => {
+            MaskMaker::Gt { v } => {
                 Self::apply_prev(&prev_mask, dists.gt_tensor(v))
             }
             MaskMaker::LocalMin => {
                 Self::apply_prev(&prev_mask, local_min_mask(&dists))
             }
-            MaskMaker::LeMean { k, avg, total_samples } => {
+            MaskMaker::LeRunningMean { k, avg, total_samples } => {
                 Self::apply_prev(&prev_mask, mean_mask(*k as f64, dists, prev_mask.as_ref(), *avg, total_samples))
             }
         }
@@ -383,7 +383,7 @@ mod distance_tests {
     use thoosa_shared::run_configs::Applicable;
     use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, local_min_mask, mean_mask, slice_t, z_normalized_euclidean, MaskMaker};
     use crate::chunks::{ChunkOfSlicedTensors};
-    use crate::distance::MaskMaker::{Diagonal, LocalMin, LeQuantile, Tril, LE, LeMean};
+    use crate::distance::MaskMaker::{Diagonal, LocalMin, LeQuantile, Tril, Le, LeRunningMean};
 
     #[ctor::ctor]
     fn init() {
@@ -937,7 +937,7 @@ mod distance_tests {
 
         debug!("thresholds_t_broadcasted=\n{thresholds_t_broadcasted}");
 
-        let mask = LE {v:thresholds_t_broadcasted}.make_mask(None, &dists_t);
+        let mask = Le {v:thresholds_t_broadcasted}.make_mask(None, &dists_t);
 
         debug!("mask=\n{mask}");
 
@@ -970,7 +970,7 @@ mod distance_tests {
         let dists_t = tensor_3_7_5_lin();
         let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
 
-        let mask = LeMean {k:1.0, avg: &mut means, total_samples: &mut Mutex::new(Tensor::zeros([3], INT64_CPU)) }.make_mask(None, &dists_t);
+        let mask = LeRunningMean {k:1.0, avg: &mut means, total_samples: &mut Mutex::new(Tensor::zeros([3], INT64_CPU)) }.make_mask(None, &dists_t);
 
         debug!("mask=\n{mask}");
         assert_eq!(
@@ -1016,8 +1016,8 @@ mod distance_tests {
         let mut means = Mutex::new(Tensor::zeros([3], FLOAT_CPU));
 
         let mut total_samples = Mutex::new(Tensor::zeros([3], INT64_CPU));
-        let mask = LeMean {k:1.0, avg: &mut means, total_samples: &mut total_samples }.make_mask(None, &dists_t_0);
-        let mask = LeMean {k:1.0, avg: &mut means, total_samples: &mut total_samples }.make_mask(None, &dists_t_1);
+        let mask = LeRunningMean {k:1.0, avg: &mut means, total_samples: &mut total_samples }.make_mask(None, &dists_t_0);
+        let mask = LeRunningMean {k:1.0, avg: &mut means, total_samples: &mut total_samples }.make_mask(None, &dists_t_1);
 
         debug!("mask=\n{mask}");
         //
