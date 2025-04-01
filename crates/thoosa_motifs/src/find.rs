@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::current;
 use std::time::{Duration, Instant};
-use std::{fmt, fs, mem, thread};
+use std::{f64, fmt, fs, mem, thread};
 use tch::{Device, IndexOp, Kind, Tensor};
 use std::panic::AssertUnwindSafe;
 
@@ -38,7 +38,7 @@ use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 use crate::distance::MaskMaker::{Diagonal, LeMean, LeQuantile, LocalMin, Tril, LE};
-use crate::distance::{average_euclidean_distance, slice_t};
+use crate::distance::{average_euclidean_distance, clc_dist_d2, slice_t};
 use crate::distance::{clc_dist_d2_and_mask, dist_d2};
 use crate::fragments::{load_motif_slices, motifs_to_tensor, MotifsTensors};
 use plotters::prelude::BLACK;
@@ -48,6 +48,7 @@ use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelB
 use serde::Deserialize;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use tch::Device::{Cpu, Cuda};
+use tch::Kind::Bool;
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
 use thoosa_common::loader::Loader;
@@ -122,6 +123,100 @@ impl FixedFindMotifsConfig {
         }
     }
 }
+
+
+pub fn find_min_euc_dist(
+    _: Option<&Vec<RunId>>, //first step, no input run ids
+    mut run_configs: Vec<FindMotifsRunConfig>,
+    resource_config: &Simple,
+    common_config: &FixedFindMotifsConfig,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    devices:Vec<Device>
+) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
+
+    let mut resource_keys = resource_config.to_resources(store)?;
+    // resource_keys.shuffle(&mut thread_rng());
+
+    let run_config_ids:Vec<RunId> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
+
+    debug!("find_min_euc_dist: run_configs={run_configs:?} devices={devices:?}");
+    debug!("find_min_euc_dist: resource_keys={resource_keys:?} run_config_ids={run_config_ids:?} channels={}", ws.read().channels());
+
+
+    let mut min_dists = Arc::new(run_config_ids.iter().fold(HashMap::new(), |mut map, rc_id|{
+        map.insert(rc_id, RwLock::new(SyncWrapper::new_t(Tensor::full(&[ws.read().channels() as i64], f64::INFINITY, (Kind::Float, devices[0])))));
+        map
+    }));
+
+
+    let mut min_dists_gpu = Arc::clone(&min_dists);
+
+    let run_configs_arcs = run_configs.into_iter().zip(devices.into_iter().cycle())
+        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), device)))
+        .collect::<Vec<_>>();
+
+    chunk_and_slice_2x(
+        resource_keys,
+        common_config.chunk_size as usize,
+        &run_configs_arcs,
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsRunConfigApplicable>| {
+
+            debug!("find_min_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
+
+            let t_0 = chunk_sliced_0.t.to_device(find_motifs_run_config.device());
+            let t_1 = chunk_sliced_1.t.to_device(find_motifs_run_config.device());
+
+            let distances = clc_dist_d2(t_0, t_1, 1)?;//.view((1, -1));
+            debug!("find_min_euc_dist/gpu_fn: distances.size={:?}", distances.size());
+            trace!("find_min_euc_dist/gpu_fn: distances=\n{distances}");
+
+
+            let mask_tril = chunk_sliced_0.resource_ids[0].eq(&chunk_sliced_1.resource_ids[0]) && !chunk_sliced_1.is_split();
+            let tril_mask = if mask_tril {
+
+                let ones = Tensor::ones(distances.size(), (Bool, distances.device())).triu(1);
+
+                debug!("find_min_euc_dist/gpu_fn: ones=\n{ones}");
+                ones
+            } else {
+                Tensor::ones(distances.size(), (Bool, distances.device()))
+            };
+
+            let inf = Tensor::from_slice(&[f32::INFINITY]).to_device(find_motifs_run_config.device());
+            let distances_trilled = distances.where_self(&tril_mask.to_kind(Bool), &inf).to_device(find_motifs_run_config.device());
+            drop(tril_mask);
+            drop(distances);
+
+            trace!("find_min_euc_dist/gpu_fn: distances trilled=\n{distances_trilled}");
+            debug!("find_min_euc_dist/gpu_fn: distances.size={:?}", distances_trilled.size());
+
+
+            if let Some(rwlocked_value) = min_dists_gpu.get(&find_motifs_run_config.id()) {
+                let mut guard = rwlocked_value.write();
+
+                debug!("find_min_euc_dist/gpu_fn: guard.device={:?}, distances_trilled.device={:?}", guard.device(), distances_trilled.device());
+
+                *guard = SyncWrapper::new_t(guard.minimum(&distances_trilled.view((1, -1)).min_dim(1, false).0));
+            }
+
+            Ok(())
+
+        },
+        &|run_config_id, _:(), chunk_0, chunk_1| {},
+        loader
+    )?;
+
+    for e in min_dists.iter(){
+        info!("find_min_euc_dist: e=\n{:?}", e);
+    }
+
+    info!("find_min_euc_dist: done");
+
+    Ok(None)
+}
+
 
 pub fn find_motifs_by_euc_dist(
     _: Option<&Vec<RunId>>, //first step, no input run ids
@@ -198,11 +293,11 @@ pub fn find_motifs_by_euc_dist(
                 &mut [LocalMin, LeMean { k: find_motifs_run_config.mean_k(), avg: &mut means_acc, total_samples: &mut total_samples }][..]
             };
 
-            let (mask, _) = clc_dist_d2_and_mask(
+            let (mask, dists) = clc_dist_d2_and_mask(
                 //TODO devices[0], should be in chunk_and_slice_2x
                 chunk_sliced_0.t.to_device(find_motifs_run_config.device()),
                 chunk_sliced_1.t.to_device(find_motifs_run_config.device()),
-                false,
+                true,
                 mask_makers,
                 //remove diagonal if same chunk_0 and chunk_1 point to same tensors
             )?;
@@ -215,11 +310,12 @@ pub fn find_motifs_by_euc_dist(
                 debug!("find_motifs_by_euc_dist: count_nonzero={}", mask_cpu.count_nonzero_dim_intlist(&[1, 2]));
             }
 
-            Ok(mask_cpu)
+            Ok((mask_cpu, SyncWrapper::new_tb(Box::new(dists.unwrap()))))
 
         },
-        &|run_config_id, mask_cpu, chunk_0, chunk_1| {
+        &|run_config_id, mask_dists_cpu:(SyncWrapper<Box<Tensor>>, SyncWrapper<Box<Tensor>>), chunk_0, chunk_1| {
             let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
+            let (mask_cpu, disks) = mask_dists_cpu;
 
             debug!("find_motifs_by_euc_dist: mask_cpu.size={:?}", mask_cpu.size());
 
@@ -374,7 +470,7 @@ where
     Ok(())
 }
 
-fn chunk_and_slice_2x<G, C>(
+fn chunk_and_slice_2x<G, C, D>(
     resources: Vec <Resource>,
     chunk_size: usize,
     run_configs:&Vec<Arc<FindMotifsRunConfigApplicable>>,
@@ -383,8 +479,10 @@ fn chunk_and_slice_2x<G, C>(
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>
 ) -> Result<(), ThoosaError>
 where
-    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfigApplicable>) -> Result<SyncWrapper<Box<Tensor>>, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
-    C: Fn(RunId, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
+    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfigApplicable>) -> Result<D, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    C: Fn(RunId, D, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
+    D: Send,
+    // CTX: Send + Sync + Debug TODO  FindMotifsRunConfigApplicable -> CTX
 {
     debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={run_configs:?}");
     trace!("chunk_and_slice_2x: resources={resources:?}");
@@ -396,7 +494,7 @@ where
 
         resource_chunks.push(vec![]); //to get last window processed
 
-        let (tx, rx) = crossbeam_channel::unbounded::<(RunId, SyncWrapper<Box<Tensor>>, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
+        let (tx, rx) = crossbeam_channel::unbounded::<(RunId, D, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
         let trackers_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(32)//TODO config
             .spawn_handler(|thread_builder| {
@@ -469,11 +567,7 @@ where
                             Some(Cpu),
                         ))//.into()
 
-
-
                     }).collect::<Vec<_>>();
-
-
 
                 drop(window_0_tensors);
 
@@ -1377,7 +1471,7 @@ mod motif_find_tests {
 
 
     use log::LevelFilter::Trace;
-    use log::{debug, trace};
+    use log::{debug, set_max_level, trace};
     use parking_lot::RwLock;
     use parking_lot_mpsc::SendError;
     use plotters::prelude::full_palette::ORANGE_800;
@@ -1394,7 +1488,7 @@ mod motif_find_tests {
 
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::clc_dist_d2;
-    use crate::find::select_motifs_by_corr;
+    use crate::find::{find_min_euc_dist, select_motifs_by_corr};
     use crate::find::{clc_motif_matches, collect_dists, find_motifs_by_euc_dist, plot_motif_slices, select_motifs_by_label_variance, select_motifs_by_ratio, select_motifs_for_label, FixedFindMotifsConfig, MotifTrackerStore};
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -1647,6 +1741,107 @@ mod motif_find_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_zzz(){
+        let t_0 = Tensor::from_slice(&[
+            0.1,
+            1.1,
+            2.1,
+        ]);
+
+
+        let t_1 = Tensor::from_slice(&[
+            0.3, 0.1, 0.2,
+            1.4, 1.6, 1.7,
+            2.0, 2.1, 2.5
+        ]).view((3, -1));
+
+
+         let min = t_0.minimum(&t_1.min_dim(1, false).0);
+
+        debug!("min=\n{min}");
+    }
+
+
+    #[test]
+    fn test_find_min_euc_dist() -> Result<(), ThoosaError> {
+        reset_print_options();
+        set_max_level(Trace);
+        let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
+
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+
+        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
+        let n = 10i64;
+
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, n as usize)?));
+
+        let pulse = pulse_v(50., 10., 100, 20.);
+
+        let sig_0 = join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));   //random_saw(1000); //
+        let sig_1 = join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));   //random_saw(1000); //
+        let sig_2 = join_with_offset::<f32>(0., 10.0, &[(800, pulse.clone())], random_saw(1000));   //random_saw(1000); //
+
+        /*
+        let x = lin_t(n);
+        plot_series(
+             vec![
+                 (format!("Sig0"), plotters::prelude::RED, vec_f32_from(&x).into_iter().zip(sig_0.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig1"), plotters::prelude::GREEN, vec_f32_from(&x).into_iter().zip(sig_1.clone()).collect::<Vec<(f32, f32)>>()),
+                 (format!("Sig2"), plotters::prelude::BLACK, vec_f32_from(&x).into_iter().zip(sig_2.clone()).collect::<Vec<(f32, f32)>>()),
+
+             ], "test_find_motifs_by_euc_dist", (1000, 500), &test_dir.join(format!("0_{:?}.png", chrono::Utc::now().to_rfc3339()))
+        ).unwrap();
+         */
+
+
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
+            move |key: &Resource| {
+                let sig = match key.file_stem() {
+                    "1111" => &sig_0,
+                    "2222" => &sig_1,
+                    "3333" => &sig_2,
+                    _ => panic!("no")
+                };
+
+                SyncWrapper::new_tb(
+                    Box::new(Tensor::vstack(&[
+                        Tensor::from_slice(
+                            sig.as_slice()
+                        ), //ch 0
+                    ]))
+                )
+            }, 4, 100,
+        )));
+
+        let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
+            ("1111".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("2222".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+            ("3333".to_string(), (ResourceStats::new(vec![1,n as u32]), vec![("label_0".to_string(), 1.0)])),
+        ]))?;
+        let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, None, None);
+
+        let run_config_id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+
+        let run_ids = vec![1];
+
+        find_min_euc_dist(
+            None,
+            vec![run_config],
+            &Simple::new(ResourceType::List(eeg_id_series)),
+            &FixedFindMotifsConfig::new(Some(3), 2, false, None),
+            &ws,
+            &store,
+            &loader,
+            vec![Cpu]
+        )?;
+
+        Ok(())
+    }
+
 
     #[test]
     fn test_find_motifs_by_euc_dist() -> Result<(), ThoosaError> {
@@ -2829,7 +3024,7 @@ mod motif_find_tests {
             1, 1, 1, 1, 1, 1, 1, // channel_2
         ]).totype(Bool).view([3, 7]);
 
-        log::set_max_level(Trace);
+        // log::set_max_level(Trace);
         let matches = Tensor::from_slice(&[
             0,   0,   0,   0,  0,  0,  0, // label_1, channel_0
             0,   0,   0,   0,  0,  0,  0, // label_1, channel_0
