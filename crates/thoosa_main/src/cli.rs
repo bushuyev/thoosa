@@ -944,7 +944,7 @@ fn run_train_motif_nodes_on_motif_selection(
                     .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>();
 
                 let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"))?
-                    .to_applicable(FindMotifsRunConfigWsCtx::from(ws.read().deref()), device);
+                    .to_applicable(ws.read().deref(), device);
 
 
                 debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");

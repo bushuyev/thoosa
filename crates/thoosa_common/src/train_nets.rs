@@ -2136,12 +2136,6 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
     Ok(t_1.flatten(0, (t_1.size().len() - 1) as i64).iter::<f64>()?.find(|v| v > &0.).is_some())
 }
 
-pub trait FindMotifsRunConfigCtx {
-    fn channels(&self) -> u32;
-    fn sample_rate(&self) -> u32;
-}
-
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LabelNetType2 {
     MaxPadding(MaxPaddingNetParams2),
@@ -3570,16 +3564,4 @@ mod train_tests {
     }
 
 
-}
-
-// #[cfg(test)]
-pub struct DummyFindMotifsRunConfigCtx;
-impl FindMotifsRunConfigCtx for DummyFindMotifsRunConfigCtx {
-    fn channels(&self) -> u32 {
-        30
-    }
-
-    fn sample_rate(&self) -> u32 {
-        1000
-    }
 }

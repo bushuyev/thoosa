@@ -14,7 +14,6 @@ use thoosa_shared::run_configs::{Applicable, RunConfig, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
 use crate::loader::SyncWrapper;
-use crate::train_nets::FindMotifsRunConfigCtx;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
 
@@ -57,7 +56,7 @@ impl FindMotifsRunConfig {
         Ok(find_motifs_run_config)
     }
 
-    pub fn to_applicable<C:FindMotifsRunConfigCtx>(&self, ctx:C, device: Device) -> FindMotifsRunConfigApplicable {
+    pub fn to_applicable(&self, ctx: &Box<dyn Workspace>, device: Device) -> FindMotifsRunConfigApplicable {
         FindMotifsRunConfigApplicable::new(&self, ctx, device)
     }
 
@@ -78,15 +77,6 @@ impl From<&Box<dyn Workspace>> for FindMotifsRunConfigWsCtx {
     }
 }
 
-impl FindMotifsRunConfigCtx for FindMotifsRunConfigWsCtx {
-    fn channels(&self) -> u32 {
-        self.channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-}
 
 #[derive(Debug)]
 pub struct FindMotifsRunConfigApplicable {
@@ -98,7 +88,7 @@ pub struct FindMotifsRunConfigApplicable {
 
 impl FindMotifsRunConfigApplicable {
 
-    pub fn new<C:FindMotifsRunConfigCtx>(run_config:&FindMotifsRunConfig, ctx:C, device:Device) -> Self {
+    pub fn new(run_config:&FindMotifsRunConfig, ctx: &Box<dyn Workspace>, device:Device) -> Self {
 
         match &run_config.filter {
             None => {

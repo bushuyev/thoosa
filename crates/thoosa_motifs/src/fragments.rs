@@ -28,7 +28,6 @@ use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
 use tch::Device::Cpu;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigWsCtx};
-use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
 
@@ -103,7 +102,7 @@ pub fn motifs_to_tensor(
     let wg = WaitGroup::new();
     let wg_1 = wg.clone();
 
-    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read().deref()), Cpu);
+    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(ws.read().deref(), Cpu);
 
     loader.write().exec(move |loader, _| {
         async move {
@@ -419,7 +418,6 @@ mod motifs_tests {
     use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
-    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::utils::*;
     use thoosa_common::ws::{DummyWorkspace, Workspace};
     use thoosa_shared::resource::{Resource, ResourceId};
@@ -585,7 +583,7 @@ mod motifs_tests {
 
         let motif_slices = super::load_motif_slices(
             0,
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(FindMotifsRunConfigWsCtx::from(&DummyWorkspace::new(1, 1000, 100)?), Cpu),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&DummyWorkspace::new(1, 1000, 100)?, Cpu),
             vec![TensorIdSliceIdx(1, 2)],
             HashMap::from([(1, Resource::new(1, 1, "aaa".to_string(), 100))]),
             &executor_rc
@@ -614,7 +612,7 @@ mod motifs_tests {
 
         let motif_slices = super::load_motif_slices(
             0,
-            &FindMotifsRunConfig::new(None, 1, 5000, None, None).to_applicable(FindMotifsRunConfigWsCtx::from(&DummyWorkspace::new(1, 1000, 100)?), Cpu),
+            &FindMotifsRunConfig::new(None, 1, 5000, None, None).to_applicable(&DummyWorkspace::new(1, 1000, 100)?, Cpu),
             vec![TensorIdSliceIdx(123, 2)],
             HashMap::from([(123, Resource::new(123, 1, "aaa".to_string(), 100))]),
             &executor_rc

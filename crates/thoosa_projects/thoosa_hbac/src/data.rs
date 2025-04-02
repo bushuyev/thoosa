@@ -654,7 +654,6 @@ mod tests {
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
-    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
@@ -702,13 +701,14 @@ mod tests {
         ).unwrap();
 
         let window = 1000;
+        let ws = DummyWorkspace::new(1, 1000, 100)?;
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_0_0.into()], //sig_0 at idx 0
             vec![0], None
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_1_0.into()], //sig_0 at idx 2000
             vec![0], None
         ).t;
