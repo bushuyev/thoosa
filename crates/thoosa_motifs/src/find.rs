@@ -155,7 +155,7 @@ pub fn find_min_euc_dist(
     let mut min_dists_gpu = Arc::clone(&min_dists);
 
     let run_configs_arcs = run_configs.iter().zip(devices.into_iter().cycle())
-        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), device)))
+        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read().deref()), device)))
         .collect::<Vec<_>>();
 
     chunk_and_slice_2x(
@@ -276,7 +276,7 @@ pub fn find_motifs_by_euc_dist(
     let mut total_samples = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Int64, devices[0])));
 
     let run_configs_arcs = run_configs.into_iter().zip(devices.into_iter().cycle())
-        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), device)))
+        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read().deref()), device)))
         .collect::<Vec<_>>();
 
     chunk_and_slice_2x(
@@ -387,6 +387,7 @@ fn chunk_and_slice<G, CTX>(
     run_configs:&mut Vec<(FindMotifsRunConfig, CTX)>,
     mut callback: G,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
@@ -448,7 +449,7 @@ where
             // .par_bridge() //TODO spread among devices
             .for_each(|(run_config_with_ctx, device)| {
                 let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-                    &run_config_with_ctx.0.to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+                    &run_config_with_ctx.0.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read().deref()), *device),
                     &window_0_tensors.read(),
                     window_0_0_clone.clone(),
                     None
@@ -1200,6 +1201,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                 Ok(())
             },
             loader,
+            ws,
             &devices
         )?;
     }
@@ -3086,7 +3088,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(run_id, &store.lock().list_run_config_values(run_id)?)?;
 
-    let resources_slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, loader); //TODO Into for TensorSliceIdx
+    let resources_slices = load_motif_slices(channel, &find_motifs_run_config.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read().deref()), *device), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, loader); //TODO Into for TensorSliceIdx
 
     let all_slices = resources_slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 

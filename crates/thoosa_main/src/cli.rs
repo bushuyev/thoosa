@@ -24,6 +24,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::{fs, process};
+use std::ops::Deref;
 use tch::nn::{Module, VarStore};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
@@ -48,7 +49,7 @@ use thoosa_shared::{
 };
 use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigRangeOrValue, FindMotifsRunConfigWsCtx, InputFilter};
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
@@ -929,7 +930,7 @@ fn run_train_motif_nodes_on_motif_selection(
 
     devices_motif_selection
         .into_par_iter()
-        .map( |(device_i, motif_selection_run_ids_chunk)| {
+        .map( |(device, motif_selection_run_ids_chunk)| {
 
             motif_selection_run_ids_chunk.iter().map(|motif_selection_run_id| {
 
@@ -942,7 +943,8 @@ fn run_train_motif_nodes_on_motif_selection(
                     .flat_map(|channel_motifs| channel_motifs.into_iter())
                     .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>();
 
-                let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"))?;
+                let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"))?
+                    .to_applicable(FindMotifsRunConfigWsCtx::from(ws.read().deref()), device);
 
 
                 debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
@@ -951,12 +953,12 @@ fn run_train_motif_nodes_on_motif_selection(
                     &motifs,
                     find_motifs_run_ids[0],
                     &train_motifs_nodes_run_configs,
-                    &find_motifs_run_config,
+                    &find_motifs_run_config_applicable,
                     fixed_config,
                     ws,
                     Arc::clone(store),
                     loader,
-                    device_i
+                    device
                 )
 
             }).collect::<Result<Vec<Vec<Box<dyn SavableResult>>>, ThoosaError>>()
@@ -1136,7 +1138,7 @@ fn run_train_motif_nets(
     motifs: &Vec<usize>,
     find_motifs_run_id: RunId,
     train_motifs_nodes_run_configs: &OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
-    find_motifs_run_config: &FindMotifsRunConfig,
+    find_motifs_run_config_applicable: &FindMotifsRunConfigApplicable,
     fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Mutex<Box<dyn Store>>>,
@@ -1157,7 +1159,7 @@ fn run_train_motif_nets(
             trace!("train_on_motif: 1. slices={slices:?}, resources_map={resources_map:?}");
 
             let all_slices_1 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
+                load_motif_slices(channel, find_motifs_run_config_applicable, slices, resources_map, loader)
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
@@ -1167,7 +1169,7 @@ fn run_train_motif_nets(
             trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
 
             let all_slices_0 = train_nets::slices_in_all_resources(
-                load_motif_slices(channel, find_motifs_run_config.window(), slices, resources_map, loader)
+                load_motif_slices(channel, find_motifs_run_config_applicable, slices, resources_map, loader)
             );
 
             debug!("train_on_motif: 0. run_id={}, done", run_id);
@@ -1199,7 +1201,7 @@ fn run_train_motif_nets(
                     0.8,//TODO config
                     device
                 );
-                run_train_motif_net(find_motifs_run_config.window(), run_config, &device, &mut batch, vs, listener)
+                run_train_motif_net(find_motifs_run_config_applicable.run_config().window(), run_config, &device, &mut batch, vs, listener)
             },
             train_motifs_nodes_run_configs,
             device,
@@ -1737,7 +1739,7 @@ mod cli_tests {
             r#"{
                             step:"100",
                             window:"800",
-                            mean_k: "0.2"
+                            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
                         }"#,
             r#"{
                             motif_selector:{
@@ -1820,7 +1822,7 @@ mod cli_tests {
                                     padding:"1"
                                 }
                             },
-                            mean_k: "0.2"
+                            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
                         }"#,
             r#"{
                             motif_selector:{

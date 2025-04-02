@@ -69,8 +69,8 @@ pub struct FindMotifsRunConfigWsCtx {
     sample_rate:u32
 }
 
-impl From<RwLockReadGuard<'_, Box<dyn Workspace>>> for FindMotifsRunConfigWsCtx {
-    fn from(value: RwLockReadGuard<'_, Box<dyn Workspace>>) -> Self {
+impl From<&Box<dyn Workspace>> for FindMotifsRunConfigWsCtx {
+    fn from(value: &Box<dyn Workspace>) -> Self {
         FindMotifsRunConfigWsCtx {
             channels: value.channels() as u32,
             sample_rate: value.sample_rate(),
