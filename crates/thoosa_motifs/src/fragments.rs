@@ -27,7 +27,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
 use tch::Device::Cpu;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigOptions, FindMotifsRunConfigWsCtx};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigOptions};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
 
@@ -418,7 +418,7 @@ mod motifs_tests {
     use tch::kind::FLOAT_CPU;
     use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig};
     use thoosa_common::utils::*;
     use thoosa_common::ws::{DummyWorkspace, Workspace};
     use thoosa_shared::resource::{Resource, ResourceId};

@@ -62,21 +62,6 @@ impl FindMotifsRunConfig {
 
 }
 
-//TODO use workspace directly
-pub struct FindMotifsRunConfigWsCtx {
-    channels:u32,
-    sample_rate:u32
-}
-
-impl From<&Box<dyn Workspace>> for FindMotifsRunConfigWsCtx {
-    fn from(value: &Box<dyn Workspace>) -> Self {
-        FindMotifsRunConfigWsCtx {
-            channels: value.channels() as u32,
-            sample_rate: value.sample_rate(),
-        }
-    }
-}
-
 
 #[derive(Debug)]
 pub struct FindMotifsRunConfigApplicable {

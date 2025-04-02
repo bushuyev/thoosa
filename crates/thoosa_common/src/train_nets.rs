@@ -1093,14 +1093,10 @@ pub fn load_motif_models(ws:&Arc<RwLock<Box<dyn Workspace>>>, channel:usize, mot
 
     channel_motif_models_paths.into_iter().map(|(model, config)|{
 
-        // let mut vs = VarStore::new(device.clone());
         let motif_node_params = MotifNetParams::from_file(&config)?;
 
         debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
 
-        // let module = SyncModule::new(motif_node(&motif_node_params).build_tch_module(&vs.root())?);
-        // vs.load(&model)?;
-        // vs.freeze();
 
         let module = ThoModuleWithStore::load(motif_node(&motif_node_params), model, device.clone())?;
 
@@ -1876,7 +1872,6 @@ fn split_train_val<T>(classes_tensors: Vec<Vec<T>>, train_valid_split: f32) -> (
     (train, val)
 }
 
-
 /// returns Tensor channels x nets x batches x batch size
 fn apply_motif_nets(
     batch_t: &Tensor,
@@ -1895,6 +1890,7 @@ fn apply_motif_nets(
             .map(|(channel, (find_motifs_cfg, motif_nodes))| {
                 // let slices_len = 100; //slices_len(input_t.size()[1], find_motifs_cfg.window as i64, find_motifs_cfg.step as usize);
                 debug!("apply_motif_nets: slices_len={slices_len} slices_len={slices_len} motif_width={} step={}", find_motifs_cfg.window, find_motifs_cfg.step);
+
                 let r = apply_channel_motifs(
                     motif_nodes,
                     batch_t.i((.., channel as i64, ..)),
