@@ -938,22 +938,21 @@ fn run_train_motif_nodes_on_motif_selection(
 
                 let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"))?;
 
-                // train_motifs_nodes_run_configs.iter().map(move | train_motifs_nodes_run_config | {
 
-                    debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
+                debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?} motif_selection_id={motif_selection_run_id}");
 
-                    run_train_motif_nets(
-                        &motifs,
-                        find_motifs_run_ids[0],
-                        &train_motifs_nodes_run_configs,
-                        &find_motifs_run_config,
-                        fixed_config,
-                        ws,
-                        Arc::clone(store),
-                        loader,
-                        device_i
-                    )
-                // })
+                run_train_motif_nets(
+                    &motifs,
+                    find_motifs_run_ids[0],
+                    &train_motifs_nodes_run_configs,
+                    &find_motifs_run_config,
+                    fixed_config,
+                    ws,
+                    Arc::clone(store),
+                    loader,
+                    device_i
+                )
+
             }).collect::<Result<Vec<Vec<Box<dyn SavableResult>>>, ThoosaError>>()
 
         })
@@ -1237,16 +1236,6 @@ fn run_train_motif_nets(
         assert!(all_slices_1.len() > 0, "all_slices_1.len(), motif={motif_id}");
         assert!(all_slices_0.len() > 0, "all_slices_0.len(), motif={motif_id}");
 
-        // let batch_size = common_config.batch_size; //TODO, purge small motifs
-       /* if all_slices_1.len() < batch_size {
-            warn!("num of motif_id {motif_id} all_slices_1.len()={} in channel {channel} is less than {batch_size}", all_slices_1.len());
-            return Err(ThoosaError::new("skip"));
-        }
-
-        if all_slices_0.len() < batch_size {
-            warn!("num of not motif_id {motif_id} all_slices_0.len()={} in channel {channel} is less than {batch_size}", all_slices_0.len());
-            return Err(ThoosaError::new("skip"));
-        }*/
 
         debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
 
