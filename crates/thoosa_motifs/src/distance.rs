@@ -627,8 +627,8 @@ mod distance_tests {
         let run_config_applicable = run_config.to_applicable(&DummyWorkspace::new(2, 100, 1000)?, Cpu);
 
         let  (tensor_0, sizes_0) =run_config_applicable.apply(&[
-            t_00.into(), t_01.into()
-        ][..]).expect("apply");
+                    t_00.into(), t_01.into()
+                ][..],()).expect("apply");
 
         let chunk_0 = ChunkOfSlicedTensors::new(
             vec![0,1],
@@ -638,8 +638,8 @@ mod distance_tests {
         );
 
         let  (tensor_1, sizes_1) =run_config_applicable.apply(&[
-            t_10.into(), t_11.into()
-        ][..]).expect("apply");
+                    t_10.into(), t_11.into()
+                ][..],()).expect("apply");
 
         let chunk_1 = ChunkOfSlicedTensors::new(
             vec![2,3],

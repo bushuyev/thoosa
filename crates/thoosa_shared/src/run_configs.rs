@@ -123,9 +123,9 @@ pub trait RunConfig:Debug {
     fn type_name()->&'static str;
 }
 
-pub trait Applicable<S, R>:Debug {
+pub trait Applicable<S, R, O>:Debug {
 
-    fn apply(&self, subject:S) ->Result<R, ThoosaError>;
+    fn apply(&self, subject:S, options: O) ->Result<R, ThoosaError>;
 }
 
 pub struct RunConfigHolder<R:RunConfig> {

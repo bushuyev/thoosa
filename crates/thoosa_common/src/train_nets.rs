@@ -739,69 +739,6 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
 
  # returns Tensor nodes x batches x batch size
 */
-pub fn apply_channel_motifs_2(
-    motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
-    batch_channel: Tensor,
-    motif_width: i64,
-    sum_motif_nodes: i64,
-    slices_len: i64,
-    device: &Device
-) -> Result<Tensor, ThoosaError> {
-
-    trace!("apply_channel_motifs: motif_nodes={motif_nodes:?}");
-    debug!("apply_channel_motifs: batch_channel={batch_channel:?} motif_width={motif_width} max_motif_nodes={sum_motif_nodes} slices_len={slices_len} device={device:?}");
-
-    if motif_nodes.is_empty() {
-        return Ok(Tensor::zeros([batch_channel.size()[0], sum_motif_nodes, slices_len], (Float, *device)));
-    }
-
-    let (input_slice_step, pad) = clc_step(batch_channel.size()[1], motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
-
-    let unfolded = batch_channel
-        .pad([0, pad], "constant", 0.)//pad: last dimension [0 - padding left, pad - padding right]
-        .unfold(1, motif_width, input_slice_step);
-
-    debug!("apply_channel_motifs: channel.size={:?} motif_width={motif_width} input_slice_step={input_slice_step} pad={pad}  unfolded.size()={:?}", batch_channel.size(), unfolded.size());
-
-    let motif_dists = motif_nodes.iter_mut().map(|(_params, net)| {
-        net.set_device(device.clone());
-
-        let mut motif_distance_splits = vec![];
-        run_split_on_oom(
-            SplitQueue::<2, _>::new(SplittableTensor::<0>(unfolded.shallow_clone())),
-            |t|{
-                let t = t.as_ref();
-                trace!("apply_channel_motifs: forward: t=\n{t}");
-                let r = net.infer(&t.to_device(device.clone()));
-                debug!("apply_channel_motifs: forward: size={:?} r.size={:?}", t.as_ref().size(), r.size());
-                trace!("apply_channel_motifs: forward: r=\n{r}");
-
-                Ok(r)
-            },
-            |v, t|{
-                debug!("v={v:?}");
-                motif_distance_splits.push(v);
-            },
-            10//TODO config
-        ).unwrap();//TODO unwrap
-
-        net.set_device(Cpu);
-
-        debug!("apply_channel_motifs: motif_distance_splits={motif_distance_splits:?}");
-        if motif_distance_splits.len() > 0 {
-            Ok(Tensor::concat(&motif_distance_splits, 0))
-
-        } else if motif_distance_splits.len() == 1 {
-            Ok(motif_distance_splits.pop().unwrap())
-
-        } else {
-            Err(ThoosaError::new("no motif distances "))
-
-        }
-    }).collect::<Result<Vec<_>, ThoosaError>>()?;
-
-    Ok(Tensor::stack(motif_dists.as_slice(), 1).view((batch_channel.size()[0], motif_nodes.len() as i64, -1)))
-}
 pub fn apply_channel_motifs(
     motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
     batch_channel: Tensor,

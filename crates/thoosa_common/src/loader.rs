@@ -291,6 +291,44 @@ where
 
     }
 
+    //TODO check perf
+    pub fn exec_scoped<'s, F>(&mut self, make_future: F)
+    where
+        F: FnOnce(
+            Arc<RwLock<Loader<V>>>,
+            Box<dyn FnOnce(&[Resource], u64) + Send>
+        ) -> BoxFuture<'s, ()>,
+    {
+        let loader_for_purge = Arc::clone(&self.loader);
+
+        let future = make_future(
+            Arc::clone(&self.loader),
+            Box::new(move |keys, cache_area| {
+                Loader::purge_resources(loader_for_purge, keys, cache_area);
+            }),
+        );
+
+        let notify = Arc::new(RayonNotify::new());
+        let waker = waker_ref(&notify);
+        let mut cx = Context::from_waker(&waker);
+
+        let mut pinned = Box::pin(future);
+        loop {
+            match pinned.as_mut().poll(&mut cx) {
+                Poll::Ready(()) => {
+                    break;
+                }
+                Poll::Pending => {
+                   thread::yield_now();
+
+                    if self.stop.load(Relaxed) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn debug(&self, prefix:&str) {
         if log_enabled!(Level::Debug) {
             Loader::debug(&self.loader, prefix);
