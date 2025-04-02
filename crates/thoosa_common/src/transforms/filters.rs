@@ -1,7 +1,35 @@
 use log::debug;
+use serde::Deserialize;
 use tch::{Tensor, Kind, Device};
 use tch::kind::FLOAT_CPU;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use crate::utils::from;
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+pub struct BandPassFilterParams {
+    #[in_map]
+    #[run_config]
+    pub low_hz: f64,
+
+    #[in_map]
+    #[run_config]
+    pub band_hz: f64,
+
+    #[in_map]
+    #[run_config]
+    pub kernel_size: i64,
+
+    #[in_map]
+    #[run_config]
+    pub stride: i64,
+
+    #[in_map]
+    #[run_config]
+    pub padding: i64,
+}
+
 
 /// Create a sinc-based band-pass filter
 pub fn band_pass_filter(
@@ -13,8 +41,8 @@ pub fn band_pass_filter(
 ) -> Tensor {
     let n = Tensor::arange(kernel_size, (Kind::Float, Device::Cpu)) - (kernel_size - 1) as f64 / 2.0;
 
-    let low = 2.0 * std::f64::consts::PI * low_hz / sample_rate;
-    let high = 2.0 * std::f64::consts::PI * high_hz / sample_rate;
+    let low = std::f64::consts::TAU * low_hz / sample_rate;
+    let high = std::f64::consts::TAU * high_hz / sample_rate;
 
     let sinc = |x: &Tensor| {
         let x_eps = x + eps;
@@ -47,11 +75,13 @@ pub fn clc_frequencies(input_signal_0: &Tensor, n: i64, rate: f64, take: usize) 
     let ranked= absolutes.argsort(0, true);
 
 
-    from::<Vec<f32>>(&ranked)
-        .into_iter()
-        .take(take)
-        .map(|i|(freq.double_value(&[i as i64]), absolutes.double_value(&[i as i64])))
-        .collect()
+    let mut i:Box<dyn Iterator<Item=f32>> = Box::new(from::<Vec<f32>>(&ranked).into_iter());
+    if take > 0 {
+        i = Box::new(i.take(take));
+    }
+
+    i.map(|i|(freq.double_value(&[i as i64]), absolutes.double_value(&[i as i64])))
+    .collect()
 }
 
 
@@ -132,5 +162,52 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_band_pass_filter_mult_channels() -> Result<(), ThoosaError> {
+        let samples = 16000;
+        let sample_rate = 16000.0;
+        let kernel_size = 101;
+        let low_hz = 5.0;
+        let high_hz = 15.0;
+
+        let t = Tensor::arange(samples, (Kind::Float, Device::Cpu)) / sample_rate;
+        let input_signal_0 = sin_t(&t, 10.);
+
+        let input_signal_1 = sin_t(&t, 300.);
+
+        let input_signal = input_signal_0 + input_signal_1;
+        let input_freqs = clc_frequencies(&input_signal, samples, sample_rate, 2);
+        let input = input_signal.view((1,1,-1)); // batch x channel for conv1d
+        debug!("0. input={input:?}");
+        let input = input.repeat([10, 3, 1]); // [out_channels, in_channels/groups, kernel_size]
+        debug!("1. input={input:?}");
+
+
+        let kernel = band_pass_filter(low_hz, high_hz, kernel_size, sample_rate, 1e-6);
+        debug!("1. kernel={kernel:?}");
+        // let kernel = kernel.repeat([3,1,1]);
+        let kernel = kernel.view([1,1,-1]).expand([3,1,-1], true);
+        debug!("1. kernel={kernel:?}");
+
+        //apply filter
+        let output = input.conv1d(&kernel, None::<Tensor>, 1, 0, 1, 3);
+
+        let output_freqs = clc_frequencies(&output.i((0, 0, ..)), samples, sample_rate, 5);
+
+
+        debug!("input_freqs={input_freqs:?}");
+        debug!("output_freqs={output_freqs:?}");
+
+        assert_eq!([(300.0, 0.5), (10.0, 0.5)], input_freqs.as_slice());
+        //output_freqs -[(10.0, 0.4967866837978363), (300.0, 0.26481497287750244)
+        assert!(
+            are_close(&[0.5, 0.2648], &[output_freqs[0].1, output_freqs[1].1], 1e-2)
+        );
+
+
+        Ok(())
+    }
+
 
 }

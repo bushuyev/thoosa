@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
-use crate::loader::{LoadRunner, Loader};
+use crate::loader::{LoadRunner, Loader, SyncWrapper};
 use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -12,8 +12,8 @@ use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
 use futures::StreamExt;
-use log::{debug, info, trace, warn, Log};
-use parking_lot::{Mutex, RawRwLock, RwLock};
+use log::{debug, info, log_enabled, trace, warn, Log};
+use parking_lot::{Mutex, RawRwLock, RwLock, RwLockReadGuard};
 use plotters::prelude::BLACK;
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
@@ -26,6 +26,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::{fmt, fs};
 use std::hash::Hash;
 use std::iter::Map;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -43,12 +44,15 @@ use thoosa_shared::val::Val::UInt;
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use log::Level::Debug as DebugLevel;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_shared::run_configs::RunConfig;
+use thoosa_shared::run_configs::{Applicable, RunConfig};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use crate::find_motifs_run_config::*;
+use crate::transforms::filters::*;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -319,7 +323,7 @@ impl Splittable<1> for LoadingTensorsDataBatch {
         Self: Sized
     {
         let mut batch = self.clone();
-        batch.batch_size = batch.batch_size/2;
+        batch.batch_size = batch.batch_size/2;//TODO param
 
         if batch.batch_size > 0 {
             debug!("Splittable<1> for LoadingTensorsDataBatch: batch.batch_size={}", batch.batch_size);
@@ -550,7 +554,6 @@ pub fn run_opt_train_label_nets(
 
             )));
 
-
             let mut result = None::<(f32, LabelNetParams)>;
             run_split_on_oom(
                 Reducer::new(BatchTransform::new(Rc::clone(&batch), |t|{
@@ -736,6 +739,69 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
 
  # returns Tensor nodes x batches x batch size
 */
+pub fn apply_channel_motifs_2(
+    motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
+    batch_channel: Tensor,
+    motif_width: i64,
+    sum_motif_nodes: i64,
+    slices_len: i64,
+    device: &Device
+) -> Result<Tensor, ThoosaError> {
+
+    trace!("apply_channel_motifs: motif_nodes={motif_nodes:?}");
+    debug!("apply_channel_motifs: batch_channel={batch_channel:?} motif_width={motif_width} max_motif_nodes={sum_motif_nodes} slices_len={slices_len} device={device:?}");
+
+    if motif_nodes.is_empty() {
+        return Ok(Tensor::zeros([batch_channel.size()[0], sum_motif_nodes, slices_len], (Float, *device)));
+    }
+
+    let (input_slice_step, pad) = clc_step(batch_channel.size()[1], motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
+
+    let unfolded = batch_channel
+        .pad([0, pad], "constant", 0.)//pad: last dimension [0 - padding left, pad - padding right]
+        .unfold(1, motif_width, input_slice_step);
+
+    debug!("apply_channel_motifs: channel.size={:?} motif_width={motif_width} input_slice_step={input_slice_step} pad={pad}  unfolded.size()={:?}", batch_channel.size(), unfolded.size());
+
+    let motif_dists = motif_nodes.iter_mut().map(|(_params, net)| {
+        net.set_device(device.clone());
+
+        let mut motif_distance_splits = vec![];
+        run_split_on_oom(
+            SplitQueue::<2, _>::new(SplittableTensor::<0>(unfolded.shallow_clone())),
+            |t|{
+                let t = t.as_ref();
+                trace!("apply_channel_motifs: forward: t=\n{t}");
+                let r = net.infer(&t.to_device(device.clone()));
+                debug!("apply_channel_motifs: forward: size={:?} r.size={:?}", t.as_ref().size(), r.size());
+                trace!("apply_channel_motifs: forward: r=\n{r}");
+
+                Ok(r)
+            },
+            |v, t|{
+                debug!("v={v:?}");
+                motif_distance_splits.push(v);
+            },
+            10//TODO config
+        ).unwrap();//TODO unwrap
+
+        net.set_device(Cpu);
+
+        debug!("apply_channel_motifs: motif_distance_splits={motif_distance_splits:?}");
+        if motif_distance_splits.len() > 0 {
+            Ok(Tensor::concat(&motif_distance_splits, 0))
+
+        } else if motif_distance_splits.len() == 1 {
+            Ok(motif_distance_splits.pop().unwrap())
+
+        } else {
+            Err(ThoosaError::new("no motif distances "))
+
+        }
+    }).collect::<Result<Vec<_>, ThoosaError>>()?;
+
+    Ok(Tensor::stack(motif_dists.as_slice(), 1).view((batch_channel.size()[0], motif_nodes.len() as i64, -1)))
+}
 pub fn apply_channel_motifs(
     motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
     batch_channel: Tensor,
@@ -800,7 +866,7 @@ pub fn apply_channel_motifs(
     Ok(Tensor::stack(motif_dists.as_slice(), 1).view((batch_channel.size()[0], motif_nodes.len() as i64, -1)))
 }
 
-pub fn apply_channel_motifs_with_padding(input_slice_step: usize,
+pub fn apply_channel_motifs_with_padding(input_slice_step: u32,
                                          motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
                                          channel: Tensor, //batch , data
                                          motif_width: i64,
@@ -1931,10 +1997,10 @@ fn apply_motif_nets_with_padding(
             .iter_mut()
             .enumerate()
             .map(|(channel, (find_motifs_cfg, motif_nodes))| {
-                let slices_len = slices_len(input_n as i64, find_motifs_cfg.window as i64, find_motifs_cfg.step as usize);
+                let slices_len = slices_len(input_n as i64, find_motifs_cfg.window as i64, find_motifs_cfg.step);
                 debug!("apply_motif_nets: slices_len={slices_len} input_n={input_n} motif_width={} step={}", find_motifs_cfg.window, find_motifs_cfg.step);
                 apply_channel_motifs_with_padding(
-                    find_motifs_cfg.step as usize,
+                    find_motifs_cfg.step,
                     motif_nodes,
                     input_t.i((.., channel as i64, ..)),//batch, channel, data
                     find_motifs_cfg.window as i64,
@@ -2070,105 +2136,11 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
     Ok(t_1.flatten(0, (t_1.size().len() - 1) as i64).iter::<f64>()?.find(|v| v > &0.).is_some())
 }
 
-
-
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
-#[run_config_grid]
-pub struct FindMotifsRunConfig {
-    #[in_map]
-    pub id:Option<RunId>,//TODO move to RunConfigHolder
-
-    #[run_config]
-    #[in_map]
-    pub step: u32,
-
-    #[run_config]
-    #[in_map]
-    pub window: u32,
-
-    #[run_config]
-    #[in_map]
-    pub min_tracker_step: Option<u32>,
-
-    #[run_config]
-    #[in_map]
-    pub filter: Option<InputFilter>,
-
-    #[run_config]
-    #[in_map]
-    pub mean_k: f32,
-
+pub trait FindMotifsRunConfigCtx {
+    fn channels(&self) -> u32;
+    fn sample_rate(&self) -> u32;
 }
 
-impl FindMotifsRunConfig {
-
-    //TODO RunConfigHolder
-    pub fn from_properties_map__(id:RunId, properties: &HashMap<String, Val>) -> Result<FindMotifsRunConfig, thoosa_shared::ThoosaError> {
-        let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, properties)?;
-        find_motifs_run_config.set_id(id);
-
-        Ok(find_motifs_run_config)
-    }
-}
-
-
-impl FindMotifsRunConfig {
-    pub fn new(id: Option<u32>,
-               step: u32,
-               window: u32,
-               filter: Option<InputFilter>,
-               mean_k: Option<f32>,
-    ) -> Self {
-        Self {
-            id,
-            step,
-            window,
-            filter,
-            min_tracker_step: None,//TODO
-            mean_k: mean_k.unwrap_or(0.5)
-        }
-    }
-
-    pub fn window(&self) -> i64 {
-        self.window as i64//TODO
-    }
-
-    pub fn step(&self) -> usize {
-        self.step as usize //TODO
-    }
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Subcommand, PartialEq, Clone)]
-pub enum InputFilter {
-    Conv1(Conv1Params),
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, Args, PartialEq, Clone)] //PartialEq - for tests
-pub struct Conv1Params {
-    #[in_map]
-    #[arg(long)]
-    #[run_config]
-    kernel: i64,
-
-    #[in_map]
-    #[arg(long, default_value_t = 1)]
-    #[run_config]
-    stride: i64,
-
-    #[in_map]
-    #[arg(long, default_value_t = 0)]
-    #[run_config]
-    padding: i64,
-}
-
-
-impl Conv1Params {
-    pub fn new(kernel: i64, stride: i64, padding: i64) -> Self {
-        Self { kernel, stride, padding }
-    }
-
-}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LabelNetType2 {
@@ -2263,7 +2235,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfig, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, InputFilterRangeOrValue, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
     use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
@@ -2293,6 +2265,8 @@ mod train_tests {
     use thoosa_shared::run_configs::{OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::SqlStore;
+    use crate::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
 
     #[ctor::ctor]
     fn test_init() {
@@ -2400,7 +2374,7 @@ mod train_tests {
 
     #[test]
     fn test_apply_motif_models() -> Result<(), ThoosaError>{
-        set_max_level(Trace);
+        // set_max_level(Trace);
         reset_print_options();
 
         let input_n = 1000;
@@ -2494,7 +2468,7 @@ mod train_tests {
         reset_print_options();
         let input_n = 1000;
         let motif_width = 100;
-        let step = (motif_width / 1) as usize;//1 - step==motif_width slices do not overlap so net output - sum(slice)*k
+        let step = (motif_width / 1) as u32;//1 - step==motif_width slices do not overlap so net output - sum(slice)*k
 
         let t = lin_test_tensor(input_n).unsqueeze(0);
         let slices_len = slices_len(input_n, motif_width, step);
@@ -2670,7 +2644,7 @@ mod train_tests {
     fn test_save_load_label_model_fixed_num_slices() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, 32000)?));
 
         let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetType2::FixedNumSlices(FixedNumSlicesNetParams2::new(10, 100)));
 
@@ -2701,7 +2675,7 @@ mod train_tests {
         let max_motif_nodes = 19;
         let slices_len = 23;
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as usize, 1000)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as usize, 1000, 32000)?));
         let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2::new(3)));
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2729,7 +2703,7 @@ mod train_tests {
     #[test]
     fn test_train_label() -> Result<(), ThoosaError> {
         set_max_level(Debug);
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1000)?));
 
         const BATCH_SIZE:usize = 10;
         const CHANNELS:usize = 2;
@@ -3195,7 +3169,7 @@ mod train_tests {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1000)?));
 
         const BATCH_SIZE:usize = 1;
         const CHANNELS:usize = 2;
@@ -3378,7 +3352,7 @@ mod train_tests {
         }
 
         let (loss, final_params) = super::train_final_node(
-            &Arc::new(RwLock::new(DummyWorkspace::new(0, 100)?)),
+            &Arc::new(RwLock::new(DummyWorkspace::new(0, 1000, 100)?)),
             &TrainFinalNetRunConfig::new(Some(1), CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3), FinalNetParams::new(3)),
             &mut DummyLabelBatch::new(),
             &Cpu,
@@ -3595,4 +3569,17 @@ mod train_tests {
         //TODO
     }
 
+
+}
+
+// #[cfg(test)]
+pub struct DummyFindMotifsRunConfigCtx;
+impl FindMotifsRunConfigCtx for DummyFindMotifsRunConfigCtx {
+    fn channels(&self) -> u32 {
+        30
+    }
+
+    fn sample_rate(&self) -> u32 {
+        1000
+    }
 }

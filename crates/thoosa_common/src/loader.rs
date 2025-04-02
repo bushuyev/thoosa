@@ -277,7 +277,7 @@ where
 
     pub fn exec<F>(&mut self, make_future: F)
     where
-        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(&[Resource], u64) + Send>) -> BoxFuture<'static, ()>,//TODO 'static
+        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(&[Resource], u64) + Send>) -> BoxFuture<'static, ()>,
 
     {
         let loader_for_purge = Arc::clone(&self.loader);
@@ -288,6 +288,7 @@ where
                 Loader::purge_resources(loader_for_purge, keys, cache_area);
             }),
         ))).expect("features_sender.send");
+
     }
 
     pub fn debug(&self, prefix:&str) {

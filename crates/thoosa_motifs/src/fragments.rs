@@ -25,7 +25,11 @@ use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
-use thoosa_shared::run_configs::RunId;
+use tch::Device::Cpu;
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
+use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
+use thoosa_common::ws::Workspace;
+use thoosa_shared::run_configs::{Applicable, RunId};
 
 #[derive(Debug, Args)]
 pub struct MotifsToFragmentsParams {
@@ -81,11 +85,12 @@ impl MotifsTensors {
 * motifs order is random because of iterating over hashmap entries but always consistent between tensor and vec
 */
 pub fn motifs_to_tensor(
-    resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, window: i64, channels: i64, device: Device,
-    area: u64
+    resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, find_motifs_run_config: &FindMotifsRunConfig, channels: i64, device: Device,
+    area: u64,
+    ws:&Arc<RwLock<Box<dyn Workspace>>>
 ) -> Result<MotifsTensors, ThoosaError> {
 
-    debug!("motifs_to_tensor: resource_id_motif_slices.len={} device={device:?} window={window}", resource_id_motif_slices.len());
+    debug!("motifs_to_tensor: resource_id_motif_slices.len={} device={device:?} find_motifs_run_config={find_motifs_run_config:?}", resource_id_motif_slices.len());
     trace!("motifs_to_tensor: resource_id_motif_slices={resource_id_motif_slices:?}");
 
     assert!(resource_id_motif_slices.len() > 0, "resource_id_motif_slices is empty in motifs_to_tensor");
@@ -97,23 +102,24 @@ pub fn motifs_to_tensor(
     let wg = WaitGroup::new();
     let wg_1 = wg.clone();
 
+    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), Cpu);
 
     loader.write().exec(move |loader, _| {
         async move {
 
             for (resource, motif_slices) in resource_id_motif_slices {
-
+                debug!("motifs_to_tensor: resource={resource:?}");
                 let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, area).await;
-                debug!("motifs_to_tensor: eeg_t.size={:?}", t.size());
+                debug!("motifs_to_tensor: t.size={:?}", t.size());
+                let applied = find_motifs_run_config_applicable.apply(&t).expect("find_motifs_run_config_for_loader.apply");
+                debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
 
                 for motif_slice in motif_slices {
+                    debug!("motifs_to_tensor: motif_slice={motif_slice:?}");
 
-                    let channel_t = t.get(motif_slice.channel as i64);
-                    let channel_t = channel_t.view([1, -1]);
+                    let motif_slice_t = applied.i((motif_slice.channel as i64, motif_slice.slice_idx/ find_motifs_run_config_applicable.step() as i64, ..)); //channel_t.narrow(1, motif_slice.slice_idx, find_motifs_run_config_for_loader.window as i64);
 
-                    let motif_slice_t = channel_t.narrow(1, motif_slice.slice_idx, window);
-                    // let motif_slice_t = t.i((motif_slice.channel, motif_slice.slice_idx..motif_slice.slice_idx+window));
-                    // let motif_slice_t = t.copy((channel_t, motif_slice.slice_idx..motif_slice.slice_idx+window));
+                    debug!("motifs_to_tensor: motif_slice_t.size={:?}", motif_slice_t.size());
 
                     let mut write_guard = channels_motifs_slices_arc.write();
                     let  channels_motifs = write_guard.entry(motif_slice.channel).or_insert_with(||HashMap::new());
@@ -121,7 +127,6 @@ pub fn motifs_to_tensor(
 
 
                     motif_slices.push(SyncWrapper::new_tb(Box::new(motif_slice_t)));
-                    // motifs_slices_map_arc.write().insert(motif_slice.motif_id(), motif_slice);
                 }
             }
 
@@ -139,7 +144,7 @@ pub fn motifs_to_tensor(
     let max_motifs_num = channels_motifs_slices.read().values().map(|motif_slices| motif_slices.len()).max().expect("No motifs") as i64;
 
     let mut channel_motif_ids:Vec<Vec<usize>> = (0..channels).into_iter().map(|_|Vec::with_capacity(max_motifs_num as usize)).collect();
-    let zeros_t = Tensor::zeros(window, (Float, device));
+    let zeros_t = Tensor::zeros(find_motifs_run_config.window as i64, (Float, device));
 
     let mut channels_motifs_slices_t = Vec::with_capacity(channels as usize);
     let mut channels_motifs_avg_dists_t = Vec::with_capacity(channels as usize);
@@ -187,7 +192,7 @@ pub fn motifs_to_tensor(
             channel_motif_ids[channel as usize].extend(vec![0; max_motifs_num as usize - channel_motif_ids_len]);
         }
         channels_motifs_avg_dists_t.push(Tensor::from_slice(motifs_avg_dists.as_slice()));
-        channels_motifs_slices_t.push(Tensor::vstack(motifs.as_slice()).view((max_motifs_num, window)))
+        channels_motifs_slices_t.push(Tensor::vstack(motifs.as_slice()).view((max_motifs_num, find_motifs_run_config.window as i64)))
     }
 
 
@@ -277,6 +282,8 @@ pub struct PlotMotifSlicesArgs {
     #[arg(long, value_enum)]
     motifs_by: MotifsBy,
 
+    #[arg(long, value_enum)]
+    pub limit: Option<u32>,
 }
 
 impl PlotMotifSlicesArgs {
@@ -286,7 +293,7 @@ impl PlotMotifSlicesArgs {
     }
 
     pub fn new(motifs_by: MotifsBy) -> Self {
-        Self { motifs_by }
+        Self { motifs_by, limit: None }
     }
 }
 
@@ -328,12 +335,11 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
                     let tensor_idx_id = resource.id();
                     let t = LoadRunner::<Box<Tensor>>::load_future(loader, resource, 0).await;
 
-                    let take = t.size()[1] / widow;
-                    debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?} take={}", slices.len(), t.size(),  take  );
+                    debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
 
                     all_slices.write().push(
                         (tensor_idx_id,
-                         slices.into_iter().filter(|slice_idx| {
+                         slices.into_iter().filter(|slice_idx| {//TODO filter_map
                              let slice_ok = t.size()[1] >= (*slice_idx) as i64 + widow;
 
                              if !slice_ok {
@@ -410,7 +416,9 @@ mod motifs_tests {
     use tch::kind::FLOAT_CPU;
     use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::*;
+    use thoosa_common::ws::DummyWorkspace;
     use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::MotifSlice;
     use thoosa_shared::TensorIdSliceIdx;
@@ -426,24 +434,25 @@ mod motifs_tests {
     fn test_motifs_to_tensor() -> Result<(), ThoosaError>{
         let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
         debug!("dir={}", dir);
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
 
-        let mut eeg_id_fragments_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
+        let mut slices_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
-        eeg_id_fragments_map.insert(Resource::new(1, 1, "111".into(), 0), vec![
+        slices_map.insert(Resource::new(1, 1, "111".into(), 0), vec![
             MotifSlice::new(10, 100, 0),
             MotifSlice::new(11, 301, 1),
             MotifSlice::new(20, 500, 0),
             MotifSlice::new(21, 701, 1)
         ]);
 
-        eeg_id_fragments_map.insert(Resource::new(2, 2, "222".into(), 0), vec![
+        slices_map.insert(Resource::new(2, 2, "222".into(), 0), vec![
             MotifSlice::new(10, 200, 0),
             MotifSlice::new(11, 401, 1),
             MotifSlice::new(20, 600, 0),
             MotifSlice::new(21, 801, 1)
         ]);
 
-        fn test_eeg_to_t(eeg_id:&Resource) -> Box<Tensor> {
+        fn test_tensor(eeg_id:&Resource) -> Box<Tensor> {
             let data = (0..1000).map(|i| i as f64).collect::<Vec<f64>>();
             match eeg_id.file_stem() {
                 "111"=>Box::new(Tensor::vstack(&[
@@ -461,21 +470,23 @@ mod motifs_tests {
             }
         }
 
-        let executor_rc = Arc::new(parking_lot::RwLock::new(LoadRunner::new(
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
                 SyncWrapper::new_tb(
-                    test_eeg_to_t(key)
+                    test_tensor(key)
                 )
             }, 4, 100,
         )));
 
 
         let motifs_tensors = super::motifs_to_tensor(
-            eeg_id_fragments_map,
-            &executor_rc,
-            10, 2,
+            slices_map,
+            &loader,
+            &FindMotifsRunConfig::new(None, 10, 10, None, None),
+            2,
             Device::Cpu,
-            1
+            1,
+            &ws
         )?;
 
         debug!("slices_t={}", motifs_tensors.channels_motifs_slices);

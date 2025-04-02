@@ -341,17 +341,26 @@ mod tests {
 
     #[test]
     fn test_plot_resource() -> Result<(), ThoosaError> {
-        let ws = Arc::new(RwLock::new(FsWorkspace::new("/tmp/ws_test_clef", 1, 999)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new("/tmp/ws_test_clef", 1, 999, 32000)?));
 
         let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
         plot_resource(
 
             Simple::new(ResourceType::List(vec![
-                "piepuf1_XC769654.ogg".into(),
+                // "piepuf1_XC769654.ogg".into(),
                 // "crbtan1_XC137679.ogg".into(),
                 // "whfant1_XC669571.ogg".into(),
                 // "blhpar1_XC116438.ogg".into(),
+
+                "bugtan_XC946265.ogg".into(),
+                "bugtan_XC946266.ogg".into(),
+                "bugtan_XC946267.ogg".into(),
+                "bugtan_XC953345.ogg".into(),
+                "bugtan_XC959312.ogg".into(),
+                "bugtan_XC959322.ogg".into(),
+                "bugtan_XC962679.ogg".into(),
+
             ])),
             &ws,
             &store

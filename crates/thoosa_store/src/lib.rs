@@ -101,17 +101,18 @@ pub trait Store:ResourceStore + Sync + Send {
     fn save_slices(&mut self, run_id: RunId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoosaError>;
     fn save_groups_as_motifs_with_slices_matches(&mut self, run_id: RunId, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
     fn save_groups_as_motifs(&mut self, run_id: RunId, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoosaError>;
+
     fn list_motifs(&mut self, run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: RunId) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
+    fn list_motif_slices(&mut self, motif_id: usize, limit: Option<u32>, all_but_in_run_id: Option<(RunId, usize)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>;
+
     fn list_run_resources(&mut self, run_id: RunId) -> Result<Vec<String>, ThoosaError>;
     fn list_run_config_values(&mut self, run_id: RunId) -> Result<HashMap<String, Val>, ThoosaError>;
     fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(usize, f64)>) -> Result<RunId, ThoosaError>;
     fn list_input_run_ids(&mut self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
     fn list_selected_motifs(&mut self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
-    fn list_motif_slices(&mut self, motif_id: usize, limit: Option<usize>, all_but_in_run_id: Option<(RunId, usize)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>;
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
-
     fn conn(&self) -> &Mutex<Connection>;
 }
 
@@ -904,7 +905,7 @@ impl Store for SqlStore {
         let resources_motifs = {
             let mut stmt = t.prepare("\
                     SELECT m.id, m.channel_id, \
-                    s.resource_id, r.import_id, r.key, s.slice_idx, r.length \
+                    r.id, r.import_id, r.key, s.slice_idx, r.length \
                     FROM motifs m \
                     JOIN slices s ON s.motif_id=m.id \
                     JOIN resources r on r.id=s.resource_id \
@@ -965,7 +966,7 @@ impl Store for SqlStore {
     /**
     returns channel, find_motifs_run_id, slices
     */
-    fn list_motif_slices(&mut self, motif_id: usize, limit: Option<usize>, all_but_in_run_id: Option<(RunId, usize)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError> {
+    fn list_motif_slices(&mut self, motif_id: usize, limit: Option<u32>, all_but_in_run_id: Option<(RunId, usize)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 

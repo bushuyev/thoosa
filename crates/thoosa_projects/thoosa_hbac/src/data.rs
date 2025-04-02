@@ -651,8 +651,10 @@ mod tests {
     use tch::{Device, IndexOp, TchError, Tensor};
     use tch::Device::Cpu;
     use tch::Kind::Float;
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
+    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
     use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
@@ -701,14 +703,14 @@ mod tests {
 
         let window = 1000;
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            100, window,
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_0_0.into()], //sig_0 at idx 0
-            vec![0], Cpu
+            vec![0], None
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            100, window,
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
             &vec![t_1_0.into()], //sig_0 at idx 2000
-            vec![0], Cpu
+            vec![0], None
         ).t;
 
 
@@ -876,7 +878,7 @@ mod tests {
     #[test]
     fn test_import_resources() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(3, 1000)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(3, 1000, 1000)?));
 
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
