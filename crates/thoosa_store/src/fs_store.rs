@@ -20,7 +20,7 @@ use crate::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMat
 
 pub struct FileMotifTrackerStore {
     run_id: RunId,
-    channel: usize,
+    channel: u32,
     writer: ZstdWriter<'static, File>,
     path: PathBuf,
 }
@@ -33,7 +33,7 @@ impl Debug for FileMotifTrackerStore {
 
 impl FileMotifTrackerStore {
 
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: usize) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
 
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -103,7 +103,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         self.run_id
     }
 
-    fn channel(&self) -> usize {
+    fn channel(&self) -> u32 {
         self.channel
     }
 

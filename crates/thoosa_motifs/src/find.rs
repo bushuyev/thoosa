@@ -1507,7 +1507,7 @@ mod motif_find_tests {
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::Simple;
-    use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
+    use thoosa_common::ws::{mock_workspace_simp, FsWorkspace};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::colors_iter::DistinctColorIter;
@@ -1790,7 +1790,7 @@ mod motif_find_tests {
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
         let n = 10i64;
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, n as usize)?));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, n as u32)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1866,7 +1866,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -1956,7 +1956,7 @@ mod motif_find_tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
-        // let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
+        // let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000)?));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
@@ -2164,7 +2164,7 @@ mod motif_find_tests {
     #[test]
     fn test_find_motifs_by_euc_dist_with_smooth_kernel() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
 
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -2260,7 +2260,7 @@ mod motif_find_tests {
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist_diff_sizes.db3"))?));
 
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2339,7 +2339,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2402,6 +2402,7 @@ mod motif_find_tests {
         Ok(())
     }
 
+    //TODO replace with mockall
     #[derive(Debug)]
     struct DummyDumper<'a> {
         motifs:  &'a mut Vec<SlicesMatch>
@@ -2432,7 +2433,7 @@ mod motif_find_tests {
             todo!()
         }
 
-        fn channel(&self) -> usize {
+        fn channel(&self) -> u32 {
             todo!()
         }
 
@@ -2753,7 +2754,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&DummyWorkspace::new(2, 100, 1000)?, Cpu))],
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu))],
             // HashMap::new(),
             move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
@@ -2997,7 +2998,7 @@ mod motif_find_tests {
         //     ], "test_clc_motif_matches t_0_0", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         // )?;
 
-        let ws = DummyWorkspace::new(2, 100, 1000)?;
+        let ws = mock_workspace_simp(2, 100, 1000);
         let t_0= clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(

@@ -1672,7 +1672,7 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
 
 pub struct SqlMotifTrackerStore {
     run_id: RunId,
-    channel: usize,
+    channel: u32,
     conn: Mutex<Connection>,
     path: PathBuf
 }
@@ -1682,7 +1682,7 @@ impl SqlMotifTrackerStore {
 
 
 
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: usize) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
         let mut conn = Connection::open(&path).expect("SqlMotifTrackerStore::new: connection");
         {
             let t = conn.transaction()?;
@@ -1724,7 +1724,7 @@ pub trait MotifTrackerStore:Debug + Send + Sync {
     fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError>;
 
     fn run_id(&self) -> RunId;
-    fn channel(&self) -> usize;
+    fn channel(&self) -> u32;
     fn path(&self) -> &PathBuf;
 }
 
@@ -1820,7 +1820,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         self.run_id
     }
 
-    fn channel(&self) -> usize {
+    fn channel(&self) -> u32 {
         self.channel
     }
 

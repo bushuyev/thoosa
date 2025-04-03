@@ -11,6 +11,7 @@ use std::fs::{read_dir, ReadDir};
 use std::num::ParseIntError;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use mockall::automock;
 use tch::nn::VarStore;
 use tch::{Device, TchError, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
@@ -29,14 +30,14 @@ pub struct FsWorkspace {
     log_path:PathBuf,
     tmp_path:PathBuf,
 
-    channels:usize, //TODO move into input meta
+    channels:u32, //TODO move into input meta
     sample_rate:u32,
-    max_input:usize //TODO move into input meta
+    max_input:u32 //TODO move into input meta
 }
 
 impl FsWorkspace {
 
-    pub fn new(base_path: impl Into<PathBuf>, channels: usize, max_input: usize, sample_rate: u32) -> Result<Box<dyn Workspace>, ThoosaError> {
+    pub fn new(base_path: impl Into<PathBuf>, channels: u32, max_input: u32, sample_rate: u32) -> Result<Box<dyn Workspace>, ThoosaError> {
 
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
@@ -256,7 +257,7 @@ impl Workspace for FsWorkspace {
     }
 
     #[inline]
-    fn channels(&self) -> usize {
+    fn channels(&self) -> u32 {
         self.channels
     }
 
@@ -265,7 +266,7 @@ impl Workspace for FsWorkspace {
     }
 
     #[inline]
-    fn max_input(&self) -> usize {
+    fn max_input(&self) -> u32 {
         self.max_input
     }
 
@@ -298,8 +299,9 @@ impl Workspace for FsWorkspace {
 
 }
 
+#[automock]
 pub trait Workspace:Sync + Send {
-    fn import_tensor(&self, t:Tensor, import_id:u32, key:&str)-> Result<ResourceStats, ThoosaError>;
+    fn import_tensor<'a>(&self, t:Tensor, import_id:u32, key:&'a str)-> Result<ResourceStats, ThoosaError>;
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;
     fn store_path(&self) -> &PathBuf;
@@ -324,140 +326,34 @@ pub trait Workspace:Sync + Send {
     fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>;
 
     #[inline]
-    fn channels(&self) -> usize;
+    fn channels(&self) -> u32;
     fn sample_rate(&self) -> u32;
     #[inline]
-    fn max_input(&self) -> usize;
+    fn max_input(&self) -> u32;
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError>;
 
 }
 
-//TODO replace with mockall
-#[derive(Debug)]
-pub struct DummyWorkspace {
-    base:PathBuf,
-    channels:usize,
-    sample_rate:u32,
-    n:usize
-}
+pub fn mock_workspace_simp(channels:u32, sample_rate: u32, max_input:u32)->Box<dyn Workspace>{
+    let base = Path::new("/tmp").join(cdt_for_dir());
 
-impl DummyWorkspace {
-    pub fn new(channels: usize, sample_rate: u32, n: usize) ->Result<Box<dyn Workspace>, ThoosaError> {
-        let base = Path::new("/tmp").join(cdt_for_dir());
-        fs::create_dir_all(&base)?;
-
-        Ok(Box::new(Self {
-            channels,
-            sample_rate,
-            base,
-            n
-        }))
-    }
-}
-
-impl Workspace for DummyWorkspace {
-    fn import_tensor(&self,  t:Tensor, import_id: u32, key: &str) -> Result<ResourceStats, ThoosaError>{
-        Ok(ResourceStats::new(vec![self.channels as u32, self.n as u32]))
-    }
-
-    fn base_path_as_str(&self) -> String {
-        todo!()
-    }
-
-    fn base_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn store_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn tmp_run_store_path(&self, run_id: RunId, channel: u32) -> PathBuf {
-        self.base.join(format!("{run_id}_{channel}.db3"))
-    }
-
-    fn tmp_path(&self) -> &PathBuf {
-        &self.base
-    }
+    let mut ws_mock = MockWorkspace::new();
 
 
-    fn tensors_path(&self) -> &PathBuf {
-        &self.base
-    }
+    ws_mock.expect_tensors_path().return_const(base.clone());
+    ws_mock.expect_tmp_path().return_const(base.clone());
+    ws_mock.expect_tensors_path().return_const(base.clone());
 
-    fn tensor_path(&self, key: &Resource) -> PathBuf {
-        todo!()
-    }
+    ws_mock.expect_sample_rate().return_const(sample_rate);
+    ws_mock.expect_channels().return_const(channels);
+    ws_mock.expect_max_input().return_const(max_input);
 
-    fn models_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn plots_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn motifs_models_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn labels_models_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn final_models_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
-        todo!()
-    }
-
-    fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError> {
-        todo!()
-    }
-
-    fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
-        todo!()
-    }
-
-    fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNetParams) -> Result<PathBuf, ThoosaError> {
-        todo!()
-    }
-
-    fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError> {
-        todo!()
-    }
-
-    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>{
-        todo!()
-    }
-
-    fn channels(&self) -> usize {
-        self.channels
-    }
-
-
-    fn max_input(&self) -> usize {
-        self.n
-    }
-
-    fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
-        Ok(1000)
-    }
-
-    fn log_path(&self) -> &PathBuf {
-        todo!()
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
+    Box::new(ws_mock)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DummyWorkspace, FsWorkspace, Workspace};
+    use super::{FsWorkspace, Workspace};
     use crate::train_nets::{LabelNetParams, MaxPaddingNetParams, MotifNetParams};
     use log::debug;
     use std::fs;

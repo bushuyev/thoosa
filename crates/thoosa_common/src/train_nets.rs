@@ -2391,7 +2391,7 @@ mod train_tests {
     use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
-    use crate::ws::{DummyWorkspace, FsWorkspace, Workspace};
+    use crate::ws::{FsWorkspace, Workspace};
     use cudarc::driver::CudaDevice;
     use log::LevelFilter::{Debug, Info, Trace};
     use log::{debug, error, info, set_max_level, trace};
@@ -2420,6 +2420,7 @@ mod train_tests {
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
+    use crate::ws::mock_workspace_simp;
 
     #[ctor::ctor]
     fn test_init() {
@@ -2563,7 +2564,7 @@ mod train_tests {
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
             &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![vec![(1, 1.0)]]))),
-            &Arc::new(RwLock::new(DummyWorkspace::new(2, 100, input_n as usize)?)),
+            &Arc::new(RwLock::new(mock_workspace_simp(2, 100, input_n as u32))),
             Cpu
         );
 
@@ -2834,7 +2835,7 @@ mod train_tests {
         let max_motif_nodes = 19;
         let slices_len = 23;
 
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as usize, 1000, 32000)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as u32, 1000, 32000)?));
         let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams::new(3)));
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2871,7 +2872,7 @@ mod train_tests {
     #[test]
     fn test_train_label() -> Result<(), ThoosaError> {
         set_max_level(Debug);
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1100)?));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(2, 1000, 1100)));
 
         const BATCH_SIZE:usize = 10;
         const CHANNELS:usize = 2;
@@ -3344,7 +3345,7 @@ mod train_tests {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(2, 1000, 1000)));
 
         const BATCH_SIZE:usize = 1;
         const CHANNELS:usize = 2;
@@ -3533,7 +3534,7 @@ mod train_tests {
         }
 
         let (loss, final_params) = super::train_final_node(
-            &Arc::new(RwLock::new(DummyWorkspace::new(0, 1000, 100)?)),
+            &Arc::new(RwLock::new(mock_workspace_simp(0, 1000, 100))),
             &TrainFinalNetRunConfig::new(Some(1), CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3), FinalNetParams::new(3)),
             &mut DummyLabelBatch::new(),
             &Cpu,

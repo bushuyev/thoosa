@@ -51,7 +51,7 @@ use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, FindMotifsRunConfigRangeOrValue, InputFilter};
 use crate::version::VERSION;
-use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
+use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
@@ -143,8 +143,8 @@ pub fn run_cli<F, R>(
     labeled_resources: F,
     resource_to_tensor: R,
     labels: &[&str],
-    channels: usize,
-    max_input: usize,
+    channels: u32,
+    max_input: u32,
     sample_rate: u32,
 ) -> Result<(), ThoosaError>
 where
@@ -1405,7 +1405,7 @@ mod cli_tests {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
             3,
-            n as usize,
+            n as u32,
             32000,
         )?));
         let ws_rc = Arc::clone(&ws);
@@ -1985,7 +1985,7 @@ mod cli_tests {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
             3,
-            3 * n as usize,
+            3 * n as u32,
             32000,
         )?));
         let ws_runner = Arc::clone(&ws);
@@ -2181,7 +2181,7 @@ mod cli_tests {
     fn test_import_resources() -> Result<(), ThoosaError> {
         let n = 1000i64;
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as usize, 32000)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as u32, 32000)?));
 
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());

@@ -20,7 +20,7 @@ fn main()  {
         resource_to_tensor,
         &LABELS,
         1,
-        usize::MAX,
+        u32::MAX,//TODO Option?
         32000
     ) {
 
