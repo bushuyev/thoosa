@@ -13,7 +13,6 @@ use crate::argmin::ArgmTensor;
 use crate::parzen::cpe::CategoricalParzenEstimator;
 use crate::parzen::mvpe::MultiVariateParzenEstimator;
 use crate::parzen::npe::{BandwidthFactor, NumericalParzenEstimator};
-use crate::train_nets::LabelNetType;
 use thoosa_shared::opt_rng::opt_rnd;
 
 

@@ -56,22 +56,22 @@ impl FindMotifsRunConfig {
         Ok(find_motifs_run_config)
     }
 
-    pub fn to_applicable(&self, ctx: &Box<dyn Workspace>, device: Device) -> FindMotifsRunConfigApplicable {
-        FindMotifsRunConfigApplicable::new(&self, ctx, device)
+    pub fn to_applicable(&self, ctx: &Box<dyn Workspace>, device: Device) -> FindMotifsApplicable {
+        FindMotifsApplicable::new(&self, ctx, device)
     }
 
 }
 
 
 #[derive(Debug)]
-pub struct FindMotifsRunConfigApplicable {
+pub struct FindMotifsApplicable {
     run_config:FindMotifsRunConfig,
     kernel:Option<SyncWrapper<Box<Tensor>>>,
     groups:i64,
     device:Device
 }
 
-impl FindMotifsRunConfigApplicable {
+impl FindMotifsApplicable {
 
     pub fn new(run_config:&FindMotifsRunConfig, ctx: &Box<dyn Workspace>, device:Device) -> Self {
 
@@ -144,7 +144,7 @@ pub enum FindMotifsRunConfigOptions {
     FilterUnfold
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindMotifsRunConfigApplicable {
+impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindMotifsApplicable {
     fn apply(&self, tensor: &Box<Tensor>, options:FindMotifsRunConfigOptions) -> Result<Box<Tensor>, ThoosaError> {
 
         let t = match self.kernel.as_ref() {
@@ -175,14 +175,12 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindM
                 }
             }
         }
-
-
     }
 }
 
-impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>), ()> for FindMotifsRunConfigApplicable {
+impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
 
-    //TODO first cat then apply?
+    /// applying transform (Filter) and unfolding tensors one by one since they have varying sizes - can't concat into batch to avoid slices spanning different tensors
     fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>], options:()) -> Result<(Tensor, Vec<i64>), ThoosaError> {
         let mut slices = Vec::with_capacity(tensors_chunk.len());
         let mut slice_sizes = Vec::with_capacity(tensors_chunk.len());
@@ -294,6 +292,7 @@ pub struct MaxDistance {
 #[cfg(test)]
 mod tests {
     use log::debug;
+    use tch::Tensor;
     use crate::find_motifs_run_config::{DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, SlicesFilterRangeOrValue};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
 
@@ -319,6 +318,9 @@ mod tests {
             slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue { mean: 0.5.into()}),
         };
         debug!("{:#}", serde_json5::to_string(&rc).unwrap());
+        //TODO test
     }
+
+
 
 }

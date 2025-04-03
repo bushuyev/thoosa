@@ -7,7 +7,7 @@ use std::mem;
 use std::ops::Deref;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable};
 use thoosa_common::loader::SyncWrapper;
 use thoosa_common::utils::{SplitQueue, Splittable};
 use thoosa_shared::resource::ResourceId;
@@ -68,7 +68,7 @@ impl  ChunkOfSlicedTensors {
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk(run_config:&FindMotifsRunConfigApplicable, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
+    pub fn slice_tensors_chunk(run_config:&FindMotifsApplicable, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 

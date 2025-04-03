@@ -95,21 +95,30 @@ pub struct TrainLabelNetsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub net: LabelNetType2,
+    pub net: LabelNetType,
 }
 
 impl TrainLabelNetsRunConfig {
-    pub fn new(id: Option<RunId>, common_training_args: CommonTrainingRunConfig, net: LabelNetType2) -> Self {
+    pub fn new(id: Option<RunId>, common_training_args: CommonTrainingRunConfig, net: LabelNetType) -> Self {
         Self { id, common_training_args, net }
     }
 }
 
-struct BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(Tensor) -> Tensor + Sync + Send{
+//batch transform, for single tensor transform pass transform_fn to the batch impl
+struct BatchTransform<B, F>
+where
+    B: DataBatch + Debug,
+    F: FnMut(Tensor) -> Tensor + Sync + Send,
+{
     inner: Rc<Box<B>>,
     transform_fn:Rc<RefCell<F>>
 }
 
-impl <B, F>  Debug for BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(Tensor) -> Tensor + Sync + Send {
+impl<B, F> Debug for BatchTransform<B, F>
+where
+    B: DataBatch + Debug,
+    F: FnMut(Tensor) -> Tensor + Sync + Send,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("BatchTransform")
                  .field("inner", &self.inner)
@@ -117,7 +126,11 @@ impl <B, F>  Debug for BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(Ten
     }
 }
 
-impl <B, F> BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(Tensor) -> Tensor + Sync + Send {
+impl <B, F> BatchTransform<B, F>
+where
+    B: DataBatch + Debug,
+    F: FnMut(Tensor) -> Tensor + Sync + Send,
+{
     pub fn new(inner: Rc<Box<B>>, transform_fn: F) -> Self {
         Self {
             inner,
@@ -132,7 +145,11 @@ impl <B, F> BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(Tensor) -> Ten
     }
 }
 
-impl <B, F> DataBatch for BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(Tensor) -> Tensor + Sync + Send {
+impl<B, F> DataBatch for BatchTransform<B, F>
+where
+    B: DataBatch + Debug,
+    F: FnMut(Tensor) -> Tensor + Sync + Send,
+{
     fn train_batch(&self) -> (Tensor, Tensor) {
         let (inputs, labels) = self.inner.train_batch();
         ((self.transform_fn.borrow_mut())(inputs), labels)
@@ -144,7 +161,11 @@ impl <B, F> DataBatch for BatchTransform<B, F> where B:DataBatch+Debug, F:FnMut(
     }
 }
 
-impl <B, F> Splittable<1> for BatchTransform<B, F>  where B:SplittableDataBatch+Debug, F:FnMut(Tensor) -> Tensor + Sync + Send {
+impl<B, F> Splittable<1> for BatchTransform<B, F>
+where
+    B: SplittableDataBatch + Debug,
+    F: FnMut(Tensor) -> Tensor + Sync + Send,
+{
     fn split(&self) -> Option<[Self; 1]>
     where
         Self: Sized
@@ -158,18 +179,19 @@ impl <B, F> Splittable<1> for BatchTransform<B, F>  where B:SplittableDataBatch+
 
 /**
 * returns num labels * items_per_label x channels x motifs x motifs batch size
+* TODO rename
 */
 #[derive(Clone)]
-struct LoadingTensorsDataBatch  {
+struct LoadingTensorsDataBatch<'b>  {
     train: Rc<Vec<(i64, Vec <Resource>)>>,
     val: Rc<Vec<(i64, Vec <Resource>)>>,
     batch_size: usize,
-    executor: Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     device:Device,
-    transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>
+    transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send  + 'b>>>>//for single tensor, wrap into BatchTransform for per-batch transform
 }
 
-impl Debug for LoadingTensorsDataBatch {
+impl Debug for LoadingTensorsDataBatch<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("")
             .field("train", &self.train)
@@ -180,28 +202,28 @@ impl Debug for LoadingTensorsDataBatch {
     }
 }
 
-impl LoadingTensorsDataBatch {
+impl <'b> LoadingTensorsDataBatch<'b> {
 
     pub fn new(
         train: Rc<Vec<(i64, Vec <Resource>)>>,
         val: Rc<Vec<(i64, Vec <Resource>)>>,
         batch_size: usize,
-        executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+        loader: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
         device:Device,
-        transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>
+        transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send  + 'b>>
     ) -> Self {
 
         Self {
             train,
             val,
             batch_size,
-            executor,
+            loader,
             device,
             transform_fn: transform_fn.map(|f|Arc::new(RwLock::new(f)))
         }
     }
 
-    fn choose_for_batch(class_resources: &Vec<(i64, Vec<Resource>)>, batch_size: usize, loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>, device: &Device, transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>>>) -> (Tensor, Tensor) {
+    fn choose_for_batch(class_resources: &Vec<(i64, Vec<Resource>)>, batch_size: usize, loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>, device: &Device, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send + 'b>>>>) -> (Tensor, Tensor) {
         debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
         let mut rng = thread_rng();
@@ -268,8 +290,8 @@ impl LoadingTensorsDataBatch {
         Self::vec_to_tensors(device, x_y_vecs)
     }
 
-    fn load_tensor(loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, area: u64, x_y_acc_in_exec: Arc<Mutex<Vec<(Box<Tensor>, i64)>>>, wg_exec: WaitGroup, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send>>>>, resource_id: Resource, class: i64) {
-        loader.write().exec(move |loader, keys_purge| {
+    fn load_tensor(loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, area: u64, x_y_acc_in_exec: Arc<Mutex<Vec<(Box<Tensor>, i64)>>>, wg_exec: WaitGroup, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send + 'b>>>>, resource_id: Resource, class: i64) {
+        loader.write().exec_scoped(move |loader, keys_purge| {
             async move {
                 let t = Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, area).await; //TODO cache area
                 let t = if let Some(transform) = transform_fn {
@@ -301,23 +323,23 @@ impl LoadingTensorsDataBatch {
     }
 }
 
-impl DataBatch for LoadingTensorsDataBatch {
+impl DataBatch for LoadingTensorsDataBatch<'_> {
 
     fn train_batch(&self) -> (Tensor, Tensor){
         tch::no_grad(|| {
-            Self::choose_for_batch(&self.train, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
+            Self::choose_for_batch(&self.train, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.clone())
         })
     }
 
     fn valid_batch(&self) -> (Tensor, Tensor){
         tch::no_grad(|| {
-            Self::choose_for_batch(&self.val, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.clone())
+            Self::choose_for_batch(&self.val, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.clone())
         })
     }
 }
 
 
-impl Splittable<1> for LoadingTensorsDataBatch {
+impl Splittable<1> for LoadingTensorsDataBatch<'_> {
     fn split(&self) -> Option<[Self; 1]>
     where
         Self: Sized
@@ -334,7 +356,7 @@ impl Splittable<1> for LoadingTensorsDataBatch {
     }
 }
 
-impl SplittableDataBatch for LoadingTensorsDataBatch {}
+impl SplittableDataBatch for LoadingTensorsDataBatch<'_> {}
 
 
 struct ClassTensorsLoaderData  {
@@ -379,7 +401,7 @@ impl ClassTensorsLoaderData  {
 
 }
 
-impl   DataBatch for ClassTensorsLoaderData {
+impl DataBatch for ClassTensorsLoaderData {
 
     fn train_batch(&self) -> (Tensor, Tensor){
         Self::batch(&self.train_resources, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.as_ref())
@@ -520,7 +542,7 @@ pub fn run_opt_train_label_nets(
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
     train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
     valid_labels_resources: Rc<Vec<(i64, Vec <Resource>)>>,
-    channels_motifs_nets:Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>,
+    channels_motifs_nets:Arc<RwLock<MotifsNetsSelectionApplicable>>,
     label: &String,
     fixed_config: &OptConfig,
     slices_len: i64,
@@ -529,47 +551,68 @@ pub fn run_opt_train_label_nets(
     device: &Device
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
-    let nets_count = channels_motifs_nets.read().iter().map(|nets| nets.1.len()).sum::<usize>() as i64;
-    if nets_count <= 0 {
-        panic!("no motif nets found");//TODO skip?
-    }
+    // let nets_count = channels_motifs_nets.read().iter().map(|nets| nets.1.len()).sum::<usize>() as i64;
+    // if nets_count <= 0 {
+    //     panic!("no motif nets found");//TODO skip?
+    // }
+    // TODO to nets in some channel ok?
 
-    let channels = channels_motifs_nets.read().len() as i64;
+    let channels = ws.read().channels() as i64;
     let device = device.clone();
     let max_input = ws.read().max_input();
-
-    debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} slices_len={slices_len} channels={channels} cuda_mem={:?}", cuda_mem());
+    let nets_count = channels_motifs_nets.read().nets_count() as i64;
+    debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} channels={channels} cuda_mem={:?}", cuda_mem());
 
     opt_train(
         fixed_config,
         |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, _listener: &mut dyn TrainListener|{//TODO add _listener to train_label_nodes_2
 
-            let batch = Rc::new(Box::new(LoadingTensorsDataBatch::new(
-                train_labels_resources.clone(),
-                valid_labels_resources.clone(),
-                run_config.common_training_args.batch_size as usize,
-                Arc::clone(&loader),
-                device.clone(),
-                None
-
-            )));
+            // let batch = Box::new(LoadingTensorsDataBatch::new(
+            //     train_labels_resources.clone(),
+            //     valid_labels_resources.clone(),
+            //     run_config.common_training_args.batch_size as usize,
+            //     Arc::clone(&loader),
+            //     device.clone(),
+            //     Some(Box::new(|t|{
+            //         match &run_config.net {
+            //             LabelNetType::MaxPadding(params) => {
+            //                 // apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nets), &device, max_input as u32)
+            //                 channels_motifs_nets.write().apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
+            //             }
+            //             LabelNetType::FixedNumSlices(params) => {
+            //                 // apply_motif_nets(&t, Arc::clone(&channels_motifs_nets), &device, params.slices_len)
+            //                 channels_motifs_nets.write().apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
+            //             }
+            //         }
+            //     }))
+            //
+            // ));
 
             let mut result = None::<(f32, LabelNetParams)>;
             run_split_on_oom(
-                Reducer::new(BatchTransform::new(Rc::clone(&batch), |t|{
-                    match &run_config.net {
-                        LabelNetType2::MaxPadding(params) => {
-                            apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nets), &device, max_input as u32)
+                Reducer::new(LoadingTensorsDataBatch::new(
+                    train_labels_resources.clone(),
+                    valid_labels_resources.clone(),
+                    run_config.common_training_args.batch_size as usize,
+                    Arc::clone(&loader),
+                    device.clone(),
+                    Some(Box::new(|t|{
+                        match &run_config.net {
+                            LabelNetType::MaxPadding(params) => {
+                                // apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nets), &device, max_input as u32)
+                                channels_motifs_nets.write().apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
+                            }
+                            LabelNetType::FixedNumSlices(params) => {
+                                // apply_motif_nets(&t, Arc::clone(&channels_motifs_nets), &device, params.slices_len)
+                                channels_motifs_nets.write().apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
+                            }
                         }
-                        LabelNetType2::FixedNumSlices(params) => {
-                            apply_motif_nets(&t, Arc::clone(&channels_motifs_nets), &device, params.slices_len)
-                        }
-                    }
+                    }))
 
-                })),
+                )),
                 |b|{
                     train_label_net(
-                        ws, run_config, b, &device, channels, nets_count, vs, slices_len
+                        ws, run_config, b, &device, channels, nets_count, vs, &channels_motifs_nets
                     )
                 },
                 |v, i|{
@@ -581,11 +624,11 @@ pub fn run_opt_train_label_nets(
 
             Ok(result.expect("no result from train_label_nodes"))
         },
-        &run_configs,
+        run_configs,
         device,
         "label"
     ).map(|(var_store, label_node_params, run_config, min_loss)| {
-        Box::new(TrainLabelNetsRunConfigResult::new(*select_motifs_for_label_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
+        Box::new(TrainLabelNetsRunConfigResult::new(channels_motifs_nets.read().motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
     })
 }
 
@@ -598,15 +641,24 @@ pub fn train_label_net<B:DataBatch> (
     channels:i64,
     max_nets:i64,
     vs_0: &VarStore,
-    slices_len: i64
+    channels_motifs_nets:&Arc<RwLock<MotifsNetsSelectionApplicable>>,
 ) ->  Result<(f32, LabelNetParams), ThoosaError> {
 
     let label_node_params = match &run_config.net {//TODO return net params from net builder
-        LabelNetType2::MaxPadding(config) => {
+        LabelNetType::MaxPadding(config) => {
+            debug!("train_label_net: LabelNetType::MaxPadding(config={config:?})");
+
+            let guard = channels_motifs_nets.read();
+            let find_motifs_run_config = guard.find_motifs_applicable.run_config();
+            let slices_len = slices_len(ws.read().max_input() as i64, find_motifs_run_config.window(), find_motifs_run_config.step());
+
+            debug!("train_label_net: LabelNetType::MaxPadding max_input={} find_motifs_run_config={find_motifs_run_config:?} slices_len={slices_len}", ws.read().max_input());
 
             LabelNetParams::new(channels, max_nets, config.num_layers as i64, slices_len, run_config.net.clone())
         }
-        LabelNetType2::FixedNumSlices(config) => {
+        LabelNetType::FixedNumSlices(config) => {
+            debug!("train_label_net: LabelNetType::FixedNumSlices(config={config:?})");
+
             LabelNetParams::new(channels, max_nets, config.num_layers as i64, config.slices_len as i64, run_config.net.clone())
 
         }
@@ -825,7 +877,7 @@ pub fn apply_channel_motifs_with_padding(input_slice_step: u32,
 
     let motif_dists = motif_nodes.iter_mut().map(|(_params, net)| {
         net.set_device(device.clone());
-        debug!("apply_channel_motifs_with_padding: net={net:?}");
+        debug!("apply_channel_motifs: net={net:?}");
 
         let mut motif_distance_splits = vec![];
         run_split_on_oom(
@@ -839,20 +891,24 @@ pub fn apply_channel_motifs_with_padding(input_slice_step: u32,
                 Ok(r)
             },
             |v, t|{
-                debug!("apply_channel_motifs_with_padding: on_ok: v={v:?}");
+                debug!("v={v:?}");
                 motif_distance_splits.push(v);
             },
-            10
+            10//TODO config
         ).unwrap();//TODO unwrap
 
         net.set_device(Cpu);
-        debug!("apply_channel_motifs_with_padding: motif_distance_splits={motif_distance_splits:?}");
+
+        debug!("apply_channel_motifs: motif_distance_splits={motif_distance_splits:?}");
         if motif_distance_splits.len() > 0 {
             Ok(Tensor::concat(&motif_distance_splits, 0))
+
         } else if motif_distance_splits.len() == 1 {
             Ok(motif_distance_splits.pop().unwrap())
+
         } else {
             Err(ThoosaError::new("no motif distances "))
+
         }
     }).collect::<Result<Vec<_>, ThoosaError>>()?;
 
@@ -896,10 +952,10 @@ pub fn apply_motif_and_label_nets(
 
         for (label_node_run_id, label_node_params, label_node) in label_nodes.iter_mut() {
             let motif_nets_t = match &label_node_params.net_type {
-                LabelNetType2::MaxPadding(params) => {
+                LabelNetType::MaxPadding(params) => {
                     apply_motif_nets_with_padding(&batch_t, Arc::clone(&channels_motifs_models), &device, max_input)
                 }
-                LabelNetType2::FixedNumSlices(params) => {
+                LabelNetType::FixedNumSlices(params) => {
                     apply_motif_nets(&batch_t, Arc::clone(&channels_motifs_models), &device, params.slices_len)
                 }
             };
@@ -1345,17 +1401,225 @@ pub fn motif_node(params: &MotifNetParams) -> Node {
         .end_seq()
 }
 
+#[derive(Debug)]
+pub struct MotifsNetsSelectionApplicable {
+    pub motif_selection_run_id:RunId,
+    pub find_motifs_applicable: FindMotifsApplicable,
+    pub channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore)>>,
+    pub device:Device,
+    pub max_input:u32
+}
+
+impl MotifsNetsSelectionApplicable {
+
+    pub fn new(motif_selection_run_id:RunId, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device:Device) -> Self {
+        let channels = ws.read().channels() as u32;
+
+        let find_motifs_run_config_ids = store.lock().get_input_run_ids(motif_selection_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for motif_selection_run_id={motif_selection_run_id:?} not found").as_str());
+        assert_eq!(find_motifs_run_config_ids.len(), 1);
+
+
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_config_ids[0], &store.lock().list_run_config_values(find_motifs_run_config_ids[0]).expect("list_run_params")).unwrap();
+
+        let channels_motifs = store
+            .lock()
+            .list_selected_motifs(motif_selection_run_id, channels)
+            .expect("list_selected_motifs") //TODO move out
+            .into_iter()
+            .enumerate()
+            .map(|(channel, channels_motifs)| {
+
+                channels_motifs
+                    .into_iter()
+                    .flat_map(move |(motif_id, corr)| {
+                        load_motif_models(&ws, channel, motif_id, &Cpu)
+                            .expect("load_motif_models")
+                    })
+                    .collect::<Vec<_>>()
+
+            })
+            .collect::<Vec<Vec<_>>>();
+
+        MotifsNetsSelectionApplicable {
+            motif_selection_run_id,
+            find_motifs_applicable: find_motifs_run_config.to_applicable(&ws.read(), device),
+            channels_motifs,
+            device,
+            max_input: ws.read().max_input() as u32
+        }
+    }
+
+    pub fn nets_count(&self) -> u32 {
+        self.channels_motifs.iter().map(|motifs| motifs.len() as u32).max().expect("No motif count")
+    }
+}
+
+pub enum MotifsNetsPadding {
+    Max,
+    Fixed(u32)
+}
+
+impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSelectionApplicable {
+
+    fn apply(&self, t: &Box<Tensor>, options: MotifsNetsPadding) -> Result<Box<Tensor>, ThoosaError> {
+        let batch_channel = self.find_motifs_applicable.apply(t, FindMotifsRunConfigOptions::FilterUnfold)?;
+        let motif_width= self.find_motifs_applicable.run_config().window as i64;
+
+        match options {
+            MotifsNetsPadding::Max => {
+                let slices_len = slices_len(self.max_input as i64, motif_width, self.find_motifs_applicable.run_config().step);
+
+                Ok(Box::new(Tensor::stack(
+                    self.channels_motifs
+                        .iter()
+                        .enumerate()
+                        .map(|(channel, motif_nodes)| {
+
+                            if motif_nodes.is_empty() {
+                                Ok(Tensor::zeros([batch_channel.size()[0], self.nets_count() as i64, slices_len], (Float, self.device)))
+                            } else {
+                                let filtered = self.find_motifs_applicable.apply(t, FindMotifsRunConfigOptions::FilterUnfold)?;
+
+                                let unfolded_channel = filtered.i((.., channel as i64, .., ..));//batch, channel, slices, slice
+
+                                debug!("apply_channel_motifs_with_padding: unfolded.size={:?}", unfolded_channel.size());
+
+                                let motif_dists = motif_nodes.iter().map(|(_params, net)| {
+                                    // net.set_device(device.clone());
+                                    debug!("apply_channel_motifs: net={net:?}");
+
+                                    let mut motif_distance_splits = vec![];
+                                    run_split_on_oom(
+                                        SplitQueue::<2, _>::new(SplittableTensor::<0/*batch dimension*/>(unfolded_channel.shallow_clone())),
+                                        |t| {
+                                            debug!("apply_channel_motifs_with_padding: forward: t.size={:?}", t.as_ref().size());
+                                            let r = net.infer(&t.as_ref().to_device(self.device.clone())).flatten(1, 2); //flatten - removes always 1-sized distance dimension [batch, slices, slices_len]->[batch, slices, [distance]]
+                                            debug!("apply_channel_motifs_with_padding: forward:  r.size={:?}", r.size());
+
+                                            Ok(r)
+                                        },
+                                        |v, t| {
+                                            debug!("v={v:?}");
+                                            motif_distance_splits.push(v);
+                                        },
+                                        10 //TODO config
+                                    ).unwrap(); //TODO unwrap
+
+                                    // net.set_device(Cpu);
+
+                                    debug!("apply_channel_motifs: motif_distance_splits={motif_distance_splits:?}");
+                                    if motif_distance_splits.len() > 0 {
+                                        Ok(Tensor::concat(&motif_distance_splits, 0))
+                                    } else if motif_distance_splits.len() == 1 {
+                                        Ok(motif_distance_splits.pop().unwrap())
+                                    } else {
+                                        Err(ThoosaError::new("no motif distances "))
+                                    }
+                                }).collect::<Result<Vec<_>, ThoosaError>>()?;
+
+
+                                debug!("apply_channel_motifs_with_padding: motif_dists={motif_dists:?}");
+                                //TODO pad_sequence?
+                                let motif_nets_out = Tensor::stack(motif_dists.as_slice(), 1);
+
+                                debug!("apply_channel_motifs_with_padding: motif_dists.len={} motif_nets_out.size={:?}", motif_dists.len(), motif_nets_out.size());
+
+                                let r = pad_to(&motif_nets_out, &[unfolded_channel.size()[0], self.nets_count() as i64, slices_len]);
+
+                                debug!("apply_channel_motifs_with_padding: r.size={:?}", r.as_ref().map(|r|r.size()));
+
+                                r
+
+
+                            }
+
+
+                         })
+                        .collect::<Result<Vec<_>, ThoosaError>>().unwrap().as_slice(),
+                    1
+                )))
+            }
+            MotifsNetsPadding::Fixed(slices_len) => {
+
+                Ok(Box::new(Tensor::concat(
+                    self.channels_motifs
+                        .iter()
+                        .enumerate()
+                        .map(|(channel, motif_nodes)| {
+                            // let slices_len = 100; //slices_len(input_t.size()[1], find_motifs_cfg.window as i64, find_motifs_cfg.step as usize);
+                            // debug!("apply_motif_nets: slices_len={slices_len} slices_len={slices_len} motif_width={} step={}", find_motifs_cfg.window, find_motifs_cfg.step);
+                            let (input_slice_step, pad) = clc_step(batch_channel.size()[1], motif_width, slices_len as i64); //(channel.size()[0]-motif_width)/100;
+
+
+                            // let unfolded = batch_channel
+                            //     .pad([0, pad], "constant", 0.)//pad: last dimension [0 - padding left, pad - padding right]
+                            //     .unfold(1, motif_width, input_slice_step);
+
+                            let unfolded = self.find_motifs_applicable.apply(
+                                &Box::new(batch_channel.pad([0, pad], "constant", 0.)), crate::find_motifs_run_config::FindMotifsRunConfigOptions::FilterUnfold
+                            )?;
+
+
+                            let motif_dists = motif_nodes.iter().map(|(_params, net)| {
+                                // net.set_device(self.device.clone());
+
+                                let mut motif_distance_splits = vec![];
+                                run_split_on_oom(
+                                    SplitQueue::<2, _>::new(SplittableTensor::<0>(unfolded.shallow_clone())),
+                                    |t|{
+                                        let t = t.as_ref();
+                                        trace!("apply_channel_motifs: forward: t=\n{t}");
+                                        let r = net.infer(&t.to_device(self.device.clone()));
+                                        debug!("apply_channel_motifs: forward: size={:?} r.size={:?}", t.as_ref().size(), r.size());
+                                        trace!("apply_channel_motifs: forward: r=\n{r}");
+
+                                        Ok(r)
+                                    },
+                                    |v, t|{
+                                        debug!("v={v:?}");
+                                        motif_distance_splits.push(v);
+                                    },
+                                    10//TODO config
+                                ).unwrap();//TODO unwrap
+
+                                // net.set_device(Cpu);
+
+                                debug!("apply_channel_motifs: motif_distance_splits={motif_distance_splits:?}");
+                                if motif_distance_splits.len() > 0 {
+                                    Ok(Tensor::concat(&motif_distance_splits, 0))
+
+                                } else if motif_distance_splits.len() == 1 {
+                                    Ok(motif_distance_splits.pop().unwrap())
+
+                                } else {
+                                    Err(ThoosaError::new("no motif distances "))
+
+                                }
+                            }).collect::<Result<Vec<_>, ThoosaError>>()?;
+
+                            Ok(Tensor::stack(motif_dists.as_slice(), 1).view((batch_channel.size()[0], motif_nodes.len() as i64, -1)))
+                        })
+                        .collect::<Result<Vec<_>, ThoosaError>>()?.as_slice(),
+                    1
+                )))
+            }
+        }
+
+
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LabelNetParams {
     channels:i64,
     motif_nodes:i64,
     motif_layers:i64,
     slices_len:i64,
-    net_type: LabelNetType2
+    net_type: LabelNetType
 }
 
 impl LabelNetParams {
-    pub fn new(channels: i64, max_motif_nodes: i64, motif_layers:i64, slices_len:i64, net_type: LabelNetType2/*TODO should be Params Enum*/) -> Self {
+    pub fn new(channels: i64, max_motif_nodes: i64, motif_layers:i64, slices_len:i64, net_type: LabelNetType/*TODO should be Params Enum*/) -> Self {
         Self { channels, motif_nodes: max_motif_nodes, slices_len, motif_layers, net_type }
     }
 
@@ -1368,16 +1632,16 @@ impl LabelNetParams {
 
     pub fn label_node(&self) -> Node {
         match &self.net_type {
-            LabelNetType2::MaxPadding(max_padding_params) => {
+            LabelNetType::MaxPadding(max_padding_params) => {
                 LabelNetParams::label_node_max_padding(&self, max_padding_params)
             }
-            LabelNetType2::FixedNumSlices(fixed_num_slices_params) => {
+            LabelNetType::FixedNumSlices(fixed_num_slices_params) => {
                 LabelNetParams::label_node_fixed_num_slices(&self, fixed_num_slices_params)
             }
         }
     }
 
-    fn label_node_fixed_num_slices(params:&LabelNetParams, fixed_num_slices_params: &FixedNumSlicesNetParams2) -> Node {
+    fn label_node_fixed_num_slices(params:&LabelNetParams, fixed_num_slices_params: &FixedNumSlicesNetParams) -> Node {
         debug!("label_node_fixed_num_slices: params={:?}", params);
 
         let channels_motifs=  params.channels * params.motif_nodes;
@@ -1445,7 +1709,7 @@ impl LabelNetParams {
 
     }
 
-    fn label_node_max_padding(params:&LabelNetParams, max_padding_params: &MaxPaddingNetParams2) -> Node {
+    fn label_node_max_padding(params:&LabelNetParams, max_padding_params: &MaxPaddingNetParams) -> Node {
         debug!("label_node_max_padding: params={:?}", params);
 
         let max_motif_nets=  params.motif_nodes;
@@ -2070,59 +2334,37 @@ pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub enum LabelNetType2 {
-    MaxPadding(MaxPaddingNetParams2),
+pub enum LabelNetType {
+    MaxPadding(MaxPaddingNetParams),
 
-    FixedNumSlices(FixedNumSlicesNetParams2),
+    FixedNumSlices(FixedNumSlicesNetParams),
 }
 
 //TODO remove
-impl Default for LabelNetType2 {
-    fn default() -> LabelNetType2 {
-        crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })
+impl Default for LabelNetType {
+    fn default() -> LabelNetType {
+        LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })
     }
 }
 
-#[derive(Debug, Subcommand, Clone)]
-pub enum LabelNetType {
-    //to produce same size tensors for label net
-    MaxPadding(MaxPaddingNetParams),
-    //...input tensors are padded to max nets in a channel/max input length over all inputs
-    FixedNumSlices(FixedNumSlicesNetParams),
-    //... motif nodes are ran with calculated step to produce equally sized (slices_len) output tensors (shared/clc_step) for inputs of different size
-}
 
-#[derive(Debug, Args, Clone)]
-pub struct MaxPaddingNetParams {
-    #[arg(long, value_parser=parse_range_or_value::<u32>)]
-    num_layers: RangeOrValue<u32>,
-}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize,  Debug, Clone, PartialEq)]
-pub struct MaxPaddingNetParams2 {
+pub struct MaxPaddingNetParams {
     #[in_map]
     #[run_config]
     pub(crate) num_layers: u32,
 }
 
-impl MaxPaddingNetParams2 {
+impl MaxPaddingNetParams {
     pub fn new(num_layers: u32) -> Self {
         Self { num_layers }
     }
 }
 
 
-#[derive(Debug, Args, Clone)]
-pub struct FixedNumSlicesNetParams {
-    #[arg(long, value_parser=parse_range_or_value::<u32>)]
-    pub num_layers: RangeOrValue<u32>,
-
-    #[arg(long, value_parser=parse_range_or_value::<u32>)]
-    pub slices_len: RangeOrValue<u32>,
-}
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct  FixedNumSlicesNetParams2 {
+pub struct FixedNumSlicesNetParams {
     #[in_map]
     #[run_config]
     pub num_layers: u32,
@@ -2132,27 +2374,10 @@ pub struct  FixedNumSlicesNetParams2 {
     pub slices_len: u32,
 }
 
-impl FixedNumSlicesNetParams2 {
+impl FixedNumSlicesNetParams {
     pub fn new(num_layers: u32, slices_len: u32) -> Self {
         Self { num_layers, slices_len }
     }
-}
-
-impl Display for LabelNetType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            LabelNetType::MaxPadding(_) => {
-                Display::fmt(&"MaxPadding", f)
-            }
-            LabelNetType::FixedNumSlices(_) => {
-                Display::fmt(&"FixedNumSlices", f)
-            }
-        }
-    }
-}
-
-impl LabelNetType {
-
 }
 
 #[cfg(test)]
@@ -2162,7 +2387,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, FixedNumSlicesNetParams2, InputFilterRangeOrValue, LabelNetType, LabelNetType2, LabelNetType2RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams2, MaxPaddingNetParams2RangeOrValue, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetType, RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetParams, MaxPaddingNetParamsRangeOrValue, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, LabelNetTypeRangeOrValue, MotifsNetsPadding};
     use crate::train_nets::{load_label_models_ws, load_motif_models, InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
@@ -2186,12 +2411,13 @@ mod train_tests {
     use tch::{nn, Device, Tensor};
     use tch::{IndexOp, Kind, Reduction};
     use torch_sys::at_autocast_clear_cache;
+    use thoosa_properties_map::ToHashmap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, RangeOrValue, ThoosaError};
-    use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, ThoosaError};
+    use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
-    use thoosa_store::SqlStore;
+    use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
 
@@ -2334,13 +2560,19 @@ mod train_tests {
             )
         ];
 
+        let applicable = MotifsNetsSelectionApplicable::new(
+            1,
+            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![vec![(1, 1.0)]]))),
+            &Arc::new(RwLock::new(DummyWorkspace::new(2, 100, input_n as usize)?)),
+            Cpu
+        );
+
         let max_motif_nets_in_channel = motif_nets.iter().map(|nets|nets.1.len()).max().unwrap_or(0);
         assert_eq!(2, max_motif_nets_in_channel);
 
-
-
         // let channel_0_t = apply_channel_motifs(step, batch_size as i64, &mut motif_nets[0], t.i((0, ..)), max_motif_nets_in_channel as i64, max_motif_batches, &Cpu);
-        let channel_0_t = apply_channel_motifs(&mut motif_nets[0].1, batch.i((.., 0, ..)), motif_width, max_motif_nets_in_channel as i64, slices_len, &Cpu)?;
+        // let channel_0_t = apply_channel_motifs(&mut motif_nets[0].1, batch.i((.., 0, ..)), motif_width, max_motif_nets_in_channel as i64, slices_len, &Cpu)?;
+        let channel_0_t = applicable.apply(&Box::new(batch.i((0, 0, ..))), MotifsNetsPadding::Max)?;
 
         // debug!("t.i((0, ..))=\n{}", batch.i((0, ..)));
         debug!("channel_0_t.size={:?}", channel_0_t.size());
@@ -2573,7 +2805,7 @@ mod train_tests {
         debug!("test_dir={test_dir:?}");
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, 32000)?));
 
-        let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetType2::FixedNumSlices(FixedNumSlicesNetParams2::new(10, 100)));
+        let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetType::FixedNumSlices(FixedNumSlicesNetParams::new(10, 100)));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net = LabelNetParams::label_node(&params).build_tch_module(&vs_0.root())?;
@@ -2603,7 +2835,7 @@ mod train_tests {
         let slices_len = 23;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, channels as usize, 1000, 32000)?));
-        let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2::new(3)));
+        let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams::new(3)));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net = LabelNetParams::label_node(&params).build_tch_module(&vs_0.root())?;
@@ -2626,11 +2858,20 @@ mod train_tests {
         Ok(())
     }
 
+    #[test]
+    fn test_x(){
+        let rc = FindMotifsRunConfig::new(Some(1), 100, 100, None, Some(0.1));
+
+        let map:HashMap<String, Val> = rc.to_properties_iter(None).collect();
+
+
+        debug!("map={map:?}");
+    }
 
     #[test]
     fn test_train_label() -> Result<(), ThoosaError> {
         set_max_level(Debug);
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(DummyWorkspace::new(2, 1000, 1100)?));
 
         const BATCH_SIZE:usize = 10;
         const CHANNELS:usize = 2;
@@ -2643,6 +2884,7 @@ mod train_tests {
         const VALID_LABELS: [bool; BATCH_SIZE] = build_labels::<BATCH_SIZE>();
 
         const MAX_SLICES_LEN:usize = slices_len(1100, 100, 100) as usize;
+
 
 
         #[derive(Debug)]
@@ -2687,14 +2929,20 @@ mod train_tests {
             &TrainLabelNetsRunConfig::new(
                 Some(1),
                 CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3),
-                LabelNetType2::MaxPadding(MaxPaddingNetParams2::new(3))
+                LabelNetType::MaxPadding(MaxPaddingNetParams::new(3))
+                // LabelNetType::FixedNumSlices(FixedNumSlicesNetParams { num_layers: 1, slices_len: MAX_SLICES_LEN as u32 })
             ),
             &mut DummyLabelBatch::new(),
             &Cpu,
             CHANNELS as i64,
             MAX_MOTIF_NETS as i64, //max_nets
             &VarStore::new(Cpu),
-            MAX_SLICES_LEN as i64
+            &Arc::new(RwLock::new(MotifsNetsSelectionApplicable::new(
+                1,
+                &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![vec![(0, 0.0)]]))),
+                &ws,
+                Cpu
+            )))
         )?;
 
         debug!("test_train_label: loss={loss:?} params={params:?}");
@@ -3165,7 +3413,13 @@ mod train_tests {
                             CHANNELS as i64,
                             MAX_MOTIF_NETS as i64, //max_nets
                             &VarStore::new(Cuda(0)),
-                            MAX_SLICES_LEN as i64
+                            &Arc::new(RwLock::new(MotifsNetsSelectionApplicable::new(
+                                1,
+                                &Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?)),
+                                &ws,
+                                Cpu
+                            )))
+
                         )
                     },
                     |v, i|{
@@ -3187,7 +3441,7 @@ mod train_tests {
                     opt_max_evals: 10.into(),
                     opt_n_init: 3.into(),
                 },
-                net: LabelNetType2RangeOrValue::MaxPadding(MaxPaddingNetParams2RangeOrValue{ num_layers: 3.into() }).into(),
+                net: LabelNetTypeRangeOrValue::MaxPadding(MaxPaddingNetParamsRangeOrValue{ num_layers: 3.into() }).into(),
             }.opt_run_configs(),
             Cpu,
             "label"
@@ -3432,7 +3686,7 @@ mod train_tests {
     }
 
     fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: RunId, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
-        let label_node_params = LabelNetParams::new(channels as i64, max_motif_nets, 0, 0, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 }));//TODO slices_len, motif_layers
+        let label_node_params = LabelNetParams::new(channels as i64, max_motif_nets, 0, 0, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 }));//TODO slices_len, motif_layers
 
         let mut vs_0 = VarStore::new(Cpu);
         let _ = LabelNetParams::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
@@ -3474,12 +3728,77 @@ mod train_tests {
     }
 
     #[test]
+    fn test_loading_tensors_data_batch(){
+        let loader = Arc::new(RwLock::new(LoadRunner::new(
+            move |key: &Resource| {
+                SyncWrapper::new_tb(Box::new({
+                    match key.file_stem() {
+                        "aaa"=>  {
+                            let t_0_0 = Tensor::from_slice(&[0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]); //t 0 channel 0
+                            let t_0_1 = Tensor::from_slice(&[0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19]); //t 0 channel 1
+                            let t_0 = Tensor::stack(&[t_0_0, t_0_1], 0);
+                            t_0
+                        }
+                        "bbb"=>  {
+                            let t_1_0 = Tensor::from_slice(&[1.0, 1.01, 1.02, 1.03, 1.04, 1.05]);//t 1 channel 0
+                            let t_1_1 = Tensor::from_slice(&[1.1, 1.11, 1.12, 1.13, 1.14, 1.15]);//t 1 channel 1
+                            let t_1 = Tensor::stack(&[t_1_0, t_1_1], 0);
+                            t_1
+                        }
+                        "ccc"=>  {
+                            let t_2_0 = Tensor::from_slice(&[2.0, 2.01, 2.02, 2.03, 2.04, 2.05, 2.06, 2.07]);//t 2 channel 0
+                            let t_2_1 = Tensor::from_slice(&[2.1, 2.11, 2.12, 2.13, 2.14, 2.15, 2.16, 2.17]);//t 2 channel 1
+                            let t_2 = Tensor::stack(&[t_2_0, t_2_1], 0);
+                            t_2
+                        }
+                        _ => {
+                            panic!("unexpected key={key:?}")
+                        }
+                    }
+
+                }
+                ))
+            },
+            1,
+            10,
+        )));
+
+        let mut data_batch = LoadingTensorsDataBatch::new(
+            Rc::new(vec![
+                (0, vec![
+                    Resource::new(0, 1, "aaa".to_string(), 10),
+                    Resource::new(1, 1, "bbb".to_string(), 6),
+                ]),
+                (1, vec![
+                    Resource::new(2, 1, "ccc".to_string(), 8),
+                ])
+            ]),
+            Rc::new(vec![]),
+            3,
+            loader,
+            Cpu,
+            Some(Box::new(|t|{
+                Box::new(t.pad([0,10-t.size()[1]], "constant", 0.))
+            }))
+        );
+
+        let batch = data_batch.train_batch();
+
+
+        // debug!("data={}", batch.0);
+        // debug!("labels={:?}", batch.1);
+
+        assert_eq!(
+            [3_i64,2,10],
+            batch.0.size()[..]
+        );
+    }
+
+    #[test]
     fn test_batch_transform(){
         let n = 1000;
         let t_0 = Tensor::from_slice(pulse_in_rand(n, &[], 0.05, 1., 0.1).as_slice());
         let t_1 = Tensor::from_slice(sin_v(n, 22.).as_slice());
-
-
 
         let batch = Rc::new(Box::new(DummyDs::new(
             t_0.shallow_clone(),

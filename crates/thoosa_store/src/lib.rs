@@ -17,6 +17,7 @@ use bytemuck::{Pod, Zeroable};
 use parking_lot::{Mutex, RwLock};
 
 use log::{debug, error, trace, warn};
+use mockall::automock;
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 use rusqlite::{Connection, Error, params, Transaction};
@@ -83,21 +84,48 @@ impl SetCond {
     }
 }
 
+impl ResourceStore for MockStore {
+    fn list_resources_by_file_stems<'a>(&mut self, file_stems: &'a [&'a str]) -> Result<Vec<Resource>, ThoosaError> {
+        self.list_resources_by_file_stems(file_stems)
+    }
+
+    fn list_resource_set_resources_by_descr(&mut self, descr: &str) -> Result<Vec<Resource>, ThoosaError> {
+        self.list_resource_set_resources_by_descr(descr)
+    }
+
+    fn list_resource_set_group_sets(&mut self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError> {
+        self.list_resource_set_group_sets(group_descr)
+    }
+
+    fn list_group_labeled_resources_sets(&mut self, group_decr: &str) -> Result<Vec<(String, String)>, ThoosaError> {
+        self.list_group_labeled_resources_sets(group_decr)
+    }
+
+    fn list_resource_set_resources(&mut self, set_id: usize) -> Result<Vec<Resource>, ThoosaError> {
+        self.list_resource_set_resources(set_id)
+    }
+
+    fn list_resource_random_in_group(&mut self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError> {
+        self.list_resource_random_in_group(group_descr)
+    }
+}
+
+#[automock]
 pub trait Store:ResourceStore + Sync + Send {
-    fn save_import(&self, descr: String, t: &Transaction) -> Result<u32, ThoosaError>;
-    fn save_run_config(&mut self, input_run_id: Option<&[RunId]>, run_config_type: &dyn Display, descr: &str, keys: &str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoosaError>;
-    fn get_input_run_ids(&mut self, run_id: RunId, input_type: Option<&dyn Display>) -> Result<Vec<RunId>, ThoosaError>;
+    fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
+    fn save_run_config<'a>(&mut self, input_run_id: Option<&'a[RunId]>, run_config_type: &'a dyn Display, descr: &'a str, keys: &'a str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoosaError>;
+    fn get_input_run_ids<'a>(&mut self, run_id: RunId, input_type: Option<&'a dyn Display>) -> Result<Vec<RunId>, ThoosaError>;
     fn save_resources_set(&mut self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoosaError>;
     fn save_resource_set_group(&mut self, descr: String) -> Result<usize, ThoosaError>;
-    fn save_resources_labels(&self, resource_stats_labels_probs: &HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &Transaction) -> Result<Vec<ResourceId>, ThoosaError>;
-    fn save_pure_sets(&self, max_len: usize, only_unused: bool, t: &Transaction) -> Result<(), ThoosaError>;
+    fn save_resources_labels<'a>(&self, resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>, import_id: u32, t: &'a Transaction<'a>) -> Result<Vec<ResourceId>, ThoosaError>;
+    fn save_pure_sets<'a>(&self, max_len: usize, only_unused: bool, t: &'a Transaction<'a>) -> Result<(), ThoosaError>;
     fn save_set_by_labels(&mut self, conds: Vec<(String, SetCond)>, only_unused: bool, limit: usize) -> Result<(), ThoosaError>;
-    fn save_groups_by_label_cnt(&self, max_resources_in_set: usize, t: &Transaction) -> Result<(), ThoosaError>;
+    fn save_groups_by_label_cnt<'a>(&self, max_resources_in_set: usize, t: &'a Transaction<'a>) -> Result<(), ThoosaError>;
     fn list_resources_by_ids(&mut self, file_stem: &Vec<ResourceId>) -> Result<Vec<Resource>, ThoosaError>;
     fn list_resource_random_not_label(&mut self, label: &str, limit: i64) -> Result<Vec<Resource>, ThoosaError>;
-    fn save_label(&self, label: &str, t: &Transaction) -> Result<u32, ThoosaError>;
+    fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
     fn list_labels(&mut self) -> Result<Vec<String>, ThoosaError>;
-    fn save_params_value(&mut self, params: HashMap<String, Val>, run_id: RunId, label: Option<&str>) -> Result<(), ThoosaError>;
+    fn save_params_value<'a>(&mut self, params: HashMap<String, Val>, run_id: RunId, label: Option<&'a str>) -> Result<(), ThoosaError>;
     fn save_slices(&mut self, run_id: RunId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoosaError>;
     fn save_groups_as_motifs_with_slices_matches(&mut self, run_id: RunId, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>, as_ref: &dyn AsRef<Path>) -> Result<(), ThoosaError>;
     fn save_groups_as_motifs(&mut self, run_id: RunId, channel: i64, groups:HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoosaError>;
@@ -113,7 +141,7 @@ pub trait Store:ResourceStore + Sync + Send {
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
     fn list_selected_motifs(&mut self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
-    fn conn(&self) -> &Mutex<Connection>;
+    fn conn(&self) -> &parking_lot::Mutex<Connection>;//parking_lot:: for mockall
 }
 
 impl Debug for SqlMotifTrackerStore {
@@ -139,7 +167,7 @@ impl ResourceStore for SqlStore {
 
         Ok(r)
     }
-    fn list_resources_by_file_stems(&mut self, file_stems: &Vec<&str>) -> Result<Vec<Resource>, ThoosaError> {
+    fn list_resources_by_file_stems<'a>(&mut self, file_stems: &'a [&'a str]) -> Result<Vec<Resource>, ThoosaError>{
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
 
@@ -2211,6 +2239,22 @@ mod store_tests {
         Ok(())
     }
 
+}
 
+pub fn mock_store_with_find_motifs_run_config(step: i32, window: i32, selected_motifs: Vec<Vec<(usize, f64)>>) -> Box<dyn Store> {
+    let mut mock = MockStore::new();
+    mock.expect_get_input_run_ids().return_const(Ok(vec![0]));
+    mock.expect_list_run_config_values().return_const(
+        Ok(HashMap::from([
+            ("FindMotifsRunConfig::id".to_string(), 1.into()),
+            ("FindMotifsRunConfig::step".to_string(), step.into()),
+            ("FindMotifsRunConfig::window".to_string(), window.into()),
+            ("FindMotifsRunConfig::slices_filter.distance_running_mean_k".to_string(), true.into()),
+            ("FindMotifsRunConfig::slices_filter.distance_running_mean_k.mean".to_string(), 0.1.into())
+        ]))
+    );
 
+    mock.expect_list_selected_motifs().return_const(Ok(selected_motifs));
+
+    Box::new(mock)
 }

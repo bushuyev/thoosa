@@ -33,7 +33,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, FixedNumSlicesNetParams, InferArgs, LabelNetParams, LabelNetType, MotifNetParams, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -49,7 +49,7 @@ use thoosa_shared::{
 };
 use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigRangeOrValue, InputFilter};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, FindMotifsRunConfigRangeOrValue, InputFilter};
 use crate::version::VERSION;
 use thoosa_common::ws::{DummyWorkspace, FsWorkspace, Workspace};
 use thoosa_motifs::distance::average_euclidean_distance;
@@ -706,13 +706,13 @@ fn load_label_and_motif_models(
                     .enumerate()
                     .map(|(channel, channels_motifs)| {
                         let ws_moved = Arc::clone(&ws);
-
                         (
                             find_motifs_run_config.clone(),
                             channels_motifs
                             .into_iter()
                             .flat_map(move |(motif_id, rate)| {
-                                load_motif_models(&ws_moved, channel, motif_id, device).expect("load_motif_models")
+                                load_motif_models(&ws_moved, channel, motif_id, device)
+                                    .expect("load_motif_models")
                             })
                             .collect::<Vec<_>>()
                         )
@@ -771,46 +771,47 @@ pub fn run_train_label_nets(
     let channels = ws.read().channels() as u32;
 
     let run_configs_arc = Arc::new(run_configs); //.into_iter().map(|c|Arc::new(c)).collect::<Vec<_>>());
-    let selected_motifs_for_label_run_ids__channels_motifs_models = selected_motifs_for_label_run_ids
+    let selected_motifs_for_label_applicable = selected_motifs_for_label_run_ids
         .iter()
         .map(|select_motifs_for_label_run_id| {
 
-            let find_motifs_run_config_ids = store.lock().get_input_run_ids(*select_motifs_for_label_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_for_label_run_id={select_motifs_for_label_run_id:?} not found").as_str());
-            assert_eq!(find_motifs_run_config_ids.len(), 1);
+            // let find_motifs_run_config_ids = store.lock().get_input_run_ids(*select_motifs_for_label_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_for_label_run_id={select_motifs_for_label_run_id:?} not found").as_str());
+            // assert_eq!(find_motifs_run_config_ids.len(), 1);
+            //
+            //
+            // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_config_ids[0], &store.lock().list_run_config_values(find_motifs_run_config_ids[0]).expect("list_run_params")).unwrap();
 
-
-            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_config_ids[0], &store.lock().list_run_config_values(find_motifs_run_config_ids[0]).expect("list_run_params")).unwrap();
-
-            (
-                *select_motifs_for_label_run_id,
+            // (
+            //     *select_motifs_for_label_run_id,
 
                 Arc::new(RwLock::new(
 
-                    store
-                        .lock()
-                        .list_selected_motifs(*select_motifs_for_label_run_id, channels)
-                        .expect("list_selected_motifs") //TODO move out
-                        .into_iter()
-                        .enumerate()
-                        .map(|(channel, channels_motifs)| {
-                            let ws_moved = Arc::clone(&ws);
-                            (
-                                find_motifs_run_config.clone(),
-                                channels_motifs
-                                    .into_iter()
-                                    .flat_map(move |(motif_id, corr)| {
-                                        load_motif_models(&ws_moved, channel, motif_id, &Cpu)
-                                            .expect("load_motif_models")
-                                    })
-                                    .collect()
-                            )
-                        })
-                        .collect::<Vec<(FindMotifsRunConfig, Vec<_>)>>()
+                    // store
+                    //     .lock()
+                    //     .list_selected_motifs(*select_motifs_for_label_run_id, channels)
+                    //     .expect("list_selected_motifs") //TODO move out
+                    //     .into_iter()
+                    //     .enumerate()
+                    //     .map(|(channel, channels_motifs)| {
+                    //         let ws_moved = Arc::clone(&ws);
+                    //         (
+                    //             find_motifs_run_config.clone(),
+                    //             channels_motifs
+                    //                 .into_iter()
+                    //                 .flat_map(move |(motif_id, corr)| {
+                    //                     load_motif_models(&ws_moved, channel, motif_id, &Cpu)
+                    //                         .expect("load_motif_models")
+                    //                 })
+                    //                 .collect::<Vec<_>>()
+                    //         )
+                    //     })
+                    //     .collect::<Vec<(FindMotifsRunConfig, Vec<_>)>>()
+                    MotifsNetsSelectionApplicable::new(*select_motifs_for_label_run_id, store, ws, devices[0])
 
-                )),
-            )
+                ))
+            // )
         })
-        .collect::<Vec<(RunId, Arc<RwLock<Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>>)>>();
+        .collect::<Vec<Arc<RwLock<MotifsNetsSelectionApplicable>>>>();
 
     let chunk_len = max(1, train_labels_resource_keys.len() / devices.len());
 
@@ -852,18 +853,18 @@ pub fn run_train_label_nets(
 
                 let run_configs_arc = Arc::clone(&run_configs_arc);
 
-                selected_motifs_for_label_run_ids__channels_motifs_models.iter().map(move |(select_motifs_for_label_run_id, channels_motifs_models)| {
-                    let find_motifs_run_ids = store.lock().get_input_run_ids(*select_motifs_for_label_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_for_label_run_id={select_motifs_for_label_run_id} not found").as_str());
-                    assert_eq!(find_motifs_run_ids.len(), 1);
-                    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_ids[0], &store.lock().list_run_config_values(find_motifs_run_ids[0]).expect("list_run_params")).unwrap();
+                selected_motifs_for_label_applicable.iter().map(move |motifs_nets_selection_applicable| {
+                    // let find_motifs_run_ids = store.lock().get_input_run_ids(*select_motifs_for_label_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for select_motifs_for_label_run_id={select_motifs_for_label_run_id} not found").as_str());
+                    // assert_eq!(find_motifs_run_ids.len(), 1);
+                    // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_ids[0], &store.lock().list_run_config_values(find_motifs_run_ids[0]).expect("list_run_params")).unwrap();
 
 
-                    let motif_width = find_motifs_run_config.window(); //channels_motifs_models.read().iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
-                    let slices_len = slices_len(ws.read().max_input() as i64, motif_width, find_motifs_run_config.step());
+                    // let motif_width = find_motifs_run_config.window(); //channels_motifs_models.read().iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
+                    // let slices_len = slices_len(ws.read().max_input() as i64, motif_width, find_motifs_run_config.step());
                     if log::log_enabled!(Level::Debug){
-                        debug!("run_train_label_nodes: label={label} channels={channels} channels_motifs_models.len={:?}", channels_motifs_models.read().iter().map(|m|m.1.len()).collect::<Vec<_>>());
+                        debug!("run_train_label_nodes: label={label} channels={channels} motifs_nets_selection_applicable.len={:?}", motifs_nets_selection_applicable.read().nets_count());
                     }
-                    trace!("run_train_label_nodes: label={label} select_motifs_for_label_run_id={select_motifs_for_label_run_id} channels_motifs_models={channels_motifs_models:?}");
+                    trace!("run_train_label_nodes: label={label} channels_motifs_models={motifs_nets_selection_applicable:?}");
 
 
                     debug!("run_train_label_nodes: label={label} cuda_mem={:?}", cuda_mem());
@@ -873,15 +874,15 @@ pub fn run_train_label_nets(
                     let valid_labels_resources_clone = Rc::clone(&valid_labels_resources_rc);
 
                     run_opt_train_label_nets(
-                        select_motifs_for_label_run_id,
+                        &0, //TODO//motifs_nets_selection_applicable.read().motif_selection_run_id,
                         &run_configs_arc,
                         // common_config,
                         Rc::clone(&train_labels_resources_clone),
                         Rc::clone(&valid_labels_resources_clone),
-                        Arc::clone(&channels_motifs_models),
+                        Arc::clone(&motifs_nets_selection_applicable),
                         label,
                         fixed_config,
-                        slices_len,
+                        0, //TODO slices_len,
                         ws,
                         &loader,
                         &device_i,
@@ -1131,7 +1132,7 @@ fn run_train_motif_nets(
     motifs: &Vec<usize>,
     find_motifs_run_id: RunId,
     train_motifs_nodes_run_configs: &OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
-    find_motifs_run_config_applicable: &FindMotifsRunConfigApplicable,
+    find_motifs_run_config_applicable: &FindMotifsApplicable,
     fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Mutex<Box<dyn Store>>>,

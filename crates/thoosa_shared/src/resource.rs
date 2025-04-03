@@ -4,11 +4,13 @@ use std::hash::{Hash, Hasher};
 use clap::builder::Str;
 use log::{debug, trace};
 use std::sync::Arc;
+use mockall::automock;
 use parking_lot::Mutex;
 use crate::ThoosaError;
 
+#[automock]
 pub trait ResourceStore {
-    fn list_resources_by_file_stems(&mut self, file_stem: &Vec<&str>) -> Result<Vec<Resource>, ThoosaError>;
+    fn list_resources_by_file_stems<'a>(&mut self, file_stems: &'a [&'a str])-> Result<Vec<Resource>, ThoosaError>;
     fn list_resource_set_resources_by_descr(&mut self, descr: &str) -> Result<Vec<Resource>, ThoosaError>;
     fn list_resource_set_group_sets(&mut self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError>;
     fn list_group_labeled_resources_sets(&mut self, group_decr: &str) -> Result<Vec<(String, String)>, ThoosaError>;

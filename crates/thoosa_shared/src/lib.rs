@@ -126,6 +126,16 @@ pub struct ThoosaError {//TODO enum
     is_oom:bool
 }
 
+impl Clone for ThoosaError {
+    fn clone(&self) -> Self {
+        ThoosaError {
+            msg: self.msg.clone(),
+            is_oom: self.is_oom,
+            backtrace: Backtrace::capture()
+        }
+    }
+}
+
 unsafe impl Send for ThoosaError {}
 
 impl ThoosaError {

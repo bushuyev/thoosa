@@ -51,7 +51,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Float};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, SlicesFilter};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, SlicesFilter};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
@@ -162,7 +162,7 @@ pub fn find_min_euc_dist(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsRunConfigApplicable>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
 
             debug!("find_min_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
@@ -283,7 +283,7 @@ pub fn find_motifs_by_euc_dist(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsRunConfigApplicable>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
 
             debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
@@ -449,7 +449,7 @@ where
             // .par_bridge() //TODO spread among devices
             .for_each(|(run_config_with_ctx, device)| {
                 let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-                    &run_config_with_ctx.0.to_applicable(ws.read().deref(), *device),
+                    &mut run_config_with_ctx.0.to_applicable(ws.read().deref(), *device),
                     &window_0_tensors.read(),
                     window_0_0_clone.clone(),
                     None
@@ -485,13 +485,13 @@ where
 fn chunk_and_slice_2x<G, C, D>(
     resources: Vec <Resource>,
     chunk_size: usize,
-    run_configs:&Vec<Arc<FindMotifsRunConfigApplicable>>,
+    run_configs:&Vec<Arc<FindMotifsApplicable>>,
     mut gpu_fn: G,
     mut cpu_fn: &C,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>
 ) -> Result<(), ThoosaError>
 where
-    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfigApplicable>) -> Result<D, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsApplicable>) -> Result<D, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     C: Fn(RunId, D, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
     D: Send,
     // CTX: Send + Sync + Debug TODO  FindMotifsRunConfigApplicable -> CTX

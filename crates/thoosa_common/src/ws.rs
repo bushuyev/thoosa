@@ -332,6 +332,7 @@ pub trait Workspace:Sync + Send {
 
 }
 
+//TODO replace with mockall
 #[derive(Debug)]
 pub struct DummyWorkspace {
     base:PathBuf,
@@ -438,7 +439,7 @@ impl Workspace for DummyWorkspace {
 
 
     fn max_input(&self) -> usize {
-        todo!()
+        self.n
     }
 
     fn clc_records(&self, resource_ids: &Vec<String>) -> Result<i64, ThoosaError> {
@@ -457,7 +458,7 @@ impl Workspace for DummyWorkspace {
 #[cfg(test)]
 mod tests {
     use super::{DummyWorkspace, FsWorkspace, Workspace};
-    use crate::train_nets::{LabelNetParams, MaxPaddingNetParams2, MotifNetParams};
+    use crate::train_nets::{LabelNetParams, MaxPaddingNetParams, MotifNetParams};
     use log::debug;
     use std::fs;
     use std::path::Path;
@@ -516,10 +517,10 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400, 32000)?;
 
 
-        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(10, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
-        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(20, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
-        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(30, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
-        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(40, 4, 10, 20, crate::train_nets::LabelNetType2::MaxPadding(MaxPaddingNetParams2{ num_layers: 0 })))?;
+        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(10, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
+        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(20, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
+        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(30, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
+        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(40, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
 
         let models =  ws.label_models()?;
         // for mm in &models{

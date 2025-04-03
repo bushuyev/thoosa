@@ -27,7 +27,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
 use tch::Device::Cpu;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigOptions};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, FindMotifsRunConfigOptions};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
 
@@ -299,7 +299,7 @@ impl PlotMotifSlicesArgs {
 
 
 
-pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &FindMotifsRunConfigApplicable, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &FindMotifsApplicable, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
 
     debug!("load_motif_slices: channel={}, find_motifs_run_config={:?}, slices={}", channel, find_motifs_run_config_applicable, slices.len());
 

@@ -624,7 +624,7 @@ mod distance_tests {
         let t_11 = Tensor::from_slice(&a_11).view((1, -1));
 
         let run_config = FindMotifsRunConfig::new(None, 1, 2, None, None);
-        let run_config_applicable = run_config.to_applicable(&DummyWorkspace::new(2, 100, 1000)?, Cpu);
+        let mut run_config_applicable = run_config.to_applicable(&DummyWorkspace::new(2, 100, 1000)?, Cpu);
 
         let  (tensor_0, sizes_0) =run_config_applicable.apply(&[
                     t_00.into(), t_01.into()
