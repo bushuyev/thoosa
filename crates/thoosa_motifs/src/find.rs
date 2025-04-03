@@ -1234,8 +1234,8 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                                 .into_iter()
                                 .flat_map(|v| v.into_iter())
                                 .zip(from::<Vec<Vec<f32>>>(&motifs_rates).into_iter().flat_map(|v| v.into_iter())))
-                            .filter_map(|(id, (b, r))| if b { Some((id as usize, r as f64)) } else { None })
-                            .collect::<Vec<(usize, f64)>>();
+                            .filter_map(|(id, (b, r))| if b { Some((id as u32, r as f64)) } else { None })
+                            .collect::<Vec<(u32, f64)>>();
 
                         info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
                         a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
@@ -2117,14 +2117,14 @@ mod motif_find_tests {
         let mut pulse_0_slices: Vec<_> = slices
             .values()
             .flat_map(|slice_list| slice_list.iter())
-            .filter(|slice| slice.motif_id == pulse_0_motif as usize)
+            .filter(|slice| slice.motif_id == pulse_0_motif as u32)
             .map(|slice| slice.slice_idx)
             .collect();
 
         let mut pulse_1_slices: Vec<_> = slices
             .values()
             .flat_map(|slice_list| slice_list.iter())
-            .filter(|slice| slice.motif_id == pulse_1_motif as usize)
+            .filter(|slice| slice.motif_id == pulse_1_motif as u32)
             .map(|slice| slice.slice_idx)
             .collect();
 
@@ -3080,7 +3080,7 @@ mod motif_find_tests {
 
 }
 
-pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
+pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: u32, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
     let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, limit, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {

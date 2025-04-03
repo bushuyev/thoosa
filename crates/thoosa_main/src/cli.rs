@@ -33,7 +33,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, load_motif_models, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -711,7 +711,7 @@ fn load_label_and_motif_models(
                             channels_motifs
                             .into_iter()
                             .flat_map(move |(motif_id, rate)| {
-                                load_motif_models(&ws_moved, channel, motif_id, device)
+                                ws_moved.read().load_motif_models( channel as u32, motif_id, device)
                                     .expect("load_motif_models")
                             })
                             .collect::<Vec<_>>()
@@ -935,7 +935,7 @@ fn run_train_motif_nodes_on_motif_selection(
                 let motifs = store.lock().list_selected_motifs(*motif_selection_run_id, ws.read().channels() as u32).expect("list_selected_motifs")
                     .into_iter()
                     .flat_map(|channel_motifs| channel_motifs.into_iter())
-                    .map(|(motif_id, _corr)| motif_id).collect::<Vec<usize>>();
+                    .map(|(motif_id, _corr)| motif_id).collect::<Vec<u32>>();
 
                 let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"))?
                     .to_applicable(ws.read().deref(), device);
@@ -1101,7 +1101,7 @@ fn run_plot_motif_slices(
         MotifsBy::MotifId(motif_id) => {
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
-            find::plot_motif_slices(ws, store, loader, motif_id, plot_motif_slices_params.limit, device)?;
+            find::plot_motif_slices(ws, store, loader, motif_id as u32, plot_motif_slices_params.limit, device)?;
         }
         MotifsBy::RunId(run_id) => {
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
@@ -1116,7 +1116,7 @@ fn run_plot_motif_slices(
                 .for_each(|motif_id| {
                     //TODO par in devices
                     debug!("run_plot_motif_slices: motif_id={motif_id}");
-                    find::plot_motif_slices(ws, store, loader, motif_id, plot_motif_slices_params.limit, device).unwrap();
+                    find::plot_motif_slices(ws, store, loader, motif_id as u32, plot_motif_slices_params.limit, device).unwrap();
                     let done = done_cnt.fetch_add(1, Relaxed);
                     if done % 10 == 0 {
                         info!("done {done} from  {motifs_len}");
@@ -1129,7 +1129,7 @@ fn run_plot_motif_slices(
 }
 
 fn run_train_motif_nets(
-    motifs: &Vec<usize>,
+    motifs: &Vec<u32>,
     find_motifs_run_id: RunId,
     train_motifs_nodes_run_configs: &OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
     find_motifs_run_config_applicable: &FindMotifsApplicable,
@@ -1157,7 +1157,7 @@ fn run_train_motif_nets(
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
-            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as usize)))?;
+            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
 
             debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
             trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");

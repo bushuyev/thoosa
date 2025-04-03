@@ -204,19 +204,19 @@ where D: Display {
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
 pub struct MotifSlice {
-    pub motif_id: usize,//TODO u32?
+    pub motif_id: u32,
     pub slice_idx: i64,
     pub channel: u16,
 }
 
 impl MotifSlice {
 
-    pub fn new(motif_id: usize, slise_idx: i64, channel: u16) -> Self {
+    pub fn new(motif_id: u32, slise_idx: i64, channel: u16) -> Self {
         Self { motif_id, slice_idx: slise_idx, channel }
     }
 
     #[inline]
-    pub fn motif_id(&self) -> usize {
+    pub fn motif_id(&self) -> u32 {
         self.motif_id
     }
 

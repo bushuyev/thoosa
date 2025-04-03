@@ -56,5 +56,6 @@ quote = "1.0.39"
 libloading = "0.8.6"
 plotters = { version = "0.3.7"}
 mockall = "0.13.1"
+mockall_double = "0.3.1"
 [profile.test]
 opt-level = 0

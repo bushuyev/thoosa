@@ -1,4 +1,4 @@
-use crate::train_nets::{FinalNodeParams, LabelNetParams, MotifNetParams};
+use crate::train_nets::{motif_node, FinalNodeParams, LabelNetParams, MotifNetParams, ThoModuleWithStore};
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
@@ -11,12 +11,14 @@ use std::fs::{read_dir, ReadDir};
 use std::num::ParseIntError;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use mockall::automock;
 use tch::nn::VarStore;
 use tch::{Device, TchError, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::{cdt_for_dir, recurse_files, ThoosaError};
 use thoosa_shared::run_configs::RunId;
+use crate::find_motifs_run_config::FindMotifsRunConfig;
 
 pub struct FsWorkspace {
     base_path:PathBuf,
@@ -184,10 +186,31 @@ impl Workspace for FsWorkspace {
 
         Ok(())
     }
+
+    fn load_motif_models<'a>(&self, channel:u32, motif_id:u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError> {
+        debug!("load_motif_models_ws: channel={channel} motif_selection_run_id={motif_id}");
+
+        let channel_motif_models_paths = self.motif_models(channel, motif_id)?;
+
+        channel_motif_models_paths.into_iter().map(|(model, config)|{
+
+            let motif_node_params = MotifNetParams::from_file(&config)?;
+
+            debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
+
+
+            let module = ThoModuleWithStore::load(motif_node(&motif_node_params), model, device.clone())?;
+
+            Ok((motif_node_params, module))
+
+        }).collect()
+
+    }
+
     /**
     returns Vec<safetensors_path, config jsonpath>
      */
-    fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
+    fn motif_models(&self, channel: u32, motif_id: u32) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
         let motif_prefix = format!("{}_", motif_id);
 
         recurse_files(&self.motifs_models_path.join(channel.to_string()), &|path| {
@@ -317,10 +340,11 @@ pub trait Workspace:Sync + Send {
     fn final_models_path(&self) -> &PathBuf;
     fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError>;
     fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError>;
+    fn load_motif_models<'a>(&self, channel:u32, motif_id:u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError>;
     /**
     returns Vec<safetensors_path, config jsonpath>
      */
-    fn motif_models(&self, channel: &dyn Display, motif_id: usize) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
+    fn motif_models(&self, channel: u32, motif_id: u32) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError>;
     fn save_label_model(&self, label_node_run_id: u32, label: &dyn  Display, vs: &VarStore, params: &LabelNetParams) -> Result<PathBuf, ThoosaError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoosaError>;
     fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoosaError>;
@@ -335,6 +359,12 @@ pub trait Workspace:Sync + Send {
 }
 
 pub fn mock_workspace_simp(channels:u32, sample_rate: u32, max_input:u32)->Box<dyn Workspace>{
+    let ws_mock = _mock_simp(channels, sample_rate, max_input);
+
+    Box::new(ws_mock)
+}
+
+fn _mock_simp(channels: u32, sample_rate: u32, max_input: u32) -> MockWorkspace {
     let base = Path::new("/tmp").join(cdt_for_dir());
 
     let mut ws_mock = MockWorkspace::new();
@@ -347,6 +377,22 @@ pub fn mock_workspace_simp(channels:u32, sample_rate: u32, max_input:u32)->Box<d
     ws_mock.expect_sample_rate().return_const(sample_rate);
     ws_mock.expect_channels().return_const(channels);
     ws_mock.expect_max_input().return_const(max_input);
+    ws_mock
+}
+
+pub fn mock_workspace_with_motif_nets(
+    channels: u32, sample_rate: u32, max_input: u32,
+    channels_motif_nets: Vec<Vec<(Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore + Sync + Send + 'static>)>>,
+) -> Box<dyn Workspace> {
+    let mut ws_mock = _mock_simp(channels, sample_rate, max_input);
+
+    ws_mock.expect_load_motif_models()
+        .returning(move |channel: u32, motif_id: u32, device| Ok(
+            vec![(
+                (channels_motif_nets[channel as usize][motif_id as usize].0)(),
+                (channels_motif_nets[channel as usize][motif_id as usize].1)()
+            )]
+        ));
 
     Box::new(ws_mock)
 }
@@ -393,13 +439,13 @@ mod tests {
         ws.save_motif_model(&1, &3, &4, &VarStore::new(Cpu), &MotifNetParams::new(50, 1))?;
 
 
-        let models = ws.motif_models(&0, 0)?;
+        let models = ws.motif_models(0, 0)?;
 
 
-        assert_eq!(ws.motif_models(&0, 0)?.len(), 1);
-        assert_eq!(ws.motif_models(&1, 0)?.len(), 1);
-        assert_eq!(ws.motif_models(&1, 2)?.len(), 3);
-        assert_eq!(ws.motif_models(&1, 4)?.len(), 1);
+        assert_eq!(ws.motif_models(0, 0)?.len(), 1);
+        assert_eq!(ws.motif_models(1, 0)?.len(), 1);
+        assert_eq!(ws.motif_models(1, 2)?.len(), 3);
+        assert_eq!(ws.motif_models(1, 4)?.len(), 1);
 
         Ok(())
     }

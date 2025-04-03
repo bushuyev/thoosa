@@ -123,7 +123,7 @@ pub fn motifs_to_tensor(
 
                     let mut write_guard = channels_motifs_slices_arc.write();
                     let  channels_motifs = write_guard.entry(motif_slice.channel).or_insert_with(||HashMap::new());
-                    let  motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
+                    let  motif_slices = channels_motifs.entry(motif_slice.motif_id as usize).or_insert_with(||Vec::new());
 
 
                     motif_slices.push(SyncWrapper::new_tb(Box::new(motif_slice_t)));
@@ -260,7 +260,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum MotifsBy {
-    MotifId(usize),
+    MotifId(usize),//TODO u32
     RunId(RunId)
 }
 

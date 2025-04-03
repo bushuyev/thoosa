@@ -55,6 +55,7 @@ num-traits.workspace = true
 once_cell = "1.20.2"
 
 mockall.workspace = true
+mockall_double.workspace = true
 
 [build-dependencies]
 chrono.workspace = true

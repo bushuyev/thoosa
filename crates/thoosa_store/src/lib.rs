@@ -132,14 +132,14 @@ pub trait Store:ResourceStore + Sync + Send {
 
     fn list_motifs(&mut self, run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
     fn list_motifs_slices(&mut self, run_id: RunId) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
-    fn list_motif_slices(&mut self, motif_id: usize, limit: Option<u32>, all_but_in_run_id: Option<(RunId, usize)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>;
+    fn list_motif_slices(&mut self, motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>;
 
     fn list_run_resources(&mut self, run_id: RunId) -> Result<Vec<String>, ThoosaError>;
     fn list_run_config_values(&mut self, run_id: RunId) -> Result<HashMap<String, Val>, ThoosaError>;
-    fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(usize, f64)>) -> Result<RunId, ThoosaError>;
+    fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoosaError>;
     fn list_input_run_ids(&mut self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>; //corr_run_id, run_id, label
-    fn list_selected_motifs(&mut self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError>;
+    fn list_selected_motifs(&mut self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError>;
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
     fn conn(&self) -> &parking_lot::Mutex<Connection>;//parking_lot:: for mockall
 }
@@ -955,7 +955,7 @@ impl Store for SqlStore {
             })?.fold(
                 Ok((HashMap::new(),HashMap::new())),
                 |a: Result<(HashMap<ResourceId, Vec<MotifSlice>>,HashMap<ResourceId, Resource>), Error>, v: Result<(
-                    usize, i64,//motif_id, channel_id
+                    u32, i64,//motif_id, channel_id
 
                     u32, u32, String, i64,//resource_id, import_0, key_0, slice_idx_0
 
@@ -994,7 +994,7 @@ impl Store for SqlStore {
     /**
     returns channel, find_motifs_run_id, slices
     */
-    fn list_motif_slices(&mut self, motif_id: usize, limit: Option<u32>, all_but_in_run_id: Option<(RunId, usize)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError> {
+    fn list_motif_slices(&mut self, motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1142,7 +1142,7 @@ impl Store for SqlStore {
         Ok(result)
     }
 
-    fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(usize, f64)>) -> Result<RunId, ThoosaError> {
+    fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoosaError> {
         debug!("save_selected_motifs: selected_motifs={:?}", selected_motifs);
 
         let mut guard = self.conn.lock();
@@ -1235,8 +1235,8 @@ impl Store for SqlStore {
     /**k
         * returns vec of channel X (motif id, rate)
     */
-    fn list_selected_motifs(&mut self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(usize, f64)>>, ThoosaError> {
-        let mut channels_motifs = (0..channels).into_iter().map(|_| Vec::with_capacity(10)).collect::<Vec<Vec<(usize, f64)>>>();
+    fn list_selected_motifs(&mut self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError> {
+        let mut channels_motifs = (0..channels).into_iter().map(|_| Vec::with_capacity(10)).collect::<Vec<Vec<(u32, f64)>>>();
 
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
@@ -1246,7 +1246,7 @@ impl Store for SqlStore {
 
             stmt.query_map([motif_selection_id], |row| {
                 Ok((
-                    row.get::<usize, usize>(0)?,
+                    row.get::<usize, u32>(0)?,
                     row.get::<usize, f32>(1)?,
                     row.get::<usize, usize>(2)?
                 ))
@@ -2061,8 +2061,8 @@ mod store_tests {
         debug!("motifs: {:?}", motifs);
 
         //7th channel
-        assert_eq!(motif_slices_444[0].motif_id, motifs[7][0].0);
-        assert_eq!(motif_slices_1111[0].motif_id, motifs[7][1].0);
+        assert_eq!(motif_slices_444[0].motif_id as u32, motifs[7][0].0);
+        assert_eq!(motif_slices_1111[0].motif_id as u32, motifs[7][1].0);
         //
         // //TODO
         let (channel, run_id_, mut slices, resources_map) = store.lock().list_motif_slices(motif_slices_1111[0].motif_id, None, None)?;
@@ -2241,7 +2241,7 @@ mod store_tests {
 
 }
 
-pub fn mock_store_with_find_motifs_run_config(step: i32, window: i32, selected_motifs: Vec<Vec<(usize, f64)>>) -> Box<dyn Store> {
+pub fn mock_store_with_find_motifs_run_config(step: i32, window: i32, selected_motifs: Vec<Vec<(u32, f64)>>) -> Box<dyn Store> {
     let mut mock = MockStore::new();
     mock.expect_get_input_run_ids().return_const(Ok(vec![0]));
     mock.expect_list_run_config_values().return_const(
