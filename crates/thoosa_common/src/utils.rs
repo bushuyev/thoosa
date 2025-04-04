@@ -617,7 +617,7 @@ pub mod tests {
 
         debug!("u={u:?}");
 
-        assert_eq!(k as i64, u.size()[1]);
+        assert_eq!(k, u.size()[1]);
     }
 
     #[test]

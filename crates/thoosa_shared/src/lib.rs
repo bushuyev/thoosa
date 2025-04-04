@@ -788,9 +788,9 @@ pub const fn slices_len(input_n: i64, motif_width: i64, step: u32) -> i64 {
     (input_n - motif_width) / step as i64 + 1
 }
 
-pub  fn clc_step(input_n: i64, motif_width: i64, k:i64) -> (i64, i64) {
+pub fn clc_step(input_n: i64, motif_width: i64, num_of_slices:i64) -> (i64, i64) {
     let v = input_n - motif_width;
-    let div = (k - 1);
+    let div = num_of_slices-1;
 
     let r = v % div;
 
@@ -804,7 +804,6 @@ pub  fn clc_step(input_n: i64, motif_width: i64, k:i64) -> (i64, i64) {
 
     (step, pad)
 }
-
 
 pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoosaError> {
     let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO const, error

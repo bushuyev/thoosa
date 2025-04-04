@@ -400,7 +400,7 @@ pub fn mock_workspace_with_motif_nets(
 #[cfg(test)]
 mod tests {
     use super::{FsWorkspace, Workspace};
-    use crate::train_nets::{LabelNetParams, MaxPaddingNetParams, MotifNetParams};
+    use crate::train_nets::{LabelNetParams, MaxPaddingNetArgs, MaxPaddingNetParams, MotifNetParams};
     use log::debug;
     use std::fs;
     use std::path::Path;
@@ -459,10 +459,10 @@ mod tests {
         let ws = FsWorkspace::new(test_dir, 20, 684400, 32000)?;
 
 
-        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(10, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
-        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(20, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
-        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(30, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
-        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(40, 4, 10, 20, crate::train_nets::LabelNetType::MaxPadding(MaxPaddingNetParams { num_layers: 0 })))?;
+        ws.save_label_model(1, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(10, 4, 10, 20, crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(0))))?;
+        ws.save_label_model(2, &"label_0", &VarStore::new(Cpu), &LabelNetParams::new(20, 4, 10, 20, crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(0))))?;
+        ws.save_label_model(3, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(30, 4, 10, 20, crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(0))))?;
+        ws.save_label_model(4, &"label_1", &VarStore::new(Cpu), &LabelNetParams::new(40, 4, 10, 20, crate::train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(0))))?;
 
         let models =  ws.label_models()?;
         // for mm in &models{
