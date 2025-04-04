@@ -1719,7 +1719,7 @@ mod cli_tests {
 
      */
     #[test]
-    fn slow_test_run_all_basic() -> Result<(), ThoosaError> {
+    fn slow_test_run_all_basic_fixed_slices() -> Result<(), ThoosaError> {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
@@ -1791,6 +1791,81 @@ mod cli_tests {
 
         Ok(())
     }
+
+
+    #[test]
+    fn slow_test_run_all_basic_max_padding() -> Result<(), ThoosaError> {
+
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+
+        let n = 1000;
+        let max_y = 1f32;
+
+        let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
+
+
+        let train_final_nodes_run_ids = run_all_steps(
+            r#"{
+                            step:"100",
+                            window:"800",
+                            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
+                        }"#,
+            r#"{
+                            motif_selector:{
+                                ByLabelVariance: {_dummy: 0}
+                            }
+                        }"#,
+            r#"{
+                            common_training_args: {
+                                    cycles: "100",
+                                    batch_size: "11",
+                                    lr: "0.0001..0.001",
+                                    max_loss: "0.1",
+                                    opt_max_evals: "10",
+                                    opt_n_init: "3"
+                            },
+                            num_layers: "3"
+                        }"#,
+            r#"{
+                            common_training_args: {
+                                    cycles: "100",
+                                    batch_size: "11",
+                                    lr: "0.0001..0.001",
+                                    max_loss: "0.1",
+                                    opt_max_evals: "10",
+                                    opt_n_init: "3"
+                            },
+                            net: {
+                                MaxPadding: {
+                                    num_layers: "2"
+                                }
+                            }
+                        }"#,
+            r#"{
+                            common_training_args: {
+                                cycles: "100",
+                                batch_size: "11",
+                                lr: "0.0001..0.001",
+                                max_loss: "0.1",
+                                opt_max_evals: "10",
+                                opt_n_init: "3"
+                            },
+                            net: {
+                                num_layers: "2"
+                            }
+                        }"#,
+            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices
+        )?;
+
+
+        debug!("train_final_nodes_run_ids={train_final_nodes_run_ids:?}");
+
+
+        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2)?;
+
+        Ok(())
+    }
+
 
     #[test]
     fn slow_test_run_all_band_filter() -> Result<(), ThoosaError> {

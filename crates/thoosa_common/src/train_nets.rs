@@ -681,7 +681,7 @@ pub fn train_label_net<B:DataBatch> (
     let loss = train(
         &device,
         batch as &mut dyn DataBatch,
-        &label_node_params.label_node().build_tch_module(&vs_0.root())?,
+        &label_node_params.label_net().build_tch_module(&vs_0.root())?,
 
         |pred: &Tensor, target: &Tensor| {
             debug!("train_label_net: pred.size={:?}", pred.size());
@@ -1164,7 +1164,7 @@ pub fn load_label_models_ws(ws:&Arc<RwLock<Box<dyn Workspace>>>, train_label_nod
 
             debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
 
-            let node = ThoModuleWithStore::load(LabelNetParams::label_node(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str());
+            let node = ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str());
 
             debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} loaded");
             // vs.load(&model_path).expect(format!("no {model_path:?}").as_str());
@@ -1671,18 +1671,18 @@ impl LabelNetParams {
     }
 
 
-    pub fn label_node(&self) -> Node {
+    pub fn label_net(&self) -> Node {
         match &self.net_type {
             LabelNetTypeParams::MaxPadding(max_padding_params) => {
-                LabelNetParams::label_node_max_padding(&self, max_padding_params)
+                LabelNetParams::label_net_max_padding(&self, max_padding_params)
             }
             LabelNetTypeParams::FixedNumSlices(fixed_num_slices_params) => {
-                LabelNetParams::label_node_fixed_num_slices(&self, fixed_num_slices_params)
+                LabelNetParams::label_net_fixed_num_slices(&self, fixed_num_slices_params)
             }
         }
     }
 
-    fn label_node_fixed_num_slices(params:&LabelNetParams, fixed_num_slices_params: &FixedNumSlicesNetParams) -> Node {
+    fn label_net_fixed_num_slices(params:&LabelNetParams, fixed_num_slices_params: &FixedNumSlicesNetParams) -> Node {
         debug!("label_node_fixed_num_slices: params={:?}", params);
 
         let channels_motifs=  params.channels * params.motif_nodes;
@@ -1750,7 +1750,7 @@ impl LabelNetParams {
 
     }
 
-    fn label_node_max_padding(params:&LabelNetParams, max_padding_params: &MaxPaddingNetParams) -> Node {
+    fn label_net_max_padding(params:&LabelNetParams, max_padding_params: &MaxPaddingNetParams) -> Node {
         debug!("label_node_max_padding: params={:?}", params);
 
         let max_motif_nets=  params.motif_nodes;
@@ -2866,7 +2866,7 @@ mod train_tests {
         let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(10)));
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net = LabelNetParams::label_node(&params).build_tch_module(&vs_0.root())?;
+        let net = LabelNetParams::label_net(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let _ = net.tho_forward(&Tensor::rand([11, 3 * 19, 100], FLOAT_CPU), false);
@@ -2876,7 +2876,7 @@ mod train_tests {
         debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
 
-        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_node(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
+        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_net(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(),loaded_module.var_store().variables());
@@ -2896,7 +2896,7 @@ mod train_tests {
         let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(3)));
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net = LabelNetParams::label_node(&params).build_tch_module(&vs_0.root())?;
+        let net = LabelNetParams::label_net(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let batch = 11i64;
@@ -2908,7 +2908,7 @@ mod train_tests {
         debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
 
-        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_node(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
+        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_net(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(),loaded_module.var_store().variables());
@@ -3742,7 +3742,7 @@ mod train_tests {
         let label_node_params = LabelNetParams::new(channels, max_motif_nets, 0, 0, train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams { num_layers: 0 }));//TODO slices_len, motif_layers
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _ = LabelNetParams::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
+        let _ = LabelNetParams::label_net(&label_node_params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
         debug!("save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}", channels, max_motif_nets, max_motif_batches, motif_batch_size, vs_0.variables());
 
