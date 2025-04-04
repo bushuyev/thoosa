@@ -232,8 +232,8 @@ impl FindMotifsRunConfig {
         }
     }
 
-    pub fn window(&self) -> i64 {
-        self.window as i64
+    pub fn window(&self) -> u32 {
+        self.window
     }
 
     pub fn step(&self) -> u32 {

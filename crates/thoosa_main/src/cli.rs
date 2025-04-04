@@ -1400,7 +1400,7 @@ mod cli_tests {
         fs::create_dir_all(&test_dir)?;
         let base_path = test_dir.to_string_lossy().to_string();
 
-        let n = 1000i64;
+        let n = 1000;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
@@ -1687,7 +1687,7 @@ mod cli_tests {
         Ok(())
     }
 
-    fn label_1_t(n: i64, max_y: f32) -> Tensor {
+    fn label_1_t(n: u32, max_y: f32) -> Tensor {
         Tensor::vstack(&[Tensor::from_slice(
             [
                 sig_one_imp(n, max_y, Some(10. ..12.), Some(10. ..12.), 0.1),
@@ -1698,7 +1698,7 @@ mod cli_tests {
         )])
     }
 
-    fn label_0_t(n: i64, max_y: f32) -> Tensor {
+    fn label_0_t(n: u32, max_y: f32) -> Tensor {
         Tensor::vstack(&[Tensor::from_slice(
             [
                 sig_three_imp(n, max_y, Some(10. ..12.), Some(10. ..12.)),
@@ -1723,7 +1723,7 @@ mod cli_tests {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
-        let n = 1000i64;
+        let n = 1000;
         let max_y = 1f32;
 
         let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
@@ -1797,7 +1797,7 @@ mod cli_tests {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
-        let n = 1000i64;
+        let n = 1000;
         let max_y = 1f32;
 
         let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
@@ -1876,7 +1876,7 @@ mod cli_tests {
     }
 
 
-    fn verify_infer(test_dir: &PathBuf, n: i64, max_y: f32, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, devices: Vec<Device>, train_final_nodes_run_ids: Vec<RunId>, max_mse: f64) -> Result<(), ThoosaError> {
+    fn verify_infer(test_dir: &PathBuf, n: u32, max_y: f32, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, devices: Vec<Device>, train_final_nodes_run_ids: Vec<RunId>, max_mse: f64) -> Result<(), ThoosaError> {
         let input_dir = test_dir.join("infer_input");
 
         debug!("run_infer: input_dir={input_dir:?}");
@@ -1933,13 +1933,13 @@ mod cli_tests {
         Ok(())
     }
 
-    fn _saw(n: i64) -> Vec<f32> {
+    fn _saw(n: u32) -> Vec<f32> {
         saw_with_steps(n as usize, 10, 5.)
     }
 
 
 
-    fn label_0_t_rs(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y: f32) -> Tensor {
+    fn label_0_t_rs(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y: f32) -> Tensor {
         Tensor::vstack(&[
             Tensor::from_slice(
                 [sig_0_v.clone(), _saw(n), sig_0_v.clone()]
@@ -1953,7 +1953,7 @@ mod cli_tests {
         ])
     }
 
-    fn label_1_t_rs(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y: f32) -> Tensor {
+    fn label_1_t_rs(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>, max_y: f32) -> Tensor {
         Tensor::vstack(&[
             Tensor::from_slice(
                 [sig_1_v.clone(), _saw(n), sig_1_v.clone()]
@@ -1967,7 +1967,7 @@ mod cli_tests {
         ])
     }
 
-    fn prepare_test_data(n:i64, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Mutex<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Box<Tensor>>>>, Vec<Device>), ThoosaError> {
+    fn prepare_test_data(n:u32, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Mutex<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Box<Tensor>>>>, Vec<Device>), ThoosaError> {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }

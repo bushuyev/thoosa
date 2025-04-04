@@ -723,7 +723,7 @@ mod tests {
         )? else {
             panic!("no distances")
         };
-        let x = lin_t(distances.size()[1]);
+        let x = lin_t(distances.size()[1] as u32);
         plot_series(
             vec![
                 (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
@@ -739,7 +739,7 @@ mod tests {
         // let channels_hists = channels_dists_flat.hist
         debug!("channels_dists_flat={:?}", channels_dists_flat.size());
         let hists = hist_1_dim(&channels_dists_flat, window);
-        let x = lin_t(window as i64);
+        let x = lin_t(window);
 
         // let normal = Tensor::normal_(hists.i(0).mean(Float), hists.std(true))
 

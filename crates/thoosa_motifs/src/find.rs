@@ -1963,7 +1963,7 @@ mod motif_find_tests {
         // let pulse = pulse_v(50., 10., 100, 20.);
         let pulse_0 = sig_one_imp(100, 30.0, None, Some(2. ..2.01), 0.0);
         let pulse_1 = sig_one_imp(100, 30.0, None, Some(20. ..20.01), 0.0);
-        let n = 1000i64;
+        let n = 1000;
 
         let scale = 10.0;
         // dists between sample pulses and joined are too big

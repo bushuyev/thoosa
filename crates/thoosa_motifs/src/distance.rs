@@ -419,7 +419,7 @@ mod distance_tests {
 
         // set_max_level(Trace);
 
-        let n = 1000i64;
+        let n = 1000;
         let max_y = 30.0;
 
         let sig_0_v = sig_one_imp(n, max_y, None, None, 0.0);
@@ -489,12 +489,12 @@ mod distance_tests {
         plot_series_with_points(
             (0..distances.size()[2])
                 .zip(DistinctColorIter::new())
-                .map(|(slice, color)|(format!("0ch slice={}", slice), color,   lin_iter(distances.size()[1]).zip(from::<Vec<f32>>(&distances.i((0, .., slice)))).collect::<Vec<(f32, f32)>>()))
+                .map(|(slice, color)|(format!("0ch slice={}", slice), color,   lin_iter(distances.size()[1] as u32).zip(from::<Vec<f32>>(&distances.i((0, .., slice)))).collect::<Vec<(f32, f32)>>()))
                 .collect(),
             "distance", (2000, 1000), &format!("/tmp/plots/distance_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
             &(0..distances.size()[2])
                 .flat_map(|slice|
-                    lin_iter(distances.size()[1])
+                    lin_iter(distances.size()[1] as u32)
                         .zip(from::<Vec<f32>>(&distances.i((0, .., slice))))
                         .filter(|(x, v)|&mask.i((0, *x as i64, slice)).double_value(&[]) == &1.)
                         .collect::<Vec<(f32, f32)>>())
@@ -509,7 +509,7 @@ mod distance_tests {
 
         debug!("channels_dists_flat={:?}", channels_dists_flat.size());
         let hists = hist_1_dim(&channels_dists_flat, window);
-        let x = lin_t(window as i64);
+        let x = lin_t(window);
 
         let (skewness, kurtosis) = skewness_kurtosis_1_dim(&hists.totype(Float));
         debug!("skewness={skewness}");
@@ -1792,7 +1792,7 @@ mod distance_tests {
         let distances = Tensor::stack(&[
             Tensor::from_slice(ch_0.as_slice()),
             Tensor::from_slice(ch_1.as_slice())
-        ], 0).view((2, input_n));//unsqueeze to make it [channels x t_0 slices x t_1 slices]
+        ], 0).view((2, input_n as i64));//unsqueeze to make it [channels x t_0 slices x t_1 slices]
 
         let mask = LocalMin.make_mask(None, &distances);
 

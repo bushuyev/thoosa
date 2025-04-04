@@ -608,16 +608,16 @@ pub mod tests {
 
     #[test]
     fn test_clc_step(){
-        let n = 10_000;
+        let n = 10_000u32;
         let w = 1000;
-        let t = Tensor::rand(&[1, n], FLOAT_CPU);
-        let k = 100;
-        let (step, pad) = clc_step(n, w, k); //(n-w)/(k-1);
-        let u = t.pad([0, pad], "constant", 0.).unfold(1, w, step);
+        let t = Tensor::rand(&[1, n as i64], FLOAT_CPU);
+        let slices_num = 100;
+        let (step, pad) = clc_step(n, w, slices_num); //(n-w)/(k-1);
+        let u = t.pad([0i64, pad as i64], "constant", 0.).unfold(1, w as i64, step as i64);
 
         debug!("u={u:?}");
 
-        assert_eq!(k, u.size()[1]);
+        assert_eq!(slices_num, u.size()[1] as u32);
     }
 
     #[test]
@@ -1397,11 +1397,11 @@ pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
     t/ t.tensordot(&t, dim, dim).diag(0).sqrt().view([1, -1]).transpose(0, 1)
 }
 
-pub fn lin_t(n: i64) -> Tensor {
+pub fn lin_t(n: u32) -> Tensor {
     Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
 }
 
-pub fn lin_iter(n: i64) -> Map<Range<i64>, fn(i64) -> f32> {
+pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
@@ -1516,7 +1516,7 @@ pub fn train<F>(
     Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
 
-pub fn two_sigs(n: i64) -> (Tensor, Tensor) {
+pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
     let sig_1 = Tensor::from_slice(
         pulses_in_const(n, &[
             // (10, pulse_v(8., 3., 20, 2.)),
@@ -1569,7 +1569,7 @@ pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
     Tensor::from(pulse_v(μ, σ, n, f).as_slice())
 }
 
-pub fn three_sigs_tensor(n: i64, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> (Tensor, Tensor, Tensor, Tensor) {
+pub fn three_sigs_tensor(n: u32, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> (Tensor, Tensor, Tensor, Tensor) {
     let t_0_0 = t_0_0(n, sig_0_v, sig_2_v);
 
     // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
@@ -1588,7 +1588,7 @@ pub fn three_sigs_tensor(n: i64, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v
     (t_0_0, t_0_1, t_1_0, t_1_1)
 }
 
-pub fn t_0_0(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+pub fn t_0_0(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     Tensor::vstack(&[
         Tensor::from_slice([sig_0_v.clone(), saw(n), saw(n)].concat().as_slice()),
         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
@@ -1596,7 +1596,7 @@ pub fn t_0_0(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     ])
 }
 
-pub fn t_0_1(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+pub fn t_0_1(n: u32, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     Tensor::vstack(&[
         Tensor::from_slice([saw(n), sig_0_v.clone(), saw(n)].concat().as_slice()),
         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
@@ -1604,7 +1604,7 @@ pub fn t_0_1(n: i64, sig_0_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     ])
 }
 
-pub fn t_1_0(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+pub fn t_1_0(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     Tensor::vstack(&[
         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
         Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
@@ -1612,7 +1612,7 @@ pub fn t_1_0(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     ])
 }
 
-pub fn t_1_1(n: i64, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
+pub fn t_1_1(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     Tensor::vstack(&[
         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
         Tensor::from_slice([sig_1_v.clone(), saw(n), saw(n)].concat().as_slice()),

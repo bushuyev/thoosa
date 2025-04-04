@@ -557,10 +557,10 @@ pub fn run_opt_train_label_nets(
     // }
     // TODO to nets in some channel ok?
 
-    let channels = ws.read().channels() as i64;
+    let channels = ws.read().channels();
     let device = device.clone();
     let max_input = ws.read().max_input();
-    let nets_count = channels_motifs_nets.read().nets_count() as i64;
+    let nets_count = channels_motifs_nets.read().nets_count();
     debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} channels={channels} cuda_mem={:?}", cuda_mem());
 
     opt_train(
@@ -638,8 +638,8 @@ pub fn train_label_net<B:DataBatch> (
     // comon_label_node_params:&CommonTrainLabelNodeRunConfig,
     mut batch:&mut B,
     device: &Device,
-    channels:i64,
-    max_nets:i64,
+    channels:u32,
+    max_nets:u32,
     vs_0: &VarStore,
     channels_motifs_nets:&Arc<RwLock<MotifsNetsSelectionApplicable>>,
 ) ->  Result<(f32, LabelNetParams), ThoosaError> {
@@ -650,16 +650,16 @@ pub fn train_label_net<B:DataBatch> (
 
             let guard = channels_motifs_nets.read();
             let find_motifs_run_config = guard.find_motifs_applicable.run_config();
-            let slices_len = slices_len(ws.read().max_input() as i64, find_motifs_run_config.window(), find_motifs_run_config.step());
+            let slices_len = slices_len(ws.read().max_input(), find_motifs_run_config.window(), find_motifs_run_config.step());
 
             debug!("train_label_net: LabelNetType::MaxPadding max_input={} find_motifs_run_config={find_motifs_run_config:?} slices_len={slices_len}", ws.read().max_input());
 
-            LabelNetParams::new(channels, max_nets, config.num_layers as i64, slices_len, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(config.num_layers)))
+            LabelNetParams::new(channels, max_nets, config.num_layers, slices_len, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(config.num_layers)))
         }
         LabelNetTypeArgs::FixedNumSlices(config) => {
             debug!("train_label_net: LabelNetType::FixedNumSlices(config={config:?})");
 
-            LabelNetParams::new(channels, max_nets, config.num_layers as i64, config.slices_len as i64, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(config.num_layers, config.slices_len)))
+            LabelNetParams::new(channels, max_nets, config.num_layers, config.slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(config.num_layers)))
 
         }
     };
@@ -729,7 +729,7 @@ pub fn run_opt_train_final_net(
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     device: &Device,
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
-    let labels_len = labels_channels_motifs_models.len();
+    let labels_len = labels_channels_motifs_models.len() as u32;
 
     let labels_channels_motifs_models_rw = labels_channels_motifs_models.into_iter().fold(HashMap::new(), |mut a, v|{
         a.insert(v.0, Arc::new(RwLock::new(v.1)));
@@ -741,7 +741,7 @@ pub fn run_opt_train_final_net(
 
     debug!("run_opt_train_final: labels={labels:?}");
 
-    assert_eq!(labels.len(), labels_len);
+    assert_eq!(labels.len() as u32, labels_len);
 
     let max_input = ws.read().max_input() as u32;
 
@@ -794,9 +794,9 @@ input_slices_motif_batch_size - both for motif node input batch size and output 
 pub fn apply_channel_motifs(
     motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
     batch_channel: Tensor,
-    motif_width: i64,
-    sum_motif_nodes: i64,
-    slices_len: i64,
+    motif_width: u32,
+    sum_motif_nodes: u32,
+    slices_len: u32,
     device: &Device
 ) -> Result<Tensor, ThoosaError> {
 
@@ -804,14 +804,14 @@ pub fn apply_channel_motifs(
     debug!("apply_channel_motifs: batch_channel={batch_channel:?} motif_width={motif_width} max_motif_nodes={sum_motif_nodes} slices_len={slices_len} device={device:?}");
 
     if motif_nodes.is_empty() {
-        return Ok(Tensor::zeros([batch_channel.size()[0], sum_motif_nodes, slices_len], (Float, *device)));
+        return Ok(Tensor::zeros([batch_channel.size()[0], sum_motif_nodes as i64, slices_len as i64], (Float, *device)));
     }
 
-    let (input_slice_step, pad) = clc_step(batch_channel.size()[1], motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
+    let (input_slice_step, pad) = clc_step(batch_channel.size()[1] as u32, motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
 
     let unfolded = batch_channel
-        .pad([0, pad], "constant", 0.)//pad: last dimension [0 - padding left, pad - padding right]
-        .unfold(1, motif_width, input_slice_step);
+        .pad([0, pad as i64], "constant", 0.)//pad: last dimension [0 - padding left, pad - padding right]
+        .unfold(1, motif_width as i64, input_slice_step as i64);
 
     debug!("apply_channel_motifs: channel.size={:?} motif_width={motif_width} input_slice_step={input_slice_step} pad={pad}  unfolded.size()={:?}", batch_channel.size(), unfolded.size());
 
@@ -858,9 +858,9 @@ pub fn apply_channel_motifs(
 pub fn apply_channel_motifs_with_padding(input_slice_step: u32,
                                          motif_nodes: &mut [(MotifNetParams, ThoModuleWithStore)],
                                          channel: Tensor, //batch , data
-                                         motif_width: i64,
-                                         max_motif_nodes: i64,
-                                         slices_len: i64,
+                                         motif_width: u32,
+                                         max_motif_nodes: u32,
+                                         slices_len: u32,
                                          device: &Device
 ) -> Result<Tensor, ThoosaError> {
 
@@ -868,10 +868,10 @@ pub fn apply_channel_motifs_with_padding(input_slice_step: u32,
     debug!("apply_channel_motifs_with_padding: channel={channel:?} motif_width={motif_width} input_slice_step={input_slice_step} max_motif_nodes={max_motif_nodes} motif_nodes.len={} max_dists_len={slices_len} device={device:?}", motif_nodes.len());
 
     if motif_nodes.is_empty() {
-        return Ok(Tensor::zeros([channel.size()[0], max_motif_nodes, slices_len], (Float, *device)));
+        return Ok(Tensor::zeros([channel.size()[0], max_motif_nodes as i64, slices_len as i64], (Float, *device)));
     }
 
-    let unfolded = channel.unfold(1, motif_width, input_slice_step as i64);
+    let unfolded = channel.unfold(1, motif_width as i64, input_slice_step as i64);
 
     debug!("apply_channel_motifs_with_padding: unfolded.size={:?}", unfolded.size());
 
@@ -919,7 +919,7 @@ pub fn apply_channel_motifs_with_padding(input_slice_step: u32,
 
     debug!("apply_channel_motifs_with_padding: motif_dists.len={} motif_nets_out.size={:?}", motif_dists.len(), motif_nets_out.size());
 
-    let r = pad_to(&motif_nets_out, &[channel.size()[0], max_motif_nodes, slices_len]);
+    let r = pad_to(&motif_nets_out, &[channel.size()[0], max_motif_nodes as i64, slices_len as i64]);
 
     debug!("apply_channel_motifs_with_padding: r.size={:?}", r.as_ref().map(|r|r.size()));
 
@@ -956,7 +956,7 @@ pub fn apply_motif_and_label_nets(
                     apply_motif_nets_with_padding(&batch_t, Arc::clone(&channels_motifs_models), &device, max_input)
                 }
                 LabelNetTypeParams::FixedNumSlices(params) => {
-                    apply_motif_nets(&batch_t, Arc::clone(&channels_motifs_models), &device, params.slices_len)
+                    apply_motif_nets(&batch_t, Arc::clone(&channels_motifs_models), &device, label_node_params.slices_len)
                 }
             };
 
@@ -1023,8 +1023,8 @@ impl SavableResult for TrainFinalNodesRunConfigResult {
     }
 }
 
-pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainFinalNetRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: usize, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
-    let final_node_params= FinalNodeParams::new(labels_len as i64, run_config_values.net.num_layers);
+pub fn train_final_node(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_config_values: &TrainFinalNetRunConfig, batch:&mut dyn DataBatch, device: &Device, labels_len: u32, vs_0: &VarStore) ->  Result<(f32, FinalNodeParams), ThoosaError>{
+    let final_node_params= FinalNodeParams::new(labels_len, run_config_values.net.num_layers);
 
     let mut optimizer = nn::Adam::default();
    /* if let Some(adam_w) = run_config_values.adam_w {
@@ -1314,13 +1314,13 @@ impl OptConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct MotifNetParams {
-    num_features: i64,
-    num_layers:i64
+    num_features: u32,
+    num_layers:u32
 }
 
 impl MotifNetParams {
 
-    pub fn new(num_features: i64, num_layers: i64) -> Self {
+    pub fn new(num_features: u32, num_layers: u32) -> Self {
         Self {
             num_features,
             num_layers
@@ -1346,11 +1346,11 @@ impl MotifNetParams {
         ).map_err(|serde_err|ThoosaError::new(format!("err={}, path={path:?}", serde_err.to_string())))
     }
 
-    pub fn num_features(&self) -> i64 {
+    pub fn num_features(&self) -> u32 {
         self.num_features
     }
 
-    pub fn with_num_layer(&self, num_layers:i64) -> Self {
+    pub fn with_num_layer(&self, num_layers:u32) -> Self {
         Self {
             num_features: self.num_features,
             num_layers,
@@ -1451,7 +1451,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
 
     fn apply(&self, t: &Box<Tensor>, options: MotifsNetsPadding) -> Result<Box<Tensor>, ThoosaError> {
         debug!("Applicable for MotifsNetsSelectionApplicable::apply: t.size={:?} options={options:?}", t.size());
-        let motif_width= self.find_motifs_applicable.run_config().window as i64;
+        let motif_width= self.find_motifs_applicable.run_config().window;
 
         match options {
             MotifsNetsPadding::Max => {
@@ -1460,7 +1460,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
 
                 trace!("Applicable for MotifsNetsSelectionApplicable::apply/Max: unfolded=\n{unfolded}");
 
-                let max_num_slices = slices_len(self.max_input as i64, motif_width, self.find_motifs_applicable.run_config().step);
+                let max_num_slices = slices_len(self.max_input, motif_width, self.find_motifs_applicable.run_config().step);
 
                 debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_width={motif_width} self.max_input={} max_num_slices={max_num_slices}", self.max_input);
 
@@ -1472,7 +1472,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
                             debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: channel={channel} motif_nodes.len()={}", motif_nodes.len());
 
                             if motif_nodes.is_empty() {
-                                Ok(Tensor::zeros([unfolded.size()[0], self.nets_count() as i64, max_num_slices], (Float, self.device)))
+                                Ok(Tensor::zeros([unfolded.size()[0], self.nets_count() as i64, max_num_slices as i64], (Float, self.device)))
                             } else {
 
                                 let unfolded_channel = unfolded.i((channel as i64, .., ..));//channel, slices, slice
@@ -1521,7 +1521,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
                                 trace!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_nets_out=\n{motif_nets_out}");
                                 debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_dists.len={} motif_nets_out.size={:?}", motif_dists.len(), motif_nets_out.size());
 
-                                let r = pad_to(&motif_nets_out, &[self.nets_count() as i64, max_num_slices]);
+                                let r = pad_to(&motif_nets_out, &[self.nets_count() as i64, max_num_slices as i64]);
 
                                 debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: r.size={:?}", r.as_ref().map(|r|r.size()));
 
@@ -1538,14 +1538,14 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
             }
             //returns sum of motifs in all channels x slices_len
             MotifsNetsPadding::Fixed(slices_len) => {
-                let (input_slice_step, pad) = clc_step(t.size()[1], motif_width, slices_len as i64); //(channel.size()[0]-motif_width)/100;
+                let (input_slice_step, pad) = clc_step(t.size()[1] as u32, motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
                 debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: input_slice_stepsize={input_slice_step} pad={pad}");
 
                 let filtered = self.find_motifs_applicable.apply(
-                    &Box::new(t.pad([0, pad], "constant", 0.)), FindMotifsRunConfigOptions::Filter
+                    &Box::new(t.pad([0, pad as i64], "constant", 0.)), FindMotifsRunConfigOptions::Filter
                 )?;
 
-                let unfolded = filtered.unfold(1, motif_width, input_slice_step);
+                let unfolded = filtered.unfold(1, motif_width as i64, input_slice_step as i64);
 
                 let nets_count = self.nets_count();
 
@@ -1617,10 +1617,10 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LabelNetParams {
-    channels:i64,
-    motif_nodes:i64,
-    motif_layers:i64,
-    slices_len:i64,
+    channels:u32,
+    motif_nodes:u32,
+    motif_layers:u32,
+    slices_len:u32,
     net_type: LabelNetTypeParams
 }
 
@@ -1651,17 +1651,16 @@ impl MaxPaddingNetParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FixedNumSlicesNetParams {
     num_layers: u32,
-    pub slices_len: u32,
 }
 
 impl FixedNumSlicesNetParams {
-    pub fn new(num_layers: u32, slices_len: u32) -> Self {
-        Self { num_layers, slices_len }
+    pub fn new(num_layers: u32) -> Self {
+        Self { num_layers }
     }
 }
 
 impl LabelNetParams {
-    pub fn new(channels: i64, max_motif_nodes: i64, motif_layers:i64, slices_len:i64, net_type: LabelNetTypeParams) -> Self {
+    pub fn new(channels: u32, max_motif_nodes: u32, motif_layers:u32, slices_len:u32, net_type: LabelNetTypeParams) -> Self {
         Self { channels, motif_nodes: max_motif_nodes, slices_len, motif_layers, net_type }
     }
 
@@ -1718,7 +1717,7 @@ impl LabelNetParams {
                     move |t:&Tensor|
                         (0..channels_motifs)
                             .map(|net_i|{
-                                t.i((.., net_i, ..))
+                                t.i((.., net_i as i64, ..))
                             })
                             .collect()
                 ),//label batch, channel, max_motif_nets, max slices
@@ -1788,7 +1787,7 @@ impl LabelNetParams {
                         (0..max_motif_nets)
                             .map(|net_i|{
                                 debug!("label_node_max_padding: split, t.size={:?}", t.size());
-                                t.i((.., .., net_i, ..))
+                                t.i((.., .., net_i as i64, ..))
                             })
                             .collect()
                 ),//label batch, channel, max_motif_nets, max slices
@@ -1817,7 +1816,7 @@ impl LabelNetParams {
 
 }
 
-pub fn flat_label_node(params: &LabelNetParams, slices_len:i64) -> Node {
+pub fn flat_label_node(params: &LabelNetParams, slices_len:u32) -> Node {
     debug!("motif_node: params={params:?}");
     let num_features = params.channels * params.motif_nodes * slices_len;
     let mut builder = SeqBuilder::new(slices_len, None);
@@ -1841,12 +1840,12 @@ pub fn flat_label_node(params: &LabelNetParams, slices_len:i64) -> Node {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FinalNodeParams {
-    in_features: i64,
+    in_features: u32,
     num_layers: u32
 }
 
 impl FinalNodeParams {
-    pub fn new(in_features: i64, num_layers: u32) -> Self {
+    pub fn new(in_features: u32, num_layers: u32) -> Self {
         Self { in_features, num_layers }
     }
 
@@ -2035,8 +2034,8 @@ where
     min_var_store.ok_or_else(||ThoosaError::new("opt was not run"))
 }
 
-pub fn run_train_motif_net(motif_width: i64, run_config: &TrainMotifsNetsRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, listener: &mut dyn TrainListener) -> Result<(f32, MotifNetParams), ThoosaError> {
-    let node_params = MotifNetParams::new(motif_width, run_config.num_layers as i64);
+pub fn run_train_motif_net(motif_width: u32, run_config: &TrainMotifsNetsRunConfig, device: &Device, mut batch: &mut TensorsDataBatch, vs: &VarStore, listener: &mut dyn TrainListener) -> Result<(f32, MotifNetParams), ThoosaError> {
+    let node_params = MotifNetParams::new(motif_width, run_config.num_layers);
 
     let loss=  train(
         &device,
@@ -2200,9 +2199,9 @@ fn apply_motif_nets(
                 let r = apply_channel_motifs(
                     motif_nodes,
                     batch_t.i((.., channel as i64, ..)),
-                    find_motifs_cfg.window as i64,
-                    max_motif_nodes as i64,
-                    slices_len as i64,
+                    find_motifs_cfg.window,
+                    max_motif_nodes as u32,
+                    slices_len,
                     device
                 );
                 debug!("apply_motif_nets: r={:?}", r);
@@ -2236,14 +2235,14 @@ fn apply_motif_nets_with_padding(
             .iter_mut()
             .enumerate()
             .map(|(channel, (find_motifs_cfg, motif_nodes))| {
-                let slices_len = slices_len(input_n as i64, find_motifs_cfg.window as i64, find_motifs_cfg.step);
+                let slices_len = slices_len(input_n, find_motifs_cfg.window, find_motifs_cfg.step);
                 debug!("apply_motif_nets: slices_len={slices_len} input_n={input_n} motif_width={} step={}", find_motifs_cfg.window, find_motifs_cfg.step);
                 apply_channel_motifs_with_padding(
                     find_motifs_cfg.step,
                     motif_nodes,
-                    input_t.i((.., channel as i64, ..)),//batch, channel, data
-                    find_motifs_cfg.window as i64,
-                    max_motif_nodes as i64,
+                    input_t.i((.., channel as i64, ..)), //batch, channel, data
+                    find_motifs_cfg.window,
+                    max_motif_nodes as u32,
                     slices_len,
                     device
                 )})
@@ -2360,11 +2359,11 @@ fn build_multidim<'a>( builder:&'a mut SeqBuilder, dims:&'a [i64])  {
     let builder = dims.windows(2).into_iter().fold(builder, | b, d|{
         debug!("d={:?}", d);
 
-        b.linear_s(d[0])
+        b.linear_s(d[0] as u32)
             // .func(Tensor::relu)
             .linear_s(1)
             // .func(Tensor::sigmoid)
-            .closure(Box::new(|t:&Tensor|t.squeeze()), Some(d[1]))
+            .closure(Box::new(|t:&Tensor|t.squeeze()), Some(d[1] as u32))
 
     });
 
@@ -2521,7 +2520,7 @@ mod train_tests {
     }
 
     ///sums and multiplies inputs by k
-    pub fn test_net(num_features: i64, k: f64, device: Device, ) -> Result<Box<dyn ThoModule>, ThoosaError> {
+    pub fn test_net(num_features: u32, k: f64, device: Device, ) -> Result<Box<dyn ThoModule>, ThoosaError> {
         let vs = VarStore::new(device);
 
         SeqBuilder::new(num_features, None)
@@ -2534,7 +2533,7 @@ mod train_tests {
     }
 
     ///sums and multiplies inputs by k
-    pub fn test_net_vs(num_features: i64, k: f64, vs:&VarStore) -> Result<Box<dyn ThoModule>, ThoosaError> {
+    pub fn test_net_vs(num_features: u32, k: f64, vs:&VarStore) -> Result<Box<dyn ThoModule>, ThoosaError> {
 
         SeqBuilder::new(num_features, None)
             //.linear_s_with_conf(num_features, LinearConfig {
@@ -2578,7 +2577,7 @@ mod train_tests {
         reset_print_options();
 
         let input_n = 1000;
-        let motif_width = 100i64;
+        let motif_width = 100u32;
         let step = (motif_width / 1) as usize;//1 - step==motif_width slices do not overlap so net output - sum(slice)*k
 
         //batch 2 x channels 5 x n 1000
@@ -2671,7 +2670,7 @@ mod train_tests {
         reset_print_options();
 
         let input_n = 1000;
-        let motif_width = 100i64;
+        let motif_width = 100u32;
         let step = (motif_width / 1) as usize;//1 - step==motif_width slices do not overlap so net output - sum(slice)*k
 
         //batch 2 x channels 5 x n 1000
@@ -2779,8 +2778,8 @@ mod train_tests {
         let max_dists_len = slices_len(input_n, motif_width, input_slice_step);
 
         let channel = lin_t(input_n).to_device(Cuda(0));
-        let unfolded = channel.unfold(0, motif_width, input_slice_step as i64);
-        let sums = unfolded.sum_dim_intlist(1, true, Float).view(max_dists_len);//sums of the slices should be what test_net produces
+        let unfolded = channel.unfold(0, motif_width as i64, input_slice_step as i64);
+        let sums = unfolded.sum_dim_intlist(1, true, Float).view(max_dists_len as i64);//sums of the slices should be what test_net produces
         debug!("tensor_size_in_bytes={:?}M ", tensor_mem_size(&unfolded)/1024/1024);
         trace!("unfolded=\n{unfolded} \nsums=\n{}", sums);
 
@@ -2788,7 +2787,7 @@ mod train_tests {
             (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cuda(0))?))
         ];
 
-        let channel_1_t = apply_channel_motifs(&mut motif_nets, channel, motif_width, 1, max_dists_len, &Cuda(0))?.view(max_dists_len);
+        let channel_1_t = apply_channel_motifs(&mut motif_nets, channel, motif_width, 1, max_dists_len, &Cuda(0))?.view(max_dists_len as i64);
 
         trace!("channel_1_t=\n{channel_1_t}");
 
@@ -2823,7 +2822,6 @@ mod train_tests {
             )
         ]));
 
-        let max_dists_len = (input_n_0-motif_width)/step as i64 + 1;
 
 
         let channels_motifs_0 = apply_motif_nets(&t_0, Arc::clone(&motif_nets), &Cpu, input_n_0 as u32);
@@ -2865,7 +2863,7 @@ mod train_tests {
         debug!("test_dir={test_dir:?}");
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, 32000)?));
 
-        let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(10, 100)));
+        let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(10)));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net = LabelNetParams::label_node(&params).build_tch_module(&vs_0.root())?;
@@ -2890,7 +2888,7 @@ mod train_tests {
     fn test_save_load_label_model_max_padding() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
-        let channels = 3i64;
+        let channels = 3;
         let max_motif_nodes = 19;
         let slices_len = 23;
 
@@ -2902,7 +2900,7 @@ mod train_tests {
         vs_0.freeze();
 
         let batch = 11i64;
-        let _ = net.tho_forward(&Tensor::rand([batch, channels, max_motif_nodes, slices_len], FLOAT_CPU), false);
+        let _ = net.tho_forward(&Tensor::rand([batch, channels as i64, max_motif_nodes as i64, slices_len as i64], FLOAT_CPU), false);
 
 
         let model_path = ws.write().save_label_model(1, &"test_label", &vs_0, &params)?;
@@ -2994,8 +2992,8 @@ mod train_tests {
             ),
             &mut DummyLabelBatch::new(),
             &Cpu,
-            CHANNELS as i64,
-            MAX_MOTIF_NETS as i64, //max_nets
+            CHANNELS as u32,
+            MAX_MOTIF_NETS as u32, //max_nets
             &VarStore::new(Cpu),
             &Arc::new(RwLock::new(MotifsNetsSelectionApplicable::new(
                 1,
@@ -3127,7 +3125,7 @@ mod train_tests {
         // const FEATURES:i64 = 2i64.pow(10);
 
         let batch_size = 10;
-        const FEATURES:i64 = 10;
+        const FEATURES:u32 = 10;
 
         let res_seq_0 = SeqBuilder::new(FEATURES, None)
             // .func(|t|{
@@ -3470,8 +3468,8 @@ mod train_tests {
                             run_config,
                             batch,
                             &Cuda(0),
-                            CHANNELS as i64,
-                            MAX_MOTIF_NETS as i64, //max_nets
+                            CHANNELS as u32,
+                            MAX_MOTIF_NETS as u32, //max_nets
                             &VarStore::new(Cuda(0)),
                             &Arc::new(RwLock::new(MotifsNetsSelectionApplicable::new(
                                 1,
@@ -3592,7 +3590,7 @@ mod train_tests {
             &TrainFinalNetRunConfig::new(Some(1), CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3), FinalNetParams::new(3)),
             &mut DummyLabelBatch::new(),
             &Cpu,
-            LABELS_SIZE,
+            LABELS_SIZE as u32,
             &VarStore::new(Cpu)
         )?;
 
@@ -3668,7 +3666,7 @@ mod train_tests {
 
     //6 corrs 4 motif models
     //TODO remove?
-    fn save_test_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, base_run_id: RunId, channels: usize, max_motif_batches: i64, max_batch_size: i64, motif_node_params_run_id: usize, window: i64) -> Result<(), ThoosaError> {
+    fn save_test_models(ws: &Arc<RwLock<Box<dyn Workspace>>>, base_run_id: RunId, channels: u32, max_motif_batches: u32, max_batch_size: u32, motif_node_params_run_id: RunId, window: u32) -> Result<(), ThoosaError> {
         // fs::create_dir_all(models_path)?;
 
         // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
@@ -3728,7 +3726,7 @@ mod train_tests {
         fs::write(&input_path.join(name), "lalalal").unwrap();
     }
 
-    fn save_test_final_model(models_path: &PathBuf, features: i64) -> Result<(), ThoosaError> {
+    fn save_test_final_model(models_path: &PathBuf, features: u32) -> Result<(), ThoosaError> {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -3740,8 +3738,8 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: RunId, label:&str, channels: usize, max_motif_nets: i64, max_motif_batches: i64, motif_batch_size: i64) -> Result<(), ThoosaError> {
-        let label_node_params = LabelNetParams::new(channels as i64, max_motif_nets, 0, 0, train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams { num_layers: 0 }));//TODO slices_len, motif_layers
+    fn save_test_label_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, run_id: RunId, label:&str, channels: u32, max_motif_nets: u32, max_motif_batches: u32, motif_batch_size: u32) -> Result<(), ThoosaError> {
+        let label_node_params = LabelNetParams::new(channels, max_motif_nets, 0, 0, train_nets::LabelNetTypeParams::MaxPadding(MaxPaddingNetParams { num_layers: 0 }));//TODO slices_len, motif_layers
 
         let mut vs_0 = VarStore::new(Cpu);
         let _ = LabelNetParams::label_node(&label_node_params).build_tch_module(&vs_0.root())?;
@@ -3752,7 +3750,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn save_test_motif_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, channel: &str, motif_id: usize, window: i64, motif_node_params_run_id: usize) -> Result<(), ThoosaError> {
+    fn save_test_motif_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, channel: &str, motif_id: u32, window: u32, motif_node_params_run_id: RunId) -> Result<(), ThoosaError> {
 
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model = train_nets::motif_node(&MotifNetParams::new(window, 1)).build_tch_module(&vs_0.root())?;

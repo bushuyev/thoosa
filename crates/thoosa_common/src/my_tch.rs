@@ -188,9 +188,9 @@ pub struct MyBatchNorm1d {
 }
 
 impl MyBatchNorm1d {
-    pub fn new<'a, P: Borrow<Path<'a>>>(path:P, num_features:i64, config: BatchNormConfig) -> Self {
+    pub fn new<'a, P: Borrow<Path<'a>>>(path:P, num_features:u32, config: BatchNormConfig) -> Self {
         Self {
-            batch_norm:batch_norm1d(path, num_features, config)
+            batch_norm:batch_norm1d(path, num_features as i64, config)
         }
     }
 }
@@ -345,7 +345,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
     Ok(MyLinear { ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs })
 }
 
-pub fn configure_dense(num_features: i64, num_blocks: usize, num_layers_in_block: usize, kernel: i64, channels: i64) -> Node  {
+pub fn configure_dense(num_features: u32, num_blocks: usize, num_layers_in_block: usize, kernel: u32, channels: u32) -> Node  {
     let mut builder = SeqBuilder::new(num_features, None);
 
     let dense_block = |b:&mut SeqBuilder| b
@@ -536,8 +536,8 @@ mod tch_tests {
 
 
 
-        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n));
-        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n));
+        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n as i64));
+        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n as i64));
 
         debug!("net t_0={:?}, t_1={:?}",
              from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true).view(-1)),
@@ -564,13 +564,13 @@ mod tch_tests {
         Ok(())
     }
 
-    fn test_net(vs: &VarStore, num_features: i64) -> Result<Box<dyn ThoModule>, ThoosaError> {
+    fn test_net(vs: &VarStore, num_features: u32) -> Result<Box<dyn ThoModule>, ThoosaError> {
         SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(Box::new(|t:&Tensor|{
                 t.view((t.size()[0], 1, t.size()[1]))//channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
             }), None)
-            .conv_1d(num_features/10, 1, 1, ConvConfig::default())
+            .conv_1d((num_features / 10), 1, 1, ConvConfig::default())
             .linear_s(1)
             .func(Tensor::sigmoid)
             .end_seq().build_tch_module(&vs.root())
