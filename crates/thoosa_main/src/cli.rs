@@ -33,7 +33,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, load_label_models_ws, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -554,7 +554,7 @@ pub fn run_train_final_nets(
     debug!("run_train_final_node_2: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
     let (label_models, labels_channels_motifs_models) =
-        load_label_and_motif_models(&ws, store, &Cpu, train_label_nodes_run_ids); //TODO move out of run_configs cycle
+        load_label_and_motif_models(&ws, store, &Cpu, train_label_nodes_run_ids.map(|v|v.as_slice())); //TODO move out of run_configs cycle
 
     debug!("run_train_final_node_2: label_models={label_models:?} train_label_nodes_run_ids={train_label_nodes_run_ids:?} labels_channels_motifs_models={labels_channels_motifs_models:?}");
 
@@ -650,19 +650,18 @@ where
     Ok(infer_result)
 }
 
-
 fn load_label_and_motif_models(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
     device: &Device,
-    train_label_nodes_run_ids: Option<&Vec<RunId>>,
+    train_label_nodes_run_ids: Option<&[RunId]>,
 ) -> (
     HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>,
     HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>,
 ) {
     debug!("load_label_and_motif_models: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
-    let label_models = load_label_models_ws(&ws, train_label_nodes_run_ids, device).expect("load_all_label_models_ws");
+    let label_models = ws.read().load_label_models_ws(train_label_nodes_run_ids, device).expect("load_all_label_models_ws");
 
     trace!("load_label_and_motif_models: label_models={label_models:?}");
 

@@ -4,7 +4,7 @@ use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::fs;
 use std::fs::{read_dir, ReadDir};
@@ -105,13 +105,12 @@ impl FsWorkspace {
 
 
 impl Workspace for FsWorkspace {
-
-    fn import_tensor(&self,  t:Tensor, import_id:u32, key:&str)-> Result<ResourceStats, ThoosaError>{
+    fn import_tensor(&self, t: Tensor, import_id: u32, key: &str) -> Result<ResourceStats, ThoosaError> {
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
         trace!("Workspace:import_tensor {path:?} t.size={:?}", t.size());
-        t.save(path).map_err(|e|ThoosaError::new(e.to_string()))?;
+        t.save(path).map_err(|e| ThoosaError::new(e.to_string()))?;
 
-        Ok(ResourceStats::new(t.size().into_iter().map(|v|v as u32).collect::<Vec<_>>()))
+        Ok(ResourceStats::new(t.size().into_iter().map(|v| v as u32).collect::<Vec<_>>()))
     }
 
     fn base_path_as_str(&self) -> String {
@@ -187,13 +186,12 @@ impl Workspace for FsWorkspace {
         Ok(())
     }
 
-    fn load_motif_models<'a>(&self, channel:u32, motif_id:u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError> {
+    fn load_motif_models<'a>(&self, channel: u32, motif_id: u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError> {
         debug!("load_motif_models_ws: channel={channel} motif_selection_run_id={motif_id}");
 
         let channel_motif_models_paths = self.motif_models(channel, motif_id)?;
 
-        channel_motif_models_paths.into_iter().map(|(model, config)|{
-
+        channel_motif_models_paths.into_iter().map(|(model, config)| {
             let motif_node_params = MotifNetParams::from_file(&config)?;
 
             debug!("load_motif_models_ws: model={model:?} config={config:?} motif_node_params={motif_node_params:?}");
@@ -202,12 +200,54 @@ impl Workspace for FsWorkspace {
             let module = ThoModuleWithStore::load(motif_node(&motif_node_params), model, device.clone())?;
 
             Ok((motif_node_params, module))
-
         }).collect()
-
     }
 
-    /**
+    fn load_label_models_ws(&self, train_label_nodes_run_ids: Option<&[RunId]>, device: &Device) -> Result<HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>, ThoosaError> {
+        let label_models_paths = self.label_models()?;
+
+        debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
+
+        let train_label_nodes_run_ids_hash = train_label_nodes_run_ids.map(|v| v.into_iter().collect::<HashSet<_>>());
+
+        debug!("load_all_label_models_ws: train_label_nodes_run_ids_hash={train_label_nodes_run_ids_hash:?}");
+
+        label_models_paths.into_iter().try_fold(HashMap::new(), |mut a, (label, paths)| {
+            let models: Vec<(RunId, LabelNetParams, ThoModuleWithStore)> = paths.into_iter().filter_map(|(model_path, params_path)| {
+                let run_id = FsWorkspace::model_path_to_run_id(&model_path);
+                if train_label_nodes_run_ids_hash.as_ref().map(|set| !set.contains(&run_id)).unwrap_or(true) {
+                    debug!("load_all_label_models_ws: skipping run_id={run_id}");
+                    return None;
+                }
+
+                let label_node_params = LabelNetParams::from_file(&params_path).expect(format!("no {params_path:?}").as_str());
+
+                debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
+
+                let node = ThoModuleWithStore::load(LabelNetParams::label_net(&label_node_params), model_path.clone(), *device).expect(format!("can't load {model_path:?}").as_str());
+
+                debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} loaded");
+                // vs.load(&model_path).expect(format!("no {model_path:?}").as_str());
+                // vs.freeze();
+
+                Some((run_id, label_node_params, node))
+            }).collect();
+
+            a.insert(
+                label,
+                models
+            );
+
+            Ok(a)
+        })
+    }
+
+    fn load_label_model<'a>(&self, train_label_net_run_id: RunId, device: &'a Device) -> Result<Vec<(LabelNetParams, ThoModuleWithStore)>, ThoosaError>{
+        todo!()
+    }
+
+
+/**
     returns Vec<safetensors_path, config jsonpath>
      */
     fn motif_models(&self, channel: u32, motif_id: u32) -> Result<Vec<(PathBuf, PathBuf)>, ThoosaError> {
@@ -341,6 +381,8 @@ pub trait Workspace:Sync + Send {
     fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError>;
     fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError>;
     fn load_motif_models<'a>(&self, channel:u32, motif_id:u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError>;
+    fn load_label_model<'a>(&self, train_label_net_run_id: RunId, device: &'a Device) -> Result<Vec<(LabelNetParams, ThoModuleWithStore)>, ThoosaError>;
+    fn load_label_models_ws<'a>(&self, train_label_nodes_run_ids: Option<&'a [RunId]>, device: &'a Device) -> Result<HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>, ThoosaError>;//TODO remove
     /**
     returns Vec<safetensors_path, config jsonpath>
      */
