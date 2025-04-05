@@ -291,16 +291,24 @@ impl <'b> LoadingTensorsDataBatch<'b> {
     }
 
     fn load_tensor(loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, area: u64, x_y_acc_in_exec: Arc<Mutex<Vec<(Box<Tensor>, i64)>>>, wg_exec: WaitGroup, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send + 'b>>>>, resource_id: Resource, class: i64) {
+        debug!("LoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area}");
+
         loader.write().exec_scoped(move |loader, keys_purge| {
             async move {
-                let t = Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, area).await; //TODO cache area
+                debug!("LoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area}");
+                let resource_id_debug = resource_id.clone();
+                let t = Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, area).await;
+
+                debug!("LoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area}");
+
                 let t = if let Some(transform) = transform_fn {
                     transform.read()(t)
                 } else {
                     t
                 };
-
+                debug!("LoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area}");
                 x_y_acc_in_exec.lock().push((t, class));
+                debug!("LoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area}");
                 drop(wg_exec);
             }.boxed()
         });
@@ -542,7 +550,7 @@ pub fn run_opt_train_label_nets(
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
     train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
     valid_labels_resources: Rc<Vec<(i64, Vec <Resource>)>>,
-    channels_motifs_nets:Arc<RwLock<MotifsNetsSelectionApplicable>>,
+    channels_motifs_nets:Arc<MotifsNetsSelectionApplicable>,
     label: &String,
     fixed_config: &OptConfig,
     slices_len: i64,
@@ -560,9 +568,9 @@ pub fn run_opt_train_label_nets(
     let channels = ws.read().channels();
     let device = device.clone();
     let max_input = ws.read().max_input();
-    let nets_count = channels_motifs_nets.read().nets_count();
+    let nets_count = channels_motifs_nets.nets_count();
     debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} channels={channels} cuda_mem={:?}", cuda_mem());
-
+    let channels_motifs_nets_for_batch = Arc::clone(&channels_motifs_nets);
     opt_train(
         fixed_config,
         |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, _listener: &mut dyn TrainListener|{//TODO add _listener to train_label_nodes_2
@@ -589,6 +597,8 @@ pub fn run_opt_train_label_nets(
             // ));
 
             let mut result = None::<(f32, LabelNetParams)>;
+            // let net_type = run_config.net.clone();
+            let channels_motifs_nets_for_batch = Arc::clone(&channels_motifs_nets);
             run_split_on_oom(
                 Reducer::new(LoadingTensorsDataBatch::new(
                     train_labels_resources.clone(),
@@ -596,15 +606,15 @@ pub fn run_opt_train_label_nets(
                     run_config.common_training_args.batch_size as usize,
                     Arc::clone(&loader),
                     device.clone(),
-                    Some(Box::new(|t|{
+                    Some(Box::new(move |t|{
                         match &run_config.net {
                             LabelNetTypeArgs::MaxPadding(params) => {
                                 // apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nets), &device, max_input as u32)
-                                channels_motifs_nets.write().apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
+                                channels_motifs_nets_for_batch.apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
                             }
                             LabelNetTypeArgs::FixedNumSlices(params) => {
                                 // apply_motif_nets(&t, Arc::clone(&channels_motifs_nets), &device, params.slices_len)
-                                channels_motifs_nets.write().apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
+                                channels_motifs_nets_for_batch.apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
                             }
                         }
                     }))
@@ -628,7 +638,7 @@ pub fn run_opt_train_label_nets(
         device,
         "label"
     ).map(|(var_store, label_node_params, run_config, min_loss)| {
-        Box::new(TrainLabelNetsRunConfigResult::new(channels_motifs_nets.read().motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
+        Box::new(TrainLabelNetsRunConfigResult::new(channels_motifs_nets.motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
     })
 }
 
@@ -641,14 +651,16 @@ pub fn train_label_net<B:DataBatch> (
     channels:u32,
     max_nets:u32,
     vs_0: &VarStore,
-    channels_motifs_nets:&Arc<RwLock<MotifsNetsSelectionApplicable>>,
+    channels_motifs_nets:&Arc<MotifsNetsSelectionApplicable>,
 ) ->  Result<(f32, LabelNetParams), ThoosaError> {
+
+    let guard = channels_motifs_nets;
 
     let label_node_params = match &run_config.net {//TODO return net params from net builder
         LabelNetTypeArgs::MaxPadding(config) => {
             debug!("train_label_net: LabelNetType::MaxPadding(config={config:?})");
 
-            let guard = channels_motifs_nets.read();
+
             let find_motifs_run_config = guard.find_motifs_applicable.run_config();
             let slices_len = slices_len(ws.read().max_input(), find_motifs_run_config.window(), find_motifs_run_config.step());
 
@@ -659,7 +671,9 @@ pub fn train_label_net<B:DataBatch> (
         LabelNetTypeArgs::FixedNumSlices(config) => {
             debug!("train_label_net: LabelNetType::FixedNumSlices(config={config:?})");
 
-            LabelNetParams::new(channels, max_nets, config.num_layers, config.slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(config.num_layers)))
+
+
+            LabelNetParams::new(channels, max_nets, config.num_layers, config.slices_len, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(config.num_layers, guard.nets_count())))
 
         }
     };
@@ -1472,7 +1486,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
                             debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: channel={channel} motif_nodes.len()={}", motif_nodes.len());
 
                             if motif_nodes.is_empty() {
-                                Ok(Tensor::zeros([unfolded.size()[0], self.nets_count() as i64, max_num_slices as i64], (Float, self.device)))
+                                Ok(Tensor::zeros([self.nets_count() as i64, max_num_slices as i64], (Float, self.device)))
                             } else {
 
                                 let unfolded_channel = unfolded.i((channel as i64, .., ..));//channel, slices, slice
@@ -1651,11 +1665,12 @@ impl MaxPaddingNetParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FixedNumSlicesNetParams {
     num_layers: u32,
+    nets_count: u32,
 }
 
 impl FixedNumSlicesNetParams {
-    pub fn new(num_layers: u32) -> Self {
-        Self { num_layers }
+    pub fn new(num_layers: u32, nets_count: u32) -> Self {
+        Self { num_layers, nets_count }
     }
 }
 
@@ -1685,7 +1700,7 @@ impl LabelNetParams {
     fn label_net_fixed_num_slices(params:&LabelNetParams, fixed_num_slices_params: &FixedNumSlicesNetParams) -> Node {
         debug!("label_node_fixed_num_slices: params={:?}", params);
 
-        let channels_motifs=  params.channels * params.motif_nodes;
+        let nets_count =  fixed_num_slices_params.nets_count;//sum of motif nets in all channels
         SeqBuilder::new(params.slices_len, None)//Some(2)
             .closure(Box::new(move |t:&Tensor|{
                 debug!("label_node_fixed_num_slices: input.size={:?}", t.size());
@@ -1693,7 +1708,7 @@ impl LabelNetParams {
 
             }), None)
             .split(
-                (0..channels_motifs).map( |_i| {
+                (0..nets_count).map( |_i| {
                     let num_features = params.slices_len;
                     let mut builder = SeqBuilder::new(num_features, None);
                     let mut net = builder
@@ -1715,7 +1730,7 @@ impl LabelNetParams {
 
                 Box::new(
                     move |t:&Tensor|
-                        (0..channels_motifs)
+                        (0..nets_count)
                             .map(|net_i|{
                                 t.i((.., net_i as i64, ..))
                             })
@@ -1740,7 +1755,7 @@ impl LabelNetParams {
                 // t_0
                 t.shallow_clone()
 
-            }), Some(channels_motifs))
+            }), Some(nets_count))
 
             .linear()
             // .func(Tensor::relu)
@@ -2259,6 +2274,25 @@ fn apply_motif_nets_with_padding(
     channels_motifs
 }
 
+#[derive(Debug)]
+pub struct LabelNetApplicable {
+
+}
+
+
+impl LabelNetApplicable {
+    pub fn new(train_labels_run_id:RunId, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device:Device) -> LabelNetApplicable {
+        LabelNetApplicable {
+
+        }
+    }
+}
+
+impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for LabelNetApplicable {
+    fn apply(&self, subject: &Box<Tensor>, options: MotifsNetsPadding) -> Result<Box<Tensor>, ThoosaError> {
+        todo!()
+    }
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainFinalNetArgs {
@@ -2322,6 +2356,10 @@ impl TrainFinalNetRunConfig {
         Self { id, common_training_args, net }
     }
 }
+
+
+
+
 
 #[derive(Debug, Args, Clone)]
 pub struct InferArgs {
@@ -2863,7 +2901,7 @@ mod train_tests {
         debug!("test_dir={test_dir:?}");
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 3, 1000, 32000)?));
 
-        let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(10)));
+        let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(10, 100)));
 
         let mut vs_0 = VarStore::new(Cpu);
         let net = LabelNetParams::label_net(&params).build_tch_module(&vs_0.root())?;
@@ -2995,12 +3033,12 @@ mod train_tests {
             CHANNELS as u32,
             MAX_MOTIF_NETS as u32, //max_nets
             &VarStore::new(Cpu),
-            &Arc::new(RwLock::new(MotifsNetsSelectionApplicable::new(
+            &Arc::new(MotifsNetsSelectionApplicable::new(
                 1,
                 &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![vec![(0, 0.0)]]))),
                 &ws,
                 Cpu
-            )))
+            ))
         )?;
 
         debug!("test_train_label: loss={loss:?} params={params:?}");
@@ -3017,92 +3055,6 @@ mod train_tests {
 
     fn dummy_1(data: &mut [f64; 11]) -> (Tensor, f32) {
         (Tensor::from_slice(data).to_kind(Float) + 1.0, 1.0)
-    }
-
-    #[test]
-    fn test_gpt()-> Result<(), ThoosaError> {
-        let _device = CudaDevice::new(0)?;
-        let cudarc_lib = unsafe {
-            let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        };
-        // Choose your device: either CPU or CUDA(0) if you have a GPU.
-        let device = Device::Cuda(0); // or Device::Cpu
-
-        // Create a variable store for the model parameters.
-        let vs = nn::VarStore::new(device);
-
-        // Define a simple feed-forward network:
-        //   Input(11) -> Linear(11->16) -> ReLU -> Linear(16->8) -> ReLU
-        //   -> Linear(8->1) -> Sigmoid
-        let net = nn::seq()
-            .add(nn::linear(&vs.root(), 11, 16, Default::default()))
-            .add_fn(|x| x.relu())
-            .add(nn::linear(&vs.root(), 16, 8, Default::default()))
-            .add_fn(|x| x.relu())
-            .add(nn::linear(&vs.root(), 8, 1, Default::default()))
-            .add_fn(|x| x.sigmoid());
-
-        // Generate some synthetic data for binary classification.
-        // We'll say: 50% chance we add 100.0 to the inputs and label = 1,
-        // otherwise label = 0.
-        let mut rng = thread_rng();
-        let (input_vec, target_vec): (Vec<Tensor>, Vec<f32>) = (0..20)
-            .map(|_| {
-                // each "row" is 11 features
-                let mut data = [0.0; 11];
-                rng.fill(&mut data);
-
-                if rng.gen_bool(0.5) {
-                    dummy_1(&mut data)
-                } else {
-                    dummy_0(&mut data)
-                }
-            })
-            .unzip();
-
-        // Stack the data along dimension 0 => shape [20, 11]
-        let input = Tensor::stack(&input_vec, 0).to_device(device);
-        // Convert targets to a Tensor => shape [20]
-        let target = Tensor::from_slice(&target_vec).to_device(device);
-
-        // Create an optimizer, e.g., SGD with learning rate 1e-2
-        let mut opt = nn::Sgd::default().build(&vs, 1e-2)?;
-
-        // Training loop
-        let epochs = 1000;
-        for epoch in 0..epochs {
-            // Forward pass
-            let logits = net.forward(&input); // shape [20, 1]
-            // Binary cross-entropy expects (preds, target),
-            // so we unsqueeze target to match shape [20, 1].
-            let loss = logits.binary_cross_entropy(
-                &target.unsqueeze(-1),
-                None::<Tensor>,
-                Reduction::Mean,
-            );
-
-            // Backprop + update weights
-            opt.backward_step(&loss);
-
-            // Print the loss occasionally
-            if epoch % 50 == 0 {
-                println!("Epoch {:3}, loss: {:8.6}", epoch, loss.double_value(&[]));
-            }
-        }
-
-        let mut data = [0.0; 11];
-        rng.fill(&mut data);
-
-        // Example: do a forward pass on the same data after training
-        println!("Predictions 1:\n{:?}", net.forward(&Tensor::stack(&[
-            dummy_1(&mut data).0
-        ], 0).to_device(device)).squeeze().to_device(Cpu));
-
-        println!("Predictions 0:\n{:?}", net.forward(&Tensor::stack(&[
-            dummy_0(&mut data).0
-        ], 0).to_device(device)).squeeze().to_device(Cpu));
-
-        Ok(())
     }
 
     fn asc_t<const S:usize>(mut data: [f32; S]) -> Tensor {
@@ -3471,12 +3423,12 @@ mod train_tests {
                             CHANNELS as u32,
                             MAX_MOTIF_NETS as u32, //max_nets
                             &VarStore::new(Cuda(0)),
-                            &Arc::new(RwLock::new(MotifsNetsSelectionApplicable::new(
+                            &Arc::new(MotifsNetsSelectionApplicable::new(
                                 1,
                                 &Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?)),
                                 &ws,
                                 Cpu
-                            )))
+                            ))
 
                         )
                     },

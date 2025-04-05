@@ -92,12 +92,12 @@ where
 
             debug!("preload_vec: adding key={key:?}");
 
-            let loader = Arc::clone(&self_lock.loader_fn);
+            let loader_fn = Arc::clone(&self_lock.loader_fn);
             let self_arc_pool = Arc::clone(&self_arc);
 
             let key = key.clone();
 
-            self_lock.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
+            self_lock.loader_pool.spawn(move || Self::loader_task(cache_area, loader_fn, self_arc_pool, &key));
         }
         ResourceFuture::new(Arc::clone(&self_arc), key).boxed()
     }

@@ -784,7 +784,7 @@ pub fn run_train_label_nets(
             // (
             //     *select_motifs_for_label_run_id,
 
-                Arc::new(RwLock::new(
+                Arc::new(/*RwLock::new(*/
 
                     // store
                     //     .lock()
@@ -808,10 +808,10 @@ pub fn run_train_label_nets(
                     //     .collect::<Vec<(FindMotifsRunConfig, Vec<_>)>>()
                     MotifsNetsSelectionApplicable::new(*select_motifs_for_label_run_id, store, ws, devices[0])
 
-                ))
+                )//)
             // )
         })
-        .collect::<Vec<Arc<RwLock<MotifsNetsSelectionApplicable>>>>();
+        .collect::<Vec<Arc<MotifsNetsSelectionApplicable>>>();
 
     let chunk_len = max(1, train_labels_resource_keys.len() / devices.len());
 
@@ -862,7 +862,7 @@ pub fn run_train_label_nets(
                     // let motif_width = find_motifs_run_config.window(); //channels_motifs_models.read().iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
                     // let slices_len = slices_len(ws.read().max_input() as i64, motif_width, find_motifs_run_config.step());
                     if log::log_enabled!(Level::Debug){
-                        debug!("run_train_label_nodes: label={label} channels={channels} motifs_nets_selection_applicable.len={:?}", motifs_nets_selection_applicable.read().nets_count());
+                        debug!("run_train_label_nodes: label={label} channels={channels} motifs_nets_selection_applicable.len={:?}", motifs_nets_selection_applicable.nets_count());
                     }
                     trace!("run_train_label_nodes: label={label} channels_motifs_models={motifs_nets_selection_applicable:?}");
 
@@ -1763,7 +1763,7 @@ mod cli_tests {
                             net: {
                                 FixedNumSlices: {
                                     num_layers: "2",
-                                    slices_len: "100"
+                                    slices_len: "111"
                                 }
                             }
                         }"#,

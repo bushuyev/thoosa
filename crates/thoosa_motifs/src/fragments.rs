@@ -333,7 +333,7 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
             loader.write().exec_scoped(move |loader, _keys_purge| {//TODO purge
                 async move {
                     let tensor_idx_id = resource.id();
-                    let t = LoadRunner::<Box<Tensor>>::load_future(loader, resource, 0).await;
+                    let t = Loader::<Box<Tensor>>::load_future(loader, resource, 0).await;
                     let t= find_motifs_run_config_applicable.apply(&t, FindMotifsRunConfigOptions::Filter).unwrap();
 
                     debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
