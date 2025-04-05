@@ -370,7 +370,7 @@ impl SplittableDataBatch for LoadingTensorsDataBatch<'_> {}
 struct ClassTensorsLoaderData  {
     train_resources: Vec<(Resource, Vec<f32>)>,
     valid_resources: Vec<(Resource, Vec<f32>)>,
-    executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
     batch_size: usize,
     device:Device,
     transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>
@@ -393,7 +393,7 @@ impl ClassTensorsLoaderData  {
         train_loader: Vec<(Resource, Vec<f32>)>,
         valid_loader: Vec<(Resource, Vec<f32>)>,
         batch_size: usize,
-        executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+        loader: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
         device:Device,
         transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>
     ) -> Self {
@@ -401,7 +401,7 @@ impl ClassTensorsLoaderData  {
             train_resources: train_loader,
             valid_resources: valid_loader,
             batch_size,
-            executor,
+            loader,
             device,
             transform_fn// transform_fn.map(|f|Arc::new(RwLock::new(f)))
         }
@@ -412,11 +412,11 @@ impl ClassTensorsLoaderData  {
 impl DataBatch for ClassTensorsLoaderData {
 
     fn train_batch(&self) -> (Tensor, Tensor){
-        Self::batch(&self.train_resources, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.as_ref())
+        Self::batch(&self.train_resources, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.as_ref())
     }
 
     fn valid_batch(&self) -> (Tensor, Tensor){
-        Self::batch(&self.valid_resources, self.batch_size, Arc::clone(&self.executor), &self.device, self.transform_fn.as_ref())
+        Self::batch(&self.valid_resources, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.as_ref())
     }
 }
 
@@ -610,11 +610,11 @@ pub fn run_opt_train_label_nets(
                         match &run_config.net {
                             LabelNetTypeArgs::MaxPadding(params) => {
                                 // apply_motif_nets_with_padding(&t, Arc::clone(&channels_motifs_nets), &device, max_input as u32)
-                                channels_motifs_nets_for_batch.apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
+                                channels_motifs_nets_for_batch.apply(&Box::new(t.shallow_clone()), NetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
                             }
                             LabelNetTypeArgs::FixedNumSlices(params) => {
                                 // apply_motif_nets(&t, Arc::clone(&channels_motifs_nets), &device, params.slices_len)
-                                channels_motifs_nets_for_batch.apply(&Box::new(t.shallow_clone()), MotifsNetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
+                                channels_motifs_nets_for_batch.apply(&Box::new(t.shallow_clone()), NetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
                             }
                         }
                     }))
@@ -757,27 +757,35 @@ pub fn run_opt_train_final_net(
 
     assert_eq!(labels.len() as u32, labels_len);
 
-    let max_input = ws.read().max_input() as u32;
+    let max_input = ws.read().max_input();
+
+    let label_nets_applicable = Arc::new(LabelNetsApplicable::load_all_filtered_by_run_ids(train_label_nodes_run_ids.map(|v|v.as_slice()), store, ws, device));
+
 
 
     opt_train(
         fixed_config,
-        |vs:&VarStore, run_config_values:&TrainFinalNetRunConfig, listener: &mut dyn TrainListener|{
-            let batch = Rc::new(Box::new(ClassTensorsLoaderData::new(
+         |vs:&VarStore, run_config_values:&TrainFinalNetRunConfig, listener: &mut dyn TrainListener|{
+             let label_nets_applicable_rc = Arc::clone(&label_nets_applicable);
+
+            let  batch = Rc::new(Box::new(ClassTensorsLoaderData::new(
                 train_resources.clone(),
                 valid_resources.clone(),
                 run_config_values.common_training_args.batch_size as usize,
                 Arc::clone(&loader),
                 device.clone(),
 
-                None
+                None,
+                // Some(Box::new(move |t|{
+                //     label_nets_applicable_rc.apply(&t, ()).expect("label_nets_applicable.apply failed")
+                // }))
             )));
 
             train_final_node(
                 ws,
                 run_config_values,
                 &mut BatchTransform::new(Rc::clone(&batch), |t|{
-                    apply_motif_and_label_nets(&Box::new(t), &mut label_models, &labels_channels_motifs_models_rw, &device, &labels, max_input)
+                    *label_nets_applicable_rc.apply(&Box::new(t.shallow_clone()), ()).expect("label_nets_applicable.apply failed")
                 }),
                 &device,
                 labels_len,
@@ -1414,20 +1422,20 @@ impl MotifsNetsSelectionApplicable {
     }
 }
 
-#[derive(Debug)]
-pub enum MotifsNetsPadding {
+#[derive(Debug, Copy, Clone)]
+pub enum NetsPadding {
     Max,
     Fixed(u32)
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSelectionApplicable {
+impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionApplicable {
 
-    fn apply(&self, t: &Box<Tensor>, options: MotifsNetsPadding) -> Result<Box<Tensor>, ThoosaError> {
+    fn apply(&self, t: &Box<Tensor>, options: NetsPadding) -> Result<Box<Tensor>, ThoosaError> {
         debug!("Applicable for MotifsNetsSelectionApplicable::apply: t.size={:?} options={options:?}", t.size());
         let motif_width= self.find_motifs_applicable.run_config().window;
 
         match options {
-            MotifsNetsPadding::Max => {
+            NetsPadding::Max => {
 
                 let unfolded = self.find_motifs_applicable.apply(t, FindMotifsRunConfigOptions::FilterUnfold)?;
 
@@ -1510,9 +1518,9 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
                 )))
             }
             //returns sum of motifs in all channels x slices_len
-            MotifsNetsPadding::Fixed(slices_len) => {
+            NetsPadding::Fixed(slices_len) => {
                 let (input_slice_step, pad) = clc_step(t.size()[1] as u32, motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
-                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: input_slice_stepsize={input_slice_step} pad={pad}");
+                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: input_slice_step={input_slice_step} pad={pad}");
 
                 let filtered = self.find_motifs_applicable.apply(
                     &Box::new(t.pad([0, pad as i64], "constant", 0.)), FindMotifsRunConfigOptions::Filter
@@ -1527,14 +1535,14 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for MotifsNetsSele
                         .iter()
                         .enumerate()
                         .filter(|(_, motif_nodes)|!motif_nodes.is_empty())
-                        .map(|(channel, motif_nodes)| {
+                        .map(|(channel, motif_nets)| {
 
                             let unfolded_channel = unfolded.i((channel as i64, .., ..));//channel, slices, slice
 
                             debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: unfolded.size={:?}", unfolded_channel.size());
                             trace!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: unfolded_channel=\n{unfolded_channel}");
 
-                            let motif_dists = motif_nodes.iter().map(|(_params, net)| {
+                            let motif_dists = motif_nets.iter().map(|(_params, net)| {
                                 // net.set_device(device.clone());
                                 debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: net={net:?}");
 
@@ -2234,51 +2242,98 @@ fn apply_motif_nets_with_padding(
 }
 
 #[derive(Debug)]
-pub struct LabelNetsApplicable {
+pub struct LabelNetApplicable {
 
-    pub motifs_nets_selection_applicable: MotifsNetsSelectionApplicable
+    pub motifs_nets_selection_applicable: MotifsNetsSelectionApplicable,
+    pub label_net_params:LabelNetParams,
+    pub module:ThoModuleWithStore
 }
 
+impl LabelNetApplicable {
+    pub fn motifs_nets_selection_applicable_options(&self)->NetsPadding {
+        match self.label_net_params.net_type {
+            LabelNetTypeParams::MaxPadding(_) => {
+                NetsPadding::Max
+            }
+            LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{ num_layers, nets_count }) => {
+                NetsPadding::Fixed(self.label_net_params.slices_len)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LabelNetsApplicable {
+    label_applicables:HashMap<String, Vec<LabelNetApplicable>>
+}
 
 impl LabelNetsApplicable {
 
-    pub fn new(train_label_nodes_run_ids: Option<&[RunId]>, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device:Device) -> HashMap<String, Vec<LabelNetsApplicable>>{
+    pub fn load_all_filtered_by_run_ids(train_label_nodes_run_ids: Option<&[RunId]>, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> LabelNetsApplicable {
         let label_models = ws.read().load_label_models_ws(train_label_nodes_run_ids, &device).expect("load_all_label_models_ws");
 
-        label_models.into_iter().fold(HashMap::new(), |a, (label, label_run_id_nodes)|{
+        LabelNetsApplicable {
+            label_applicables: label_models.into_iter().fold(HashMap::new(), |mut a, (label, label_run_id_nodes)| {
+                let label_applicables = label_run_id_nodes.into_iter().map(|(label_run_id, label_net_params, module)| {
+                    let motif_selection_run_ids = store
+                        .lock()
+                        .get_input_run_ids(label_run_id, Some(&SelectMotifsRunConfig::type_name()))
+                        .expect("get_input_run_ids(motif_node_params_selection_run_ids")
+                        .into_iter()
+                        .collect::<HashSet<RunId>>(); //TODO distinct in sql?
 
-            let label_applicables = label_run_id_nodes.into_iter().map(|(label_run_id, label_node_params, node)| {
+                    debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
 
-                let motif_selection_run_ids = store
-                    .lock()
-                    .get_input_run_ids(label_run_id, Some(&SelectMotifsRunConfig::type_name()))
-                    .expect("get_input_run_ids(motif_node_params_selection_run_ids")
-                    .into_iter()
-                    .collect::<HashSet<RunId>>(); //TODO distinct in sql?
+                    assert_eq!(motif_selection_run_ids.len(), 1);
 
-                debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
+                    LabelNetApplicable {
+                        motifs_nets_selection_applicable: MotifsNetsSelectionApplicable::new(motif_selection_run_ids.into_iter().next().unwrap(), store, ws, device),
+                        label_net_params,
+                        module,
+                    }
+                }).collect::<Vec<_>>();
 
-                assert_eq!(motif_selection_run_ids.len(), 1);
-
-
-            }).collect::<Vec<_>>();
-
-
-            //
-            // let motifs_nets_selection_applicable= crate::train_nets::MotifsNetsSelectionApplicable::new()
-            // LabelNetsApplicable {
-            //     motifs_nets_selection_applicable
-            // }
-            //
-            a
-        })
+                a.insert(label, label_applicables);
+                a
+            })
         }
+    }
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, MotifsNetsPadding> for LabelNetsApplicable {
-    fn apply(&self, subject: &Box<Tensor>, options: MotifsNetsPadding) -> Result<Box<Tensor>, ThoosaError> {
-        todo!()
+impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetApplicable {
+    fn apply(&self, batch: &Box<Tensor>, _: ()) -> Result<Box<Tensor>, ThoosaError> {
+        Ok(
+            Box::new(self.module.infer(
+                //label net accepts batch, motif net - single tensor
+                &Tensor::stack(
+                    (0..batch.size()[0])
+                        .map(|i| self.motifs_nets_selection_applicable.apply(&Box::new(batch.i((i, .., ..))), self.motifs_nets_selection_applicable_options()))
+                        .collect::<Result<Vec<_>, _>>()?.as_slice(),
+                    0,
+                )
+            ))
+        )
     }
+}
+
+impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetsApplicable {
+    fn apply(&self, subject: &Box<Tensor>, _: ()) -> Result<Box<Tensor>, ThoosaError> {
+
+        Ok(
+            Box::new(
+                Tensor::stack(
+                    self.label_applicables.iter().map(|(label, label_applicable)|{
+                        label_applicable[0].apply(subject, ())
+                    }).collect::<Result<Vec<_>, _>>()?.as_slice(),
+
+                    1
+                )
+            )
+
+
+        )
+    }
+
 }
 
 #[derive(Args, Debug, Clone)]
@@ -2453,7 +2508,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, InputFilterRangeOrValue, LabelNetTypeArgs, RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, MotifsNetsPadding, LabelNetTypeArgsRangeOrValue, MaxPaddingNetParams, FixedNumSlicesNetParams, LabelNetsApplicable};
+    use crate::train_nets::{apply_channel_motifs, apply_channel_motifs_with_padding, apply_motif_and_label_nets, apply_motif_nets, apply_motif_nets_with_padding, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FinalNodeParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, InputFilterRangeOrValue, LabelNetTypeArgs, RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, NetsPadding, LabelNetTypeArgsRangeOrValue, MaxPaddingNetParams, FixedNumSlicesNetParams, LabelNetApplicable, LabelNetsApplicable};
     use crate::train_nets::{ InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
@@ -2630,7 +2685,7 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(&Box::new(t_0), MotifsNetsPadding::Max)?;
+        let t_0_applied = applicable.apply(&Box::new(t_0), NetsPadding::Max)?;
 
         debug!("t_0_applied.size={:?}", t_0_applied.size());
         trace!("t_0_0_applied=\n{}", t_0_applied.i((0, ..)));
@@ -2655,7 +2710,7 @@ mod train_tests {
 
         assert_eq!(channel_1_motifs, t_0_applied.i((1, ..)).view((1, 2, 10)));
 
-        let t_1_applied = applicable.apply(&Box::new(t_1), MotifsNetsPadding::Max)?;
+        let t_1_applied = applicable.apply(&Box::new(t_1), NetsPadding::Max)?;
 
         debug!("t_1_applied.size={:?}", t_1_applied.size());
         trace!("t_1_applied=\n{}", t_1_applied.i((0, ..)));
@@ -2715,7 +2770,7 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(&Box::new(t_0), MotifsNetsPadding::Fixed(11))?;
+        let t_0_applied = applicable.apply(&Box::new(t_0), NetsPadding::Fixed(11))?;
 
         debug!("t_0_applied.size={:?}", t_0_applied.size());
         trace!("t_0_applied=\n{}", t_0_applied);
@@ -2728,7 +2783,7 @@ mod train_tests {
 
         assert_eq!(channel_0_motifs, *t_0_applied);
 
-        let t_1_applied = applicable.apply(&Box::new(t_1), MotifsNetsPadding::Fixed(11))?;
+        let t_1_applied = applicable.apply(&Box::new(t_1), NetsPadding::Fixed(11))?;
 
         debug!("t_1_applied.size={:?}", t_1_applied.size());
         trace!("t_1_applied=\n{}", t_1_applied);
@@ -2758,7 +2813,7 @@ mod train_tests {
         let t_1 = lin_test_tensor(input_n / 2);
 
 
-        let applicable = LabelNetsApplicable::new(
+        let applicable = LabelNetsApplicable::load_all_filtered_by_run_ids(
             Some(&[1, 2]),
             &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],

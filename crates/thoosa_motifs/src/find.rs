@@ -51,7 +51,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Float};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, SlicesFilter};
+use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
@@ -1033,38 +1033,6 @@ impl SelectMotifsArgs {
         Labeled::new(self.resources_group.clone())
     }
 
-}
-
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
-struct ByLabelVarianceConfig {
-    #[in_map]
-    _dummy: u32,//TODO fix ThoosaRunConfig to let empty configs
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap,  Clone, PartialEq, Debug, Deserialize)]
-enum MotifSelector {
-    ByLabelVariance(ByLabelVarianceConfig)//TODO
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
-#[run_config_grid]
-pub struct SelectMotifsRunConfig {
-    #[in_map]
-    id:Option<RunId>,
-
-    #[in_map]
-    #[run_config]
-    motif_selector: MotifSelector
-}
-
-impl SelectMotifsRunConfig {
-    pub fn new() -> Self {
-        Self {
-            id:None,
-            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default())
-        }
-    }
 }
 
 

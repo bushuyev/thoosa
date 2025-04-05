@@ -324,3 +324,34 @@ mod tests {
 
 
 }
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_grid]
+pub struct SelectMotifsRunConfig {
+    #[in_map]
+    pub id:Option<RunId>,
+
+    #[in_map]
+    #[run_config]
+    pub motif_selector: MotifSelector
+}
+
+impl SelectMotifsRunConfig {
+    pub fn new() -> Self {
+        Self {
+            id:None,
+            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default())
+        }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct ByLabelVarianceConfig {
+    #[in_map]
+    _dummy: u32,//TODO fix ThoosaRunConfig to let empty configs
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap,  Clone, PartialEq, Debug, Deserialize)]
+pub enum MotifSelector {
+    ByLabelVariance(ByLabelVarianceConfig)//TODO
+}
