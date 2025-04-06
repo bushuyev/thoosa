@@ -117,14 +117,12 @@ impl <T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hype
 pub type RunId = u32;
 
 pub trait RunConfig:Debug {
-
     fn set_id(&mut self, id: RunId);
 
     fn type_name()->&'static str;
 }
 
 pub trait Applicable<S, R, O>:Debug {
-
     fn apply(&self, subject:S, options: O) ->Result<R, ThoosaError>;
 }
 

@@ -461,7 +461,7 @@ mod distance_tests {
 
         //t_label_tensor_channel
         let window = 1000;
-        let ws = mock_workspace_simp(2, 100, 1000);
+        let ws = mock_workspace_simp(None, 2, 100, 1000);
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_0.into()], //sig_0 at idx 0
@@ -562,7 +562,7 @@ mod distance_tests {
         ]);
 
 
-        let ws = mock_workspace_simp(2, 100, 1000);
+        let ws = mock_workspace_simp(None, 2, 100, 1000);
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(&ws, Cpu), &vec![t_0.into()], vec![0], None).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(&ws, Cpu), &vec![t_1.into()], vec![0], None).t;
 
@@ -624,7 +624,7 @@ mod distance_tests {
         let t_11 = Tensor::from_slice(&a_11).view((1, -1));
 
         let run_config = FindMotifsRunConfig::new(None, 1, 2, None, None);
-        let mut run_config_applicable = run_config.to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu);
+        let mut run_config_applicable = run_config.to_applicable(&mock_workspace_simp(None, 2, 100, 1000), Cpu);
 
         let  (tensor_0, sizes_0) =run_config_applicable.apply(&[
                     t_00.into(), t_01.into()

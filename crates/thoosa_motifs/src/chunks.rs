@@ -187,7 +187,7 @@ mod tests {
 
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_workspace_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor_a.into(), tensor_b.into()], vec![0, 1],
             None
         );
@@ -228,7 +228,7 @@ mod tests {
         ]).view([2, 3]).totype(Float);
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_workspace_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor.into()], vec![0],
             None
         );
@@ -257,7 +257,7 @@ mod tests {
 
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_workspace_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor.into()], vec![0],
             None
         );
@@ -282,7 +282,7 @@ mod tests {
         debug!("tensor={tensor}");
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_workspace_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor.into()], vec![0],
             None
         );
@@ -356,7 +356,7 @@ mod tests {
         debug!("tensor_bbb={tensor_bbb}");
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_workspace_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor_aaa.into(), tensor_bbb.into()], vec![0, 1],
             None
         );

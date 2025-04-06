@@ -701,7 +701,7 @@ mod tests {
         ).unwrap();
 
         let window = 1000;
-        let ws = mock_workspace_simp(1, 1000, 100);
+        let ws = mock_workspace_simp(None, 1, 1000, 100);
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_0_0.into()], //sig_0 at idx 0
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn test_import_resources() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(3, 1000, 1000)));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(None, 3, 1000, 1000)));
 
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());

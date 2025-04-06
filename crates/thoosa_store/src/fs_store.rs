@@ -34,6 +34,7 @@ impl Debug for FileMotifTrackerStore {
 impl FileMotifTrackerStore {
 
     pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+        debug!("FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel}");
 
         let file = std::fs::OpenOptions::new()
             .create(true)

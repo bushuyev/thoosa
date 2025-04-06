@@ -436,7 +436,7 @@ mod motifs_tests {
     fn test_motifs_to_tensor() -> Result<(), ThoosaError>{
         let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
         debug!("dir={}", dir);
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(None, 1, 1000, 1000)));
 
         let mut slices_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
@@ -584,7 +584,7 @@ mod motifs_tests {
 
         let motif_slices = super::load_motif_slices(
             0,
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_workspace_simp(1, 1000, 100), Cpu),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_workspace_simp(None, 1, 1000, 100), Cpu),
             vec![TensorIdSliceIdx(1, 2)],
             HashMap::from([(1, Resource::new(1, 1, "aaa".to_string(), 100))]),
             &executor_rc
@@ -613,7 +613,7 @@ mod motifs_tests {
 
         let motif_slices = super::load_motif_slices(
             0,
-            &FindMotifsRunConfig::new(None, 1, 5000, None, None).to_applicable(&mock_workspace_simp(1, 1000, 100), Cpu),
+            &FindMotifsRunConfig::new(None, 1, 5000, None, None).to_applicable(&mock_workspace_simp(None, 1, 1000, 100), Cpu),
             vec![TensorIdSliceIdx(123, 2)],
             HashMap::from([(123, Resource::new(123, 1, "aaa".to_string(), 100))]),
             &executor_rc

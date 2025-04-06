@@ -1444,6 +1444,7 @@ mod motif_find_tests {
     use parking_lot::{Mutex, RawMutex};
     use std::collections::{HashMap, HashSet};
     use std::fmt::{Debug, Display};
+    use std::fs::create_dir_all;
     use std::ops::{Add, AddAssign, Deref};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering::Relaxed;
@@ -1758,7 +1759,7 @@ mod motif_find_tests {
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
         let n = 10i64;
 
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, n as u32)));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(None, 1, 1000, n as u32)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1834,7 +1835,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
 
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -2132,7 +2133,8 @@ mod motif_find_tests {
     #[test]
     fn test_find_motifs_by_euc_dist_with_smooth_kernel() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
+        create_dir_all(&test_dir)?;
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -2224,11 +2226,11 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
-        fs::create_dir_all(&test_dir)?;
+        create_dir_all(&test_dir)?;
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist_diff_sizes.db3"))?));
 
 
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2307,7 +2309,8 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000, 1000)));
+        create_dir_all(&test_dir)?;
+        let ws = Arc::new(RwLock::new(mock_workspace_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2722,7 +2725,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_workspace_simp(2, 100, 1000), Cpu))],
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_workspace_simp(None, 2, 100, 1000), Cpu))],
             // HashMap::new(),
             move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
@@ -2966,7 +2969,7 @@ mod motif_find_tests {
         //     ], "test_clc_motif_matches t_0_0", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         // )?;
 
-        let ws = mock_workspace_simp(2, 100, 1000);
+        let ws = mock_workspace_simp(None, 2, 100, 1000);
         let t_0= clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(

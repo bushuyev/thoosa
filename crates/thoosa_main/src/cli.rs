@@ -33,7 +33,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNodeParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -56,7 +56,7 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
+use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunConfig, RunId};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
 
 #[derive(Parser, Clone, Debug)]
@@ -585,7 +585,8 @@ pub fn run_infer<F>(
 where
     F: Fn(&PathBuf) -> Result<Tensor, ThoosaError> + Sync,
 {
-    let final_model = load_final_model(infer_params.final_run_id, ws, &device)?;
+    let final_applicable = FinalNetApplicable::new(infer_params.final_run_id, store, ws, device);
+   /* let final_model = load_final_model(infer_params.final_run_id, ws, &device)?;
 
     let train_label_node_run_ids = store.lock().get_input_run_ids(
         infer_params.final_run_id,
@@ -609,14 +610,14 @@ where
                 a.insert(v.0, Arc::new(RwLock::new(v.1)));
                 a
             });
-
+*/
     let labels = store.lock().list_labels()?;
     let mut infer_result = InputProbs::new(labels.clone());
 
     for entry in read_dir(&infer_params.input_dir)? {
         let path = entry?.path();
 
-        let t = apply_motif_and_label_nets(
+       /* let t = apply_motif_and_label_nets(
             &load_tensor(&path)?.unsqueeze(0),//for batch dim
             &mut label_models,
             &labels_channels_motifs_models_rw,
@@ -625,13 +626,16 @@ where
             ws.read().max_input() as u32
         );
 
-        let logits = final_model.2.infer(&t.view((1, -1))); //batch(1 for infer) x classes
+        let logits = final_model.2.infer(&t.view((1, -1))); //batch(1 for infer) x classes*/
+        let t = load_tensor(&path)?;
+
+        debug!("run_infer:={path:?} label=\n{t} t.view((1,-1))=\n{}",t.view((1, -1)));
+
+        let logits = final_applicable.apply(&Box::new(t), ())?; //batch(1 for infer) x classes
         let probs = logits.softmax(-1, Float);
 
-        debug!(
-            "run_infer:={path:?} label=\n{t} t.view((1,-1))=\n{} logits=\n{logits} probs=\n{probs}",
-            t.view((1, -1))
-        );
+        debug!("run_infer:={path:?} logits=\n{logits} probs=\n{probs}");
+
 
         infer_result.add(
             path.file_stem()

@@ -1,4 +1,4 @@
-use crate::train_nets::{motif_node, FinalNodeParams, LabelNetParams, MotifNetParams, ThoModuleWithStore};
+use crate::train_nets::{motif_node, FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore};
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
@@ -154,7 +154,7 @@ impl Workspace for FsWorkspace {
     fn final_models_path(&self) -> &PathBuf {
         &self.final_models_path
     }
-    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError> {
+    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNetParams) -> Result<(), ThoosaError> {
         debug!("save_final_model: run_id={run_id}  params={params:?} final_models_path={:?}", self.final_models_path);
 
         fs::create_dir_all(&self.final_models_path)?;
@@ -378,7 +378,7 @@ pub trait Workspace:Sync + Send {
     fn motifs_models_path(&self) -> &PathBuf;
     fn labels_models_path(&self) -> &PathBuf;
     fn final_models_path(&self) -> &PathBuf;
-    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNodeParams) -> Result<(), ThoosaError>;
+    fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNetParams) -> Result<(), ThoosaError>;
     fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError>;
     fn load_motif_models<'a>(&self, channel:u32, motif_id:u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError>;
     fn load_label_model<'a>(&self, train_label_net_run_id: RunId, device: &'a Device) -> Result<Vec<(LabelNetParams, ThoModuleWithStore)>, ThoosaError>;
@@ -400,14 +400,14 @@ pub trait Workspace:Sync + Send {
 
 }
 
-pub fn mock_workspace_simp(channels:u32, sample_rate: u32, max_input:u32)->Box<dyn Workspace>{
-    let ws_mock = _mock_simp(channels, sample_rate, max_input);
+pub fn mock_workspace_simp(path: Option<&PathBuf>, channels:u32, sample_rate: u32, max_input:u32) ->Box<dyn Workspace>{
+    let ws_mock = _mock_simp(path, channels, sample_rate, max_input);
 
     Box::new(ws_mock)
 }
 
-fn _mock_simp(channels: u32, sample_rate: u32, max_input: u32) -> MockWorkspace {
-    let base = Path::new("/tmp").join(cdt_for_dir());
+fn _mock_simp(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> MockWorkspace {
+    let base = path.map(|v|v.clone()).unwrap_or_else(||Path::new("/tmp").join(cdt_for_dir()));
 
     let mut ws_mock = MockWorkspace::new();
 
@@ -426,7 +426,7 @@ pub fn mock_workspace_with_motif_nets(
     channels: u32, sample_rate: u32, max_input: u32,
     channels_motif_nets: Vec<Vec<(Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore + Sync + Send + 'static>)>>,
 ) -> Box<dyn Workspace> {
-    let mut ws_mock = _mock_simp(channels, sample_rate, max_input);
+    let mut ws_mock = _mock_simp(None, channels, sample_rate, max_input);
 
     ws_mock.expect_load_motif_models()
         .returning(move |channel: u32, motif_id: u32, device| Ok(
