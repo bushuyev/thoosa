@@ -187,7 +187,7 @@ impl Workspace for FsWorkspace {
     }
 
     fn load_motif_models<'a>(&self, channel: u32, motif_id: u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError> {
-        debug!("load_motif_models_ws: channel={channel} motif_selection_run_id={motif_id}");
+        debug!("load_motif_models_ws: channel={channel} motif_id={motif_id}");
 
         let channel_motif_models_paths = self.motif_models(channel, motif_id)?;
 
@@ -241,11 +241,6 @@ impl Workspace for FsWorkspace {
             Ok(a)
         })
     }
-
-    fn load_label_model<'a>(&self, train_label_net_run_id: RunId, device: &'a Device) -> Result<Vec<(LabelNetParams, ThoModuleWithStore)>, ThoosaError>{
-        todo!()
-    }
-
 
 /**
     returns Vec<safetensors_path, config jsonpath>
@@ -381,7 +376,6 @@ pub trait Workspace:Sync + Send {
     fn save_final_model(&self, run_id: RunId, vs: &VarStore, params: &FinalNetParams) -> Result<(), ThoosaError>;
     fn save_motif_model(&self, channel: &dyn Display, motif_node_params_run_id: &dyn Display, motif_id: &dyn Display, vs: &VarStore, params: &MotifNetParams) -> Result<(), ThoosaError>;
     fn load_motif_models<'a>(&self, channel:u32, motif_id:u32, device: &'a Device) -> Result<Vec<(MotifNetParams, ThoModuleWithStore)>, ThoosaError>;
-    fn load_label_model<'a>(&self, train_label_net_run_id: RunId, device: &'a Device) -> Result<Vec<(LabelNetParams, ThoModuleWithStore)>, ThoosaError>;
     fn load_label_models_ws<'a>(&self, train_label_nodes_run_ids: Option<&'a [RunId]>, device: &'a Device) -> Result<HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>, ThoosaError>;//TODO remove
     /**
     returns Vec<safetensors_path, config jsonpath>
@@ -400,7 +394,7 @@ pub trait Workspace:Sync + Send {
 
 }
 
-pub fn mock_workspace_simp(path: Option<&PathBuf>, channels:u32, sample_rate: u32, max_input:u32) ->Box<dyn Workspace>{
+pub fn mock_ws_simp(path: Option<&PathBuf>, channels:u32, sample_rate: u32, max_input:u32) ->Box<dyn Workspace>{
     let ws_mock = _mock_simp(path, channels, sample_rate, max_input);
 
     Box::new(ws_mock)
@@ -422,22 +416,6 @@ fn _mock_simp(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input
     ws_mock
 }
 
-pub fn mock_workspace_with_motif_nets(
-    channels: u32, sample_rate: u32, max_input: u32,
-    channels_motif_nets: Vec<Vec<(Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore + Sync + Send + 'static>)>>,
-) -> Box<dyn Workspace> {
-    let mut ws_mock = _mock_simp(None, channels, sample_rate, max_input);
-
-    ws_mock.expect_load_motif_models()
-        .returning(move |channel: u32, motif_id: u32, device| Ok(
-            vec![(
-                (channels_motif_nets[channel as usize][motif_id as usize].0)(),
-                (channels_motif_nets[channel as usize][motif_id as usize].1)()
-            )]
-        ));
-
-    Box::new(ws_mock)
-}
 
 pub struct WsMockBuilder {
     mock:MockWorkspace

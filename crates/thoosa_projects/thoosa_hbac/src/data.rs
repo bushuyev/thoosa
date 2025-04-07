@@ -655,7 +655,7 @@ mod tests {
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
-    use thoosa_common::ws::{mock_workspace_simp, FsWorkspace};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{import_resources, Cli};
@@ -701,7 +701,7 @@ mod tests {
         ).unwrap();
 
         let window = 1000;
-        let ws = mock_workspace_simp(None, 1, 1000, 100);
+        let ws = mock_ws_simp(None, 1, 1000, 100);
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
             &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_0_0.into()], //sig_0 at idx 0
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn test_import_resources() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(mock_workspace_simp(None, 3, 1000, 1000)));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 1000, 1000)));
 
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
