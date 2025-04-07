@@ -439,6 +439,61 @@ pub fn mock_workspace_with_motif_nets(
     Box::new(ws_mock)
 }
 
+pub struct WsMockBuilder {
+    mock:MockWorkspace
+}
+
+impl WsMockBuilder {
+    pub fn new(path: Option<&PathBuf>, channels:u32, sample_rate: u32, max_input:u32) -> Self {
+        Self {
+            mock:_mock_simp(path, channels, sample_rate, max_input)
+        }
+    }
+
+    pub fn with_motif_nets(
+        mut self,
+        channels_motif_nets: Vec<Vec<(
+            Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>,
+            Box<dyn Fn() -> ThoModuleWithStore + Sync + Send + 'static>
+        )>>) -> Self {
+        self.mock.expect_load_motif_models()
+            .returning(move |channel: u32, motif_id: u32, device| Ok(
+                vec![(
+                    (channels_motif_nets[channel as usize][motif_id as usize].0)(),
+                    (channels_motif_nets[channel as usize][motif_id as usize].1)()
+                )]
+            ));
+
+        self
+    }
+
+    pub fn with_label_nets(
+        mut self,
+        label_nets: HashMap<String, Vec<(
+                    RunId,
+                    Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
+                    Box<dyn Fn() -> ThoModuleWithStore + Sync + Send + 'static>
+        )>>
+    ) -> Self {
+        self.mock.expect_load_label_models_ws()
+            .returning(move |train_label_nodes_run_ids, device| Ok(
+
+                HashMap::from_iter(label_nets.iter().map(|(label, nodes)|{
+                    (label.clone(), nodes.into_iter().map(|(run_id, params, module)|{
+                        (*run_id, params(), module())
+                    } ).collect::<Vec<_>>())
+                }))
+            ));
+        self
+    }
+
+
+    pub fn build(self) -> Box<dyn Workspace> {
+        Box::new(self.mock)
+    }
+
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FsWorkspace, Workspace};

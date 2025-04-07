@@ -865,7 +865,7 @@ pub fn run_train_label_nets(
                     // let motif_width = find_motifs_run_config.window(); //channels_motifs_models.read().iter().flat_map(|v|v.iter().map(|v|v.0.num_features())).next().expect("no models"); //all channels motifs come from same selection/find_motifs
                     // let slices_len = slices_len(ws.read().max_input() as i64, motif_width, find_motifs_run_config.step());
                     if log::log_enabled!(Level::Debug){
-                        debug!("run_train_label_nodes: label={label} channels={channels} motifs_nets_selection_applicable.len={:?}", motifs_nets_selection_applicable.nets_count());
+                        debug!("run_train_label_nodes: label={label} channels={channels} motifs_nets_selection_applicable.len={:?}", motifs_nets_selection_applicable.max_nets());
                     }
                     trace!("run_train_label_nodes: label={label} channels_motifs_models={motifs_nets_selection_applicable:?}");
 
@@ -1736,7 +1736,7 @@ mod cli_tests {
             r#"{
                             step:"100",
                             window:"800",
-                            slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
+                            slices_filter: {'DistanceRunningMeanK':{'mean':'0.3'}}
                         }"#,
             r#"{
                             motif_selector:{
@@ -1745,12 +1745,12 @@ mod cli_tests {
                         }"#,
             r#"{
                             common_training_args: {
-                                    cycles: "100",
+                                    cycles: "300",
                                     batch_size: "11",
                                     lr: "0.0001..0.001",
                                     max_loss: "0.1",
-                                    opt_max_evals: "10",
-                                    opt_n_init: "3"
+                                    opt_max_evals: "100",
+                                    opt_n_init: "10"
                             },
                             num_layers: "3"
                         }"#,
@@ -1760,13 +1760,13 @@ mod cli_tests {
                                     batch_size: "11",
                                     lr: "0.0001..0.001",
                                     max_loss: "0.1",
-                                    opt_max_evals: "10",
-                                    opt_n_init: "3"
+                                    opt_max_evals: "100",
+                                    opt_n_init: "10"
                             },
                             net: {
                                 FixedNumSlices: {
-                                    num_layers: "2",
-                                    slices_len: "111"
+                                    num_layers: "4",
+                                    slices_len: "400"
                                 }
                             }
                         }"#,
@@ -1776,14 +1776,14 @@ mod cli_tests {
                                 batch_size: "11",
                                 lr: "0.0001..0.001",
                                 max_loss: "0.1",
-                                opt_max_evals: "10",
-                                opt_n_init: "3"
+                                opt_max_evals: "100",
+                                opt_n_init: "10"
                             },
                             net: {
-                                num_layers: "2"
+                                num_layers: "2..8"
                             }
                         }"#,
-            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices
+            &group_name, OptConfig::new(50, 10), &ws, &store, &loader, &devices
         )?;
 
 
