@@ -276,7 +276,7 @@ where
                 &loader,
                 devices.clone(),
                 "FindMotifs",
-                false,
+                true,
             )?;
 
             info!("FindMotifs done, run_ids={run_ids:?}");

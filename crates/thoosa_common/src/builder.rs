@@ -28,7 +28,13 @@ pub enum Node {
     Conv1d {kernel: u32, in_channels: u32, out_channels:u32, config: ConvConfig},
     Conv2d {kernel: u32, in_channels: u32, out_channels:u32, config: ConvConfig},
     BatchNorm {num_features: u32, config:BatchNormConfig},
-    Linear { in_feats: u32, out_feats: u32, config:Option<LinearConfig>},
+    Linear {
+        in_feats: u32,
+        out_feats: u32,
+        config:Option<LinearConfig>,
+        #[cfg(debug_assertions)]
+        descr:String
+    },
     Func { func:Fp},
     MaxPool { kernel_size:u32, stride:u32, padding:u32},
     AvgPool { kernel_size:u32, stride:u32, padding:u32},
@@ -104,11 +110,22 @@ impl Node {
                 Box::new(MyBatchNorm1d::new(vs/"batch_norm", num_features, config))
             }
 
-            Node::Linear {in_feats, out_feats, config} => {
+            Node::Linear {
+                in_feats, out_feats, config,
+                #[cfg(debug_assertions)]
+                descr
+            } => {
                 assert!(in_feats > 0);
                 assert!(out_feats > 0);
-                debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
-                Box::new(my_linear(vs/"linear", in_feats as i64, out_feats as i64, config.unwrap_or(LinearConfig::default()))?)//TODO rename layer1
+
+                #[cfg(debug_assertions)]
+                debug!("Node::Linear: descr={descr} in_feats={:?}, out_feats={:?}", in_feats, out_feats);
+
+                Box::new(my_linear(
+                    vs/"linear", in_feats as i64, out_feats as i64, config.unwrap_or(LinearConfig::default()),
+                    #[cfg(debug_assertions)]
+                    descr
+                )?)//TODO rename layer1
             }
 
             Node::MaxPool { kernel_size, stride, padding } => {
@@ -233,35 +250,67 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear(&mut self) -> &mut Self {
+    pub fn linear(
+        &mut self,
+        #[cfg(debug_assertions)]
+        descr:String
+    ) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats: self.num_features, out_feats: self.num_features, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats: self.num_features, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self
     }
 
-    pub fn linear_feats(&mut self, num_features:u32, out_feats:u32) -> &mut Self {
+    pub fn linear_feats(
+        &mut self, num_features:u32, out_feats:u32,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats:num_features, out_feats, config:None}
+            Node::Linear {
+                in_feats:num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self.num_features = out_feats;
         self
     }
 
-    pub fn linear_f(&mut self, f:f32) -> &mut Self {
+    pub fn linear_f(
+        &mut self, f:f32,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
         let out_feats = (self.num_features as f32 * f) as u32;
         self.elts.push(
-            Node::Linear { in_feats: self.num_features, out_feats, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self.num_features = out_feats as u32;
 
         self
     }
 
-    pub fn linear_s(&mut self, out_feats:u32) -> &mut Self {
+    pub fn linear_s(
+        &mut self, out_feats:u32,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
         assert!(out_feats > 0);
         self.elts.push(
-            Node::Linear { in_feats: self.num_features, out_feats, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self.num_features = out_feats;
 
@@ -270,7 +319,11 @@ impl SeqBuilder {
 
     pub fn linear_s_with_conf(&mut self, out_feats:u32, config:LinearConfig) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats: self.num_features, out_feats, config:Some(config)}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:Some(config),
+                #[cfg(debug_assertions)]
+                descr: "zzz".to_string()
+            }
         );
         self.num_features = out_feats as u32;
 
@@ -280,7 +333,11 @@ impl SeqBuilder {
     pub fn linear_p(&mut self, n:usize, p:&impl NthParams<Params=u32>) -> &mut Self {
         let out_feats = p.on_nth_layer(n);
         self.elts.push(
-            Node::Linear { in_feats: self.num_features, out_feats, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr: "zzz".to_string()
+            }
         );
         self.num_features = out_feats;
 

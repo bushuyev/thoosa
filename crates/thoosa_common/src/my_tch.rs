@@ -29,7 +29,10 @@ pub struct MySequential {
 
 impl MySequential {
 
-    pub fn new(layers: Vec<Box<dyn ThoModule>>, split_input: Option<(i64, i64)>) -> Self {
+    pub fn new(
+        layers: Vec<Box<dyn ThoModule>>,
+        split_input: Option<(i64, i64)>
+    ) -> Self {
         Self {
             layers ,
             split_input
@@ -300,17 +303,25 @@ impl ThoModule for MyClosureModule{
 pub struct MyLinear {
     pub ws: Tensor,
     pub bs: Option<Tensor>,
+
+    #[cfg(debug_assertions)]
+    descr:String,
 }
 
 
 impl ThoModule for MyLinear{
+
     fn debug(&self) {
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
     }
 
     fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), t.device());
-        debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}", self.ws.size(), self.bs.as_ref().map(|bs|bs.size()), t.size());
+
+        #[cfg(debug_assertions)] {
+            debug!("Module for MyLinear::forward: descr={}", self.descr);
+            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), t.device());
+            debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}", self.ws.size(), self.bs.as_ref().map(|bs|bs.size()), t.size());
+        }
         match t.f_linear(&self.ws, self.bs.as_ref()) {//TODO error
             Ok(t) => t,
             Err(e) => {
@@ -327,6 +338,8 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
+    #[cfg(debug_assertions)]
+    descr:String,
 ) -> Result<MyLinear, ThoosaError> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
@@ -342,7 +355,11 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
         None
     };
 
-    Ok(MyLinear { ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs })
+    Ok(MyLinear {
+        ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs,
+        #[cfg(debug_assertions)]
+        descr
+    })
 }
 
 pub fn configure_dense(num_features: u32, num_blocks: usize, num_layers_in_block: usize, kernel: u32, channels: u32) -> Node  {
@@ -377,7 +394,10 @@ pub fn configure_dense(num_features: u32, num_blocks: usize, num_layers_in_block
         .func(Tensor::relu)
         .avg_pool(7, 3, 0)
         .dropout()
-        .linear_s(6)
+        .linear_s(6,
+                  #[cfg(debug_assertions)]
+                  "test".to_string()
+        )
         .end_seq()
 
 }
@@ -436,7 +456,7 @@ mod tch_tests {
     #[test]
     pub fn test_seq_linear_same_size(){
         let seq = SeqBuilder::new(2, None)
-            .linear()
+            .linear("test".to_string())
             .end_seq();
 
         let vs = nn::VarStore::new(Device::Cpu);
@@ -455,12 +475,12 @@ mod tch_tests {
         // }
 
         let res_seq = SeqBuilder::new(10, None)
-            .linear_s(1)
+            .linear_s(1, "test".to_string())
             .end_seq();
 
         let conv_seq = SeqBuilder::new(10, None)
             .conv_1d(5, 1, 1, ConvConfig::default())
-            .linear_s(1)
+            .linear_s(1, "test".to_string())
             .end_seq();
 
         let main = SeqBuilder::new(10, None)
@@ -571,7 +591,7 @@ mod tch_tests {
                 t.view((t.size()[0], 1, t.size()[1]))//channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
             }), None)
             .conv_1d((num_features / 10), 1, 1, ConvConfig::default())
-            .linear_s(1)
+            .linear_s(1, "test".to_string())
             .func(Tensor::sigmoid)
             .end_seq().build_tch_module(&vs.root())
     }
@@ -678,17 +698,17 @@ mod tch_tests {
                     vec![
                         SeqBuilder::new(123, None)
                             .batch_norm(BatchNormConfig::default())//3 weight bias running_var
-                            .linear()//2 weight bias
+                            .linear("test_node".to_string())//2 weight bias
                             .func(Tensor::relu)
-                            .linear()//2 weight bias
+                            .linear("test_node".to_string())//2 weight bias
                             .func(Tensor::relu)
-                            .linear_s(1)//2 weight bias
+                            .linear_s(1, "test".to_string())//2 weight bias
                             .end_seq(),
                         SeqBuilder::new(321, None)
                             .batch_norm(BatchNormConfig::default())//3 weight bias running_var
-                            .linear()//2 weight bias
+                            .linear("test_node".to_string())//2 weight bias
                             .func(Tensor::relu)
-                            .linear_s(1)//2 weight bias
+                            .linear_s(1, "test".to_string())//2 weight bias
                             .end_seq()
                     ],
 
@@ -706,10 +726,10 @@ mod tch_tests {
                     })
 
                 )
-                .linear_s(10)//2 weight bias
+                .linear_s(10, "test".to_string())//2 weight bias
                 .conv_1d(3, 1, 2, ConvConfig::default())//2 weight bias
                 .conv_1d(5, 1, 2, ConvConfig::default())//2 weight bias
-                .linear_s(20)//2 weight bias
+                .linear_s(20, "test".to_string())//2 weight bias
                 .func(Tensor::sigmoid)
                 .end_seq()
         }

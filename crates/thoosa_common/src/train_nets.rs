@@ -749,7 +749,7 @@ pub fn run_opt_train_final_net(
                 // }))
             )));
 
-            train_final_node(
+            train_final_net(
                 run_config_values,
                 label_nets_applicable.label_nets_num(),
                 label_nets_applicable.labels_num(),
@@ -1013,7 +1013,7 @@ impl SavableResult for TrainFinalNodesRunConfigResult {
     }
 }
 
-pub fn train_final_node(run_config_values: &TrainFinalNetRunConfig, label_nets_num: u32, labels_num: u32, batch:&mut dyn DataBatch, var_store: &VarStore, device: &Device) ->  Result<(f32, FinalNetParams), ThoosaError>{
+pub fn train_final_net(run_config_values: &TrainFinalNetRunConfig, label_nets_num: u32, labels_num: u32, batch:&mut dyn DataBatch, var_store: &VarStore, device: &Device) ->  Result<(f32, FinalNetParams), ThoosaError>{
     let final_node_params= FinalNetParams::new(label_nets_num, labels_num, run_config_values.net.num_layers);
     debug!("train_final_node: final_node_params={final_node_params:?}");
 
@@ -1026,7 +1026,7 @@ pub fn train_final_node(run_config_values: &TrainFinalNetRunConfig, label_nets_n
     let loss = train(
         device,
         batch,
-        &final_node(&final_node_params).build_tch_module(&var_store.root())?, //TODO features?
+        &final_net(&final_node_params).build_tch_module(&var_store.root())?, //TODO features?
         |pred: &Tensor, target: &Tensor| {
 
             debug!("train_final: pred.size={:?} target.size={:?}", pred.size(), target.size());
@@ -1140,7 +1140,7 @@ pub fn load_final_model(run_id: RunId, ws:&Arc<RwLock<Box<dyn Workspace>>>, devi
     let final_node_params = FinalNetParams::from_file(&params_path)?;
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
-    let node = ThoModuleWithStore::load(final_node(&final_node_params), model_path, *device)?;
+    let node = ThoModuleWithStore::load(final_net(&final_node_params), model_path, *device)?;
 
     Ok((final_node_params, node))
 }
@@ -1313,18 +1313,27 @@ pub fn motif_node(params: &MotifNetParams) -> Node {
     let mut net = builder
         // .batch_norm()
         // .conv_1d(10, 1, 1, ConvConfig::default())
-        .linear_s(params.num_features * 2)
+        .linear_s(params.num_features * 2,
+                  #[cfg(debug_assertions)]
+                  "motif_node first layer".to_string()
+        )
         .func(Tensor::relu);
 
         for i in 0..params.num_layers as usize {
-            net = net.linear_s(params.num_features * 2)
-                .func(Tensor::relu);
+            net = net.linear_s(params.num_features * 2,
+                   #[cfg(debug_assertions)]
+                   format!("motif_node  {i}th layer")
+            )
+            .func(Tensor::relu);
         }
 
     net
         // .linear_s(180)
         // .func(Tensor::relu)
-        .linear_s(1)
+        .linear_s(1,
+              #[cfg(debug_assertions)]
+              "motif_node last layer".to_string()
+        )
         .func(Tensor::sigmoid)
         .end_seq()
 }
@@ -1633,12 +1642,12 @@ impl LabelNetParams {
     }
 
     fn label_net_fixed_num_slices(params:&LabelNetParams, fixed_num_slices_params: &FixedNumSlicesNetParams) -> Node {
-        debug!("label_node_fixed_num_slices: params={:?}", params);
+        debug!("label_net_fixed_num_slices: params={:?}", params);
 
         let nets_count =  fixed_num_slices_params.nets_count;//sum of motif nets in all channels
         SeqBuilder::new(params.slices_len, None)//Some(2)
             .closure(Box::new(move |t:&Tensor|{
-                debug!("label_node_fixed_num_slices: input.size={:?}", t.size());
+                debug!("label_net_fixed_num_slices: input.size={:?}", t.size());
                 t.shallow_clone()
 
             }), None)
@@ -1647,17 +1656,29 @@ impl LabelNetParams {
                     let num_features = params.slices_len;
                     let mut builder = SeqBuilder::new(num_features, None);
                     let mut net = builder
-                        .linear_s(num_features);
+                        .linear_s(
+                            num_features,
+                            #[cfg(debug_assertions)]
+                            "label_net_fixed_num_slices: motif nets first layer".to_string()
+                        );
 
                     for i in 0..params.motif_layers as usize {//params.num_layers
                         net = net
-                            .linear_s(num_features)
+                            .linear_s(
+                                num_features,
+                                #[cfg(debug_assertions)]
+                                format!("label_net_fixed_num_slices: motif nets {i}th layer")
+                            )
                             .func(Tensor::relu);
                     }
 
                     net
                         .func(Tensor::relu)
-                        .linear_s(1)
+                        .linear_s(
+                            1,
+                            #[cfg(debug_assertions)]
+                            "label_net_fixed_num_slices: motif nets last layer".to_string()
+                        )
                         // .func(Tensor::sigmoid)
                         .end_seq()
 
@@ -1692,9 +1713,16 @@ impl LabelNetParams {
 
             }), Some(nets_count))
 
-            .linear()
+            .linear(
+                #[cfg(debug_assertions)]
+                "first main layer".to_string()
+            )
             // .func(Tensor::relu)
-            .linear_s(1)
+            .linear_s(
+                1,
+                #[cfg(debug_assertions)]
+                "last main layer".to_string()
+            )
             .func(Tensor::sigmoid)
             .end_seq()
 
@@ -1716,17 +1744,29 @@ impl LabelNetParams {
                     let num_features = params.slices_len;
                     let mut builder = SeqBuilder::new(num_features, None);
                     let mut net = builder
-                        .linear_s(num_features);
+                        .linear_s(
+                            num_features,
+                            #[cfg(debug_assertions)]
+                            "label_net_max_padding: motif nets first layer".to_string()
+                        );
 
                     for i in 0..params.motif_layers as usize {//params.num_layers
                         net = net
-                            .linear_s(num_features)
+                            .linear_s(
+                                num_features,
+                                #[cfg(debug_assertions)]
+                                format!("label_net_max_padding: motif nets {i}-th layer")
+                            )
                             .func(Tensor::relu);
                     }
 
                     net
                         .func(Tensor::relu)
-                        .linear_s(1)
+                        .linear_s(
+                            1,
+                            #[cfg(debug_assertions)]
+                            "label_net_max_padding: motif nets last layer".to_string()
+                        )
                         // .func(Tensor::sigmoid)
                         .end_seq()
 
@@ -1756,9 +1796,16 @@ impl LabelNetParams {
 
             }), Some(params.channels))
 
-            .linear()
+            .linear(
+                #[cfg(debug_assertions)]
+                "label_net_max_padding".to_string()
+            )
             // .func(Tensor::relu)
-            .linear_s(1)
+            .linear_s(
+                1,
+                #[cfg(debug_assertions)]
+                "label_net_max_padding: final layer".to_string()
+            )
             .func(Tensor::sigmoid)
             .end_seq()
 
@@ -1777,11 +1824,23 @@ pub fn flat_label_node(params: &LabelNetParams, slices_len:u32) -> Node {
 
             t_0
         }), Some(num_features))
-        .linear_s(num_features)
+        .linear_s(
+            num_features,
+            #[cfg(debug_assertions)]
+            "flat_label_node 0".to_string()
+        )
         .func(Tensor::relu)
-        .linear_s(num_features)
+        .linear_s(
+            num_features,
+            #[cfg(debug_assertions)]
+            "flat_label_node 1".to_string()
+        )
         .func(Tensor::relu)
-        .linear_s(1)
+        .linear_s(
+            1,
+            #[cfg(debug_assertions)]
+            "flat_label_node 2".to_string()
+        )
 
         .func(Tensor::sigmoid)
         .end_seq()
@@ -1809,22 +1868,34 @@ impl FinalNetParams {
 
 }
 
-pub fn final_node(params:&FinalNetParams) -> Node {
+pub fn final_net(params:&FinalNetParams) -> Node {
     debug!("final_node: params={:?}", params);
 
     let mut builder = SeqBuilder::new(params.in_features, None);
     let mut net = builder
-        .linear_s(2*params.in_features)
+        .linear_s(
+            2*params.in_features,
+            #[cfg(debug_assertions)]
+            "final_net: first".to_string()
+        )
         .func(Tensor::relu);
 
     for i in 0..params.num_layers {
-        net = net.linear_s(params.in_features)
-             .func(Tensor::relu)
+        net = net.linear_s(
+            params.in_features,
+            #[cfg(debug_assertions)]
+            format!("final_net: {i}th"),
+        )
+         .func(Tensor::relu)
     }
 
     net
         // .func(Tensor::relu)
-        .linear_s(params.out_features)
+        .linear_s(
+            params.out_features,
+            #[cfg(debug_assertions)]
+            "final_net: ".to_string(),
+        )
         // .func(|t|t.softmax(1, Float))
         .end_seq()
 }
@@ -2454,22 +2525,6 @@ impl InferArgs {
     }
 }
 
-#[allow(dead_code)]
-fn build_multidim<'a>( builder:&'a mut SeqBuilder, dims:&'a [i64])  {
-
-    let builder = dims.windows(2).into_iter().fold(builder, | b, d|{
-        debug!("d={:?}", d);
-
-        b.linear_s(d[0] as u32)
-            // .func(Tensor::relu)
-            .linear_s(1)
-            // .func(Tensor::sigmoid)
-            .closure(Box::new(|t:&Tensor|t.squeeze()), Some(d[1] as u32))
-
-    });
-
-    builder.func(Tensor::sigmoid);
-}
 
 pub fn is_nonzero(t_1: &Tensor) -> Result<bool, ThoosaError> {
     Ok(t_1.flatten(0, (t_1.size().len() - 1) as i64).iter::<f64>()?.find(|v| v > &0.).is_some())
@@ -2869,7 +2924,7 @@ mod train_tests {
                         ]
                 )
                 .with_label_nets(HashMap::from([
-                        ("Label_0".to_string(), label_test_nets(motif_width, 1.))
+                        ("Label_0".to_string(), label_test_nets(100, 1., LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new(3, 3))))
                 ]))
                 .build()
 
@@ -2888,19 +2943,14 @@ mod train_tests {
         (Box::new(move || MotifNetParams::new(motif_width, 1)), Box::new(move || ThoModuleWithStore::new(test_net(motif_width, k, Cpu).unwrap())))
     }
 
-    fn label_test_nets(motif_width: u32, k: f64) -> Vec<(RunId, Box<dyn Fn() -> LabelNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore + Sync + Send>)> {
-        let vec1: Vec<(
-            RunId,
-            Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
-            Box<dyn Fn() -> ThoModuleWithStore + Sync + Send + 'static>
-        )> = vec![
+    fn label_test_nets(num_features: u32, k: f64, params: LabelNetTypeParams) -> Vec<(RunId, Box<dyn Fn() -> LabelNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore + Sync + Send>)> {
+        vec![
             (
                 0u32,
-                Box::new(|| LabelNetParams::new(2, 3, 3, 100, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new(3)))),
-                Box::new(move || ThoModuleWithStore::new(test_net(motif_width, k, Cpu).unwrap()))
+                Box::new(move || LabelNetParams::new(2, 3, 3, 100, params.clone())),
+                Box::new(move || ThoModuleWithStore::new(test_net(num_features, k, Cpu).unwrap()))
             )
-        ];
-        vec1
+        ]
     }
 
     #[test]
@@ -3184,11 +3234,11 @@ mod train_tests {
             //     t.shallow_clone()
             // })
             .batch_norm(BatchNormConfig::default())
-            .linear_s(FEATURES*20)
+            .linear_s(FEATURES*20, "test".to_string())
             .func(Tensor::relu)
-            .linear_s(FEATURES*16)
+            .linear_s(FEATURES*16, "test".to_string())
             .func(Tensor::relu)
-            .linear_s(10)
+            .linear_s(10, "test".to_string())
             // .func(Tensor::sigmoid)
             .end_seq();
 
@@ -3198,11 +3248,11 @@ mod train_tests {
             //     t.shallow_clone()
             // })
             .batch_norm(BatchNormConfig::default())
-            .linear_s(FEATURES*20)
+            .linear_s(FEATURES*20, "test".to_string())
             .func(Tensor::relu)
-            .linear_s(FEATURES*16)
+            .linear_s(FEATURES*16, "test".to_string())
             .func(Tensor::relu)
-            .linear_s(10)
+            .linear_s(10, "test".to_string())
             // .func(Tensor::sigmoid)
             .end_seq();
 
@@ -3233,9 +3283,9 @@ mod train_tests {
                 })
 
             )
-            .linear_feats(20, 20)
+            .linear_feats(20, 20, "test".to_string())
             .func(Tensor::relu)
-            .linear_feats(20, 1)
+            .linear_feats(20, 1, "test".to_string())
             .func(Tensor::sigmoid)
             .end_seq();
 
@@ -3637,7 +3687,7 @@ mod train_tests {
             }
         }
 
-        let (loss, final_params) = super::train_final_node(
+        let (loss, final_params) = super::train_final_net(
             &TrainFinalNetRunConfig::new(Some(1), CommonTrainingRunConfig::new(10, 10, 0.1, 0.1, 10, 3), FinalNetArgs::new(3)),
             LABEL_NETS_SIZE as u32,
             LABELS_SIZE as u32,
@@ -3782,7 +3832,7 @@ mod train_tests {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _ = train_nets::final_node(&FinalNetParams::new(features, 0, 1)).build_tch_module(&vs_0.root())?;
+        let _ = train_nets::final_net(&FinalNetParams::new(features, 0, 1)).build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
         debug!("save_test_final_model: features={} vs_0.variables()={:?}", features, vs_0.variables());
