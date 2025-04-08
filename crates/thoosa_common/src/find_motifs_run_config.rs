@@ -145,7 +145,9 @@ pub enum FindMotifsRunConfigOptions {
 }
 
 impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindMotifsApplicable {
+
     fn apply(&self, tensor: &Box<Tensor>, options:FindMotifsRunConfigOptions) -> Result<Box<Tensor>, ThoosaError> {
+        debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, tensor.size());
 
         let t = match self.kernel.as_ref() {
             None => {

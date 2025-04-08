@@ -40,13 +40,14 @@ impl MySequential {
     }
 
     fn run_layers(&self, t: &Tensor, train: bool) -> Tensor {
-        debug!("MySequential::forward: xs.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.device(), self.layers[0]);
+        debug!("MySequential::forward: t.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.device(), self.layers[0]);
 
-        let xs = self.layers[0].tho_forward(t, train);
-        self.layers.iter().skip(1).enumerate().fold(xs, |xs, (i, layer)| {
-            debug!("MySequential::layer={i} xs.size={:?} device={:?} layer={:?}", xs.size(), xs.device(), layer);
+        let output_t = self.layers[0].tho_forward(t, train);
 
-            layer.tho_forward(&xs, train)
+        self.layers.iter().skip(1).enumerate().fold(output_t, |output_t, (i, layer)| {
+            debug!("MySequential::layer={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.device(), layer);
+
+            layer.tho_forward(&output_t, train)
         })
     }
 }

@@ -317,15 +317,19 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear_s_with_conf(&mut self, out_feats:u32, config:LinearConfig) -> &mut Self {
+    pub fn linear_s_with_conf(
+        &mut self, out_feats:u32, config:LinearConfig,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
         self.elts.push(
             Node::Linear {
                 in_feats: self.num_features, out_feats, config:Some(config),
                 #[cfg(debug_assertions)]
-                descr: "zzz".to_string()
+                descr
             }
         );
-        self.num_features = out_feats as u32;
+        self.num_features = out_feats;
 
         self
     }

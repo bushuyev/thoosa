@@ -458,7 +458,7 @@ where
             match panic_to_err!(f(&mut split_0)) {
                 Ok(fr) => {
                     on_ok(fr, &mut split_0);
-                    break 'out;
+                    continue 'out;
                 }
                 Err(e) if e.is_oom() => {
                     debug!("run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}");

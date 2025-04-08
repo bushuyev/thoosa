@@ -33,7 +33,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{apply_motif_and_label_nets, load_final_model, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{load_final_model, opt_train, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, CommonTrainingArgs, CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -667,7 +667,7 @@ fn load_label_and_motif_models(
 ) {
     debug!("load_label_and_motif_models: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
 
-    let label_models = ws.read().load_label_models_ws(train_label_nodes_run_ids, device).expect("load_all_label_models_ws");
+    let label_models = ws.read().load_label_nets(train_label_nodes_run_ids, device).expect("load_all_label_models_ws");
 
     trace!("load_label_and_motif_models: label_models={label_models:?}");
 
@@ -716,7 +716,7 @@ fn load_label_and_motif_models(
                             channels_motifs
                             .into_iter()
                             .flat_map(move |(motif_id, rate)| {
-                                ws_moved.read().load_motif_models( channel as u32, motif_id, device)
+                                ws_moved.read().load_motif_nets(channel as u32, motif_id, device)
                                     .expect("load_motif_models")
                             })
                             .collect::<Vec<_>>()
@@ -1507,7 +1507,7 @@ mod cli_tests {
             &loader,
             vec![Cpu],
             "Test/FindMotifs",
-            false,
+            true,
         )?;
 
         let mut slices = store.lock().list_motifs_slices(run_ids[0])?;
@@ -1707,7 +1707,7 @@ mod cli_tests {
 
      */
     #[test]
-    fn slow_test_run_all_basic_fixed_slices() -> Result<(), ThoosaError> {
+    fn slow_test_run_all_fixed_slices_basic() -> Result<(), ThoosaError> {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
@@ -1734,8 +1734,8 @@ mod cli_tests {
                                     batch_size: "11",
                                     lr: "0.0001..0.001",
                                     max_loss: "0.1",
-                                    opt_max_evals: "100",
-                                    opt_n_init: "10"
+                                    opt_max_evals: "10",
+                                    opt_n_init: "3"
                             },
                             num_layers: "3"
                         }"#,
@@ -1745,8 +1745,8 @@ mod cli_tests {
                                     batch_size: "11",
                                     lr: "0.0001..0.001",
                                     max_loss: "0.1",
-                                    opt_max_evals: "100",
-                                    opt_n_init: "10"
+                                    opt_max_evals: "10",
+                                    opt_n_init: "3"
                             },
                             net: {
                                 FixedNumSlices: {
@@ -1761,8 +1761,8 @@ mod cli_tests {
                                 batch_size: "11",
                                 lr: "0.0001..0.001",
                                 max_loss: "0.1",
-                                opt_max_evals: "100",
-                                opt_n_init: "10"
+                                opt_max_evals: "10",
+                                opt_n_init: "3"
                             },
                             net: {
                                 num_layers: "2..8"
@@ -1780,9 +1780,83 @@ mod cli_tests {
         Ok(())
     }
 
+    #[test]
+    fn slow_test_run_all_max_padding_basic() -> Result<(), ThoosaError> {
+
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+
+        let n = 1000;
+        let max_y = 1f32;
+
+        let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
+
+
+        let train_final_nodes_run_ids = run_all_steps(
+            r#"{
+                step:"100",
+                window:"800",
+                slices_filter: {'DistanceRunningMeanK':{'mean':'0.1'}}
+            }"#,
+            r#"{
+                motif_selector:{
+                    ByLabelVariance: {_dummy: 0}
+                }
+            }"#,
+            r#"{
+                common_training_args: {
+                        cycles: "100",
+                        batch_size: "11",
+                        lr: "0.0001..0.001",
+                        max_loss: "0.1",
+                        opt_max_evals: "10",
+                        opt_n_init: "3"
+                },
+                num_layers: "3"
+            }"#,
+            r#"{
+                common_training_args: {
+                        cycles: "100",
+                        batch_size: "11",
+                        lr: "0.0001..0.001",
+                        max_loss: "0.1",
+                        opt_max_evals: "10",
+                        opt_n_init: "3"
+                },
+                net: {
+                    MaxPadding: {
+                        num_layers: "2"
+                    }
+                }
+            }"#,
+            r#"{
+                common_training_args: {
+                    cycles: "100",
+                    batch_size: "11",
+                    lr: "0.0001..0.001",
+                    max_loss: "0.1",
+                    opt_max_evals: "10",
+                    opt_n_init: "3"
+                },
+                net: {
+                    num_layers: "2"
+                }
+            }"#,
+            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices
+        )?;
+
+
+        debug!("train_final_nodes_run_ids={train_final_nodes_run_ids:?}");
+
+
+        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2)?;
+
+        Ok(())
+    }
+
+
 
     #[test]
-    fn slow_test_run_all_basic_max_padding() -> Result<(), ThoosaError> {
+    fn slow_test_run_all_max_padding_with_mean_grid_lr_opt() -> Result<(), ThoosaError> {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
