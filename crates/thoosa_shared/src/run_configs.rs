@@ -123,7 +123,7 @@ pub trait RunConfig:Debug {
 }
 
 pub trait Applicable<S, R, O>:Debug {
-    fn apply(&self, subject:S, options: O) ->Result<R, ThoosaError>;
+    fn apply(&self, input:S, options: O) ->Result<R, ThoosaError>;
 }
 
 pub struct RunConfigHolder<R:RunConfig> {

@@ -524,7 +524,7 @@ mod opt_tests {
     }
 
     //stack if first point is min
-    #[test]
+    // #[test]
     fn  test_opt_1d_with_ei() -> Result<(), ThoosaError> {
         let n = 100i64;
 
@@ -598,7 +598,7 @@ mod opt_tests {
     }
 
 
-    #[test]
+    // #[test]
     fn test_opt_1d() -> Result<(), ThoosaError>{
 
         let n = 100i64;

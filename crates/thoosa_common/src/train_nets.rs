@@ -1182,14 +1182,14 @@ pub enum NetsPadding {
 
 impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionApplicable {
 
-    fn apply(&self, t: &Box<Tensor>, options: NetsPadding) -> Result<Box<Tensor>, ThoosaError> {
-        debug!("Applicable for MotifsNetsSelectionApplicable::apply: t.size={:?} options={options:?}", t.size());
+    fn apply(&self, input: &Box<Tensor>, options: NetsPadding) -> Result<Box<Tensor>, ThoosaError> {
+        debug!("Applicable for MotifsNetsSelectionApplicable::apply: t.size={:?} options={options:?}", input.size());
         let motif_width= self.find_motifs_applicable.run_config().window;
 
         match options {
             NetsPadding::Max => {
 
-                let unfolded = self.find_motifs_applicable.apply(t, FindMotifsRunConfigOptions::FilterUnfold)?;
+                let unfolded = self.find_motifs_applicable.apply(input, FindMotifsRunConfigOptions::FilterUnfold)?;
 
                 trace!("Applicable for MotifsNetsSelectionApplicable::apply/Max: unfolded=\n{unfolded}");
 
@@ -1205,7 +1205,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
                             debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: channel={channel} motif_nodes.len()={}", motif_nets.len());
 
                             if motif_nets.is_empty() {
-                                Ok(Tensor::zeros([self.max_nets() as i64, max_num_slices as i64], (Float, self.device)))
+                                Ok(Tensor::zeros([self.max_nets() as i64, max_num_slices as i64], (Float, Cpu)))
                             } else {
 
                                 let unfolded_channel = unfolded.i((channel as i64, .., ..));//channel, slices, slice
@@ -1273,11 +1273,11 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
             }
             //returns sum of motifs in all channels x slices_len
             NetsPadding::Fixed(slices_len) => {
-                let (input_slice_step, pad) = clc_step(t.size()[1] as u32, motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
+                let (input_slice_step, pad) = clc_step(input.size()[1] as u32, motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
                 debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: input_slice_step={input_slice_step} pad={pad}");
 
                 let filtered = self.find_motifs_applicable.apply(
-                    &Box::new(t.pad([0, pad as i64], "constant", 0.)), FindMotifsRunConfigOptions::Filter
+                    &Box::new(input.pad([0, pad as i64], "constant", 0.)), FindMotifsRunConfigOptions::Filter
                 )?;
 
                 let unfolded = filtered.unfold(1, motif_width as i64, input_slice_step as i64);
@@ -1303,7 +1303,9 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
                                     SplitQueue::<2, _>::new(SplittableTensor::<0/*batch dimension*/>(unfolded_channel.shallow_clone())),
                                     |t| {
                                         debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: forward: t.size={:?}", t.as_ref().size());
-                                        let r = net.infer(&t.as_ref().to_device(self.device.clone())).flatten(0, 1); //flatten - removes always 1-sized distance dimension [ slices, slices_len]->[slices, [distance]]
+                                        let r = net.infer(
+                                            &t.as_ref().to_device(self.device.clone())
+                                        ).flatten(0, 1); //flatten - removes always 1-sized distance dimension [ slices, slices_len]->[slices, [distance]]
                                         debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: forward:  r.size={:?}", r.size());
 
                                         Ok(r.to_device(Cpu))
@@ -1349,7 +1351,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LabelNetParams {
     channels:u32,
-    motif_nodes:u32,
+    motif_nets:u32,
     motif_layers:u32,
     slices_len:u32,
     net_type: LabelNetTypeParams
@@ -1389,8 +1391,8 @@ impl FixedNumSlicesNetParams {
 }
 
 impl LabelNetParams {
-    pub fn new(channels: u32, motif_nodes: u32, motif_layers:u32, slices_len:u32, net_type: LabelNetTypeParams) -> Self {
-        Self { channels, motif_nodes, slices_len, motif_layers, net_type }
+    pub fn new(channels: u32, motif_nets: u32, motif_layers:u32, slices_len:u32, net_type: LabelNetTypeParams) -> Self {
+        Self { channels, motif_nets, slices_len, motif_layers, net_type }
     }
 
     pub fn from_file(path:&PathBuf) -> Result<Self, ThoosaError> {
@@ -1415,7 +1417,7 @@ impl LabelNetParams {
         debug!("label_net_fixed_num_slices: params={:?}", params);
 
         //sum of motif nets in all channels
-        let motif_nodes = params.motif_nodes;
+        let motif_nodes = params.motif_nets;
         SeqBuilder::new(params.slices_len, None)//Some(2)
             .closure(Box::new(move |t:&Tensor|{
                 debug!("label_net_fixed_num_slices: input.size={:?}", t.size());
@@ -1500,7 +1502,7 @@ impl LabelNetParams {
     fn label_net_max_padding(params:&LabelNetParams, max_padding_params: &MaxPaddingNetParams) -> Node {
         debug!("label_node_max_padding: params={:?}", params);
 
-        let motif_nodes = params.motif_nodes;
+        let motif_nodes = params.motif_nets;
         SeqBuilder::new(params.slices_len, None)// batch x channel x max motif_nets x slices //TODO split?
             .closure(Box::new(move |t:&Tensor|{
                 debug!("label_node_max_padding: input.size={:?}", t.size());
@@ -1590,7 +1592,7 @@ impl LabelNetParams {
 
 pub fn flat_label_node(params: &LabelNetParams, slices_len:u32) -> Node {
     debug!("motif_node: params={params:?}");
-    let num_features = params.channels * params.motif_nodes * slices_len;
+    let num_features = params.channels * params.motif_nets * slices_len;
     let mut builder = SeqBuilder::new(slices_len, None);
     builder
         .closure(Box::new(move |t: &Tensor| {
@@ -2075,12 +2077,12 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetApplicable {
 
 impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetsApplicable {
 
-    fn apply(&self, subject: &Box<Tensor>, _: ()) -> Result<Box<Tensor>, ThoosaError> {
-        debug!("Applicable for LabelNetsApplicable::apply: self.labels_applicables={:?}", self.labels_applicables);
+    fn apply(&self, input: &Box<Tensor>, _: ()) -> Result<Box<Tensor>, ThoosaError> {
+        debug!("Applicable for LabelNetsApplicable::apply: self.labels_applicables={:?} input.size={:?}", self.labels_applicables, input.size());
 
         let t = Tensor::stack(
             self.labels_applicables.iter().flat_map(|(label, label_applicables)| {
-                label_applicables.iter().map(|label_applicable| label_applicable.apply(subject, ()))
+                label_applicables.iter().map(|label_applicable| label_applicable.apply(input, ()))
             }).collect::<Result<Vec<_>, _>>()?.as_slice(),
             1
         );
@@ -2124,12 +2126,12 @@ impl FinalNetApplicable {
 
 impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for FinalNetApplicable {
 
-    fn apply(&self, subject: &Box<Tensor>, options: ()) -> Result<Box<Tensor>, ThoosaError> {
-        assert_eq!(subject.size().len(), 2);//single tensor - channels x data
+    fn apply(&self, input: &Box<Tensor>, options: ()) -> Result<Box<Tensor>, ThoosaError> {
+        assert_eq!(input.size().len(), 2);//single tensor - channels x data
 
         Ok(Box::new(self.final_net_module.infer(
             &self.label_nets_applicable.apply(
-                &Box::new(subject.unsqueeze(0)),
+                &Box::new(input.unsqueeze(0)),
                 options
             )?.view((1,-1))
         )))
@@ -2393,7 +2395,7 @@ mod train_tests {
                 ws_init: init::Init::Const(k),//conflicts with ctor's init
                 bs_init: None,
                 bias: false
-            }, descr.to_string())
+            }, #[cfg(debug_assertions)] descr.to_string())
             .end_seq().build_tch_module(&vs.root())
     }
 
@@ -2452,7 +2454,6 @@ mod train_tests {
                         ]
                     )
                     .build()
-
 
             )),
             Cpu
@@ -2972,11 +2973,11 @@ mod train_tests {
             //     t.shallow_clone()
             // })
             .batch_norm(BatchNormConfig::default())
-            .linear_s(FEATURES*20, "test".to_string())
+            .linear_s(FEATURES*20, #[cfg(debug_assertions)] "test".to_string())
             .func(Tensor::relu)
-            .linear_s(FEATURES*16, "test".to_string())
+            .linear_s(FEATURES*16, #[cfg(debug_assertions)]  "test".to_string())
             .func(Tensor::relu)
-            .linear_s(10, "test".to_string())
+            .linear_s(10, #[cfg(debug_assertions)] "test".to_string())
             // .func(Tensor::sigmoid)
             .end_seq();
 
@@ -2986,11 +2987,11 @@ mod train_tests {
             //     t.shallow_clone()
             // })
             .batch_norm(BatchNormConfig::default())
-            .linear_s(FEATURES*20, "test".to_string())
+            .linear_s(FEATURES*20, #[cfg(debug_assertions)] "test".to_string())
             .func(Tensor::relu)
-            .linear_s(FEATURES*16, "test".to_string())
+            .linear_s(FEATURES*16, #[cfg(debug_assertions)] "test".to_string())
             .func(Tensor::relu)
-            .linear_s(10, "test".to_string())
+            .linear_s(10, #[cfg(debug_assertions)] "test".to_string())
             // .func(Tensor::sigmoid)
             .end_seq();
 
@@ -3021,9 +3022,9 @@ mod train_tests {
                 })
 
             )
-            .linear_feats(20, 20, "test".to_string())
+            .linear_feats(20, 20, #[cfg(debug_assertions)] "test".to_string())
             .func(Tensor::relu)
-            .linear_feats(20, 1, "test".to_string())
+            .linear_feats(20, 1, #[cfg(debug_assertions)]"test".to_string())
             .func(Tensor::sigmoid)
             .end_seq();
 
@@ -3600,7 +3601,7 @@ mod train_tests {
                 ws_init: init::Init::Const(1.0),
                 bs_init: None,
                 bias: false
-            }, "test_motif_model".to_string())
+            }, #[cfg(debug_assertions)] "test_motif_model".to_string())
             .end_seq().build_tch_module(&vs_0.root())?;
 
 

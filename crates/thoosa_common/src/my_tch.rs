@@ -457,7 +457,10 @@ mod tch_tests {
     #[test]
     pub fn test_seq_linear_same_size(){
         let seq = SeqBuilder::new(2, None)
-            .linear("test".to_string())
+            .linear(
+                #[cfg(debug_assertions)]
+                "test".to_string()
+            )
             .end_seq();
 
         let vs = nn::VarStore::new(Device::Cpu);
@@ -476,12 +479,12 @@ mod tch_tests {
         // }
 
         let res_seq = SeqBuilder::new(10, None)
-            .linear_s(1, "test".to_string())
+            .linear_s(1, #[cfg(debug_assertions)] "test".to_string())
             .end_seq();
 
         let conv_seq = SeqBuilder::new(10, None)
             .conv_1d(5, 1, 1, ConvConfig::default())
-            .linear_s(1, "test".to_string())
+            .linear_s(1, #[cfg(debug_assertions)] "test".to_string())
             .end_seq();
 
         let main = SeqBuilder::new(10, None)
@@ -592,7 +595,7 @@ mod tch_tests {
                 t.view((t.size()[0], 1, t.size()[1]))//channel for convolution ("Given groups=1, weight of size [1, 1, 100], expected input[1, 10, 1000] to have 1 channels, but got 10 channels instead)
             }), None)
             .conv_1d((num_features / 10), 1, 1, ConvConfig::default())
-            .linear_s(1, "test".to_string())
+            .linear_s(1, #[cfg(debug_assertions)]  "test".to_string())
             .func(Tensor::sigmoid)
             .end_seq().build_tch_module(&vs.root())
     }
@@ -699,17 +702,29 @@ mod tch_tests {
                     vec![
                         SeqBuilder::new(123, None)
                             .batch_norm(BatchNormConfig::default())//3 weight bias running_var
-                            .linear("test_node".to_string())//2 weight bias
+                            .linear(
+                                #[cfg(debug_assertions)]
+                                "test_node".to_string()
+                            )//2 weight bias
                             .func(Tensor::relu)
-                            .linear("test_node".to_string())//2 weight bias
+                            .linear(
+                                #[cfg(debug_assertions)]
+                                "test_node".to_string()
+                            )//2 weight bias
                             .func(Tensor::relu)
-                            .linear_s(1, "test".to_string())//2 weight bias
+                            .linear_s(1, #[cfg(debug_assertions)]  "test".to_string())//2 weight bias
                             .end_seq(),
                         SeqBuilder::new(321, None)
                             .batch_norm(BatchNormConfig::default())//3 weight bias running_var
-                            .linear("test_node".to_string())//2 weight bias
+                            .linear(
+                                #[cfg(debug_assertions)]
+                                "test_node".to_string()
+                            )//2 weight bias
                             .func(Tensor::relu)
-                            .linear_s(1, "test".to_string())//2 weight bias
+                            .linear_s(1,
+                                      #[cfg(debug_assertions)]
+                                      "test".to_string()
+                            )//2 weight bias
                             .end_seq()
                     ],
 
@@ -727,10 +742,10 @@ mod tch_tests {
                     })
 
                 )
-                .linear_s(10, "test".to_string())//2 weight bias
+                .linear_s(10, #[cfg(debug_assertions)]  "test".to_string())//2 weight bias
                 .conv_1d(3, 1, 2, ConvConfig::default())//2 weight bias
                 .conv_1d(5, 1, 2, ConvConfig::default())//2 weight bias
-                .linear_s(20, "test".to_string())//2 weight bias
+                .linear_s(20, #[cfg(debug_assertions)]  "test".to_string())//2 weight bias
                 .func(Tensor::sigmoid)
                 .end_seq()
         }

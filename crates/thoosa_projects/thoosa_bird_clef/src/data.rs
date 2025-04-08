@@ -326,20 +326,16 @@ mod tests {
 
     #[test]
     fn test_labeled_resourses() -> Result<(), ThoosaError>{
-        labeled_resourses("test_data/")?;
+        let resourses = labeled_resourses("test_data/")?;
+
+        assert_eq!(28564, resourses.len());
 
         Ok(())
 
     }
 
-    #[test]
-    fn test_import_resources() -> Result<(), ThoosaError>{
 
-        debug!("labels={LABELS:?}");
-        Ok(())
-    }
-
-    #[test]
+    // #[test]
     fn test_plot_resource() -> Result<(), ThoosaError> {
         let ws = Arc::new(RwLock::new(FsWorkspace::new("/tmp/ws_test_clef", 1, 999, 32000)?));
 

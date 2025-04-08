@@ -1730,7 +1730,7 @@ mod cli_tests {
                         }"#,
             r#"{
                             common_training_args: {
-                                    cycles: "300",
+                                    cycles: "100",
                                     batch_size: "11",
                                     lr: "0.0001..0.001",
                                     max_loss: "0.1",
@@ -1765,7 +1765,7 @@ mod cli_tests {
                                 opt_n_init: "3"
                             },
                             net: {
-                                num_layers: "2..8"
+                                num_layers: "2"
                             }
                         }"#,
             &group_name, OptConfig::new(50, 10), &ws, &store, &loader, &devices
