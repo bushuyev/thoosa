@@ -327,6 +327,9 @@ impl ThoModule for MyLinear{
             Ok(t) => t,
             Err(e) => {
                 error!("{:?}", e);
+                #[cfg(debug_assertions)]
+                error!("failed layer descr: {} ", self.descr);
+
                 panic!("{:?}", e);
             }
         }

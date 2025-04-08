@@ -1191,18 +1191,18 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                 let unfolded = self.find_motifs_applicable.apply(input, FindMotifsRunConfigOptions::FilterUnfold)?;
 
-                trace!("Applicable for MotifsNetsSelectionApplicable::apply/Max: unfolded=\n{unfolded}");
+                trace!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded=\n{unfolded}");
 
                 let max_num_slices = slices_len(self.max_input, motif_width, self.find_motifs_applicable.run_config().step);
 
-                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_width={motif_width} self.max_input={} max_num_slices={max_num_slices}", self.max_input);
+                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: motif_width={motif_width} self.max_input={} max_num_slices={max_num_slices}", self.max_input);
 
                 Ok(Box::new(Tensor::stack(
                     self.channels_motifs
                         .iter()
                         .enumerate()
                         .map(|(channel, motif_nets)| {
-                            debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: channel={channel} motif_nodes.len()={}", motif_nets.len());
+                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: channel={channel} motif_nodes.len()={}", motif_nets.len());
 
                             if motif_nets.is_empty() {
                                 Ok(Tensor::zeros([self.max_nets() as i64, max_num_slices as i64], (Float, Cpu)))
@@ -1210,27 +1210,27 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                                 let unfolded_channel = unfolded.i((channel as i64, .., ..));//channel, slices, slice
 
-                                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: unfolded.size={:?}", unfolded_channel.size());
-                                trace!("Applicable for MotifsNetsSelectionApplicable::apply/Max: unfolded_channel=\n{unfolded_channel}");
+                                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded.size={:?}", unfolded_channel.size());
+                                trace!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded_channel=\n{unfolded_channel}");
 
                                 let motif_dists = motif_nets.iter().map(|(_params, net)| {
                                     // net.set_device(device.clone());
-                                    debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: net={net:?}");
+                                    debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: net={net:?}");
 
                                     let mut motif_distance_splits = vec![];
                                     run_split_on_oom(
                                         SplitQueue::<2, _>::new(SplittableTensor::<0/*batch dimension*/>(unfolded_channel.shallow_clone())),
                                         |t| {
-                                            debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: forward: t.size={:?}", t.as_ref().size());
+                                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: forward: t.size={:?}", t.as_ref().size());
                                             let r = net.infer(
                                                 &t.as_ref().to_device(self.device.clone())
                                             ).flatten(0, 1); //flatten - removes always 1-sized distance dimension [ slices, slices_len]->[slices, [distance]]
-                                            debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: forward:  r.size={:?}", r.size());
+                                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: forward:  r.size={:?}", r.size());
 
                                             Ok(r.to_device(Cpu))
                                         },
                                         |v, t| {
-                                            debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: on_ok: v={v:?} device={:?}", v.device());
+                                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: on_ok: v={v:?} device={:?}", v.device());
                                             motif_distance_splits.push(v);
                                         },
                                         3 //TODO config
@@ -1238,7 +1238,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                                     // net.set_device(Cpu);
 
-                                    debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_distance_splits={motif_distance_splits:?}");
+                                    debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: motif_distance_splits={motif_distance_splits:?}");
                                     if motif_distance_splits.len() > 0 {
                                         Ok(Tensor::concat(&motif_distance_splits, 0))
                                     } else if motif_distance_splits.len() == 1 {
@@ -1249,23 +1249,19 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
                                 }).collect::<Result<Vec<_>, ThoosaError>>()?;
 
 
-                                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_dists={motif_dists:?}");
+                                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: motif_dists={motif_dists:?}");
                                 //TODO pad_sequence?
                                 let motif_nets_out = Tensor::stack(motif_dists.as_slice(), 0);
 
-                                trace!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_nets_out=\n{motif_nets_out}");
-                                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: motif_dists.len={} motif_nets_out.size={:?}", motif_dists.len(), motif_nets_out.size());
+                                trace!("Applicable for MotifsNetsSelectionApplicable::apply:Max: motif_nets_out=\n{motif_nets_out}");
+                                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: motif_dists.len={} motif_nets_out.size={:?}", motif_dists.len(), motif_nets_out.size());
 
                                 let r = pad_to(&motif_nets_out, &[self.max_nets() as i64, max_num_slices as i64]);
 
-                                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Max: r.size={:?}", r.as_ref().map(|r|r.size()));
+                                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: r.size={:?}", r.as_ref().map(|r|r.size()));
 
                                 r
-
-
                             }
-
-
                          })
                         .collect::<Result<Vec<_>, ThoosaError>>().unwrap().as_slice(),
                     0
@@ -1273,14 +1269,16 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
             }
             //returns sum of motifs in all channels x slices_len
             NetsPadding::Fixed(slices_len) => {
-                let (input_slice_step, pad) = clc_step(input.size()[1] as u32, motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
-                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: input_slice_step={input_slice_step} pad={pad}");
 
                 let filtered = self.find_motifs_applicable.apply(
-                    &Box::new(input.pad([0, pad as i64], "constant", 0.)), FindMotifsRunConfigOptions::Filter
+                    input, FindMotifsRunConfigOptions::Filter
                 )?;
+                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: filtered.size={:?}", filtered.size());
 
-                let unfolded = filtered.unfold(1, motif_width as i64, input_slice_step as i64);
+                let (input_slice_step, pad) = clc_step(filtered.size()[1] as u32, motif_width, slices_len); //(channel.size()[0]-motif_width)/100;
+                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: input_slice_step={input_slice_step} pad={pad}");
+
+                let unfolded = filtered.pad([0, pad as i64], "constant", 0.).unfold(1, motif_width as i64, input_slice_step as i64);
 
                 Ok(Box::new(Tensor::concat(
                     self.channels_motifs
@@ -1291,27 +1289,27 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                             let unfolded_channel = unfolded.i((channel as i64, .., ..));//channel, slices, slice
 
-                            debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: unfolded.size={:?}", unfolded_channel.size());
-                            trace!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: unfolded_channel=\n{unfolded_channel}");
+                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: unfolded.size={:?}", unfolded_channel.size());
+                            trace!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: unfolded_channel=\n{unfolded_channel}");
 
                             let motif_dists = motif_nets.iter().map(|(_params, net)| {
                                 // net.set_device(device.clone());
-                                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: net={net:?}");
+                                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: net={net:?}");
 
                                 let mut motif_distance_splits = vec![];
                                 run_split_on_oom(
                                     SplitQueue::<2, _>::new(SplittableTensor::<0/*batch dimension*/>(unfolded_channel.shallow_clone())),
                                     |t| {
-                                        debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: forward: t.size={:?}", t.as_ref().size());
+                                        debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: forward: t.size={:?}", t.as_ref().size());
                                         let r = net.infer(
                                             &t.as_ref().to_device(self.device.clone())
                                         ).flatten(0, 1); //flatten - removes always 1-sized distance dimension [ slices, slices_len]->[slices, [distance]]
-                                        debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: forward:  r.size={:?}", r.size());
+                                        debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: forward:  r.size={:?}", r.size());
 
                                         Ok(r.to_device(Cpu))
                                     },
                                     |v, t| {
-                                        debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: on_ok: v={v:?} device={:?}", v.device());
+                                        debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: on_ok: v={v:?} device={:?}", v.device());
                                         motif_distance_splits.push(v);
                                     },
                                     10 //TODO config
@@ -1319,7 +1317,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                                 // net.set_device(Cpu);
 
-                                debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: motif_distance_splits={motif_distance_splits:?}");
+                                debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: motif_distance_splits={motif_distance_splits:?}");
                                 if motif_distance_splits.len() > 0 {
                                     Ok(Tensor::concat(&motif_distance_splits, 0))
                                 } else if motif_distance_splits.len() == 1 {
@@ -1330,12 +1328,12 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
                             }).collect::<Result<Vec<_>, ThoosaError>>()?;
 
 
-                            debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: motif_dists={motif_dists:?}");
+                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: motif_dists={motif_dists:?}");
 
                             let motif_nets_out = Tensor::stack(motif_dists.as_slice(), 0);
 
-                            trace!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: motif_nets_out=\n{motif_nets_out}");
-                            debug!("Applicable for MotifsNetsSelectionApplicable::apply/Fixed: motif_dists.len={} motif_nets_out.size={:?}", motif_dists.len(), motif_nets_out.size());
+                            trace!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: motif_nets_out=\n{motif_nets_out}");
+                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: motif_dists.len={} motif_nets_out.size={:?}", motif_dists.len(), motif_nets_out.size());
 
                             Ok(motif_nets_out)
 
@@ -1461,24 +1459,24 @@ impl LabelNetParams {
                     move |t:&Tensor|
                         (0..motif_nodes)
                             .map(|net_i|{
-                                debug!("label_node_max_padding: split, t.size={:?}  net_i={net_i}", t.size());
+                                debug!("label_net_fixed_num_slices: split, t.size={:?}  net_i={net_i}", t.size());
                                 t.i((.., net_i as i64, ..))
                             })
                             .collect()
                 ),//label batch, channel, max_motif_nets, max slices
 
                 Box::new(move |t:Vec<Tensor>|{
-                    debug!("label_node_fixed_num_slices: join t={t:?}");
+                    debug!("label_net_fixed_num_slices: join t={t:?}");
 
                     let out = Tensor::concat(t.as_slice(), 1); //.mean_dim(1, false, Float);
-                    debug!("label_node_fixed_num_slices: join out={:?}", out.size());
+                    debug!("label_net_fixed_num_slices: join out={:?}", out.size());
 
                     out
                 })
 
             )
             .closure(Box::new(move |t:&Tensor|{
-                debug!("label_node_fixed_num_slices: merged final in flatten t.size()={:?}", t.size());
+                debug!("label_net_fixed_num_slices: merged final in flatten t.size()={:?}", t.size());
 
                 t.shallow_clone()
 
@@ -1486,13 +1484,13 @@ impl LabelNetParams {
 
             .linear(
                 #[cfg(debug_assertions)]
-                "label_node_fixed_num_slices: first main layer".to_string()
+                "label_net_fixed_num_slices: first main layer".to_string()
             )
             // .func(Tensor::relu)
             .linear_s(
                 1,
                 #[cfg(debug_assertions)]
-                "label_node_fixed_num_slices: final layer".to_string()
+                "label_net_fixed_num_slices: final layer".to_string()
             )
             .func(Tensor::sigmoid)
             .end_seq()
@@ -1546,27 +1544,27 @@ impl LabelNetParams {
                     move |t:&Tensor|
                         (0..motif_nodes)
                             .map(|net_i|{
-                                debug!("label_node_max_padding: split, t.size={:?} net_i={net_i}", t.size());
+                                debug!("label_net_max_padding: split, t.size={:?} net_i={net_i}", t.size());
                                 t.i((.., .., net_i as i64, ..))
                             })
                             .collect()
                 ),//label batch, channel, max_motif_nets, max slices
 
                 Box::new(move |t:Vec<Tensor>|{
-                    debug!("label_node_max_padding: join t={t:?}");
+                    debug!("label_net_max_padding: join t={t:?}");
 
                     let out = Tensor::stack(t.as_slice(), 1).mean_dim(1, false, Float);
-                    debug!("label_node_max_padding: join out={:?}", out.size());
+                    debug!("label_net_max_padding: join out={:?}", out.size());
 
                     out
                 })
 
             )
             .closure(Box::new(move |t:&Tensor|{
-                    debug!("label_node_max_padding: merged final in flatten t.size()={:?}", t.size());
+                    debug!("label_net_max_padding: merged final in flatten t.size()={:?}", t.size());
 
                     let t_0 = t.squeeze_dims(2);
-                    debug!("label_node_max_padding: merged final out flatten t_0.size()={:?}", t_0.size());
+                    debug!("label_net_max_padding: merged final out flatten t_0.size()={:?}", t_0.size());
 
                     t_0
 
@@ -2255,8 +2253,6 @@ impl Default for LabelNetTypeArgs {
     }
 }
 
-
-
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize,  Debug, Clone, PartialEq)]
 pub struct MaxPaddingNetArgs {
     #[in_map]
@@ -2269,7 +2265,6 @@ impl MaxPaddingNetArgs {
         Self { num_layers }
     }
 }
-
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FixedNumSlicesNetArgs {
