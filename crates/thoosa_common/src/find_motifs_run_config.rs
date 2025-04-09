@@ -14,7 +14,6 @@ use thoosa_shared::run_configs::{Applicable, RunConfig, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
 use crate::loader::SyncWrapper;
-use crate::train_nets::FindMotifsRunConfigCtx;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
 
@@ -57,48 +56,24 @@ impl FindMotifsRunConfig {
         Ok(find_motifs_run_config)
     }
 
-    pub fn to_applicable<C:FindMotifsRunConfigCtx>(&self, ctx:C, device: Device) -> FindMotifsRunConfigApplicable {
-        FindMotifsRunConfigApplicable::new(&self, ctx, device)
+    pub fn to_applicable(&self, ctx: &Box<dyn Workspace>, device: Device) -> FindMotifsApplicable {
+        FindMotifsApplicable::new(&self, ctx, device)
     }
 
 }
 
-//TODO use workspace directly
-pub struct FindMotifsRunConfigWsCtx {
-    channels:u32,
-    sample_rate:u32
-}
-
-impl From<RwLockReadGuard<'_, Box<dyn Workspace>>> for FindMotifsRunConfigWsCtx {
-    fn from(value: RwLockReadGuard<'_, Box<dyn Workspace>>) -> Self {
-        FindMotifsRunConfigWsCtx {
-            channels: value.channels() as u32,
-            sample_rate: value.sample_rate(),
-        }
-    }
-}
-
-impl FindMotifsRunConfigCtx for FindMotifsRunConfigWsCtx {
-    fn channels(&self) -> u32 {
-        self.channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-}
 
 #[derive(Debug)]
-pub struct FindMotifsRunConfigApplicable {
+pub struct FindMotifsApplicable {
     run_config:FindMotifsRunConfig,
     kernel:Option<SyncWrapper<Box<Tensor>>>,
     groups:i64,
     device:Device
 }
 
-impl FindMotifsRunConfigApplicable {
+impl FindMotifsApplicable {
 
-    pub fn new<C:FindMotifsRunConfigCtx>(run_config:&FindMotifsRunConfig, ctx:C, device:Device) -> Self {
+    pub fn new(run_config:&FindMotifsRunConfig, ctx: &Box<dyn Workspace>, device:Device) -> Self {
 
         match &run_config.filter {
             None => {
@@ -164,37 +139,51 @@ impl FindMotifsRunConfigApplicable {
     }
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>> for FindMotifsRunConfigApplicable {
-    fn apply(&self, input: &Box<Tensor>) -> Result<Box<Tensor>, ThoosaError> {
+pub enum FindMotifsRunConfigOptions {
+    Filter,
+    FilterUnfold
+}
+
+impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindMotifsApplicable {
+
+    fn apply(&self, tensor: &Box<Tensor>, options:FindMotifsRunConfigOptions) -> Result<Box<Tensor>, ThoosaError> {
+        debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, tensor.size());
 
         let t = match self.kernel.as_ref() {
             None => {
-                input.to_device(self.device).shallow_clone()
+                tensor.to_device(self.device).shallow_clone()
             }
             Some(kernel) => {
-                input.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+                tensor.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
             }
         };
 
-        let input_length = t.size()[1];
+        match options {
+            FindMotifsRunConfigOptions::Filter => {
+                Ok(Box::new(t))
+            }
+            FindMotifsRunConfigOptions::FilterUnfold => {
+                let input_length = t.size()[1];
 
-        if input_length >= self.run_config.window as i64 {
+                if input_length >= self.run_config.window as i64 {
 
-            let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
+                    let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
 
-            debug!("Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
+                    debug!("Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-            Ok(Box::new(unfolded))
-        } else {
-            Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
+                    Ok(Box::new(unfolded))
+                } else {
+                    Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
+                }
+            }
         }
     }
 }
 
-impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>)> for FindMotifsRunConfigApplicable {
+impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
 
-    //TODO first cat then apply?
-    fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>]) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+    /// applying transform (Filter) and unfolding tensors one by one since they have varying sizes - can't concat into batch to avoid slices spanning different tensors
+    fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>], options:()) -> Result<(Tensor, Vec<i64>), ThoosaError> {
         let mut slices = Vec::with_capacity(tensors_chunk.len());
         let mut slice_sizes = Vec::with_capacity(tensors_chunk.len());
         if log_enabled!(DebugLevel) {
@@ -202,7 +191,7 @@ impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>)> for FindMotifsR
         }
 
         for tensor_wrapped in tensors_chunk {
-            match self.apply(tensor_wrapped.deref()){
+            match self.apply(tensor_wrapped.deref(), FindMotifsRunConfigOptions::FilterUnfold){
                 Ok(t) => {
                     slice_sizes.push(t.size()[1]);
                     slices.push(t);
@@ -245,8 +234,8 @@ impl FindMotifsRunConfig {
         }
     }
 
-    pub fn window(&self) -> i64 {
-        self.window as i64
+    pub fn window(&self) -> u32 {
+        self.window
     }
 
     pub fn step(&self) -> u32 {
@@ -305,6 +294,7 @@ pub struct MaxDistance {
 #[cfg(test)]
 mod tests {
     use log::debug;
+    use tch::Tensor;
     use crate::find_motifs_run_config::{DistanceRunningMeanK, DistanceRunningMeanKRangeOrValue, FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue, SlicesFilterRangeOrValue};
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
 
@@ -330,6 +320,40 @@ mod tests {
             slices_filter: SlicesFilterRangeOrValue::DistanceRunningMeanK(DistanceRunningMeanKRangeOrValue { mean: 0.5.into()}),
         };
         debug!("{:#}", serde_json5::to_string(&rc).unwrap());
+        //TODO test
     }
 
+
+
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_grid]
+pub struct SelectMotifsRunConfig {
+    #[in_map]
+    pub id:Option<RunId>,
+
+    #[in_map]
+    #[run_config]
+    pub motif_selector: MotifSelector
+}
+
+impl SelectMotifsRunConfig {
+    pub fn new() -> Self {
+        Self {
+            id:None,
+            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default())
+        }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct ByLabelVarianceConfig {
+    #[in_map]
+    _dummy: u32,//TODO fix ThoosaRunConfig to let empty configs
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap,  Clone, PartialEq, Debug, Deserialize)]
+pub enum MotifSelector {
+    ByLabelVariance(ByLabelVarianceConfig)//TODO
 }

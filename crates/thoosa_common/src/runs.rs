@@ -40,7 +40,7 @@ impl ResourcesConfig for Simple {
     fn to_resources<S:ResourceStore + ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Vec<Resource>, ThoosaError>{
         Ok(match self.resources() {
             ResourceType::List(list) => {
-                store.lock().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect()).expect("list_resources_by_file_stems")
+                store.lock().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect::<Vec<_>>()).expect("list_resources_by_file_stems")
             }
             ResourceType::Set(set) => {
                 store.lock().list_resource_set_resources_by_descr(set).expect("list_resource_set_resources")

@@ -330,12 +330,12 @@ mod tests {
         assert_eq!(vec![30], pred_2.size());
     }
 
-    fn build_net(_params: &HashMap<String, Val>, vs: &mut VarStore, in_features: i64, out_features: i64) -> Box<dyn ThoModule> {
+    fn build_net(_params: &HashMap<String, Val>, vs: &mut VarStore, in_features: u32, out_features: u32) -> Box<dyn ThoModule> {
 
         debug!("build_net_1: in_features={} out_features={}", in_features, out_features);
 
         SeqBuilder::new(in_features, None)
-            .linear_s(out_features)
+            .linear_s(out_features, #[cfg(debug_assertions)] "test".to_string())
             .end_seq()
             .build_tch_module(&vs.root()).expect("build_tch_module")
     }

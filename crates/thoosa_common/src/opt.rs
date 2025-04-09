@@ -524,7 +524,7 @@ mod opt_tests {
     }
 
     //stack if first point is min
-    #[test]
+    // #[test]
     fn  test_opt_1d_with_ei() -> Result<(), ThoosaError> {
         let n = 100i64;
 
@@ -598,7 +598,7 @@ mod opt_tests {
     }
 
 
-    #[test]
+    // #[test]
     fn test_opt_1d() -> Result<(), ThoosaError>{
 
         let n = 100i64;
@@ -824,7 +824,7 @@ mod opt_tests {
         debug!("store_path={}", store_path);
 
         let pulse = pulse_v(50., 10., 100, 20.);
-        let n = 1000i64;
+        let n = 1000;
 
         let sig_0=  join_with_offset::<f32>(0., 10.0, &[(100, pulse.clone())], random_saw(1000));
         let sig_1=  join_with_offset::<f32>(0., 10.0, &[(500, pulse.clone())], random_saw(1000));

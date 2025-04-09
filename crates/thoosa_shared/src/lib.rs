@@ -126,6 +126,16 @@ pub struct ThoosaError {//TODO enum
     is_oom:bool
 }
 
+impl Clone for ThoosaError {
+    fn clone(&self) -> Self {
+        ThoosaError {
+            msg: self.msg.clone(),
+            is_oom: self.is_oom,
+            backtrace: Backtrace::capture()
+        }
+    }
+}
+
 unsafe impl Send for ThoosaError {}
 
 impl ThoosaError {
@@ -194,19 +204,19 @@ where D: Display {
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
 pub struct MotifSlice {
-    pub motif_id: usize,//TODO u32?
+    pub motif_id: u32,
     pub slice_idx: i64,
     pub channel: u16,
 }
 
 impl MotifSlice {
 
-    pub fn new(motif_id: usize, slise_idx: i64, channel: u16) -> Self {
+    pub fn new(motif_id: u32, slise_idx: i64, channel: u16) -> Self {
         Self { motif_id, slice_idx: slise_idx, channel }
     }
 
     #[inline]
-    pub fn motif_id(&self) -> usize {
+    pub fn motif_id(&self) -> u32 {
         self.motif_id
     }
 
@@ -276,7 +286,7 @@ pub fn saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
     y
 }
 
-pub fn sig_three_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
+pub fn sig_three_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
 
     join_with_offset::<f32>(0., 1.0, &[
@@ -286,7 +296,7 @@ pub fn sig_three_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: 
     ], saw_with_steps(n as usize, 20, 0.2*max_y))
 }
 
-pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
+pub fn sig_two_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
 
     join_with_offset::<f32>(0., 1.0, &[
@@ -295,7 +305,7 @@ pub fn sig_two_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Op
     ], saw_with_steps(n as usize, 20, 0.2*max_y))
 }
 
-pub fn sig_one_imp(n: i64, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
+pub fn sig_one_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
     join_with_offset::<f32>(0., 1.0, &[
         ((offset*n as f32) as usize, pulse_v_fit(0., σ, ((1.0-2.*offset)*n as f32) as i64, f, 100., max_y)),
@@ -309,11 +319,11 @@ fn σ_f_params(σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> (f3
     (σ, f)
 }
 
-pub fn saw(n: i64) -> Vec<f32> {
+pub fn saw(n: u32) -> Vec<f32> {
     saw_with_steps(n as usize, 30, 100.)
 }
 
-pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
+pub fn pulses_in_const(n: u32, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
     let pulses_len:usize = pulses.iter().map(|(offset, pulse)| *offset + pulse.len()).sum();
 
     std::iter::repeat(0.).take(n as usize).zip(
@@ -330,7 +340,7 @@ pub fn pulses_in_const(n: i64, pulses: &[(usize, Vec<f32>)]) -> Vec<f32> {
 }
 
 
-pub fn pulse_in_rand(n: i64, pulses: &[(usize, Vec<f32>)], random_amplitude: f32, pulse_scale: f32, max_slope: f32) -> Vec<f32> {
+pub fn pulse_in_rand(n: u32, pulses: &[(usize, Vec<f32>)], random_amplitude: f32, pulse_scale: f32, max_slope: f32) -> Vec<f32> {
     let random = random_v(n, random_amplitude, max_slope);
     let _pulses_len:usize = pulses.iter().map(|(offset, _pulse)| *offset ).sum();
 
@@ -378,7 +388,7 @@ pub fn pulse_v_fit(μ: f32, σ: f32, n: i64, f: f32, max_x:f32, max_y:f32) -> Ve
     gauss_scaled(μ, σ, n, max_x, max_y).into_iter().enumerate().map(|(i, x)|  x * ( f * 2. * PI *  i as f32 / n as f32).sin() ).collect::<Vec<_>>()
 }
 
-pub fn sin_v(n: i64, p: f32) -> Vec<f32> {
+pub fn sin_v(n: u32, p: f32) -> Vec<f32> {
     (0..n).map(|x| 4. * (PI * (x as f32)/ p).sin()).collect::<Vec<f32>>()
 }
 
@@ -413,7 +423,7 @@ pub fn pulse_v(μ: f32, σ: f32, n: i64, f: f32) -> Vec<f32> {
     gauss_i(μ, σ, n).enumerate().map(|(i, x)| (f * 2. * PI *  i as f32 / n as f32).sin() * x).collect::<Vec<_>>()
 }
 
-pub fn random_v(n: i64, amplitude: f32, max_slope: f32) -> Vec<f32> {
+pub fn random_v(n: u32, amplitude: f32, max_slope: f32) -> Vec<f32> {
     let mut signal = Vec::with_capacity(n as usize);
 
     let mut current_value = 0.0;
@@ -774,13 +784,13 @@ pub const fn clc_num_batches(input_n: usize, motif_width: usize, step: usize, ba
     (positions + batch_size - 1) / batch_size
 }
 
-pub const fn slices_len(input_n: i64, motif_width: i64, step: u32) -> i64 {
-    (input_n - motif_width) / step as i64 + 1
+pub const fn slices_len(input_n: u32, motif_width: u32, step: u32) -> u32 {
+    (input_n - motif_width) / step + 1
 }
 
-pub  fn clc_step(input_n: i64, motif_width: i64, k:i64) -> (i64, i64) {
+pub fn clc_step(input_n: u32, motif_width: u32, slices_num:u32) -> (u32, u32) {
     let v = input_n - motif_width;
-    let div = (k - 1);
+    let div = slices_num -1;
 
     let r = v % div;
 
@@ -794,7 +804,6 @@ pub  fn clc_step(input_n: i64, motif_width: i64, k:i64) -> (i64, i64) {
 
     (step, pad)
 }
-
 
 pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoosaError> {
     let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#).map_err(|e|ThoosaError::new(e.to_string()))?;//TODO const, error

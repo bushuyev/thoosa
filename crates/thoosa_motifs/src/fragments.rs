@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::fs;
 use std::hash::Hash;
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -26,8 +27,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
 use tch::Device::Cpu;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigWsCtx};
-use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, FindMotifsRunConfigOptions};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
 
@@ -102,7 +102,7 @@ pub fn motifs_to_tensor(
     let wg = WaitGroup::new();
     let wg_1 = wg.clone();
 
-    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), Cpu);
+    let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(ws.read().deref(), Cpu);
 
     loader.write().exec(move |loader, _| {
         async move {
@@ -111,7 +111,7 @@ pub fn motifs_to_tensor(
                 debug!("motifs_to_tensor: resource={resource:?}");
                 let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, area).await;
                 debug!("motifs_to_tensor: t.size={:?}", t.size());
-                let applied = find_motifs_run_config_applicable.apply(&t).expect("find_motifs_run_config_for_loader.apply");
+                let applied = find_motifs_run_config_applicable.apply(&t, FindMotifsRunConfigOptions::FilterUnfold).expect("find_motifs_run_config_for_loader.apply");
                 debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
 
                 for motif_slice in motif_slices {
@@ -123,7 +123,7 @@ pub fn motifs_to_tensor(
 
                     let mut write_guard = channels_motifs_slices_arc.write();
                     let  channels_motifs = write_guard.entry(motif_slice.channel).or_insert_with(||HashMap::new());
-                    let  motif_slices = channels_motifs.entry(motif_slice.motif_id).or_insert_with(||Vec::new());
+                    let  motif_slices = channels_motifs.entry(motif_slice.motif_id as usize).or_insert_with(||Vec::new());
 
 
                     motif_slices.push(SyncWrapper::new_tb(Box::new(motif_slice_t)));
@@ -260,7 +260,7 @@ pub fn write_motifs_slices<F>(base_path:&str, output_dir:&str, eeg_id_fragments_
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum MotifsBy {
-    MotifId(usize),
+    MotifId(usize),//TODO u32
     RunId(RunId)
 }
 
@@ -299,9 +299,9 @@ impl PlotMotifSlicesArgs {
 
 
 
-pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &FindMotifsApplicable, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
 
-    debug!("load_motif_slices: channel={}, widow={}, slices={}", channel, widow, slices.len());
+    debug!("load_motif_slices: channel={}, find_motifs_run_config={:?}, slices={}", channel, find_motifs_run_config_applicable, slices.len());
 
     let tensors_ids_slices = slices.iter().fold(HashMap::new(), |mut a, slice| {
         a
@@ -315,7 +315,7 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
 
     let mut all_slices:Arc<RwLock<Vec<(ResourceId, Vec<Box<SyncWrapper<Tensor>>>)>>> = Arc::new(RwLock::new(vec![]));//TODO remove Arc or add par_iter?
     let wg = WaitGroup::new();
-
+    let window = find_motifs_run_config_applicable.run_config().window;
 
     tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).for_each(|tensor_keys|{//TODO remove chunks?
 
@@ -330,25 +330,26 @@ pub fn load_motif_slices (channel: i64, widow: i64, slices: Vec<TensorIdSliceIdx
 
             let all_slices = Arc::clone(&all_slices);
             let wg = wg.clone();
-            loader.write().exec(move |loader, _keys_purge| {//TODO purge
+            loader.write().exec_scoped(move |loader, _keys_purge| {//TODO purge
                 async move {
                     let tensor_idx_id = resource.id();
-                    let t = LoadRunner::<Box<Tensor>>::load_future(loader, resource, 0).await;
+                    let t = Loader::<Box<Tensor>>::load_future(loader, resource, 0).await;
+                    let t= find_motifs_run_config_applicable.apply(&t, FindMotifsRunConfigOptions::Filter).unwrap();
 
                     debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
 
                     all_slices.write().push(
                         (tensor_idx_id,
                          slices.into_iter().filter(|slice_idx| {//TODO filter_map
-                             let slice_ok = t.size()[1] >= (*slice_idx) as i64 + widow;
+                             let slice_ok = t.size()[1] >= (*slice_idx  + window)as i64;
 
                              if !slice_ok {
-                                 warn!("slice doesn't fit into tensor: tensor_idx_id={tensor_idx_id}, t.size()={:?}, *slice_idx={slice_idx:?}, widow={widow:?}", t.size())
+                                 warn!("slice doesn't fit into tensor: tensor_idx_id={tensor_idx_id}, t.size()={:?}, *slice_idx={slice_idx:?}, window={window:?}", t.size())
                              }
 
                              slice_ok
                          }).map(|slice_idx| Box::new(
-                             SyncWrapper::new_t(t.i((channel, slice_idx as i64..(slice_idx as i64) + widow )))
+                             SyncWrapper::new_t(t.i((channel, slice_idx as i64..(slice_idx + window )as i64)))
                          )).collect::<Vec<Box<SyncWrapper<Tensor>>>>()
                         )
                     );
@@ -413,12 +414,13 @@ mod motifs_tests {
 
     use log::debug;
     use parking_lot::RwLock;
+    use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::Kind::Float;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig};
     use thoosa_common::utils::*;
-    use thoosa_common::ws::DummyWorkspace;
+    use thoosa_common::ws::{mock_ws_simp, Workspace};
     use thoosa_shared::resource::{Resource, ResourceId};
     use thoosa_shared::MotifSlice;
     use thoosa_shared::TensorIdSliceIdx;
@@ -434,7 +436,7 @@ mod motifs_tests {
     fn test_motifs_to_tensor() -> Result<(), ThoosaError>{
         let dir = format!("/tmp/test_{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
         debug!("dir={}", dir);
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 1000, 1000)));
 
         let mut slices_map: HashMap<Resource, Vec<MotifSlice>> = HashMap::new();
 
@@ -578,11 +580,11 @@ mod motifs_tests {
         }
 
         let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
-        let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
+        let executor_rc = Arc::new(RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
             0,
-            2,
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_ws_simp(None, 1, 1000, 100), Cpu),
             vec![TensorIdSliceIdx(1, 2)],
             HashMap::from([(1, Resource::new(1, 1, "aaa".to_string(), 100))]),
             &executor_rc
@@ -611,7 +613,7 @@ mod motifs_tests {
 
         let motif_slices = super::load_motif_slices(
             0,
-            5000,
+            &FindMotifsRunConfig::new(None, 1, 5000, None, None).to_applicable(&mock_ws_simp(None, 1, 1000, 100), Cpu),
             vec![TensorIdSliceIdx(123, 2)],
             HashMap::from([(123, Resource::new(123, 1, "aaa".to_string(), 100))]),
             &executor_rc
