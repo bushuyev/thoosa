@@ -654,9 +654,8 @@ mod tests {
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::ResourceLoader;
-    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
-    use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{import_resources, Cli};
@@ -702,13 +701,14 @@ mod tests {
         ).unwrap();
 
         let window = 1000;
+        let ws = mock_ws_simp(None, 1, 1000, 100);
         let t_0_0_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_0_0.into()], //sig_0 at idx 0
             vec![0], None
         ).t;
         let t_0_1_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 100, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_1_0.into()], //sig_0 at idx 2000
             vec![0], None
         ).t;
@@ -723,7 +723,7 @@ mod tests {
         )? else {
             panic!("no distances")
         };
-        let x = lin_t(distances.size()[1]);
+        let x = lin_t(distances.size()[1] as u32);
         plot_series(
             vec![
                 (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&x).into_iter().zip(from::<Vec<f32>>(&distances.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
@@ -739,7 +739,7 @@ mod tests {
         // let channels_hists = channels_dists_flat.hist
         debug!("channels_dists_flat={:?}", channels_dists_flat.size());
         let hists = hist_1_dim(&channels_dists_flat, window);
-        let x = lin_t(window as i64);
+        let x = lin_t(window);
 
         // let normal = Tensor::normal_(hists.i(0).mean(Float), hists.std(true))
 
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn test_import_resources() -> Result<(), ThoosaError>{
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(3, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 1000, 1000)));
 
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());

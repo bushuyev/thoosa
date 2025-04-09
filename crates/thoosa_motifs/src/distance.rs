@@ -377,8 +377,8 @@ mod distance_tests {
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::SyncWrapper;
     use thoosa_common::panic_to_err;
-    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
     use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, Reducer, SplitQueue, Splittable, SplittableTensor};
+    use thoosa_common::ws::{mock_ws_simp};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::run_configs::Applicable;
@@ -419,7 +419,7 @@ mod distance_tests {
 
         // set_max_level(Trace);
 
-        let n = 1000i64;
+        let n = 1000;
         let max_y = 30.0;
 
         let sig_0_v = sig_one_imp(n, max_y, None, None, 0.0);
@@ -461,13 +461,14 @@ mod distance_tests {
 
         //t_label_tensor_channel
         let window = 1000;
+        let ws = mock_ws_simp(None, 2, 100, 1000);
         let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_0.into()], //sig_0 at idx 0
             vec![0], None
         ).t;
         let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 200, window, None, None).to_applicable(&ws, Cpu),
             &vec![t_1.into()], //sig_0 at idx 2000
             vec![0], None
         ).t;
@@ -488,12 +489,12 @@ mod distance_tests {
         plot_series_with_points(
             (0..distances.size()[2])
                 .zip(DistinctColorIter::new())
-                .map(|(slice, color)|(format!("0ch slice={}", slice), color,   lin_iter(distances.size()[1]).zip(from::<Vec<f32>>(&distances.i((0, .., slice)))).collect::<Vec<(f32, f32)>>()))
+                .map(|(slice, color)|(format!("0ch slice={}", slice), color,   lin_iter(distances.size()[1] as u32).zip(from::<Vec<f32>>(&distances.i((0, .., slice)))).collect::<Vec<(f32, f32)>>()))
                 .collect(),
             "distance", (2000, 1000), &format!("/tmp/plots/distance_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
             &(0..distances.size()[2])
                 .flat_map(|slice|
-                    lin_iter(distances.size()[1])
+                    lin_iter(distances.size()[1] as u32)
                         .zip(from::<Vec<f32>>(&distances.i((0, .., slice))))
                         .filter(|(x, v)|&mask.i((0, *x as i64, slice)).double_value(&[]) == &1.)
                         .collect::<Vec<(f32, f32)>>())
@@ -508,7 +509,7 @@ mod distance_tests {
 
         debug!("channels_dists_flat={:?}", channels_dists_flat.size());
         let hists = hist_1_dim(&channels_dists_flat, window);
-        let x = lin_t(window as i64);
+        let x = lin_t(window);
 
         let (skewness, kurtosis) = skewness_kurtosis_1_dim(&hists.totype(Float));
         debug!("skewness={skewness}");
@@ -561,8 +562,9 @@ mod distance_tests {
         ]);
 
 
-        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_0.into()], vec![0], None).t;
-        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu), &vec![t_1.into()], vec![0], None).t;
+        let ws = mock_ws_simp(None, 2, 100, 1000);
+        let t_0_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(&ws, Cpu), &vec![t_0.into()], vec![0], None).t;
+        let t_1_sliced = ChunkOfSlicedTensors::slice_tensors_chunk(&FindMotifsRunConfig::new(None, 1, 3, None, None).to_applicable(&ws, Cpu), &vec![t_1.into()], vec![0], None).t;
 
         let (mask, Some(dists)) = clc_dist_d2_and_mask(t_0_sliced.shallow_clone(), t_1_sliced.shallow_clone(), true, &mut [])? else {
             panic!("no distances")
@@ -622,11 +624,11 @@ mod distance_tests {
         let t_11 = Tensor::from_slice(&a_11).view((1, -1));
 
         let run_config = FindMotifsRunConfig::new(None, 1, 2, None, None);
-        let run_config_applicable = run_config.to_applicable(DummyFindMotifsRunConfigCtx, Cpu);
+        let mut run_config_applicable = run_config.to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu);
 
         let  (tensor_0, sizes_0) =run_config_applicable.apply(&[
-            t_00.into(), t_01.into()
-        ][..]).expect("apply");
+                    t_00.into(), t_01.into()
+                ][..],()).expect("apply");
 
         let chunk_0 = ChunkOfSlicedTensors::new(
             vec![0,1],
@@ -636,8 +638,8 @@ mod distance_tests {
         );
 
         let  (tensor_1, sizes_1) =run_config_applicable.apply(&[
-            t_10.into(), t_11.into()
-        ][..]).expect("apply");
+                    t_10.into(), t_11.into()
+                ][..],()).expect("apply");
 
         let chunk_1 = ChunkOfSlicedTensors::new(
             vec![2,3],
@@ -1790,7 +1792,7 @@ mod distance_tests {
         let distances = Tensor::stack(&[
             Tensor::from_slice(ch_0.as_slice()),
             Tensor::from_slice(ch_1.as_slice())
-        ], 0).view((2, input_n));//unsqueeze to make it [channels x t_0 slices x t_1 slices]
+        ], 0).view((2, input_n as i64));//unsqueeze to make it [channels x t_0 slices x t_1 slices]
 
         let mask = LocalMin.make_mask(None, &distances);
 

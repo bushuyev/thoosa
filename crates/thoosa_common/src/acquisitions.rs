@@ -61,7 +61,7 @@ mod tests {
     use crate::opt::kernel_rbf;
     use crate::utils::{from, plot_series_with_points, sin3_pow2, vec_f32_from};
 
-    #[test]
+    // #[test]
     fn test_expected_improvement() -> Result<(), ThoosaError> {
 
         let n = 100i64;

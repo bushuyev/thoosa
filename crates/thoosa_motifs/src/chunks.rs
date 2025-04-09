@@ -7,7 +7,7 @@ use std::mem;
 use std::ops::Deref;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable};
 use thoosa_common::loader::SyncWrapper;
 use thoosa_common::utils::{SplitQueue, Splittable};
 use thoosa_shared::resource::ResourceId;
@@ -68,11 +68,11 @@ impl  ChunkOfSlicedTensors {
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk(run_config:&FindMotifsRunConfigApplicable, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
+    pub fn slice_tensors_chunk(run_config:&FindMotifsApplicable, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
-        let  (tensor, sizes) = run_config.apply(tensors_chunk).expect("ChunkOfSlicedTensors apply failed");
+        let  (tensor, sizes) = run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
 
 
         debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
@@ -160,8 +160,8 @@ mod tests {
     use tch::Tensor;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::SyncWrapper;
-    use thoosa_common::train_nets::{DummyFindMotifsRunConfigCtx, FindMotifsRunConfigCtx};
     use thoosa_common::utils::Splitter;
+    use thoosa_common::ws::{mock_ws_simp};
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::resource::ResourceId;
     use thoosa_shared::test_utils::init_test_logging;
@@ -187,7 +187,7 @@ mod tests {
 
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor_a.into(), tensor_b.into()], vec![0, 1],
             None
         );
@@ -228,7 +228,7 @@ mod tests {
         ]).view([2, 3]).totype(Float);
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 1, 2, None, None).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor.into()], vec![0],
             None
         );
@@ -257,7 +257,7 @@ mod tests {
 
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor.into()], vec![0],
             None
         );
@@ -282,7 +282,7 @@ mod tests {
         debug!("tensor={tensor}");
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor.into()], vec![0],
             None
         );
@@ -356,7 +356,7 @@ mod tests {
         debug!("tensor_bbb={tensor_bbb}");
 
         let chunk = ChunkOfSlicedTensors::slice_tensors_chunk(
-            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+            &FindMotifsRunConfig::new(None, 10, 20, None, None).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu),
             &vec![tensor_aaa.into(), tensor_bbb.into()], vec![0, 1],
             None
         );

@@ -92,12 +92,12 @@ where
 
             debug!("preload_vec: adding key={key:?}");
 
-            let loader = Arc::clone(&self_lock.loader_fn);
+            let loader_fn = Arc::clone(&self_lock.loader_fn);
             let self_arc_pool = Arc::clone(&self_arc);
 
             let key = key.clone();
 
-            self_lock.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
+            self_lock.loader_pool.spawn(move || Self::loader_task(cache_area, loader_fn, self_arc_pool, &key));
         }
         ResourceFuture::new(Arc::clone(&self_arc), key).boxed()
     }
@@ -289,6 +289,44 @@ where
             }),
         ))).expect("features_sender.send");
 
+    }
+
+    //TODO check perf
+    pub fn exec_scoped<'s, F>(&mut self, make_future: F)
+    where
+        F: FnOnce(
+            Arc<RwLock<Loader<V>>>,
+            Box<dyn FnOnce(&[Resource], u64) + Send>
+        ) -> BoxFuture<'s, ()>,
+    {
+        let loader_for_purge = Arc::clone(&self.loader);
+
+        let future = make_future(
+            Arc::clone(&self.loader),
+            Box::new(move |keys, cache_area| {
+                Loader::purge_resources(loader_for_purge, keys, cache_area);
+            }),
+        );
+
+        let notify = Arc::new(RayonNotify::new());
+        let waker = waker_ref(&notify);
+        let mut cx = Context::from_waker(&waker);
+
+        let mut pinned = Box::pin(future);
+        loop {
+            match pinned.as_mut().poll(&mut cx) {
+                Poll::Ready(()) => {
+                    break;
+                }
+                Poll::Pending => {
+                   thread::yield_now();
+
+                    if self.stop.load(Relaxed) {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     pub fn debug(&self, prefix:&str) {

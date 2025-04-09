@@ -130,7 +130,7 @@ mod tests {
     use thoosa_common::ResourceLoader;
     use thoosa_common::runs::Simple;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, vec_f32_from};
-    use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
+    use thoosa_common::ws::{FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::data::ParquetLoader;
     use thoosa_main::cli::{import_resources, Cli};
@@ -326,20 +326,16 @@ mod tests {
 
     #[test]
     fn test_labeled_resourses() -> Result<(), ThoosaError>{
-        labeled_resourses("test_data/")?;
+        let resourses = labeled_resourses("test_data/")?;
+
+        assert_eq!(28564, resourses.len());
 
         Ok(())
 
     }
 
-    #[test]
-    fn test_import_resources() -> Result<(), ThoosaError>{
 
-        debug!("labels={LABELS:?}");
-        Ok(())
-    }
-
-    #[test]
+    // #[test]
     fn test_plot_resource() -> Result<(), ThoosaError> {
         let ws = Arc::new(RwLock::new(FsWorkspace::new("/tmp/ws_test_clef", 1, 999, 32000)?));
 

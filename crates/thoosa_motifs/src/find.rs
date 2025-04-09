@@ -51,7 +51,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Float};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigApplicable, FindMotifsRunConfigWsCtx, SlicesFilter};
+use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
@@ -70,7 +70,7 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConf
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::Val::UInt;
 use thoosa_store::fs_store::FileMotifTrackerStore;
-use thoosa_properties_map::FromHashmap;
+use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 
 
@@ -155,14 +155,14 @@ pub fn find_min_euc_dist(
     let mut min_dists_gpu = Arc::clone(&min_dists);
 
     let run_configs_arcs = run_configs.iter().zip(devices.into_iter().cycle())
-        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), device)))
+        .map(|(rc, device)|Arc::new(rc.to_applicable(ws.read().deref(), device)))
         .collect::<Vec<_>>();
 
     chunk_and_slice_2x(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsRunConfigApplicable>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
 
             debug!("find_min_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
@@ -233,10 +233,10 @@ pub fn find_motifs_by_euc_dist(
     let mut resource_keys = resource_config.to_resources(store)?;
     // resource_keys.shuffle(&mut thread_rng());
 
-    let run_config_ids:Vec<RunId> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
+    // let run_config_ids:Vec<RunId> = run_configs.iter().map(|run_config| run_config.id.expect("id")).collect();
 
     debug!("find_motifs_by_euc_dist: run_configs={run_configs:?}");
-    debug!("find_motifs_by_euc_dist: resource_keys={resource_keys:?} run_config_ids={run_config_ids:?} channels={}", ws.read().channels());
+    debug!("find_motifs_by_euc_dist: resource_keys={resource_keys:?} channels={}", ws.read().channels());
 
     let run_config__channels_trackers: HashMap<RunId, Vec<Mutex<SimpleMotifTracker>>> = run_configs.iter().fold(HashMap::new(), |mut a, run_config| {
 
@@ -275,15 +275,15 @@ pub fn find_motifs_by_euc_dist(
     let mut means_acc = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Float, devices[0])));//TODO move
     let mut total_samples = Mutex::new(Tensor::zeros([ws.read().channels() as i64, 1], (Kind::Int64, devices[0])));
 
-    let run_configs_arcs = run_configs.into_iter().zip(devices.into_iter().cycle())
-        .map(|(rc, device)|Arc::new(rc.to_applicable(FindMotifsRunConfigWsCtx::from(ws.read()), device)))
+    let run_configs_arcs = run_configs.iter().zip(devices.into_iter().cycle())
+        .map(|(rc, device)|Arc::new(rc.to_applicable(ws.read().deref(), device)))
         .collect::<Vec<_>>();
 
     chunk_and_slice_2x(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsRunConfigApplicable>| {
+        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
 
             debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
@@ -366,7 +366,7 @@ pub fn find_motifs_by_euc_dist(
     // }
 
     let total_trackers  = run_config__channels_trackers.values().map(|v| v.len()).sum::<usize>();
-    info!("setting motifs in {} configs,  {total_trackers} trackers on {} threads", run_config_ids.len(), rayon::current_num_threads());
+    info!("setting motifs in {} configs,  {total_trackers} trackers on {} threads", run_configs.len(), rayon::current_num_threads());
     let num_trackers_per_thread = max(1, total_trackers/rayon::current_num_threads());
     let run_config__channels_trackers_vec = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).collect::<Vec<_>>();
 
@@ -378,7 +378,27 @@ pub fn find_motifs_by_euc_dist(
         }
     });
 
-    Ok(None)
+    Ok(Some(run_configs.into_iter().map(|rc|{
+        Box::new(FindMotifsSavableResult {
+            run_config:rc
+        })as Box<dyn SavableResult>
+    }).collect()))
+}
+
+#[derive(Debug)]
+struct FindMotifsSavableResult {
+    run_config:FindMotifsRunConfig
+}
+
+impl SavableResult for FindMotifsSavableResult {
+    fn value(&self) -> f32 {
+        0.0
+    }
+
+    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+
+        Ok(self.run_config.id.expect("id"))
+    }
 }
 
 fn chunk_and_slice<G, CTX>(
@@ -387,6 +407,7 @@ fn chunk_and_slice<G, CTX>(
     run_configs:&mut Vec<(FindMotifsRunConfig, CTX)>,
     mut callback: G,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     devices:&[Device]
 ) -> Result<(), ThoosaError>
 where
@@ -448,7 +469,7 @@ where
             // .par_bridge() //TODO spread among devices
             .for_each(|(run_config_with_ctx, device)| {
                 let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-                    &run_config_with_ctx.0.to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+                    &mut run_config_with_ctx.0.to_applicable(ws.read().deref(), *device),
                     &window_0_tensors.read(),
                     window_0_0_clone.clone(),
                     None
@@ -484,13 +505,13 @@ where
 fn chunk_and_slice_2x<G, C, D>(
     resources: Vec <Resource>,
     chunk_size: usize,
-    run_configs:&Vec<Arc<FindMotifsRunConfigApplicable>>,
+    run_configs:&Vec<Arc<FindMotifsApplicable>>,
     mut gpu_fn: G,
     mut cpu_fn: &C,
     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>
 ) -> Result<(), ThoosaError>
 where
-    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsRunConfigApplicable>) -> Result<D, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
+    G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsApplicable>) -> Result<D, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
     C: Fn(RunId, D, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>) + Send + Sync,
     D: Send,
     // CTX: Send + Sync + Debug TODO  FindMotifsRunConfigApplicable -> CTX
@@ -1035,38 +1056,6 @@ impl SelectMotifsArgs {
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
-struct ByLabelVarianceConfig {
-    #[in_map]
-    _dummy: u32,//TODO fix ThoosaRunConfig to let empty configs
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap,  Clone, PartialEq, Debug, Deserialize)]
-enum MotifSelector {
-    ByLabelVariance(ByLabelVarianceConfig)//TODO
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
-#[run_config_grid]
-pub struct SelectMotifsRunConfig {
-    #[in_map]
-    id:Option<RunId>,
-
-    #[in_map]
-    #[run_config]
-    motif_selector: MotifSelector
-}
-
-impl SelectMotifsRunConfig {
-    pub fn new() -> Self {
-        Self {
-            id:None,
-            motif_selector: MotifSelector::ByLabelVariance(ByLabelVarianceConfig::default())
-        }
-    }
-}
-
-
 fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask: &Tensor) -> (Tensor, Tensor) {
     debug!("select_motifs_by_label_variance: labels_channels_motifs_counts={:?}", labels_channels_motifs_counts.size());
 
@@ -1099,7 +1088,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 }
 
  pub fn select_motifs_for_label(
-     input_run_ids:Option<&Vec<RunId>>,
+     find_motif_run_ids:Option<&Vec<RunId>>,
      select_motif_run_configs: Vec<SelectMotifsRunConfig>,
      resource_config: &Labeled,
      _common_config: &(),
@@ -1112,13 +1101,13 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
     let motifs_area = loader.write().get_available_cache_area();
     let labels_resources = resource_config.to_resources(store)?;
 
-    debug!("select_motifs_for_label_2: select_motif_run_configs={select_motif_run_configs:?}");
-    trace!("select_motifs_for_label_2: labels_resources={labels_resources:?}");
+    debug!("select_motifs_for_label: select_motif_run_configs={select_motif_run_configs:?}");
+    trace!("select_motifs_for_label: labels_resources={labels_resources:?}");
 
-    let mut find_motifs_run_config_motifs_tensors = input_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
+    let mut find_motifs_run_config_motifs_tensors = find_motif_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
 
         let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
-        trace!("select_motifs_for_label_2: resource_id_motif_slices={resource_id_motif_slices:?}");
+        trace!("select_motifs_for_label: resource_id_motif_slices={resource_id_motif_slices:?}");
 
         // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.lock().list_run_config_values(*find_motif_run_id)?);
         let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(*find_motif_run_id, &store.lock().list_run_config_values(*find_motif_run_id)?)?;
@@ -1134,8 +1123,8 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
         ).map(|motifs_tensors| {
             let size = &motifs_tensors.channels_motifs_slices.size()[0..=1];//channels x motifs for motif sums
 
-            debug!("select_motifs_for_label_2: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensors.channels_motifs_slices.size());
-            trace!("select_motifs_for_label_2: motifs_tensors.channels_motifs_ids=\n{} channels_motifs_mask=\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_mask, motifs_tensors.channels_motifs_avg_dists);
+            debug!("select_motifs_for_label: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensors.channels_motifs_slices.size());
+            trace!("select_motifs_for_label: motifs_tensors.channels_motifs_ids=\n{} channels_motifs_mask=\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_mask, motifs_tensors.channels_motifs_avg_dists);
 
             (
                 find_motifs_run_config,
@@ -1159,12 +1148,12 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
     loader.write().purge_cache(motifs_area);
 
 
-    debug!("select_motifs_for_label_2: motifs_tensors loaded");
+    debug!("select_motifs_for_label: motifs_tensors loaded");
 
     // let mut find_motifs_run_configs = find_motifs_run_config_motifs_tensors.iter().map(|v|v.0.clone()).collect::<Vec<_>>();
 
     for (label, resources) in labels_resources {
-        debug!("select_motifs_for_label_2: label={label:?} resources={resources:?}");
+        debug!("select_motifs_for_label: label={label:?} resources={resources:?}");
         chunk_and_slice(
             resources,
             2,//TODO params
@@ -1174,7 +1163,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 
                 let broadcast_to_size = [motif_tensors.channels_motifs_slices.size()[0], motif_tensors.channels_motifs_slices.size()[1], chunk.t.size()[1]];
 
-                debug!("select_motifs_for_label_2: label={label} resources cfg={cfg:?} chunk.t.size={:?} motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motif_tensors); //chunk.t
+                debug!("select_motifs_for_label: label={label} resources cfg={cfg:?} chunk.t.size={:?} motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motif_tensors); //chunk.t
 
                 let (mask, _) = clc_dist_d2_and_mask(
                     motif_tensors.channels_motifs_slices.to_device(devices[0]),
@@ -1184,70 +1173,114 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                     &mut [Le {v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0])}]
                 )?;
                 let mask = mask.to_device(Cpu);
-                trace!("select_motifs_for_label_2: label={label} mask=\n{mask}");
+                trace!("select_motifs_for_label: label={label} mask=\n{mask}");
 
                 let sums = mask.sum_dim_intlist(2, false, Kind::Int64);//channels x motif matches
-                trace!("select_motifs_for_label_2: label={label} sums=\n{sums}");
+                trace!("select_motifs_for_label: label={label} sums=\n{sums}");
 
                 label_motif_matches_sums.get_mut(&label).expect(format!("no motif sums tensor for {label}").as_str()).add_assign(sums.into());
 
                 if log_enabled!(Level::Trace) {
                     for (label, motif_sums) in label_motif_matches_sums.iter() {
-                        trace!("select_motifs_for_label_2: label={label} motif_sums=\n{motif_sums}");
+                        trace!("select_motifs_for_label: label={label} motif_sums=\n{motif_sums}");
                     }
                 }
 
                 Ok(())
             },
             loader,
+            ws,
             &devices
         )?;
     }
 
-    find_motifs_run_config_motifs_tensors.iter().try_fold(vec![],  |mut a, (find_motif_run_cfg, (motifs_tensors, label_motif_matches_sums))|{
-        debug!("select_motifs_for_label_2: cfg.window={} channels_motif_ids=\n{:?}", find_motif_run_cfg.window, motifs_tensors.channels_motifs_ids);
-        trace!("select_motifs_for_label_2:  avg_dists_t=\n{}", motifs_tensors.channels_motifs_avg_dists);
-        if log_enabled!(Level::Trace) {
-            for (label, motif_sums) in label_motif_matches_sums.iter() {
-                trace!("select_motifs_for_label_2: label={label} final motif_sums=\n{motif_sums}");
-            }
+     Ok(Some(find_motifs_run_config_motifs_tensors.into_iter()
+         .filter(|(find_motif_run_cfg, (motifs_tensors, label_motif_matches_sums))|{
+             if label_motif_matches_sums.is_empty() {
+                 debug!("select_motifs_for_label:  label_motif_matches_sums is_empty for find_motif_run_cfg={find_motif_run_cfg:?}");
+                 false
+             } else {
+                 true
+             }
+         })
+         .flat_map( |(find_motif_run_cfg, (motifs_tensors, label_motif_matches_sums))|{
+             if log_enabled!(Level::Trace) {
+                 for (label, motif_sums) in label_motif_matches_sums.iter() {
+                     trace!("select_motifs_for_label: label={label} final motif_sums=\n{motif_sums}");
+                 }
+             }
+
+             let labels_channels_motifs_counts = Tensor::stack(
+                 label_motif_matches_sums.into_iter().map(|t| t.1.shallow_clone()).collect::<Vec<_>>().as_slice(),
+                 0,
+             ).totype(Float);
+
+             select_motif_run_configs.iter().filter_map(move |select_motif_run_config|{
+                 match &select_motif_run_config.motif_selector {
+                     //TODO other selectors
+                     MotifSelector::ByLabelVariance(_) => {
+
+                         let (good_motifs, motifs_rates) = select_motifs_by_label_variance(&labels_channels_motifs_counts, &motifs_tensors.channels_motifs_mask);
+                         debug!("select_motifs_for_label: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+
+                         let good_motif_ids_rates = from::<Vec<Vec<i64>>>(&motifs_tensors.channels_motifs_ids).into_iter().flat_map(|v| v.into_iter()).zip(
+                             from::<Vec<Vec<bool>>>(&good_motifs)
+                                 .into_iter()
+                                 .flat_map(|v| v.into_iter())
+                                 .zip(from::<Vec<Vec<f32>>>(&motifs_rates).into_iter().flat_map(|v| v.into_iter())))
+                             .filter_map(|(id, (b, r))| if b { Some((id as u32, r as f64)) } else { None })
+                             .collect::<Vec<(u32, f64)>>();
+
+                         info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
+                         // a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
+                         Some(Box::new(SelectMotifsSavableResult::new(find_motif_run_cfg.id.expect("find_motif_run_cfg.id"), select_motif_run_config.clone(), good_motif_ids_rates)) as Box<dyn SavableResult>)
+                     }
+                 }
+             })
+
+
+     }).collect::<Vec<_>>()))
+}
+
+#[derive(Debug)]
+struct SelectMotifsSavableResult {
+    find_motif_run_cfg_id:RunId,
+    run_config:SelectMotifsRunConfig,
+    good_motif_ids_rates: Vec<(u32, f64)>
+}
+
+impl SelectMotifsSavableResult {
+    pub fn new(find_motif_run_cfg_id:RunId, run_config:SelectMotifsRunConfig, good_motif_ids_rates: Vec<(u32, f64)>) -> Self {
+        Self {
+            find_motif_run_cfg_id,
+            run_config,
+            good_motif_ids_rates
         }
-        if label_motif_matches_sums.len() > 0 {
-            let labels_channels_motifs_counts = Tensor::f_stack(
-                label_motif_matches_sums.into_iter().map(|t| &***t.1).collect::<Vec<_>>().as_slice(),
-                0,
-            )?.totype(Kind::Float);
+    }
+}
 
-            for run_config in &select_motif_run_configs {
+impl SavableResult for SelectMotifsSavableResult {
+    fn value(&self) -> f32 {
+        0.1
+    }
 
-                match run_config.motif_selector {
-                    //TODO other selectors
-                    MotifSelector::ByLabelVariance(_) => {
+    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+        let run_config_id = store
+            .lock()
+            .save_run_config(
+                Some(&[self.find_motif_run_cfg_id]),
+                &SelectMotifsRunConfig::type_name(),
+                "Select motifs",
+                &"todo",
+                self.run_config.to_properties_iter(None).collect(),
+            )?;
 
-                        let (good_motifs, motifs_rates) = select_motifs_by_label_variance(&labels_channels_motifs_counts, &motifs_tensors.channels_motifs_mask);
-                        debug!("select_motifs_for_label_2: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+        self.run_config.set_id(run_config_id);
 
-                        let good_motif_ids_rates = from::<Vec<Vec<i64>>>(&motifs_tensors.channels_motifs_ids).into_iter().flat_map(|v| v.into_iter()).zip(
-                            from::<Vec<Vec<bool>>>(&good_motifs)
-                                .into_iter()
-                                .flat_map(|v| v.into_iter())
-                                .zip(from::<Vec<Vec<f32>>>(&motifs_rates).into_iter().flat_map(|v| v.into_iter())))
-                            .filter_map(|(id, (b, r))| if b { Some((id as usize, r as f64)) } else { None })
-                            .collect::<Vec<(usize, f64)>>();
+        store.lock().save_selected_motifs(run_config_id, self.good_motif_ids_rates.clone())?;//TODO mem::replace?
 
-                        info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
-                        a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
-                    }
-                }
-            }
-        } else {
-            warn!("no label motif matches for cfg={find_motif_run_cfg:?}");
-        }
-        Ok::<Vec<RunId>, ThoosaError>(a)
-    })?;
-
-    Ok(None)
-
+        Ok(run_config_id)
+    }
 }
 
 fn clc_motif_matches(
@@ -1474,6 +1507,7 @@ mod motif_find_tests {
     use parking_lot::{Mutex, RawMutex};
     use std::collections::{HashMap, HashSet};
     use std::fmt::{Debug, Display};
+    use std::fs::create_dir_all;
     use std::ops::{Add, AddAssign, Deref};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering::Relaxed;
@@ -1505,8 +1539,7 @@ mod motif_find_tests {
     use crate::fragments::motifs_to_tensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::Simple;
-    use thoosa_common::train_nets::DummyFindMotifsRunConfigCtx;
-    use thoosa_common::ws::{DummyWorkspace, FsWorkspace};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::colors_iter::DistinctColorIter;
@@ -1789,7 +1822,7 @@ mod motif_find_tests {
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
         let n = 10i64;
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, n as usize)?));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 1000, n as u32)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -1865,7 +1898,7 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -1955,14 +1988,14 @@ mod motif_find_tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
-        // let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000)?));
+        // let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000)?));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
         // let pulse = pulse_v(50., 10., 100, 20.);
         let pulse_0 = sig_one_imp(100, 30.0, None, Some(2. ..2.01), 0.0);
         let pulse_1 = sig_one_imp(100, 30.0, None, Some(20. ..20.01), 0.0);
-        let n = 1000i64;
+        let n = 1000;
 
         let scale = 10.0;
         // dists between sample pulses and joined are too big
@@ -2116,14 +2149,14 @@ mod motif_find_tests {
         let mut pulse_0_slices: Vec<_> = slices
             .values()
             .flat_map(|slice_list| slice_list.iter())
-            .filter(|slice| slice.motif_id == pulse_0_motif as usize)
+            .filter(|slice| slice.motif_id == pulse_0_motif as u32)
             .map(|slice| slice.slice_idx)
             .collect();
 
         let mut pulse_1_slices: Vec<_> = slices
             .values()
             .flat_map(|slice_list| slice_list.iter())
-            .filter(|slice| slice.motif_id == pulse_1_motif as usize)
+            .filter(|slice| slice.motif_id == pulse_1_motif as u32)
             .map(|slice| slice.slice_idx)
             .collect();
 
@@ -2163,7 +2196,8 @@ mod motif_find_tests {
     #[test]
     fn test_find_motifs_by_euc_dist_with_smooth_kernel() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        create_dir_all(&test_dir)?;
+        let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
@@ -2255,11 +2289,11 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
-        fs::create_dir_all(&test_dir)?;
+        create_dir_all(&test_dir)?;
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist_diff_sizes.db3"))?));
 
 
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2338,7 +2372,8 @@ mod motif_find_tests {
         // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
         let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(DummyWorkspace::new(1, 1000, 1000)?));
+        create_dir_all(&test_dir)?;
+        let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let pulse = pulse_v(50., 10., 100, 20.);
 
@@ -2401,6 +2436,7 @@ mod motif_find_tests {
         Ok(())
     }
 
+    //TODO replace with mockall
     #[derive(Debug)]
     struct DummyDumper<'a> {
         motifs:  &'a mut Vec<SlicesMatch>
@@ -2431,7 +2467,7 @@ mod motif_find_tests {
             todo!()
         }
 
-        fn channel(&self) -> usize {
+        fn channel(&self) -> u32 {
             todo!()
         }
 
@@ -2752,7 +2788,7 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(DummyFindMotifsRunConfigCtx, Cpu))],
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))],
             // HashMap::new(),
             move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
@@ -2996,10 +3032,11 @@ mod motif_find_tests {
         //     ], "test_clc_motif_matches t_0_0", (2000, 1000), &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
         // )?;
 
+        let ws = mock_ws_simp(None, 2, 100, 1000);
         let t_0= clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(
-                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(&ws, Cpu),
                 &vec![t_0_0.into(), t_0_1.into()],
                 vec![0, 1],
                 None
@@ -3013,7 +3050,7 @@ mod motif_find_tests {
         let t_1 = clc_motif_matches(
             &motifs,
             &ChunkOfSlicedTensors::slice_tensors_chunk(
-                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(DummyFindMotifsRunConfigCtx, Cpu),
+                &FindMotifsRunConfig::new(None, 100, 1000, None, None).to_applicable(&ws, Cpu),
                 &vec![t_1_0.into(), t_1_1.into()],
                 vec![0, 1],
                 None
@@ -3077,7 +3114,7 @@ mod motif_find_tests {
 
 }
 
-pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: usize, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
+pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: u32, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
     let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, limit, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
@@ -3086,7 +3123,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(run_id, &store.lock().list_run_config_values(run_id)?)?;
 
-    let resources_slices = load_motif_slices(channel, find_motifs_run_config.window(), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, loader); //TODO Into for TensorSliceIdx
+    let resources_slices = load_motif_slices(channel, &find_motifs_run_config.to_applicable(ws.read().deref(), *device), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, loader); //TODO Into for TensorSliceIdx
 
     let all_slices = resources_slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
 

@@ -9,29 +9,35 @@ use thoosa_shared::ThoosaError;
 use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule};
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-pub fn clc_conv1d_out(l_in: i64, k: i64, c: ConvConfig) -> i64 {
-    (l_in + 2 * c.padding - c.dilation * (k -1 ) -1)/c.stride +1
+pub fn clc_conv1d_out(l_in: u32, k: u32, c: ConvConfig) -> u32 {
+    (l_in + 2 * c.padding as u32 - c.dilation as u32 * (k -1 ) -1)/c.stride as u32+1
 }
 
 
-pub fn clc_maxpool1d_out(l_in: i64, kernel: i64, padding:i64, dilation:i64, stride:i64) -> i64 {
+pub fn clc_maxpool1d_out(l_in: u32, kernel: u32, padding:u32, dilation:u32, stride:u32) -> u32 {
     (l_in + 2 * padding - dilation * (kernel - 1) - 1) / stride + 1
 }
 
-pub fn clc_avgpool1d_out(l_in: i64, kernel: i64, padding:i64, stride:i64) -> i64 {
+pub fn clc_avgpool1d_out(l_in: u32, kernel: u32, padding:u32, stride:u32) -> u32 {
     (l_in + 2 * padding - kernel) / stride + 1
 }
 
 pub enum Node {
     Seq {elts: Vec<Node>, split_input:Option<(i64, i64)>},
     Par {elts: Vec<Node>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>},
-    Conv1d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
-    Conv2d {kernel: i64, in_channels: i64, out_channels:i64, config: ConvConfig},
-    BatchNorm {num_features: i64, config:BatchNormConfig},
-    Linear { in_feats: i64, out_feats: i64, config:Option<LinearConfig>},
+    Conv1d {kernel: u32, in_channels: u32, out_channels:u32, config: ConvConfig},
+    Conv2d {kernel: u32, in_channels: u32, out_channels:u32, config: ConvConfig},
+    BatchNorm {num_features: u32, config:BatchNormConfig},
+    Linear {
+        in_feats: u32,
+        out_feats: u32,
+        config:Option<LinearConfig>,
+        #[cfg(debug_assertions)]
+        descr:String
+    },
     Func { func:Fp},
-    MaxPool { kernel_size:i64, stride:i64, padding:i64},
-    AvgPool { kernel_size:i64, stride:i64, padding:i64},
+    MaxPool { kernel_size:u32, stride:u32, padding:u32},
+    AvgPool { kernel_size:u32, stride:u32, padding:u32},
     Closure { cl:Box<dyn Fn(&Tensor)->Tensor + Send + Sync>}
 }
 
@@ -93,30 +99,41 @@ impl Node {
             }
 
             Node::Conv1d { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv1d(vs/ "cnn_1d", in_channels, out_channels, kernel, config))
+                Box::new(nn::conv1d(vs/ "cnn_1d", in_channels as i64, out_channels as i64, kernel as i64, config))
             }
 
             Node::Conv2d { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv2d(vs/ "cnn_2d", in_channels, out_channels, kernel, config))
+                Box::new(nn::conv2d(vs/ "cnn_2d", in_channels as i64, out_channels as i64, kernel as i64, config))
             }
 
             Node::BatchNorm { num_features, config } => {
                 Box::new(MyBatchNorm1d::new(vs/"batch_norm", num_features, config))
             }
 
-            Node::Linear {in_feats, out_feats, config} => {
+            Node::Linear {
+                in_feats, out_feats, config,
+                #[cfg(debug_assertions)]
+                descr
+            } => {
                 assert!(in_feats > 0);
                 assert!(out_feats > 0);
-                debug!("Node::Linear: in_feats={:?}, out_feats={:?}", in_feats, out_feats);
-                Box::new(my_linear(vs/"linear", in_feats, out_feats, config.unwrap_or(LinearConfig::default()))?)//TODO rename layer1
+
+                #[cfg(debug_assertions)]
+                debug!("Node::Linear: descr={descr} in_feats={:?}, out_feats={:?}", in_feats, out_feats);
+
+                Box::new(my_linear(
+                    vs/"linear", in_feats as i64, out_feats as i64, config.unwrap_or(LinearConfig::default()),
+                    #[cfg(debug_assertions)]
+                    descr
+                )?)//TODO rename layer1
             }
 
             Node::MaxPool { kernel_size, stride, padding } => {
-                Box::new(MyMaxPool1d::new(kernel_size, stride, padding))
+                Box::new(MyMaxPool1d::new(kernel_size as i64, stride as i64, padding as i64))
             }
 
             Node::AvgPool { kernel_size, stride, padding } => {
-                Box::new(MyAvgPool1d::new(kernel_size, stride, padding))
+                Box::new(MyAvgPool1d::new(kernel_size as i64, stride as i64, padding as i64))
             }
 
             Node::Func { func } => {
@@ -133,19 +150,19 @@ impl Node {
 
 #[derive(Debug)]
 pub struct SeqBuilder {
-    num_features:i64,
-    kernel:Option<i64>,
+    num_features:u32,
+    kernel:Option<u32>,
     elts: Vec<Node>,
     split_input: Option<(i64, i64)>
 }
 
 impl SeqBuilder {
-    pub fn new(num_features:i64, split_input_dim: Option<i64>) -> Self {
+    pub fn new(num_features:u32, split_input_dim: Option<i64>) -> Self {
         Self {
             num_features,
             kernel: None,
             elts: vec![],
-            split_input: split_input_dim.map(|dim|(dim, num_features))
+            split_input: split_input_dim.map(|dim|(dim, num_features as i64))
         }
     }
 
@@ -176,32 +193,32 @@ impl SeqBuilder {
         self
     }
 
-    pub fn conv_1d(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
+    pub fn conv_1d(&mut self, kernel: u32, in_channels: u32, out_channels: u32, config: ConvConfig) -> &mut Self {
 
         self.elts.push(
             Node::Conv1d {kernel, in_channels, out_channels, config },
         );
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config);
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32;
         self.kernel = Some(kernel);
 
         self
     }
 
-    pub fn conv_2d(&mut self, kernel: i64, in_channels: i64, out_channels: i64, config: ConvConfig) -> &mut Self {
+    pub fn conv_2d(&mut self, kernel: u32, in_channels: u32, out_channels: u32, config: ConvConfig) -> &mut Self {
 
         self.elts.push(
             Node::Conv2d {kernel, in_channels, out_channels, config },
         );
 
-        self.num_features = clc_conv1d_out(self.num_features, kernel, config);//TODO 2d
+        self.num_features = clc_conv1d_out(self.num_features, kernel, config) as u32;//TODO 2d
         self.kernel = Some(kernel);
 
         self
     }
 
 
-    pub fn max_pool(&mut self, kernel:i64, stride:i64, padding:i64) -> &mut Self {
+    pub fn max_pool(&mut self, kernel:u32, stride:u32, padding:u32) -> &mut Self {
         self.elts.push(
             Node::MaxPool {
                 kernel_size: kernel,
@@ -215,7 +232,7 @@ impl SeqBuilder {
         self
     }
 
-    pub fn avg_pool(&mut self, kernel:i64, stride:i64, padding:i64) -> &mut Self {
+    pub fn avg_pool(&mut self, kernel:u32, stride:u32, padding:u32) -> &mut Self {
         self.elts.push(
             Node::AvgPool {
                 kernel_size: kernel,
@@ -233,54 +250,98 @@ impl SeqBuilder {
         self
     }
 
-    pub fn linear(&mut self) -> &mut Self {
+    pub fn linear(
+        &mut self,
+        #[cfg(debug_assertions)]
+        descr:String
+    ) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats:self.num_features, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats: self.num_features, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self
     }
 
-    pub fn linear_feats(&mut self, num_features:i64, out_feats:i64) -> &mut Self {
+    pub fn linear_feats(
+        &mut self, num_features:u32, out_feats:u32,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats:num_features, out_feats:out_feats, config:None}
+            Node::Linear {
+                in_feats:num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self.num_features = out_feats;
         self
     }
 
-    pub fn linear_f(&mut self, f:f32) -> &mut Self {
-        let out_feats = (self.num_features as f32 * f) as i64;
+    pub fn linear_f(
+        &mut self, f:f32,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
+        let out_feats = (self.num_features as f32 * f) as u32;
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
-        self.num_features = out_feats;
+        self.num_features = out_feats as u32;
 
         self
     }
 
-    pub fn linear_s(&mut self, out_feats:i64) -> &mut Self {
+    pub fn linear_s(
+        &mut self, out_feats:u32,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
         assert!(out_feats > 0);
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self.num_features = out_feats;
 
         self
     }
 
-    pub fn linear_s_with_conf(&mut self, out_feats:i64, config:LinearConfig) -> &mut Self {
+    pub fn linear_s_with_conf(
+        &mut self, out_feats:u32, config:LinearConfig,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> &mut Self {
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats, config:Some(config)}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:Some(config),
+                #[cfg(debug_assertions)]
+                descr
+            }
         );
         self.num_features = out_feats;
 
         self
     }
 
-    pub fn linear_p(&mut self, n:usize, p:&impl NthParams<Params=i64>) -> &mut Self {
+    pub fn linear_p(&mut self, n:usize, p:&impl NthParams<Params=u32>) -> &mut Self {
         let out_feats = p.on_nth_layer(n);
         self.elts.push(
-            Node::Linear { in_feats:self.num_features, out_feats, config:None}
+            Node::Linear {
+                in_feats: self.num_features, out_feats, config:None,
+                #[cfg(debug_assertions)]
+                descr: "zzz".to_string()
+            }
         );
         self.num_features = out_feats;
 
@@ -294,7 +355,7 @@ impl SeqBuilder {
         self
     }
 
-    pub fn closure(&mut self, cl: Box<dyn Fn(&Tensor)->Tensor + Send + Sync>, num_features: Option<i64>) -> &mut Self {
+    pub fn closure(&mut self, cl: Box<dyn Fn(&Tensor)->Tensor + Send + Sync>, num_features: Option<u32>) -> &mut Self {
         self.elts.push(
             Node::Closure { cl }
         );
