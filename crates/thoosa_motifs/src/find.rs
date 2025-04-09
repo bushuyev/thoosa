@@ -133,7 +133,7 @@ pub fn find_min_euc_dist(
     common_config: &FixedFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock< LoadRunner<Tensor>>>,
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
 
@@ -226,7 +226,7 @@ pub fn find_motifs_by_euc_dist(
     common_config: &FixedFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
 
@@ -310,7 +310,7 @@ pub fn find_motifs_by_euc_dist(
                 //remove diagonal if same chunk_0 and chunk_1 point to same tensors
             )?;
 
-            let mask_cpu = SyncWrapper::new_tb(Box::new(mask.to_device(Cpu)));
+            let mask_cpu = SyncWrapper::new_t(mask.to_device(Cpu));
             drop(mask);
 
             trace!("find_motifs_by_euc_dist: mask_cpu=\n{mask_cpu} mask_tril=\n{mask_tril}");
@@ -318,10 +318,10 @@ pub fn find_motifs_by_euc_dist(
                 debug!("find_motifs_by_euc_dist: count_nonzero={}", mask_cpu.count_nonzero_dim_intlist(&[1, 2]));
             }
 
-            Ok((mask_cpu, SyncWrapper::new_tb(Box::new(dists.unwrap()))))
+            Ok((mask_cpu, SyncWrapper::new_t(dists.unwrap())))
 
         },
-        &|run_config_id, mask_dists_cpu:(SyncWrapper<Box<Tensor>>, SyncWrapper<Box<Tensor>>), chunk_0, chunk_1| {
+        &|run_config_id, mask_dists_cpu:(SyncWrapper<Tensor>, SyncWrapper<Tensor>), chunk_0, chunk_1| {
             let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
             let (mask_cpu, dists) = mask_dists_cpu;
 
@@ -401,7 +401,7 @@ fn chunk_and_slice<G, CTX>(
     chunk_size: usize,
     run_configs:&mut Vec<(FindMotifsRunConfig, CTX)>,
     mut callback: G,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock< LoadRunner<Tensor>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     devices:&[Device]
 ) -> Result<(), ThoosaError>
@@ -448,8 +448,8 @@ where
                 for key in &window_0_0 {
                     debug!("chunk_and_slice:  exec:callback_arc: key={key:?}");
 
-                    let sync_wrapper = SyncWrapper::new_tb(
-                        Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
+                    let sync_wrapper = SyncWrapper::new_t(
+                        Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0).await
                     );
                     window_0_tensors_arc.write().push(sync_wrapper);
                 }
@@ -503,7 +503,7 @@ fn chunk_and_slice_2x<G, C, D>(
     run_configs:&Vec<Arc<FindMotifsApplicable>>,
     mut gpu_fn: G,
     mut cpu_fn: &C,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>
+    loader: &Arc<RwLock< LoadRunner<Tensor>>>
 ) -> Result<(), ThoosaError>
 where
     G: FnMut(&Arc<ChunkOfSlicedTensors>, &ChunkOfSlicedTensors, &Arc<FindMotifsApplicable>) -> Result<D, ThoosaError> + Send + Sync , //&mut Arc<Vec<Mutex<SimpleMotifTracker<SqlMotifTrackerStore>>>>,
@@ -572,8 +572,8 @@ where
                         for key in &window_0_0 {
                             debug!("0. exec:callback_arc: key={key:?}");
 
-                            let sync_wrapper = SyncWrapper::new_tb(
-                                Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_0).await
+                            let sync_wrapper = SyncWrapper::new_t(
+                                Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0).await
                             );
                             window_0_tensors_arc.write().push(sync_wrapper);
                         }
@@ -620,8 +620,8 @@ where
                             for key in &window_1_0 {
                                 debug!("chunk_and_slice: 1. exec:callback_arc: key={key:?}");
 
-                                let sync_wrapper = SyncWrapper::new_tb(
-                                    Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), key.clone(), area_1).await
+                                let sync_wrapper = SyncWrapper::new_t(
+                                    Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_1).await
                                 );
                                 window_1_tensors_arc.write().push(sync_wrapper);
                             }
@@ -867,7 +867,7 @@ fn clc_dot_matches(series: &Tensor, motifs: &Tensor, step: usize, threshold: f32
  * motifs = [channel x motif x data slice]
  * channel_motif_ids - max distances for motifs
  */
-fn clc_dist_matches(target: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>, step: usize, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<Tensor, ThoosaError> {
+fn clc_dist_matches(target: &Tensor, motifs: Arc<RwLock<SyncWrapper<Tensor>>>, step: usize, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<Tensor, ThoosaError> {
     let channels_num = target.size()[0];
 
     let motifs_num = motifs.read().size()[1];
@@ -937,11 +937,11 @@ fn clc_dist_matches(target: &Tensor, motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>
 }
 
 fn clc_motifs_matches_for_label<L>(
-    motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
-    all_zero: SyncWrapper<Box<Tensor>>,
+    motifs: Arc<RwLock<SyncWrapper<Tensor>>>,
+    all_zero: SyncWrapper<Tensor>,
     channels_motifs_matches_labels: Arc<Mutex<Vec<Vec<(Vec<f64>, Vec<L>)>>>>, //output TODO return it
     resources: Vec<Resource>,
-    executor: Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    executor: Arc<RwLock<LoadRunner<Tensor>>>,
     label: L,
     step: usize,
     motifs_distances: Arc<RwLock<HashMap<usize, f32>>>,
@@ -969,7 +969,7 @@ where
 
                 // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
 
-                let target = &*Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource.clone(), area).await;
+                let target = &Loader::<Tensor>::load_future(Arc::clone(&loader), resource.clone(), area).await;
                 let matches = clc_dist_matches(
                     target,
                     Arc::clone(&motifs), step, Arc::clone(&motifs_distances), Arc::clone(&channel_motif_ids)
@@ -1088,7 +1088,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
      _common_config: &(),
      ws: &Arc<RwLock<Box<dyn Workspace>>>,
      store: &Arc<Mutex<Box<dyn Store>>>,
-     loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+     loader: &Arc<RwLock< LoadRunner<Tensor>>>,
      devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>{
 
@@ -1130,7 +1130,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
                             .map(|(label, _)|
                                 (
                                     label.clone(),
-                                    SyncWrapper::new_tb(Box::new(Tensor::zeros(size.clone(), INT64_CPU)))//motif counts
+                                    SyncWrapper::new_t(Tensor::zeros(size.clone(), INT64_CPU))//motif counts
                                 )
                             )
                     )
@@ -1138,7 +1138,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
             )
         })
 
-    }).collect::<Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Box<Tensor>>>))>, ThoosaError>>()?;
+    }).collect::<Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))>, ThoosaError>>()?;
     loader.write().purge_cache(motifs_area);
 
 
@@ -1316,7 +1316,7 @@ fn clc_motif_matches(
     num_matches
 }
 
-pub fn select_motifs_by_ratio (motifs: Tensor, labels_resources: Vec<(String, Vec <Resource>)>, executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
+pub fn select_motifs_by_ratio (motifs: Tensor, labels_resources: Vec<(String, Vec <Resource>)>, executor: &Arc<RwLock< LoadRunner<Tensor>>>, step: usize, device: Device, min_ratio: f32, motifs_distances: Arc<RwLock<HashMap<usize, f32>>>, channel_motif_ids: Arc<RwLock<Vec<Vec<usize>>>>) -> Result<HashMap<String, Vec<Vec<(i64, f64)>>>, ThoosaError> {
 
     let mut labels_channels_good_motifs = labels_resources.iter().fold(HashMap::new(), |mut a, v| {
         a.insert(v.0.clone(), (0..motifs.size()[0]).map(|_| vec![]).collect::<Vec<Vec<(i64, f64)>>>()); //motifs.size()[0] - channels_num
@@ -1324,7 +1324,7 @@ pub fn select_motifs_by_ratio (motifs: Tensor, labels_resources: Vec<(String, Ve
     });
 
     let (channels_num, motifs_num, channels_motifs_counts_labels_arc) = clc_channels_motifs_labels(
-        Arc::new(RwLock::new(SyncWrapper::new_tb(Box::new(motifs)))),
+        Arc::new(RwLock::new(SyncWrapper::new_t(motifs))),
         labels_resources,
         executor,
         step,
@@ -1374,7 +1374,7 @@ pub fn select_motifs_by_ratio (motifs: Tensor, labels_resources: Vec<(String, Ve
 pub fn select_motifs_by_corr (
     motifs: Tensor,
     labels_loaders: Vec<(i64, Vec <Resource>)>,
-    executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    executor: &Arc<RwLock< LoadRunner<Tensor>>>,
     step: usize,
     device: Device,
     min_corr: f64,
@@ -1383,7 +1383,7 @@ pub fn select_motifs_by_corr (
 ) -> Result<Vec<Vec<(i64, f64)>>, ThoosaError> {
 
     let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(
-        Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs), |e| Box::new(e.shallow_clone())))),
+        Arc::new(RwLock::new(SyncWrapper::new(motifs, |e| e.shallow_clone()))),
         labels_loaders,
         executor,
         step,
@@ -1427,9 +1427,9 @@ pub fn select_motifs_by_corr (
 }
 
 fn clc_channels_motifs_labels<L>(
-    motifs: Arc<RwLock<SyncWrapper<Box<Tensor>>>>,
+    motifs: Arc<RwLock<SyncWrapper<Tensor>>>,
     labels_resources: Vec<(L, Vec <Resource>)>,
-    executor: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    executor: &Arc<RwLock< LoadRunner<Tensor>>>,
     step: usize,
     device: &Device,
     motifs_distances: Arc<RwLock<HashMap<usize, f32>>>,
@@ -1464,7 +1464,7 @@ where
 
         clc_motifs_matches_for_label(
             Arc::clone(&motifs),
-            SyncWrapper::new_tb(Box::new(Tensor::zeros(slice_len, (tch::Kind::Float, *device)))),
+            SyncWrapper::new_t(Tensor::zeros(slice_len, (tch::Kind::Float, *device))),
             Arc::clone(&channels_motifs_matches_labels_arc), //output,
             resources,
             Arc::clone(&executor),
@@ -1480,13 +1480,13 @@ where
 
 
 //TODO for tests only?
-pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item=Box<Tensor>> {
+pub fn iter_all_in_dir<P: AsRef<std::path::Path>>(path: P) -> impl Iterator<Item=Tensor> {
     fs::read_dir(path.as_ref()).map(|r|
         r.map(|e_r|
 
             e_r.and_then(|e| {
                 debug!("select_motifs: load_all_in_dir");
-                Ok(Box::new(Tensor::load(e.path()).expect(format!("can't load {:?}", e.path()).as_str())))
+                Ok(Tensor::load(e.path()).expect(format!("can't load {:?}", e.path()).as_str()))
             }).expect("")
         )
     ).expect("iter_all_in_dir")
@@ -1733,7 +1733,7 @@ mod motif_find_tests {
                 let tensor = Tensor::load(test_dir.join(key.file_stem())).expect(format!("can't load {:?}", key).as_str());
                 debug!("LoadRunner: tensor={tensor}");
 
-                SyncWrapper::new_tb(Box::new(tensor))
+                SyncWrapper::new_t(tensor)
             }, 4, 100,
         )));
         let motifs_avg_distances_arc = Arc::new(RwLock::new(motifs_avg_distances));
@@ -1846,12 +1846,12 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
-                SyncWrapper::new_tb(
-                    Box::new(Tensor::vstack(&[
+                SyncWrapper::new_t(
+                    Tensor::vstack(&[
                         Tensor::from_slice(
                             sig.as_slice()
                         ), //ch 0
-                    ]))
+                    ])
                 )
             }, 4, 100,
         )));
@@ -1923,12 +1923,12 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
-                SyncWrapper::new_tb(
-                    Box::new(Tensor::vstack(&[
+                SyncWrapper::new_t(
+                    Tensor::vstack(&[
                         Tensor::from_slice(
                             sig.as_slice()
                         ), //ch 0
-                    ]))
+                    ])
                 )
             }, 4, 100,
         )));
@@ -2023,12 +2023,12 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
-                SyncWrapper::new_tb(
-                    Box::new(Tensor::vstack(&[
+                SyncWrapper::new_t(
+                    Tensor::vstack(&[
                         Tensor::from_slice(
                             sig.as_slice()
                         ), //ch 0
-                    ]))
+                    ])
                 )
             }, 4, 100,
         )));
@@ -2226,12 +2226,12 @@ mod motif_find_tests {
                 };
 
                 SyncWrapper::new(
-                    Box::new(Tensor::vstack(&[
+                    Tensor::vstack(&[
                         Tensor::from_slice(
                             sig.as_slice()
                         ), //ch 0
-                    ])),
-                    |e| Box::new(e.shallow_clone())
+                    ]),
+                    |e| e.shallow_clone()
                 )
             }, 4, 100,
         )));
@@ -2315,12 +2315,12 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
-                SyncWrapper::new_tb(
-                    Box::new(Tensor::vstack(&[
+                SyncWrapper::new_t(
+                    Tensor::vstack(&[
                         Tensor::from_slice(
                             sig.as_slice()
                         ), //ch 0
-                    ]))
+                    ])
                 )
             }, 4, 100,
         )));
@@ -2389,12 +2389,12 @@ mod motif_find_tests {
                     key.file_stem().parse::<usize>().expect(format!("parse {}", key.file_stem()).as_str())
                 ).expect(format!("tensor {key:?}", ).as_str());
 
-                SyncWrapper::new_tb(
-                    Box::new(Tensor::vstack(&[
+                SyncWrapper::new_t(
+                    Tensor::vstack(&[
                         Tensor::from_slice(
                             sig.as_slice()
                         ), //ch 0
-                    ]))
+                    ])
                 )
             }, 4, 100,
         )));
@@ -2721,7 +2721,7 @@ mod motif_find_tests {
         ]).totype(Int);
 
         let _threshold = 2.;
-        let tensor = super::clc_dist_matches(&t_0, Arc::new(RwLock::new(SyncWrapper::new(Box::new(motifs_t), |e|Box::new(e.shallow_clone())))), 1, Arc::new(RwLock::new(HashMap::from([
+        let tensor = super::clc_dist_matches(&t_0, Arc::new(RwLock::new(SyncWrapper::new(motifs_t, |e|e.shallow_clone()))), 1, Arc::new(RwLock::new(HashMap::from([
             (1, 0.01),
             (2, 0.01),
             (3, 0.01),
@@ -2734,7 +2734,6 @@ mod motif_find_tests {
             vec![1, 2, 3, 4],
             vec![10, 20, 30, 40],
         ])))?;
-
 
         assert_eq!(matches_t, tensor);
 
@@ -2772,7 +2771,7 @@ mod motif_find_tests {
                 let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
-                SyncWrapper::new_tb(Box::new(Tensor::from_slice(v.as_slice()).view((1, 10))))
+                SyncWrapper::new_t(Tensor::from_slice(v.as_slice()).view((1, 10)))
             }, 4, 100,
         );
         let executor_rc = Arc::new(RwLock::new(executor));
@@ -2790,7 +2789,7 @@ mod motif_find_tests {
 
                 chunks_0_test_rc.lock().push(chunk_0.t.i(( 0, .., ..)).squeeze());
                 chunks_1_test_rc.lock().push(chunk_1.t.i(( 0, .., ..)).squeeze());
-                Ok(SyncWrapper::new_tb(Box::new(Tensor::from_slice(&[0.1]))))
+                Ok(SyncWrapper::new_t(Tensor::from_slice(&[0.1])))
             },
             &|run_config_id, t, chunk_0, chunk_1|{
 
@@ -3106,7 +3105,7 @@ mod motif_find_tests {
 
 }
 
-pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, motif_id: u32, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
+pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, motif_id: u32, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
     let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, limit, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
@@ -3117,7 +3116,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
 
     let resources_slices = load_motif_slices(channel, &find_motifs_run_config.to_applicable(ws.read().deref(), *device), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, loader); //TODO Into for TensorSliceIdx
 
-    let all_slices = resources_slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Box<Tensor>>>();
+    let all_slices = resources_slices.iter().flat_map(|(_id, slices)| slices.iter()).collect::<Vec<&Tensor>>();
 
     let all_slices= if all_slices.len() > 3_000 {
         warn!("Too many slices ({}) in motif {motif_id} to plot, truncating", all_slices.len());

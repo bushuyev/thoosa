@@ -371,7 +371,7 @@ impl ResourceLoader for ParquetLoader {
     type K = String;
     type V = Tensor;
 
-    fn load(&self, key: &String, device:Device) -> Box<Tensor> {
+    fn load(&self, key: &String, device:Device) -> Tensor {
 
         let t = if let Some(tensors_path) = self.tensors_path.as_ref() {//TODO move into another loader
             load_tensor(tensors_path.as_str(), key.as_str(), device)
@@ -390,6 +390,6 @@ impl ResourceLoader for ParquetLoader {
 
         }).expect(format!("can't load {}", key).as_str());
 
-        Box::new(t)
+        t
     }
 }

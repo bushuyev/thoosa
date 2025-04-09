@@ -545,7 +545,7 @@ pub fn run_train_final_nets(
     resource_config: &NetResources<Logits>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
     debug!("run_train_final_node_2: run_configs.len={run_configs:?} resource_config={resource_config:?}");
@@ -696,7 +696,7 @@ pub fn run_train_label_nets(
     resource_config: &NetResources<Labeled>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
     debug!("run_train_label_nodes: run_configs={run_configs:?} resource_config={resource_config:?} cuda_mem={:?}", cuda_mem());
@@ -822,7 +822,7 @@ fn run_train_motif_nodes_on_motif_selection(
     _resource_config: &Empty,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
     let motif_selection_run_ids: &Vec<RunId> =
@@ -896,7 +896,7 @@ fn motifs_to_tensor_cmd(
     device: Device,
     choose_fragments_params: &MotifsToTensorArgs,
     ws:&Arc<RwLock<Box<dyn Workspace>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
 ) -> Result<(), ThoosaError> {
     let mut store_guard = store.lock();
 
@@ -1017,7 +1017,7 @@ where
 fn run_plot_motif_slices(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
 ) -> Result<(), ThoosaError> {
@@ -1060,7 +1060,7 @@ fn run_train_motif_nets(
     fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     device: Device,
 ) -> Result<Vec<Box<dyn SavableResult>>, ThoosaError> {
     debug!("train_on_motifs: device={device:?}, find_motifs_run_id={find_motifs_run_id} motifs={motifs:?}");
@@ -1106,8 +1106,8 @@ fn run_train_motif_nets(
             fixed_config,
             move |vs:&VarStore, run_config:&TrainMotifsNetsRunConfig, listener: &mut dyn TrainListener|{
                 //TODO batch size
-                let all_slices_0_cl = all_slices_0.iter().map(|v|Box::new(v.shallow_clone())).collect::<Vec<_>>();
-                let all_slices_1_cl = all_slices_1.iter().map(|v|Box::new(v.shallow_clone())).collect::<Vec<_>>();
+                let all_slices_0_cl = all_slices_0.iter().map(|v|v.shallow_clone()).collect::<Vec<_>>();
+                let all_slices_1_cl = all_slices_1.iter().map(|v|v.shallow_clone()).collect::<Vec<_>>();
 
 
                 let mut batch = TensorsDataBatch::new(
@@ -1149,7 +1149,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     opt_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
     descr: &str,
 ) -> Result<Vec<RunId>, ThoosaError>
@@ -1161,7 +1161,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
             &R,
             &Arc<RwLock<Box<dyn Workspace>>>,
             &Arc<Mutex<Box<dyn Store>>>,
-            &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+            &Arc<RwLock<LoadRunner<Tensor>>>,
             Vec<Device>,
         ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,//TODO remove Option & Vec
         RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>> + ToHashmap,
@@ -1207,7 +1207,7 @@ pub fn run_all_grid_step<RC, RCRV, R, FC, ST>(
     grid_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
     descr: &str,
     presave: bool,
@@ -1220,7 +1220,7 @@ where
         &FC,
         &Arc<RwLock<Box<dyn Workspace>>>,
         &Arc<Mutex<Box<dyn Store>>>,
-        &Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+        &Arc<RwLock<LoadRunner<Tensor>>>,
         Vec<Device>,
     ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>> + thoosa_properties_map::ToHashmap,
@@ -1391,9 +1391,9 @@ mod cli_tests {
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
-                SyncWrapper::new_tb(Box::new(
+                SyncWrapper::new_t(
                     Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem()))).unwrap(),
-                ))
+                )
             },
             4,
             100,
@@ -2145,7 +2145,7 @@ mod cli_tests {
         ])
     }
 
-    fn prepare_test_data(n:u32, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Mutex<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Box<Tensor>>>>, Vec<Device>), ThoosaError> {
+    fn prepare_test_data(n:u32, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Mutex<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Tensor>>>, Vec<Device>), ThoosaError> {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -2221,9 +2221,9 @@ mod cli_tests {
             move |key: &Resource| {
                 let path = ws_runner.read().tensor_path(key);
                 debug!("test_run_step: path={path:?}");
-                SyncWrapper::new_tb(Box::new(
+                SyncWrapper::new_t(
                     Tensor::load(&path).expect(format!("can't open {path:?}").as_str()),
-                ))
+                )
             },
             4,
             100,
@@ -2237,7 +2237,7 @@ mod cli_tests {
         Ok((ws, store, group_name, loader, devices))
     }
 
-    fn run_all_steps(find_motifs_run_config: &str, select_motifs_run_config: &str, train_motif_nodes_run_config: &str, train_label_nodes_run_config: &str, train_final_nodes_run_config: &str, group_name: &String, opt_config: OptConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, devices: &Vec<Device>) -> Result<Vec<RunId>, ThoosaError> {
+    fn run_all_steps(find_motifs_run_config: &str, select_motifs_run_config: &str, train_motif_nodes_run_config: &str, train_label_nodes_run_config: &str, train_final_nodes_run_config: &str, group_name: &String, opt_config: OptConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, devices: &Vec<Device>) -> Result<Vec<RunId>, ThoosaError> {
         let find_motifs_run_ids = run_all_grid_step(
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(&find_motifs_run_config).unwrap(),

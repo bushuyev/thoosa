@@ -186,7 +186,7 @@ struct LoadingTensorsDataBatch<'b>  {
     train: Rc<Vec<(i64, Vec <Resource>)>>,
     val: Rc<Vec<(i64, Vec <Resource>)>>,
     batch_size: usize,
-    loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+    loader: Arc<RwLock<LoadRunner<Tensor>>>,
     device:Device,
     transform_fn:Option<Arc<RwLock<Box<dyn Fn(Tensor)->Tensor + Sync + Send  + 'b>>>>//for single tensor, wrap into BatchTransform for per-batch transform
 }
@@ -208,7 +208,7 @@ impl <'b> LoadingTensorsDataBatch<'b> {
         train: Rc<Vec<(i64, Vec <Resource>)>>,
         val: Rc<Vec<(i64, Vec <Resource>)>>,
         batch_size: usize,
-        loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>,
+        loader: Arc<RwLock<LoadRunner<Tensor>>>,
         device:Device,
         transform_fn:Option<Box<dyn Fn(Tensor)->Tensor + Sync + Send  + 'b>>
     ) -> Self {
@@ -223,13 +223,13 @@ impl <'b> LoadingTensorsDataBatch<'b> {
         }
     }
 
-    fn choose_for_batch(class_resources: &Vec<(i64, Vec<Resource>)>, batch_size: usize, loader: Arc<RwLock<LoadRunner<Tensor>>>, device: &Device, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send + 'b>>>>) -> (Tensor, Tensor) {
+    fn choose_for_batch(class_resources: &Vec<(i64, Vec<Resource>)>, batch_size: usize, loader: Arc<RwLock<LoadRunner<Tensor>>>, device: &Device, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Tensor) -> Tensor + Sync + Send + 'b>>>>) -> (Tensor, Tensor) {
         debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
         let mut rng = thread_rng();
         let wg = WaitGroup::new();
         let area = loader.write().get_available_cache_area();
-        let x_y_acc:Arc<Mutex<Vec<(Box<Tensor>, i64)>>> = Arc::new(Mutex::new(vec![]));
+        let x_y_acc:Arc<Mutex<Vec<(Tensor, i64)>>> = Arc::new(Mutex::new(vec![]));
 
         if batch_size <  class_resources.len() {
             debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size <  class_resources.len");
@@ -271,7 +271,7 @@ impl <'b> LoadingTensorsDataBatch<'b> {
 
         wg.wait();
 
-        let mut x_y_vecs:Vec<(Box<Tensor>, i64)> = x_y_vecs_mx.lock().drain(..).collect();
+        let mut x_y_vecs:Vec<(Tensor, i64)> = x_y_vecs_mx.lock().drain(..).collect();
 
         debug!("LoadingTensorsDataBatch::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}", x_y_vecs.len());
         loader.read().debug("LoadingTensorsDataBatch::choose_for_batch");
@@ -280,7 +280,7 @@ impl <'b> LoadingTensorsDataBatch<'b> {
         (x_y_vecs.len()..batch_size).for_each(|i|{
             x_y_vecs.push(
                 (
-                    Box::new(x_y_vecs[i- x_y_vecs.len()].0.shallow_clone()),
+                    x_y_vecs[i- x_y_vecs.len()].0.shallow_clone(),
                     x_y_vecs[i- x_y_vecs.len()].1
                 )
             );
@@ -290,14 +290,14 @@ impl <'b> LoadingTensorsDataBatch<'b> {
         Self::vec_to_tensors(device, x_y_vecs)
     }
 
-    fn load_tensor(loader: &Arc<RwLock<LoadRunner<Box<Tensor>>>>, area: u64, x_y_acc_in_exec: Arc<Mutex<Vec<(Box<Tensor>, i64)>>>, wg_exec: WaitGroup, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send + 'b>>>>, resource_id: Resource, class: i64) {
+    fn load_tensor(loader: &Arc<RwLock<LoadRunner<Tensor>>>, area: u64, x_y_acc_in_exec: Arc<Mutex<Vec<(Tensor, i64)>>>, wg_exec: WaitGroup, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Tensor) -> Tensor + Sync + Send + 'b>>>>, resource_id: Resource, class: i64) {
         debug!("LoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area}");
 
         loader.write().exec_scoped(move |loader, keys_purge| {
             async move {
                 debug!("LoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area}");
                 let resource_id_debug = resource_id.clone();
-                let t = Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id, area).await;
+                let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area).await;
 
                 debug!("LoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area}");
 
@@ -314,7 +314,7 @@ impl <'b> LoadingTensorsDataBatch<'b> {
         });
     }
 
-    fn vec_to_tensors(device: &Device, mut x_y_vecs: Vec<(Box<Tensor>, i64)>) -> (Tensor, Tensor) {
+    fn vec_to_tensors(device: &Device, mut x_y_vecs: Vec<(Tensor, i64)>) -> (Tensor, Tensor) {
         let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice()).to_device(*device);
 
         let tensor = Tensor::stack(
@@ -370,10 +370,10 @@ impl SplittableDataBatch for LoadingTensorsDataBatch<'_> {}
 struct ClassTensorsLoaderData  {
     train_resources: Vec<(Resource, Vec<f32>)>,
     valid_resources: Vec<(Resource, Vec<f32>)>,
-    loader: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: Arc<RwLock< LoadRunner<Tensor>>>,
     batch_size: usize,
     device:Device,
-    transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>
+    transform_fn:Option<Box<dyn Fn(Tensor)->Tensor + Sync + Send >>
 }
 
 impl Debug for ClassTensorsLoaderData {
@@ -393,9 +393,9 @@ impl ClassTensorsLoaderData  {
         train_loader: Vec<(Resource, Vec<f32>)>,
         valid_loader: Vec<(Resource, Vec<f32>)>,
         batch_size: usize,
-        loader: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+        loader: Arc<RwLock< LoadRunner<Tensor>>>,
         device:Device,
-        transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>
+        transform_fn:Option<Box<dyn Fn(Tensor)->Tensor + Sync + Send >>
     ) -> Self {
         Self {
             train_resources: train_loader,
@@ -422,7 +422,7 @@ impl DataBatch for ClassTensorsLoaderData {
 
 impl ClassTensorsLoaderData {
 
-    fn batch(resources: &Vec<(Resource, Vec<f32>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Box<Tensor>>>>,device: &Device, transform_fn:Option<&Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send >>) -> (Tensor, Tensor) {
+    fn batch(resources: &Vec<(Resource, Vec<f32>)>, batch_size: usize, executor: Arc<RwLock< LoadRunner<Tensor>>>,device: &Device, transform_fn:Option<&Box<dyn Fn(Tensor)->Tensor + Sync + Send >>) -> (Tensor, Tensor) {
         debug!("ClassTensorsLoaderData.batch: resources={resources:?} batch_size={batch_size}");
 
         let x_y_vecs_mx = Arc::new(Mutex::new((vec![], vec![])));
@@ -443,13 +443,13 @@ impl ClassTensorsLoaderData {
                 for (resource_id, labels_p) in rnd_resoruces {
                     resources_to_purge.push(resource_id.clone());
 
-                    let t =  Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource_id.clone(), 0).await;
+                    let t =  Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id.clone(), 0).await;
 
                     let mut guard = x_y_acc_in_exec.lock();
 
                     guard.0.push(t);
                     guard.1.push(
-                        Box::new(Tensor::from_slice(labels_p.as_slice()))
+                        Tensor::from_slice(labels_p.as_slice())
                     );
 
                 }
@@ -472,7 +472,7 @@ impl ClassTensorsLoaderData {
         assert_eq!(labels.len(), inputs.len(), "classes.len() != inputs.len()");
 
         inputs = if let Some(ref transform) = transform_fn {
-            inputs.iter().map(|t| transform(Box::new(t.shallow_clone()))).collect() //TODO par on devices
+            inputs.iter().map(|t| transform(t.shallow_clone())).collect() //TODO par on devices
         } else {
             inputs
         };
@@ -482,8 +482,8 @@ impl ClassTensorsLoaderData {
             let idx = i - inputs.len();
             let tensor_x = inputs[idx].shallow_clone();
             let tensor_y = labels[idx].shallow_clone();
-            inputs.push(Box::new(tensor_x));
-            labels.push(Box::new(tensor_y));
+            inputs.push(tensor_x);
+            labels.push(tensor_y);
 
         });
 
@@ -553,7 +553,7 @@ pub fn run_opt_train_label_nets(
     label: &String,
     fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock< LoadRunner<Tensor>>>,
     device: &Device
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
@@ -695,7 +695,7 @@ pub fn run_opt_train_final_net(
     fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Mutex<Box<dyn Store>>>,
-    loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+    loader: &Arc<RwLock< LoadRunner<Tensor>>>,
     device: &Device,
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
@@ -727,7 +727,7 @@ pub fn run_opt_train_final_net(
                 label_nets_applicable.label_nets_num(),
                 label_nets_applicable.labels_num(),
                 &mut BatchTransform::new(Rc::clone(&batch), |t|{
-                    *label_nets_applicable_rc.apply(&Box::new(t.shallow_clone()), ()).expect("label_nets_applicable.apply failed")
+                    label_nets_applicable_rc.apply(&t, ()).expect("label_nets_applicable.apply failed")
                 }),
                 vs,
                 &device
@@ -1827,22 +1827,22 @@ pub fn run_train_motif_net(motif_width: u32, run_config: &TrainMotifsNetsRunConf
     Ok((loss, node_params))
 }
 
-pub fn slices_in_all_resources <ResourceId>(slices: Vec<(ResourceId, Vec<Box<Tensor>>)>) -> Vec<Box<Tensor>> {
-    slices.into_iter().flat_map(|(_resource_key, slices)| slices.into_iter()).collect::<Vec<Box<Tensor>>>()
+pub fn slices_in_all_resources <ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {
+    slices.into_iter().flat_map(|(_resource_key, slices)| slices.into_iter()).collect::<Vec<Tensor>>()
 }
 
 
 #[derive(Debug)]
 pub struct TensorsDataBatch {
-    train :Vec<Vec<Box<Tensor>>>,//index - class
-    val :Vec<Vec<Box<Tensor>>>,
+    train :Vec<Vec<Tensor>>,//index - class
+    val :Vec<Vec<Tensor>>,
     batch_size: u32,
     device:Device
 }
 
 impl TensorsDataBatch {
 
-    pub fn new(classes_tensors: Vec<Vec<Box<Tensor>>>, batch_size: u32, train_valid_split:f32, device:Device) -> Self {
+    pub fn new(classes_tensors: Vec<Vec<Tensor>>, batch_size: u32, train_valid_split:f32, device:Device) -> Self {
 
         let classes_len = classes_tensors.len();
         assert!(classes_len > 0);
@@ -1859,7 +1859,7 @@ impl TensorsDataBatch {
     }
 
 
-    fn choose_for_batch(class_tensors: &Vec<Vec<Box<Tensor>>>, batch_size: u32, device:&Device) -> (Tensor, Tensor) {
+    fn choose_for_batch(class_tensors: &Vec<Vec<Tensor>>, batch_size: u32, device:&Device) -> (Tensor, Tensor) {
         let mut rng = thread_rng();
 
         let per_class_len = batch_size / class_tensors.len() as u32;//TODO make balanced
@@ -2022,14 +2022,14 @@ impl LabelNetsApplicable {
     }
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetApplicable {
+impl Applicable<&Tensor, Tensor, ()> for LabelNetApplicable {
 
 
-    fn apply(&self, batch: &Box<Tensor>, _: ()) -> Result<Box<Tensor>, ThoosaError> {
+    fn apply(&self, batch: &Tensor, _: ()) -> Result<Tensor, ThoosaError> {
         debug!("Applicable for LabelNetApplicable::apply: batch.size={:?}", batch.size());
 
         Ok(
-            Box::new(self.module.infer(
+            self.module.infer(
                 //label net accepts batch, motif net - single tensor
                 &Tensor::stack(
                     (0..batch.size()[0])
@@ -2046,14 +2046,14 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetApplicable {
                         .collect::<Result<Vec<_>, _>>()?.as_slice(),
                     0,
                 ).to_device(self.device)
-            ))
+            )
         )
     }
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetsApplicable {
+impl Applicable<&Tensor, Tensor, ()> for LabelNetsApplicable {
 
-    fn apply(&self, input: &Box<Tensor>, _: ()) -> Result<Box<Tensor>, ThoosaError> {
+    fn apply(&self, input: &Tensor, _: ()) -> Result<Tensor, ThoosaError> {
         debug!("Applicable for LabelNetsApplicable::apply: self.labels_applicables={:?} input.size={:?}", self.labels_applicables, input.size());
 
         let t = Tensor::stack(
@@ -2065,11 +2065,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for LabelNetsApplicable {
 
         debug!("Applicable for LabelNetsApplicable::apply: t.size={:?}", t.size());
 
-        Ok(
-            Box::new(
-                t
-            )
-        )
+        Ok(t)
     }
 }
 
@@ -2102,17 +2098,17 @@ impl FinalNetApplicable {
     }
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, ()> for FinalNetApplicable {
+impl Applicable<&Tensor, Tensor, ()> for FinalNetApplicable {
 
-    fn apply(&self, input: &Box<Tensor>, options: ()) -> Result<Box<Tensor>, ThoosaError> {
+    fn apply(&self, input: &Tensor, options: ()) -> Result<Tensor, ThoosaError> {
         assert_eq!(input.size().len(), 2);//single tensor - channels x data
 
-        Ok(Box::new(self.final_net_module.infer(
+        Ok(self.final_net_module.infer(
             &self.label_nets_applicable.apply(
                 &Box::new(input.unsqueeze(0)),
                 options
             )?.view((1,-1))
-        )))
+        ))
     }
 }
 
@@ -2320,17 +2316,17 @@ mod train_tests {
         let mut batch = TensorsDataBatch::new(
             vec![
                 vec![
-                    Box::new(Tensor::from_slice(&[0., 0., 0.])),Box::new(Tensor::from_slice(&[0., 0., 1.])),Box::new(Tensor::from_slice(&[0., 0., 2.])),
-                    Box::new(Tensor::from_slice(&[0., 1., 0.])),Box::new(Tensor::from_slice(&[0., 1., 1.])),Box::new(Tensor::from_slice(&[0., 1., 2.])),
-                    Box::new(Tensor::from_slice(&[0., 2., 0.])),Box::new(Tensor::from_slice(&[0., 2., 1.])),Box::new(Tensor::from_slice(&[0., 2., 2.])),
-                    Box::new(Tensor::from_slice(&[0., 3., 0.])),Box::new(Tensor::from_slice(&[0., 3., 1.])),Box::new(Tensor::from_slice(&[0., 3., 2.]))
+                    Tensor::from_slice(&[0., 0., 0.]),Tensor::from_slice(&[0., 0., 1.]),Tensor::from_slice(&[0., 0., 2.]),
+                    Tensor::from_slice(&[0., 1., 0.]),Tensor::from_slice(&[0., 1., 1.]),Tensor::from_slice(&[0., 1., 2.]),
+                    Tensor::from_slice(&[0., 2., 0.]),Tensor::from_slice(&[0., 2., 1.]),Tensor::from_slice(&[0., 2., 2.]),
+                    Tensor::from_slice(&[0., 3., 0.]),Tensor::from_slice(&[0., 3., 1.]),Tensor::from_slice(&[0., 3., 2.])
                 ],
 
                 vec![
-                    Box::new(Tensor::from_slice(&[1., 0., 0.])),Box::new(Tensor::from_slice(&[1., 0., 1.])),Box::new(Tensor::from_slice(&[1., 0., 2.])),
-                    Box::new(Tensor::from_slice(&[1., 1., 0.])),Box::new(Tensor::from_slice(&[1., 1., 1.])),Box::new(Tensor::from_slice(&[1., 1., 2.])),
-                    Box::new(Tensor::from_slice(&[1., 2., 0.])),Box::new(Tensor::from_slice(&[1., 2., 1.])),Box::new(Tensor::from_slice(&[1., 2., 2.])),
-                    Box::new(Tensor::from_slice(&[1., 3., 0.])),Box::new(Tensor::from_slice(&[1., 3., 1.])),Box::new(Tensor::from_slice(&[1., 3., 2.]))
+                    Tensor::from_slice(&[1., 0., 0.]),Tensor::from_slice(&[1., 0., 1.]),Tensor::from_slice(&[1., 0., 2.]),
+                    Tensor::from_slice(&[1., 1., 0.]),Tensor::from_slice(&[1., 1., 1.]),Tensor::from_slice(&[1., 1., 2.]),
+                    Tensor::from_slice(&[1., 2., 0.]),Tensor::from_slice(&[1., 2., 1.]),Tensor::from_slice(&[1., 2., 2.]),
+                    Tensor::from_slice(&[1., 3., 0.]),Tensor::from_slice(&[1., 3., 1.]),Tensor::from_slice(&[1., 3., 2.])
                 ]
 
             ],
@@ -2537,7 +2533,7 @@ mod train_tests {
              99000.,  279000.,  459000.,  639000.,  819000.,  999000., 1179000., 1359000., 1539000., 1719000., 1899000.// lin_test_tensor multiplies each chanel by its ordinal + *10 by net
         ]).totype(Float).view((3, 11));
 
-        assert_eq!(channel_0_motifs, *t_0_applied);
+        assert_eq!(channel_0_motifs, t_0_applied);
 
         let t_1_applied = applicable.apply(&Box::new(t_1), NetsPadding::Fixed(11))?;
 
@@ -2550,7 +2546,7 @@ mod train_tests {
             99000., 179000., 259000., 339000., 419000., 499000., 579000., 659000., 739000., 819000., 899000.
         ]).totype(Float).view((3, 11));
 
-        assert_eq!(channel_1_motifs, *t_1_applied);
+        assert_eq!(channel_1_motifs, t_1_applied);
 
         Ok(())
     }
@@ -3675,7 +3671,7 @@ mod train_tests {
     fn test_loading_tensors_data_batch(){
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
-                SyncWrapper::new_tb(Box::new({
+                SyncWrapper::new_t({
                     match key.file_stem() {
                         "aaa"=>  {
                             let t_0_0 = Tensor::from_slice(&[0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]); //t 0 channel 0
@@ -3701,7 +3697,7 @@ mod train_tests {
                     }
 
                 }
-                ))
+                )
             },
             1,
             10,
@@ -3722,7 +3718,7 @@ mod train_tests {
             loader,
             Cpu,
             Some(Box::new(|t|{
-                Box::new(t.pad([0,10-t.size()[1]], "constant", 0.))
+                t.pad([0,10-t.size()[1]], "constant", 0.)
             }))
         );
 

@@ -32,5 +32,5 @@ pub trait ResourceLoader:Send+Sync {
     type K;
     type V;
 
-    fn load(&self, key:&Self::K, device:Device)->Box<Self::V>;
+    fn load(&self, key:&Self::K, device:Device)->Self::V;
 }

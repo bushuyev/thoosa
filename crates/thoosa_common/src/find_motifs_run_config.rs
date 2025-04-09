@@ -66,7 +66,7 @@ impl FindMotifsRunConfig {
 #[derive(Debug)]
 pub struct FindMotifsApplicable {
     run_config:FindMotifsRunConfig,
-    kernel:Option<SyncWrapper<Box<Tensor>>>,
+    kernel:Option<SyncWrapper<Tensor>>,
     groups:i64,
     device:Device
 }
@@ -130,7 +130,7 @@ impl FindMotifsApplicable {
         &self.run_config
     }
 
-    pub fn kernel(&self) -> &Option<SyncWrapper<Box<Tensor>>> {
+    pub fn kernel(&self) -> &Option<SyncWrapper<Tensor>> {
         &self.kernel
     }
 
@@ -180,10 +180,10 @@ impl Applicable<&Tensor, Tensor, FindMotifsRunConfigOptions> for FindMotifsAppli
     }
 }
 
-impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
+impl Applicable<&[SyncWrapper<Tensor>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
 
     /// applying transform (Filter) and unfolding tensors one by one since they have varying sizes - can't concat into batch to avoid slices spanning different tensors
-    fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>], options:()) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+    fn apply(&self, tensors_chunk: &[SyncWrapper<Tensor>], options:()) -> Result<(Tensor, Vec<i64>), ThoosaError> {
         let mut slices = Vec::with_capacity(tensors_chunk.len());
         let mut slice_sizes = Vec::with_capacity(tensors_chunk.len());
         if log_enabled!(DebugLevel) {

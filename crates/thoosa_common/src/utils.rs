@@ -1407,7 +1407,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 
 pub trait DataBatch {
     /// returns (inputs, labels)
-    fn train_batch(&self) -> (Tensor, Tensor);//TODO change to Box<Tensor>
+    fn train_batch(&self) -> (Tensor, Tensor);//TODO change to Tensor
     fn valid_batch(&self) -> (Tensor, Tensor);
 }
 
