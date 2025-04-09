@@ -552,21 +552,13 @@ pub fn run_train_final_nets(
     debug!("run_train_final_node_2: run_configs.len={run_configs:?} resource_config={resource_config:?}");
     let (train_resource_keys, valid_resource_keys) = resource_config.to_resources(store)?;
 
-
     debug!("run_train_final_node_2: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
-
-    let (label_models, labels_channels_motifs_models) =
-        load_label_and_motif_models(&ws, store, &Cpu, train_label_nodes_run_ids.map(|v|v.as_slice())); //TODO move out of run_configs cycle
-
-    debug!("run_train_final_node_2: label_models={label_models:?} train_label_nodes_run_ids={train_label_nodes_run_ids:?} labels_channels_motifs_models={labels_channels_motifs_models:?}");
 
     run_opt_train_final_net(
         train_label_nodes_run_ids,
         &run_configs,
         train_resource_keys.clone(),
         valid_resource_keys.clone(),
-        label_models,
-        labels_channels_motifs_models,
         fixed_config,
         ws,
         store,
@@ -574,8 +566,6 @@ pub fn run_train_final_nets(
         &devices[0],
     ).map(|v| Some(vec![v]))
 }
-
-
 
 pub fn run_infer<F>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -587,48 +577,16 @@ pub fn run_infer<F>(
 where
     F: Fn(&PathBuf) -> Result<Tensor, ThoosaError> + Sync,
 {
-    let final_applicable = FinalNetApplicable::new(infer_params.final_run_id, store, ws, device);
-   /* let final_model = load_final_model(infer_params.final_run_id, ws, &device)?;
-
-    let train_label_node_run_ids = store.lock().get_input_run_ids(
-        infer_params.final_run_id,
-        Some(&TrainLabelNetsRunConfig::type_name())
-    ).expect(format!("TrainLabelNodeRunConfig for infer_params.final_run_id={:?} not found", infer_params.final_run_id).as_str());
-
-    let (mut label_models, labels_channels_motifs_models) =
-        load_label_and_motif_models(
-            &ws,
-            store,
-            &device,
-            Some(
-                &train_label_node_run_ids
-            )
-        );
-
-    let labels_channels_motifs_models_rw =
-        labels_channels_motifs_models
-            .into_iter()
-            .fold(HashMap::new(), |mut a, v| {
-                a.insert(v.0, Arc::new(RwLock::new(v.1)));
-                a
-            });
-*/
     let labels = store.lock().list_labels()?;
-    let mut infer_result = InputProbs::new(labels.clone());
+    let final_applicable = FinalNetApplicable::new(infer_params.final_run_id, labels.clone(), store, ws, device);
+
+
+    let mut infer_result = InputProbs::new(labels);
 
     for entry in read_dir(&infer_params.input_dir)? {
         let path = entry?.path();
 
-       /* let t = apply_motif_and_label_nets(
-            &load_tensor(&path)?.unsqueeze(0),//for batch dim
-            &mut label_models,
-            &labels_channels_motifs_models_rw,
-            &device,
-            &labels,
-            ws.read().max_input() as u32
-        );
 
-        let logits = final_model.2.infer(&t.view((1, -1))); //batch(1 for infer) x classes*/
         let t = load_tensor(&path)?;
 
         debug!("run_infer:={path:?} label=\n{t} t.view((1,-1))=\n{}",t.view((1, -1)));
