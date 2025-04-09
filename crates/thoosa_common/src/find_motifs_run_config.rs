@@ -144,9 +144,9 @@ pub enum FindMotifsRunConfigOptions {
     FilterUnfold
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindMotifsApplicable {
+impl Applicable<&Tensor, Tensor, FindMotifsRunConfigOptions> for FindMotifsApplicable {
 
-    fn apply(&self, tensor: &Box<Tensor>, options:FindMotifsRunConfigOptions) -> Result<Box<Tensor>, ThoosaError> {
+    fn apply(&self, tensor: &Tensor, options:FindMotifsRunConfigOptions) -> Result<Tensor, ThoosaError> {
         debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, tensor.size());
 
         let t = match self.kernel.as_ref() {
@@ -160,7 +160,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindM
 
         match options {
             FindMotifsRunConfigOptions::Filter => {
-                Ok(Box::new(t))
+                Ok(t)
             }
             FindMotifsRunConfigOptions::FilterUnfold => {
                 let input_length = t.size()[1];
@@ -171,7 +171,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindM
 
                     debug!("Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-                    Ok(Box::new(unfolded))
+                    Ok(unfolded)
                 } else {
                     Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
                 }

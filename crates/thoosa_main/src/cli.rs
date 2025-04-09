@@ -212,10 +212,9 @@ where
     let loader = Arc::new(RwLock::new(LoadRunner::new(
         move |key: &Resource| {
             let tensor = Tensor::load_multi_with_device(
-                // tensors_path.join(format!("{}_{}.pt", key.import_id(), key.file_stem())),
                 FsWorkspace::resource_tensor_path(&tensors_path, key),
                 Cpu,
-            ) //Cuda(0))
+            )
             .map_err(|e| ThoosaError::new(e.to_string()))
             .expect(format!("can't load {key:?}").as_str())
             .pop()
@@ -226,7 +225,7 @@ where
                 warn!("tensor requires grad!");
             }
             debug!("key={key:?} tensor.size={:?}", tensor.size());
-            SyncWrapper::new_tb(Box::new(tensor))
+            tensor.into()
         },
         loader_threads,
         cli.futures_channel_bound,
@@ -2278,9 +2277,6 @@ mod cli_tests {
 
         debug!("test_run_step: select_motifs_for_label_run_ids={select_motifs_for_label_run_ids:?}");
 
-
-        // assert_eq!(select_motifs_for_label_run_ids.len(), 1);
-
         for select_motifs_for_label_run_id in &select_motifs_for_label_run_ids {
             let selected_motifs = store.lock().list_selected_motifs(
                 *select_motifs_for_label_run_id,
@@ -2292,13 +2288,6 @@ mod cli_tests {
                 selected_motifs[0].len()
             );
         }
-
-        // assert!(selected_motifs[0].len() > 2);
-        // //no motifs in channels 1 and 2
-        // assert!(selected_motifs[1].is_empty());
-        // assert!(selected_motifs[2].is_empty());
-        // //TODO check if motifs match signals
-
 
         let train_motif_nodes_run_ids = run_opt_step::<TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue, OptConfig, Empty, _>(
             Some(select_motifs_for_label_run_ids.clone()),
@@ -2313,16 +2302,7 @@ mod cli_tests {
             "Test/TrainMotifsNets",
         )?;
         debug!("train_motif_nodes_run_ids={train_motif_nodes_run_ids:?}");
-        /*
-         MaxPadding: {
-            num_layers: "2",
-         }
 
-         FixedNumSlices: {
-            num_layers: "2",
-            slices_len: "100"
-         }
-        */
 
         let train_label_nodes_run_ids = run_opt_step::<TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, OptConfig, NetResources<Labeled>, _>(
             Some(select_motifs_for_label_run_ids.clone()),

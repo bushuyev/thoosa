@@ -188,7 +188,7 @@ struct LoadingTensorsDataBatch<'b>  {
     batch_size: usize,
     loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>,
     device:Device,
-    transform_fn:Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send  + 'b>>>>//for single tensor, wrap into BatchTransform for per-batch transform
+    transform_fn:Option<Arc<RwLock<Box<dyn Fn(Tensor)->Tensor + Sync + Send  + 'b>>>>//for single tensor, wrap into BatchTransform for per-batch transform
 }
 
 impl Debug for LoadingTensorsDataBatch<'_> {
@@ -208,9 +208,9 @@ impl <'b> LoadingTensorsDataBatch<'b> {
         train: Rc<Vec<(i64, Vec <Resource>)>>,
         val: Rc<Vec<(i64, Vec <Resource>)>>,
         batch_size: usize,
-        loader: Arc<RwLock< LoadRunner<Box<Tensor>>>>,
+        loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>,
         device:Device,
-        transform_fn:Option<Box<dyn Fn(Box<Tensor>)->Box<Tensor> + Sync + Send  + 'b>>
+        transform_fn:Option<Box<dyn Fn(Tensor)->Tensor + Sync + Send  + 'b>>
     ) -> Self {
 
         Self {
@@ -223,7 +223,7 @@ impl <'b> LoadingTensorsDataBatch<'b> {
         }
     }
 
-    fn choose_for_batch(class_resources: &Vec<(i64, Vec<Resource>)>, batch_size: usize, loader: Arc<RwLock<LoadRunner<Box<Tensor>>>>, device: &Device, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send + 'b>>>>) -> (Tensor, Tensor) {
+    fn choose_for_batch(class_resources: &Vec<(i64, Vec<Resource>)>, batch_size: usize, loader: Arc<RwLock<LoadRunner<Tensor>>>, device: &Device, transform_fn: Option<Arc<RwLock<Box<dyn Fn(Box<Tensor>) -> Box<Tensor> + Sync + Send + 'b>>>>) -> (Tensor, Tensor) {
         debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
         let mut rng = thread_rng();
@@ -577,10 +577,10 @@ pub fn run_opt_train_label_nets(
                     Some(Box::new(move |t|{
                         match &run_config.net {
                             LabelNetTypeArgs::MaxPadding(params) => {
-                                motifs_nets_selection_applicable_arc_in_batch.apply(&Box::new(t.shallow_clone()), NetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
+                                motifs_nets_selection_applicable_arc_in_batch.apply(&t.shallow_clone(), NetsPadding::Max).expect("channels_motifs_nets/apply failed")//TODO Box
                             }
                             LabelNetTypeArgs::FixedNumSlices(params) => {
-                                motifs_nets_selection_applicable_arc_in_batch.apply(&Box::new(t.shallow_clone()), NetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
+                                motifs_nets_selection_applicable_arc_in_batch.apply(&t.shallow_clone(), NetsPadding::Fixed(params.slices_len)).expect("channels_motifs_nets/apply failed")//TODO Box
                             }
                         }
                     }))
@@ -1155,10 +1155,10 @@ pub enum NetsPadding {
     Fixed(u32)
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionApplicable {
+impl Applicable<&Tensor, Tensor, NetsPadding> for MotifsNetsSelectionApplicable {
 
     ///input - single [channels x data(varying length)] -> [channels x
-    fn apply(&self, input: &Box<Tensor>, options: NetsPadding) -> Result<Box<Tensor>, ThoosaError> {
+    fn apply(&self, input: &Tensor, options: NetsPadding) -> Result<Tensor, ThoosaError> {
         debug!("Applicable for MotifsNetsSelectionApplicable::apply: t.size={:?} options={options:?}", input.size());
         let motif_width= self.find_motifs_applicable.run_config().window;
 
@@ -1173,7 +1173,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                 debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: motif_width={motif_width} self.max_input={} max_num_slices={max_num_slices}", self.max_input);
 
-                Ok(Box::new(Tensor::stack(
+                Ok(Tensor::stack(
                     self.channels_motifs
                         .iter()
                         .enumerate()
@@ -1238,10 +1238,10 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                                 r
                             }
-                         })
+                        })
                         .collect::<Result<Vec<_>, ThoosaError>>().unwrap().as_slice(),
                     0
-                )))
+                ))
             }
             //returns sum of motifs in all channels x slices_len
             NetsPadding::Fixed(slices_len) => {
@@ -1256,7 +1256,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
 
                 let unfolded = filtered.pad([0, pad as i64], "constant", 0.).unfold(1, motif_width as i64, input_slice_step as i64);
 
-                Ok(Box::new(Tensor::concat(
+                Ok(Tensor::concat(
                     self.channels_motifs
                         .iter()
                         .enumerate()
@@ -1316,7 +1316,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, NetsPadding> for MotifsNetsSelectionA
                         })
                         .collect::<Result<Vec<_>, ThoosaError>>()?.as_slice(),
                     0
-                )))
+                ))
             }
         }
     }

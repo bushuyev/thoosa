@@ -320,9 +320,7 @@ mod tests {
         }
 
         assert_eq!(iters.len(), 5);
-        // for iter in iters {
-        //     println!("iter={:?}", iter.collect::<Vec<_>>());
-        // }
+
 
         let slices = iters.into_iter().flat_map(|i|i).collect::<Vec<_>>();
 
