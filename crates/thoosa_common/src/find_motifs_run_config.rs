@@ -13,6 +13,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::run_configs::{Applicable, RunConfig, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
+use crate::dims::{TCD, TCSD};
 use crate::loader::SyncWrapper;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
@@ -144,17 +145,17 @@ pub enum FindMotifsRunConfigOptions {
     FilterUnfold
 }
 
-impl Applicable<&Tensor, Tensor, FindMotifsRunConfigOptions> for FindMotifsApplicable {
+impl Applicable<&TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
 
-    fn apply(&self, tensor: &Tensor, options:FindMotifsRunConfigOptions) -> Result<Tensor, ThoosaError> {
-        debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, tensor.size());
+    fn apply(&self, input: &TCD, options:FindMotifsRunConfigOptions) -> Result<TCSD, ThoosaError> {
+        debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
 
         let t = match self.kernel.as_ref() {
             None => {
-                tensor.to_device(self.device).shallow_clone()
+                input.as_ref().to_device(self.device).shallow_clone()
             }
             Some(kernel) => {
-                tensor.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+                input.as_ref().to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
             }
         };
 

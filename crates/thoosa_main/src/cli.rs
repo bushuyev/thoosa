@@ -613,81 +613,6 @@ where
     Ok(infer_result)
 }
 
-fn load_label_and_motif_models(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
-    device: &Device,
-    train_label_nodes_run_ids: Option<&[RunId]>,
-) -> (
-    HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore)>>,
-    HashMap<String, Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>>,
-) {
-    debug!("load_label_and_motif_models: train_label_nodes_run_ids={train_label_nodes_run_ids:?}");
-
-    let label_models = ws.read().load_label_nets(train_label_nodes_run_ids, device).expect("load_all_label_models_ws");
-
-    trace!("load_label_and_motif_models: label_models={label_models:?}");
-
-    let mut labels_channels_motifs_models: HashMap<
-        String,
-        Vec<(FindMotifsRunConfig, Vec<(MotifNetParams, ThoModuleWithStore)>)>,
-    > = HashMap::new();
-
-    for (label, label_run_id_nodes) in label_models.iter() {
-
-        debug!("load_label_and_motif_models: label={label:?} label_run_id_nodes={label_run_id_nodes:?}");
-
-        for (label_run_id, label_node_params, node) in label_run_id_nodes {
-
-            debug!("load_label_and_motif_models: label_run_id={label_run_id:?}");
-
-            let motif_selection_run_ids = store
-                .lock()
-                .get_input_run_ids(*label_run_id, Some(&SelectMotifsRunConfig::type_name()))
-                .expect("get_input_run_ids(motif_node_params_selection_run_ids")
-                .into_iter()
-                .collect::<HashSet<RunId>>(); //TODO distinct in sql?
-
-            debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
-
-            assert_eq!(motif_selection_run_ids.len(), 1);
-
-            let find_motifs_for_label_run_ids = store.lock().get_input_run_ids(*motif_selection_run_ids.iter().next().unwrap(), Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for motif_selection_run_ids={motif_selection_run_ids:?} not found").as_str());
-            assert_eq!(find_motifs_for_label_run_ids.len(), 1);
-            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_for_label_run_ids[0], /**/ &store.lock().list_run_config_values(find_motifs_for_label_run_ids[0]).expect("list_run_params")).expect("load find_motifs_run_config failed");
-
-            let channels_motifs_models =
-                store
-                    .lock()
-                    .list_selected_motifs(
-                        motif_selection_run_ids.into_iter().next().unwrap(),
-                        ws.read().channels() as u32,
-                    )
-                    .expect("list_selected_motifs")
-                    .into_iter()
-                    .enumerate()
-                    .map(|(channel, channels_motifs)| {
-                        let ws_moved = Arc::clone(&ws);
-                        (
-                            find_motifs_run_config.clone(),
-                            channels_motifs
-                            .into_iter()
-                            .flat_map(move |(motif_id, rate)| {
-                                ws_moved.read().load_motif_nets(channel as u32, motif_id, device)
-                                    .expect("load_motif_models")
-                            })
-                            .collect::<Vec<_>>()
-                        )
-                    })
-                    .collect::<Vec<(FindMotifsRunConfig, Vec<_>)>>();
-
-            debug!("load_all_label_and_motif_models: label={label} channels_motifs_models={channels_motifs_models:?}");
-
-            labels_channels_motifs_models.insert(label.clone(), channels_motifs_models);
-        }
-    }
-    (label_models, labels_channels_motifs_models)
-}
 
 pub fn run_train_label_nets(
     selected_motifs_for_label_run_ids: Option<&Vec<RunId>>,
@@ -2149,15 +2074,9 @@ mod cli_tests {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-
         // log::set_max_level(Warn);
 
-
-        // let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (20, 50, 20, 10, 10);
-        // let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (5, 3, 3, 1, 3);
-        let (tensors_per_label, cycles, opt_max_evals, opt_n_init, motif_batch_size) = (10, 3, 3, 1, 3);
-        // debug!("test_run_step: tensors_per_label={tensors_per_label}, cycles={cycles}, opt_max_evals={opt_max_evals}, opt_n_init={opt_n_init}, motif_batch_size={motif_batch_size}");
-
+        let tensors_per_label = 10;
 
         debug!("test_run_step: test_dir={test_dir:?}");
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
@@ -2179,14 +2098,12 @@ mod cli_tests {
             label_0_t_rs(n, &sig_0, &sig_three_imp(n, 30.0, None, None), max_y)
                 .save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt")))
                 .unwrap(); //first 1_ for import_id
-            // label_1_t_rs(n, &sig_one_imp(n, 30.0, None, Some(1. ..1.01), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_0_{i}.pt"))).unwrap();
         });
 
         (0..tensors_per_label).for_each(|i| {
             label_1_t_rs(n, &sig_1, &sig_three_imp(n, 30.0, None, None), max_y)
                 .save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt")))
                 .unwrap();
-            // label_0_t_rs(n, &sig_one_imp(n, 30.0, None, Some(20. ..20.1), 0.1), &sig_three_imp(n, 30.0, None, None), max_y).save(ws.read().tensors_path().join(format!("1_t_1_{i}.pt"))).unwrap();//first 1_ for import_id
         });
 
         /*
@@ -2211,7 +2128,6 @@ mod cli_tests {
             "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join("1.png").to_path_buf(),
         )?;*/
 
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
         let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
 
         init_test_store(&store, tensors_per_label)?;
