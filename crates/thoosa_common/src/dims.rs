@@ -24,22 +24,22 @@ impl Dims for MotifData {}
 #[derive(Debug)]
 pub struct ChannelsMotifsData;
 impl Dims for ChannelsMotifsData{}
+impl LabelNetInputTensorDims for ChannelsMotifsData{}
 
 #[derive(Debug)]
-pub struct ChannelsMotifsFlattenData;
-impl Dims for ChannelsMotifsFlattenData{}
+pub struct ChannelsMotifsFlattenedData;
+impl Dims for ChannelsMotifsFlattenedData {}
+impl LabelNetInputTensorDims for ChannelsMotifsFlattenedData {}
 
+trait LabelNetInputTensorDims:Dims{}
 
 #[derive(Debug)]
 pub struct LabelProbability;
 impl Dims for LabelProbability {}//[1] probability of an input belonging to certain labeled class
 
-
-
 #[derive(Debug)]
 pub struct LabelNetsProbabilities;
 impl Dims for LabelNetsProbabilities {}//[num of label nets x 1] probabilities of an input belonging to corresponding label produces by all label nets
-
 
 #[derive(Debug)]
 pub struct LabelsProbabilities;
@@ -48,7 +48,7 @@ impl Dims for LabelsProbabilities {}//[num of labels, 1] probabilities of an inp
 #[derive(Debug)]
 pub enum MotifsNetsSelectionDims {
     ChannelsMotifsData(ChannelsMotifsData),
-    ChannelsMotifsFlattenData(ChannelsMotifsFlattenData)
+    ChannelsMotifsFlattenData(ChannelsMotifsFlattenedData)
 }
 impl Dims for MotifsNetsSelectionDims {}
 
@@ -57,11 +57,11 @@ pub struct Batch<D:Dims>(D);
 impl <D:Dims> Dims for Batch<D> {}
 
 #[derive(Debug)]
-pub enum LabelModules {
+pub enum LabelModule {
     ChannelsMotifsData(ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>),
-    ChannelsMotifsFlattenData(ThoModuleWithStore<ChannelsMotifsFlattenData, Batch<LabelProbability>>),
+    ChannelsMotifsFlattenData(ThoModuleWithStore<ChannelsMotifsFlattenedData, Batch<LabelProbability>>),
 }
-impl Dimensional for LabelModules {
+impl Dimensional for LabelModule {
     type Dimensions = MotifsNetsSelectionDims;
 }
 
@@ -69,7 +69,7 @@ impl Dimensional for LabelModules {
 #[derive(Debug)]
 pub enum LabelInputTensors {
     ChannelsMotifsData(ThoTensor<ChannelsMotifsData>),
-    ChannelsMotifsFlattenData(ThoTensor<ChannelsMotifsFlattenData>),
+    ChannelsMotifsFlattenData(ThoTensor<ChannelsMotifsFlattenedData>),
 }
 
 impl Dimensional for LabelInputTensors {

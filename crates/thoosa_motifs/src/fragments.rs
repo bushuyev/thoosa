@@ -111,13 +111,13 @@ pub fn motifs_to_tensor(
                 debug!("motifs_to_tensor: resource={resource:?}");
                 let t =   Loader::<Tensor>::load_future(Arc::clone(&loader), resource, area).await;
                 debug!("motifs_to_tensor: t.size={:?}", t.size());
-                let applied = find_motifs_run_config_applicable.apply(&t, FindMotifsRunConfigOptions::FilterUnfold).expect("find_motifs_run_config_for_loader.apply");
+                let applied = find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::FilterUnfold).expect("find_motifs_run_config_for_loader.apply");
                 debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
 
                 for motif_slice in motif_slices {
                     debug!("motifs_to_tensor: motif_slice={motif_slice:?}");
 
-                    let motif_slice_t = applied.i((motif_slice.channel as i64, motif_slice.slice_idx/ find_motifs_run_config_applicable.step() as i64, ..)); //channel_t.narrow(1, motif_slice.slice_idx, find_motifs_run_config_for_loader.window as i64);
+                    let motif_slice_t = applied.as_ref().i((motif_slice.channel as i64, motif_slice.slice_idx/ find_motifs_run_config_applicable.step() as i64, ..)); //channel_t.narrow(1, motif_slice.slice_idx, find_motifs_run_config_for_loader.window as i64);
 
                     debug!("motifs_to_tensor: motif_slice_t.size={:?}", motif_slice_t.size());
 
@@ -334,7 +334,7 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
                 async move {
                     let tensor_idx_id = resource.id();
                     let t = Loader::<Tensor>::load_future(loader, resource, 0).await;
-                    let t= find_motifs_run_config_applicable.apply(&t, FindMotifsRunConfigOptions::Filter).unwrap();
+                    let t= find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::Filter).unwrap();
 
                     debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
 
@@ -349,7 +349,7 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
 
                              slice_ok
                          }).map(|slice_idx|
-                             SyncWrapper::new_t(t.i((channel, slice_idx as i64..(slice_idx + window )as i64)))
+                             SyncWrapper::new_t(t.as_ref().i((channel, slice_idx as i64..(slice_idx + window )as i64)))
                          ).collect::<Vec<SyncWrapper<Tensor>>>()
                         )
                     );

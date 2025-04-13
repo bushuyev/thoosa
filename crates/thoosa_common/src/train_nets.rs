@@ -52,7 +52,7 @@ use thoosa_shared::run_configs::{Applicable, RunConfig};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, LabelModules, MotifsNetsSelectionDims, ThoTensor, TCD, TCSD, ChannelsMotifsFlattenData, MotifData, LabelInputTensors, LabelNetsProbabilities};
+use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, LabelModule, MotifsNetsSelectionDims, ThoTensor, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelInputTensors, LabelNetsProbabilities};
 use crate::find_motifs_run_config::*;
 use crate::transforms::filters::*;
 
@@ -848,7 +848,14 @@ impl SavableResult for TrainFinalNodesRunConfigResult {
     }
 }
 
-pub fn train_final_net(run_config_values: &TrainFinalNetRunConfig, label_nets_num: u32, labels_num: u32, batch:&mut dyn DataBatch<LabelNetsProbabilities>, var_store: &VarStore, device: &Device) ->  Result<(f32, FinalNetParams), ThoosaError>{
+pub fn train_final_net(
+    run_config_values: &TrainFinalNetRunConfig,
+    label_nets_num: u32,
+    labels_num: u32,
+    batch:&mut dyn DataBatch<LabelNetsProbabilities>,
+    var_store: &VarStore,
+    device: &Device
+) ->  Result<(f32, FinalNetParams), ThoosaError>{
     let final_node_params= FinalNetParams::new(label_nets_num, labels_num, run_config_values.net.num_layers);
     debug!("train_final_node: final_node_params={final_node_params:?}");
 
@@ -1304,9 +1311,9 @@ impl Applicable<&TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelection
     }
 }
 
-impl Applicable<&TCD, ThoTensor<ChannelsMotifsFlattenData>, u32> for MotifsNetsSelectionApplicable {
+impl Applicable<&TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSelectionApplicable {
 
-    fn apply(&self, input: &TCD, slices_len: u32) -> Result<ThoTensor<ChannelsMotifsFlattenData>, ThoosaError> {
+    fn apply(&self, input: &TCD, slices_len: u32) -> Result<ThoTensor<ChannelsMotifsFlattenedData>, ThoosaError> {
         let motif_width= self.find_motifs_applicable.run_config().window;
 
         let filtered = self.find_motifs_applicable.apply(
@@ -2014,7 +2021,7 @@ pub struct LabelNetApplicable {
 
     pub motifs_nets_selection_applicable: MotifsNetsSelectionApplicable,
     pub label_net_params:LabelNetParams,
-    pub module: LabelModules,
+    pub module: LabelModule,
     device: Device
 }
 
@@ -2092,7 +2099,7 @@ impl Applicable<&ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbabilit
 
         Ok(
             match &self.module {
-                LabelModules::ChannelsMotifsData(module) => {
+                LabelModule::ChannelsMotifsData(module) => {
                     module.infer(
                         //label net accepts batch, motif net - single tensor
                         &Tensor::stack(
@@ -2104,7 +2111,7 @@ impl Applicable<&ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbabilit
 
                                     debug!("Applicable for LabelNetApplicable::apply: i={i} t={t:?}");
 
-                                    Ok(t.as_ref())
+                                    Ok::<Tensor, ThoosaError>(t.as_ref().shallow_clone())
                                 })
                                 .collect::<Result<Vec<_>, _>>()?.as_slice(),
                             0,
@@ -2112,19 +2119,19 @@ impl Applicable<&ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbabilit
                     )
 
                 }
-                LabelModules::ChannelsMotifsFlattenData(module) => {
+                LabelModule::ChannelsMotifsFlattenData(module) => {
                     module.infer(
                         //label net accepts batch, motif net - single tensor
                         &Tensor::stack(
                             (0..input.size()[0])
                                 .map(|i| {
-                                    let t:ThoTensor<ChannelsMotifsFlattenData> = self.motifs_nets_selection_applicable.apply(
-                                        &input.as_ref().i((i, .., ..)).into(), self.motifs_nets_selection_applicable_options() //NetsPadding::Max
+                                    let t:ThoTensor<ChannelsMotifsFlattenedData> = self.motifs_nets_selection_applicable.apply(
+                                        &input.as_ref().i((i, .., ..)).into(), 100 //TODO dims
                                     )?;
 
                                     debug!("Applicable for LabelNetApplicable::apply: i={i} t={t:?}");
 
-                                    Ok(t.as_ref())
+                                    Ok::<Tensor, ThoosaError>(t.as_ref().shallow_clone())
                                 })
                                 .collect::<Result<Vec<_>, _>>()?.as_slice(),
                             0,
@@ -2145,7 +2152,10 @@ impl Applicable<&ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbab
             self.labels.iter()
                 .map(|label|(label, self.labels_applicables.get(label).expect(format!("no {label} in labels applicable").as_str())))
                 .flat_map(|(label, label_applicables)| {
-                    label_applicables.iter().map(|label_applicable| label_applicable.apply(input, ()).map(|v|v.as_ref().shallow_clone()))
+                    label_applicables.iter().map(|label_applicable| {
+
+                        label_applicable.apply(input, ()).map(|v|v.as_ref().shallow_clone())
+                    })
                 }).collect::<Result<Vec<_>, _>>()?.as_slice(),
             1
         );
@@ -2192,10 +2202,10 @@ impl Applicable<&TCD, Tensor, ()> for FinalNetApplicable {
 
         Ok(self.final_net_module.infer(
             &self.label_nets_applicable.apply(
-                &Box::new(input.unsqueeze(0)),
+                &input.as_ref().unsqueeze(0).into(),
                 options
-            )?.view((1,-1))
-        ))
+            )?.as_ref().view((1,-1)).into()
+        ).as_ref().shallow_clone())
     }
 }
 
@@ -2386,7 +2396,7 @@ mod train_tests {
     use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
-    use crate::dims::{Batch, Dims, LabelModules, AnyDims, ThoTensor, SlicesData, MotifData};
+    use crate::dims::{Batch, Dims, LabelModule, AnyDims, ThoTensor, SlicesData, MotifData};
     use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::ws::mock_ws_simp;
@@ -2401,7 +2411,7 @@ mod train_tests {
     #[test]
     fn test_class_tensors_data_batch()-> Result<(), ThoosaError>{
 
-        let mut batch = TensorsDataBatch::new(
+        let mut batch:TensorsDataBatch<AnyDims> = TensorsDataBatch::new(
             vec![
                 vec![
                     Tensor::from_slice(&[0., 0., 0.]),Tensor::from_slice(&[0., 0., 1.]),Tensor::from_slice(&[0., 0., 2.]),
@@ -2425,10 +2435,10 @@ mod train_tests {
 
         let train_batch = batch.train_batch();
 
-        debug!("train_batch: x={:?}", from::<Vec<f32>>(&train_batch.0.i((.., 0))));
+        debug!("train_batch: x={:?}", from::<Vec<f32>>(&train_batch.0.as_ref().i((.., 0))));
         debug!("train_batch: y={:?}", from::<Vec<f32>>(&train_batch.1));
 
-        assert_eq!(from::<Vec<f32>>(&train_batch.0.i((.., 0))), from::<Vec<f32>>(&train_batch.1));
+        assert_eq!(from::<Vec<f32>>(&train_batch.0.as_ref().i((.., 0))), from::<Vec<f32>>(&train_batch.1));
 
         // debug!("train_batch: x={:?}, y={:?}", train_batch.0.size(), train_batch.1.size());
 
@@ -2446,7 +2456,7 @@ mod train_tests {
     }
 
     ///sums and multiplies inputs by k
-    pub fn test_net(num_features: u32, k: f64, device: Device, descr: &str, ) -> Result<Box<dyn ThoModule<AnyDims, AnyDims>>, ThoosaError> {
+    pub fn test_net<DI:Dims + Send + 'static, DO:Dims + Send + 'static>(num_features: u32, k: f64, device: Device, descr: &str, ) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
         let vs = VarStore::new(device);
 
         SeqBuilder::new(num_features, None)
@@ -2463,16 +2473,16 @@ mod train_tests {
         let t_0 = lin_test_tensor(1000, 5);
         debug!("t_0.size={:?}", t_0.size());
 
-        let t = t_0.unfold(1, 100, 10).into();
+        let t:ThoTensor<AnyDims> = t_0.unfold(1, 100, 10).into();
 
         debug!("t.size={:?}", t.size());
 
         //sums and multiplies by k
-        let r_0 = test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true);
+        let r_0:ThoTensor<AnyDims> = test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true);
         debug!("r_0.size={:?}", r_0.size());
 
         assert_eq!(Tensor::from_slice(&[4950.]), r_0.as_ref().i((0, 0, ..)));
-        assert_eq!(Tensor::from_slice(&[9900.]), test_net(100, 2., Cpu, "test_net")?.tho_forward(&t, true).i((0, 0, ..)));
+        assert_eq!(Tensor::from_slice(&[9900.]), test_net::<AnyDims, AnyDims>(100, 2., Cpu, "test_net")?.tho_forward(&t, true).as_ref().i((0, 0, ..)));
 
         Ok(())
     }
@@ -2518,11 +2528,11 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(&Box::new(t_0), NetsPadding::Max)?;
+        let t_0_applied = applicable.apply(&t_0.into(), ())?;
 
         debug!("t_0_applied.size={:?}", t_0_applied.size());
-        trace!("t_0_0_applied=\n{}", t_0_applied.i((0, ..)));
-        trace!("t_0_1_applied=\n{}", t_0_applied.i((1, ..)));
+        trace!("t_0_0_applied=\n{}", t_0_applied.as_ref().i((0, ..)));
+        trace!("t_0_1_applied=\n{}", t_0_applied.as_ref().i((1, ..)));
 
         let channel_0_motifs = Tensor::stack(&[
             //sum 0-100  100-200 ...
@@ -2531,7 +2541,7 @@ mod train_tests {
             Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 54950., 64950., 74950., 84950., 94950.]) *2. // ch. 0 net 1 (ResourceId=2)
         ], 0).totype(Float).view((1, 2, 10));
 
-        assert_eq!(channel_0_motifs, t_0_applied.i((0, ..)).view((1, 2, 10)));
+        assert_eq!(channel_0_motifs, t_0_applied.as_ref().i((0, ..)).view((1, 2, 10)));
 
 
         let channel_1_motifs = Tensor::stack(&[
@@ -2541,13 +2551,13 @@ mod train_tests {
             Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 54950., 64950., 74950., 84950., 94950.]) *0. // ch. 0 net 1 (ResourceId=2)
         ], 0).totype(Float).view((1, 2, 10));
 
-        assert_eq!(channel_1_motifs, t_0_applied.i((1, ..)).view((1, 2, 10)));
+        assert_eq!(channel_1_motifs, t_0_applied.as_ref().i((1, ..)).view((1, 2, 10)));
 
-        let t_1_applied = applicable.apply(&Box::new(t_1), NetsPadding::Max)?;
+        let t_1_applied = applicable.apply(&t_1.into(), ())?;
 
         debug!("t_1_applied.size={:?}", t_1_applied.size());
-        trace!("t_1_applied=\n{}", t_1_applied.i((0, ..)));
-        trace!("t_1_applied=\n{}", t_1_applied.i((1, ..)));
+        trace!("t_1_applied=\n{}", t_1_applied.as_ref().i((0, ..)));
+        trace!("t_1_applied=\n{}", t_1_applied.as_ref().i((1, ..)));
 
         let channel_0_motifs = Tensor::stack(&[
             //sum 0-100  100-200 ...
@@ -2556,7 +2566,7 @@ mod train_tests {
             Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 0., 0., 0., 0., 0.]) *2. // ch. 0 net 1 (ResourceId=2)
         ], 0).totype(Float).view((1, 2, 10));
 
-        assert_eq!(channel_0_motifs, t_1_applied.i((0, ..)).view((1, 2, 10)));
+        assert_eq!(channel_0_motifs, t_1_applied.as_ref().i((0, ..)).view((1, 2, 10)));
 
 
         let channel_1_motifs = Tensor::stack(&[
@@ -2566,7 +2576,7 @@ mod train_tests {
             Tensor::from_slice(&[4950., 14950., 24950., 34950., 44950., 0., 0., 0., 0., 0.]) *0. // ch. 0 net 1 (ResourceId=2)
         ], 0).totype(Float).view((1, 2, 10));
 
-        assert_eq!(channel_1_motifs, t_1_applied.i((1, ..)).view((1, 2, 10)));
+        assert_eq!(channel_1_motifs, t_1_applied.as_ref().i((1, ..)).view((1, 2, 10)));
 
         Ok(())
     }
@@ -2610,7 +2620,7 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(&Box::new(t_0), NetsPadding::Fixed(11))?;
+        let t_0_applied = applicable.apply(&t_0.into(), 11)?;
 
         debug!("t_0_applied.size={:?}", t_0_applied.size());
         trace!("t_0_applied=\n{}", t_0_applied);
@@ -2621,9 +2631,9 @@ mod train_tests {
              99000.,  279000.,  459000.,  639000.,  819000.,  999000., 1179000., 1359000., 1539000., 1719000., 1899000.// lin_test_tensor multiplies each chanel by its ordinal + *10 by net
         ]).totype(Float).view((3, 11));
 
-        assert_eq!(channel_0_motifs, t_0_applied);
+        assert_eq!(&channel_0_motifs, t_0_applied.as_ref());
 
-        let t_1_applied = applicable.apply(&Box::new(t_1), NetsPadding::Fixed(11))?;
+        let t_1_applied = applicable.apply(&t_1.into(), 11)?;
 
         debug!("t_1_applied.size={:?}", t_1_applied.size());
         trace!("t_1_applied=\n{}", t_1_applied);
@@ -2634,7 +2644,7 @@ mod train_tests {
             99000., 179000., 259000., 339000., 419000., 499000., 579000., 659000., 739000., 819000., 899000.
         ]).totype(Float).view((3, 11));
 
-        assert_eq!(channel_1_motifs, t_1_applied);
+        assert_eq!(&channel_1_motifs, t_1_applied.as_ref());
 
         Ok(())
     }
@@ -2684,11 +2694,11 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(&Box::new(t_0.unsqueeze(0)), ())?;
+        let t_0_applied = applicable.apply(&t_0.unsqueeze(0).into(), ())?;
 
         trace!("t_0_applied=\n{t_0_applied}");
         assert!(
-            t_0_applied.allclose(
+            t_0_applied.as_ref().allclose(
             &Tensor::from_slice(&[
                 4.9810e7_f32,
                 9.9620e7,
@@ -2747,7 +2757,8 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(&Box::new(t_0.unsqueeze(0)), ())?;
+        let tho_tensor = applicable.apply(&t_0.unsqueeze(0).into(), ())?;
+        let t_0_applied = tho_tensor.as_ref();
         trace!("t_0_applied=\n{t_0_applied}");
 
         assert!(
@@ -2775,12 +2786,12 @@ mod train_tests {
         )
     }
 
-    fn label_test_nets(num_features: u32, k: f64, params: LabelNetTypeParams, device: Device) -> Vec<(RunId, Box<dyn Fn() -> LabelNetParams + Sync + Send>, Box<dyn Fn() -> LabelModules + Sync + Send>)> {
+    fn label_test_nets(num_features: u32, k: f64, params: LabelNetTypeParams, device: Device) -> Vec<(RunId, Box<dyn Fn() -> LabelNetParams + Sync + Send>, Box<dyn Fn() -> LabelModule + Sync + Send>)> {
         vec![
             (
                 0u32,
                 Box::new(move || LabelNetParams::new(2, 3, 3, 100, params.clone())),
-                Box::new(move || LabelModules::ChannelsMotifsData(ThoModuleWithStore::new(test_net(num_features, k, device, "test_label_net").unwrap())))
+                Box::new(move || LabelModule::ChannelsMotifsData(ThoModuleWithStore::new(test_net(num_features, k, device, "test_label_net").unwrap())))
             )
         ]
     }
@@ -2834,14 +2845,14 @@ mod train_tests {
             Cuda(0)
         );
 
-        let out = applicable.apply(&Box::new(channel),NetsPadding::Max)?;
+        let out = applicable.apply(&channel.into(),())?;
 
         // let channel_1_t = apply_channel_motifs(&mut motif_nets, channel, motif_width, 1, max_dists_len, &Cuda(0))?.view(max_dists_len as i64);
 
         trace!("sums=\n{sums}");
         trace!("out=\n{out}");
 
-        assert!(sums.allclose(&out.squeeze(), 100.0, 100.0, true));
+        assert!(sums.allclose(&out.as_ref().squeeze(), 100.0, 100.0, true));
 
 
         Ok(())
@@ -2885,12 +2896,12 @@ mod train_tests {
             Cpu
         );
 
-        let channels_motifs_0 = applicable.apply(&Box::new(t_0.shallow_clone()), NetsPadding::Max)?;
+        let channels_motifs_0 = applicable.apply(&t_0.into(), ())?;
 
         // let channels_motifs_0 = apply_motif_nets(&t_0, Arc::clone(&motif_nets), &Cpu, input_n_0 as u32);
 
         debug!("channels_motifs_0.size={:?}", channels_motifs_0.size());
-        let channels_motifs_1 = applicable.apply(&Box::new(t_1), NetsPadding::Max)?;
+        let channels_motifs_1 = applicable.apply(&t_1.into(), ())?;
 
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
@@ -2919,17 +2930,17 @@ mod train_tests {
         let params = LabelNetParams::new(3, 19, 2, 100, train_nets::LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams::new()));
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net = LabelNetParams::label_net(&params).build_tch_module(&vs_0.root())?;
+        let net:Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
-        let _ = net.tho_forward(&Tensor::rand([11, 3 * 19, 100], FLOAT_CPU), false);
+        let _ = net.tho_forward(&Tensor::rand([11, 3 * 19, 100], FLOAT_CPU).into(), false);
 
         let model_path = ws.write().save_label_model(1, &"test_label", &vs_0, &params)?;
 
         debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
 
-        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_net(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
+        let loaded_module:ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(LabelNetParams::label_net(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(),loaded_module.var_store().variables());
@@ -2949,11 +2960,11 @@ mod train_tests {
         let params = LabelNetParams::new(channels, max_motif_nodes, 3, slices_len, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()));
 
         let mut vs_0 = VarStore::new(Cpu);
-        let net = LabelNetParams::label_net(&params).build_tch_module(&vs_0.root())?;
+        let net:Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let batch = 11i64;
-        let _ = net.tho_forward(&Tensor::rand([batch, channels as i64, max_motif_nodes as i64, slices_len as i64], FLOAT_CPU), false);
+        let _ = net.tho_forward(&Tensor::rand([batch, channels as i64, max_motif_nodes as i64, slices_len as i64], FLOAT_CPU).into(), false);
 
 
         let model_path = ws.write().save_label_model(1, &"test_label", &vs_0, &params)?;
@@ -2961,7 +2972,7 @@ mod train_tests {
         debug!("model_path={model_path:?} vs_0.variables().len()={}", vs_0.variables().len());
 
 
-        let loaded_module = ThoModuleWithStore::load(LabelNetParams::label_net(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
+        let loaded_module:ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(LabelNetParams::label_net(&params), thoosa_shared::replace_extension(&model_path, "safetensors").1.into(), Cpu)?;
 
         assert!(vs_0.variables().len() > 0);
         assert_eq!(vs_0.variables(),loaded_module.var_store().variables());
@@ -3047,7 +3058,7 @@ mod train_tests {
 
         impl <D:Dims> SplittableDataBatch<D> for DummyLabelBatch {}
 
-        let (loss, params) = super::train_label_net(
+        let (loss, params) = super::train_label_net::<AnyDims, DummyLabelBatch>(
             &Arc::new(MotifsNetsSelectionApplicable::new(
                 1,
                 &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![vec![(0, 0.0)]]))),
@@ -3169,7 +3180,7 @@ mod train_tests {
 
 
         let root = vs_0.root();
-        let net_full = full.build_tch_module(&root)?; //&(root / "vs_0"))?;
+        let net_full:Box<dyn ThoModule<AnyDims, AnyDims>> = full.build_tch_module(&root)?; //&(root / "vs_0"))?;
 
         debug!("vs_0={vs_0:?}");
 
@@ -3253,10 +3264,10 @@ mod train_tests {
 
             trace!("target=\n{target}");
 
-            let pred = net_full.tho_forward(&input.totype(kind), true);
+            let pred = net_full.tho_forward(&input.totype(kind).into(), true);
 
-            let loss = pred.binary_cross_entropy(&target.totype(kind), None::<Tensor>, Reduction::Mean);
 
+            let loss = pred.as_ref().binary_cross_entropy(&target.totype(kind), None::<Tensor>, Reduction::Mean);
             if split_i == 0 {
                 //TODO off-load to CPU
                 opt_split_0.backward_step(&loss);
@@ -3297,17 +3308,17 @@ mod train_tests {
             let pred_0 = net_full.tho_forward(&Tensor::stack(&[
                 Tensor::stack(&[asc_t(data), desc_t(data)], 0), //0
                 // Tensor::stack(&[desc_t(data), asc_t(data)], 0), //1
-            ], 1).transpose(0, 1).to_device(Cuda(0)), false); //0
+            ], 1).transpose(0, 1).to_device(Cuda(0)).into(), false); //0
             info!("pred_0=\n{pred_0}");
 
             let pred_1 = net_full.tho_forward(&Tensor::stack(&[
                 // Tensor::stack(&[asc_t(data), desc_t(data)], 0), //0
                 Tensor::stack(&[desc_t(data), asc_t(data)], 0), //1
-            ], 1).transpose(0, 1).to_device(Cuda(0)), false); //1
+            ], 1).transpose(0, 1).to_device(Cuda(0)).into(), false); //1
             info!("pred_1=\n{pred_1}");
 
-            assert!(pred_0.squeeze().double_value(&[]) < 0.5);
-            assert!(pred_1.squeeze().double_value(&[]) > 0.5);
+            assert!(pred_0.as_ref().squeeze().double_value(&[]) < 0.5);
+            assert!(pred_1.as_ref().squeeze().double_value(&[]) > 0.5);
 
             // results.push((
             //     pred_0.squeeze().double_value(&[]) < 0.5,
@@ -3440,7 +3451,7 @@ mod train_tests {
                 run_split_on_oom(
                     Reducer::new(batch.clone()),
                     |batch|{
-                        super::train_label_net(
+                        super::train_label_net::<AnyDims, DummyLabelBatch>(
                             &Arc::new(MotifsNetsSelectionApplicable::new(
                                 1,
                                 &Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?)),
@@ -3705,7 +3716,7 @@ mod train_tests {
         fs::create_dir_all(models_path.clone())?;
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _ = train_nets::final_net(&FinalNetParams::new(features, 0, 1)).build_tch_module(&vs_0.root())?;
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = train_nets::final_net(&FinalNetParams::new(features, 0, 1)).build_tch_module(&vs_0.root())?;
 
         vs_0.freeze();
         debug!("save_test_final_model: features={} vs_0.variables()={:?}", features, vs_0.variables());
@@ -3717,7 +3728,7 @@ mod train_tests {
         let label_node_params = LabelNetParams::new(channels, max_motif_nets, 0, 0, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams::new()));//TODO slices_len, motif_layers
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _ = LabelNetParams::label_net(&label_node_params).build_tch_module(&vs_0.root())?;
+        let _:Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&label_node_params).build_tch_module(&vs_0.root())?;
         vs_0.freeze();
         debug!("save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}", channels, max_motif_nets, max_motif_batches, motif_batch_size, vs_0.variables());
 
@@ -3728,9 +3739,9 @@ mod train_tests {
     fn save_test_motif_model(ws: &Arc<RwLock<Box<dyn Workspace>>>, channel: &str, motif_id: u32, window: u32, motif_node_params_run_id: RunId) -> Result<(), ThoosaError> {
 
         let mut vs_0 = VarStore::new(Cpu);
-        let _test_motif_model = train_nets::motif_node(&MotifNetParams::new(window, 1)).build_tch_module(&vs_0.root())?;
+        let _test_motif_model:Box<dyn ThoModule<AnyDims, AnyDims>> = train_nets::motif_node(&MotifNetParams::new(window, 1)).build_tch_module(&vs_0.root())?;
 
-        let test_motif_model = SeqBuilder::new(100, None)
+        let test_motif_model:Box<dyn ThoModule<AnyDims, AnyDims>> = SeqBuilder::new(100, None)
             .linear_s_with_conf(1, LinearConfig {
                 ws_init: init::Init::Const(1.0),
                 bs_init: None,
@@ -3791,7 +3802,7 @@ mod train_tests {
             10,
         )));
 
-        let mut data_batch = LoadingTensorsDataBatch::new(
+        let mut data_batch:LoadingTensorsDataBatch<AnyDims, AnyDims> = LoadingTensorsDataBatch::new(
             Rc::new(vec![
                 (0, vec![
                     Resource::new(0, 1, "aaa".to_string(), 10),
@@ -3805,8 +3816,8 @@ mod train_tests {
             3,
             loader,
             Cpu,
-            Some(Box::new(|t|{
-                t.pad([0,10-t.size()[1]], "constant", 0.)
+            Some(Box::new(|t:ThoTensor<AnyDims>|{
+                t.as_ref().pad([0,10-t.size()[1]], "constant", 0.).into()
             }))
         );
 

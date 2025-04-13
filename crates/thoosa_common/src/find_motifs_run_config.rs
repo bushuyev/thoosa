@@ -161,7 +161,7 @@ impl Applicable<&TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable
 
         match options {
             FindMotifsRunConfigOptions::Filter => {
-                Ok(t)
+                Ok(t.into())
             }
             FindMotifsRunConfigOptions::FilterUnfold => {
                 let input_length = t.size()[1];
@@ -172,7 +172,7 @@ impl Applicable<&TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable
 
                     debug!("Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-                    Ok(unfolded)
+                    Ok(unfolded.into())
                 } else {
                     Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
                 }
@@ -192,10 +192,10 @@ impl Applicable<&[SyncWrapper<Tensor>], (Tensor, Vec<i64>), ()> for FindMotifsAp
         }
 
         for tensor_wrapped in tensors_chunk {
-            match self.apply(tensor_wrapped.deref(), FindMotifsRunConfigOptions::FilterUnfold){
+            match self.apply(&tensor_wrapped.deref().into(), FindMotifsRunConfigOptions::FilterUnfold){
                 Ok(t) => {
                     slice_sizes.push(t.size()[1]);
-                    slices.push(t);
+                    slices.push(t.as_ref().shallow_clone());
 
                 }
                 Err(e) => {
@@ -213,7 +213,7 @@ impl Applicable<&[SyncWrapper<Tensor>], (Tensor, Vec<i64>), ()> for FindMotifsAp
         };
 
         Ok(
-            (tensor, slice_sizes) //num slices in each tensor,
+            (tensor.into(), slice_sizes) //num slices in each tensor,
         )
     }
 }

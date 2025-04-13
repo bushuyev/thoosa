@@ -590,7 +590,7 @@ where
 
         debug!("run_infer:={path:?} label=\n{t} t.view((1,-1))=\n{}",t.view((1, -1)));
 
-        let logits = final_applicable.apply(&Box::new(t), ())?; //batch(1 for infer) x classes
+        let logits = final_applicable.apply(&t.into(), ())?; //batch(1 for infer) x classes
         let probs = logits.softmax(-1, Float);
 
         debug!("run_infer:={path:?} logits=\n{logits} probs=\n{probs}");
