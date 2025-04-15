@@ -123,22 +123,29 @@ enum LabelNetApplicableAndNetE {
     }
 }
 
+#[derive(Clone, Debug)]
 enum LabelNetInputTensors {
-    MaxPadding(ThoTensor<Batch<ChannelsMotifsData>>),
-    FixedNumSlices(ThoTensor<Batch<ChannelsMotifsFlattenedData>>)
+    MaxPadding(ThoTensor<ChannelsMotifsData>),
+    FixedNumSlices(ThoTensor<ChannelsMotifsFlattenedData>)
 }
 
-impl <L:LabelNetInputTensorDims> From<LabelNetInputTensors> for ThoTensor<Batch<L>> {
+impl Dims for LabelNetInputTensors{}
+
+impl From<tch::Tensor> for LabelNetInputTensors {
+    fn from(tensor: tch::Tensor) -> Self {
+        todo!()
+    }
+}
+
+impl From<LabelNetInputTensors> for ThoTensor<ChannelsMotifsData> {
     fn from(value: LabelNetInputTensors) -> Self {
         todo!()
-//         match value {
-//             LabelNetInputTensors::MaxPadding(t) => {
-//                 t
-//             }
-//             LabelNetInputTensors::FixedNumSlices(t) => {
-//                 t
-//             }
-//         }
+    }
+}
+
+impl From<LabelNetInputTensors> for ThoTensor<ChannelsMotifsFlattenedData> {
+    fn from(value: LabelNetInputTensors) -> Self {
+        todo!()
     }
 }
 
@@ -162,8 +169,15 @@ impl LabelNetApplicableAndNetE {
         }
     }
 
-    pub fn apply<D:LabelNetInputTensorDims>(&self, t:&TCD) -> ThoTensor<Batch<D>> {
-        todo!()
+    pub fn apply(&self, t:&TCD) -> Result<LabelNetInputTensors, ThoosaError> {
+        match self {
+            LabelNetApplicableAndNetE::MaxPadding { applicable, .. } => {
+                applicable.apply(t, ()).map(|t|LabelNetInputTensors::MaxPadding(t))
+            }
+            LabelNetApplicableAndNetE::FixedNumSlices { applicable, .. } => {
+                applicable.apply(t, 100).map(|t|LabelNetInputTensors::FixedNumSlices(t))
+            }
+        }
     }
 }
 //
@@ -735,12 +749,13 @@ pub fn run_opt_train_label_nets(
             //                 LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>>(&vs.root()).unwrap()
             //             )
             //         }
-            //     };
+            //     }; jnJBB
+
 
 
             run_split_on_oom(
                 Reducer::new(
-                    LoadingTensorsDataBatch::new(
+                    LoadingTensorsDataBatch::<ChannelsData, LabelNetInputTensors, _, _>::new(
                      train_labels_resources.clone(),
                      valid_labels_resources.clone(),
                      run_config.common_training_args.batch_size as usize,
@@ -757,7 +772,7 @@ pub fn run_opt_train_label_nets(
                          //         // motifs_nets_selection_applicable_arc_in_batch.apply(&t, params.slices_len).expect("channels_motifs_nets/apply for FixedNumSlices failed")
                          //     }
                          // }
-                         applicable_and_net_enum.apply::<ChannelsMotifsData>(&t)
+                         applicable_and_net_enum.apply(&t).unwrap()
                          // match &applicable_and_net_enum {
                          //     LabelNetApplicableAndNetE::MaxPadding { .. } => {
                          //         LabelNetInputTensors::MaxPadding(applicable_and_net_enum.apply::<ChannelsMotifsData>(&t))

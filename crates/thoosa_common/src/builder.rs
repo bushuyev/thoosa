@@ -76,6 +76,75 @@ impl Node {
 
     pub fn build_tch_module_2<DI:Dims + Send + 'static, DO:Dims + Send + 'static, M:ThoModule<DI, DO>>(self, vs: &nn::Path) -> Result<M, ThoosaError>  {
         todo!()
+        // Ok(match self {
+        //     Node::Seq { elts, split_input } => {
+        //
+        //         let layers:Vec<Box<dyn ThoModule<AnyDims, AnyDims>>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, (i, node)| {
+        //             kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
+        //
+        //             Ok::<Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, ThoosaError>(kids)
+        //         })?;
+        //
+        //         MySequential::new(layers, split_input)
+        //
+        //     }
+        //
+        //     Node::Par {elts,  split, join } => {
+        //
+        //         let layers:Vec<Box<dyn ThoModule<DI, DO>>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule<DI, DO>>>, (i, node)| {
+        //             kids.push(node.build_tch_module(&(vs / format!("split_{i}")))?);
+        //             Ok::<Vec<Box<dyn ThoModule<DI, DO>>>, ThoosaError>(kids)
+        //         })?;
+        //
+        //         MyParallel::new(layers, split, join)
+        //     }
+        //
+        //     Node::Conv1d { kernel, in_channels, out_channels, config} => {
+        //         nn::conv1d(vs/ "cnn_1d", in_channels as i64, out_channels as i64, kernel as i64, config)
+        //     }
+        //
+        //     Node::Conv2d { kernel, in_channels, out_channels, config} => {
+        //         nn::conv2d(vs/ "cnn_2d", in_channels as i64, out_channels as i64, kernel as i64, config)
+        //     }
+        //
+        //     Node::BatchNorm { num_features, config } => {
+        //         MyBatchNorm1d::new(vs/"batch_norm", num_features, config)
+        //     }
+        //
+        //     Node::Linear {
+        //         in_feats, out_feats, config,
+        //         #[cfg(debug_assertions)]
+        //         descr
+        //     } => {
+        //         assert!(in_feats > 0);
+        //         assert!(out_feats > 0);
+        //
+        //         #[cfg(debug_assertions)]
+        //         debug!("Node::Linear: descr={descr} in_feats={:?}, out_feats={:?}", in_feats, out_feats);
+        //
+        //         my_linear(
+        //             vs/"linear", in_feats as i64, out_feats as i64, config.unwrap_or(LinearConfig::default()),
+        //             #[cfg(debug_assertions)]
+        //             descr
+        //         )?//TODO rename layer1
+        //     }
+        //
+        //     Node::MaxPool { kernel_size, stride, padding } => {
+        //         MyMaxPool1d::new(kernel_size as i64, stride as i64, padding as i64)
+        //     }
+        //
+        //     Node::AvgPool { kernel_size, stride, padding } => {
+        //         MyAvgPool1d::new(kernel_size as i64, stride as i64, padding as i64)
+        //     }
+        //
+        //     Node::Func { func } => {
+        //         MyFuncModule::new(func)
+        //     }
+        //
+        //     Node::Closure { cl: closure } => {
+        //         MyClosureModule::new(Box::new(closure))
+        //     }
+        // })
     }
 
     pub fn build_tch_module<DI:Dims + Send + 'static, DO:Dims + Send + 'static>(self, vs: &nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>  {
