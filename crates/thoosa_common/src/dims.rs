@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use tch::{Device, Tensor};
 
 
-pub trait Dims:Clone + Debug {}
+pub trait Dims:Send + Clone + Debug {}
 
 #[derive(Clone, Debug)]
 pub struct ChannelsData;
@@ -65,7 +65,7 @@ pub trait Dimensional {
 #[derive(Debug)]
 pub struct ThoTensor<D: Dims> {
     pub tensor: Tensor, // attach the actual tensor
-    _pd: PhantomData<D>,
+    pub _pd: PhantomData<D>,
 }
 
 impl <D:Dims> Dimensional for ThoTensor<D> {

@@ -308,16 +308,18 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyClosureModule{
 
 
 #[derive(Debug)]
-pub struct MyLinear {
+pub struct MyLinear<DI:Dims, DO:Dims> {
     pub ws: Tensor,
     pub bs: Option<Tensor>,
+    _pd_di:PhantomData<DI>,
+    _pd_do:PhantomData<DO>,
 
     #[cfg(debug_assertions)]
     descr:String,
 }
 
 
-impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyLinear{
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyLinear<DI, DO>{
 
     fn debug(&self) {
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
@@ -344,14 +346,14 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyLinear{
 }
 
 
-pub fn my_linear<'a, T: Borrow<Path<'a>>>(
+pub fn my_linear<'a, T: Borrow<Path<'a>>, DI:Dims, DO:Dims>(
     vs: T,
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
     #[cfg(debug_assertions)]
     descr:String,
-) -> Result<MyLinear, ThoosaError> {
+) -> Result<MyLinear<DI, DO>, ThoosaError> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
@@ -368,6 +370,8 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
 
     Ok(MyLinear {
         ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs,
+        _pd_di: Default::default(),
+        _pd_do: Default::default(),
         #[cfg(debug_assertions)]
         descr
     })

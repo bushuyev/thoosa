@@ -1435,7 +1435,7 @@ pub enum ListenerResponse {
 pub fn train<F, DI:Dims, DO:Dims>(
     device:&Device,
     data:&mut dyn DataBatch<DI>,
-    model:&Box<dyn ThoModule<Batch<DI>, DO>>,
+    net:&Box<dyn ThoModule<Batch<DI>, DO>>,
     loss_fn:LossFp,
     cycles: usize,
     mut opt: Optimizer,
@@ -1459,7 +1459,7 @@ pub fn train<F, DI:Dims, DO:Dims>(
 
         debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
 
-        let predicted_y = model.tho_forward(&x_t, true);
+        let predicted_y = net.tho_forward(&x_t, true);
         debug!("train: 1. cuda_mem={:?}",  cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
@@ -1488,7 +1488,7 @@ pub fn train<F, DI:Dims, DO:Dims>(
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = model.tho_forward(&x_t, true);
+                let pred_y = net.tho_forward(&x_t, true);
 
                 let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
