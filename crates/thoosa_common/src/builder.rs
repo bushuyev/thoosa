@@ -74,6 +74,10 @@ impl NthParams for NthConst {
 
 impl Node {
 
+    pub fn build_tch_module_2<DI:Dims + Send + 'static, DO:Dims + Send + 'static, M:ThoModule<DI, DO>>(self, vs: &nn::Path) -> Result<M, ThoosaError>  {
+        todo!()
+    }
+
     pub fn build_tch_module<DI:Dims + Send + 'static, DO:Dims + Send + 'static>(self, vs: &nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>  {
         Ok(match self {
             Node::Seq { elts, split_input } => {

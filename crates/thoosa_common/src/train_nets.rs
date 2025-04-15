@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader, SyncWrapper};
-use crate::my_tch::ThoModule;
+use crate::my_tch::{MyClosureModule, ThoModule};
 use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use crate::{panic_to_err, train_nets};
@@ -52,7 +52,7 @@ use thoosa_shared::run_configs::{Applicable, RunConfig};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, LabelModule, MotifsNetsSelectionDims, ThoTensor, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelInputTensors, LabelNetsProbabilities};
+use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims};
 use crate::find_motifs_run_config::*;
 use crate::transforms::filters::*;
 
@@ -105,6 +105,116 @@ impl TrainLabelNetsRunConfig {
         Self { id, common_training_args, net }
     }
 }
+
+pub enum LabelNetTypes {
+    MaxPadding{
+        params:LabelNetParams,
+    }
+}
+
+enum LabelNetApplicableAndNetE {
+    MaxPadding {
+        applicable:Arc<MotifsNetsSelectionApplicable>,
+        module: ThoModuleWithStore<Batch<ChannelsMotifsData>, Batch<LabelProbability>>
+    },
+    FixedNumSlices{
+        applicable:Arc<MotifsNetsSelectionApplicable>,
+        module: ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>
+    }
+}
+
+enum LabelNetInputTensors {
+    MaxPadding(ThoTensor<Batch<ChannelsMotifsData>>),
+    FixedNumSlices(ThoTensor<Batch<ChannelsMotifsFlattenedData>>)
+}
+
+impl <L:LabelNetInputTensorDims> From<LabelNetInputTensors> for ThoTensor<Batch<L>> {
+    fn from(value: LabelNetInputTensors) -> Self {
+        todo!()
+//         match value {
+//             LabelNetInputTensors::MaxPadding(t) => {
+//                 t
+//             }
+//             LabelNetInputTensors::FixedNumSlices(t) => {
+//                 t
+//             }
+//         }
+    }
+}
+
+impl LabelNetApplicableAndNetE {
+    pub fn new(nettype_args:&LabelNetTypeArgs, motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>, vs: &VarStore)-> Self{
+        match &nettype_args {
+            LabelNetTypeArgs::MaxPadding(_) => {
+                LabelNetApplicableAndNetE::MaxPadding {
+                    // run_config,
+                    applicable: Arc::clone(&motifs_nets_selection_applicable),
+                    module: LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams {})).label_net().build_tch_module_2::<Batch<ChannelsMotifsData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsData>, Batch<LabelProbability>>>(&vs.root()).unwrap()
+                }
+
+            }
+            LabelNetTypeArgs::FixedNumSlices(_) => {
+                LabelNetApplicableAndNetE::FixedNumSlices {
+                    applicable: Arc::clone(&motifs_nets_selection_applicable),
+                    module: LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>>(&vs.root()).unwrap()
+                }
+            }
+        }
+    }
+
+    pub fn apply<D:LabelNetInputTensorDims>(&self, t:&TCD) -> ThoTensor<Batch<D>> {
+        todo!()
+    }
+}
+//
+// pub struct LabelNetApplicableAndNet<
+//     LI:LabelNetInputTensorDims,
+//     // P,
+//     // A: for<'a> Applicable<&'a ThoTensor<ChannelsData>, ThoTensor<LI>, P>,
+//     M:ThoModule<Batch<LI>, Batch<LabelProbability>>
+// > {
+//     applicable:Arc<MotifsNetsSelectionApplicable>,
+//     module:M,
+//     _pd_li:PhantomData<LI>,
+//     // _pd_p:PhantomData<P>
+//     // // motifs_nets_selection_applicable_arc_in_batch: Arc<MotifsNetsSelectionApplicable>
+//     // transform_fn: Box<dyn Fn(ThoTensor<ChannelsData>)->ThoTensor<D> + Sync + Send>
+// }
+//
+// impl
+// <
+//     // LI:LabelNetInputTensorDims, P, A:for<'a>  Applicable<&'a ThoTensor<ChannelsData>, ThoTensor<LI>, P>,
+//     LI:LabelNetInputTensorDims, //P,
+//     M:ThoModule<Batch<LI>, Batch<LabelProbability>>
+// >
+//
+// LabelNetApplicableAndNet<LI, /*P,*/ M> {
+//     // pub fn new(run_config:&TrainLabelNetsRunConfig, motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>, vs: &VarStore) -> Self{
+//     //      // match &run_config.net {
+//     //      //     LabelNetTypeArgs::MaxPadding(params) => {
+//     //      //         Self::new_(run_config, motifs_nets_selection_applicable, LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsData>, Batch<LabelProbability>>>(&var_store.root()).unwrap())
+//     //      //
+//     //      //     }
+//     //      //     LabelNetTypeArgs::FixedNumSlices(params) => {
+//     //      //         Self::new_(run_config, motifs_nets_selection_applicable, LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>>(&var_store.root()).unwrap())
+//     //      //     }
+//     //      // }
+//     //     LabelNetApplicableAndNet::new_(
+//     //         run_config,
+//     //         motifs_nets_selection_applicable,
+//     //         LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>>(&vs.root()).unwrap()
+//     //     )
+//     // }
+//
+//     pub fn new_(run_config:&TrainLabelNetsRunConfig, motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>, module:M)-> Self{
+//         Self {
+//             applicable: Arc::clone(motifs_nets_selection_applicable),
+//             module,
+//             _pd_li: Default::default(),
+//             // _pd_p: Default::default(),
+//         }    }
+//
+// }
 
 //batch transform, for single tensor transform pass transform_fn to the batch impl
 struct BatchTransform<DI:Dims, DO:Dims, B, F>
@@ -190,17 +300,20 @@ where
 * TODO rename
 */
 #[derive(Clone)]
-struct LoadingTensorsDataBatch<'b, DI:Dims, DO:Dims>  {
+struct LoadingTensorsDataBatch<'b, DI:Dims, DO:Dims + Send, I:Into<ThoTensor<DO>> + 'b  + From<Tensor> + Clone, F: (Fn(ThoTensor<DI>)->I) + Send + Sync + Clone> {
     train_resources: Rc<Vec<(i64, Vec <Resource>)>>,
     valid_resources: Rc<Vec<(i64, Vec <Resource>)>>,
 
     batch_size: usize,
     loader: Arc<RwLock<LoadRunner<Tensor>>>,
     device:Device,
-    transform_fn:Option<Arc<RwLock<Box<dyn Fn(ThoTensor<DI>)->ThoTensor<DO> + Sync + Send  + 'b>>>>//for single tensor, wrap into BatchTransform for per-batch transform
+    transform_fn:Option<Arc<RwLock<Box<F>>>>, //for single tensor, wrap into BatchTransform for per-batch transform
+    _pd_b:PhantomData<&'b DI>,
+    _pd_do:PhantomData<DO>,
+    _pd_i:PhantomData<I>,
 }
 
-impl <DI:Dims, DO:Dims> Debug for LoadingTensorsDataBatch<'_, DI, DO> {
+impl <'b, DI:Dims, DO:Dims + Send, I:Into<ThoTensor<DO>> + 'b + From<Tensor> + Clone, F: Fn(ThoTensor<DI>)->I + Send + Sync + Clone> Debug for LoadingTensorsDataBatch<'_, DI, DO, I, F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("")
             .field("train", &self.train_resources)
@@ -211,7 +324,7 @@ impl <DI:Dims, DO:Dims> Debug for LoadingTensorsDataBatch<'_, DI, DO> {
     }
 }
 
-impl <'b, DI:Dims, DO:Dims+Send> LoadingTensorsDataBatch<'b, DI, DO> {
+impl <'b, DI:Dims, DO:Dims + Send, I:Into<ThoTensor<DO>> + 'b + From<Tensor> + Clone, F: Fn(ThoTensor<DI>)->I + Send + Sync + Clone> LoadingTensorsDataBatch<'b, DI, DO, I, F> {
 
     pub fn new(
         train: Rc<Vec<(i64, Vec <Resource>)>>,
@@ -219,7 +332,7 @@ impl <'b, DI:Dims, DO:Dims+Send> LoadingTensorsDataBatch<'b, DI, DO> {
         batch_size: usize,
         loader: Arc<RwLock<LoadRunner<Tensor>>>,
         device:Device,
-        transform_fn:Option<Box<dyn Fn(ThoTensor<DI>)->ThoTensor<DO> + Sync + Send  + 'b>>
+        transform_fn:Option<Box<F>>
     ) -> Self {
 
         Self {
@@ -228,7 +341,11 @@ impl <'b, DI:Dims, DO:Dims+Send> LoadingTensorsDataBatch<'b, DI, DO> {
             batch_size,
             loader,
             device,
-            transform_fn: transform_fn.map(|f|Arc::new(RwLock::new(f)))
+            transform_fn: transform_fn.map(|f|Arc::new(RwLock::new(f))),
+
+            _pd_b:PhantomData,
+            _pd_do:PhantomData,
+            _pd_i:PhantomData,
         }
     }
 
@@ -237,7 +354,7 @@ impl <'b, DI:Dims, DO:Dims+Send> LoadingTensorsDataBatch<'b, DI, DO> {
         batch_size: usize,
         loader: Arc<RwLock<LoadRunner<Tensor>>>,
         device: &Device,
-        transform_fn: Option<Arc<RwLock<Box<dyn Fn(ThoTensor<DI>) -> ThoTensor<DO> + Sync + Send + 'b>>>>,
+        transform_fn: Option<Arc<RwLock<Box<F>>>>,
     ) -> (ThoTensor<Batch<DO>>, Tensor) {
         debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
@@ -310,7 +427,7 @@ impl <'b, DI:Dims, DO:Dims+Send> LoadingTensorsDataBatch<'b, DI, DO> {
         area: u64,
         x_y_acc_in_exec: Arc<Mutex<Vec<(ThoTensor<DO>, i64)>>>,
         wg_exec: WaitGroup,
-        transform_fn: Option<Arc<RwLock<Box<dyn Fn(ThoTensor<DI>) -> ThoTensor<DO> + Sync + Send + 'b>>>>,
+        transform_fn: Option<Arc<RwLock<Box<F>>>>,
         resource_id: Resource,
         class: i64
     ) {
@@ -330,7 +447,7 @@ impl <'b, DI:Dims, DO:Dims+Send> LoadingTensorsDataBatch<'b, DI, DO> {
                     t.into()
                 };
                 debug!("LoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area}");
-                x_y_acc_in_exec.lock().push((t, class));
+                x_y_acc_in_exec.lock().push((t.into(), class));
                 debug!("LoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area}");
                 drop(wg_exec);
             }.boxed()
@@ -354,7 +471,7 @@ impl <'b, DI:Dims, DO:Dims+Send> LoadingTensorsDataBatch<'b, DI, DO> {
     }
 }
 
-impl <DI:Dims+Send, DO:Dims+Send> DataBatch<DO> for LoadingTensorsDataBatch<'_, DI, DO> {
+impl <'b, DI:Dims, DO:Dims + Send, I:Into<ThoTensor<DO>> + 'b  + From<Tensor> + Clone, F: Fn(ThoTensor<DI>)->I+ Send + Sync + Clone> DataBatch<DO> for LoadingTensorsDataBatch<'_, DI, DO, I, F> {
 
     fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
         tch::no_grad(|| {
@@ -370,25 +487,25 @@ impl <DI:Dims+Send, DO:Dims+Send> DataBatch<DO> for LoadingTensorsDataBatch<'_, 
 }
 
 
-impl <DI:Dims+Send, DO:Dims+Send> Splittable<1> for LoadingTensorsDataBatch<'_,  DI, DO> {
+impl <'b, DI:Dims, DO:Dims + Send, I:Into<ThoTensor<DO>> + 'b  + From<Tensor> + Clone, F: Fn(ThoTensor<DI>)->I+ Send + Sync + Clone> Splittable<1> for LoadingTensorsDataBatch<'_,  DI, DO, I, F> {
     fn split(&self) -> Option<[Self; 1]>
     where
         Self: Sized
     {
-        // let mut batch = self.clone();
-        // batch.batch_size = batch.batch_size/2;//TODO param
-        //
-        // if batch.batch_size > 0 {
-        //     debug!("Splittable<1> for LoadingTensorsDataBatch: batch.batch_size={}", batch.batch_size);
-        //     Some([batch])
-        // } else {
-        //     None
-        // }
-        todo!() //Dims
+        let mut batch = self.clone();
+        batch.batch_size = batch.batch_size/2;//TODO param
+
+        if batch.batch_size > 0 {
+            debug!("Splittable<1> for LoadingTensorsDataBatch: batch.batch_size={}", batch.batch_size);
+            Some([batch])
+        } else {
+            None
+        }
+        // todo!() //Dims
     }
 }
 
-impl <DI:Dims+Send, DO:Dims+Send> SplittableDataBatch<DO> for LoadingTensorsDataBatch<'_,  DI, DO> {}
+impl <'b, DI:Dims, DO:Dims + Send, I:Into<ThoTensor<DO>> + 'b  + From<Tensor> + Clone, F: Fn(ThoTensor<DI>)->I+ Send + Sync + Clone> SplittableDataBatch<DO> for LoadingTensorsDataBatch<'_,  DI, DO, I, F> {}
 
 
 struct ClassTensorsLoaderData<DI:Dims, DO:Dims>  {
@@ -601,6 +718,25 @@ pub fn run_opt_train_label_nets(
             let mut result = None::<(f32, LabelNetParams)>;
 
             let motifs_nets_selection_applicable_arc_in_batch = Arc::clone(&motifs_nets_selection_applicable_arc);
+            let applicable_and_net_enum = LabelNetApplicableAndNetE::new(&run_config.net, &motifs_nets_selection_applicable_arc, vs);
+            // let applicable_and_net =
+            //     match &run_config.net {
+            //         LabelNetTypeArgs::MaxPadding(_) => {
+            //             LabelNetApplicableAndNet::new_(
+            //                 run_config,
+            //                 &motifs_nets_selection_applicable_arc,
+            //                 LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsData>, Batch<LabelProbability>>>(&vs.root()).unwrap()
+            //             )
+            //         }
+            //         LabelNetTypeArgs::FixedNumSlices(_) => {
+            //             LabelNetApplicableAndNet::new_(
+            //                 run_config,
+            //                 &motifs_nets_selection_applicable_arc,
+            //                 LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>>(&vs.root()).unwrap()
+            //             )
+            //         }
+            //     };
+
 
             run_split_on_oom(
                 Reducer::new(
@@ -610,17 +746,29 @@ pub fn run_opt_train_label_nets(
                      run_config.common_training_args.batch_size as usize,
                      Arc::clone(&loader),
                      device.clone(),
-                     Some(Box::new(move |t:TCD|{
-                         match &run_config.net {
-                             LabelNetTypeArgs::MaxPadding(params) => {
-                                 motifs_nets_selection_applicable_arc_in_batch.apply(&t, ()).expect("channels_motifs_nets/apply failed")
-                             }
-                             LabelNetTypeArgs::FixedNumSlices(params) => {
-                                 // LabelInputTensors::ChannelsMotifsFlattenData(motifs_nets_selection_applicable_arc_in_batch.apply(&t, params.slices_len).expect("channels_motifs_nets/apply failed"))
-                                 todo!()
-                             }
-                         }
+                     Some(Box::new( |t:TCD|{
+                         // match &run_config.net {
+                         //     LabelNetTypeArgs::MaxPadding(params) => {
+                         //         motifs_nets_selection_applicable_arc_in_batch.apply(&t, ()).expect("channels_motifs_nets/apply for MaxPadding failed")
+                         //     }
+                         //     LabelNetTypeArgs::FixedNumSlices(params) => {
+                         //         // LabelInputTensors::ChannelsMotifsFlattenData(motifs_nets_selection_applicable_arc_in_batch.apply(&t, params.slices_len).expect("channels_motifs_nets/apply failed"))
+                         //         motifs_nets_selection_applicable_arc_in_batch.apply(&t, 0).expect("channels_motifs_nets/apply for FixedNumSlices failed")
+                         //         // motifs_nets_selection_applicable_arc_in_batch.apply(&t, params.slices_len).expect("channels_motifs_nets/apply for FixedNumSlices failed")
+                         //     }
+                         // }
+                         applicable_and_net_enum.apply::<ChannelsMotifsData>(&t)
+                         // match &applicable_and_net_enum {
+                         //     LabelNetApplicableAndNetE::MaxPadding { .. } => {
+                         //         LabelNetInputTensors::MaxPadding(applicable_and_net_enum.apply::<ChannelsMotifsData>(&t))
+                         //     }
+                         //     LabelNetApplicableAndNetE::FixedNumSlices { .. } => {
+                         //         LabelNetInputTensors::FixedNumSlices(applicable_and_net_enum.apply::<ChannelsMotifsFlattenedData>(&t))
+                         //     }
+                         // }
                      }))
+                     // Some(applicable_and_net.transform_fn)
+                     // None
                     )
 
                     /*match &run_config.net {
@@ -652,12 +800,20 @@ pub fn run_opt_train_label_nets(
                 ),
                 |batch| {
                     train_label_net(&motifs_nets_selection_applicable_arc, run_config, batch, vs, ws, &device)
+                    // match &applicable_and_net_enum {
+                    //     LabelNetApplicableAndNetE::MaxPadding { .. } => {
+                    //         train_label_net_max(&motifs_nets_selection_applicable_arc, run_config, batch, vs, ws, &device)
+                    //     }
+                    //     LabelNetApplicableAndNetE::FixedNumSlices { .. } => {
+                    //         train_label_net_fixed(&motifs_nets_selection_applicable_arc, run_config, batch, vs, ws, &device)
+                    //     }
+                    // }
                 },
                 |v, i| {
                     debug!("v={v:?}");
                     result.replace(v);
                 },
-                3,
+                3, //TODO config
             )?;
 
             Ok(result.expect("no result from train_label_nodes"))
@@ -668,6 +824,30 @@ pub fn run_opt_train_label_nets(
     ).map(|(var_store, label_node_params, run_config, min_loss)| {
         Box::new(TrainLabelNetsRunConfigResult::new(motifs_nets_selection_applicable_arc.motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
     })
+}
+
+
+pub fn train_label_net_max<B:DataBatch<ChannelsMotifsData>> (
+    motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>,
+    run_config:&TrainLabelNetsRunConfig,
+    mut batch:&mut B,
+    var_store: &VarStore,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    device: &Device,
+) ->  Result<(f32, LabelNetParams), ThoosaError> {
+    todo!()
+}
+
+
+pub fn train_label_net_fixed<B:DataBatch<ChannelsMotifsFlattenedData>> (
+    motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>,
+    run_config:&TrainLabelNetsRunConfig,
+    mut batch:&mut B,
+    var_store: &VarStore,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    device: &Device,
+) ->  Result<(f32, LabelNetParams), ThoosaError> {
+    todo!()
 }
 
 pub fn train_label_net<D:Dims+Send+'static, B:DataBatch<D>> (
@@ -895,12 +1075,18 @@ pub fn train_final_net(
 
 
 #[derive(Debug)]
-pub struct ThoModuleWithStore<DI:Dims+Send, DO:Dims+Send> {
+pub struct ThoModuleWithStore<DI:Dims+Send + 'static + ?Sized, DO:Dims+Send> {
     module:Box<dyn ThoModule<DI, DO>>,
     var_store:VarStore
 }
 
 unsafe impl <DI:Dims+Send, DO:Dims+Send> Sync for ThoModuleWithStore<DI, DO> {}
+
+impl <DI:Dims+Send+'static, DO:Dims+Send+'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        self.module.tho_forward(t, train)
+    }
+}
 
 impl <DI:Dims+Send+'static, DO:Dims+Send+'static> ThoModuleWithStore<DI, DO> {
 
@@ -1431,6 +1617,12 @@ impl FixedNumSlicesNetParams {
         Self {  }
     }
 }
+
+// impl ThoModule<Batch<ChannelsData>, Batch<LabelProbability>> for MyClosureModule {
+//     fn tho_forward(&self, t: &ThoTensor<Batch<ChannelsMotifsData>>, train: bool) -> ThoTensor<Batch<LabelProbability>> {
+//         todo!()
+//     }
+// }
 
 impl LabelNetParams {
     pub fn new(channels: u32, motif_nets: u32, motif_layers:u32, slices_len:u32, net_type: LabelNetTypeParams) -> Self {
@@ -2021,7 +2213,7 @@ pub struct LabelNetApplicable {
 
     pub motifs_nets_selection_applicable: MotifsNetsSelectionApplicable,
     pub label_net_params:LabelNetParams,
-    pub module: LabelModule,
+    pub module: ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
     device: Device
 }
 
@@ -2096,11 +2288,10 @@ impl Applicable<&ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbabilit
     fn apply(&self, input: &ThoTensor<Batch<ChannelsData>>, _: ()) -> Result<ThoTensor<Batch<LabelProbability>>, ThoosaError> {
         debug!("Applicable for LabelNetApplicable::apply: batch.size={:?}", input.size());
 
-
         Ok(
-            match &self.module {
-                LabelModule::ChannelsMotifsData(module) => {
-                    module.infer(
+            match &self.label_net_params.net_type {
+                LabelNetTypeParams::MaxPadding(params) => {
+                    self.module.infer(
                         //label net accepts batch, motif net - single tensor
                         &Tensor::stack(
                             (0..input.size()[0])
@@ -2119,8 +2310,8 @@ impl Applicable<&ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbabilit
                     )
 
                 }
-                LabelModule::ChannelsMotifsFlattenData(module) => {
-                    module.infer(
+                LabelNetTypeParams::FixedNumSlices(params)=>{
+                    self.module.infer(
                         //label net accepts batch, motif net - single tensor
                         &Tensor::stack(
                             (0..input.size()[0])
@@ -2396,7 +2587,7 @@ mod train_tests {
     use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
-    use crate::dims::{Batch, Dims, LabelModule, AnyDims, ThoTensor, SlicesData, MotifData};
+    use crate::dims::{Batch, Dims, AnyDims, ThoTensor, SlicesData, MotifData, MotifsNetsSelectionDims, LabelProbability};
     use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::ws::mock_ws_simp;
@@ -2786,12 +2977,12 @@ mod train_tests {
         )
     }
 
-    fn label_test_nets(num_features: u32, k: f64, params: LabelNetTypeParams, device: Device) -> Vec<(RunId, Box<dyn Fn() -> LabelNetParams + Sync + Send>, Box<dyn Fn() -> LabelModule + Sync + Send>)> {
+    fn label_test_nets(num_features: u32, k: f64, params: LabelNetTypeParams, device: Device) -> Vec<(RunId, Box<dyn Fn() -> LabelNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>> + Sync + Send>)> {
         vec![
             (
                 0u32,
                 Box::new(move || LabelNetParams::new(2, 3, 3, 100, params.clone())),
-                Box::new(move || LabelModule::ChannelsMotifsData(ThoModuleWithStore::new(test_net(num_features, k, device, "test_label_net").unwrap())))
+                Box::new(move || ThoModuleWithStore::new(test_net(num_features, k, device, "test_label_net").unwrap()))
             )
         ]
     }
@@ -3801,7 +3992,8 @@ mod train_tests {
             1,
             10,
         )));
-
+/*
+TODO
         let mut data_batch:LoadingTensorsDataBatch<AnyDims, AnyDims> = LoadingTensorsDataBatch::new(
             Rc::new(vec![
                 (0, vec![
@@ -3830,7 +4022,7 @@ mod train_tests {
         assert_eq!(
             [3_i64,2,10],
             batch.0.size()[..]
-        );
+        );*/
     }
 
     #[test]

@@ -1,80 +1,60 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use tch::{Device, Tensor};
-use crate::train_nets::ThoModuleWithStore;
 
-pub trait Dims:Debug {}
 
-#[derive(Debug)]
+pub trait Dims:Clone + Debug {}
+
+#[derive(Clone, Debug)]
 pub struct ChannelsData;
 impl Dims for ChannelsData {}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ChannelsSlicesData;
 impl Dims for ChannelsSlicesData {}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SlicesData;//sliced data [slices, slice_width]
 impl Dims for SlicesData {}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MotifData;//motif net applied to sliced data [slices, slice_width] - distances between motif and a slice
 impl Dims for MotifData {}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ChannelsMotifsData;
 impl Dims for ChannelsMotifsData{}
 impl LabelNetInputTensorDims for ChannelsMotifsData{}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ChannelsMotifsFlattenedData;
 impl Dims for ChannelsMotifsFlattenedData {}
 impl LabelNetInputTensorDims for ChannelsMotifsFlattenedData {}
 
-trait LabelNetInputTensorDims:Dims{}
+pub trait LabelNetInputTensorDims:Dims{}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LabelProbability;
 impl Dims for LabelProbability {}//[1] probability of an input belonging to certain labeled class
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LabelNetsProbabilities;
 impl Dims for LabelNetsProbabilities {}//[num of label nets x 1] probabilities of an input belonging to corresponding label produces by all label nets
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LabelsProbabilities;
 impl Dims for LabelsProbabilities {}//[num of labels, 1] probabilities of an input belonging to target labeled classes
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum MotifsNetsSelectionDims {
     ChannelsMotifsData(ChannelsMotifsData),
     ChannelsMotifsFlattenData(ChannelsMotifsFlattenedData)
 }
 impl Dims for MotifsNetsSelectionDims {}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Batch<D:Dims>(D);
 impl <D:Dims> Dims for Batch<D> {}
-
-#[derive(Debug)]
-pub enum LabelModule {
-    ChannelsMotifsData(ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>),
-    ChannelsMotifsFlattenData(ThoModuleWithStore<ChannelsMotifsFlattenedData, Batch<LabelProbability>>),
-}
-impl Dimensional for LabelModule {
-    type Dimensions = MotifsNetsSelectionDims;
-}
-
-
-#[derive(Debug)]
-pub enum LabelInputTensors {
-    ChannelsMotifsData(ThoTensor<ChannelsMotifsData>),
-    ChannelsMotifsFlattenData(ThoTensor<ChannelsMotifsFlattenedData>),
-}
-
-impl Dimensional for LabelInputTensors {
-    type Dimensions = MotifsNetsSelectionDims;
-}
 
 
 pub trait Dimensional {
@@ -90,6 +70,15 @@ pub struct ThoTensor<D: Dims> {
 
 impl <D:Dims> Dimensional for ThoTensor<D> {
     type Dimensions = D;
+}
+
+impl <D:Dims> Clone for ThoTensor<D> {
+    fn clone(&self) -> Self {
+        ThoTensor {
+            tensor: self.tensor.shallow_clone(),
+            _pd: PhantomData,
+        }
+    }
 }
 
 
@@ -158,6 +147,6 @@ impl <D:Dims> Display for ThoTensor<D> {
 }
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AnyDims {}
 impl Dims for AnyDims {}
