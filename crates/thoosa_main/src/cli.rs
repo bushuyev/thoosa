@@ -1633,7 +1633,7 @@ mod cli_tests {
                             net: {
                                 FixedNumSlices: {
                                     num_layers: "4",
-                                    slices_len: "400"
+                                    slices_len: "333"
                                 }
                             }
                         }"#,
@@ -1948,7 +1948,7 @@ mod cli_tests {
                             net: {
                                 FixedNumSlices: {
                                     num_layers: "2",
-                                    slices_len: "100"
+                                    slices_len: "333"
                                 }
                             }
                         }"#,
