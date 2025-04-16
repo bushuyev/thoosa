@@ -35,6 +35,7 @@ use torch_sys::*;
 
 use crate::my_tch::{LossFp, ThoModule};
 use thoosa_shared::opt_rng::opt_rnd;
+use crate::dims::{Batch, Dims, ThoTensor};
 
 pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -418,7 +419,6 @@ pub struct Reducer<T> {
 }
 
 impl <T> Reducer<T> {
-
     pub fn new(value: T) -> Self {
         Self { value:Some(value) }
     }
@@ -571,6 +571,7 @@ pub mod tests {
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{add_prefix, add_range_or_value, cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
     use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunConfig, RunId};
+    use crate::dims::{Dims, AnyDims};
     use crate::find_motifs_run_config::InputFilter;
 
     #[ctor::ctor]
@@ -1206,6 +1207,8 @@ pub mod tests {
         )
     }
 
+
+
     // #[test]
     fn test_mem_track()->Result<(), ThoosaError>{//TODO util
         let mut free_mem_0: usize = 0;
@@ -1229,7 +1232,7 @@ pub mod tests {
         let motif_node_params = MotifNetParams::from_file(&PathBuf::from("/tmp/ws_test/models/motifs/0/31211_366.json"))?;
 
         let inst_0 = Instant::now();
-        let mut module = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cpu)?;
+        let mut module:ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cpu)?;
         for i in 0..100 {
             module.set_device(Cuda(0));
             module.set_device(Cpu);
@@ -1240,7 +1243,7 @@ pub mod tests {
         let inst_0 = Instant::now();
 
         for i in 0..100 {
-            let mut module = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cuda(0))?;
+            let mut module:ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cuda(0))?;
         }
 
         info!("cuda load done in {}", inst_0.elapsed().as_millis());
@@ -1405,13 +1408,13 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
-pub trait DataBatch {
+pub trait DataBatch<D:Dims>  {
     /// returns (inputs, labels)
-    fn train_batch(&self) -> (Tensor, Tensor);//TODO change to Box<Tensor>
-    fn valid_batch(&self) -> (Tensor, Tensor);
+    fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
+    fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
 }
 
-pub trait SplittableDataBatch: DataBatch + Splittable<1> + Debug {
+pub trait SplittableDataBatch<D:Dims>: DataBatch<D> + Splittable<1> + Debug {
 
 }
 
@@ -1429,17 +1432,17 @@ pub enum ListenerResponse {
     Nope
 }
 
-pub fn train<F>(
+pub fn train<F, DI:Dims, DO:Dims>(
     device:&Device,
-    data:&mut dyn DataBatch,
-    model:&Box<dyn ThoModule>,
+    data:&mut dyn DataBatch<DI>,
+    net:&Box<dyn ThoModule<Batch<DI>, DO>>,
     loss_fn:LossFp,
     cycles: usize,
     mut opt: Optimizer,
     x_f:F,
     mut listener: Option<&mut dyn TrainListener>
 ) -> Result<f32, ThoosaError>
-    where F:Fn(Tensor)->Tensor {
+    where F:Fn(ThoTensor<Batch<DI>>)->ThoTensor<Batch<DI>> {
 
     debug!("train: device={:?} cycles={}", device, cycles);
     debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
@@ -1456,17 +1459,17 @@ pub fn train<F>(
 
         debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
 
-        let predicted_y = model.tho_forward(&x_t, true);
+        let predicted_y = net.tho_forward(&x_t, true);
         debug!("train: 1. cuda_mem={:?}",  cuda_mem());
         trace!("train: x_t=\n{x_t}");
-        drop(x_t);
+        x_t.drop();
         // unsafe { at_autocast_clear_cache(); }
 
-        let loss = loss_fn(&predicted_y, &expected_y);
+        let loss = loss_fn(predicted_y.as_ref(), &expected_y);
 
         debug!("train: 2. cuda_mem={:?}",  cuda_mem());
         trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}", optimizer_mem_size(&opt));
-        drop(predicted_y);
+        predicted_y.drop();
         drop(expected_y);
         debug!("train: 2.1 cuda_mem={:?}",  cuda_mem());
         let t1 = Instant::now();
@@ -1485,9 +1488,9 @@ pub fn train<F>(
 
                 let x_t = x_f(x_t_0);
 
-                let pred_y = model.tho_forward(&x_t, true);
+                let pred_y = net.tho_forward(&x_t, true);
 
-                let valid_loss = loss_fn(&pred_y, &y_t);
+                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
 
 
