@@ -3131,6 +3131,7 @@ mod train_tests {
         debug!("map={map:?}");
     }
 
+    //TODO split into tests for FixedNumSlices and MaxPadding
     #[test]
     fn test_train_label() -> Result<(), ThoosaError> {
         set_max_level(Debug);
@@ -3571,8 +3572,6 @@ mod train_tests {
         Ok(())
     }
 
-
-
     #[test]
     fn test_train_oom()->Result<(), ThoosaError>{
 
@@ -3581,15 +3580,34 @@ mod train_tests {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
 
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 1000, 1000)));
+        let ws = Arc::new(RwLock::new(
+            WsMockBuilder::new(None, CHANNELS as u32, 100, 1000u32)
+                .with_motif_nets(
+                    vec![
+                        vec![ //channel 0
+                              motif_test_net(100, 1., Cpu),
+                              motif_test_net(100, 1., Cpu),
+                              motif_test_net(100, 1., Cpu),
+                              motif_test_net(100, 1., Cpu),
+                              motif_test_net(100, 1., Cpu),
+                        ],
+                        vec![ //channel 0
+                              motif_test_net(100, 1., Cpu),
+                              motif_test_net(100, 1., Cpu),
+                              motif_test_net(100, 1., Cpu),
+                        ]
+                    ]
+                )
+                .build()
 
-        const BATCH_SIZE:usize = 1;
+
+        ));
+
+
+        const BATCH_SIZE:usize = 10;
         const CHANNELS:usize = 2;
         const MAX_MOTIF_NETS:usize = 5;
 
-        let channel_motif_nets = [3,2,1];//TODO
-
-        // let mut rnd = thread_rng();
 
         const TRAIN_LABELS: [bool; BATCH_SIZE] = build_labels::<BATCH_SIZE>();
         const VALID_LABELS: [bool; BATCH_SIZE] = build_labels::<BATCH_SIZE>();
@@ -3635,55 +3653,70 @@ mod train_tests {
 
         let batch = DummyLabelBatch::new();
 
-        //TODO
-        // let r= opt_train(
-        //     &OptConfig::new(10, 3),
-        //     |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, listener: &mut dyn TrainListener|{
-        //         let mut r = None::<(f32, LabelNetParams)>;
-        //         run_split_on_oom(
-        //             Reducer::new(batch.clone()),
-        //             |batch|{
-        //                 super::train_label_net::<AnyDims, DummyLabelBatch>(
-        //                     &Arc::new(MotifsNetsSelectionApplicable::new(
-        //                         1,
-        //                         &Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?)),
-        //                         &ws,
-        //                         Cpu
-        //                     )),
-        //                     run_config,
-        //                     batch, //max_nets
-        //                     &VarStore::new(Cuda(0)),
-        //                     &ws,
-        //                     &Cuda(0)
-        //                 )
-        //             },
-        //             |v, i|{
-        //                 debug!("v={v:?}");
-        //                 r.replace(v);
-        //             },
-        //             3
-        //         )?;
-        //
-        //         Ok(r.unwrap())
-        //     },
-        //     &TrainLabelNetsRunConfigRangeOrValue {
-        //         id: None,
-        //         common_training_args: CommonTrainingRunConfigRangeOrValue {
-        //             cycles: 10.into(),
-        //             batch_size: 10.into(),
-        //             lr: (0.01..0.1).into(),
-        //             max_loss: 0.1f32.into(),
-        //             opt_max_evals: 10.into(),
-        //             opt_n_init: 3.into(),
-        //         },
-        //         net: LabelNetTypeArgsRangeOrValue::MaxPadding(MaxPaddingNetArgsRangeOrValue{ num_layers: 3.into() }).into(),
-        //     }.opt_run_configs(),
-        //     Cpu,
-        //     "label"
-        // );
+        let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
+            1,
+            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![
+                vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
+                vec![(0, 1.0), (1, 1.0), (2, 1.0)]
+            ]))),
+            &ws,
+            Cpu
+        ));
 
-        // debug!("test_train_oom: r={r:?}");
+        let run_config = TrainLabelNetsRunConfig::new(
+            Some(1),
+            CommonTrainingRunConfig::new(10, BATCH_SIZE as u32, 0.1, 0.1, 10, 3),
+            LabelNetTypeArgs::MaxPadding(MaxPaddingNetArgs::new(3))
+        );
 
+        let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
+            &run_config.net, &motifs_nets_selection_applicable_arc,  &ws
+        );
+
+        let r= opt_train(
+            &OptConfig::new(10, 3),
+            |vs:&VarStore, run_config:&TrainLabelNetsRunConfig, listener: &mut dyn TrainListener|{
+                let mut r = None::<(f32, LabelNetParams)>;
+                run_split_on_oom(
+                    Reducer::new(batch.clone()),
+                    |batch|{
+                        super::train_label_net(
+                            &applicable_and_net_enum.module(&vs)?,
+                            run_config,
+                            batch, //max_nets
+                            &VarStore::new(Cuda(0)),
+                            &ws,
+                            &Cuda(0)
+                        )
+                    },
+                    |v, i|{
+                        debug!("v={v:?}");
+                        r.replace((v, LabelNetParams::default()));
+                    },
+                    3
+                )?;
+
+                Ok(r.unwrap())
+            },
+            &TrainLabelNetsRunConfigRangeOrValue {
+                id: None,
+                common_training_args: CommonTrainingRunConfigRangeOrValue {
+                    cycles: 10.into(),
+                    batch_size: 10.into(),
+                    lr: (0.01..0.1).into(),
+                    max_loss: 0.1f32.into(),
+                    opt_max_evals: 10.into(),
+                    opt_n_init: 3.into(),
+                },
+                net: LabelNetTypeArgsRangeOrValue::MaxPadding(MaxPaddingNetArgsRangeOrValue{ num_layers: 3.into() }).into(),
+            }.opt_run_configs(),
+            Cuda(0),
+            "label"
+        );
+
+        debug!("test_train_oom: r={r:?}");
+
+        assert!(r.is_ok());
 
         Ok(())
     }
