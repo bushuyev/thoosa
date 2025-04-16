@@ -122,15 +122,15 @@ pub trait RunConfig:Debug {
     fn type_name()->&'static str;
 }
 
-pub trait Applicable<S, R, O>:Debug {
-    fn apply(&self, input:S, options: O) ->Result<R, ThoosaError>;
+pub trait Applicable<In, Out, P>:Debug {
+    fn apply(&self, input: In, params: P) ->Result<Out, ThoosaError>;
 }
 
+//TODO move from_properties_map__ into here + all run config meta data id, description, date, running time
 pub struct RunConfigHolder<R:RunConfig> {
     id:RunId,
     run_config: R,
     descr:String,
-    // ran_on:std::time::SystemTime TODO for each run X resource
 }
 
 impl<R:RunConfig> RunConfigHolder<R> {

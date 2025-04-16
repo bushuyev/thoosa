@@ -1,6 +1,7 @@
 use core::fmt;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
@@ -18,48 +19,53 @@ use thoosa_shared::ThoosaError;
 use crate::builder::Node;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
+use crate::dims::{Dims, AnyDims, ThoTensor};
 use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
 use crate::utils::*;
 
 #[derive(Debug)]
-pub struct MySequential {
-    layers: Vec<Box<dyn ThoModule>>,
-    split_input:Option<(i64, i64)> //dim features
+pub struct MySequential<DI:Dims, DO:Dims> {
+    layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>,
+    split_input:Option<(i64, i64)>, //dim features
+    _pd_do:PhantomData<DO>,
+    _pd_di:PhantomData<DI>
 }
 
-impl MySequential {
+impl <DI:Dims, DO:Dims> MySequential<DI, DO> {
 
     pub fn new(
-        layers: Vec<Box<dyn ThoModule>>,
+        layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>,
         split_input: Option<(i64, i64)>
     ) -> Self {
         Self {
             layers ,
-            split_input
+            split_input,
+            _pd_do: PhantomData,
+            _pd_di: PhantomData,
         }
     }
 
-    fn run_layers(&self, t: &Tensor, train: bool) -> Tensor {
-        debug!("MySequential::forward: t.size={:?} device={:?} self.layers[0]={:?}", t.size(), t.device(), self.layers[0]);
+    fn run_layers(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        debug!("MySequential::forward: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.device(), self.layers[0]);
 
-        let output_t = self.layers[0].tho_forward(t, train);
+        let output_t = self.layers[0].tho_forward(&t.as_ref().shallow_clone().into(), train);
 
         self.layers.iter().skip(1).enumerate().fold(output_t, |output_t, (i, layer)| {
             debug!("MySequential::layer={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.device(), layer);
 
             layer.tho_forward(&output_t, train)
-        })
+        }).as_ref().shallow_clone().into()
     }
 }
 
-impl ThoModule for MySequential {
+impl <DI:Dims+Send, DO:Dims+Send> ThoModule<DI, DO> for MySequential<DI, DO> {
     fn debug(&self) {
         for l in &self.layers {
             l.debug();
         }
     }
 
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
         if self.layers.is_empty() {
             t.shallow_clone()
         } else {
@@ -68,14 +74,15 @@ impl ThoModule for MySequential {
                     self.run_layers(t, train)
                 }
                 Some((dim, num_features)) => {
-                    let splits= t.split(num_features, dim);
+                    let splits= t.as_ref().split(num_features, dim);
                     debug!("MySequential::tho_forward splits.sizes={:?} num_features={num_features} dim={dim}", splits.iter().map(|t|t.size()).collect::<Vec<_>>());
 
                     let split_r = Tensor::concat(splits.into_iter().enumerate().filter_map(| (i, split) | {
                         if split.size()[dim as usize] == num_features {
-                            let r = self.run_layers(&split, train);
-                            debug!("MySequential::tho_forward i={i} split={:?} r.size()={:?}", split.size(), r.size());
-                            Some(r)
+                            debug!("MySequential::tho_forward i={i} split={:?}", split.size());
+                            let r = self.run_layers(&split.into(), train);
+                            debug!("MySequential::tho_forward i={i} r.size()={:?}",r.size());
+                            Some(r.as_ref().shallow_clone())
                         } else {
                             //TODO ok skipping?
                             debug!("MySequential::tho_forward skipping i={i} split.size={:?}", split.size());
@@ -89,7 +96,7 @@ impl ThoModule for MySequential {
 
                     debug!("MySequential::tho_forward split_r.size()={:?} mean_r.size()={:?}", split_r.size(), mean_r.size());
 
-                    mean_r
+                    mean_r.into()
                 }
             }
 
@@ -97,13 +104,13 @@ impl ThoModule for MySequential {
     }
 }
 
-pub struct MyParallel {
-    layers: Vec<Box<dyn ThoModule>>,
+pub struct MyParallel<DI:Dims, DO:Dims> {
+    layers: Vec<Box<dyn ThoModule<DI, DO>>>,
     split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>,
     join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>,
 }
 
-impl Debug for MyParallel {
+impl <DI:Dims, DO:Dims> Debug for MyParallel<DI, DO> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("")
             .field("layers", &self.layers)
@@ -112,9 +119,9 @@ impl Debug for MyParallel {
 }
 
 
-impl MyParallel {
+impl <DI:Dims, DO:Dims> MyParallel<DI, DO> {
 
-    pub fn new(layers: Vec<Box<dyn ThoModule>>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>) -> Self {
+    pub fn new(layers: Vec<Box<dyn ThoModule<DI, DO>>>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>) -> Self {
 
         assert!(layers.len() > 0, "layers len > 0");
 
@@ -126,36 +133,36 @@ impl MyParallel {
     }
 }
 
-impl ThoModule for MyParallel{
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyParallel<DI, DO>{
     fn debug(&self) {
         for l in &self.layers{
             l.debug();
         }
     }
 
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
-            (self.split)(t).into_iter().zip(self.layers.iter()).map(|(t, net)| {
-                net.tho_forward(&t, train)
+            (self.split)(t.as_ref()).into_iter().zip(self.layers.iter()).map(|(t, net)| {
+                net.tho_forward(&t.into(), train).as_ref().shallow_clone()
             }).collect::<Vec<Tensor>>()
         );
 
         debug!("MyParallel::forward: t={:?}", t.size());
 
-        t
+        t.into()
     }
 }
 
-impl ThoModule for Conv1D {
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        self.forward(t)
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for Conv1D {
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        self.forward(t.as_ref()).into()
     }
 }
 
-impl ThoModule for Conv2D {
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        self.forward(t)
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for Conv2D {
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        self.forward(t.as_ref()).into()
     }
 }
 
@@ -180,9 +187,9 @@ impl MyMaxPool1d {
 }
 
 
-impl ThoModule for MyMaxPool1d {
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        t.max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode)
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyMaxPool1d {
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        t.as_ref().max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode).into()
     }
 }
 
@@ -199,9 +206,9 @@ impl MyBatchNorm1d {
     }
 }
 
-impl ThoModule for MyBatchNorm1d{
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        self.batch_norm.forward_t(t, train)
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyBatchNorm1d{
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        self.batch_norm.forward_t(t.as_ref(), train).into()
     }
 }
 
@@ -226,19 +233,19 @@ impl MyAvgPool1d {
 }
 
 
-impl ThoModule for MyAvgPool1d{
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        t.avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad)
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyAvgPool1d{
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        t.as_ref().avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad).into()
     }
 }
 
-pub trait ThoModule:Debug  + Send  {
+pub trait ThoModule<DI:Dims, DO:Dims>:Debug  + Send  {
     fn debug(&self){}
     fn mem_size(&self) -> usize {//TODO
         0
     }
 
-    fn tho_forward(&self, t:&Tensor, train: bool) -> Tensor;
+    fn tho_forward(&self, t:&ThoTensor<DI>, train: bool) -> ThoTensor<DO>;
 
 }
 
@@ -268,9 +275,9 @@ impl  MyFuncModule {
 }
 
 
-impl ThoModule for MyFuncModule{
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        (self.func)(t)
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyFuncModule{
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        (self.func)(t.as_ref()).into()
     }
 }
 
@@ -293,38 +300,40 @@ impl Debug for MyClosureModule {
 }
 
 
-impl ThoModule for MyClosureModule{
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
-        (self.func)(t)
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyClosureModule{
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        (self.func)(t.as_ref()).into()
     }
 }
 
 
 #[derive(Debug)]
-pub struct MyLinear {
+pub struct MyLinear<DI:Dims, DO:Dims> {
     pub ws: Tensor,
     pub bs: Option<Tensor>,
+    _pd_di:PhantomData<DI>,
+    _pd_do:PhantomData<DO>,
 
     #[cfg(debug_assertions)]
     descr:String,
 }
 
 
-impl ThoModule for MyLinear{
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyLinear<DI, DO>{
 
     fn debug(&self) {
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
     }
 
-    fn tho_forward(&self, t: &Tensor, train: bool) -> Tensor {
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
 
         #[cfg(debug_assertions)] {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
             debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()), t.device());
             debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}", self.ws.size(), self.bs.as_ref().map(|bs|bs.size()), t.size());
         }
-        match t.f_linear(&self.ws, self.bs.as_ref()) {//TODO error
-            Ok(t) => t,
+        match t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {//TODO error
+            Ok(t) => t.into(),
             Err(e) => {
                 error!("{:?}", e);
                 #[cfg(debug_assertions)]
@@ -337,14 +346,14 @@ impl ThoModule for MyLinear{
 }
 
 
-pub fn my_linear<'a, T: Borrow<Path<'a>>>(
+pub fn my_linear<'a, T: Borrow<Path<'a>>, DI:Dims, DO:Dims>(
     vs: T,
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
     #[cfg(debug_assertions)]
     descr:String,
-) -> Result<MyLinear, ThoosaError> {
+) -> Result<MyLinear<DI, DO>, ThoosaError> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
@@ -361,6 +370,8 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>>(
 
     Ok(MyLinear {
         ws: vs.f_var("weight", &[out_dim, in_dim], c.ws_init)?, bs,
+        _pd_di: Default::default(),
+        _pd_do: Default::default(),
         #[cfg(debug_assertions)]
         descr
     })
@@ -445,6 +456,7 @@ mod tch_tests {
 
     use crate::builder::{clc_conv1d_out, Node};
     use crate::builder::SeqBuilder;
+    use crate::dims::{Dims, AnyDims, Batch};
     use crate::my_tch::ThoModule;
     use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
     use crate::utils;
@@ -468,9 +480,9 @@ mod tch_tests {
 
         let vs = nn::VarStore::new(Device::Cpu);
 
-        let net = seq.build_tch_module(&vs.root()).unwrap();
+        let net:Box<dyn ThoModule<AnyDims, AnyDims>> = seq.build_tch_module(&vs.root()).unwrap();
 
-        let y_p = net.tho_forward(&tch::Tensor::randn([10, 2], (Kind::Float, Device::Cpu)), true);
+        let y_p = net.tho_forward(&Tensor::randn([10, 2], (Float, Cpu)).into(), true);
 
         assert_eq!(vec![10,2], y_p.size())
     }
@@ -500,10 +512,10 @@ mod tch_tests {
 
         let mut vs = nn::VarStore::new(Cpu);
 
-        let net = main.build_tch_module(&vs.root())?;
+        let net:Box<dyn ThoModule<AnyDims, AnyDims>> = main.build_tch_module(&vs.root())?;
 
 
-        let y_p = net.tho_forward(&tch::Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)), true);
+        let y_p = net.tho_forward(&Tensor::randn([10, 2, 10], (Kind::Float, Device::Cpu)).into(), true);
 
 
         assert_eq!(vec![10,2], y_p.size());
@@ -543,7 +555,7 @@ mod tch_tests {
             &mut crate::simp::DummyDs::new(
                 t_0.shallow_clone(),
                 t_1.shallow_clone(),
-            ) as &mut dyn DataBatch,
+            ) as &mut dyn DataBatch<AnyDims>,
             &net_0,
             |pred: &Tensor, target: &Tensor| {
                 // pred.cross_entropy_loss::<Tensor>(&target.totype(Kind::Int64), None, Reduction::Mean, -100, 0.0)
@@ -563,12 +575,12 @@ mod tch_tests {
 
 
 
-        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n as i64));
-        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n as i64));
+        let batch_0 = Tensor::stack((0..10).map(|_| t_0.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n as i64)).into();
+        let batch_1 = Tensor::stack((0..10).map(|_| t_1.shallow_clone()).collect::<Vec<Tensor>>().as_slice(), 0).view((10, n as i64)).into();
 
         debug!("net t_0={:?}, t_1={:?}",
-             from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true).view(-1)),
-             from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true).view(-1))
+             from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true).as_ref().view(-1)),
+             from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true).as_ref().view(-1))
         );
 
         vs_0.freeze();
@@ -580,18 +592,19 @@ mod tch_tests {
         vs_1.load("/tmp/test_vars.safetensors")?;
 
         debug!("net 1 t_0={:?}, t_1={:?}",
-             from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true).view(-1)),
-             from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true).view(-1))
+             from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true).as_ref().view(-1)),
+             from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true).as_ref().view(-1))
         );
 
-        assert_eq!(from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true).view(-1)), from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true).view(-1)));
-        assert_eq!(from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true).view(-1)), from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true).view(-1)));
+        assert_eq!(from::<Vec<f32>>(&net_0.tho_forward(&batch_0, true).as_ref().view(-1)), from::<Vec<f32>>(&net_1.tho_forward(&batch_0, true).as_ref().view(-1)));
+        assert_eq!(from::<Vec<f32>>(&net_0.tho_forward(&batch_1, true).as_ref().view(-1)), from::<Vec<f32>>(&net_1.tho_forward(&batch_1, true).as_ref().view(-1)));
 
 
         Ok(())
     }
 
-    fn test_net(vs: &VarStore, num_features: u32) -> Result<Box<dyn ThoModule>, ThoosaError> {
+
+    fn test_net(vs: &VarStore, num_features: u32) -> Result<Box<dyn ThoModule<Batch<AnyDims>, AnyDims>>, ThoosaError> {
         SeqBuilder::new(num_features, None)
             .batch_norm(BatchNormConfig::default())
             .closure(Box::new(|t:&Tensor|{
@@ -678,7 +691,7 @@ mod tch_tests {
         let vs_0 = VarStore::new(Cpu);
 
         let node = test_node();
-        let _my_mod = node.build_tch_module(&vs_0.root())?;
+        let _my_mod:Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs_0.root())?;
 
         debug!("variables={:?}", vs_0.variables());
 
@@ -689,7 +702,7 @@ mod tch_tests {
 
         vs_0.save("/tmp/test.safetensors")?;
 
-        let loaded_module = ThoModuleWithStore::load(test_node(), "/tmp/test.safetensors".into(), Cpu)?;
+        let loaded_module:ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(test_node(), "/tmp/test.safetensors".into(), Cpu)?;
 
         debug!("loaded variables={:?}", loaded_module.var_store().variables());
 

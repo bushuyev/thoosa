@@ -5,8 +5,9 @@ use tch::{nn, Tensor};
 use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
 
 use thoosa_shared::ThoosaError;
-
+use crate::dims::{AnyDims, Dims};
 use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule};
+use crate::train_nets::ThoModuleWithStore;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
 pub fn clc_conv1d_out(l_in: u32, k: u32, c: ConvConfig) -> u32 {
@@ -74,14 +75,21 @@ impl NthParams for NthConst {
 
 impl Node {
 
-    pub fn build_tch_module(self, vs: &nn::Path) -> Result<Box<dyn ThoModule>, ThoosaError>  {
+    pub fn build_tch_module_2<DI:Dims + Send + 'static, DO:Dims + Send + 'static>(self, vs: &nn::Path) -> Result<ThoModuleWithStore<DI, DO>, ThoosaError>  {
+        Ok(
+            ThoModuleWithStore::new(self.build_tch_module(vs)?)
+        )
+
+    }
+
+    pub fn build_tch_module<DI:Dims + Send + 'static, DO:Dims + Send + 'static>(self, vs: &nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError>  {
         Ok(match self {
             Node::Seq { elts, split_input } => {
 
-                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, (i, node)| {
+                let layers:Vec<Box<dyn ThoModule<AnyDims, AnyDims>>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, (i, node)| {
                     kids.push(node.build_tch_module(&(vs / format!("seq_{i}")))?);
 
-                    Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
+                    Ok::<Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>, ThoosaError>(kids)
                 })?;
 
                 Box::new(MySequential::new(layers, split_input))
@@ -90,9 +98,9 @@ impl Node {
 
             Node::Par {elts,  split, join } => {
 
-                let layers:Vec<Box<dyn ThoModule>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule>>, (i, node)| {
+                let layers:Vec<Box<dyn ThoModule<DI, DO>>> = elts.into_iter().enumerate().try_fold(Vec::new(), |mut kids:Vec<Box<dyn ThoModule<DI, DO>>>, (i, node)| {
                     kids.push(node.build_tch_module(&(vs / format!("split_{i}")))?);
-                    Ok::<Vec<Box<dyn ThoModule>>, ThoosaError>(kids)
+                    Ok::<Vec<Box<dyn ThoModule<DI, DO>>>, ThoosaError>(kids)
                 })?;
 
                 Box::new(MyParallel::new(layers, split, join))

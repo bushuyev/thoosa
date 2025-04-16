@@ -13,6 +13,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::run_configs::{Applicable, RunConfig, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
+use crate::dims::{TCD, TCSD};
 use crate::loader::SyncWrapper;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
@@ -66,7 +67,7 @@ impl FindMotifsRunConfig {
 #[derive(Debug)]
 pub struct FindMotifsApplicable {
     run_config:FindMotifsRunConfig,
-    kernel:Option<SyncWrapper<Box<Tensor>>>,
+    kernel:Option<SyncWrapper<Tensor>>,
     groups:i64,
     device:Device
 }
@@ -130,7 +131,7 @@ impl FindMotifsApplicable {
         &self.run_config
     }
 
-    pub fn kernel(&self) -> &Option<SyncWrapper<Box<Tensor>>> {
+    pub fn kernel(&self) -> &Option<SyncWrapper<Tensor>> {
         &self.kernel
     }
 
@@ -144,23 +145,23 @@ pub enum FindMotifsRunConfigOptions {
     FilterUnfold
 }
 
-impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindMotifsApplicable {
+impl Applicable<&TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
 
-    fn apply(&self, tensor: &Box<Tensor>, options:FindMotifsRunConfigOptions) -> Result<Box<Tensor>, ThoosaError> {
-        debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, tensor.size());
+    fn apply(&self, input: &TCD, options:FindMotifsRunConfigOptions) -> Result<TCSD, ThoosaError> {
+        debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
 
         let t = match self.kernel.as_ref() {
             None => {
-                tensor.to_device(self.device).shallow_clone()
+                input.as_ref().to_device(self.device).shallow_clone()
             }
             Some(kernel) => {
-                tensor.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+                input.as_ref().to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
             }
         };
 
         match options {
             FindMotifsRunConfigOptions::Filter => {
-                Ok(Box::new(t))
+                Ok(t.into())
             }
             FindMotifsRunConfigOptions::FilterUnfold => {
                 let input_length = t.size()[1];
@@ -171,7 +172,7 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindM
 
                     debug!("Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-                    Ok(Box::new(unfolded))
+                    Ok(unfolded.into())
                 } else {
                     Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
                 }
@@ -180,10 +181,10 @@ impl Applicable<&Box<Tensor>, Box<Tensor>, FindMotifsRunConfigOptions> for FindM
     }
 }
 
-impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
+impl Applicable<&[SyncWrapper<Tensor>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
 
     /// applying transform (Filter) and unfolding tensors one by one since they have varying sizes - can't concat into batch to avoid slices spanning different tensors
-    fn apply(&self, tensors_chunk: &[SyncWrapper<Box<Tensor>>], options:()) -> Result<(Tensor, Vec<i64>), ThoosaError> {
+    fn apply(&self, tensors_chunk: &[SyncWrapper<Tensor>], options:()) -> Result<(Tensor, Vec<i64>), ThoosaError> {
         let mut slices = Vec::with_capacity(tensors_chunk.len());
         let mut slice_sizes = Vec::with_capacity(tensors_chunk.len());
         if log_enabled!(DebugLevel) {
@@ -191,10 +192,10 @@ impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>), ()> for FindMot
         }
 
         for tensor_wrapped in tensors_chunk {
-            match self.apply(tensor_wrapped.deref(), FindMotifsRunConfigOptions::FilterUnfold){
+            match self.apply(&tensor_wrapped.deref().into(), FindMotifsRunConfigOptions::FilterUnfold){
                 Ok(t) => {
                     slice_sizes.push(t.size()[1]);
-                    slices.push(t);
+                    slices.push(t.as_ref().shallow_clone());
 
                 }
                 Err(e) => {
@@ -212,7 +213,7 @@ impl Applicable<&[SyncWrapper<Box<Tensor>>], (Tensor, Vec<i64>), ()> for FindMot
         };
 
         Ok(
-            (tensor, slice_sizes) //num slices in each tensor,
+            (tensor.into(), slice_sizes) //num slices in each tensor,
         )
     }
 }

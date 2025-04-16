@@ -61,19 +61,19 @@ impl MotifsToFragmentsParams {
 
 #[derive(Debug)]
 pub struct MotifsTensors {
-    pub channels_motifs_slices:Box<Tensor>,
-    pub channels_motifs_avg_dists:Box<Tensor>,
-    pub channels_motifs_mask:Box<Tensor>,
-    pub channels_motifs_ids:Box<Tensor>,
+    pub channels_motifs_slices:Tensor,
+    pub channels_motifs_avg_dists:Tensor,
+    pub channels_motifs_mask:Tensor,
+    pub channels_motifs_ids:Tensor,
 }
 //should be read-only
 unsafe  impl Sync for MotifsTensors {}
 
 impl MotifsTensors {
-    pub fn new(channels_motifs_slices: Box<Tensor>, channels_motifs_avg_dists: Box<Tensor>, channels_motifs_ids: Box<Tensor>) -> Self {
+    pub fn new(channels_motifs_slices: Tensor, channels_motifs_avg_dists: Tensor, channels_motifs_ids: Tensor) -> Self {
         Self {
             channels_motifs_slices,
-            channels_motifs_mask: Box::new(channels_motifs_avg_dists.ge(0.)),//avg dists padded with f32::MIN
+            channels_motifs_mask: channels_motifs_avg_dists.ge(0.),//avg dists padded with f32::MIN
             channels_motifs_avg_dists,
             channels_motifs_ids
         }
@@ -85,7 +85,7 @@ impl MotifsTensors {
 * motifs order is random because of iterating over hashmap entries but always consistent between tensor and vec
 */
 pub fn motifs_to_tensor(
-    resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>, find_motifs_run_config: &FindMotifsRunConfig, channels: i64, device: Device,
+    resource_id_motif_slices: HashMap<Resource, Vec<MotifSlice>>, loader: &Arc<RwLock< LoadRunner<Tensor>>>, find_motifs_run_config: &FindMotifsRunConfig, channels: i64, device: Device,
     area: u64,
     ws:&Arc<RwLock<Box<dyn Workspace>>>
 ) -> Result<MotifsTensors, ThoosaError> {
@@ -95,7 +95,7 @@ pub fn motifs_to_tensor(
 
     assert!(resource_id_motif_slices.len() > 0, "resource_id_motif_slices is empty in motifs_to_tensor");
 
-    let channels_motifs_slices:Arc<RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Box<Tensor>>>>>>> = Arc::new(RwLock::new(HashMap::new()));
+    let channels_motifs_slices:Arc<RwLock<HashMap<u16, HashMap<usize, Vec<SyncWrapper<Tensor>>>>>> = Arc::new(RwLock::new(HashMap::new()));
 
     let channels_motifs_slices_arc = Arc::clone(&channels_motifs_slices);
 
@@ -109,15 +109,15 @@ pub fn motifs_to_tensor(
 
             for (resource, motif_slices) in resource_id_motif_slices {
                 debug!("motifs_to_tensor: resource={resource:?}");
-                let t =   Loader::<Box<Tensor>>::load_future(Arc::clone(&loader), resource, area).await;
+                let t =   Loader::<Tensor>::load_future(Arc::clone(&loader), resource, area).await;
                 debug!("motifs_to_tensor: t.size={:?}", t.size());
-                let applied = find_motifs_run_config_applicable.apply(&t, FindMotifsRunConfigOptions::FilterUnfold).expect("find_motifs_run_config_for_loader.apply");
+                let applied = find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::FilterUnfold).expect("find_motifs_run_config_for_loader.apply");
                 debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
 
                 for motif_slice in motif_slices {
                     debug!("motifs_to_tensor: motif_slice={motif_slice:?}");
 
-                    let motif_slice_t = applied.i((motif_slice.channel as i64, motif_slice.slice_idx/ find_motifs_run_config_applicable.step() as i64, ..)); //channel_t.narrow(1, motif_slice.slice_idx, find_motifs_run_config_for_loader.window as i64);
+                    let motif_slice_t = applied.as_ref().i((motif_slice.channel as i64, motif_slice.slice_idx/ find_motifs_run_config_applicable.step() as i64, ..)); //channel_t.narrow(1, motif_slice.slice_idx, find_motifs_run_config_for_loader.window as i64);
 
                     debug!("motifs_to_tensor: motif_slice_t.size={:?}", motif_slice_t.size());
 
@@ -126,7 +126,7 @@ pub fn motifs_to_tensor(
                     let  motif_slices = channels_motifs.entry(motif_slice.motif_id as usize).or_insert_with(||Vec::new());
 
 
-                    motif_slices.push(SyncWrapper::new_tb(Box::new(motif_slice_t)));
+                    motif_slices.push(SyncWrapper::new_t(motif_slice_t));
                 }
             }
 
@@ -160,7 +160,7 @@ pub fn motifs_to_tensor(
             if slices.len() > 10_000 {//TODO config
                 Err(ThoosaError::new(format!("skipped motif {motif_id} with too many slices ({})", slices.len())))
             } else {
-                let slices_t = Tensor::vstack(slices.into_iter().map(|s| *s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
+                let slices_t = Tensor::vstack(slices.into_iter().map(|s| s.shallow_clone()).collect::<Vec<Tensor>>().as_slice());
                 debug!("motifs_to_tensor: motif_id={motif_id} slices_t={:?}", slices_t.size());
                 trace!("motifs_to_tensor: slices_t=\n{slices_t}");
 
@@ -201,21 +201,21 @@ pub fn motifs_to_tensor(
     debug!("motifs_to_tensor: channel_motif_ids={channel_motif_ids:?}");
 
     Ok(MotifsTensors::new(
-        Box::new(Tensor::vstack(
+        Tensor::vstack(
             channels_motifs_slices_t.as_slice()
-        ).view((channels, max_motifs_num, -1))),
+        ).view((channels, max_motifs_num, -1)),
 
-        Box::new(Tensor::vstack(
-             channels_motifs_avg_dists_t.as_slice()
-         ).view((channels, max_motifs_num)) + 1e-2), //+ 1e-2 if motif avg is 0 (in tests) there will be no matches with tensors where dists close to 0 but not equal
+        Tensor::vstack(
+            channels_motifs_avg_dists_t.as_slice()
+        ).view((channels, max_motifs_num)) + 1e-2, //+ 1e-2 if motif avg is 0 (in tests) there will be no matches with tensors where dists close to 0 but not equal
 
-        Box::new(Tensor::from_slice(
+        Tensor::from_slice(
             channel_motif_ids
                 .into_iter()
                 .flat_map(|channel_motif_ids|channel_motif_ids.into_iter())
                 .map(|v|v as i32).collect::<Vec<_>>()
                 .as_slice()
-        ).view((channels, -1)))
+        ).view((channels, -1))
     ))
 }
 
@@ -299,7 +299,7 @@ impl PlotMotifSlicesArgs {
 
 
 
-pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &FindMotifsApplicable, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, loader: &Arc<RwLock< LoadRunner<Box<Tensor>>>>) -> Vec<(ResourceId, Vec<Box<Tensor>>)> {
+pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &FindMotifsApplicable, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, loader: &Arc<RwLock< LoadRunner<Tensor>>>) -> Vec<(ResourceId, Vec<Tensor>)> {
 
     debug!("load_motif_slices: channel={}, find_motifs_run_config={:?}, slices={}", channel, find_motifs_run_config_applicable, slices.len());
 
@@ -313,7 +313,7 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
 
     debug!("load_motif_slices: tensors_ids_slices.len={}", tensors_ids_slices.len());
 
-    let mut all_slices:Arc<RwLock<Vec<(ResourceId, Vec<Box<SyncWrapper<Tensor>>>)>>> = Arc::new(RwLock::new(vec![]));//TODO remove Arc or add par_iter?
+    let mut all_slices:Arc<RwLock<Vec<(ResourceId, Vec<SyncWrapper<Tensor>>)>>> = Arc::new(RwLock::new(vec![]));//TODO remove Arc or add par_iter?
     let wg = WaitGroup::new();
     let window = find_motifs_run_config_applicable.run_config().window;
 
@@ -333,8 +333,8 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
             loader.write().exec_scoped(move |loader, _keys_purge| {//TODO purge
                 async move {
                     let tensor_idx_id = resource.id();
-                    let t = Loader::<Box<Tensor>>::load_future(loader, resource, 0).await;
-                    let t= find_motifs_run_config_applicable.apply(&t, FindMotifsRunConfigOptions::Filter).unwrap();
+                    let t = Loader::<Tensor>::load_future(loader, resource, 0).await;
+                    let t= find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::Filter).unwrap();
 
                     debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
 
@@ -348,9 +348,9 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
                              }
 
                              slice_ok
-                         }).map(|slice_idx| Box::new(
-                             SyncWrapper::new_t(t.i((channel, slice_idx as i64..(slice_idx + window )as i64)))
-                         )).collect::<Vec<Box<SyncWrapper<Tensor>>>>()
+                         }).map(|slice_idx|
+                             SyncWrapper::new_t(t.as_ref().i((channel, slice_idx as i64..(slice_idx + window )as i64)))
+                         ).collect::<Vec<SyncWrapper<Tensor>>>()
                         )
                     );
                     drop(wg);
@@ -370,7 +370,7 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
             |v|
                 (
                     v.0,
-                    v.1.into_iter().map(|b|Box::new(b.shallow_clone())).collect()
+                    v.1.into_iter().map(|b|b.shallow_clone()).collect()
                 )
         )
         .collect();
@@ -454,18 +454,18 @@ mod motifs_tests {
             MotifSlice::new(21, 801, 1)
         ]);
 
-        fn test_tensor(eeg_id:&Resource) -> Box<Tensor> {
+        fn test_tensor(eeg_id:&Resource) -> Tensor {
             let data = (0..1000).map(|i| i as f64).collect::<Vec<f64>>();
             match eeg_id.file_stem() {
-                "111"=>Box::new(Tensor::vstack(&[
+                "111"=>Tensor::vstack(&[
                     Tensor::from_slice(data.as_slice()),//ch 0
                     Tensor::from_slice(data.as_slice()) //ch 1
-                ])),
+                ]),
 
-                "222"=>Box::new(Tensor::vstack(&[
+                "222"=>Tensor::vstack(&[
                     Tensor::from_slice(data.as_slice()),//ch 0
                     Tensor::from_slice(data.as_slice()) //ch 1
-                ])),
+                ]),
 
                 _=>panic!("eeg_id={:?}", eeg_id)
 
@@ -474,7 +474,7 @@ mod motifs_tests {
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
-                SyncWrapper::new_tb(
+                SyncWrapper::new_t(
                     test_tensor(key)
                 )
             }, 4, 100,
@@ -570,13 +570,13 @@ mod motifs_tests {
     #[test]
     fn test_load_motif_slices()-> Result<(), ThoosaError>{
 
-        fn test_eeg_to_t(_eeg_id:&Resource) -> SyncWrapper<Box<Tensor>> {
+        fn test_eeg_to_t(_eeg_id:&Resource) -> SyncWrapper<Tensor> {
             let t = Tensor::vstack(&[
                 Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
             ]);
 
-            SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
+            SyncWrapper::new(t,|t|t.shallow_clone())
         }
 
         let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
@@ -590,7 +590,7 @@ mod motifs_tests {
             &executor_rc
         );
 
-        assert_eq!(vec![(1, vec![Box::new(Tensor::from_slice(&[2.0, 3.0]))])], motif_slices);
+        assert_eq!(vec![(1, vec![Tensor::from_slice(&[2.0, 3.0])])], motif_slices);
 
         debug!("motif_slices={:?}", motif_slices);
 
@@ -599,13 +599,13 @@ mod motifs_tests {
 
     #[test]
     fn test_load_motif_slices_5000()-> Result<(), ThoosaError>{
-        fn test_eeg_to_t(_eeg_id:&Resource) -> SyncWrapper<Box<Tensor>> {
+        fn test_eeg_to_t(_eeg_id:&Resource) -> SyncWrapper<Tensor> {
 
             let t = Tensor::vstack(&[
                 Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
             ]);
 
-            SyncWrapper::new(Box::new(t),|t|Box::new(t.shallow_clone()))
+            SyncWrapper::new(t,|t|t.shallow_clone())
         }
 
         let executor = LoadRunner::new(test_eeg_to_t, 4, 100);

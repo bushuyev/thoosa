@@ -165,13 +165,6 @@ impl OfMemSize for Tensor {
     }
 }
 
-
-impl OfMemSize for Box<Tensor> {
-    fn mem_size(&self) -> (Device, usize) {
-        (self.device(), tensor_mem_size(self))
-    }
-}
-
 pub struct LoadRunner<V>
 where
     V: OfMemSize + Send + Debug + 'static,
@@ -475,11 +468,6 @@ impl SyncWrapper<Tensor> {
     }
 }
 
-impl SyncWrapper<Box<Tensor>> {
-    pub fn new_tb(t:Box<Tensor>) -> Self {
-        SyncWrapper::new(t, |b|Box::new(b.shallow_clone()))
-    }
-}
 
 impl<V> SyncWrapper<V>
 where
@@ -518,15 +506,15 @@ where
     }
 }
 
-impl From<Tensor> for SyncWrapper<Box<Tensor>> {
+impl From<Tensor> for SyncWrapper<Tensor> {
     fn from(t: Tensor) -> Self {
-        SyncWrapper::new_tb(Box::new(t))
+        SyncWrapper::new_t(t)
     }
 }
 
-impl AddAssign for SyncWrapper<Box<Tensor>> {
+impl AddAssign for SyncWrapper<Tensor> {
     fn add_assign(&mut self, rhs: Self) {
-       *self.v+=*rhs.v;
+        self.v += rhs.v;
     }
 }
 

@@ -10,7 +10,7 @@ use thoosa_shared::TensorIdSliceIdx;
 
 
 pub trait TensorsStore {
-    fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, ThoosaError>;
+    fn get_tensor(&mut self, index: usize) -> Result<&Tensor, ThoosaError>;
 
     fn get_tensors(&mut self, indexes: &[usize]) -> Result<Vec<Tensor>, ThoosaError> {
         indexes.into_iter().map(|i|*i).map( |i| self.get_tensor(i).map(|t|t.shallow_clone())).collect()
@@ -135,16 +135,16 @@ mod tests {
 
 
     struct VecTensorsStore {
-        tensors:Vec<Box<Tensor>>
+        tensors:Vec<Tensor>
     }
 
     impl VecTensorsStore {
         pub fn new(tensors: Vec<Tensor>) -> Box<Self> {
-            Box::new(Self { tensors:tensors.into_iter().map(|t|Box::new(t)).collect() })
+            Box::new(Self { tensors:tensors.into_iter().map(|t|t).collect() })
         }
     }
     impl TensorsStore for VecTensorsStore {
-        fn get_tensor(&mut self, index: usize) -> Result<&Box<Tensor>, ThoosaError> {
+        fn get_tensor(&mut self, index: usize) -> Result<&Tensor, ThoosaError> {
             Ok(&self.tensors[index])
         }
 
@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn load_rand_tensor(_key:&String) ->Box<Tensor>{
-        Box::new(Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu)))
+    fn load_rand_tensor(_key:&String) ->Tensor{
+        Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu))
     }
 }

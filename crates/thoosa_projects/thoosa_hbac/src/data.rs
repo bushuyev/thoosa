@@ -12,7 +12,7 @@ use std::io::Write;
 
 use rand::prelude::SliceRandom;
 use regex::Regex;
-
+use thoosa_common::dims::{Batch, ChannelsData, ThoTensor};
 use thoosa_common::utils::DataBatch;
 use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
 use thoosa_shared::ThoosaError;
@@ -597,7 +597,7 @@ impl EEGs {
         )
     }
 
-    fn random_subset(batch_size: usize, data: &Vec<EEG>) -> (Tensor, Tensor) {
+    fn random_subset(batch_size: usize, data: &Vec<EEG>) -> (ThoTensor<Batch<ChannelsData>>, Tensor) {
         let mut rng = thread_rng();
 
         let (eegs, votes) = data
@@ -616,7 +616,7 @@ impl EEGs {
             Tensor::stack(
                 eegs.as_slice(),
                 0,
-            ),
+            ).into(),
             Tensor::stack(
                 votes.as_slice(),
                 0,
@@ -625,12 +625,12 @@ impl EEGs {
     }
 }
 
-impl DataBatch for EEGs {
-    fn train_batch(&self) -> (Tensor, Tensor) {
+impl DataBatch<ChannelsData> for EEGs {
+    fn train_batch(&self) -> (ThoTensor<Batch<ChannelsData>>, Tensor) {
         Self::random_subset(self.batch_size, &self.train_set)
     }
 
-    fn valid_batch(&self) -> (Tensor, Tensor) {
+    fn valid_batch(&self) -> (ThoTensor<Batch<ChannelsData>>, Tensor) {
         Self::random_subset(self.batch_size, &self.valid_set)
     }
 }

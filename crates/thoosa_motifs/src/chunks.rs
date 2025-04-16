@@ -68,7 +68,7 @@ impl  ChunkOfSlicedTensors {
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk(run_config:&FindMotifsApplicable, tensors_chunk: &[SyncWrapper<Box<Tensor>>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
+    pub fn slice_tensors_chunk(run_config:&FindMotifsApplicable, tensors_chunk: &[SyncWrapper<Tensor>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
@@ -320,9 +320,7 @@ mod tests {
         }
 
         assert_eq!(iters.len(), 5);
-        // for iter in iters {
-        //     println!("iter={:?}", iter.collect::<Vec<_>>());
-        // }
+
 
         let slices = iters.into_iter().flat_map(|i|i).collect::<Vec<_>>();
 

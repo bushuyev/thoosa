@@ -1,5 +1,5 @@
 use tch::Tensor;
-
+use crate::dims::{AnyDims, Batch, ChannelsData, ThoTensor};
 use crate::utils::DataBatch;
 
 #[derive(Debug)]
@@ -21,8 +21,8 @@ impl DummyDs {
     }
 }
 
-impl DataBatch for DummyDs {
-    fn train_batch(&self) -> (Tensor, Tensor) {
+impl DataBatch<AnyDims> for DummyDs {
+    fn train_batch(&self) -> (ThoTensor<Batch<AnyDims>>, Tensor) {
         let (x, y):(Vec<Tensor>, Vec<Tensor>) = (0..self.batch_size).fold((vec![], vec![]), |mut x_y, i| {
 
             if i % 2 == 0 {
@@ -45,7 +45,7 @@ impl DataBatch for DummyDs {
             Tensor::stack(
                 x.as_slice(),
                 0,
-            ).view([self.batch_size as i64, -1]),
+            ).view([self.batch_size as i64, -1]).into(),
 
             Tensor::stack(
                 y.as_slice(),
@@ -54,7 +54,7 @@ impl DataBatch for DummyDs {
         )
     }
 
-    fn valid_batch(&self) -> (Tensor, Tensor) {
+    fn valid_batch(&self) -> (ThoTensor<Batch<AnyDims>>, Tensor) {
         self.train_batch()
     }
 }

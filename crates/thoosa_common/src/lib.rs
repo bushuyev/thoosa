@@ -13,7 +13,6 @@ pub mod builder;
 pub mod my_tch;
 pub mod simp;
 pub mod train_nets;
-mod opt_steps;
 mod opt;
 mod bfgs;
 mod argmin;
@@ -27,10 +26,11 @@ pub mod bool_iter;
 pub mod input_probs;
 pub mod transforms;
 pub mod find_motifs_run_config;
+pub mod dims;
 
 pub trait ResourceLoader:Send+Sync {
     type K;
     type V;
 
-    fn load(&self, key:&Self::K, device:Device)->Box<Self::V>;
+    fn load(&self, key:&Self::K, device:Device)->Self::V;
 }
