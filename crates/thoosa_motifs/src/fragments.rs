@@ -109,7 +109,7 @@ pub fn motifs_to_tensor(
 
             for (resource, motif_slices) in resource_id_motif_slices {
                 debug!("motifs_to_tensor: resource={resource:?}");
-                let t =   Loader::<Tensor>::load_future(Arc::clone(&loader), resource, area).await;
+                let t =   Loader::<Tensor>::load_future(Arc::clone(&loader), resource, area, 0).await;
                 debug!("motifs_to_tensor: t.size={:?}", t.size());
                 let applied = find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::FilterUnfold).expect("find_motifs_run_config_for_loader.apply");
                 debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
@@ -333,7 +333,7 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
             loader.write().exec_scoped(move |loader, _keys_purge| {//TODO purge
                 async move {
                     let tensor_idx_id = resource.id();
-                    let t = Loader::<Tensor>::load_future(loader, resource, 0).await;
+                    let t = Loader::<Tensor>::load_future(loader, resource, 0, 0).await;
                     let t= find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::Filter).unwrap();
 
                     debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());

@@ -479,7 +479,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
             async move {
                 debug!("LoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area}");
                 let resource_id_debug = resource_id.clone();
-                let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area).await;
+                let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area, 0).await;
 
                 debug!("LoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area}");
 
@@ -633,7 +633,7 @@ impl <DI:Dims, DO:Dims> ClassTensorsLoaderData<DI, DO> {
                 for (resource_id, labels_p) in rnd_resoruces {
                     resources_to_purge.push(resource_id.clone());
 
-                    let t =  Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id.clone(), 0).await;
+                    let t =  Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id.clone(), 0, 0).await;
 
                     let mut guard = x_y_acc_in_exec.lock();
 
