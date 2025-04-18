@@ -449,7 +449,7 @@ where
                     debug!("chunk_and_slice:  exec:callback_arc: key={key:?}");
 
                     let sync_wrapper = SyncWrapper::new_t(
-                        Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0).await
+                        Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, 0).await
                     );
                     window_0_tensors_arc.write().push(sync_wrapper);
                 }
@@ -573,7 +573,7 @@ where
                             debug!("0. exec:callback_arc: key={key:?}");
 
                             let sync_wrapper = SyncWrapper::new_t(
-                                Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0).await
+                                Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, 0).await
                             );
                             window_0_tensors_arc.write().push(sync_wrapper);
                         }
@@ -621,7 +621,7 @@ where
                                 debug!("chunk_and_slice: 1. exec:callback_arc: key={key:?}");
 
                                 let sync_wrapper = SyncWrapper::new_t(
-                                    Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_1).await
+                                    Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_1, 0).await
                                 );
                                 window_1_tensors_arc.write().push(sync_wrapper);
                             }
@@ -969,7 +969,7 @@ where
 
                 // let matches = clc_dot_matches(&eeg?, &motifs, step, threshold)?;
 
-                let target = &Loader::<Tensor>::load_future(Arc::clone(&loader), resource.clone(), area).await;
+                let target = &Loader::<Tensor>::load_future(Arc::clone(&loader), resource.clone(), area, 0).await;
                 let matches = clc_dist_matches(
                     target,
                     Arc::clone(&motifs), step, Arc::clone(&motifs_distances), Arc::clone(&channel_motif_ids)
