@@ -1316,7 +1316,7 @@ mod cli_tests {
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
-                SyncWrapper::new_t(
+                SyncWrapper::wrap_tensor(
                     Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem()))).unwrap(),
                 )
             },
@@ -2137,7 +2137,7 @@ mod cli_tests {
             move |key: &Resource| {
                 let path = ws_runner.read().tensor_path(key);
                 debug!("test_run_step: path={path:?}");
-                SyncWrapper::new_t(
+                SyncWrapper::wrap_tensor(
                     Tensor::load(&path).expect(format!("can't open {path:?}").as_str()),
                 )
             },

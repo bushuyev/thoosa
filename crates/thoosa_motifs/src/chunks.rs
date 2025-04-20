@@ -33,7 +33,7 @@ impl  ChunkOfSlicedTensors {
             resource_ids: keys,
             sizes,//number of slices produced from each tensor
             step,
-            t:SyncWrapper::new_t(t),
+            t:SyncWrapper::wrap_tensor(t),
             split_at: None,
         }
     }
@@ -64,7 +64,7 @@ impl  ChunkOfSlicedTensors {
 
     //TODO Option instead  of [0.0]
     pub fn drop_tensor(&mut self) {
-        mem::swap(&mut self.t, &mut SyncWrapper::new_t(Tensor::from_slice(&[0.0])));
+        mem::swap(&mut self.t, &mut SyncWrapper::wrap_tensor(Tensor::from_slice(&[0.0])));
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
@@ -104,14 +104,14 @@ impl Splittable<2> for ChunkOfSlicedTensors {
                         resource_ids: self.resource_ids.clone(),
                         sizes: vec![split_at_idx],
                         step: self.step,
-                        t: SyncWrapper::new_t(self.t.i((.., ..split_at_idx, ..))),
+                        t: SyncWrapper::wrap_tensor(self.t.i((.., ..split_at_idx, ..))),
                         split_at: self.split_at,
                     },
                     Self {
                         resource_ids: self.resource_ids.clone(),
                         sizes: vec![self.sizes[0] - split_at_idx],
                         step: self.step,
-                        t: SyncWrapper::new_t(self.t.i((.., split_at_idx.., ..))),
+                        t: SyncWrapper::wrap_tensor(self.t.i((.., split_at_idx.., ..))),
                         split_at: self.split_at.map(|v| Some(v + split_at_idx)).unwrap_or(Some(split_at_idx)),
                     }
                 ])
@@ -133,7 +133,7 @@ impl Splittable<2> for ChunkOfSlicedTensors {
                     resource_ids: self.resource_ids[..split_at].to_vec(),
                     sizes: self.sizes[..split_at].to_vec(),
                     step: self.step,
-                    t: SyncWrapper::new_t(self.t.i((.., ..split_at_tensors_idx, ..))),
+                    t: SyncWrapper::wrap_tensor(self.t.i((.., ..split_at_tensors_idx, ..))),
 
                     split_at: self.split_at,
                 },
@@ -141,7 +141,7 @@ impl Splittable<2> for ChunkOfSlicedTensors {
                     resource_ids: self.resource_ids[split_at..].to_vec(),
                     sizes: self.sizes[split_at..].to_vec(),
                     step: self.step,
-                    t: SyncWrapper::new_t(self.t.i((.., split_at_tensors_idx.., ..))),
+                    t: SyncWrapper::wrap_tensor(self.t.i((.., split_at_tensors_idx.., ..))),
                     split_at: None, //self.split_at.map(|v|Some(v+ split_at_tensors_idx)).unwrap_or(Some(split_at_tensors_idx)),
                 }
             ])
