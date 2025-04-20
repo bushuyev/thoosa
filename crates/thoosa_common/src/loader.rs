@@ -16,6 +16,7 @@ use std::io::Write;
 use std::pin::Pin;
 use futures::task::Poll;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
+use std::task::Waker;
 use futures::Future;
 use futures::{
     future::{BoxFuture, FutureExt},
@@ -25,38 +26,30 @@ use tch::{Device, IndexOp, Tensor};
 use thoosa_shared::resource::{Resource, ResourceId};
 use crate::utils::tensor_mem_size;
 
-struct RayonNotify {
-    ready: Mutex<bool>,
-    cv:     Condvar,
+
+
+struct ResourcesBeingLoadedData<V>
+where V: OfMemSize + Send + Debug + 'static,{
+    area:u64,
+    future_ids:Vec<<LoadRunner<V> as KeyMaker>::Key>
 }
 
-impl RayonNotify {
-    pub fn new() -> Self {
+impl <V: OfMemSize + Send + Debug + 'static> ResourcesBeingLoadedData<V> {
+
+    pub fn new(area:u64, future_id:Option<<LoadRunner<V> as KeyMaker>::Key>) -> Self {
+        let future_ids = future_id.map(|future_id|vec![future_id]).unwrap_or(Vec::new());
         Self {
-            ready: Mutex::new(false),
-            cv:     Condvar::new(),
+            area,
+            future_ids
         }
     }
 
-    fn wait_for_ready(&self, stop: &AtomicBool) -> bool {
-        debug!("RayonNotify: wait_for_ready");
-        let mut guard = self.ready.lock();
-        if *guard {
-            *guard = false;
-            return true;
+    pub fn add(&mut self, area:u64, future_id:Option<<LoadRunner<V> as KeyMaker>::Key>){
+        self.area |= area;
+        if let Some(future_id) = future_id {
+            self.future_ids.push(future_id);
         }
-        while !*guard && !stop.load(Relaxed) {
-            self.cv.wait(&mut guard);
-        }
-        let woke = *guard;
-        *guard = false;
-        woke
-    }
-}
-impl ArcWake for RayonNotify {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        *arc_self.ready.lock() = true;
-        arc_self.cv.notify_one();
+
     }
 }
 
@@ -68,14 +61,14 @@ where
     loader_pool: ThreadPool,
 
     resources: HashMap<Resource, SyncWrapper<V>>,//TODO replace Resource with ResourceId
-    resources_being_loaded: HashMap<Resource, u64>,
+    resources_being_loaded: HashMap<Resource, ResourcesBeingLoadedData<V>>,
 }
 
 impl<V> Loader<V>
 where
     V: OfMemSize + Send + Debug + 'static,
 {
-    pub fn preload(self_arc: Arc<RwLock<Loader<V>>>, keys: &[Resource], cache_area: u64) {
+    pub fn preload(self_arc: Arc<RwLock<Loader<V>>>, keys: &[Resource], cache_area: u64, done_sender:SyncSender<<LoadRunner<V> as KeyMaker>::Key>) {
         debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
         let mut self_write_guard = self_arc.write();
 
@@ -87,12 +80,13 @@ where
             }
 
             if let Some(being_loaded) = self_write_guard.resources_being_loaded.get_mut(&key) {
-                *being_loaded |= cache_area;
-                debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.cache_area={:064b}", *being_loaded);
+                // *being_loaded |= cache_area;
+                being_loaded.add(cache_area, None);
+                debug!("preload_vec: adding key={key:?} resources_being_loaded_guard.cache_area={:064b}", being_loaded.area);
                 continue;
             }
 
-            self_write_guard.resources_being_loaded.insert(key.clone(), cache_area);
+            self_write_guard.resources_being_loaded.insert(key.clone(), ResourcesBeingLoadedData::new(cache_area, None));
 
 
             debug!("preload_vec: adding key={key:?}");
@@ -102,16 +96,21 @@ where
             let self_arc_pool = Arc::clone(&self_arc);
 
             let key = key.clone();
+            let done_sender = done_sender.clone();
 
-            self_write_guard.loader_pool.spawn(move || Self::loader_task(cache_area, loader, self_arc_pool, &key));
+            self_write_guard.loader_pool.spawn(move || {
+
+                Self::loader_task(cache_area, loader, self_arc_pool, &key, done_sender);
+
+            });
         };
     }
 
-    pub fn load_future_2(self_arc: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64, future_id: <LoadRunner<V> as KeyMaker>::Key, done_sender:SyncSender<<LoadRunner<V> as KeyMaker>::Key>) -> BoxFuture<'static, V> {
+    pub fn load_future(self_arc: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64, future_id: <LoadRunner<V> as KeyMaker>::Key, done_sender:SyncSender<<LoadRunner<V> as KeyMaker>::Key>) -> BoxFuture<'static, V> {
         let mut self_lock = self_arc.write();
 
         if !self_lock.resources.contains_key(&key) && !self_lock.resources_being_loaded.contains_key(&key) {
-            self_lock.resources_being_loaded.insert(key.clone(), cache_area);
+            self_lock.resources_being_loaded.insert(key.clone(), ResourcesBeingLoadedData::new(cache_area, Some(future_id)));
 
             debug!("Loader::load_future: adding key={key:?}");
 
@@ -121,47 +120,36 @@ where
             let key = key.clone();
 
             self_lock.loader_pool.spawn(move || {
-                Self::loader_task(cache_area, loader_fn, self_arc_pool, &key);
+                Self::loader_task(cache_area, loader_fn, self_arc_pool, &key, done_sender);
                 debug!("Loader::load_future: sending done for future_id={future_id} key={key:?}");
-                done_sender.send(future_id).unwrap();
+
             });
+        } else if let Some(resources_being_loaded)  = self_lock.resources_being_loaded.get_mut(&key){
+            resources_being_loaded.add(cache_area, Some(future_id));
         }
 
         ResourceFuture::new(Arc::clone(&self_arc), key).boxed()
     }
 
-
-    pub fn load_future(self_arc: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64, future_id: <LoadRunner<V> as KeyMaker>::Key) -> BoxFuture<'static, V> {
-        let mut self_lock = self_arc.write();
-
-        if !self_lock.resources.contains_key(&key) && !self_lock.resources_being_loaded.contains_key(&key) {
-            self_lock.resources_being_loaded.insert(key.clone(), cache_area);
-
-            debug!("Loader::load_future: adding key={key:?}");
-
-            let loader_fn = Arc::clone(&self_lock.loader_fn);
-            let self_arc_pool = Arc::clone(&self_arc);
-
-            let key = key.clone();
-
-            self_lock.loader_pool.spawn(move || Self::loader_task(cache_area, loader_fn, self_arc_pool, &key));
-        }
-        ResourceFuture::new(Arc::clone(&self_arc), key).boxed()
-    }
 
     fn loader_task<'a>(
-        cache_area: u64,
+        cache_area: u64,//TODO remove cache_area - it's kept in resources_being_loaded?
         loader_fn: Arc<Box<dyn Fn(&'a Resource) -> SyncWrapper<V> + Sync + Send>>,
         loader_arc: Arc<RwLock<Loader<V>>>,
         key: &'a Resource,
+        done_sender:SyncSender<<LoadRunner<V> as KeyMaker>::Key>
     ) {
         let mut v = loader_fn(key);
         debug!("Loader::loader_task: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
 
         let mut loader_guard = loader_arc.write();
 
+        let data = loader_guard.resources_being_loaded.remove(&key).expect(&format!("no data for {key:?}"));
 
-        v.cache_areas = loader_guard.resources_being_loaded.remove(&key).unwrap_or(cache_area);
+        v.cache_areas = data.area;
+        for future_id in data.future_ids {//futures may have been created for resources which were already being loaded or being preloaded
+            done_sender.send(future_id).unwrap();
+        }
 
         loader_guard.resources.insert(key.clone(), v);
 
@@ -236,7 +224,6 @@ where
     stop: Arc<AtomicBool>,
     cache_areas: u64,
     loader: Arc<RwLock<Loader<V>>>,
-    futures_notify: Arc<RayonNotify>,
     futures_counter:AtomicU16
 }
 
@@ -249,11 +236,12 @@ where
         F: Fn(&Resource) -> SyncWrapper<V> + Sync + Send + 'static,
     {
         let futures: Arc<RwLock<HashMap<<Self as KeyMaker>::Key, Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(HashMap::new()));
-        let futures_for_push = Arc::clone(&futures);
+        let futures_for_add = Arc::clone(&futures);
         let futures_for_done = Arc::clone(&futures);
         let futures_rc = Arc::clone(&futures);
 
 
+        //one for new_futures_receiver and another for done_futures_receiver
         let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
             let b = thread::Builder::new();
             b.name(format!("{}/{:?}", "futures_pool", thread_builder.index()))
@@ -262,23 +250,18 @@ where
             Ok(())
         }).build().expect("futures_pool");
 
-        let notify = Arc::new(RayonNotify::new());
-        let notify_in_pool = Arc::clone(&notify);
-        let notify_in_pool_2 = Arc::clone(&notify);
         let stop = Arc::new(AtomicBool::new(false));
-        let stop_arc = Arc::clone(&stop);
 
         let (new_futures_sender, new_futures_receiver) = sync_channel::<(<Self as KeyMaker>::Key, Mutex<BoxFuture<()>>)>(futures_channel_bound);
         let (done_futures_sender, done_futures_receiver) = sync_channel::<<Self as KeyMaker>::Key>(futures_channel_bound);
 
         futures_pool.spawn(move || {
-            let waker = waker_ref(&notify_in_pool);
-            let mut cx = Context::from_waker(&waker);
+            let mut cx = Context::from_waker(Waker::noop());
 
             while let Ok((future_id, fut)) = new_futures_receiver.recv() {
                 debug!("new_futures_receiver: got {}", future_id);
 
-                futures_for_push.write().insert(future_id, fut);
+                futures_for_add.write().insert(future_id, fut);
 
                 /*
                     LoadRunner polls futures only when external loaders finish their work to avoid polling all  futures in cycle.
@@ -289,7 +272,7 @@ where
                  */
                 let mut remove_immediately = false;
                 {
-                    let read_guard = futures_for_push
+                    let read_guard = futures_for_add
                         .read();
                     let mut guard = read_guard
                         .get(&future_id)
@@ -303,14 +286,13 @@ where
 
                 if remove_immediately {
                     debug!("new_futures_receiver: remove_immediately {}", future_id);
-                    futures_for_push.write().remove(&future_id);
+                    futures_for_add.write().remove(&future_id);
                 }
             }
         });
 
         futures_pool.spawn(move || {
-            let waker = waker_ref(&notify_in_pool_2);
-            let mut cx = Context::from_waker(&waker);
+            let mut cx = Context::from_waker(Waker::noop());
 
 
             while let Ok(future_id) = done_futures_receiver.recv() {
@@ -365,7 +347,6 @@ where
                 loader_fn: Arc::new(Box::new(loader)),
             })),
 
-            futures_notify: notify,
             futures_counter: AtomicU16::new(0),
         }
     }
@@ -376,7 +357,7 @@ where
     }
 
 
-    pub fn exec_2<F>(&mut self, make_future: F)
+    pub fn exec<F>(&mut self, make_future: F)
     where
         F: FnOnce(
             <Self as KeyMaker>::Key,//future_id
@@ -388,7 +369,6 @@ where
     {
 
         let loader_for_purge = Arc::clone(&self.loader);
-        let notify_for_purge = Arc::clone(&self.futures_notify);
 
         let future_id = self.futures_counter.fetch_add(1, Relaxed);
 
@@ -399,7 +379,6 @@ where
             Arc::clone(&self.loader),
             Box::new(move |keys, cache_area| {
                 Loader::purge_resources(loader_for_purge, keys, cache_area);
-                // RayonNotify::wake_by_ref(&notify_for_purge);
 
                 trace!("exec: purge_resources done");
             }),
@@ -408,58 +387,33 @@ where
 
         self.new_futures_sender.send((future_id, Mutex::new(future))).expect("future_sender.send");
 
-        // (&self.futures_notify).wake_by_ref();
-        // RayonNotify::wake_by_ref(&self.futures_notify);
 
         trace!("exec: future {future_id} sent");
     }
 
-
-
-    pub fn exec<F>(&mut self, make_future: F)
-    where
-        F: FnOnce(Arc<RwLock<Loader<V>>>, Box<dyn FnOnce(&[Resource], u64) + Send>) -> BoxFuture<'static, ()>,
-
-    {
-        let loader_for_purge = Arc::clone(&self.loader);
-        let notify_for_purge = Arc::clone(&self.futures_notify);
-
-        self.new_futures_sender.send((self.make_key(), Mutex::new(make_future(
-            Arc::clone(&self.loader),
-            Box::new(move |keys, cache_area| {
-                Loader::purge_resources(loader_for_purge, keys, cache_area);
-                // RayonNotify::wake_by_ref(&notify_for_purge);
-
-                trace!("exec: purge_resources done");
-            }),
-        )))).expect("future_sender.send");
-
-        // (&self.futures_notify).wake_by_ref();
-        // RayonNotify::wake_by_ref(&self.futures_notify);
-
-        trace!("exec: future sent");
-    }
-
-    //TODO check perf
     pub fn exec_scoped<'s, F>(&mut self, make_future: F)
     where
         F: FnOnce(
+            <Self as KeyMaker>::Key,
             Arc<RwLock<Loader<V>>>,
-            Box<dyn FnOnce(&[Resource], u64) + Send>
+            Box<dyn FnOnce(&[Resource], u64) + Send>,
+            SyncSender<<Self as KeyMaker>::Key>
         ) -> BoxFuture<'s, ()>,
     {
         let loader_for_purge = Arc::clone(&self.loader);
 
+        let future_id = self.futures_counter.fetch_add(1, Relaxed);
+
         let future = make_future(
+            future_id,
             Arc::clone(&self.loader),
             Box::new(move |keys, cache_area| {
                 Loader::purge_resources(loader_for_purge, keys, cache_area);
             }),
+            self.done_futures_sender.clone()
         );
 
-        let notify = Arc::new(RayonNotify::new());
-        let waker = waker_ref(&notify);
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(Waker::noop());
 
         let mut pinned = Box::pin(future);
         loop {
@@ -484,12 +438,8 @@ where
         }
     }
 
-    pub fn load_future(loader: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64) -> BoxFuture<'static, V> {
-        Loader::load_future(loader, key, cache_area, 0)
-    }
-
     pub fn preload(&mut self, keys: &[Resource], cache_area: u64) {
-        Loader::preload(Arc::clone(&self.loader), keys, cache_area);
+        Loader::preload(Arc::clone(&self.loader), keys, cache_area, self.done_futures_sender.clone());
     }
 
     pub fn resources_len(&self) -> usize {
@@ -563,7 +513,7 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
     !mask & from
 }
 
-
+///the future never calls waker, the poll is done when done_futures_receiver receives completion notification from one of the loaders and/or at the end of top future
 struct ResourceFuture<V>
 where
     V: OfMemSize + Send + Debug + 'static,
@@ -590,16 +540,15 @@ where
 {
     type Output = V;
 
-    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
-        trace!("polling key={:?}", self.key);
+    fn poll(self: Pin<&mut Self>, _ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        debug!("polling key={:?}", self.key);
 
         if let Some(resource) = self.loader.read().resources.get(&self.key) {
-            trace!("polling key={:?} Ready", self.key);
+            debug!("polling key={:?} Ready", self.key);
 
             Poll::Ready(resource.shallow_clone())
         } else {
-            trace!("polling key={:?} Pending ", self.key);
-            // ctx.waker().wake_by_ref();
+            debug!("polling key={:?} Pending ", self.key);
             Poll::Pending
         }
     }
@@ -622,17 +571,26 @@ impl<V: OfMemSize + Send + Display + Debug> Display for SyncWrapper<V> {
 }
 
 impl SyncWrapper<Tensor> {
-    pub fn new_t(t:Tensor) -> Self {
-        SyncWrapper::new(t, |b|b.shallow_clone())
+    pub fn wrap_tensor(t:Tensor) -> Self {
+
+        Self {
+            v:t,
+            shallow_clone_fn: |b|b.shallow_clone(),
+            cache_areas: 0,
+        }
     }
 }
 
+fn assert_sync<T: Sync>() {}
 
 impl<V> SyncWrapper<V>
 where
     V: OfMemSize + Send + Debug,
 {
-    pub fn new(v: V, shallow_clone_fn: fn(&V) -> V) -> Self {
+    pub fn wrap(v: V, shallow_clone_fn: fn(&V) -> V) -> Self  where V:Sync{
+
+        assert_sync::<V>();
+
         Self {
             v,
             shallow_clone_fn,
@@ -667,7 +625,7 @@ where
 
 impl From<Tensor> for SyncWrapper<Tensor> {
     fn from(t: Tensor) -> Self {
-        SyncWrapper::new_t(t)
+        SyncWrapper::wrap_tensor(t)
     }
 }
 
@@ -772,7 +730,7 @@ mod tests {
         thread::sleep(Duration::new(0, rand::thread_rng().gen_range(1e3 as u32..3e6 as u32)));
         // thread::sleep(Duration::new(0, 5e8 as u32));
 
-        super::SyncWrapper::new(
+        super::SyncWrapper::wrap(
             TestEntity {
                 key: key.clone()
             },
@@ -828,7 +786,7 @@ mod tests {
         let wg = WaitGroup::new();
         let wg_exec = wg.clone();
 
-        executor.exec_2(move |future_id, loader_arc, keys_purge, done_sender| {
+        executor.exec(move |future_id, loader_arc, keys_purge, done_sender| {
             async move {
                 MyFuture::new(future_id, done_sender.clone()).await;
                 debug!("MyFuture done 1 thread::name={:?}", thread::current().name());
@@ -914,7 +872,7 @@ mod tests {
 
             (0..num_chunks).into_par_iter().for_each(|b| {
 
-                // exec_0.write().preload(&[aaa_resources[b].clone(), bbb_resources[b].clone()].concat(), cache_area_0);
+                exec_0.write().preload(&[aaa_resources[b].clone(), bbb_resources[b].clone()].concat(), cache_area_0);
 
                 (0..num_items).for_each(|j| {
                     let i = b * 10 + j;
@@ -928,15 +886,15 @@ mod tests {
                     let aaa_resources= aaa_resources.clone();
                     let bbb_resources= bbb_resources.clone();
 
-                    exec_0.write().exec_2(move |id, loader_arc, keys_purge, done_sender| {
+                    exec_0.write().exec(move |id, loader_arc, keys_purge, done_sender| {
                         async move {
-                            debug!("test 0 exec {id} a");
+                            debug!("test 0 exec a {id} key={:?}", aaa_resources[b][j]);
                             let t = Instant::now();
-                            let _out_a = Loader::load_future_2(Arc::clone(&loader_arc), aaa_resources[b][j].clone(), cache_area_0, id, done_sender.clone()).await;
+                            let _out_a = Loader::load_future(Arc::clone(&loader_arc), aaa_resources[b][j].clone(), cache_area_0, id, done_sender.clone()).await;
 
-                            debug!("test 0 exec {id} b");
-                            let _out_b = Loader::load_future_2(loader_arc, bbb_resources[b][j].clone(), cache_area_0, id, done_sender.clone()).await;
-                            debug!("test 0 exec {id} c");
+                            debug!("test 0 exec b {id} key={:?}", bbb_resources[b][j].clone());
+                            let _out_b = Loader::load_future(loader_arc, bbb_resources[b][j].clone(), cache_area_0, id, done_sender.clone()).await;
+                            debug!("test 0 exec c {id}");
                             let time = t.elapsed().as_millis();
                             // *waiting_time_guard += time;
                             //
@@ -969,7 +927,7 @@ mod tests {
             debug!("cache_area_1={cache_area_1:064b}");
 
             (0..num_items / 10).into_par_iter().for_each(|b| {
-                // exec_1.write().preload(&[bbb_resources[b].clone(), ccc_resources[b].clone()].concat(), cache_area_1);
+                exec_1.write().preload(&[bbb_resources[b].clone(), ccc_resources[b].clone()].concat(), cache_area_1);
 
                 (0..10).for_each(|j| {
                     let i = b * 10 + j;
@@ -982,14 +940,14 @@ mod tests {
                     let bbb_resources= bbb_resources.clone();
                     let ccc_resources= ccc_resources.clone();
 
-                    exec_1.write().exec_2(move |id, loader, keys_purge, done_sender| {
+                    exec_1.write().exec(move |id, loader, keys_purge, done_sender| {
                         async move {
-                            debug!("test 1 exec {id} a");
+                            debug!("test 1 exec a {id} key={:?}", bbb_resources[b][j]);
                             let t = Instant::now();
-                            let _out_a = Loader::load_future_2(Arc::clone(&loader), bbb_resources[b][j].clone(), cache_area_1, id, done_sender.clone()).await;
-                            debug!("test 1 exec {id} b");
-                            let _out_b = Loader::load_future_2(loader, ccc_resources[b][j].clone(), cache_area_1, id, done_sender.clone()).await;
-                            debug!("test 1 exec {id} c");
+                            let _out_a = Loader::load_future(Arc::clone(&loader), bbb_resources[b][j].clone(), cache_area_1, id, done_sender.clone()).await;
+                            debug!("test 1 exec b {id} key={:?}", ccc_resources[b][j].clone());
+                            let _out_b = Loader::load_future(loader, ccc_resources[b][j].clone(), cache_area_1, id, done_sender.clone()).await;
+                            debug!("test 1 exec c {id}");
 
                             let time = t.elapsed().as_millis();
 
