@@ -475,11 +475,11 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
     ) {
         debug!("LoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area}");
 
-        loader.write().exec_scoped(move |loader, keys_purge| {
+        loader.write().exec_scoped(move |future_id, loader, keys_purge, done_sender| {
             async move {
                 debug!("LoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area}");
                 let resource_id_debug = resource_id.clone();
-                let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area, 0).await;
+                let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area, future_id, done_sender).await;
 
                 debug!("LoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area}");
 
@@ -626,14 +626,14 @@ impl <DI:Dims, DO:Dims> ClassTensorsLoaderData<DI, DO> {
         let area = loader.write().get_available_cache_area();
         let mut rng = thread_rng();
         let rnd_resoruces = resources.choose_multiple(&mut rng, batch_size).map(|v|v.clone()).collect::<Vec<_>>();
-        loader.write().exec(move |loader, keys_purge| {
+        loader.write().exec(move |future_id, loader, keys_purge, done_sender| {
             async move {
                 let mut resources_to_purge = Vec::with_capacity(batch_size);
 
                 for (resource_id, labels_p) in rnd_resoruces {
                     resources_to_purge.push(resource_id.clone());
 
-                    let t =  Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id.clone(), 0, 0).await;
+                    let t =  Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id.clone(), 0, future_id, done_sender.clone()).await;
 
                     let mut guard = x_y_acc_in_exec.lock();
 
@@ -4022,7 +4022,7 @@ mod train_tests {
     fn test_loading_tensors_data_batch(){
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
-                SyncWrapper::new_t({
+                SyncWrapper::wrap_tensor({
                     match key.file_stem() {
                         "aaa"=>  {
                             let t_0_0 = Tensor::from_slice(&[0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]); //t 0 channel 0

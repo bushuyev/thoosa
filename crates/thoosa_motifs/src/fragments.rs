@@ -104,12 +104,12 @@ pub fn motifs_to_tensor(
 
     let find_motifs_run_config_applicable = find_motifs_run_config.to_applicable(ws.read().deref(), Cpu);
 
-    loader.write().exec(move |loader, _| {
+    loader.write().exec(move |future_id, loader, _purge_resources, done_sender| {
         async move {
 
             for (resource, motif_slices) in resource_id_motif_slices {
                 debug!("motifs_to_tensor: resource={resource:?}");
-                let t =   Loader::<Tensor>::load_future(Arc::clone(&loader), resource, area, 0).await;
+                let t =   Loader::<Tensor>::load_future(Arc::clone(&loader), resource, area, future_id, done_sender.clone()).await;
                 debug!("motifs_to_tensor: t.size={:?}", t.size());
                 let applied = find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::FilterUnfold).expect("find_motifs_run_config_for_loader.apply");
                 debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
@@ -126,7 +126,7 @@ pub fn motifs_to_tensor(
                     let  motif_slices = channels_motifs.entry(motif_slice.motif_id as usize).or_insert_with(||Vec::new());
 
 
-                    motif_slices.push(SyncWrapper::new_t(motif_slice_t));
+                    motif_slices.push(SyncWrapper::wrap_tensor(motif_slice_t));
                 }
             }
 
@@ -330,10 +330,10 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
 
             let all_slices = Arc::clone(&all_slices);
             let wg = wg.clone();
-            loader.write().exec_scoped(move |loader, _keys_purge| {//TODO purge
+            loader.write().exec_scoped(move |future_id, loader, _purge_resources, done_sender| {//TODO purge
                 async move {
                     let tensor_idx_id = resource.id();
-                    let t = Loader::<Tensor>::load_future(loader, resource, 0, 0).await;
+                    let t = Loader::<Tensor>::load_future(loader, resource, 0, future_id, done_sender).await;
                     let t= find_motifs_run_config_applicable.apply(&t.into(), FindMotifsRunConfigOptions::Filter).unwrap();
 
                     debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
@@ -349,7 +349,7 @@ pub fn load_motif_slices (channel: i64, find_motifs_run_config_applicable: &Find
 
                              slice_ok
                          }).map(|slice_idx|
-                             SyncWrapper::new_t(t.as_ref().i((channel, slice_idx as i64..(slice_idx + window )as i64)))
+                             SyncWrapper::wrap_tensor(t.as_ref().i((channel, slice_idx as i64..(slice_idx + window )as i64)))
                          ).collect::<Vec<SyncWrapper<Tensor>>>()
                         )
                     );
@@ -474,7 +474,7 @@ mod motifs_tests {
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
-                SyncWrapper::new_t(
+                SyncWrapper::wrap_tensor(
                     test_tensor(key)
                 )
             }, 4, 100,
@@ -576,7 +576,7 @@ mod motifs_tests {
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
             ]);
 
-            SyncWrapper::new(t,|t|t.shallow_clone())
+            SyncWrapper::wrap(t, |t|t.shallow_clone())
         }
 
         let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
@@ -605,7 +605,7 @@ mod motifs_tests {
                 Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
             ]);
 
-            SyncWrapper::new(t,|t|t.shallow_clone())
+            SyncWrapper::wrap(t, |t|t.shallow_clone())
         }
 
         let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
