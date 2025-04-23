@@ -20,7 +20,6 @@ crossbeam.workspace = true
 crossbeam-channel.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
-parking_lot_mpsc.workspace = true
 clap.workspace = true
 rayon.workspace = true
 serde.workspace = true

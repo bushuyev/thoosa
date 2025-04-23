@@ -24,9 +24,10 @@ use std::sync::Arc;
 use std::thread::current;
 use std::time::{Duration, Instant};
 use std::{f64, fmt, fs, mem, thread};
+use std::num::NonZero;
 use tch::{Device, IndexOp, Kind, Tensor};
 use std::panic::AssertUnwindSafe;
-
+use futures::future::join_all;
 use thoosa_common::utils::*;
 use thoosa_shared::{avg_hist, parse_key_val};
 use thoosa_shared::val::Val;
@@ -162,7 +163,7 @@ pub fn find_min_euc_dist(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
+        &mut move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
 
             debug!("find_min_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
@@ -282,7 +283,7 @@ pub fn find_motifs_by_euc_dist(
         resource_keys,
         common_config.chunk_size as usize,
         &run_configs_arcs,
-        move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
+        &mut move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>, chunk_sliced_1: &ChunkOfSlicedTensors, find_motifs_run_config:&Arc<FindMotifsApplicable>| {
 
             debug!("find_motifs_by_euc_dist/gpu_fn: \nchunk_sliced_0={chunk_sliced_0:?} \nchunk_sliced_1={chunk_sliced_1:?}");
 
@@ -501,7 +502,7 @@ fn chunk_and_slice_2x<G, C, D>(
     resources: Vec <Resource>,
     chunk_size: usize,
     run_configs:&Vec<Arc<FindMotifsApplicable>>,
-    mut gpu_fn: G,
+    mut gpu_fn: &mut G,
     mut cpu_fn: &C,
     loader: &Arc<RwLock< LoadRunner<Tensor>>>
 ) -> Result<(), ThoosaError>
@@ -522,16 +523,7 @@ where
         resource_chunks.push(vec![]); //to get last window processed
 
         let (tx, rx) = crossbeam_channel::unbounded::<(RunId, D, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
-        let trackers_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(32)//TODO config
-            .spawn_handler(|thread_builder| {
 
-                let b = thread::Builder::new();
-                b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
-                    .spawn(|| thread_builder.run())?;
-
-                Ok(())
-        }).build().expect("trackers_pool");
 
         let area_0 = loader.write().get_available_cache_area();
         let area_1 = loader.write().get_available_cache_area();
@@ -569,14 +561,14 @@ where
 
                 loader.write().exec(|future_id, loader, keys_purge, done_sender| {
                     async move {
-                        for key in &window_0_0 {
-                            debug!("0. exec:callback_arc: key={key:?}");
 
-                            let sync_wrapper = SyncWrapper::wrap_tensor(
-                                Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, future_id, done_sender.clone()).await
-                            );
-                            window_0_tensors_arc.write().push(sync_wrapper);
-                        }
+                        let tensors = join_all(
+                            window_0_0.iter()
+                                .map(|key|Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, future_id, done_sender.clone()))
+                        ).await;
+
+                        window_0_tensors_arc.write().extend(tensors.into_iter().map(|t|SyncWrapper::wrap_tensor(t)));
+
                         drop(wg_0_clone);
                     }.boxed()
                 });
@@ -617,14 +609,14 @@ where
 
                     loader.write().exec(|future_id, loader, keys_purge, done_sender| {
                         async move {
-                            for key in &window_1_0 {
-                                debug!("chunk_and_slice: 1. exec:callback_arc: key={key:?}");
 
-                                let sync_wrapper = SyncWrapper::wrap_tensor(
-                                    Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_1, future_id, done_sender.clone()).await
-                                );
-                                window_1_tensors_arc.write().push(sync_wrapper);
-                            }
+                            let tensors = join_all(
+                                window_1_0.iter()
+                                    .map(|key|Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, future_id, done_sender.clone()))
+                            ).await;
+
+                            window_1_tensors_arc.write().extend(tensors.into_iter().map(|t|SyncWrapper::wrap_tensor(t)));
+
                             drop(wg_1_clone);
                         }.boxed()
                     });
@@ -684,6 +676,17 @@ where
             drop(tx);
         });
 
+
+        let trackers_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(thread::available_parallelism().map(|v|v.get()/2).unwrap_or(16))//TODO config
+            .spawn_handler(|thread_builder| {
+
+                let b = thread::Builder::new();
+                b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
+                    .spawn(|| thread_builder.run())?;
+
+                Ok(())
+            }).build().expect("trackers_pool");
 
         trackers_pool.scope(|s| {
             for (run_config_id, t, chunk_0, chunk_1) in rx.iter() {
@@ -1383,7 +1386,7 @@ pub fn select_motifs_by_corr (
 ) -> Result<Vec<Vec<(i64, f64)>>, ThoosaError> {
 
     let (channels_num, motifs_num, channels_motifs_classes_lock) = clc_channels_motifs_labels(
-        Arc::new(RwLock::new(SyncWrapper::wrap(motifs, |e| e.shallow_clone()))),
+        Arc::new(RwLock::new(SyncWrapper::wrap_tensor(motifs))),
         labels_loaders,
         executor,
         step,
@@ -1512,7 +1515,6 @@ mod motif_find_tests {
     use log::LevelFilter::Trace;
     use log::{debug, set_max_level, trace};
     use parking_lot::RwLock;
-    use parking_lot_mpsc::SendError;
     use plotters::prelude::full_palette::ORANGE_800;
     use plotters::prelude::{Color, RGBAColor, ShapeStyle};
     use plotters::style::full_palette::{GREY_A100, YELLOW_A100};
@@ -2225,13 +2227,12 @@ mod motif_find_tests {
                     _ => panic!("no")
                 };
 
-                SyncWrapper::wrap(
+                SyncWrapper::wrap_tensor(
                     Tensor::vstack(&[
                         Tensor::from_slice(
                             sig.as_slice()
                         ), //ch 0
-                    ]),
-                    |e| e.shallow_clone()
+                    ])
                 )
             }, 4, 100,
         )));
@@ -2721,7 +2722,7 @@ mod motif_find_tests {
         ]).totype(Int);
 
         let _threshold = 2.;
-        let tensor = super::clc_dist_matches(&t_0, Arc::new(RwLock::new(SyncWrapper::wrap(motifs_t, |e|e.shallow_clone()))), 1, Arc::new(RwLock::new(HashMap::from([
+        let tensor = super::clc_dist_matches(&t_0, Arc::new(RwLock::new(SyncWrapper::wrap_tensor(motifs_t))), 1, Arc::new(RwLock::new(HashMap::from([
             (1, 0.01),
             (2, 0.01),
             (3, 0.01),
@@ -2781,7 +2782,7 @@ mod motif_find_tests {
             2,
             &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))],
             // HashMap::new(),
-            move |chunk_0, chunk_1, _find_motifs_run_config| {
+            &mut move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
 
                 trace!("callback: chunk_0.t=\n{}", chunk_0.t.i((0, .., ..)).squeeze());

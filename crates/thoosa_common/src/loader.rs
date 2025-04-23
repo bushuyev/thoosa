@@ -1,5 +1,4 @@
 use parking_lot::{Condvar, Mutex, RwLock};
-use parking_lot_mpsc::*;
 use log::{debug, log_enabled, trace, Level};
 use std::sync::Arc;
 use std::hash::Hash;
@@ -17,6 +16,7 @@ use std::pin::Pin;
 use futures::task::Poll;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::task::Waker;
+use crossbeam_channel::Sender;
 use futures::Future;
 use futures::{
     future::{BoxFuture, FutureExt},
@@ -68,7 +68,7 @@ impl<V> Loader<V>
 where
     V: OfMemSize + Send + Debug + 'static,
 {
-    pub fn preload(self_arc: Arc<RwLock<Loader<V>>>, keys: &[Resource], cache_area: u64, done_sender:SyncSender<<LoadRunner<V> as KeyMaker>::Key>) {
+    pub fn preload(self_arc: Arc<RwLock<Loader<V>>>, keys: &[Resource], cache_area: u64, done_sender:Sender<<LoadRunner<V> as KeyMaker>::Key>) {
         debug!("preload_vec: keys={keys:?} cache_area={cache_area:064b}");
         let mut self_write_guard = self_arc.write();
 
@@ -106,7 +106,7 @@ where
         };
     }
 
-    pub fn load_future(self_arc: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64, future_id: <LoadRunner<V> as KeyMaker>::Key, done_sender:SyncSender<<LoadRunner<V> as KeyMaker>::Key>) -> BoxFuture<'static, V> {
+    pub fn load_future(self_arc: Arc<RwLock<Loader<V>>>, key: Resource, cache_area: u64, future_id: <LoadRunner<V> as KeyMaker>::Key, done_sender:Sender<<LoadRunner<V> as KeyMaker>::Key>) -> BoxFuture<'static, V> {
         let mut self_lock = self_arc.write();
 
         if !self_lock.resources.contains_key(&key) && !self_lock.resources_being_loaded.contains_key(&key) {
@@ -137,7 +137,7 @@ where
         loader_fn: Arc<Box<dyn Fn(&'a Resource) -> SyncWrapper<V> + Sync + Send>>,
         loader_arc: Arc<RwLock<Loader<V>>>,
         key: &'a Resource,
-        done_sender:SyncSender<<LoadRunner<V> as KeyMaker>::Key>
+        done_sender:Sender<<LoadRunner<V> as KeyMaker>::Key>
     ) {
         let mut v = loader_fn(key);
         debug!("Loader::loader_task: in loader_pool 0 current_thread={:?} key={:?}", thread::current().id(), key);
@@ -219,8 +219,8 @@ where
 {
     futures_pool: ThreadPool,
     futures: Arc<RwLock<HashMap<<Self as KeyMaker>::Key, Mutex<BoxFuture<'static, ()>>>>>,
-    new_futures_sender: SyncSender<(<Self as KeyMaker>::Key, Mutex<BoxFuture<'static, ()>>)>,
-    done_futures_sender: SyncSender<<Self as KeyMaker>::Key>,
+    new_futures_sender: Sender<(<Self as KeyMaker>::Key, Mutex<BoxFuture<'static, ()>>)>,
+    done_futures_sender: Sender<<Self as KeyMaker>::Key>,
     stop: Arc<AtomicBool>,
     cache_areas: u64,
     loader: Arc<RwLock<Loader<V>>>,
@@ -252,8 +252,8 @@ where
 
         let stop = Arc::new(AtomicBool::new(false));
 
-        let (new_futures_sender, new_futures_receiver) = sync_channel::<(<Self as KeyMaker>::Key, Mutex<BoxFuture<()>>)>(futures_channel_bound);
-        let (done_futures_sender, done_futures_receiver) = sync_channel::<<Self as KeyMaker>::Key>(futures_channel_bound);
+        let (new_futures_sender, new_futures_receiver) = crossbeam_channel::bounded::<(<Self as KeyMaker>::Key, Mutex<BoxFuture<()>>)>(futures_channel_bound);
+        let (done_futures_sender, done_futures_receiver) = crossbeam_channel::bounded::<<Self as KeyMaker>::Key>(futures_channel_bound);
 
         futures_pool.spawn(move || {
             let mut cx = Context::from_waker(Waker::noop());
@@ -363,7 +363,7 @@ where
             <Self as KeyMaker>::Key,//future_id
             Arc<RwLock<Loader<V>>>,
             Box<dyn FnOnce(&[Resource], u64) + Send>,
-            SyncSender<<Self as KeyMaker>::Key>
+            Sender<<Self as KeyMaker>::Key>
         ) -> BoxFuture<'static, ()>,
 
     {
@@ -385,7 +385,7 @@ where
             self.done_futures_sender.clone(),
         );
 
-        self.new_futures_sender.send((future_id, Mutex::new(future))).expect("future_sender.send");
+        self.new_futures_sender.send((future_id, Mutex::new(future))).expect("future_sender.send");//TODO change to await
 
 
         trace!("exec: future {future_id} sent");
@@ -397,7 +397,7 @@ where
             <Self as KeyMaker>::Key,
             Arc<RwLock<Loader<V>>>,
             Box<dyn FnOnce(&[Resource], u64) + Send>,
-            SyncSender<<Self as KeyMaker>::Key>
+            Sender<<Self as KeyMaker>::Key>
         ) -> BoxFuture<'s, ()>,
     {
         let loader_for_purge = Arc::clone(&self.loader);
@@ -651,12 +651,12 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::Ordering::Relaxed;
     use std::time::{Duration, Instant};
+    use crossbeam_channel::Sender;
     use crossbeam_utils::sync::WaitGroup;
     use futures::FutureExt;
     use log::{debug, set_max_level, LevelFilter};
     use log::LevelFilter::{Info, Trace};
     use parking_lot::RwLock;
-    use parking_lot_mpsc::SyncSender;
     use rand::Rng;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
@@ -750,7 +750,7 @@ mod tests {
         }
 
         impl MyFuture {
-            fn new(future_id:<LoadRunner<TestEntity> as KeyMaker>::Key, done_sender:SyncSender<<LoadRunner<TestEntity> as KeyMaker>::Key>) -> Self {
+            fn new(future_id:<LoadRunner<TestEntity> as KeyMaker>::Key, done_sender:Sender<<LoadRunner<TestEntity> as KeyMaker>::Key>) -> Self {
                 let done = Arc::new(RwLock::new(false));
                 let done_for_thread = Arc::clone(&done);
 
