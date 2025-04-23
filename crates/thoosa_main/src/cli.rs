@@ -201,7 +201,7 @@ where
     let cpu_num = std::thread::available_parallelism()?;
     let loader_threads = cli
         .loader_threads
-        .unwrap_or_else(|| max(2, cpu_num.get() / 8));
+        .unwrap_or_else(|| max(2, cpu_num.get() / 2));
 
     //TODO torch.backends.cuda.matmul.allow_tf32 = True
     info!("VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} loader_threads={loader_threads} tch::get_num_interop_threads={}, tch::get_num_threads={}",  cli.ws_path, tch::get_num_interop_threads(), tch::get_num_threads());
@@ -2141,7 +2141,7 @@ mod cli_tests {
                     Tensor::load(&path).expect(format!("can't open {path:?}").as_str()),
                 )
             },
-            4,
+            8, //std::thread::available_parallelism as usize/8,
             100,
         )));
 

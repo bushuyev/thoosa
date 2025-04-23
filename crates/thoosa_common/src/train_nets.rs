@@ -815,30 +815,6 @@ pub fn run_opt_train_label_nets(
     })
 }
 
-
-pub fn train_label_net_max<B:DataBatch<ChannelsMotifsData>> (
-    motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>,
-    run_config:&TrainLabelNetsRunConfig,
-    mut batch:&mut B,
-    var_store: &VarStore,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    device: &Device,
-) ->  Result<(f32, LabelNetParams), ThoosaError> {
-    todo!()
-}
-
-
-pub fn train_label_net_fixed<B:DataBatch<ChannelsMotifsFlattenedData>> (
-    motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>,
-    run_config:&TrainLabelNetsRunConfig,
-    mut batch:&mut B,
-    var_store: &VarStore,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    device: &Device,
-) ->  Result<(f32, LabelNetParams), ThoosaError> {
-    todo!()
-}
-
 pub fn train_label_net<DI:Dims+Send+'static, DO:Dims+Send+'static, B:DataBatch<DI>> (
     net:&Box<dyn ThoModule<Batch<DI>, DO>>,
     run_config:&TrainLabelNetsRunConfig,
@@ -883,20 +859,6 @@ pub fn train_label_net<DI:Dims+Send+'static, DO:Dims+Send+'static, B:DataBatch<D
     )?;
 
     Ok(loss)
-}
-
-//t - input label tensors batch size x channels x max motif nets x motif batches x motif batch size
-fn view_for_label_model(t: Tensor, channels: i64, max_motif_nets: i64, motif_batch_size: i64, max_motif_batches: usize) -> Tensor {
-    assert_eq!(t.size().len(), 5, "view_for_label_model: t.size()={:?}, should be 5 dims", t.size());
-
-    debug!("view_for_label_model: t.size={:?} channels={channels}, max_motif_nets={max_motif_nets}, max_motif_batches={max_motif_batches} motif_batch_size={motif_batch_size} max_motif_batches as i64 * motif_batch_size={}", t.size(), max_motif_batches as i64 * motif_batch_size);
-
-    // let t = t.view([-1/*items_per_label as i64 * 2*/, channels, max_nodes, max_motif_batches as i64 * motif_batch_size]);
-    let t = t.flatten(3,4);
-
-    debug!("view_for_label_model: 2. t.size={:?}", t.size());
-
-    t
 }
 
 pub fn run_opt_train_final_net(
