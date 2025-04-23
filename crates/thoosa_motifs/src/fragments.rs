@@ -570,16 +570,16 @@ mod motifs_tests {
     #[test]
     fn test_load_motif_slices()-> Result<(), ThoosaError>{
 
-        fn test_eeg_to_t(_eeg_id:&Resource) -> SyncWrapper<Tensor> {
+        fn test_load(_eeg_id:&Resource) -> SyncWrapper<Tensor> {
             let t = Tensor::vstack(&[
                 Tensor::from_slice(&[0., 1.,  2.,  3.]), //ch 0
                 Tensor::from_slice(&[0.1, 10.1, 20.1, 30.1])  //ch 1
             ]);
 
-            SyncWrapper::wrap(t, |t|t.shallow_clone())
+            SyncWrapper::wrap_tensor(t)
         }
 
-        let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
+        let executor = LoadRunner::new(test_load, 4, 100);
         let executor_rc = Arc::new(RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
@@ -605,7 +605,7 @@ mod motifs_tests {
                 Tensor::from_slice((0..16781).map(|v| v as f32).collect::<Vec<f32>>().as_slice()) //ch 0
             ]);
 
-            SyncWrapper::wrap(t, |t|t.shallow_clone())
+            SyncWrapper::wrap_tensor(t)
         }
 
         let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
