@@ -2,7 +2,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::DirEntry;
-use polars::prelude::{col, concat_list, lit, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, ScanArgsParquet, Series};
+use polars::prelude::{col, concat_list, lit, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions};
 use log::debug;
 use polars::datatypes::DataType;
 use polars::frame::DataFrame;
@@ -57,20 +57,26 @@ impl Splitter for ByPatientIdSplitter {
             col("lrda_vote").sum(),
             col("grda_vote").sum(),
             col("other_vote").sum(),
-        ]).sort_by_exprs([
-                             col("seizure_vote")
-                                 + col("lpd_vote")
-                                 + col("gpd_vote")
-                                 + col("lrda_vote")
-                                 + col("grda_vote")
-                                 + col("other_vote")
-                         ],
-                         vec![false], true, true
+        ])
+        .sort_by_exprs(
+            [col("seizure_vote")
+                + col("lpd_vote")
+                + col("gpd_vote")
+                + col("lrda_vote")
+                + col("grda_vote")
+                + col("other_vote")],
+            SortMultipleOptions {
+                descending: vec![false],
+                maintain_order: true,
+                nulls_last: vec![true],
+                multithreaded: false,
+                limit: None,
+            },
         )
-            .select([col("patient_id")])
-            .collect()?;
+        .select([col("patient_id")])
+        .collect()?;
 
-        let df_set = df_sorted.with_column(Series::new("set", (0..df_sorted.shape().0).map(|_i| if rand::random::<f32>() > self.train_frac { 1i32 } else { 0i32 }).collect::<Vec<_>>()))?;
+        let df_set = df_sorted.with_column(Series::new("set".into(), (0..df_sorted.shape().0).map(|_i| if rand::random::<f32>() > self.train_frac { 1i32 } else { 0i32 }).collect::<Vec<_>>()))?;
 
         Ok(df.clone().join(df_set.clone().lazy(), [col("patient_id")], [col("patient_id")], JoinArgs::new(JoinType::Left)))
         // Ok(df.clone().with_column(lit(1).alias("set"))) //.collect()?.lazy()
@@ -346,9 +352,15 @@ impl EEGs {
     pub fn good_eegs(base_path: &str)  -> Result<Series, ThoosaError>{
         let good_eegs_filter = Self::good_eegs_filter(base_path)?;
 
-        Ok(good_eegs_filter
-            .collect()?
-            .column("eeg_id")?.clone())
+
+            Ok(
+                good_eegs_filter
+                .collect()?
+                .column("eeg_id")?
+                .as_series()
+                .map(|v|v.clone())
+                .unwrap()
+            )
 
     }
 
@@ -360,19 +372,25 @@ impl EEGs {
             .filter(col(kind).gt(lit(0)))
                 // .sort(kind, SortOptions{ descending: true, ..Default::default()})
                 // .sort("eeg_id", Default::default())
-                .sort_by_exprs(vec![col(kind), col("eeg_id")], vec![true, false], true, true)
+                // .sort_by_exprs(vec![col(kind), col("eeg_id")], vec![true, false], true, true)
+                .sort_by_exprs(
+                    vec![col(kind), col("eeg_id")],
+                    SortMultipleOptions {
+                    descending: vec![true, false],
+                    maintain_order: true,
+                    nulls_last: vec![true],
+                    multithreaded: false,
+                    limit: None,
+                })
             .collect()?
             .column("eeg_id")?.clone();
 
 
-        match limit {
-            None => {
-                Ok(eeg_id_series)
-            }
-            Some(v) => {
-                Ok(eeg_id_series.limit(v))
-            }
-        }
+        let s = eeg_id_series.as_series().unwrap();
+        Ok(match limit {
+            None => s.clone(),
+            Some(v) => s.limit(v),
+        })
     }
 
     fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, ThoosaError> {
@@ -556,7 +574,7 @@ impl EEGs {
             // .top_k(100, [col("eeg_id")], [false], false, false)
             .group_by([col("eeg_id")])
             .agg([
-                col("eeg_label_offset_seconds").sort(false).alias("eeg_label_offset_seconds"),
+                col("eeg_label_offset_seconds").alias("eeg_label_offset_seconds"),
                 // col("set").first(),
                 col("seizure_vote").first(),
                 col("lpd_vote").first(),
@@ -645,9 +663,9 @@ mod tests {
     use log::debug;
     use log::LevelFilter::Trace;
     use parking_lot::{Mutex, RwLock};
+    use plotters::count;
     use plotters::prelude::{BLACK, RED};
-    use polars::export::chrono;
-    use polars::prelude::{col, concat_list, count, lit, when, LazyCsvReader, LazyFileListReader, NamedFrom, Series};
+    use polars::prelude::{col, concat_list, lit, when, LazyCsvReader, LazyFileListReader, NamedFrom, Series};
     use tch::{Device, IndexOp, TchError, Tensor};
     use tch::Device::Cpu;
     use tch::Kind::Float;
@@ -798,7 +816,7 @@ mod tests {
                     .alias("win_vote")
             )
             .group_by([col("win_vote")])
-            .agg([count().alias("votes_count")])
+            .agg([col("*").count().alias("votes_count")])
             .collect()?;
 
         debug!("df={:?}", df);
@@ -822,7 +840,7 @@ mod tests {
         let eegs = EEGs::load_eegs (
             "../../data",
             // Some(col("eeg_id").eq(lit(1345588872))),
-            Some(col("patient_id").is_in(lit(Series::new("eegs_", &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
+            Some(col("patient_id").is_in(lit(Series::new("eegs_".into(), &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
             // Some(col("eeg_id").is_in(lit(good_eegs))),
             // None,
             // Some(col("all_votes").list().max().eq(col("all_votes").list().sum())),
