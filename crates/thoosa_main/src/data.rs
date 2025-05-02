@@ -125,9 +125,9 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 
     assert!(ids.len() > 1);
 
-    df.with_column(Series::from_vec("frag_id", ids))?;
+    df.with_column(Series::from_vec("frag_id".into(), ids))?;
 
-    df.partition_by(&["frag_id"], false)
+    df.partition_by::<_, &str>(["frag_id"], false)
 }
 
 
@@ -147,7 +147,7 @@ pub fn load_to_logits_tensors(group: &str, store: Arc<Mutex<Box<dyn Store>>>) ->
 pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, ThoosaError> {
     let df = read_parquet_to_df(path)?;
 
-    let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s).unwrap()).collect::<Vec<Tensor>>());
+    let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s.as_series().unwrap()).unwrap()).collect::<Vec<Tensor>>());
     Ok(tensor.set_requires_grad(false).to_device(device))
 }
 
@@ -180,24 +180,24 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
 }
 
 
-pub fn save_tensor(columns:&[&str], ids:Vec<String>, t:&Tensor, path: &str) {
+pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
     assert_eq!(t.size().len(), 2);
     assert_eq!(t.size()[1] as usize, columns.len() - 1);
 
     let mut df = DataFrame::new(
         [
-            vec![Series::new(columns[0], ids)],
-
-            columns.into_iter().skip(1).enumerate().map(move |(i, c)| {
-                Series::new(c, from::<Vec<f32>>(&t.i((.., i as i64))).as_slice())
+            vec![Series::new(columns[0].into(), ids).into()],
+            columns.iter().skip(1).enumerate().map(|(i, c)| {
+                let col_tensor = t.i((.., i as i64));
+                let col_data: Vec<f32> = from::<Vec<f32>>(&col_tensor);
+                Series::new((*c).into(), col_data).into()
             }).collect()
-        ].concat()
+        ]
+            .concat()
     ).unwrap();
-
 
     let mut file = std::fs::File::create(path).unwrap();
     CsvWriter::new(&mut file).finish(&mut df).unwrap();
-
 }
 
 pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String, store: Arc<Mutex<Box<dyn Store>>>) -> Vec<(i64, Vec <Resource>)>  {
@@ -220,11 +220,14 @@ pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String
 
 #[cfg(test)]
 mod data_tests {
+    use std::mem::forget;
     use log::debug;
     use polars::prelude::*;
+    use polars_arrow::array::Float32Array;
+    use polars_arrow::buffer::Buffer;
     use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{IndexOp, Tensor};
+    use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::test_utils::init_test_logging;
     use crate::data::{arr_to_expr, split_frame_by_offsets};
@@ -234,8 +237,10 @@ mod data_tests {
         init_test_logging();
     }
 
+
     #[test]
     pub fn test_arr_to_expr() -> Result<(), ThoosaError> {
+
         let df: DataFrame = df!(
             "val"       => [1, 2, 3, 4, 5, 6, 7, 8, 9],
         )?;
@@ -246,7 +251,7 @@ mod data_tests {
 
         let df = df
             .lazy()
-            .with_row_count("id", None)
+            .with_row_index("id", None)
             .filter(filter_exps)
             .collect()?;
 

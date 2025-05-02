@@ -59,7 +59,7 @@ mod tests {
     use cudarc::driver::sys::CUdeviceptr_v2;
     use log::{debug, info};
     use parking_lot::Mutex;
-    use polars::export::rayon::iter::IntoParallelIterator;
+
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -68,7 +68,7 @@ mod tests {
     use thoosa_motifs::distance::{dist_d2, clc_dist_d2_and_mask};
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_shared::ThoosaError;
-    use polars::export::rayon::iter::ParallelIterator;
+
     use thoosa_common::loader::SyncWrapper;
 
     #[ctor::ctor]

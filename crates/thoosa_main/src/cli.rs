@@ -7,7 +7,6 @@ use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn, Level, LevelFilter};
 use parking_lot::{Mutex, RawMutex, RwLock};
 use plotters::prelude::BLACK;
-use polars::export::arrow::pushable::Pushable;
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::cmp::max;
@@ -1204,8 +1203,6 @@ mod cli_tests {
     use parking_lot::lock_api::MutexGuard;
     use parking_lot::{Mutex, RawMutex, RawRwLock, RwLock};
     use plotters::prelude::{IntoLinspace, BLACK};
-    use polars::export::arrow::array::clone;
-    use polars::export::chrono;
     use rand::Rng;
     use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
     use rayon::prelude::IntoParallelIterator;
