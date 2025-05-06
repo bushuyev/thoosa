@@ -231,18 +231,17 @@ impl<V> LoadRunner<V>
 where
     V: OfMemSize + Send + Debug + 'static,
 {
-    pub fn new<F>(loader: F, loader_threads: usize, futures_channel_bound: usize) -> Self
+    pub fn new<F>(loader: F, loader_threads: usize, futures_channel_bound: usize, num_future_threads: usize) -> Self
     where
         F: Fn(&Resource) -> SyncWrapper<V> + Sync + Send + 'static,
     {
         let futures: Arc<RwLock<HashMap<<Self as KeyMaker>::Key, Mutex<BoxFuture<()>>>>> = Arc::new(RwLock::new(HashMap::new()));
-        let futures_for_add = Arc::clone(&futures);
-        let futures_for_done = Arc::clone(&futures);
+
         let futures_rc = Arc::clone(&futures);
 
 
         //one for new_futures_receiver and another for done_futures_receiver
-        let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(2).spawn_handler(|thread_builder| {
+        let futures_pool = rayon::ThreadPoolBuilder::new().num_threads(2 * num_future_threads).spawn_handler(|thread_builder| {
             let b = thread::Builder::new();
             b.name(format!("{}/{:?}", "futures_pool", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
@@ -255,73 +254,85 @@ where
         let (new_futures_sender, new_futures_receiver) = crossbeam_channel::bounded::<(<Self as KeyMaker>::Key, Mutex<BoxFuture<()>>)>(futures_channel_bound);
         let (done_futures_sender, done_futures_receiver) = crossbeam_channel::bounded::<<Self as KeyMaker>::Key>(futures_channel_bound);
 
-        futures_pool.spawn(move || {
-            let mut cx = Context::from_waker(Waker::noop());
+        let new_futures_receiver_lock = Arc::new(new_futures_receiver);
+        let done_futures_receiver_lock = Arc::new(done_futures_receiver);
+        for p in 0..num_future_threads {
+            let futures_for_add = Arc::clone(&futures);
+            let futures_for_done = Arc::clone(&futures);
 
-            while let Ok((future_id, fut)) = new_futures_receiver.recv() {
-                debug!("new_futures_receiver: got {}", future_id);
+            let new_futures_receiver_lock = Arc::clone(&new_futures_receiver_lock);
+            let done_futures_receiver_lock = Arc::clone(&done_futures_receiver_lock);
 
-                futures_for_add.write().insert(future_id, fut);
+            futures_pool.spawn(move || {
+                let mut cx = Context::from_waker(Waker::noop());
 
-                /*
-                    LoadRunner polls futures only when external loaders finish their work to avoid polling all  futures in cycle.
-                    The future just checks if resource is ready in its poll method, no other work is done in future itself.
-                    If a resource gets downloaded/built after is_pending calculated and before futures_for_push.write().insert
-                    it gets stuck in Pending status. To avoid this the future is first always inserted, then retrieved with read_guard.get(&key),
-                    locked and held until key is removed if future is ready
-                 */
-                let mut remove_immediately = false;
-                {
-                    let read_guard = futures_for_add
-                        .read();
-                    let mut guard = read_guard
-                        .get(&future_id)
-                        .expect("just inserted")
-                        .lock();
+                while let Ok((future_id, fut)) = new_futures_receiver_lock.recv() {
+                    debug!("LoadRunner::new: new_futures_receiver: p={p} got {}", future_id);
 
-                    if guard.as_mut().poll(&mut cx).is_ready() {
-                        remove_immediately = true;
+                    futures_for_add.write().insert(future_id, fut);
+
+                    /*
+                        LoadRunner polls futures only when external loaders finish their work to avoid polling all futures in a cycle.
+                        The future just checks if resource is ready in its poll method, no other work is done in the future itself.
+                        If a resource gets downloaded/built after is_pending calculated and before futures_for_push.write().insert
+                        it gets stuck in Pending status. To avoid this, the future is first always inserted, then retrieved with read_guard.get(&key),
+                        locked and held until key is removed if future is ready
+                     */
+                    let mut remove_immediately = false;
+                    {
+                        let read_guard = futures_for_add
+                            .read();
+                        let mut guard = read_guard
+                            .get(&future_id)
+                            .expect("just inserted")
+                            .lock();
+
+                        if guard.as_mut().poll(&mut cx).is_ready() {
+                            remove_immediately = true;
+                        }
+                    }
+
+                    if remove_immediately {
+                        debug!("LoadRunner::new: new_futures_receiver: remove_immediately {}", future_id);
+                        futures_for_add.write().remove(&future_id);
                     }
                 }
+            });
 
-                if remove_immediately {
-                    debug!("new_futures_receiver: remove_immediately {}", future_id);
-                    futures_for_add.write().remove(&future_id);
-                }
-            }
-        });
-
-        futures_pool.spawn(move || {
-            let mut cx = Context::from_waker(Waker::noop());
+            futures_pool.spawn(move || {
+                let mut cx = Context::from_waker(Waker::noop());
 
 
-            while let Ok(future_id) = done_futures_receiver.recv() {
-                debug!("done_futures_receiver: got {}", future_id);
-                std::io::stdout().flush().unwrap();
+                while let Ok(future_id) = done_futures_receiver_lock.recv() {
+                    debug!("LoadRunner::new: done_futures_receiver:  p={p} got {}", future_id);
+                    std::io::stdout().flush().unwrap();
 
-                let mut map = futures_for_done.write();
+                    let mut map = futures_for_done.write();
 
-                if let std::collections::hash_map::Entry::Occupied(mut entry) = map.entry(future_id) {
-                    debug!("done_futures_receiver: getting {}", future_id);
-                    // poll while *still* owning the entry
-                    let ready = {
-                        let fut_mx = entry.get();
-                        let mut guard = fut_mx.lock();
-                        guard.as_mut().poll(&mut cx).is_ready()
-                    };
+                    if let std::collections::hash_map::Entry::Occupied(mut entry) = map.entry(future_id) {
+                        debug!("LoadRunner::new: done_futures_receiver: getting {}", future_id);
+                        // poll while *still* owning the entry
+                        let ready = {
+                            let fut_mx = entry.get();
+                            let mut guard = fut_mx.lock();
+                            guard.as_mut().poll(&mut cx).is_ready()
+                        };
 
-                    if ready {
-                        entry.remove();
-                        debug!("done_futures_receiver: {} ready", future_id);
-                    } else {
-                        debug!("done_futures_receiver: {} not ready", future_id);
+                        if ready {
+                            entry.remove();
+                            debug!("LoadRunner::new: done_futures_receiver: {} ready", future_id);
+                        } else {
+                            debug!("LoadRunner::new: done_futures_receiver: {} not ready", future_id);
+                        }
+                    } // write‑lock is released
+                    else {
+                        debug!("LoadRunner::new: done_futures_receiver: no entry for {}", future_id);
                     }
-                } // write‑lock is released
-                else {
-                    debug!("done_futures_receiver: no entry for {}", future_id);
                 }
-            }
-        });
+            });
+
+            debug!("LoadRunner::new: spawned {p} futures_pool threads");
+        }
 
         Self {
             futures_pool,
@@ -727,7 +738,7 @@ mod tests {
 
 
     fn load_test_entity_sv(key: &Resource) -> super::SyncWrapper<TestEntity> {
-        thread::sleep(Duration::new(0, rand::thread_rng().gen_range(1e3 as u32..3e6 as u32)));
+        thread::sleep(Duration::new(1, rand::thread_rng().gen_range(1e3 as u32..3e6 as u32)));
         // thread::sleep(Duration::new(0, 5e8 as u32));
 
         super::SyncWrapper::wrap(
@@ -762,6 +773,7 @@ mod tests {
                     done_sender.send(future_id).unwrap();
 
                 });
+
                 MyFuture {
                     done
                 }
@@ -771,9 +783,9 @@ mod tests {
         impl Future for MyFuture {
             type Output = ();
 
-            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
                 debug!("MyFuture poll: done={} thread::name={:?}", self.done.read(), thread::current().name());
-                // cx.waker().wake_by_ref();
+
                 if *self.done.read() {
                     Poll::Ready(())
                 } else {
@@ -782,11 +794,11 @@ mod tests {
 
             }
         }
-        let mut executor = LoadRunner::new(load_test_entity_sv, 4, 100);
+        let mut runner = LoadRunner::new(load_test_entity_sv, 4, 100, 2);
         let wg = WaitGroup::new();
         let wg_exec = wg.clone();
 
-        executor.exec(move |future_id, loader_arc, keys_purge, done_sender| {
+        runner.exec(move |future_id, loader_arc, keys_purge, done_sender| {
             async move {
                 MyFuture::new(future_id, done_sender.clone()).await;
                 debug!("MyFuture done 1 thread::name={:?}", thread::current().name());
@@ -801,7 +813,7 @@ mod tests {
 
 
         wg.wait();
-        executor.stop();
+        runner.stop();
 
         Ok(())
     }
@@ -821,7 +833,7 @@ mod tests {
 
         };
 
-        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(4).spawn_handler(|thread_builder| {
+        let pool_0 = rayon::ThreadPoolBuilder::new().num_threads(16).spawn_handler(|thread_builder| {
             let b = std::thread::Builder::new();
             b.name(format!("{}/{:?}", "pool_0", thread_builder.index()))
                 .spawn(|| thread_builder.run())?;
@@ -830,9 +842,9 @@ mod tests {
         }).build()?;
 
 
-        let num_items = 10usize;
-        let num_chunks = 1usize;
-        let executor = LoadRunner::new(load_test_entity_sv, 4, 100);
+        let num_items = 100usize;
+        let num_chunks = 10usize;
+        let executor = LoadRunner::new(load_test_entity_sv, 32, 100, 2);
         let executor_rc = Arc::new(RwLock::new(executor));
         // let wg_1 = wg.clone();
 
@@ -870,12 +882,12 @@ mod tests {
             let cache_area_0 = exec_0.write().get_available_cache_area();
             debug!("cache_area_0={cache_area_0:064b}");
 
-            (0..num_chunks).into_par_iter().for_each(|b| {
+            (0..num_chunks).into_par_iter().for_each(|chunk_i| {
 
-                exec_0.write().preload(&[aaa_resources[b].clone(), bbb_resources[b].clone()].concat(), cache_area_0);
+                exec_0.write().preload(&[aaa_resources[chunk_i].clone(), bbb_resources[chunk_i].clone()].concat(), cache_area_0);
 
                 (0..num_items).for_each(|j| {
-                    let i = b * 10 + j;
+                    let i = chunk_i * num_items + j;
 
                     let wg_0_i = wg_0.clone();
 
@@ -888,25 +900,25 @@ mod tests {
 
                     exec_0.write().exec(move |id, loader_arc, keys_purge, done_sender| {
                         async move {
-                            debug!("test 0 exec a {id} key={:?}", aaa_resources[b][j]);
+                            debug!("test 0 exec a {id} key={:?}", aaa_resources[chunk_i][j]);
                             let t = Instant::now();
-                            let _out_a = Loader::load_future(Arc::clone(&loader_arc), aaa_resources[b][j].clone(), cache_area_0, id, done_sender.clone()).await;
+                            let _out_a = Loader::load_future(Arc::clone(&loader_arc), aaa_resources[chunk_i][j].clone(), cache_area_0, id, done_sender.clone()).await;
 
-                            debug!("test 0 exec b {id} key={:?}", bbb_resources[b][j].clone());
-                            let _out_b = Loader::load_future(loader_arc, bbb_resources[b][j].clone(), cache_area_0, id, done_sender.clone()).await;
+                            debug!("test 0 exec b {id} key={:?}", bbb_resources[chunk_i][j].clone());
+                            let _out_b = Loader::load_future(loader_arc, bbb_resources[chunk_i][j].clone(), cache_area_0, id, done_sender.clone()).await;
                             debug!("test 0 exec c {id}");
                             let time = t.elapsed().as_millis();
                             // *waiting_time_guard += time;
                             //
                             let mut rw_lock_write_guard = data_done_rc.write();
-                            rw_lock_write_guard.insert(aaa_resources[b][j].clone());
-                            rw_lock_write_guard.insert(bbb_resources[b][j].clone());
+                            rw_lock_write_guard.insert(aaa_resources[chunk_i][j].clone());
+                            rw_lock_write_guard.insert(bbb_resources[chunk_i][j].clone());
                             drop(rw_lock_write_guard);
                             // *waiting_time_avg_guard = (*waiting_time_avg_guard * (n - 1) + time) / n;
 
 
 
-                            (keys_purge)(&[aaa_resources[b][j].clone(), bbb_resources[b][j].clone()], cache_area_0);
+                            (keys_purge)(&[aaa_resources[chunk_i][j].clone(), bbb_resources[chunk_i][j].clone()], cache_area_0);
                             done_sender.send(id).unwrap();
                             drop(wg_0_i);
                             debug!("test 0 exec done {id}");
@@ -926,11 +938,11 @@ mod tests {
             let cache_area_1 = exec_1.write().get_available_cache_area();
             debug!("cache_area_1={cache_area_1:064b}");
 
-            (0..num_items / 10).into_par_iter().for_each(|b| {
-                exec_1.write().preload(&[bbb_resources[b].clone(), ccc_resources[b].clone()].concat(), cache_area_1);
+            (0..num_chunks).into_par_iter().for_each(|chunk_i| {
+                exec_1.write().preload(&[bbb_resources[chunk_i].clone(), ccc_resources[chunk_i].clone()].concat(), cache_area_1);
 
-                (0..10).for_each(|j| {
-                    let i = b * 10 + j;
+                (0..num_items).for_each(|j| {
+                    let i = chunk_i * num_items + j;
 
                     let wg_1_i = wg_1.clone();
 
@@ -942,25 +954,25 @@ mod tests {
 
                     exec_1.write().exec(move |id, loader, keys_purge, done_sender| {
                         async move {
-                            debug!("test 1 exec a {id} key={:?}", bbb_resources[b][j]);
+                            debug!("test 1 exec a {id} key={:?}", bbb_resources[chunk_i][j]);
                             let t = Instant::now();
-                            let _out_a = Loader::load_future(Arc::clone(&loader), bbb_resources[b][j].clone(), cache_area_1, id, done_sender.clone()).await;
-                            debug!("test 1 exec b {id} key={:?}", ccc_resources[b][j].clone());
-                            let _out_b = Loader::load_future(loader, ccc_resources[b][j].clone(), cache_area_1, id, done_sender.clone()).await;
+                            let _out_a = Loader::load_future(Arc::clone(&loader), bbb_resources[chunk_i][j].clone(), cache_area_1, id, done_sender.clone()).await;
+                            debug!("test 1 exec b {id} key={:?}", ccc_resources[chunk_i][j].clone());
+                            let _out_b = Loader::load_future(loader, ccc_resources[chunk_i][j].clone(), cache_area_1, id, done_sender.clone()).await;
                             debug!("test 1 exec c {id}");
 
                             let time = t.elapsed().as_millis();
 
 
                             let mut rw_lock_write_guard = data_done_rc.write();
-                            rw_lock_write_guard.insert(bbb_resources[b][j].clone());
-                            rw_lock_write_guard.insert(ccc_resources[b][j].clone());
+                            rw_lock_write_guard.insert(bbb_resources[chunk_i][j].clone());
+                            rw_lock_write_guard.insert(ccc_resources[chunk_i][j].clone());
 
 
 
 
                             // info!("1: key_aaa={key_bbb:?} key_bbb={key_ccc:?} done, time={time}");
-                            (keys_purge)(&vec![bbb_resources[b][j].clone(), ccc_resources[b][j].clone()], cache_area_1);
+                            (keys_purge)(&vec![bbb_resources[chunk_i][j].clone(), ccc_resources[chunk_i][j].clone()], cache_area_1);
                             done_sender.send(id).unwrap();
                             drop(wg_1_i);
                             debug!("test 1 exec done {id}");
@@ -990,7 +1002,7 @@ mod tests {
         let r = exec_time_mls as f64 / elapsed as f64;
         info!("all done, {}/{} in elapsed={elapsed} mls exec time={exec_time_mls} r={r}", data_done_rc.read().len(), exec_2.read().resources_len());
 
-        assert_eq!(data_done_rc.read().len(), num_items * 3);
+        assert_eq!(data_done_rc.read().len(), num_chunks * num_items * 3);
 
         // exec_2.write().stop();
         executor_rc.write().stop();
