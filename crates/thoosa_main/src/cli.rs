@@ -227,7 +227,7 @@ where
             tensor.into()
         },
         loader_threads,
-        cli.futures_channel_bound,
+        cli.futures_channel_bound, 2,
     )));
 
     match &cli.command {
@@ -1318,7 +1318,7 @@ mod cli_tests {
                 )
             },
             4,
-            100,
+            100, 2,
         )));
 
         let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
@@ -2138,8 +2138,8 @@ mod cli_tests {
                     Tensor::load(&path).expect(format!("can't open {path:?}").as_str()),
                 )
             },
-            8, //std::thread::available_parallelism as usize/8,
-            100,
+            4, //std::thread::available_parallelism as usize/2,
+            100, 3,
         )));
 
         // let devices = vec![Cpu, Cpu];

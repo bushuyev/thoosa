@@ -1736,7 +1736,7 @@ mod motif_find_tests {
                 debug!("LoadRunner: tensor={tensor}");
 
                 SyncWrapper::wrap_tensor(tensor)
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
         let motifs_avg_distances_arc = Arc::new(RwLock::new(motifs_avg_distances));
         let channel_motif_ids_arc = Arc::new(RwLock::new(channel_motif_ids));
@@ -1855,7 +1855,7 @@ mod motif_find_tests {
                         ), //ch 0
                     ])
                 )
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
@@ -1932,7 +1932,7 @@ mod motif_find_tests {
                         ), //ch 0
                     ])
                 )
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
@@ -2032,7 +2032,7 @@ mod motif_find_tests {
                         ), //ch 0
                     ])
                 )
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
@@ -2234,7 +2234,7 @@ mod motif_find_tests {
                         ), //ch 0
                     ])
                 )
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
 
 
@@ -2323,7 +2323,7 @@ mod motif_find_tests {
                         ), //ch 0
                     ])
                 )
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], HashMap::from([
@@ -2397,7 +2397,7 @@ mod motif_find_tests {
                         ), //ch 0
                     ])
                 )
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
 
         let resources = test_init_store(&store, &["label_0", "label_1"], (0..tensors_len).fold(HashMap::new(), |mut a, v |{
@@ -2773,7 +2773,7 @@ mod motif_find_tests {
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
                 SyncWrapper::wrap_tensor(Tensor::from_slice(v.as_slice()).view((1, 10)))
-            }, 4, 100,
+            }, 4, 100, 2,
         );
         let executor_rc = Arc::new(RwLock::new(executor));
 

@@ -477,7 +477,7 @@ mod motifs_tests {
                 SyncWrapper::wrap_tensor(
                     test_tensor(key)
                 )
-            }, 4, 100,
+            }, 4, 100, 2,
         )));
 
 
@@ -579,7 +579,7 @@ mod motifs_tests {
             SyncWrapper::wrap_tensor(t)
         }
 
-        let executor = LoadRunner::new(test_load, 4, 100);
+        let executor = LoadRunner::new(test_load, 4, 100, 2);
         let executor_rc = Arc::new(RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
@@ -608,7 +608,7 @@ mod motifs_tests {
             SyncWrapper::wrap_tensor(t)
         }
 
-        let executor = LoadRunner::new(test_eeg_to_t, 4, 100);
+        let executor = LoadRunner::new(test_eeg_to_t, 4, 100, 2);
         let executor_rc = Arc::new(parking_lot::RwLock::new(executor));
 
         let motif_slices = super::load_motif_slices(
