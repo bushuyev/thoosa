@@ -210,55 +210,6 @@ impl LabelNetApplicableAndNetE {
         }))
     }
 }
-//
-// pub struct LabelNetApplicableAndNet<
-//     LI:LabelNetInputTensorDims,
-//     // P,
-//     // A: for<'a> Applicable<&'a ThoTensor<ChannelsData>, ThoTensor<LI>, P>,
-//     M:ThoModule<Batch<LI>, Batch<LabelProbability>>
-// > {
-//     applicable:Arc<MotifsNetsSelectionApplicable>,
-//     module:M,
-//     _pd_li:PhantomData<LI>,
-//     // _pd_p:PhantomData<P>
-//     // // motifs_nets_selection_applicable_arc_in_batch: Arc<MotifsNetsSelectionApplicable>
-//     // transform_fn: Box<dyn Fn(ThoTensor<ChannelsData>)->ThoTensor<D> + Sync + Send>
-// }
-//
-// impl
-// <
-//     // LI:LabelNetInputTensorDims, P, A:for<'a>  Applicable<&'a ThoTensor<ChannelsData>, ThoTensor<LI>, P>,
-//     LI:LabelNetInputTensorDims, //P,
-//     M:ThoModule<Batch<LI>, Batch<LabelProbability>>
-// >
-//
-// LabelNetApplicableAndNet<LI, /*P,*/ M> {
-//     // pub fn new(run_config:&TrainLabelNetsRunConfig, motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>, vs: &VarStore) -> Self{
-//     //      // match &run_config.net {
-//     //      //     LabelNetTypeArgs::MaxPadding(params) => {
-//     //      //         Self::new_(run_config, motifs_nets_selection_applicable, LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::MaxPadding(MaxPaddingNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsData>, Batch<LabelProbability>>>(&var_store.root()).unwrap())
-//     //      //
-//     //      //     }
-//     //      //     LabelNetTypeArgs::FixedNumSlices(params) => {
-//     //      //         Self::new_(run_config, motifs_nets_selection_applicable, LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>>(&var_store.root()).unwrap())
-//     //      //     }
-//     //      // }
-//     //     LabelNetApplicableAndNet::new_(
-//     //         run_config,
-//     //         motifs_nets_selection_applicable,
-//     //         LabelNetParams::new(3, 3, 3, 3, LabelNetTypeParams::FixedNumSlices(FixedNumSlicesNetParams{})).label_net().build_tch_module_2::<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>, ThoModuleWithStore<Batch<ChannelsMotifsFlattenedData>, Batch<LabelProbability>>>(&vs.root()).unwrap()
-//     //     )
-//     // }
-//
-//     pub fn new_(run_config:&TrainLabelNetsRunConfig, motifs_nets_selection_applicable:&Arc<MotifsNetsSelectionApplicable>, module:M)-> Self{
-//         Self {
-//             applicable: Arc::clone(motifs_nets_selection_applicable),
-//             module,
-//             _pd_li: Default::default(),
-//             // _pd_p: Default::default(),
-//         }    }
-//
-// }
 
 //batch transform, for single tensor transform pass transform_fn to the batch impl
 struct BatchTransform<DI:Dims, DO:Dims, B, F>
@@ -775,7 +726,6 @@ pub fn run_opt_train_label_nets(
                      device.clone(),
                      Some(Box::new( |t:TCD|{
                          applicable_and_net_enum.apply(&t).expect("applicable_and_net_enum.apply failed")
-
                      }))
                     )
 
@@ -4013,7 +3963,7 @@ mod train_tests {
                 )
             },
             1,
-            10,
+            10, 2,
         )));
 /*
 TODO
