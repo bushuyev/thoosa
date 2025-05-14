@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
@@ -6,6 +7,7 @@ use log::{debug, trace};
 use std::sync::Arc;
 use mockall::automock;
 use parking_lot::Mutex;
+use crate::applicables_runner::{AppliedId, Input};
 use crate::ThoosaError;
 
 #[automock]
@@ -23,13 +25,15 @@ pub struct Resource {
     id:ResourceId,
     import_id:u32,
     file_stem:String,
-    length:u32
+    length:u32,
+    applied_id: AppliedId
 }
 
 impl Resource {
     pub fn new(id: u32, import_id: u32, file_stem: String, length: u32) -> Self {
         trace!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");
-        Self { id, import_id, file_stem, length}
+        let applied_id = format!("{}_{}", id, import_id);
+        Self { id, import_id, file_stem, length, applied_id}
     }
 
     pub fn id(&self) -> ResourceId {
@@ -46,6 +50,12 @@ impl Resource {
 
     pub fn length(&self) -> u32 {
         self.length
+    }
+}
+
+impl Input for Resource {
+    fn id(&self) -> &AppliedId{
+        &self.applied_id
     }
 }
 
