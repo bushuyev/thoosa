@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use tch::{Device, Tensor};
-
+use thoosa_shared::applicables_runner::Output;
 
 pub trait Dims:Send + Clone + Debug {}
 
@@ -81,6 +81,8 @@ impl <D:Dims> Clone for ThoTensor<D> {
     }
 }
 
+unsafe impl <D:Dims> Sync for ThoTensor<D> {}
+unsafe impl <D:Dims> Send for ThoTensor<D> {}
 
 
 impl <D: Dims> From<Tensor> for ThoTensor<D> {
@@ -101,7 +103,7 @@ impl <D: Dims> From<&Tensor> for ThoTensor<D> {
     }
 }
 
-
+impl <D:Dims> Output for ThoTensor<D> {}
 
 pub type TCD = ThoTensor<ChannelsData>;
 pub type TCSD = ThoTensor<ChannelsSlicesData>;

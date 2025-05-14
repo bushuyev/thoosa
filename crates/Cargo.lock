@@ -220,9 +220,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.81"
+version = "0.1.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e0c28dcc82d7c8ead5cb13beb15405b57b8546e93215673ff8ca0349a028107"
+checksum = "e539d3fca749fcee5236ab05e93a52867dd549cc157c8cb7f99595f3cedffdb5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -628,9 +628,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.13"
+version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33480d6946193aa8033910124896ca395333cae7e2d1113d1fef6c3272217df2"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -740,6 +740,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38cd60a9a42ec83a2ed7effb0b1f073270264ea99da7acfc44f7e8d74dee0384"
 dependencies = [
  "libloading",
+]
+
+[[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -3323,10 +3337,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "approx",
+ "async-trait",
  "chrono",
  "clap",
  "crossbeam-channel",
  "ctor 0.4.1",
+ "dashmap",
+ "futures",
  "futures-util",
  "lazy_static",
  "libloading",
@@ -3442,10 +3459,16 @@ dependencies = [
 name = "thoosa_shared"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytemuck",
  "chrono",
  "clap",
+ "crossbeam",
+ "crossbeam-channel",
  "ctor 0.2.9",
+ "dashmap",
+ "futures",
+ "futures-util",
  "lazy_static",
  "log",
  "mockall",
@@ -3455,6 +3478,7 @@ dependencies = [
  "plotters",
  "rand",
  "rand_mt",
+ "rayon",
  "regex",
  "serde",
  "simplelog",
