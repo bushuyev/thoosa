@@ -37,6 +37,8 @@ crossbeam-utils = "0.8.19"
 crossbeam = "0.8.4"
 crossbeam-channel = "0.5.13"
 futures = "0.3.31"
+futures-util = "0.3.31"
+async-trait = "0.1.88"
 clap = { version = "4.5.28", features = ["derive", "cargo"] }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.111"
@@ -56,7 +58,7 @@ libloading = "0.8.6"
 plotters = { version = "0.3.7"}
 mockall = "0.13.1"
 mockall_double = "0.3.1"
-
+dashmap = "6.1.0"
 #TODO move to polars_utils
 polars = { version = "0.46.0", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
 [profile.test]

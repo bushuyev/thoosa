@@ -2755,6 +2755,139 @@ mod motif_find_tests {
     }
 
     #[test]
+    fn test_chunk_and_slice_2() -> Result<(), ThoosaError> {
+
+        let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555"].into_iter().enumerate().map(|(i, v)| (i as u32, 1u32, v, 10).into()).collect();
+        let resources_to_move = resources.clone();
+
+        let chunks_0_test: Arc<Mutex<Vec<Tensor>>> = Arc::new(Mutex::new(vec![]));
+        let chunks_0_test_rc = Arc::clone(&chunks_0_test);
+
+        let chunks_1_test: Arc<Mutex<Vec<Tensor>>> = Arc::new(Mutex::new(vec![]));
+        let chunks_1_test_rc = Arc::clone(&chunks_1_test);
+
+        let executor = LoadRunner::new(
+            move |key| {
+                let i = resources_to_move.iter().position(|v| v.eq(key)).expect(format!("no {key:?}").as_str()) + 1;
+                let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
+                debug!("executor: key={key:?} i={i} v={v:?}");
+
+                SyncWrapper::wrap_tensor(Tensor::from_slice(v.as_slice()).view((1, 10)))
+            }, 4, 100, 2,
+        );
+        let executor_rc = Arc::new(RwLock::new(executor));
+
+        crate::find::chunk_and_slice_2x(
+            resources,
+            2,
+            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))],
+            // HashMap::new(),
+            &mut move |chunk_0, chunk_1, _find_motifs_run_config| {
+                debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
+
+                trace!("callback: chunk_0.t=\n{}", chunk_0.t.i((0, .., ..)).squeeze());
+                trace!("callback: chunk_1.t=\n{}", chunk_1.t.i((0, .., ..)).squeeze());
+
+                chunks_0_test_rc.lock().push(chunk_0.t.i(( 0, .., ..)).squeeze());
+                chunks_1_test_rc.lock().push(chunk_1.t.i(( 0, .., ..)).squeeze());
+                Ok(SyncWrapper::wrap_tensor(Tensor::from_slice(&[0.1])))
+            },
+            &|run_config_id, t, chunk_0, chunk_1|{
+
+            },
+            &executor_rc
+        )?;
+
+        let mut chunks_0 = vec![];
+        let mut chunks_1 = vec![];
+
+        chunks_0.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+        chunks_1.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+
+        chunks_0.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+        chunks_1.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+
+
+        chunks_0.push(Tensor::from_slice(&[
+            1.0000, 1.1000, 1.2000, 1.3000, 1.4000,
+            1.3000, 1.4000, 1.5000, 1.6000, 1.7000,
+            2.0000, 2.1000, 2.2000, 2.3000, 2.4000,
+            2.3000, 2.4000, 2.5000, 2.6000, 2.7000
+        ]).view((4, 5)).totype(Float));
+
+        chunks_1.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+
+
+        //////////////////
+        chunks_0.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+        chunks_1.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+
+        chunks_0.push(Tensor::from_slice(&[
+            3.0000, 3.1000, 3.2000, 3.3000, 3.4000,
+            3.3000, 3.4000, 3.5000, 3.6000, 3.7000,
+            4.0000, 4.1000, 4.2000, 4.3000, 4.4000,
+            4.3000, 4.4000, 4.5000, 4.6000, 4.7000,
+        ]).view((4, 5)).totype(Float));
+        chunks_1.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+        ///////////////////
+
+        chunks_0.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+        chunks_1.push(Tensor::from_slice(&[
+            5.0000, 5.1000, 5.2000, 5.3000, 5.4000,
+            5.3000, 5.4000, 5.5000, 5.6000, 5.7000,
+        ]).view((2, 5)).totype(Float));
+
+
+        assert_eq!(chunks_0, *chunks_0_test.lock());
+        assert_eq!(chunks_1, *chunks_1_test.lock());
+
+        Ok(())
+    }
+
+
+    #[test]
     fn test_chunk_and_slice() -> Result<(), ThoosaError> {
 
         let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555"].into_iter().enumerate().map(|(i, v)| (i as u32, 1u32, v, 10).into()).collect();

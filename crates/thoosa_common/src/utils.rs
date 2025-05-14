@@ -1493,7 +1493,6 @@ pub fn train<F, DI:Dims, DO:Dims>(
                 let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
                 let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
 
-
                 last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
                 debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
 
