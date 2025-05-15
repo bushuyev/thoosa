@@ -24,7 +24,9 @@ pub trait Input:Send+Sync+Debug {
     fn id(&self) -> &AppliedId;
 }
 
+#[async_trait]
 pub trait Output:Send+Sync+Debug {
+    async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self>;
 }
 
 
@@ -260,7 +262,10 @@ where
         pool.install(move || { //or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
 
-                let _ = tx.send(data_fut.await);
+                let from_data = data_fut.await;
+
+                let _ = tx.send(from_data.copy_to_device(to_device).await);
+
                 statistics_clone
                     .write()
                     .on_copy_done(t_0.elapsed().as_millis());
@@ -387,7 +392,7 @@ where
                         .await;
                 }
 
-                entry.device_futures[device_idx] = None;
+                entry.device_futures[device_idx] = None;//TODO Cancel if pending?
                 entry.in_cpu_since = Some(Instant::now());
             }
             entry.device_cache_areas[device_idx] = new_mask;
@@ -440,11 +445,10 @@ impl CacheAreasKeeper {
     }
 }
 
-pub trait RunCtx:Send + Sync {
+pub trait RunCtx:Debug + Send + Sync {
     fn cache_area(&self) -> u64;
     fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<AppliedId>>;
 }
-
 
 impl FuturesRunner {
 
@@ -540,20 +544,21 @@ impl FuturesRunner {
         }
     }
 
+    pub fn next_available_cache_area(&self)->u64 {
+        self.caches_areas.write().next_available_cache_area()
+    }
+
+    pub fn statistics(self:&Arc<Self>) -> impl Deref<Target = Statistics> + '_ {
+        self.statistics.read()
+    }
 }
 
 pub(crate) fn first_free_bit(c: u64) -> u64 {
-    let mut x_next = 1u64;
-    if c == 0 {
-        return x_next;
-    } else if c == u64::MAX {
-        return 0;
+    if c == u64::MAX {
+        0
+    } else {
+        1u64 << c.trailing_ones()
     }
-
-    while !(c | !x_next) == 0 {
-        x_next = x_next << 1;
-    }
-    x_next
 }
 
 pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
@@ -619,6 +624,16 @@ mod tests {
         }
     }
 
+    impl From<usize> for Devices {
+        fn from(value: usize) -> Self {
+            match value {
+                0 => Devices::Cpu,
+                id => Devices::Cuda(id-1)
+            }
+        }
+    }
+
+
     #[derive(Debug)]
     struct DataResource {
         id: AppliedId,
@@ -629,6 +644,14 @@ mod tests {
     impl DataResource {
         fn new(id:String, device: Devices, data: Vec<f32>) -> Self {
             Self { id, device, data }
+        }
+
+        fn copy_to_device(&self, device:Devices) -> Self {
+            Self {
+                id: self.id.clone(),
+                device,
+                data: self.data.clone()
+            }
         }
     }
 
@@ -714,7 +737,12 @@ mod tests {
 
     #[derive(Debug)]
     struct LoaderOutput(DataResource);
-    impl Output for LoaderOutput {}
+    #[async_trait]
+    impl Output for LoaderOutput {
+        async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self> {
+            Arc::new(LoaderOutput(self.0.copy_to_device(device_ordinal.into())))
+        }
+    }
     unsafe impl Send for LoaderOutput {}
 
     #[async_trait]
@@ -773,7 +801,12 @@ mod tests {
 
     #[derive(Debug)]
     struct ApplicableAOutput(DataResource);
-    impl Output for ApplicableAOutput {}
+    #[async_trait]
+    impl Output for ApplicableAOutput {
+        async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self> {
+            Arc::new(ApplicableAOutput(self.0.copy_to_device(device_ordinal.into())))
+        }
+    }
 
     #[async_trait]
     impl Applicable2<LoaderInputId, ApplicableAOutput> for ApplicableA {
@@ -835,7 +868,12 @@ mod tests {
 
     #[derive(Debug)]
     struct ApplicableBOutput(DataResource);
-    impl Output for ApplicableBOutput {}
+    #[async_trait]
+    impl Output for ApplicableBOutput {
+        async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self> {
+            Arc::new(ApplicableBOutput(self.0.copy_to_device(device_ordinal.into())))
+        }
+    }
 
     #[async_trait]
     impl Applicable2<LoaderInputId, ApplicableBOutput> for ApplicableB {

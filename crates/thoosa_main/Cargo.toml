@@ -37,6 +37,8 @@ anyhow = "1.0.79"
 ctor.workspace = true
 futures.workspace = true
 futures-util = "0.3.30"
+dashmap.workspace = true
+
 lazy_static = "1.5.0"
 
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
@@ -45,7 +47,7 @@ thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args
 
 thoosa_properties_map = {path = "../thoosa_macros/thoosa_properties_map" }
 thoosa_properties_map_derive = {path = "../thoosa_macros/thoosa_properties_map_derive" }
-dashmap.workspace = true
+
 async-trait.workspace = true
 [dev-dependencies]
 rand_chacha = "0.3.1"
