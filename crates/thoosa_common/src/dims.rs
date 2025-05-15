@@ -1,7 +1,10 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
+use std::sync::Arc;
+use async_trait::async_trait;
 use tch::{Device, Tensor};
-use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::applicables_runner::{AppliedId, Input, Output};
+use crate::applicables::ThoDevice;
 
 pub trait Dims:Send + Clone + Debug {}
 
@@ -103,7 +106,21 @@ impl <D: Dims> From<&Tensor> for ThoTensor<D> {
     }
 }
 
-impl <D:Dims> Output for ThoTensor<D> {}
+#[async_trait]
+impl <D:Dims> Output for ThoTensor<D> {
+
+    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
+        Arc::new(ThoTensor::from(
+            self.tensor.to_device(ThoDevice::from(device_ordinal).into())
+        ))
+    }
+}
+
+impl <D:Dims> Input for ThoTensor<D> {
+    fn id(&self) -> &AppliedId {
+        todo!()
+    }
+}
 
 pub type TCD = ThoTensor<ChannelsData>;
 pub type TCSD = ThoTensor<ChannelsSlicesData>;
