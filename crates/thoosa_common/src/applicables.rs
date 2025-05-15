@@ -239,6 +239,14 @@ impl ThoRunner {
     pub fn futures_runner(self:&Arc<Self>) -> &Arc<FuturesRunner> {
         &self.futures_runner
     }
+    
+    pub fn loader_keys(&self) -> Vec<String> {
+        self.loader_cache_fut.iter().map(|v|v.key().clone()).collect::<Vec<String>>()
+    }
+    
+    pub fn find_motif_keys(&self) -> Vec<String> {
+        self.find_motifs_cache_fut.iter().map(|v|v.key().clone()).collect::<Vec<String>>()
+    }
 }
 
 #[cfg(test)]
