@@ -207,6 +207,65 @@ impl Applicable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable 
     }
 }
 
+#[async_trait]
+impl Applicable<TCD, TCSD, ()> for FindMotifsApplicable {
+    type R = ThoRunner;
+
+    fn apply(&self, input: TCD, _:()) -> Result<TCSD, ThoosaError> {
+        debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
+
+        let t = match self.kernel.as_ref() {
+            None => {
+                input.as_ref().to_device(self.device).shallow_clone()
+            }
+            Some(kernel) => {
+                input.as_ref().to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+            }
+        };
+
+        // match options {
+        //     FindMotifsRunConfigOptions::Filter => {
+        //         Ok(t.into())
+        //     }
+        //     FindMotifsRunConfigOptions::FilterUnfold => {
+                let input_length = t.size()[1];
+
+                if input_length >= self.run_config.window as i64 {
+
+                    let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
+
+                    debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
+
+                    Ok(unfolded.into())
+                } else {
+                    Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
+                }
+            // }
+        // }
+    }
+
+    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Applicable<TCD, TCSD, FindMotifsRunConfigOptions>>::R as Runner>::Ctx>>>) -> Arc<TCSD> {
+        Arc::new(self.apply(input.as_ref().shallow_clone(), ()).unwrap())
+    }
+
+    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+        Applicable::<TCD, TCSD, ()>::format_id(self, input_id)
+    }
+
+    fn name(&self) -> String {
+        "FindMotifsApplicable".to_string()
+    }
+
+    fn run_id(&self) -> String {
+        self.run_config.id.as_ref().expect("run_id").to_string()
+    }
+
+    fn device(&self) -> impl ToOrdinal {
+        ThoDevice::from(self.device)
+    }
+}
+
+
 //TODO
 // impl Applicable<&[SyncWrapper<Tensor>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
 //

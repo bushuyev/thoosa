@@ -14,7 +14,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::Applicable;
 use crate::find_motifs_run_config::FindMotifsApplicable;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ThoDevice(Device);
 
 impl Deref for ThoDevice {
@@ -52,6 +52,7 @@ pub struct ThoRunCtx {
     cache_area: u64,
 
     loaded: Vec<AppliedId>,
+    find_motifs: Vec<AppliedId>,
 }
 
 impl ThoRunCtx {
@@ -59,6 +60,7 @@ impl ThoRunCtx {
         Self {
             cache_area,
             loaded: Vec::new(),
+            find_motifs: Vec::new(),
         }
     }
 }
@@ -146,6 +148,7 @@ pub struct ThoRunner {
     futures_runner:Arc<FuturesRunner>,
 
     loader_cache_fut: DashMap<AppliedId, DataInDevices<TCD>>,
+    find_motifs_cache_fut: DashMap<AppliedId, DataInDevices<TCSD>>,
 
     tcd_loaders:Vec<Arc<TCDLoader>>
 }
@@ -173,6 +176,7 @@ impl ThoRunner {
         Self {
             futures_runner: Arc::new(FuturesRunner::new(&devices_threads)),//TODO config
             loader_cache_fut: Default::default(),
+            find_motifs_cache_fut: Default::default(),
             tcd_loaders
         }
     }
@@ -200,11 +204,22 @@ impl ThoRunner {
 
     pub fn run_find_motifs_applicable(
         self: &Arc<Self>,
-        input: &Resource,
+        input: &Arc<TCD>,
         applicable: &Arc<FindMotifsApplicable>,
         ctx: Option<Arc<RwLock<ThoRunCtx>>>
     ) -> Shared<BoxFuture<'static, Arc<TCSD>>> {
-        todo!()
+
+        if let Some(ctx) = ctx.as_ref() {
+            ctx.write().loaded.push(<FindMotifsApplicable as Applicable<TCD, TCSD, ()>>::applied_id(applicable, input.id()));
+        }
+
+        self.futures_runner.run_cached_task(
+            &self.find_motifs_cache_fut,
+            Arc::clone(&input),
+            applicable,
+            self,
+            ctx
+        )
     }
 
     pub(crate)  fn to_futs_iter(&self) -> impl Iterator<Item = &dyn FuturesRunnerMap> {
@@ -223,6 +238,14 @@ impl ThoRunner {
 
     pub fn futures_runner(self:&Arc<Self>) -> &Arc<FuturesRunner> {
         &self.futures_runner
+    }
+    
+    pub fn loader_keys(&self) -> Vec<String> {
+        self.loader_cache_fut.iter().map(|v|v.key().clone()).collect::<Vec<String>>()
+    }
+    
+    pub fn find_motif_keys(&self) -> Vec<String> {
+        self.find_motifs_cache_fut.iter().map(|v|v.key().clone()).collect::<Vec<String>>()
     }
 }
 
