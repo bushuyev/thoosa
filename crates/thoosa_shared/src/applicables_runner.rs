@@ -171,7 +171,7 @@ where
         ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>
     )
         -> (Self, Shared<BoxFuture<'static, Arc<O>>>)
-    where I: Hash + Eq + Input+Send+Sync+'static
+    where I: Input+Send+Sync+'static
     {
         let (tx, rx) = oneshot::channel();
         let statistics_clone = statistics.clone();
@@ -476,7 +476,7 @@ impl FuturesRunner {
     ) -> Shared<BoxFuture<'static, Arc<O>>>
     where
         O: Output + Send + Sync + 'static,
-        I: Hash + Eq + Input+Send+Sync+'static,
+        I: Input+Send+Sync+'static,
     {
         let device = applicable.device();
         let id = applicable.applied_id(input.id());
@@ -776,7 +776,7 @@ mod tests {
             self.device.clone()
         }
     }
-    
+
 
     #[derive(Debug)]
     struct ApplicableA {

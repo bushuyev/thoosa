@@ -140,19 +140,13 @@ impl Dims for LabelNetInputTensors{}
 
 impl From<ThoTensor<ChannelsMotifsData>> for ThoTensor<LabelNetInputTensors> {
     fn from(value: ThoTensor<ChannelsMotifsData>) -> Self {
-        ThoTensor {
-            tensor: value.tensor,
-            _pd: PhantomData
-        }
+        ThoTensor::from(value.tensor)
     }
 }
 
 impl From<ThoTensor<ChannelsMotifsFlattenedData>> for ThoTensor<LabelNetInputTensors> {
     fn from(value: ThoTensor<ChannelsMotifsFlattenedData>) -> Self {
-        ThoTensor {
-            tensor: value.tensor,
-            _pd: PhantomData
-        }
+        ThoTensor::from(value.tensor)
     }
 }
 
