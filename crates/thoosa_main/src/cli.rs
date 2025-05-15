@@ -589,8 +589,8 @@ where
 
         debug!("run_infer:={path:?} label=\n{t} t.view((1,-1))=\n{}",t.view((1, -1)));
 
-        let logits = final_applicable.apply(&t.into(), ())?; //batch(1 for infer) x classes
-        let probs = logits.softmax(-1, Float);
+        let logits = final_applicable.apply(t.into(), ())?; //batch(1 for infer) x classes
+        let probs = logits.tensor.softmax(-1, Float);
 
         debug!("run_infer:={path:?} logits=\n{logits} probs=\n{probs}");
 
@@ -605,7 +605,7 @@ where
 
         info!(
             "run_infer: entry={path:?} result=\n{logits} argmax={:?}",
-            logits.argmax(-1, false)
+            logits.tensor.argmax(-1, false)
         );
     }
 

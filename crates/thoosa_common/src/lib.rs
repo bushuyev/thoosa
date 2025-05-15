@@ -27,6 +27,7 @@ pub mod input_probs;
 pub mod transforms;
 pub mod find_motifs_run_config;
 pub mod dims;
+pub mod applicables;
 
 pub trait ResourceLoader:Send+Sync {
     type K;
