@@ -85,6 +85,25 @@ impl  ChunkOfSlicedTensors {
         )
     }
 
+    /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
+    pub fn slice_tensors_chunk_2(run_config:&FindMotifsApplicable, tensors_chunk: &[SyncWrapper<Tensor>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
+
+        debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
+
+        let  (tensor, sizes) = (Tensor::new(), vec![1,2,3]); //run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
+
+
+        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
+
+        ChunkOfSlicedTensors::new(
+            keys,
+            sizes,
+            run_config.step(),
+            device.map(|d|tensor.to_device(d)).unwrap_or(tensor),
+        )
+    }
+
+
     pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue<2, ChunkOfSlicedTensors>{
         SplitQueue::new(chunk)
     }

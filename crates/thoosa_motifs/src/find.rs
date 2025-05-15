@@ -537,6 +537,7 @@ where
             let find_motifs_applicables_0 = Arc::clone(&find_motifs_applicables);
 
             let chunk_0_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
+            // let chunk_0_tensors = block_on(scope.spawn_future(async move {
                 let area_0 = Arc::clone(&area_0);
 
                 join_all(
@@ -553,7 +554,7 @@ where
                                     &runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))).await,
                                     find_motifs_app,
                                     Some(area_0)
-                                )
+                                ).await
                             }
                         })
 
@@ -584,7 +585,7 @@ where
                                         &runner_1.run_loader(resource, &Cpu, Some(Arc::clone(&area_1))).await,
                                         find_motifs_app,
                                         Some(area_1)
-                                    )
+                                    ).await
                                 }
                             })
 
@@ -593,6 +594,7 @@ where
                 }));
 
                 trace!("chunk_and_slice_2x: resource_chunk_0={resource_chunk_0:?} resource_chunk_1={resource_chunk_1:?}");
+                trace!("chunk_and_slice_2x: chunk_0_tensors={chunk_0_tensors:?} chunk_1_tensors={chunk_1_tensors:?}");
             }
         }
 
