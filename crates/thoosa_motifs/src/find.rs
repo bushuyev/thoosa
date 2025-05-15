@@ -54,7 +54,7 @@ use tch::Kind::{Bool, Float};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
 use thoosa_common::applicables::ThoRunner;
-use thoosa_common::dims::TCD;
+use thoosa_common::dims::{TCD, TCSD};
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -503,7 +503,7 @@ where
 fn chunk_and_slice_2x_2<G, C, D>(
     resources: Vec <Resource>,
     chunk_size: usize,
-    run_configs:&Vec<Arc<FindMotifsApplicable>>,
+    run_configs:Arc<Vec<Arc<FindMotifsApplicable>>>,
     mut gpu_fn: &mut G,
     mut cpu_fn: &C,
     runner: &Arc<ThoRunner>
@@ -534,10 +534,24 @@ where
             let area_0 = runner.next_ctx();
             let runner_0 = Arc::clone(&runner);
             let resource_chunk_0_clone = Arc::clone(&resource_chunk_0);
+            let run_configs_0 = Arc::clone(&run_configs);
+            let chunk_0_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
+                let area_0 = Arc::clone(&area_0);
 
-            let chunk_0_tensors = block_on(RayonFuture::<Vec<Arc<TCD>>>::install_future(async move {
                 join_all(
-                    resource_chunk_0_clone.iter().map(|resource| runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))))
+                    resource_chunk_0_clone.iter().flat_map(|resource| {
+                        let area_0 = Arc::clone(&area_0);
+                        run_configs_0.iter().map(async move |rc|{
+                            let area_0 = Arc::clone(&area_0);
+
+                            runner_0.run_find_motifs_applicable(
+                                &runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))).await,
+                                rc,
+                                Some(area_0)
+                            )
+                        })
+
+                    })
                 ).await
             }));
 
@@ -733,7 +747,7 @@ where
         // });
 
     });
-    
+
     debug!("chunk_and_slice_2x: {:?}", runner.futures_runner().statistics().deref());
     Ok(())
 }
@@ -3057,7 +3071,10 @@ mod motif_find_tests {
         crate::find::chunk_and_slice_2x_2(
             resources,
             2,
-            &mut vec![Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))],
+            Arc::new( vec![
+                Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu)),
+                Arc::new(FindMotifsRunConfig::new(Some(1), 5, 10, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))
+            ]),
             // HashMap::new(),
             &mut move |chunk_0, chunk_1, _find_motifs_run_config| {
                 debug!("chunk_0={chunk_0:?} chunk_1={chunk_1:?}");
