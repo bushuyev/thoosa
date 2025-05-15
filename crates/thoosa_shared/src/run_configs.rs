@@ -1,8 +1,12 @@
 use std::marker::PhantomData;
 use std::fmt::Debug;
 use std::collections::HashMap;
+use std::sync::Arc;
+use async_trait::async_trait;
+use parking_lot::RwLock;
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::{make_combos, ThoosaError};
+use crate::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
 use crate::val::{NamedRange, NamedVal, Val};
 
 ////
@@ -122,8 +126,37 @@ pub trait RunConfig:Debug {
     fn type_name()->&'static str;
 }
 
-pub trait Applicable<In, Out, P>:Debug {
-    fn apply(&self, input: In, params: P) ->Result<Out, ThoosaError>;
+#[async_trait]
+pub trait Applicable<In, Out, P>:Debug + Sync + Send
+    where  In: Input + Send + Sync,
+           Out: Output + Send + Sync {
+    type R: Runner + Sync + Send;
+
+    fn apply(&self, input: In, params: P) ->Result<Out, ThoosaError> {
+        Err(ThoosaError::new("Not implemented yet"))
+    }
+
+    async fn async_apply(
+        self:Arc<Self>,
+        input: Arc<In>,
+        runner: Arc<Self::R>,
+        ctx: Option<Arc<RwLock<<<Self as Applicable<In, Out, P>>::R as Runner>::Ctx>>>
+    ) -> Arc<Out>;
+
+    fn format_id(&self, input_id:&AppliedId) -> AppliedId {
+        format!("{}:{}_{}", input_id, self.name(), self.run_id())
+    }
+
+    fn format_0(prev_id:&str) -> AppliedId {
+        format!("{}", prev_id)
+    }
+
+
+    fn applied_id(&self, input_id:&AppliedId) -> AppliedId;
+    fn name(&self)->String;
+    fn run_id(&self)->String;
+
+    fn device(&self) -> impl ToOrdinal;
 }
 
 //TODO move from_properties_map__ into here + all run config meta data id, description, date, running time

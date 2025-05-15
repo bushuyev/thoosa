@@ -72,7 +72,7 @@ impl  ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
-        let  (tensor, sizes) = run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
+        let  (tensor, sizes) = (Tensor::new(), vec![1,2,3]); //run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
 
 
         debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());

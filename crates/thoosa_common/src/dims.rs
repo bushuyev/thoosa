@@ -49,6 +49,10 @@ pub struct LabelsProbabilities;
 impl Dims for LabelsProbabilities {}//[num of labels, 1] probabilities of an input belonging to target labeled classes
 
 #[derive(Clone, Debug)]
+pub struct Final;
+impl Dims for Final {}//[num of labels, 1] probabilities of an input belonging to target labeled classes
+
+#[derive(Clone, Debug)]
 pub enum MotifsNetsSelectionDims {
     ChannelsMotifsData(ChannelsMotifsData),
     ChannelsMotifsFlattenData(ChannelsMotifsFlattenedData)
@@ -117,6 +121,13 @@ impl <D:Dims> Output for ThoTensor<D> {
 }
 
 impl <D:Dims> Input for ThoTensor<D> {
+    fn id(&self) -> &AppliedId {
+        todo!()
+    }
+}
+
+
+impl <D:Dims> Input for &ThoTensor<D> {
     fn id(&self) -> &AppliedId {
         todo!()
     }

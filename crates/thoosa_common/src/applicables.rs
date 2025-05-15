@@ -8,9 +8,11 @@ use std::sync::Arc;
 use log::debug;
 use tch::{Device, Tensor};
 use tch::Kind::Float;
-use crate::dims::TCD;
-use thoosa_shared::applicables_runner::{Applicable2, AppliedId, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, RunCtx, Runner, Statistics, ToOrdinal};
+use crate::dims::{TCD, TCSD};
+use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, RunCtx, Runner, Statistics, ToOrdinal};
 use thoosa_shared::resource::Resource;
+use thoosa_shared::run_configs::Applicable;
+use crate::find_motifs_run_config::FindMotifsApplicable;
 
 #[derive(Debug)]
 pub struct ThoDevice(Device);
@@ -101,10 +103,10 @@ impl Debug for TCDLoader {
 }
 
 #[async_trait]
-impl Applicable2<Resource, TCD> for TCDLoader {
+impl Applicable<Resource, TCD, ()> for TCDLoader {
     type R = ThoRunner;
 
-    async fn apply(self: Arc<Self>, input: Arc<Resource>, runner: Arc<ThoRunner>, ctx: Option<Arc<RwLock<ThoRunCtx>>>) -> Arc<TCD> {
+    async fn async_apply(self: Arc<Self>, input: Arc<Resource>, runner: Arc<ThoRunner>, ctx: Option<Arc<RwLock<ThoRunCtx>>>) -> Arc<TCD> {
 
         Arc::new((self.loader_fn)(&input, &*self.device))
     }
@@ -121,8 +123,8 @@ impl Applicable2<Resource, TCD> for TCDLoader {
         "".to_string()
     }
 
-    fn device(&self) -> &impl ToOrdinal {
-        &self.device
+    fn device(&self) -> impl ToOrdinal {
+        self.device.clone()
     }
 }
 
@@ -182,7 +184,7 @@ impl ThoRunner {
         ctx: Option<Arc<RwLock<ThoRunCtx>>>
     ) -> Shared<BoxFuture<'static, Arc<TCD>>> {
         let applicable = &self.tcd_loaders[ThoDevice::from(*on_device).ordinal()];
-        
+
         if let Some(ctx) = ctx.as_ref() {
             ctx.write().loaded.push(applicable.applied_id(Input::id(input)));
         }
@@ -194,6 +196,15 @@ impl ThoRunner {
             self,
             ctx
         )
+    }
+
+    pub fn run_find_motifs_applicable(
+        self: &Arc<Self>,
+        input: &Resource,
+        applicable: &Arc<FindMotifsApplicable>,
+        ctx: Option<Arc<RwLock<ThoRunCtx>>>
+    ) -> Shared<BoxFuture<'static, Arc<TCSD>>> {
+        todo!()
     }
 
     pub(crate)  fn to_futs_iter(&self) -> impl Iterator<Item = &dyn FuturesRunnerMap> {
@@ -209,7 +220,7 @@ impl ThoRunner {
     pub fn next_ctx(&self) -> Arc<RwLock<ThoRunCtx>> {
         Arc::new(RwLock::new(ThoRunCtx::new(self.futures_runner.next_available_cache_area())))
     }
-    
+
     pub fn futures_runner(self:&Arc<Self>) -> &Arc<FuturesRunner> {
         &self.futures_runner
     }

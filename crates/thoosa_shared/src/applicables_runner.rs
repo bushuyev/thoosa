@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use log::debug;
 use crate::resource::Resource;
+use crate::run_configs::Applicable;
 
 pub type AppliedId = String;
 
@@ -47,35 +48,36 @@ pub trait Runner {
 }
 
 
-#[async_trait]
-pub trait Applicable2<In, Out>: Sync + Send
-    where  In: Input + Send + Sync,
-            Out: Output + Send + Sync
-{
-    type R: Runner + Sync + Send;
-
-    async fn apply(
-        self:Arc<Self>,
-        input: Arc<In>,
-        runner: Arc<Self::R>,
-        ctx: Option<Arc<RwLock<<<Self as Applicable2<In, Out>>::R as Runner>::Ctx>>>
-    ) -> Arc<Out>;
-
-    fn applied_id(&self, input_id:&AppliedId) -> AppliedId;
-
-    fn format_id(&self, input_id:&AppliedId) -> AppliedId {
-        format!("{}:{}_{}", input_id, self.name(), self.run_id())
-    }
-
-    fn format_0(prev_id:&str) -> AppliedId {
-        format!("{}", prev_id)
-    }
-
-    fn name(&self)->String;
-    fn run_id(&self)->String;
-
-    fn device(&self) -> &impl ToOrdinal;
-}
+// #[async_trait]
+// pub trait Applicable<In, Out>: Sync + Send
+//     where  In: Input + Send + Sync,
+//             Out: Output + Send + Sync
+// {
+//     type R: Runner + Sync + Send;
+// 
+//     async fn apply(
+//         self:Arc<Self>,
+//         input: Arc<In>,
+//         runner: Arc<Self::R>,
+//         ctx: Option<Arc<RwLock<<<Self as Applicable<In, Out>>::R as Runner>::Ctx>>>
+//     ) -> Arc<Out>;
+// 
+//     
+// 
+//     fn format_id(&self, input_id:&AppliedId) -> AppliedId {
+//         format!("{}:{}_{}", input_id, self.name(), self.run_id())
+//     }
+// 
+//     fn format_0(prev_id:&str) -> AppliedId {
+//         format!("{}", prev_id)
+//     }
+// 
+//     fn applied_id(&self, input_id:&AppliedId) -> AppliedId;
+//     fn name(&self)->String;
+//     fn run_id(&self)->String;
+// 
+//     fn device(&self) -> &impl ToOrdinal;
+// }
 
 
 impl  Debug for FuturesRunner {
@@ -158,7 +160,7 @@ where
 
 {
 
-    fn new<I, A: Applicable2<I, O> + 'static> (
+    fn new<I, A: Applicable<I, O, ()> + 'static> (
         input: Arc<I>,
         device_ordinal: usize,
         num_devices: usize,
@@ -166,7 +168,7 @@ where
         applicable: Arc<A>,
         runner: Arc<A::R>,
         statistics: &Arc<RwLock<Statistics>>,
-        ctx: Option<Arc<RwLock<<<A as Applicable2<I, O>>::R as Runner>::Ctx>>>
+        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>
     )
         -> (Self, Shared<BoxFuture<'static, Arc<O>>>)
     where I: Hash + Eq + Input+Send+Sync+'static
@@ -185,7 +187,7 @@ where
 
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
-                let r = applicable.apply(input.clone(), runner, ctx_for_future).await;
+                let r = applicable.async_apply(input.clone(), runner, ctx_for_future).await;
                 // debug!("run_cached_task: done input={input:?}");
                 let _ = tx.send(r);
                 statistics_clone.write().on_new_load_done(t_0.elapsed().as_millis());
@@ -464,13 +466,13 @@ impl FuturesRunner {
         }
     }
 
-    pub fn run_cached_task<I, O, A: Applicable2<I, O> + 'static>(
+    pub fn run_cached_task<I, O, A: Applicable<I, O, ()> + 'static>(
         self: &Arc<Self>,
         cache: &DashMap<AppliedId, DataInDevices<O>>,
         input: Arc<I>,
         applicable:&Arc<A>,
         runner:&Arc<A::R>,
-        ctx: Option<Arc<RwLock<<<A as Applicable2<I, O>>::R as Runner>::Ctx>>>
+        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>
     ) -> Shared<BoxFuture<'static, Arc<O>>>
     where
         O: Output + Send + Sync + 'static,
@@ -487,7 +489,7 @@ impl FuturesRunner {
 
                 let f = e.get_mut().get_from_any_device(
                     device.ordinal(),
-                    self.device_pools.get_pool(device),
+                    self.device_pools.get_pool(&device),
                     &self.statistics,
                     ctx
                 ).clone();
@@ -501,7 +503,7 @@ impl FuturesRunner {
                     input,
                     device.ordinal(),
                     self.num_devices,
-                    self.device_pools.get_pool(device),
+                    self.device_pools.get_pool(&device),
                     Arc::clone(applicable),
                     Arc::clone(&runner),
                     &self.statistics,
@@ -594,7 +596,7 @@ const DUMMY_LOAD_N:u32 = 3;
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-    use super::{dummy_load, Applicable2, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, AppliedId, RunCtx, Runner, ToOrdinal};
+    use super::{dummy_load, Applicable, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, AppliedId, RunCtx, Runner, ToOrdinal};
     use crate::rayon_future::ScopeFutureExt;
     use async_trait::async_trait;
     use dashmap::DashMap;
@@ -696,6 +698,7 @@ mod tests {
     }
 
 
+    #[derive(Debug)]
     struct TestLoader {
         device: Devices
     }
@@ -746,10 +749,10 @@ mod tests {
     unsafe impl Send for LoaderOutput {}
 
     #[async_trait]
-    impl Applicable2<LoaderInputId, LoaderOutput> for TestLoader {
+    impl Applicable<LoaderInputId, LoaderOutput, ()> for TestLoader {
         type R = MyRunner;
 
-        async fn apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<LoaderOutput> {
+        async fn async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<LoaderOutput> {
             // debug!("Loader::apply_2: input={input:?}");
             // thread::sleep(Duration::new(0, 1000));
             dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
@@ -769,13 +772,13 @@ mod tests {
             "".to_string()
         }
 
-        fn device(&self) -> &impl ToOrdinal {
-            &self.device
+        fn device(&self) -> impl ToOrdinal {
+            self.device.clone()
         }
     }
+    
 
-
-
+    #[derive(Debug)]
     struct ApplicableA {
         run_id:String,
         loader:Arc<TestLoader>,
@@ -809,10 +812,10 @@ mod tests {
     }
 
     #[async_trait]
-    impl Applicable2<LoaderInputId, ApplicableAOutput> for ApplicableA {
+    impl Applicable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
         type R = MyRunner;
 
-        async fn apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableAOutput> {
+        async fn async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableAOutput> {
             let resource_0 = runner.clone().run_loader(&input, &self.loader, ctx).await;
             // debug!("ApplicableA::apply: input={input:?}");
 
@@ -824,7 +827,7 @@ mod tests {
         }
 
         fn applied_id(&self, prev_id: &AppliedId) -> String {
-            Applicable2::format_id(self, &self.loader.applied_id(prev_id))
+            Applicable::format_id(self, &self.loader.applied_id(prev_id))
         }
 
 
@@ -836,11 +839,12 @@ mod tests {
             self.run_id.clone()
         }
 
-        fn device(&self) -> &impl ToOrdinal {
-            &self.device
+        fn device(&self) -> impl ToOrdinal {
+            self.device.clone()
         }
     }
 
+    #[derive(Debug)]
     struct ApplicableB {
         run_id:String,
         applicable_a: Arc<ApplicableA>,
@@ -876,10 +880,10 @@ mod tests {
     }
 
     #[async_trait]
-    impl Applicable2<LoaderInputId, ApplicableBOutput> for ApplicableB {
+    impl Applicable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
         type R = MyRunner;
 
-        async fn  apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableBOutput> {
+        async fn  async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableBOutput> {
             let resource_a = runner.clone().run_applicable_a(&input, &self.applicable_a, ctx).await;
             debug!("ApplicableB::apply: input={input:?}");
 
@@ -890,7 +894,7 @@ mod tests {
         }
 
         fn applied_id(&self, input_id: &AppliedId) -> String {
-            Applicable2::format_id(self, &self.applicable_a.applied_id(input_id))
+            Applicable::format_id(self, &self.applicable_a.applied_id(input_id))
         }
 
         fn name(&self) -> String {
@@ -901,8 +905,8 @@ mod tests {
             self.run_id.clone()
         }
 
-        fn device(&self) -> &impl ToOrdinal {
-            &self.device
+        fn device(&self) -> impl ToOrdinal {
+            self.device.clone()
         }
     }
 
