@@ -71,6 +71,7 @@ pub trait Dimensional {
 
 #[derive(Debug)]
 pub struct ThoTensor<D: Dims> {
+    id:AppliedId,
     pub tensor: Tensor, // attach the actual tensor
     pub _pd: PhantomData<D>,
 }
@@ -82,6 +83,7 @@ impl <D:Dims> Dimensional for ThoTensor<D> {
 impl <D:Dims> Clone for ThoTensor<D> {
     fn clone(&self) -> Self {
         ThoTensor {
+            id: self.id.clone(),
             tensor: self.tensor.shallow_clone(),
             _pd: PhantomData,
         }
@@ -95,6 +97,7 @@ unsafe impl <D:Dims> Send for ThoTensor<D> {}
 impl <D: Dims> From<Tensor> for ThoTensor<D> {
     fn from(tensor: Tensor) -> Self {
         Self {
+            id: "1".to_string(),
             tensor,
             _pd: PhantomData,
         }
@@ -104,6 +107,7 @@ impl <D: Dims> From<Tensor> for ThoTensor<D> {
 impl <D: Dims> From<&Tensor> for ThoTensor<D> {
     fn from(tensor: &Tensor) -> Self {
         Self {
+            id: "2".to_string(),
             tensor: tensor.shallow_clone(),
             _pd: PhantomData,
         }
@@ -122,14 +126,14 @@ impl <D:Dims> Output for ThoTensor<D> {
 
 impl <D:Dims> Input for ThoTensor<D> {
     fn id(&self) -> &AppliedId {
-        todo!()
+        &self.id
     }
 }
 
 
 impl <D:Dims> Input for &ThoTensor<D> {
     fn id(&self) -> &AppliedId {
-        todo!()
+        &self.id
     }
 }
 
@@ -143,6 +147,8 @@ impl <D:Dims> AsRef<Tensor> for ThoTensor<D>{
 }
 
 impl <D:Dims> ThoTensor<D> {
+
+
     pub fn size(&self) -> Vec<i64> {
         self.tensor.size()
     }
@@ -153,6 +159,7 @@ impl <D:Dims> ThoTensor<D> {
 
     pub fn shallow_clone<DO:Dims>(&self) -> ThoTensor<DO> {
         ThoTensor {
+            id: self.id.clone(),
             tensor: self.tensor.shallow_clone(),
             _pd: Default::default(),
         }
@@ -164,8 +171,15 @@ impl <D:Dims> ThoTensor<D> {
 
     pub fn to_device(&self, device: Device) -> Self {
         Self{
+            id: self.id.clone(),
             tensor:self.tensor.to_device(device),
             _pd: self._pd
+        }
+    }
+
+    pub fn new(id: AppliedId, tensor: Tensor) -> Self {
+        Self { 
+            id, tensor, _pd: PhantomData 
         }
     }
 }

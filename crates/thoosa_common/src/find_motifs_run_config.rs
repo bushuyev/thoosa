@@ -212,7 +212,7 @@ impl Applicable<TCD, TCSD, ()> for FindMotifsApplicable {
     type R = ThoRunner;
 
     fn apply(&self, input: TCD, _:()) -> Result<TCSD, ThoosaError> {
-        debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
+        debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
 
         let t = match self.kernel.as_ref() {
             None => {
@@ -234,7 +234,7 @@ impl Applicable<TCD, TCSD, ()> for FindMotifsApplicable {
 
                     let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
 
-                    debug!("Applicable for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
+                    debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
                     Ok(unfolded.into())
                 } else {
@@ -245,19 +245,19 @@ impl Applicable<TCD, TCSD, ()> for FindMotifsApplicable {
     }
 
     async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Applicable<TCD, TCSD, FindMotifsRunConfigOptions>>::R as Runner>::Ctx>>>) -> Arc<TCSD> {
-        todo!()
+        Arc::new(self.apply(input.as_ref().shallow_clone(), ()).unwrap())
     }
 
     fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
-        todo!()
+        Applicable::<TCD, TCSD, ()>::format_id(self, input_id)
     }
 
     fn name(&self) -> String {
-        todo!()
+        "FindMotifsApplicable".to_string()
     }
 
     fn run_id(&self) -> String {
-        todo!()
+        self.run_config.id.as_ref().expect("run_id").to_string()
     }
 
     fn device(&self) -> impl ToOrdinal {

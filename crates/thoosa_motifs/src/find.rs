@@ -503,7 +503,7 @@ where
 fn chunk_and_slice_2x_2<G, C, D>(
     resources: Vec <Resource>,
     chunk_size: usize,
-    run_configs:Arc<Vec<Arc<FindMotifsApplicable>>>,
+    find_motifs_applicables:Arc<Vec<Arc<FindMotifsApplicable>>>,
     mut gpu_fn: &mut G,
     mut cpu_fn: &C,
     runner: &Arc<ThoRunner>
@@ -514,7 +514,7 @@ where
     D: Send,
 // CTX: Send + Sync + Debug TODO  FindMotifsRunConfigApplicable -> CTX
 {
-    debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={run_configs:?}");
+    debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={find_motifs_applicables:?}");
     trace!("chunk_and_slice_2x: resources={resources:?}");
 
     rayon::scope(|scope| {
@@ -534,21 +534,27 @@ where
             let area_0 = runner.next_ctx();
             let runner_0 = Arc::clone(&runner);
             let resource_chunk_0_clone = Arc::clone(&resource_chunk_0);
-            let run_configs_0 = Arc::clone(&run_configs);
+            let find_motifs_applicables_0 = Arc::clone(&find_motifs_applicables);
+
             let chunk_0_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
                 let area_0 = Arc::clone(&area_0);
 
                 join_all(
                     resource_chunk_0_clone.iter().flat_map(|resource| {
                         let area_0 = Arc::clone(&area_0);
-                        run_configs_0.iter().map(async move |rc|{
-                            let area_0 = Arc::clone(&area_0);
+                        let runner_0 = Arc::clone(&runner_0);
 
-                            runner_0.run_find_motifs_applicable(
-                                &runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))).await,
-                                rc,
-                                Some(area_0)
-                            )
+                        find_motifs_applicables_0.iter().map( move |find_motifs_app|{
+                            let area_0 = Arc::clone(&area_0);
+                            let runner_0 = Arc::clone(&runner_0);
+
+                            async move {
+                                runner_0.run_find_motifs_applicable(
+                                    &runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))).await,
+                                    find_motifs_app,
+                                    Some(area_0)
+                                )
+                            }
                         })
 
                     })
@@ -559,10 +565,30 @@ where
                 let area_1 = runner.next_ctx();
                 let runner_1 = Arc::clone(&runner);
                 let resource_chunk_1_clone = Arc::clone(&resource_chunk_1);
+                let find_motifs_applicables_1 = Arc::clone(&find_motifs_applicables);
 
-                let chunk_1_tensors = block_on(RayonFuture::<Vec<Arc<TCD>>>::install_future(async move {
+                let chunk_1_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
+                    let area_1 = Arc::clone(&area_1);
+
                     join_all(
-                        resource_chunk_1_clone.iter().map(|resource| runner_1.run_loader(resource, &Cpu, Some(Arc::clone(&area_1))))
+                        resource_chunk_1_clone.iter().flat_map(|resource| {
+                            let area_1 = Arc::clone(&area_1);
+                            let runner_1 = Arc::clone(&runner_1);
+
+                            find_motifs_applicables_1.iter().map( move |find_motifs_app|{
+                                let area_1 = Arc::clone(&area_1);
+                                let runner_1 = Arc::clone(&runner_1);
+
+                                async move {
+                                    runner_1.run_find_motifs_applicable(
+                                        &runner_1.run_loader(resource, &Cpu, Some(Arc::clone(&area_1))).await,
+                                        find_motifs_app,
+                                        Some(area_1)
+                                    )
+                                }
+                            })
+
+                        })
                     ).await
                 }));
 
@@ -1782,6 +1808,7 @@ mod motif_find_tests {
     use tch::Kind::{Bool, Float, Int};
     use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_common::applicables::{TCDLoader, ThoRunner};
+    use thoosa_common::dims::ThoTensor;
     use thoosa_common::find_motifs_run_config::{Conv1Params, FindMotifsRunConfig, InputFilter};
     use thoosa_common::utils::*;
     use thoosa_shared::*;
@@ -1795,6 +1822,7 @@ mod motif_find_tests {
     use thoosa_common::runs::Simple;
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
@@ -3034,38 +3062,17 @@ mod motif_find_tests {
         let chunks_1_test: Arc<Mutex<Vec<Tensor>>> = Arc::new(Mutex::new(vec![]));
         let chunks_1_test_rc = Arc::clone(&chunks_1_test);
 
-        // let executor = LoadRunner::new(
-        //     move |key| {
-        //         let i = resources_to_move.iter().position(|v| v.eq(key)).expect(format!("no {key:?}").as_str()) + 1;
-        //         let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
-        //         debug!("executor: key={key:?} i={i} v={v:?}");
-        //
-        //         SyncWrapper::wrap_tensor(Tensor::from_slice(v.as_slice()).view((1, 10)))
-        //     }, 4, 100, 2,
-        // );
-        // let executor_rc = Arc::new(RwLock::new(executor));
 
-        let runner = Arc::new(ThoRunner::new(&[10, 2, 2],  move |key, device| {
+        let runner = Arc::new(ThoRunner::new(&[10, 2],  move |key, device| {
                 debug!("loader_fn: thread={:?}", std::thread::current().name());
                 let i = resources_to_move.iter().position(|v| v.eq(key)).expect(format!("no {key:?}").as_str()) + 1;
                 let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
                 debug!("executor: key={key:?} i={i} v={v:?}");
 
-                Tensor::from_slice(v.as_slice()).view((1, 10)).into()
+                ThoTensor::new(Input::id(key).clone(), Tensor::from_slice(v.as_slice()).view((1, 10)))
             }
         ));
 
-        // let loader = Arc::new(TCDLoader::new(
-        //     move |key, device| {
-        //         debug!("loader_fn: thread={:?}", std::thread::current().name());
-        //         let i = resources_to_move.iter().position(|v| v.eq(key)).expect(format!("no {key:?}").as_str()) + 1;
-        //         let v = (0..10).map(|v| i as f32 + v as f32 / 10.).collect::<Vec<f32>>();
-        //         debug!("executor: key={key:?} i={i} v={v:?}");
-        //
-        //         Tensor::from_slice(v.as_slice()).view((1, 10)).into()
-        //     },
-        //     Device::Cpu.into()
-        // ));
 
 
         crate::find::chunk_and_slice_2x_2(
@@ -3073,7 +3080,7 @@ mod motif_find_tests {
             2,
             Arc::new( vec![
                 Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu)),
-                Arc::new(FindMotifsRunConfig::new(Some(1), 5, 10, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))
+                Arc::new(FindMotifsRunConfig::new(Some(2), 5, 10, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))
             ]),
             // HashMap::new(),
             &mut move |chunk_0, chunk_1, _find_motifs_run_config| {
@@ -3091,6 +3098,9 @@ mod motif_find_tests {
             },
             &runner
         )?;
+
+        trace!("test_chunk_and_slice_2: loader_keys={:?}", runner.loader_keys());
+        trace!("test_chunk_and_slice_2: find_motif_keys={:?}", runner.find_motif_keys());
 
         let mut chunks_0 = vec![];
         let mut chunks_1 = vec![];
