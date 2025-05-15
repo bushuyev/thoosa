@@ -12,12 +12,12 @@ use async_trait::async_trait;
 use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{AppliedId, Output, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
 use thoosa_shared::run_configs::{Applicable, RunConfig, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
 use crate::applicables::{ThoDevice, ThoRunner};
-use crate::dims::{TCD, TCSD};
+use crate::dims::{ChannelsSlicesData, ThoTensor, TCD, TCSD};
 use crate::loader::SyncWrapper;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
@@ -236,7 +236,10 @@ impl Applicable<TCD, TCSD, ()> for FindMotifsApplicable {
 
                     debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-                    Ok(unfolded.into())
+                    Ok(ThoTensor::<ChannelsSlicesData>::new(
+                        <FindMotifsApplicable as Applicable<TCD, TCSD, ()>>::applied_id(&self, input.id()), 
+                        unfolded
+                    ))
                 } else {
                     Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
                 }
