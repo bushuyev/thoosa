@@ -9,7 +9,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
 use tch::kind::FLOAT_CPU;
 use thoosa_common::dims::{TCD, TCDF};
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, FindMotifsApplicableOutput};
 use thoosa_common::loader::SyncWrapper;
 use thoosa_common::utils::{SplitQueue, Splittable};
 use thoosa_shared::resource::ResourceId;
@@ -74,16 +74,16 @@ impl  ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
-        let  (tensor, sizes) = (Tensor::rand(&[10,5], FLOAT_CPU), vec![1,2,3]); //run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
+        let  FindMotifsApplicableOutput {t, sizes} = run_config.apply(tensors_chunk.into(), ()).expect("ChunkOfSlicedTensors apply failed"); //(Tensor::rand(&[10,5], FLOAT_CPU), vec![1,2,3]); //
 
 
-        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
+        debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", t.size(), t.device());
 
         ChunkOfSlicedTensors::new(
             keys,
             sizes,
             run_config.step(),
-            device.map(|d|tensor.to_device(d)).unwrap_or(tensor),
+            device.map(|d|t.to_device(d)).unwrap_or(t),
         )
     }
 
@@ -125,8 +125,8 @@ impl  ChunkOfSlicedTensors {
             applicable.step(),
             device.map(|d|tensor.to_device(d)).unwrap_or(tensor),
         )
-        
-        
+
+
     }
 
 

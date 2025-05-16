@@ -69,6 +69,7 @@ impl RunCtx for ThoRunCtx {
     fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<AppliedId>> {
         [
             self.loaded,
+            self.find_motifs,
         ].into_iter()
     }
 
@@ -222,9 +223,10 @@ impl ThoRunner {
         )
     }
 
-    pub(crate)  fn to_futs_iter(&self) -> impl Iterator<Item = &dyn FuturesRunnerMap> {
+    pub(crate) fn to_futs_iter(&self) -> impl Iterator<Item = &dyn FuturesRunnerMap> {
         [
             &self.loader_cache_fut as &dyn FuturesRunnerMap,
+            &self.find_motifs_cache_fut as &dyn FuturesRunnerMap,
         ].into_iter()
     }
 

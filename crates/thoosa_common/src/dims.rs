@@ -123,9 +123,18 @@ impl <D: Dims> From<&Tensor> for ThoTensor<D> {
 impl <D:Dims> Output for ThoTensor<D> {
 
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        Arc::new(ThoTensor::from(
-            self.tensor.to_device(ThoDevice::from(device_ordinal).into())
-        ))
+        if self.tensor.device().eq(&ThoDevice::from(device_ordinal).into()) {
+            Arc::new(ThoTensor::new(
+                self.id.clone(),
+                self.tensor.shallow_clone()
+            ))
+        } else {
+            Arc::new(ThoTensor::new(
+                self.id.clone(),
+                self.tensor.to_device(ThoDevice::from(device_ordinal).into())
+            ))
+        }
+
     }
 }
 

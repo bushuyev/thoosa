@@ -25,6 +25,8 @@ pub trait Input:Send+Sync+Debug {
     fn id(&self) -> &AppliedId;
 }
 
+
+
 #[async_trait]
 pub trait Output:Send+Sync+Debug {
     async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self>;
@@ -386,7 +388,7 @@ where
             let device_idx = device.ordinal();
 
             let new_mask = remove_mask(entry.device_cache_areas[device_idx], cache_area);
-            if new_mask == 0 {
+            if device_idx != 0 && new_mask == 0 {//device_idx == 0 it's on CPU and will be purged by purge_cpu_caches
 
                 if entry.device_futures[0].is_none() {
                     entry
