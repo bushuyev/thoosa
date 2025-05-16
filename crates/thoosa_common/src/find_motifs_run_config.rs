@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{AppliedId, Input, Output, RunCtx, Runner, ToOrdinal};
 use thoosa_shared::run_configs::{Applicable, RunConfig, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
@@ -269,44 +269,122 @@ impl Applicable<TCD, TCDF, ()> for FindMotifsApplicable {
     }
 }
 
+#[derive(Debug)]
+pub struct FindMotifsApplicableInput(Vec<SyncWrapper<Tensor>>);
 
-//TODO
-// impl Applicable<&[SyncWrapper<Tensor>], (Tensor, Vec<i64>), ()> for FindMotifsApplicable {
-//
-//     /// applying transform (Filter) and unfolding tensors one by one since they have varying sizes - can't concat into batch to avoid slices spanning different tensors
-//     fn apply(&self, tensors_chunk: &[SyncWrapper<Tensor>], options:()) -> Result<(Tensor, Vec<i64>), ThoosaError> {
-//         let mut slices = Vec::with_capacity(tensors_chunk.len());
-//         let mut slice_sizes = Vec::with_capacity(tensors_chunk.len());
-//         if log_enabled!(DebugLevel) {
-//             debug!("Applicable for FindMotifsRunConfigApplicable::apply tensors_chunk.sizes={:?}", tensors_chunk.iter().map(|t| t.size()).collect::<Vec<_>>());
-//         }
-//
-//         for tensor_wrapped in tensors_chunk {
-//             match self.apply(&tensor_wrapped.deref().into(), FindMotifsRunConfigOptions::FilterUnfold){
-//                 Ok(t) => {
-//                     slice_sizes.push(t.size()[1]);
-//                     slices.push(t.as_ref().shallow_clone());
-//
-//                 }
-//                 Err(e) => {
-//                     warn!("Applicable for FindMotifsRunConfigApplicable::apply: skipping tensor, e={e:?}");
-//                 }
-//             };
-//         }
-//
-//         let tensor= if slices.is_empty() {
-//             //channels
-//             Tensor::zeros(&[0, tensors_chunk[0].size()[0], self.run_config.window as i64], (Float, Cpu))
-//         } else {
-//             //channels x slices x window
-//             Tensor::cat(&slices, 1)//cat along slices
-//         };
-//
-//         Ok(
-//             (tensor.into(), slice_sizes) //num slices in each tensor,
-//         )
-//     }
-// }
+impl From<Vec<SyncWrapper<Tensor>>> for FindMotifsApplicableInput {
+
+    fn from(value: Vec<SyncWrapper<Tensor>>) -> Self {
+        FindMotifsApplicableInput(value)
+    }
+}
+
+impl From<&[SyncWrapper<Tensor>]> for FindMotifsApplicableInput {
+    fn from(value: &[SyncWrapper<Tensor>]) -> Self {
+        FindMotifsApplicableInput(value.iter().map(|t| SyncWrapper::wrap_tensor(t.shallow_clone())).collect::<Vec<_>>())
+    }
+}
+
+impl Input for FindMotifsApplicableInput {
+    fn id(&self) -> &AppliedId {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+pub struct FindMotifsApplicableOutput {
+    pub t:Tensor,
+    pub sizes:Vec<i64>
+}
+unsafe impl Send for FindMotifsApplicableOutput {}
+unsafe impl Sync for FindMotifsApplicableOutput {}
+
+#[async_trait]
+impl Output for FindMotifsApplicableOutput {
+    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
+        todo!()
+    }
+}
+
+pub struct DummyRunner;
+#[derive(Debug)]
+pub struct DummyRunnerCtx;
+impl RunCtx for DummyRunnerCtx {
+
+    fn cache_area(&self) -> u64 {
+        todo!()
+    }
+
+    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<AppliedId>> {
+        [].into_iter()
+    }
+}
+impl Runner for DummyRunner { type Ctx = DummyRunnerCtx; }
+
+#[async_trait]
+impl Applicable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for FindMotifsApplicable {
+    type R = DummyRunner;
+
+    /// applying transform (Filter) and unfolding tensors one by one since they have varying sizes - can't concat into batch to avoid slices spanning different tensors
+    fn apply(&self, tensors_chunk: FindMotifsApplicableInput, options:()) -> Result<FindMotifsApplicableOutput, ThoosaError> {
+        let mut slices = Vec::with_capacity(tensors_chunk.0.len());
+        let mut slice_sizes = Vec::with_capacity(tensors_chunk.0.len());
+        if log_enabled!(DebugLevel) {
+            debug!("Applicable for FindMotifsRunConfigApplicable::apply tensors_chunk.sizes={:?}", tensors_chunk.0.iter().map(|t| t.size()).collect::<Vec<_>>());
+        }
+
+        for tensor_wrapped in tensors_chunk.0.iter() {
+            // let tcd:TCD = ThoTensor::<ChannelsData>::from(tensor_wrapped.deref());
+            match self.apply(tensor_wrapped.deref().into(), FindMotifsRunConfigOptions::FilterUnfold){
+                Ok(t) => {
+                    slice_sizes.push(t.size()[1]);
+                    slices.push(t.as_ref().shallow_clone());
+
+                }
+                Err(e) => {
+                    warn!("Applicable for FindMotifsRunConfigApplicable::apply: skipping tensor, e={e:?}");
+                }
+            };
+        }
+
+        let tensor= if slices.is_empty() {
+            //channels
+            Tensor::zeros(&[0, tensors_chunk.0[0].size()[0], self.run_config.window as i64], (Float, Cpu))
+        } else {
+            //channels x slices x window
+            Tensor::cat(&slices, 1)//cat along slices
+        };
+
+        Ok(
+            FindMotifsApplicableOutput{t:tensor.into(), sizes:slice_sizes}//num slices in each tensor,
+        )
+    }
+
+    async fn async_apply(
+        self:Arc<Self>,
+        input: Arc<FindMotifsApplicableInput>,
+        runner: Arc<Self::R>,
+        ctx: Option<Arc<RwLock<<<Self as Applicable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()>>::R as Runner>::Ctx>>>
+    ) -> Arc<FindMotifsApplicableOutput> {
+        todo!()
+    }
+
+    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+        todo!()
+    }
+
+    fn name(&self) -> String {
+        todo!()
+    }
+
+    fn run_id(&self) -> String {
+        todo!()
+    }
+
+    fn device(&self) -> impl ToOrdinal {
+        ThoDevice::from(self.device)
+    }
+}
 
 impl FindMotifsRunConfig {
     pub fn new(id: Option<u32>,

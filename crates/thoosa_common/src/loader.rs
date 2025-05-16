@@ -23,6 +23,7 @@ use futures::{
     task::{waker_ref, ArcWake},
 };
 use tch::{Device, IndexOp, Tensor};
+use thoosa_shared::applicables_runner::{AppliedId, Input};
 use thoosa_shared::resource::{Resource, ResourceId};
 use crate::utils::tensor_mem_size;
 
