@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use tch::{Device, IndexOp, Kind, Tensor};
+use tch::{Device, IndexOp, Kind, TchError, Tensor};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use log::{debug, trace, warn};
@@ -7,6 +7,8 @@ use std::mem;
 use std::ops::Deref;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
+use tch::kind::FLOAT_CPU;
+use thoosa_common::dims::{TCD, TCDF};
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable};
 use thoosa_common::loader::SyncWrapper;
 use thoosa_common::utils::{SplitQueue, Splittable};
@@ -72,7 +74,7 @@ impl  ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
-        let  (tensor, sizes) = (Tensor::new(), vec![1,2,3]); //run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
+        let  (tensor, sizes) = (Tensor::rand(&[10,5], FLOAT_CPU), vec![1,2,3]); //run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
 
 
         debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
@@ -86,21 +88,45 @@ impl  ChunkOfSlicedTensors {
     }
 
     /// returns:  channels x t.size = num slices = 1+(len-window)/step x window
-    pub fn slice_tensors_chunk_2(run_config:&FindMotifsApplicable, tensors_chunk: &[SyncWrapper<Tensor>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
+    pub fn slice_tensors_chunk_2(applicable:&FindMotifsApplicable, tensors_chunk: &[Arc<TCDF>], keys: Vec <ResourceId>, device: Option<Device>) -> ChunkOfSlicedTensors {
 
-        debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
+        debug!("ChunkOfSlicedTensors: applicable={applicable:?}");
 
-        let  (tensor, sizes) = (Tensor::new(), vec![1,2,3]); //run_config.apply(tensors_chunk, ()).expect("ChunkOfSlicedTensors apply failed");
+        let mut slices = Vec::with_capacity(tensors_chunk.len());
+        let mut slice_sizes = Vec::with_capacity(tensors_chunk.len());
 
+        //TODO move to GPU
+        for t in tensors_chunk {
+            trace!("ChunkOfSlicedTensors::slice_tensors_chunk: \tt={:?}", t.deref());
+            let unfolded = match t.tensor.f_unfold(1, applicable.run_config().window as i64, applicable.run_config().step as i64) {
+                Ok(t) => {
+                    t
+                }
+                Err(e) => {
+                    panic!("ChunkOfSlicedTensors::slice_tensors_chunk: unfold failed: {:?}", e);
+                }
+            };
+            slice_sizes.push(unfolded.size()[1]);
+            slices.push(unfolded);
+        }
 
+        let tensor= if slices.is_empty() {
+            //channels
+            Tensor::zeros(&[0, tensors_chunk[0].size()[0], applicable.run_config().window as i64], FLOAT_CPU)//TODO FLOAT_CPU
+        } else {
+            //channels x slices x window
+            Tensor::cat(&slices, 1)//cat along slices
+        };
         debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", tensor.size(), tensor.device());
 
         ChunkOfSlicedTensors::new(
             keys,
-            sizes,
-            run_config.step(),
+            slice_sizes,
+            applicable.step(),
             device.map(|d|tensor.to_device(d)).unwrap_or(tensor),
         )
+        
+        
     }
 
 

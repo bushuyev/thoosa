@@ -536,31 +536,47 @@ where
             let resource_chunk_0_clone = Arc::clone(&resource_chunk_0);
             let find_motifs_applicables_0 = Arc::clone(&find_motifs_applicables);
 
-            let chunk_0_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
-            // let chunk_0_tensors = block_on(scope.spawn_future(async move {
+            debug!("ChunkOfSlicedTensors:: chunk_0_i={chunk_0_i} resource_chunk_0={resource_chunk_0:?}---------------------");
+
+            // let chunk_0_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
+            let chunk_0_tensors = block_on(async move {
                 let area_0 = Arc::clone(&area_0);
 
                 join_all(
-                    resource_chunk_0_clone.iter().flat_map(|resource| {
+                    find_motifs_applicables_0.iter().map(  move |find_motifs_app|{
+
                         let area_0 = Arc::clone(&area_0);
                         let runner_0 = Arc::clone(&runner_0);
+                        let resource_chunk_0_clone = Arc::clone(&resource_chunk_0_clone);
 
-                        find_motifs_applicables_0.iter().map( move |find_motifs_app|{
-                            let area_0 = Arc::clone(&area_0);
-                            let runner_0 = Arc::clone(&runner_0);
+                        async move{
+                            let chunk = join_all(resource_chunk_0_clone.iter().map(move |resource| {
+                                let area_0 = Arc::clone(&area_0);
+                                let runner_0 = Arc::clone(&runner_0);
 
-                            async move {
-                                runner_0.run_find_motifs_applicable(
-                                    &runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))).await,
-                                    find_motifs_app,
-                                    Some(area_0)
-                                ).await
-                            }
-                        })
+                                async move {
+                                    runner_0.run_find_motifs_applicable(
+                                        &runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))).await,
+                                        find_motifs_app,
+                                        Some(area_0)
+                                    ).await 
+                                }
+                            }).collect::<Vec<_>>()).await;
+
+                            let c= ChunkOfSlicedTensors::slice_tensors_chunk_2(
+                                &find_motifs_app,
+                                chunk.as_slice(), //TODO change ChunkOfSlicedTensors to contain ThoTensor
+                                resource_chunk_0_clone.iter().map(|r| r.id()).collect(),
+                                Some(Cpu),
+                            );
+                            debug!("ChunkOfSlicedTensors::slice_tensors_chunk: c={:?}", c);
+
+                            c
+                        }
 
                     })
                 ).await
-            }));
+            });
 
             for resource_chunk_1 in resource_chunks.iter().skip(chunk_0_i).into_iter() {
                 let area_1 = runner.next_ctx();
@@ -568,33 +584,56 @@ where
                 let resource_chunk_1_clone = Arc::clone(&resource_chunk_1);
                 let find_motifs_applicables_1 = Arc::clone(&find_motifs_applicables);
 
-                let chunk_1_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
+                // let chunk_1_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
+                /*let chunk_1_tensors = block_on(scope.spawn_future(async move {
                     let area_1 = Arc::clone(&area_1);
 
                     join_all(
-                        resource_chunk_1_clone.iter().flat_map(|resource| {
+                        find_motifs_applicables_1.iter().map(  move |find_motifs_app|{
+
                             let area_1 = Arc::clone(&area_1);
                             let runner_1 = Arc::clone(&runner_1);
+                            let resource_chunk_1_clone = Arc::clone(&resource_chunk_1_clone);
 
-                            find_motifs_applicables_1.iter().map( move |find_motifs_app|{
-                                let area_1 = Arc::clone(&area_1);
-                                let runner_1 = Arc::clone(&runner_1);
+                            async move{
+                                let chunk = join_all(resource_chunk_1_clone.iter().map(move |resource| {
+                                    let area_1 = Arc::clone(&area_1);
+                                    let runner_1 = Arc::clone(&runner_1);
 
-                                async move {
-                                    runner_1.run_find_motifs_applicable(
-                                        &runner_1.run_loader(resource, &Cpu, Some(Arc::clone(&area_1))).await,
-                                        find_motifs_app,
-                                        Some(area_1)
-                                    ).await
-                                }
-                            })
+                                    async move {
+                                        runner_1.run_find_motifs_applicable(
+                                            &runner_1.run_loader(resource, &Cpu, Some(Arc::clone(&area_1))).await,
+                                            find_motifs_app,
+                                            Some(area_1)
+                                        ).await
+                                    }
+                                }).collect::<Vec<_>>()).await;
+
+                                trace!("chunk_and_slice_2x: resource_chunk_1_clone={resource_chunk_1_clone:?}");
+
+                                let c = ChunkOfSlicedTensors::slice_tensors_chunk_2(
+                                    &find_motifs_app,
+                                    chunk.as_slice(), //TODO change ChunkOfSlicedTensors to contain ThoTensor
+                                    resource_chunk_1_clone.iter().map(|r| r.id()).collect(),
+                                    Some(Cpu),
+                                );
+
+                                debug!("ChunkOfSlicedTensors::slice_tensors_chunk: c={:?}", c);
+
+                                c
+                            }
 
                         })
                     ).await
-                }));
-
+                }));*/
                 trace!("chunk_and_slice_2x: resource_chunk_0={resource_chunk_0:?} resource_chunk_1={resource_chunk_1:?}");
-                trace!("chunk_and_slice_2x: chunk_0_tensors={chunk_0_tensors:?} chunk_1_tensors={chunk_1_tensors:?}");
+                // trace!("chunk_and_slice_2x: chunk_0_tensors={chunk_0_tensors:?} chunk_1_tensors={chunk_1_tensors:?}");
+
+                // find_motifs_applicables.iter().zip(resource_chunk_0.iter().zip(resource_chunk_1.iter())).for_each(|(find_motifs_app, (resource_chunk_0_resource, resource_chunk_1_resource))| {
+                //     trace!("chunk_and_slice_2x: resource_chunk_0_resource={resource_chunk_0_resource:?} resource_chunk_1_resource={resource_chunk_1_resource:?} find_motifs_app={find_motifs_app:?}");
+                // });
+
+
             }
         }
 
@@ -3074,6 +3113,19 @@ mod motif_find_tests {
                 ThoTensor::new(Input::id(key).clone(), Tensor::from_slice(v.as_slice()).view((1, 10)))
             }
         ));
+
+        /*
+          ["111", "222"], ["333", "444"], ["555"]
+
+          ["111", "222"] x ["111", "222"]
+          ["111", "222"] x ["333", "444"],
+          ["111", "222"] x ["555"],
+
+          ["333", "444"] x ["333", "444"]
+          ["333", "444"] x ["555"]
+
+          ["555"] x ["555"]
+         */
 
 
 

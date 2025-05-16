@@ -8,7 +8,7 @@ use std::sync::Arc;
 use log::debug;
 use tch::{Device, Tensor};
 use tch::Kind::Float;
-use crate::dims::{TCD, TCSD};
+use crate::dims::{TCD, TCDF, TCSD};
 use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, RunCtx, Runner, Statistics, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::Applicable;
@@ -148,7 +148,7 @@ pub struct ThoRunner {
     futures_runner:Arc<FuturesRunner>,
 
     loader_cache_fut: DashMap<AppliedId, DataInDevices<TCD>>,
-    find_motifs_cache_fut: DashMap<AppliedId, DataInDevices<TCSD>>,
+    find_motifs_cache_fut: DashMap<AppliedId, DataInDevices<TCDF>>,
 
     tcd_loaders:Vec<Arc<TCDLoader>>
 }
@@ -207,10 +207,10 @@ impl ThoRunner {
         input: &Arc<TCD>,
         applicable: &Arc<FindMotifsApplicable>,
         ctx: Option<Arc<RwLock<ThoRunCtx>>>
-    ) -> Shared<BoxFuture<'static, Arc<TCSD>>> {
+    ) -> Shared<BoxFuture<'static, Arc<TCDF>>> {
 
         if let Some(ctx) = ctx.as_ref() {
-            ctx.write().loaded.push(<FindMotifsApplicable as Applicable<TCD, TCSD, ()>>::applied_id(applicable, input.id()));
+            ctx.write().loaded.push(<FindMotifsApplicable as Applicable<TCD, TCDF, ()>>::applied_id(applicable, input.id()));
         }
 
         self.futures_runner.run_cached_task(

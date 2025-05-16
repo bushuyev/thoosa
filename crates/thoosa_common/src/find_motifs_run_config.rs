@@ -17,7 +17,7 @@ use thoosa_shared::run_configs::{Applicable, RunConfig, RunId};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
 use crate::applicables::{ThoDevice, ThoRunner};
-use crate::dims::{ChannelsSlicesData, ThoTensor, TCD, TCSD};
+use crate::dims::{ChannelsData, ChannelsDataFiltered, ChannelsSlicesData, ThoTensor, TCD, TCDF, TCSD};
 use crate::loader::SyncWrapper;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
@@ -67,7 +67,7 @@ impl FindMotifsRunConfig {
 
 }
 
-
+//TODO rename to apply DSP Filter
 #[derive(Debug)]
 pub struct FindMotifsApplicable {
     run_config:FindMotifsRunConfig,
@@ -208,18 +208,22 @@ impl Applicable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable 
 }
 
 #[async_trait]
-impl Applicable<TCD, TCSD, ()> for FindMotifsApplicable {
+impl Applicable<TCD, TCDF, ()> for FindMotifsApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: TCD, _:()) -> Result<TCSD, ThoosaError> {
+    fn apply(&self, input: TCD, _:()) -> Result<TCDF, ThoosaError> {
+        todo!()
+    }
+
+    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx:Option<Arc<RwLock<<<Self as Applicable<TCD, TCDF, ()>>::R as Runner>::Ctx>>>) -> Arc<TCDF> {
         debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
 
         let t = match self.kernel.as_ref() {
             None => {
-                input.as_ref().to_device(self.device).shallow_clone()
+                input.tensor.to_device(self.device).shallow_clone()
             }
             Some(kernel) => {
-                input.as_ref().to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+                input.tensor.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
             }
         };
 
@@ -228,31 +232,28 @@ impl Applicable<TCD, TCSD, ()> for FindMotifsApplicable {
         //         Ok(t.into())
         //     }
         //     FindMotifsRunConfigOptions::FilterUnfold => {
-                let input_length = t.size()[1];
+        let input_length = t.size()[1];
 
-                if input_length >= self.run_config.window as i64 {
+        if input_length >= self.run_config.window as i64 {
 
-                    let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
+            // let unfolded = t.unfold(1, self.run_config.window as i64, self.run_config.step as i64);
 
-                    debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
+            // debug!("Applicable<TCD, TCD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-                    Ok(ThoTensor::<ChannelsSlicesData>::new(
-                        <FindMotifsApplicable as Applicable<TCD, TCSD, ()>>::applied_id(&self, input.id()), 
-                        unfolded
-                    ))
-                } else {
-                    Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
-                }
-            // }
+            Arc::new(ThoTensor::<ChannelsDataFiltered>::new(
+                <FindMotifsApplicable as Applicable<TCD, TCDF, ()>>::applied_id(&self, input.id()),
+                t
+            ))
+        } else {
+            // Err(ThoosaError::new(format!("can't unfold tensor - length ({}) is less than window ({})", input_length, self.run_config.window)))
+            panic!("todo")
+        }
+        // }
         // }
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Applicable<TCD, TCSD, FindMotifsRunConfigOptions>>::R as Runner>::Ctx>>>) -> Arc<TCSD> {
-        Arc::new(self.apply(input.as_ref().shallow_clone(), ()).unwrap())
-    }
-
     fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
-        Applicable::<TCD, TCSD, ()>::format_id(self, input_id)
+        Applicable::<TCD, TCDF, ()>::format_id(self, input_id)
     }
 
     fn name(&self) -> String {
