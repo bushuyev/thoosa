@@ -4,6 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use futures::channel::oneshot::Canceled;
+use log::error;
 
 pub trait ScopeFutureExt<'scope> {
     fn spawn_future<Fut>(&self, future: Fut) -> RayonFuture<Fut::Output>
@@ -125,7 +127,13 @@ impl<T> Future for RayonFuture<T> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.rx).poll(cx).map(|r| {
-            r.expect("Rayon task was cancelled before completing — the scope likely exited early")
+            match r {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("error in future: {:?}", e);
+                    panic!("error in future: {:?}", e);
+                }
+            }
         })
     }
 }
