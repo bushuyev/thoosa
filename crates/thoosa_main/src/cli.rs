@@ -36,7 +36,7 @@ use thoosa_common::train_nets::{load_final_model, opt_train, run_opt_train_final
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{find_min_euc_dist, find_motifs_by_euc_dist, select_motifs_by_ratio, select_motifs_for_label, FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs, SelectMotifsParams};
+use thoosa_motifs::find::{find_min_euc_dist, find_motifs_by_euc_dist, find_motifs_by_euc_dist_2, select_motifs_by_ratio, select_motifs_for_label, FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs, SelectMotifsParams};
 use thoosa_motifs::fragments::{
     load_motif_slices, motifs_to_tensor, MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs,
 };
@@ -48,6 +48,8 @@ use thoosa_shared::{
 };
 use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
+use thoosa_common::applicables::ThoRunner;
+use thoosa_common::dims::ThoTensor;
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
 use crate::version::VERSION;
 use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -57,6 +59,7 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunConfig, RunId};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
+use thoosa_shared::applicables_runner::Input;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -207,6 +210,7 @@ where
     std::io::stdout().flush()?;
 
     let tensors_path = ws.read().tensors_path().clone();
+    let tensors_path_runner = ws.read().tensors_path().clone();
 
     let loader = Arc::new(RwLock::new(LoadRunner::new(
         move |key: &Resource| {
@@ -229,6 +233,27 @@ where
         loader_threads,
         cli.futures_channel_bound, 2,
     )));
+
+    let runner = Arc::new(ThoRunner::new(&[10, 2],  move |key, device| {
+        debug!("loader_fn: thread={:?}", std::thread::current().name());
+        let tensor = Tensor::load_multi_with_device(
+            FsWorkspace::resource_tensor_path(&tensors_path_runner, key),
+            *device,
+        )
+            .map_err(|e| ThoosaError::new(e.to_string()))
+            .expect(format!("can't load {key:?}").as_str())
+            .pop()
+            .unwrap()
+            .1
+            .totype(Float);
+        if tensor.requires_grad() || tensor.retains_grad() {
+            warn!("tensor requires grad!");
+        }
+        debug!("key={key:?} tensor.size={:?}", tensor.size());
+        tensor.into()
+    }
+    ));
+
 
     match &cli.command {
         Some(ImportResources(import_resources_params)) => {
@@ -262,16 +287,16 @@ where
             debug!("FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}");
 
 
-            let run_ids = run_all_grid_step(
+            let run_ids = run_all_grid_step_2(
                 None,
                 find_motifs_run_config_range_or_value,
                 &find_motifs_args.fixed_config,
                 &find_motifs_args.resource_config(),
                 // find_min_euc_dist,
-                find_motifs_by_euc_dist,
+                find_motifs_by_euc_dist_2,
                 &ws,
                 &store,
-                &loader,
+                &runner,
                 devices.clone(),
                 "FindMotifs",
                 true,
@@ -1123,6 +1148,77 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     }
 }
 
+pub fn run_all_grid_step_2<RC, RCRV, R, FC, ST>(
+    input_run_ids: Option<Vec<RunId>>,
+    rcrv:RCRV,
+    fixed_config:&FC,
+    resource_config:&R,
+    grid_step: ST,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    runner: &Arc<ThoRunner>,
+    devices: Vec<Device>,
+    descr: &str,
+    presave: bool,
+) -> Result<Vec<RunId>, ThoosaError>
+where
+    ST: FnOnce(
+        Option<&Vec<RunId>>,
+        Vec<RC>,
+        &R,
+        &FC,
+        &Arc<RwLock<Box<dyn Workspace>>>,
+        &Arc<Mutex<Box<dyn Store>>>,
+        &Arc<ThoRunner>,
+        Vec<Device>,
+    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>> + thoosa_properties_map::ToHashmap,
+    RCRV:GridRunConfigSource,
+    R: ResourcesConfig,
+{
+
+    let grid_run_configs = rcrv.grid_run_configs();
+    debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
+
+    let mut run_configs:Vec<RC> = grid_run_configs.to_run_configs();
+    if presave {
+        save_run_configs(input_run_ids.as_ref().map(|v|v.as_slice()), &store, &mut run_configs, "find motifs");
+    }
+    // let run_config_ids = save_run_configs(input_run_ids.as_ref().map(|v|v.as_slice()), &store, &mut run_configs, "find motifs");
+
+    debug!("FindMotifs2: run_configs={run_configs:?}");
+
+    let mut opt_run_configs_opt = grid_step(
+        input_run_ids.as_ref(),
+        run_configs,
+        resource_config,
+        fixed_config,
+        ws,
+        store,
+        runner,
+        devices
+    )?;
+
+    if let Some(mut opt_run_configs) = opt_run_configs_opt {
+        debug!(
+            "run_step: saving opt_run_configs.len={}",
+            opt_run_configs.len()
+        );
+        let mut opt_run_config_ids = vec![];
+        for mut opt_run_config in opt_run_configs {
+            debug!("run_step: saving opt_run_config={opt_run_config:?}");
+
+            let opt_run_config_id = opt_run_config.save(store, ws)?;
+
+            opt_run_config_ids.push(opt_run_config_id);
+        }
+        Ok(opt_run_config_ids)
+    } else {
+        panic!("todo")
+    }
+}
+
+
 pub fn run_all_grid_step<RC, RCRV, R, FC, ST>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv:RCRV,
@@ -1196,7 +1292,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, resource_path, run_all_grid_step, run_infer, run_opt_step, run_plot_motif_slices, run_train_final_nets, run_train_label_nets, run_train_motif_nodes_on_motif_selection, Cli};
+    use crate::cli::{import_resources, resource_path, run_all_grid_step, run_all_grid_step_2, run_infer, run_opt_step, run_plot_motif_slices, run_train_final_nets, run_train_label_nets, run_train_motif_nodes_on_motif_selection, Cli};
     use crate::data::ParquetLoader;
     use log::LevelFilter::{Debug, Trace, Warn};
     use log::{debug, error, info, trace, LevelFilter};
@@ -1219,6 +1315,8 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Device::{Cpu, Cuda};
     use tch::{nn, Device, IndexOp, Tensor};
+    use thoosa_common::applicables::ThoRunner;
+    use thoosa_common::dims::ThoTensor;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -1231,7 +1329,7 @@ mod cli_tests {
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::find::{find_motifs_by_euc_dist, select_motifs_for_label, FixedFindMotifsConfig, SelectMotifsParams};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, find_motifs_by_euc_dist_2, select_motifs_for_label, FixedFindMotifsConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesArgs};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::run_configs::RunConfig;
@@ -1240,7 +1338,9 @@ mod cli_tests {
         cdt, cdt_for_dir, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp,
         sig_three_imp, sig_two_imp, ResourceType, TensorIdSliceIdx, ThoosaError,
     };
+    use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::test_utils::set_panic_hook;
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
 
     #[ctor::ctor]
@@ -1593,7 +1693,7 @@ mod cli_tests {
         let n = 1000;
         let max_y = 1f32;
 
-        let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
+        let (ws, store, group_name, loader, runner, devices) = prepare_test_data(n,max_y, &test_dir)?;
 
 
         let train_final_nodes_run_ids = run_all_steps(
@@ -1647,7 +1747,8 @@ mod cli_tests {
                                 num_layers: "2"
                             }
                         }"#,
-            &group_name, OptConfig::new(50, 10), &ws, &store, &loader, &devices
+            &group_name, OptConfig::new(50, 10), &ws, &store, &loader, &devices,
+            &runner
         )?;
 
 
@@ -1667,7 +1768,7 @@ mod cli_tests {
         let n = 1000;
         let max_y = 1f32;
 
-        let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
+        let (ws, store, group_name, loader, runner,devices) = prepare_test_data(n,max_y, &test_dir)?;
 
 
         let train_final_nodes_run_ids = run_all_steps(
@@ -1720,7 +1821,8 @@ mod cli_tests {
                     num_layers: "2"
                 }
             }"#,
-            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices
+            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices,
+            &runner
         )?;
 
 
@@ -1736,13 +1838,14 @@ mod cli_tests {
 
     #[test]
     fn slow_test_run_all_max_padding_with_mean_grid_lr_opt() -> Result<(), ThoosaError> {
+        set_panic_hook();
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
         let n = 1000;
         let max_y = 1f32;
 
-        let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
+        let (ws, store, group_name, loader, runner,devices) = prepare_test_data(n,max_y, &test_dir)?;
 
 
         let train_final_nodes_run_ids = run_all_steps(
@@ -1795,7 +1898,8 @@ mod cli_tests {
                     num_layers: "2"
                 }
             }"#,
-            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices
+            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices,
+            &runner
         )?;
 
 
@@ -1816,7 +1920,7 @@ mod cli_tests {
         let n = 1000;
         let max_y = 1f32;
 
-        let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
+        let (ws, store, group_name, loader, runner,devices) = prepare_test_data(n,max_y, &test_dir)?;
 
 
         let train_final_nodes_run_ids = run_all_steps(
@@ -1878,7 +1982,8 @@ mod cli_tests {
                                 num_layers: "2"
                             }
                         }"#,
-            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices
+            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices,
+            &runner
         )?;
 
 
@@ -1899,7 +2004,7 @@ mod cli_tests {
         let n = 1000;
         let max_y = 1f32;
 
-        let (ws, store, group_name, loader, devices) = prepare_test_data(n,max_y, &test_dir)?;
+        let (ws, store, group_name, loader, runner, devices) = prepare_test_data(n,max_y, &test_dir)?;
 
 
         let train_final_nodes_run_ids = run_all_steps(
@@ -1962,7 +2067,8 @@ mod cli_tests {
                                 num_layers: "2"
                             }
                         }"#,
-            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices
+            &group_name, OptConfig::new(10, 3), &ws, &store, &loader, &devices,
+            &runner
         )?;
 
 
@@ -2067,7 +2173,7 @@ mod cli_tests {
         ])
     }
 
-    fn prepare_test_data(n:u32, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Mutex<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Tensor>>>, Vec<Device>), ThoosaError> {
+    fn prepare_test_data(n:u32, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Mutex<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Tensor>>>, Arc<ThoRunner>, Vec<Device>), ThoosaError> {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -2082,6 +2188,7 @@ mod cli_tests {
             3 * n as u32,
             32000,
         )?));
+        let ws_loader = Arc::clone(&ws);
         let ws_runner = Arc::clone(&ws);
 
         //t_label_tensor
@@ -2132,7 +2239,7 @@ mod cli_tests {
 
         let loader = Arc::new(RwLock::new(LoadRunner::new(
             move |key: &Resource| {
-                let path = ws_runner.read().tensor_path(key);
+                let path = ws_loader.read().tensor_path(key);
                 debug!("test_run_step: path={path:?}");
                 SyncWrapper::wrap_tensor(
                     Tensor::load(&path).expect(format!("can't open {path:?}").as_str()),
@@ -2142,24 +2249,34 @@ mod cli_tests {
             100, 3,
         )));
 
+        let runner = Arc::new(ThoRunner::new(&[10, 2],  move |key, device| {
+            let path = ws_runner.read().tensor_path(key);
+            debug!("test_run_step: path={path:?}");
+
+
+            ThoTensor::new(Input::id(key).clone(), Tensor::load(&path).expect(format!("can't open {path:?}").as_str()))
+        }
+        ));
+
+
         // let devices = vec![Cpu, Cpu];
         let devices = vec![Cuda(0)];
 
         // log::set_max_level(Trace);
         reset_print_options();
-        Ok((ws, store, group_name, loader, devices))
+        Ok((ws, store, group_name, loader, runner,  devices))
     }
 
-    fn run_all_steps(find_motifs_run_config: &str, select_motifs_run_config: &str, train_motif_nodes_run_config: &str, train_label_nodes_run_config: &str, train_final_nodes_run_config: &str, group_name: &String, opt_config: OptConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, devices: &Vec<Device>) -> Result<Vec<RunId>, ThoosaError> {
-        let find_motifs_run_ids = run_all_grid_step(
+    fn run_all_steps(find_motifs_run_config: &str, select_motifs_run_config: &str, train_motif_nodes_run_config: &str, train_label_nodes_run_config: &str, train_final_nodes_run_config: &str, group_name: &String, opt_config: OptConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, devices: &Vec<Device>, runner: &Arc<ThoRunner>) -> Result<Vec<RunId>, ThoosaError> {
+        let find_motifs_run_ids = run_all_grid_step_2(
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(&find_motifs_run_config).unwrap(),
             &FixedFindMotifsConfig::new(None, 2, false, None),
             &Simple::new(ResourceType::Group(group_name.clone())),
-            find_motifs_by_euc_dist,
+            find_motifs_by_euc_dist_2,
             ws,
             store,
-            loader,
+            runner,
             devices.clone(),
             "Test/FindMotifs",
             true,
