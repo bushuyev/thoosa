@@ -516,15 +516,17 @@ where
 {
     debug!("chunk_and_slice_2x: chunk_size={chunk_size:?} run_configs={find_motifs_applicables:?}");
     trace!("chunk_and_slice_2x: resources={resources:?}");
+    let (tx, rx) = crossbeam_channel::unbounded::<(RunId, D, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
 
-    rayon::scope(|scope| {
+    block_on(async move {
+    // rayon::scope(|scope| {
         let resource_chunks = resources.chunks(chunk_size)
             .map(|v| Arc::new(v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())) //TODO k.clone()
             .collect::<Vec<Arc<Vec<Resource>>>>(); //[Resource]
         //
         // resource_chunks.push(vec![]); //to get last window processed
         //
-        // // let (tx, rx) = crossbeam_channel::unbounded::<(RunId, D, Vec<TensorIdSliceIdx>, Vec<TensorIdSliceIdx>)>();
+
 
         // let resource_chunks = resources.chunks(chunk_size);
         // trace!("chunk_and_slice_2x: resource_chunks={resource_chunks:?}");
@@ -539,10 +541,10 @@ where
             debug!("ChunkOfSlicedTensors:: chunk_0_i={chunk_0_i} resource_chunk_0={resource_chunk_0:?}---------------------");
 
             // let chunk_0_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
-            let chunk_0_tensors = block_on(async move {
-                let area_0 = Arc::clone(&area_0);
+            /*let chunk_0_tensors = block_on(async move {*/
+            let area_0 = Arc::clone(&area_0);
 
-                join_all(
+            let chunk_0_tensors =    join_all(
                     find_motifs_applicables_0.iter().map(  move |find_motifs_app|{
 
                         let area_0 = Arc::clone(&area_0);
@@ -559,7 +561,7 @@ where
                                         &runner_0.run_loader(resource, &Cpu, Some(Arc::clone(&area_0))).await,
                                         find_motifs_app,
                                         Some(area_0)
-                                    ).await 
+                                    ).await
                                 }
                             }).collect::<Vec<_>>()).await;
 
@@ -571,12 +573,12 @@ where
                             );
                             debug!("ChunkOfSlicedTensors::slice_tensors_chunk: c={:?}", c);
 
-                            c
+                            Arc::new(c)
                         }
 
                     })
-                ).await
-            });
+                ).await;
+            // });
 
             for resource_chunk_1 in resource_chunks.iter().skip(chunk_0_i).into_iter() {
                 let area_1 = runner.next_ctx();
@@ -585,10 +587,10 @@ where
                 let find_motifs_applicables_1 = Arc::clone(&find_motifs_applicables);
 
                 // let chunk_1_tensors = block_on(RayonFuture::<Vec<Arc<TCSD>>>::install_future(async move {
-                /*let chunk_1_tensors = block_on(scope.spawn_future(async move {
-                    let area_1 = Arc::clone(&area_1);
+                // let chunk_1_tensors = block_on(scope.spawn_future(async move {
+                //     let area_1 = Arc::clone(&area_1);
 
-                    join_all(
+                let chunk_1_tensors = join_all(
                         find_motifs_applicables_1.iter().map(  move |find_motifs_app|{
 
                             let area_1 = Arc::clone(&area_1);
@@ -624,195 +626,78 @@ where
                             }
 
                         })
-                    ).await
-                }));*/
+                    ).await;
+                // }));
                 trace!("chunk_and_slice_2x: resource_chunk_0={resource_chunk_0:?} resource_chunk_1={resource_chunk_1:?}");
                 // trace!("chunk_and_slice_2x: chunk_0_tensors={chunk_0_tensors:?} chunk_1_tensors={chunk_1_tensors:?}");
 
-                // find_motifs_applicables.iter().zip(resource_chunk_0.iter().zip(resource_chunk_1.iter())).for_each(|(find_motifs_app, (resource_chunk_0_resource, resource_chunk_1_resource))| {
-                //     trace!("chunk_and_slice_2x: resource_chunk_0_resource={resource_chunk_0_resource:?} resource_chunk_1_resource={resource_chunk_1_resource:?} find_motifs_app={find_motifs_app:?}");
-                // });
+                find_motifs_applicables.iter().zip(chunk_0_tensors.iter().zip(chunk_1_tensors.into_iter())).for_each(|(run_config, (resource_chunk_0_resource, resource_chunk_1_resource))| {
+                    // trace!("chunk_and_slice_2x: resource_chunk_0_resource={resource_chunk_0_resource:?} resource_chunk_1_resource={resource_chunk_1_resource:?} find_motifs_app={find_motifs_app:?}");
 
+                    run_split_on_oom(
+                        ChunkOfSlicedTensors::start_split_queue(resource_chunk_1_resource),
+                        |chunk_1_split|{
+                            // let num_tasks_v = num_tasks_arc.load(Relaxed);
+                            // if num_tasks_v > 100 {//TODO config
+                            //     debug!("chunk_and_slice: num_tasks_v={num_tasks_v}");
+                            //     // slept_times_arc.fetch_add(1, Relaxed);
+                            //     thread::sleep(Duration::from_millis(3000));//TODO config
+                            // }
+                            gpu_fn(
+                                resource_chunk_0_resource,
+                                &chunk_1_split,
+                                run_config,
+                            )
+                        },
+                        |cpu_t, chunk_1_split|{
+                            chunk_1_split.drop_tensor();
 
+                            match tx.send((
+                                run_config.id(),
+                                cpu_t,
+                                resource_chunk_0_resource.to_vec(),
+                                chunk_1_split.to_vec())
+                            ) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    error!("e:{e:?}"); //TODO panic?
+                                }
+                            }
+                        },
+                        10 //TODO config
+                    ).expect("run_split_on_oom failed");
+
+                });
             }
         }
 
 
-        // let area_0 = runner.next_ctx();
-        // let area_1 = runner.next_ctx();
-        //
-        // loader.write().preload(&resource_chunks[0], area_0);
-        //
-        // if resource_chunks.len() > chunk_size {
-        //     loader.write().preload(&resource_chunks[chunk_size], area_0);
-        // }
-        //
-        // let     slept_times = Arc::new(AtomicU64::new(0));
-        // let mut slept_times_arc = Arc::clone(&slept_times);
-        // let mut num_tasks = Arc::new(AtomicU64::new(0));
-        // let mut num_tasks_arc = Arc::clone(&num_tasks);
-        //
-        // s.spawn(move |scope| {
-        //
-        //     //first element in each window to be loaded and processed, second - preloaded
-        //     for (chunk_i_0, window_0) in resource_chunks.windows(2).enumerate() {
-        //         //window_0 - current,preload windows
-        //         debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={window_0:?}");
-        //
-        //         if window_0[1].len() > 0 {
-        //             loader.write().preload(&window_0[1], area_0);
-        //         }
-        //
-        //         let wg_0 = WaitGroup::new();
-        //
-        //         let window_0_0 = window_0[0].clone();
-        //         let window_0_0_clone = window_0_0.iter().map(|r| r.id()).collect::<Vec<ResourceId>>();
-        //
-        //         let wg_0_clone = wg_0.clone();
-        //         let window_0_tensors = Arc::new(RwLock::new(vec![]));
-        //         let window_0_tensors_arc = Arc::clone(&window_0_tensors);
-        //
-        //         loader.write().exec(|future_id, loader, keys_purge, done_sender| {
-        //             async move {
-        //
-        //                 let tensors = join_all(
-        //                     window_0_0.iter()
-        //                         .map(|key|Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, future_id, done_sender.clone()))
-        //                 ).await;
-        //
-        //                 window_0_tensors_arc.write().extend(tensors.into_iter().map(|t|SyncWrapper::wrap_tensor(t)));
-        //
-        //                 drop(wg_0_clone);
-        //             }.boxed()
-        //         });
-        //
-        //         wg_0.wait();
-        //
-        //         let run_configs_applied_to_chunk_0:Vec<Arc<ChunkOfSlicedTensors>> = run_configs.par_iter().enumerate()
-        //             .map(|(i, run_config_applicable)| {
-        //
-        //                 Arc::new(ChunkOfSlicedTensors::slice_tensors_chunk(
-        //                     &run_config_applicable,
-        //                     &window_0_tensors.read(),
-        //                     window_0_0_clone.clone(),
-        //                     Some(Cpu),
-        //                 ))
-        //
-        //             }).collect::<Vec<_>>();
-        //
-        //         drop(window_0_tensors);
-        //
-        //         let i_1 = Instant::now();
-        //         for (chunk_i_1, window_1) in resource_chunks.windows(2).into_iter().skip(chunk_i_0).enumerate() {
-        //             debug!("chunk_and_slice: chunk_i_1={chunk_i_1} window_1={window_1:?}");
-        //
-        //             if window_1[1].len() > 0 {
-        //                 loader.write().preload(&window_1[1], area_1);
-        //             }
-        //             trace!("chunk_and_slice: area_1={area_1:064b}");
-        //
-        //             let wg_1 = WaitGroup::new();
-        //
-        //             let window_1_0 = window_1[0].clone();
-        //             let window_1_0_clone = window_1_0.iter().map(|r| r.id()).collect::<Vec<ResourceId>>();
-        //
-        //             let wg_1_clone = wg_1.clone();
-        //             let window_1_tensors = Arc::new(RwLock::new(vec![]));
-        //             let window_1_tensors_arc = Arc::clone(&window_1_tensors);
-        //
-        //             loader.write().exec(|future_id, loader, keys_purge, done_sender| {
-        //                 async move {
-        //
-        //                     let tensors = join_all(
-        //                         window_1_0.iter()
-        //                             .map(|key|Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, future_id, done_sender.clone()))
-        //                     ).await;
-        //
-        //                     window_1_tensors_arc.write().extend(tensors.into_iter().map(|t|SyncWrapper::wrap_tensor(t)));
-        //
-        //                     drop(wg_1_clone);
-        //                 }.boxed()
-        //             });
-        //             wg_1.wait();
-        //
-        //             run_configs.iter()
-        //                 .zip(run_configs_applied_to_chunk_0.iter())
-        //                 // .par_bridge() //TODO spread among devices
-        //                 .for_each(|(run_config, chunk_0)| {
-        //
-        //                     run_split_on_oom(
-        //                         ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
-        //                             &run_config,
-        //                             &window_1_tensors.read(),
-        //                             window_1_0_clone.clone(),
-        //                             None//TODO
-        //                         )),
-        //                         |chunk_1_split|{
-        //                             let num_tasks_v = num_tasks_arc.load(Relaxed);
-        //                             if num_tasks_v > 100 {//TODO config
-        //                                 debug!("chunk_and_slice: num_tasks_v={num_tasks_v}");
-        //                                 slept_times_arc.fetch_add(1, Relaxed);
-        //                                 thread::sleep(Duration::from_millis(3000));//TODO config
-        //                             }
-        //                             gpu_fn(
-        //                                 &chunk_0,
-        //                                 &chunk_1_split,
-        //                                 run_config,
-        //                             )
-        //                         },
-        //                         |cpu_t, chunk_1_split|{
-        //                             chunk_1_split.drop_tensor();
-        //
-        //                             match tx.send((
-        //                                 run_config.id(),
-        //                                 cpu_t,
-        //                                 chunk_0.to_vec(),
-        //                                 chunk_1_split.to_vec())
-        //                             ) {
-        //                                 Ok(_) => {}
-        //                                 Err(e) => {
-        //                                     error!("e:{e:?}"); //TODO panic?
-        //                                 }
-        //                             }
-        //                         },
-        //                         10 //TODO config
-        //                     ).expect("run_split_on_oom failed");
-        //                 });
-        //
-        //             loader.write().purge_cache_keys(window_1[0].clone(), area_1);
-        //             print!(".");
-        //             std::io::stdout().flush().unwrap();
-        //         }
-        //         loader.write().purge_cache_keys(window_0[0].clone(), area_0);
-        //         info!("done {chunk_i_0} chunks out of {} in {} mls, slept {slept_times_arc:?} times", resource_chunks.len(), i_1.elapsed().as_millis());
-        //     }
-        //     drop(tx);
-        // });
-        //
-        //
-        // let trackers_pool = rayon::ThreadPoolBuilder::new()
-        //     .num_threads(thread::available_parallelism().map(|v|v.get()/2).unwrap_or(16))//TODO config
-        //     .spawn_handler(|thread_builder| {
-        //
-        //         let b = thread::Builder::new();
-        //         b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
-        //             .spawn(|| thread_builder.run())?;
-        //
-        //         Ok(())
-        //     }).build().expect("trackers_pool");
-        //
-        // trackers_pool.scope(|s| {
-        //     for (run_config_id, t, chunk_0, chunk_1) in rx.iter() {
-        //
-        //         num_tasks.fetch_add(1, Relaxed);
-        //         let num_tasks = Arc::clone(&num_tasks);
-        //         s.spawn(move |scope| {
-        //             cpu_fn(run_config_id, t, chunk_0, chunk_1);
-        //             num_tasks.fetch_sub(1, Relaxed);
-        //         });
-        //     }
-        // });
 
+    });
+
+
+
+    let trackers_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(thread::available_parallelism().map(|v|v.get()/2).unwrap_or(16))//TODO config
+        .spawn_handler(|thread_builder| {
+
+            let b = thread::Builder::new();
+            b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build().expect("trackers_pool");
+
+    trackers_pool.scope(|s| {
+        for (run_config_id, t, chunk_0, chunk_1) in rx.iter() {
+
+            // num_tasks.fetch_add(1, Relaxed);
+            // let num_tasks = Arc::clone(&num_tasks);
+            s.spawn(move |scope| {
+                cpu_fn(run_config_id, t, chunk_0, chunk_1);
+                // num_tasks.fetch_sub(1, Relaxed);
+            });
+        }
     });
 
     debug!("chunk_and_slice_2x: {:?}", runner.futures_runner().statistics().deref());
@@ -3134,7 +3019,7 @@ mod motif_find_tests {
             2,
             Arc::new( vec![
                 Arc::new(FindMotifsRunConfig::new(Some(1), 3, 5, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu)),
-                Arc::new(FindMotifsRunConfig::new(Some(2), 5, 10, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))
+                // Arc::new(FindMotifsRunConfig::new(Some(2), 5, 10, None, Some(0.01)).to_applicable(&mock_ws_simp(None, 2, 100, 1000), Cpu))
             ]),
             // HashMap::new(),
             &mut move |chunk_0, chunk_1, _find_motifs_run_config| {

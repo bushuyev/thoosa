@@ -115,8 +115,8 @@ impl<T> RayonFuture<T> {
             tx: Some(tx),
         }));
 
-        let shared_init = shared.clone();
-        rayon::spawn(move || poll_once(&shared_init));
+        // let shared_init = shared.clone();
+        rayon::spawn(move || poll_once(&shared));
 
         RayonFuture { rx }
     }
