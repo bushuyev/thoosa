@@ -12,6 +12,11 @@ pub trait Dims:Send + Clone + Debug {}
 pub struct ChannelsData;
 impl Dims for ChannelsData {}
 
+
+#[derive(Clone, Debug)]
+pub struct ChannelsDataFiltered;
+impl Dims for ChannelsDataFiltered {}
+
 #[derive(Clone, Debug)]
 pub struct ChannelsSlicesData;
 impl Dims for ChannelsSlicesData {}
@@ -138,6 +143,7 @@ impl <D:Dims> Input for &ThoTensor<D> {
 }
 
 pub type TCD = ThoTensor<ChannelsData>;
+pub type TCDF = ThoTensor<ChannelsDataFiltered>;
 pub type TCSD = ThoTensor<ChannelsSlicesData>;
 
 impl <D:Dims> AsRef<Tensor> for ThoTensor<D>{
