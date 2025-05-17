@@ -98,16 +98,10 @@ impl  ChunkOfSlicedTensors {
         //TODO move to GPU
         for t in tensors_chunk {
             trace!("ChunkOfSlicedTensors::slice_tensors_chunk: \tt={:?}", t.deref());
-            let unfolded = match t.tensor.f_unfold(1, applicable.run_config().window as i64, applicable.run_config().step as i64) {
-                Ok(t) => {
-                    t
-                }
-                Err(e) => {
-                    panic!("ChunkOfSlicedTensors::slice_tensors_chunk: unfold failed: {:?}", e);
-                }
-            };
+
+            let unfolded = applicable.unfold(t);
             slice_sizes.push(unfolded.size()[1]);
-            slices.push(unfolded);
+            slices.push(unfolded.tensor);
         }
 
         let tensor= if slices.is_empty() {
