@@ -1329,7 +1329,7 @@ mod cli_tests {
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::find::{find_motifs_by_euc_dist, find_motifs_by_euc_dist_2, select_motifs_for_label, FixedFindMotifsConfig, SelectMotifsParams};
+    use thoosa_motifs::find::{find_motifs_by_euc_dist, find_motifs_by_euc_dist_2, select_motifs_for_label, select_motifs_for_label_2, FixedFindMotifsConfig, SelectMotifsParams};
     use thoosa_motifs::fragments::{MotifsBy, PlotMotifSlicesArgs};
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::run_configs::RunConfig;
@@ -2291,15 +2291,15 @@ mod cli_tests {
         )?;
         debug!("test_run_step: find_motifs_run_ids={find_motifs_run_ids:?}");
 
-        let select_motifs_for_label_run_ids = run_all_grid_step(
+        let select_motifs_for_label_run_ids = run_all_grid_step_2(
             Some(find_motifs_run_ids),
             serde_json5::from_str::<SelectMotifsRunConfigRangeOrValue>(&select_motifs_run_config).unwrap(),
             &(),
             &Labeled::new(group_name.clone()),
-            select_motifs_for_label,
+            select_motifs_for_label_2,
             ws,
             store,
-            loader,
+            runner,
             devices.clone(),
             "Test/SelectMotifs",
             false,
