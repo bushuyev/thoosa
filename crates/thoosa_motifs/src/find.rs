@@ -29,6 +29,7 @@ use tch::{Device, IndexOp, Kind, Tensor};
 use std::panic::AssertUnwindSafe;
 use futures::executor::block_on;
 use futures::future::join_all;
+use futures_util::future::try_join_all;
 use thoosa_common::utils::*;
 use thoosa_shared::{avg_hist, parse_key_val};
 use thoosa_shared::val::Val;
@@ -42,7 +43,7 @@ use crate::chunks::{ChunkOfSlicedTensors, ChunkOfSlicedTensorsIter};
 use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeRunningMean, LocalMin, Tril};
 use crate::distance::{average_euclidean_distance, clc_dist_d2, slice_t, MaskMaker};
 use crate::distance::{clc_dist_d2_and_mask, dist_d2};
-use crate::fragments::{load_motif_slices, motifs_to_tensor, MotifsTensors};
+use crate::fragments::{load_motif_slices, motifs_to_tensor, motifs_to_tensor_2, MotifsTensors};
 use plotters::prelude::BLACK;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
@@ -560,6 +561,111 @@ impl SavableResult for FindMotifsSavableResult {
         Ok(self.run_config.id.expect("id"))
     }
 }
+
+async fn chunk_and_slice_2<G, CTX>(
+    resources: Vec <Resource>,
+    chunk_size: usize,
+    run_configs:&mut Vec<(FindMotifsRunConfig, CTX)>,
+    mut callback: G,
+    runner: &Arc<ThoRunner>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    devices:&[Device]
+) -> Result<(), ThoosaError>
+where
+    CTX: Send + Sync,
+    G: Fn(&ChunkOfSlicedTensors, &mut (FindMotifsRunConfig, CTX)) -> Result<(), ThoosaError> + Send + Sync
+{
+    let mut resource_chunks = resources.chunks(chunk_size)
+        .map(|v| v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())//TODO k.clone()
+        .collect::<Vec<Vec<Resource>>>();//[Resource]
+
+    resource_chunks.push(vec![]); //to get last window processed
+
+
+    let area_0 = runner.next_ctx();
+
+    // runner.write().preload(&resource_chunks[0], area_0);
+    //
+    // if resource_chunks.len() > chunk_size {
+    //     runner.write().preload(&resource_chunks[chunk_size], area_0);
+    // }
+
+    //first element in each window to be loaded and processed, second - preloaded
+    for (chunk_i_0, window_0) in resource_chunks.windows(2).enumerate() {
+        //window_0 - current,preload windows
+        debug!("chunk_and_slice: chunk_i_0={chunk_i_0} window_0={window_0:?}");
+
+        // if window_0[1].len() > 0 {
+        //     runner.write().preload(&window_0[1], area_0);
+        // }
+
+        let wg_0 = WaitGroup::new();
+
+        let window_0_0 = window_0[0].clone();
+        let window_0_0_clone = window_0_0.iter().map(|r|r.id()).collect::<Vec<ResourceId>>();
+
+        let wg_0_clone = wg_0.clone();
+        let window_0_tensors = Arc::new(RwLock::new(vec![]));
+        let window_0_tensors_arc = Arc::clone(&window_0_tensors);
+
+        // runner.write().exec(|future_id, loader, keys_purge, done_sender| {
+        //     async move {
+
+                for key in &window_0_0 {
+                    // debug!("chunk_and_slice:  exec:callback_arc: key={key:?} thread={:?}", thread::current().name());
+                    debug!("chunk_and_slice:  exec:callback_arc: key={key:?}");
+                    // thread::sleep(Duration::from_millis(1000));
+
+                    let sync_wrapper = SyncWrapper::wrap_tensor(
+                        // Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, future_id, done_sender.clone()).await
+                        runner.run_loader(key,  &Cpu, Some(Arc::clone(&area_0))).await.tensor.shallow_clone()
+                    );
+                    window_0_tensors_arc.write().push(sync_wrapper);
+                }
+                drop(wg_0_clone);
+
+            // }.boxed()
+        // });
+
+        // wg_0.wait();
+
+        run_configs.iter_mut().zip(devices.into_iter().cycle())
+            // .par_bridge() //TODO spread among devices
+            .for_each(|(run_config_with_ctx, device)| {
+                let mut split_queue = ChunkOfSlicedTensors::start_split_queue(ChunkOfSlicedTensors::slice_tensors_chunk(
+                    &mut run_config_with_ctx.0.to_applicable(ws.read().deref(), *device),
+                    &window_0_tensors.read(),
+                    window_0_0_clone.clone(),
+                    None
+                ));
+                while let Some(mut chunk_0_split) = split_queue.next() {
+                    match callback(
+                        &chunk_0_split,
+                        run_config_with_ctx,
+                    ) {
+                        Ok(_) => {
+                            chunk_0_split.drop_tensor();
+
+                        }
+                        Err(e) => {
+                            debug!("got e={e:?}, splitting");
+
+                            split_queue.split(chunk_0_split).expect("can't split chunks");//TODO return err
+                        }
+                    }
+
+                }
+            });
+
+
+        let i_1 = Instant::now();
+
+        // runner.write().purge_cache_keys(window_0[0].clone(), area_0);
+        info!("done {chunk_i_0} chunks out of {} in {} mls", resource_chunks.len(), i_1.elapsed().as_millis());
+    }
+    Ok(())
+}
+
 
 fn chunk_and_slice<G, CTX>(
     resources: Vec <Resource>,
@@ -1463,6 +1569,158 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
 
     (idx_dispersion.ge_tensor(&idx_dispersion_mean), idx_dispersion/ max)
 }
+
+pub fn select_motifs_for_label_2(
+    find_motif_run_ids: Option<&Vec<RunId>>,
+    select_motif_run_configs: Vec<SelectMotifsRunConfig>,
+    resource_config: &Labeled,
+    _common_config: &(),
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<Mutex<Box<dyn Store>>>,
+    runner: &Arc<ThoRunner>,
+    devices: Vec<Device>,
+) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
+    let motifs_area = runner.next_ctx();
+    let labels_resources = resource_config.to_resources(store)?;
+
+    debug!("select_motifs_for_label: select_motif_run_configs={select_motif_run_configs:?}");
+    trace!("select_motifs_for_label: labels_resources={labels_resources:?}");
+    let find_motifs_run_config_motifs_tensors:Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))>, ThoosaError> = block_on(async move {
+        let mut find_motifs_run_config_motifs_tensors: Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))> = try_join_all(find_motif_run_ids.expect("input_run_ids").iter().map(async |find_motif_run_id| {
+            let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
+            trace!("select_motifs_for_label: resource_id_motif_slices={resource_id_motif_slices:?}");
+
+            // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.lock().list_run_config_values(*find_motif_run_id)?);
+            let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(*find_motif_run_id, &store.lock().list_run_config_values(*find_motif_run_id)?)?;
+
+            motifs_to_tensor_2(
+                resource_id_motif_slices,
+                runner,
+                &find_motifs_run_config,
+                ws.read().channels() as i64,
+                Cpu,
+                &motifs_area,
+                ws,
+            ).await.map(|motifs_tensors| {
+                let size = &motifs_tensors.channels_motifs_slices.size()[0..=1]; //channels x motifs for motif sums
+
+                debug!("select_motifs_for_label: {find_motifs_run_config:?} motifs_tensor.size()={:?}", motifs_tensors.channels_motifs_slices.size());
+                trace!("select_motifs_for_label: motifs_tensors.channels_motifs_ids=\n{} channels_motifs_mask=\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_mask, motifs_tensors.channels_motifs_avg_dists);
+
+                (
+                    find_motifs_run_config,
+                    (
+                        motifs_tensors,
+                        HashMap::from_iter(
+                            labels_resources
+                                .iter()
+                                .map(|(label, _)|
+                                    (
+                                        label.clone(),
+                                        SyncWrapper::wrap_tensor(Tensor::zeros(size.clone(), INT64_CPU)) //motif counts
+                                    )
+                                )
+                        )
+                    )
+                )
+            })
+        })).await?; //.into_iter().collect::<Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))>, ThoosaError>>()?;
+        // runner.purge_all_gpu_caches(motifs_area, devices[0]);
+
+        debug!("select_motifs_for_label: motifs_tensors loaded");
+
+        // let mut find_motifs_run_configs = find_motifs_run_config_motifs_tensors.iter().map(|v|v.0.clone()).collect::<Vec<_>>();
+
+        for (label, resources) in labels_resources {
+            debug!("select_motifs_for_label: label={label:?} resources={resources:?}");
+            chunk_and_slice_2(
+                resources,
+                2, //TODO params
+                &mut find_motifs_run_config_motifs_tensors,
+                |chunk, (cfg, (motif_tensors, label_motif_matches_sums))| {
+                    let broadcast_to_size = [motif_tensors.channels_motifs_slices.size()[0], motif_tensors.channels_motifs_slices.size()[1], chunk.t.size()[1]];
+
+                    debug!("select_motifs_for_label: label={label} resources cfg={cfg:?} chunk.t.size={:?} motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motif_tensors); //chunk.t
+
+                    let (mask, _) = clc_dist_d2_and_mask(
+                        motif_tensors.channels_motifs_slices.to_device(devices[0]),
+                        chunk.t.to_device(devices[0]),
+                        false,
+                        //compare distances between tensor and motifs to motif's average distance
+                        &mut [Le { v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0]) }],
+                    )?;
+                    let mask = mask.to_device(Cpu);
+                    trace!("select_motifs_for_label: label={label} mask=\n{mask}");
+
+                    let sums = mask.sum_dim_intlist(2, false, Kind::Int64); //channels x motif matches
+                    trace!("select_motifs_for_label: label={label} sums=\n{sums}");
+
+                    label_motif_matches_sums.get_mut(&label).expect(format!("no motif sums tensor for {label}").as_str()).add_assign(sums.into());
+
+                    if log_enabled!(Level::Trace) {
+                        for (label, motif_sums) in label_motif_matches_sums.iter() {
+                            trace!("select_motifs_for_label: label={label} motif_sums=\n{motif_sums}");
+                        }
+                    }
+
+                    Ok(())
+                },
+                runner,
+                ws,
+                &devices,
+            ).await?;
+        }
+        
+        Ok(find_motifs_run_config_motifs_tensors)
+    });
+
+     Ok(Some(find_motifs_run_config_motifs_tensors?.into_iter()
+        .filter(|(find_motif_run_cfg, (motifs_tensors, label_motif_matches_sums))| {
+            if label_motif_matches_sums.is_empty() {
+                debug!("select_motifs_for_label:  label_motif_matches_sums is_empty for find_motif_run_cfg={find_motif_run_cfg:?}");
+                false
+            } else {
+                true
+            }
+        })
+        .flat_map(|(find_motif_run_cfg, (motifs_tensors, label_motif_matches_sums))| {
+            if log_enabled!(Level::Trace) {
+                for (label, motif_sums) in label_motif_matches_sums.iter() {
+                    trace!("select_motifs_for_label: label={label} final motif_sums=\n{motif_sums}");
+                }
+            }
+
+            let labels_channels_motifs_counts = Tensor::stack(
+                label_motif_matches_sums.into_iter().map(|t| t.1.shallow_clone()).collect::<Vec<_>>().as_slice(),
+                0,
+            ).totype(Float);
+
+            select_motif_run_configs.iter().filter_map(move |select_motif_run_config| {
+                match &select_motif_run_config.motif_selector {
+                    //TODO other selectors
+                    MotifSelector::ByLabelVariance(_) => {
+                        let (good_motifs, motifs_rates) = select_motifs_by_label_variance(&labels_channels_motifs_counts, &motifs_tensors.channels_motifs_mask);
+                        debug!("select_motifs_for_label: good_motifs=\n{good_motifs} motifs_tensors.channels_motifs_ids\n{} motifs_tensors.channels_motifs_avg_dists=\n{}", motifs_tensors.channels_motifs_ids, motifs_tensors.channels_motifs_avg_dists);
+
+                        let good_motif_ids_rates = from::<Vec<Vec<i64>>>(&motifs_tensors.channels_motifs_ids).into_iter().flat_map(|v| v.into_iter()).zip(
+                            from::<Vec<Vec<bool>>>(&good_motifs)
+                                .into_iter()
+                                .flat_map(|v| v.into_iter())
+                                .zip(from::<Vec<Vec<f32>>>(&motifs_rates).into_iter().flat_map(|v| v.into_iter())))
+                            .filter_map(|(id, (b, r))| if b { Some((id as u32, r as f64)) } else { None })
+                            .collect::<Vec<(u32, f64)>>();
+
+                        info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
+                        // a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
+                        Some(Box::new(SelectMotifsSavableResult::new(find_motif_run_cfg.id.expect("find_motif_run_cfg.id"), select_motif_run_config.clone(), good_motif_ids_rates)) as Box<dyn SavableResult>)
+                    }
+                }
+            })
+        }).collect::<Vec<_>>()))
+
+    // Ok(None)
+}
+
 
  pub fn select_motifs_for_label(
      find_motif_run_ids:Option<&Vec<RunId>>,
@@ -3135,6 +3393,11 @@ mod motif_find_tests {
         debug!("loaded_params={:?}", loaded_params);
 
         assert_eq!(params, loaded_params);
+    }
+
+    #[test]
+    fn test_select_motifs_for_label_2(){
+
     }
 
     #[test]
