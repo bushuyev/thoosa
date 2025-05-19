@@ -468,6 +468,45 @@ impl FuturesRunner {
         }
     }
 
+    pub fn run_task<I, O, A: Applicable<I, O, ()> + 'static>(
+        self: &Arc<Self>,
+        input: Arc<I>,
+        applicable:&Arc<A>,
+        runner:&Arc<A::R>,
+    ) -> BoxFuture<'static, Arc<O>>
+    where
+        O: Output + Send + Sync + 'static,
+        I: Input+Send+Sync+'static,
+    {
+        let device = applicable.device();
+        // let id = applicable.applied_id(input.id());
+
+        debug!("run_task");
+
+        let (tx, rx) = oneshot::channel();
+        // let statistics_clone = statistics.clone();
+
+        let t_0 = Instant::now();
+        let device = applicable.device();
+        let pool = self.device_pools.get_pool(&device);
+        let applicable= Arc::clone(applicable);
+        let runner= Arc::clone(runner);
+
+        pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
+            RayonFuture::<()>::install_future(async move {
+                let r = applicable.async_apply(input.clone(), runner, None).await;
+                // debug!("run_cached_task: done input={input:?}");
+                let _ = tx.send(r);
+                // statistics_clone.write().on_new_load_done(t_0.elapsed().as_millis());
+            });
+        });
+
+        async move { rx.await.expect("Task execution failed") }
+            .boxed()
+
+    }
+
+
     pub fn run_cached_task<I, O, A: Applicable<I, O, ()> + 'static>(
         self: &Arc<Self>,
         cache: &DashMap<AppliedId, DataInDevices<O>>,

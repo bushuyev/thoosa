@@ -26,6 +26,7 @@ use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::*;
 use std::panic::AssertUnwindSafe;
+use futures_util::future::join_all;
 use tch::Device::Cpu;
 use thoosa_common::applicables::{ThoRunCtx, ThoRunner};
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, FindMotifsRunConfigOptions};
@@ -454,6 +455,74 @@ impl PlotMotifSlicesArgs {
         Self { motifs_by, limit: None }
     }
 }
+
+
+pub async fn load_motif_slices_2 (channel: i64, find_motifs_run_config_applicable: &Arc<FindMotifsApplicable>, slices: Vec<TensorIdSliceIdx>, resources_map: HashMap<ResourceId, Resource>, runner: &Arc<ThoRunner>, device:&Device, ctx:Arc<RwLock<ThoRunCtx>>) -> Vec<(ResourceId, Vec<Tensor>)> {
+
+    debug!("load_motif_slices: channel={}, find_motifs_run_config={:?}, slices={}", channel, find_motifs_run_config_applicable, slices.len());
+
+    let tensors_ids_slices = slices.iter().fold(HashMap::new(), |mut a, slice| {
+        a
+            .entry(slice.0.clone())//TODO clone
+            .or_insert_with(|| Vec::with_capacity(10))
+            .push(slice.1);
+        a
+    });
+
+    debug!("load_motif_slices: tensors_ids_slices.len={}", tensors_ids_slices.len());
+
+    // let mut all_slices:Arc<RwLock<Vec<(ResourceId, Vec<SyncWrapper<Tensor>>)>>> = Arc::new(RwLock::new(vec![]));//TODO remove Arc or add par_iter?
+    // let wg = WaitGroup::new();
+    let window = find_motifs_run_config_applicable.run_config().window;
+
+    let all_slices = join_all(tensors_ids_slices.keys().collect::<Vec<_>>().chunks(100).flat_map(|tensor_keys| { //TODO remove chunks?
+
+        debug!("load_motif_slices: tensor_keys={:?}", tensor_keys);
+
+        tensor_keys
+            .iter()
+            .map(|v| resources_map.get(*v).expect(format!("no resource {v}").as_str()).clone()) //TODO clone + &Resource to load_future
+            .map(|resource| {
+                let ctx = Arc::clone(&ctx);
+                let tensors_ids_slices = tensors_ids_slices.clone();
+                async move {
+                    let slices = tensors_ids_slices.get(&resource.id()).expect(format!("no {resource:?}").as_str()).clone();
+
+
+                    let tensor_idx_id = resource.id();
+                    // let t = Loader::<Tensor>::load_future(loader, resource, 0, future_id, done_sender).await;
+                    let t = runner.run_find_motifs_applicable(&runner.run_loader(&resource, device, Some(Arc::clone(&ctx))).await, find_motifs_run_config_applicable, Some(Arc::clone(&ctx))).await;
+                    // let t= find_motifs_run_config_applicable.apply(t.into(), FindMotifsRunConfigOptions::Filter).unwrap();
+
+                    debug!("load_motif_slices: tensor_idx={tensor_idx_id} slices.len={} t.size={:?}", slices.len(), t.size());
+
+                    // all_slices.write().push(
+                    (
+                        tensor_idx_id,
+                        slices.into_iter().filter(|slice_idx| { //TODO filter_map
+                            let slice_ok = t.size()[1] >= (*slice_idx + window) as i64;
+
+                            if !slice_ok {
+                                warn!("slice doesn't fit into tensor: tensor_idx_id={tensor_idx_id}, t.size()={:?}, *slice_idx={slice_idx:?}, window={window:?}", t.size())
+                            }
+
+                            slice_ok
+                        }).map(|slice_idx|
+                            t.tensor.i((channel, slice_idx as i64..(slice_idx + window) as i64))
+                        ).collect::<Vec<Tensor>>()
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+    })).await;
+    // wg.wait();
+
+    debug!("load_motif_slices: loaded slices={}",  slices.len());
+
+
+    all_slices
+}
+
 
 
 

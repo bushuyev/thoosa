@@ -10,7 +10,7 @@ use crate::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
 use crate::val::{NamedRange, NamedVal, Val};
 
 ////
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConstConfigs<CP> {
     const_params:CP,
 }
@@ -25,7 +25,7 @@ impl <T: FieldName> ConstConfigs<Vec<NamedVal<T>>> {
 
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GridRunConfigs<CP, GP> {
     const_config_source: ConstConfigs<CP>,
     grid_params:GP
@@ -70,7 +70,7 @@ impl <T: FieldName> GridRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>> {
 }
 
 //TODO make VecOptRunConfigs with single T param?
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OptRunConfigs<CP, GP, OP, T> {
     grid_run_config_source: GridRunConfigs<CP, GP>,
     opt_params:OP,
