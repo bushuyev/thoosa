@@ -23,7 +23,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
-use std::{fmt, fs};
+use std::{fmt, fs, thread};
 use std::hash::Hash;
 use std::iter::Map;
 use std::marker::PhantomData;
@@ -51,7 +51,7 @@ use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_shared::run_configs::{Applicable, RunConfig};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{AppliedId, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{AppliedId, Output, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use crate::applicables::{ThoDevice, ThoRunner};
@@ -1358,7 +1358,7 @@ impl Applicable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionA
     }
 
     async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Applicable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsData>> {
-        todo!()
+        Arc::new(self.apply(input.deref().shallow_clone(), ()).unwrap())
     }
 
     fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
@@ -1876,6 +1876,15 @@ impl TrainMotifsNetsRunConfigResult {
     }
 }
 
+#[async_trait]
+impl Output for Box<TrainMotifsNetsRunConfigResult> {
+
+    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
+        todo!() //TODO not needed for not cachable Outputs
+    }
+}
+
+
 impl SavableResult for TrainMotifsNetsRunConfigResult {
 
     fn value(&self) -> f32 {
@@ -1915,7 +1924,7 @@ where
     let const_vals = run_config_source.grid_run_config_source().const_params();
     let mut min_loss = f32::MAX;
     let mut min_var_store: Option<(VarStore, N, R, f32)> = None;
-    info!("running opt train {descr}");
+    info!("running opt train {descr} thread name={:?}", thread::current().name());
 
     run_config_source.grid_to_vals().into_iter().for_each(|grid_vals| {
 
