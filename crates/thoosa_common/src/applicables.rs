@@ -182,6 +182,18 @@ impl ThoRunner {
         }
     }
 
+    pub fn run_task<I, O, A: Applicable<I, O, (), R=Self> + 'static>(
+        self: &Arc<Self>,
+        input: Arc<I>,
+        applicable:&Arc<A>,
+    ) -> BoxFuture<'static, Arc<O>>
+    where
+        O: Output + Send + Sync + 'static,
+        I: Input+Send+Sync+'static,
+    {
+        self.futures_runner.run_task(input, applicable, self)
+    }
+
     pub fn run_loader(
         self: &Arc<Self>,
         input: &Resource,
