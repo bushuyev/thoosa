@@ -24,6 +24,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::{fs, process};
 use std::ops::Deref;
+use async_trait::async_trait;
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
 use tch::nn::{Module, VarStore};
@@ -48,7 +49,7 @@ use thoosa_shared::{
 };
 use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
-use thoosa_common::applicables::ThoRunner;
+use thoosa_common::applicables::{ThoDevice, ThoRunner};
 use thoosa_common::dims::ThoTensor;
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
 use crate::version::VERSION;
@@ -59,7 +60,7 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunConfig, RunId};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
-use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -797,12 +798,12 @@ fn run_train_motif_nodes_on_motif_selection_2(
             motif_selection_run_ids_chunk.iter().flat_map(move |motif_selection_run_id| {
                 let find_motifs_run_ids = store.lock().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
                 debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?}");
-                
+
                 let selected_motifs = store.lock().list_selected_motifs(*motif_selection_run_id, ws.read().channels()).expect("list_selected_motifs");
                 selected_motifs.into_iter()
                     .flat_map(|channel_motifs| channel_motifs.into_iter())
                     .flat_map( {
-                        
+
                         let train_motifs_nodes_run_configs_arc = Arc::clone(&train_motifs_nodes_run_configs_arc);
 
                         move |(motif_id, _corr)| {
@@ -1135,7 +1136,21 @@ async fn run_train_motif_nets_2(
     debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
 
 
-    opt_train(
+    Ok(Arc::into_inner(runner.futures_runner().run_task(
+        Arc::new(TrainMotifNetApplicableInput{
+            motif_id,
+            fixed_config: fixed_config.clone(),
+            all_slices_0,
+            all_slices_1,
+            find_motifs_run_config: find_motifs_run_config_applicable.run_config().clone(),
+            train_motifs_nodes_run_configs: train_motifs_nodes_run_configs.deref().clone(),
+            channel: channel as u32,
+        }),
+        &Arc::new(TrainMotifNetApplicable{device}),
+        runner
+    ).await).unwrap() as Box<dyn SavableResult>)
+
+/*    opt_train(
         fixed_config,
         move |vs: &VarStore, run_config: &TrainMotifsNetsRunConfig, listener: &mut dyn TrainListener| {
             //TODO batch size
@@ -1145,7 +1160,7 @@ async fn run_train_motif_nets_2(
 
             let mut batch = TensorsDataBatch::new(
                 vec![
-                    all_slices_0_cl,
+        ()            all_slices_0_cl,
                     all_slices_1_cl
                 ],
                 run_config.common_training_args.batch_size,
@@ -1161,7 +1176,7 @@ async fn run_train_motif_nets_2(
     ).map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
         Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, channel as u32, motif_id, var_store, find_motifs_run_id/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)) as Box<dyn SavableResult>
     })
-}
+*/}
 
 
 fn run_train_motif_nets(
@@ -1242,6 +1257,88 @@ fn run_train_motif_nets(
         })
 
     }).filter(|v|v.is_ok()).collect()
+}
+
+#[derive(Debug)]
+struct TrainMotifNetApplicable {
+    device: Device,
+}
+
+#[derive(Debug)]
+struct TrainMotifNetApplicableInput {
+    motif_id:u32,
+    fixed_config: OptConfig,
+    all_slices_0:Vec<Tensor>,
+    all_slices_1:Vec<Tensor>,
+    find_motifs_run_config: FindMotifsRunConfig,
+    train_motifs_nodes_run_configs: OptRunConfigs<Vec<NamedVal<TrainMotifsNetsRunConfigFields>>, Vec<NamedRange<TrainMotifsNetsRunConfigFields>>, Vec<Hyperparameter<TrainMotifsNetsRunConfigFields>>, TrainMotifsNetsRunConfigFields>,
+    channel:u32
+}
+
+unsafe impl Sync for TrainMotifNetApplicableInput{}
+unsafe impl Send for TrainMotifNetApplicableInput{}
+
+impl Input for TrainMotifNetApplicableInput {
+    fn id(&self) -> &AppliedId {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()> for TrainMotifNetApplicable {
+    type R = ThoRunner;
+
+    async fn async_apply(self: Arc<Self>, input: Arc<TrainMotifNetApplicableInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
+        let train_motifs_nodes_run_configs = &input.train_motifs_nodes_run_configs;
+        let all_slices_0_cl = &input.all_slices_0;
+        let all_slices_1_cl = &input.all_slices_1;
+        let window = input.find_motifs_run_config.window();
+        let device = self.device;
+
+        opt_train(
+            &input.fixed_config,
+            move |vs:&VarStore, run_config:&TrainMotifsNetsRunConfig, listener: &mut dyn TrainListener|{
+                //TODO batch size
+                let all_slices_0_cl = all_slices_0_cl.iter().map(|v|v.shallow_clone()).collect::<Vec<_>>();
+                let all_slices_1_cl = all_slices_1_cl.iter().map(|v|v.shallow_clone()).collect::<Vec<_>>();
+
+                let mut batch = TensorsDataBatch::new(
+                    vec![
+                        all_slices_0_cl,
+                        all_slices_1_cl
+                    ],
+                    run_config.common_training_args.batch_size,
+                    0.8,//TODO config
+                    device
+                );
+
+                run_train_motif_net(window, run_config, &self.device, &mut batch, vs, listener)
+            },
+            &train_motifs_nodes_run_configs,
+            device,
+            "motifs"
+        ).map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)|{
+            Arc::new(Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, input.channel, input.motif_id, var_store, input.find_motifs_run_config.id.unwrap()/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)))
+
+        }).expect("TODO opt_train failed")
+
+    }
+
+    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+        todo!()
+    }
+
+    fn name(&self) -> String {
+        "TrainMotifNetApplicable".to_string()
+    }
+
+    fn run_id(&self) -> String {
+        todo!()
+    }
+
+    fn device(&self) -> impl ToOrdinal {
+        ThoDevice::from(self.device)
+    }
 }
 
 fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) -> String {
@@ -2471,7 +2568,7 @@ mod cli_tests {
             100, 3,
         )));
 
-        let runner = Arc::new(ThoRunner::new(&[10, 2],  move |key, device| {
+        let runner = Arc::new(ThoRunner::new(&[20, 2],  move |key, device| {
             let path = ws_runner.read().tensor_path(key);
             debug!("test_run_step: path={path:?}");
 
