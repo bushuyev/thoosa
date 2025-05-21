@@ -138,7 +138,7 @@ where
 
 impl<N> ParzenEstimator for NumericalParzenEstimator<N>
 where
-    N: Num + tch::kind::Element + PartialOrd + Copy,
+    N: Num + tch::kind::Element + PartialOrd + Copy + Send,
     f64: Into<N>,
     f64: From<N>,
 

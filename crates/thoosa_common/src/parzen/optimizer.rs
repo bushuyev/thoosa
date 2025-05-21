@@ -81,12 +81,12 @@ mod run_result_tests {
     }
 }
 #[allow(dead_code)]
-pub trait ParzenEstimator {
+pub trait ParzenEstimator:Send{
     fn clc_distr(&self, samples:Tensor, weights: Option<Tensor>) -> Box<dyn Distribution>;
     fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Val>, weights: Option<Tensor>) -> Box<dyn Distribution>;
 }
 
-pub trait Distribution:Debug {
+pub trait Distribution:Debug+Send {
     fn sample(&self, n_samples:usize) -> Vec<Val>;
     fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Val>) -> Tensor;
     fn weights(&self)->&Tensor;
@@ -403,6 +403,106 @@ impl <F, T: FieldName> TPEOptimizer<F, T>
     }
 
 }
+
+
+
+#[allow(dead_code)]
+pub struct AsyncTPEOptimizer<F, T> where F: AsyncFnMut(&[NamedVal<T>]) -> f32, T: FieldName
+{
+    obj_func:F,
+    cs:ConfigurationSpace<T>,
+    n_init:u32,
+    max_evals:u32,
+    tpe_samplers:HashMap<String, TreeStructuredParzenEstimator>,
+    _pd:PhantomData<T>
+}
+
+impl <F, T: FieldName> AsyncTPEOptimizer<F, T>
+where F: AsyncFnMut(&[NamedVal<T>]) -> f32 {
+
+    pub fn new(obj_func:F, cs:ConfigurationSpace<T>, max_evals: u32, n_init: u32) -> Self {
+
+        debug!("TPEOptimizer:new: cs={cs:?}");
+
+        let estimator = TreeStructuredParzenEstimator::new(&cs);
+        Self {
+            obj_func,
+            cs,
+            n_init,
+            max_evals,
+            tpe_samplers: HashMap::from([
+                ("loss".to_string(), estimator)
+            ]),
+            _pd:PhantomData::default()
+        }
+    }
+
+    pub async fn optimize(&mut self) -> Vec<Val> {
+        let mut best_loss = f32::MAX;
+        let mut best_config:Option<Vec<Val>> = None;
+
+        for i in (0..self.max_evals) {
+
+            let eval_config = if  i < self.n_init {
+                debug!("TPEOptimizer::optimize: i={i} random sample");
+                self.cs.random_sample()
+
+            } else {
+                debug!("TPEOptimizer::optimize: i={i} sample");
+                self.sample()
+            };
+
+            let loss = self.obj_func.async_call_mut((
+                &eval_config.iter().zip(self.cs.hyperparameters.iter()).map(|(val, hp)|{
+                    // (hp.name(), val.clone()).into()
+                    // NamedVal::from((hp.name().into(), val.clone()))
+                    NamedVal::from((hp.name().clone(), val.clone()))
+                }).collect::<Vec<_>>().as_slice(),
+            )).await;
+            if loss < best_loss {
+                best_loss = loss;
+                best_config.replace(eval_config.clone());
+            }
+            debug!("TPEOptimizer::optimize: i={i} eval_config={:?} loss={loss}", eval_config);
+
+            for (_key, tpe) in &mut self.tpe_samplers {
+                tpe.update_observations(loss, &eval_config)
+            }
+        }
+
+        best_config.unwrap_or(vec![])//TODO
+    }
+
+    fn sample(&self)->Vec<Val> {
+
+        //TODO if always loss only - merge get_config_candidates & compute_probability_improvement
+        let config_cands = stack_params(
+
+            self.tpe_samplers.values().map(|tpe| {
+                tpe.get_config_candidates(24)//TODO to param
+            }).collect::<Vec<Vec<Vec<Val>>>>() //tpe(only loss)/params/candidates
+        );
+
+        //TODO weights? loss only
+        let pi_config = Tensor::stack(
+            self.tpe_samplers.values().map(|tpe| tpe.compute_probability_improvement(&config_cands)).collect::<Vec<Tensor>>().as_slice(),
+            0,
+        );
+
+        trace!("sample: config_cands={config_cands:?}");
+        trace!("sample: pi_config={pi_config}");
+
+        debug!("sample: max={}", pi_config.max());
+
+        let max_i = pi_config.argmax(1, true).i(0).double_value(&[]);
+
+        config_cands.into_iter().map(|p|p[max_i as usize].clone()).collect()   // return weights @ pi_config_array
+
+    }
+
+}
+
+
 
 fn stack_params<T:Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
     let num_rows = input[0].len();

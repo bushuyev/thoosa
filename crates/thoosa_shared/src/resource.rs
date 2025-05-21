@@ -29,6 +29,7 @@ pub struct Resource {
     applied_id: AppliedId
 }
 
+
 impl Resource {
     pub fn new(id: u32, import_id: u32, file_stem: String, length: u32) -> Self {
         trace!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");

@@ -2,10 +2,10 @@ use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader, SyncWrapper};
 use crate::my_tch::{MyClosureModule, ThoModule};
-use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
+use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, TPEOptimizer};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use crate::{panic_to_err, train_nets};
-use crate::utils::{cuda_mem, from, run_split_on_oom, tensor_mem_size, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
+use crate::{panic_to_err, panic_to_err_async, train_nets};
+use crate::utils::{cuda_mem, from, run_split_on_oom, run_split_on_oom_2, tensor_mem_size, train_2, DummyListener, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
 use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
 use crate::ws::{FsWorkspace, Workspace};
 use clap::clap_derive::Args;
@@ -55,6 +55,7 @@ use thoosa_shared::applicables_runner::{AppliedId, Output, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use crate::applicables::{ThoDevice, ThoRunner};
+use crate::batches::{AsyncDataBatch, AsyncLoadingTensorsDataBatch};
 use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
 use crate::find_motifs_run_config::*;
 use crate::transforms::filters::*;
@@ -687,6 +688,83 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
     }
 }
 
+pub async  fn run_opt_train_label_nets_2(
+    run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
+    train_labels_resources:Arc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
+    valid_labels_resources:Arc<Vec<(i64, Vec <Resource>)>>,
+    motifs_nets_selection_applicable_arc:Arc<MotifsNetsSelectionApplicable>,
+    label: &String,
+    fixed_config: &Arc<OptConfig>,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    runner: &Arc<ThoRunner>,
+    device: Device
+) -> Result<Box<dyn SavableResult>, ThoosaError> {
+
+    debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} channels={} cuda_mem={:?}", ws.read().channels(), cuda_mem());
+    opt_train_2(
+        Arc::clone(fixed_config),
+        async |vs: &VarStore, run_config: TrainLabelNetsRunConfig/*, _listener*/| { //TODO add _listener to train_label_nodes_2
+            // debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}");
+
+
+            let mut result = None::<(f32, LabelNetParams)>;
+
+            let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
+                &run_config.net, &motifs_nets_selection_applicable_arc,  ws
+            );
+
+            run_split_on_oom_2(
+                Reducer::new(
+                    AsyncLoadingTensorsDataBatch::<ChannelsData, LabelNetInputTensors, _>::new(
+                        Arc::clone(&train_labels_resources),
+                        Arc::clone(&valid_labels_resources),
+                        run_config.common_training_args.batch_size as usize,
+                        Arc::clone(&runner),
+                        device.clone(),
+                        Some(Box::new( |t:TCD|{
+                            applicable_and_net_enum.apply(&t).expect("applicable_and_net_enum.apply failed")
+                        }))
+                    )
+
+                ),
+                async |batch| {
+                    train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, batch, vs, ws, &device).await
+                        .map(|v| (v,
+                                  match &applicable_and_net_enum {
+
+                                      LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
+                                          debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}");
+
+                                          params.clone()
+                                      }
+                                      LabelNetApplicableAndNetE::FixedNumSlices { applicable, params } => {
+                                          debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}");
+
+                                          params.clone()
+                                      }
+                                  }
+                        ))
+                },
+                |v, i| {
+                    debug!("v={v:?}");
+                    result.replace(v);
+                },
+                3, //TODO config
+            ).await?;
+
+            Ok(result.expect("no result from train_label_nodes"))
+            // Err(ThoosaError::new("zzz"))
+        },
+        Arc::clone(run_configs),
+        device,
+        "label",
+    ).await.map(|(var_store, label_node_params, run_config, min_loss)| {
+        Box::new(TrainLabelNetsRunConfigResult::new(motifs_nets_selection_applicable_arc.motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
+        // todo!()
+    })
+}
+
+
 pub fn run_opt_train_label_nets(
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
     train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
@@ -761,6 +839,53 @@ pub fn run_opt_train_label_nets(
         Box::new(TrainLabelNetsRunConfigResult::new(motifs_nets_selection_applicable_arc.motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
     })
 }
+
+pub async fn train_label_net_2<DI:Dims+Send+'static, DO:Dims+Send+'static, B:AsyncDataBatch<DI>> (
+    net:&Box<dyn ThoModule<Batch<DI>, DO>>,
+    run_config:&TrainLabelNetsRunConfig,
+    mut batch:&mut B,
+    var_store: &VarStore,
+    ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    device: &Device,
+) ->  Result<f32, ThoosaError> {
+
+
+    let device = device.clone();
+
+    let mut optimizer = AdamW::default().amsgrad(true);
+
+    //TODO
+    // if let Some(adam_w) = run_config.common_training_args.adam_w {
+    //     debug!("train_label_nodes: setting adam_w={adam_w:?}");
+    //     optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
+    // }
+
+    debug!("train_label_net: cuda_mem={:?}", cuda_mem());
+
+    let loss = train_2(
+        &device,
+        batch as &mut dyn AsyncDataBatch<DI>,
+        net,
+
+        |pred: &Tensor, target: &Tensor| {
+            debug!("train_label_net: pred.size={:?}", pred.size());
+            let pred_y = pred.squeeze();
+            debug!("train_label_net: pred_y={:?} target={:?} kind={:?}", pred_y.size(), target.size(), target.kind());
+            pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean)
+        },
+        run_config.common_training_args.cycles as usize,
+        optimizer.build(&var_store, run_config.common_training_args.lr)?,
+
+        |t| {
+            debug!("train_label_net: t.size={:?} cuda_mem={:?}", t.size(), cuda_mem());
+            t
+        },
+        None,
+    ).await?;
+
+    Ok(loss)
+}
+
 
 pub fn train_label_net<DI:Dims+Send+'static, DO:Dims+Send+'static, B:DataBatch<DI>> (
     net:&Box<dyn ThoModule<Batch<DI>, DO>>,
@@ -1072,6 +1197,12 @@ pub struct TrainMotifsNetsRunConfig {
 
 }
 
+impl TrainMotifsNetsRunConfig {
+    pub fn new() -> Self {
+        Self { id: None, common_training_args: CommonTrainingRunConfig::new(1, 1, 0.1, 0.1,1,1 ), num_layers: 1 }
+    }
+}
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct CommonTrainingRunConfig {
 
@@ -1362,15 +1493,15 @@ impl Applicable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionA
     }
 
     fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
-        todo!()
+        <MotifsNetsSelectionApplicable as Applicable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::format_0(input_id)
     }
 
     fn name(&self) -> String {
-        todo!()
+        "MotifsNetsSelectionApplicable".to_string()
     }
 
     fn run_id(&self) -> String {
-        todo!()
+        self.motif_selection_run_id.to_string()
     }
 
     fn device(&self) -> impl ToOrdinal {
@@ -1909,6 +2040,86 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
     }
 }
 
+pub async fn opt_train_2<P, R, F, N: Debug + Default>(
+    opt_config: Arc<OptConfig>, //N node parameters
+    mut train: F,
+    run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>,
+    device: Device,
+    descr: &str,
+) -> Result<(VarStore, N, R, f32), ThoosaError>
+where
+    P: FieldName,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone,
+    F: AsyncFnMut(&VarStore, R/*, Box<dyn TrainListener>*/) -> Result<(f32, N), ThoosaError> + Clone,
+{
+    let const_vals = run_config_source.grid_run_config_source().const_params().clone();
+    let mut min_loss = f32::MAX;
+    let mut min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
+
+    info!("running opt train {descr} thread name={:?}", thread::current().name());
+    // let x = train.clone();
+    // let train_arc = Arc::new(RwLock::new(train));
+    // let train_clone = Arc::clone(&train_arc);
+    let train_clone = train.clone();
+
+    for grid_vals in run_config_source.grid_to_vals().into_iter() {
+        let const_vals= const_vals.clone();
+        let grid_vals= grid_vals.clone();
+        let mut train_clone= train_clone.clone();
+        let mut min_var_store_clone = Arc::clone(&min_var_store);
+        let mut opt = AsyncTPEOptimizer::new( async move |opt_vals| {
+          let run_config:R = [
+                const_vals.as_slice(),
+                grid_vals.as_slice(),
+                opt_vals
+            ].concat().into_iter().into();
+
+               let vs = VarStore::new(device);
+
+
+                // let mut listener = PlotVecf32::new(format!("_params_{:?}", "id"/*TODO run_config.get_id()*/).as_str()); //motif_id ?
+
+                // let (loss, node_params) = match panic_to_err_async!(train_clone.async_call_mut((&vs, &run_config, &mut listener)).await) {
+            // train_clone.async_call_mut((&vs, &run_config/*, Box::new(DummyListener),*/)).await;
+               let (loss, node_params) = match panic_to_err_async!(train_clone.async_call_mut((&vs, run_config.clone()/*, &mut DummyListener*/)).await) {
+                    Ok(v) => {
+                        v
+                    }
+                    Err(e) => {
+                        // warn!("opt_train failed with {e:?} on {run_config:?}");
+                        (f32::MAX, Default::default())
+                    }
+                };
+                //
+                // listener.plot();
+                //
+
+            // debug!("opt_train: descr={descr} run_config_values={run_config:?} loss={loss}");
+            if loss < min_loss {
+                min_loss = loss;
+                min_var_store_clone.write().replace((vs, node_params, run_config, min_loss));
+            }
+            print!(".");
+            loss
+        },
+            ConfigurationSpace::new(run_config_source.opt_params().clone()),
+            opt_config.opt_max_evals,
+            opt_config.opt_num_init,
+        );
+
+        let best_config = opt.optimize().await;
+
+        debug!("best_config={:?}", best_config);
+        trace!("done opt {descr}");
+        info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
+
+    }
+    //
+    Arc::into_inner(min_var_store).unwrap().into_inner().ok_or_else(||ThoosaError::new("opt was not run"))
+    // todo!()
+}
+
+
 pub fn opt_train<P, R, F, N: Debug + Default>(
     opt_config: &OptConfig, //N node parameters
     mut train: F,
@@ -1958,14 +2169,12 @@ where
             loss
         },
             ConfigurationSpace::new(run_config_source.opt_params().clone()),
-                                        opt_config.opt_max_evals,
-                                        opt_config.opt_num_init,
+            opt_config.opt_max_evals,
+            opt_config.opt_num_init,
         );
 
         let best_config = opt.optimize();
 
-        debug!("best_config={:?}", best_config);
-        let best_config = opt.optimize();
         trace!("done opt {descr}");
         info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
 
