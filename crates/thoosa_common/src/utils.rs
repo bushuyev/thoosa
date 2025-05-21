@@ -35,6 +35,7 @@ use torch_sys::*;
 
 use crate::my_tch::{LossFp, ThoModule};
 use thoosa_shared::opt_rng::opt_rnd;
+use crate::batches::AsyncDataBatch;
 use crate::dims::{Batch, Dims, ThoTensor};
 
 pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Error>> {
@@ -329,6 +330,42 @@ pub fn cuda_mem() -> (usize, usize){
 }
 
 #[macro_export]
+macro_rules! panic_to_err_async {
+
+    ($expr:expr) => {{
+         let x = std::panic::catch_unwind(AssertUnwindSafe(async || {
+            $expr
+        }));
+         
+         match x {
+            //no panic
+            Ok(inner_result) => match inner_result.await {
+                Ok(val) => Ok(val),
+                Err(err) => Err(ThoosaError::from(err))
+            },
+            //panic
+            Err(e) => {
+                if let Some(msg) = e.downcast_ref::<String>() {
+                    debug!("thoosa_err String: {msg}");
+                    Err(ThoosaError::from(msg))
+                //TODO
+                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
+                //     Err(*thoosa_error)
+
+                } else if let Some(msg) = e.downcast_ref::<&str>() {
+                    debug!("thoosa_err str: {msg}");
+                    Err(ThoosaError::from(*msg))
+                } else {
+                    debug!("thoosa_err unknown: {e:?}");
+                    Err(ThoosaError::from(format!("{e:?}")))
+                }
+            }
+        }
+    }};
+}
+
+
+#[macro_export]
 macro_rules! panic_to_err {
 
     ($expr:expr) => {{
@@ -446,6 +483,39 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
     }
 }
 
+pub async fn run_split_on_oom_2<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter: S, mut f: F, mut on_ok: OkF, max_attempts: i32) -> Result<(), ThoosaError>
+where
+    F: AsyncFnMut(&mut V) -> Result<FR, ThoosaError>,
+    S: Splitter<SIZE, S=V>,
+    OkF: FnMut(FR, &mut V) -> OkR,
+{
+
+    'out: while let Some(mut split_0) = splitter.next() {
+        for attempt in 0..max_attempts {
+            match panic_to_err_async!(f.async_call_mut((&mut split_0,)).await) {
+                Ok(fr) => {
+                    on_ok(fr, &mut split_0);
+                    continue 'out;
+                }
+                Err(e) if e.is_oom() => {
+                    debug!("run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}");
+                }
+                Err(e) => {
+                    debug!("run_split_on_oom: failed on oom {e:?}");
+                    return Err(e);
+                }
+            }
+        }
+        if let Err(e) = splitter.split(split_0) {
+            return Err(e);
+        }
+    }
+
+
+    Ok(())
+}
+
+
 pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter: S, mut f: F, mut on_ok: OkF, max_attempts: i32) -> Result<(), ThoosaError>
 where
     F: FnMut(&mut V) -> Result<FR, ThoosaError>,
@@ -531,6 +601,15 @@ pub fn kick_register_cuda_hooks(){
         let t = Tensor::rand(1_000_000, FLOAT_CUDA);
         let buf = Vec::<f32>::try_from(&t).unwrap();
     };
+}
+
+
+pub struct DummyListener;
+
+impl TrainListener for DummyListener {
+    fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
+        ListenerResponse::Nope
+    }
 }
 
 #[cfg(test)]
@@ -881,14 +960,6 @@ pub mod tests {
         #[derive(Debug, Default)]
         struct TestNodeParams {
             layers:u32
-        }
-
-        struct DummyListener;
-
-        impl TrainListener for DummyListener {
-            fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
-                ListenerResponse::Nope
-            }
         }
 
         fn test_train_label(vs:&VarStore, run_config:&TrainLabelsRunConfig, ls:&mut dyn TrainListener)->Result<(f32, TestNodeParams), ThoosaError>{
@@ -1419,7 +1490,7 @@ pub trait SplittableDataBatch<D:Dims>: DataBatch<D> + Splittable<1> + Debug {
 }
 
 
-pub trait TrainListener {
+pub trait TrainListener:Send {
     fn on_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse {
         ListenerResponse::Nope
     }
@@ -1431,6 +1502,96 @@ pub enum ListenerResponse {
     UpdateLR(f64),
     Nope
 }
+
+pub async fn train_2<F, DI:Dims, DO:Dims>(
+    device:&Device,
+    data:&mut dyn AsyncDataBatch<DI>,
+    net:&Box<dyn ThoModule<Batch<DI>, DO>>,
+    loss_fn:LossFp,
+    cycles: usize,
+    mut opt: Optimizer,
+    x_f:F,
+    mut listener: Option<&mut dyn TrainListener>
+) -> Result<f32, ThoosaError>
+where F:Fn(ThoTensor<Batch<DI>>)->ThoTensor<Batch<DI>> {
+
+    debug!("train: device={:?} cycles={}", device, cycles);
+    debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
+
+    let mut last_valid_loss = [0f32;3];
+
+    for idx in 1..cycles {
+        debug!("train:  cuda_mem={:?}", cuda_mem());
+        let (x_t_0, expected_y) = data.train_batch().await;
+        debug!("train: device={:?} x_t_0.size()={:?}", device, x_t_0.size());
+        debug!("train: 0. cuda_mem={:?}", cuda_mem());
+
+        let x_t = x_f(x_t_0);
+
+        debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
+
+        let predicted_y = net.tho_forward(&x_t, true);
+        debug!("train: 1. cuda_mem={:?}",  cuda_mem());
+        trace!("train: x_t=\n{x_t}");
+        x_t.drop();
+        // unsafe { at_autocast_clear_cache(); }
+
+        let loss = loss_fn(predicted_y.as_ref(), &expected_y);
+
+        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
+        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}", optimizer_mem_size(&opt));
+        predicted_y.drop();
+        drop(expected_y);
+        debug!("train: 2.1 cuda_mem={:?}",  cuda_mem());
+        let t1 = Instant::now();
+
+        opt.backward_step(&loss);
+
+        debug!("train: 3. cuda_mem={:?}  optimizer_size={}", cuda_mem(),  optimizer_mem_size(&opt));
+        debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
+
+
+        if idx % 10 == 0 {
+
+
+            let (x_t_0, y_t) = data.valid_batch().await;
+            // debug!("train: x_t_0.size={:?}", x_t_0.size());
+
+            let rs = tch::no_grad(|| {
+                let x_t = x_f(x_t_0);
+
+
+                let pred_y = net.tho_forward(&x_t, true);
+
+                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
+                let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+
+                last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
+                debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+
+                listener.as_mut().map(|l| l.on_valid_cycle(idx, valid_loss_f32))
+            });
+
+            if let Some(rs) = rs {
+                match rs {
+                    ListenerResponse::Stop => {
+                        break;
+                    }
+                    ListenerResponse::UpdateLR(lr) => {
+                        opt.set_lr(lr);
+                    }
+                    ListenerResponse::Nope => {}
+                }
+            }
+        }
+
+        debug!("train: idx={} loss={:?}", idx, loss);
+        std::io::stdout().flush()?;
+    }
+    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",  last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+    Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
+}
+
 
 pub fn train<F, DI:Dims, DO:Dims>(
     device:&Device,

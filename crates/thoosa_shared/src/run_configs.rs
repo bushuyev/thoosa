@@ -153,7 +153,7 @@ pub trait Applicable<In, Out, P>:Debug + Sync + Send
 
 
     fn applied_id(&self, input_id:&AppliedId) -> AppliedId;
-    fn name(&self)->String;
+    fn name(&self)->String;//TODO &'static str
     fn run_id(&self)->String;
 
     fn device(&self) -> impl ToOrdinal;

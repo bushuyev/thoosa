@@ -3,6 +3,7 @@
 // #![feature(const_trait_impl)]
 // #![feature(effects)]
 // #![feature(iter_array_chunks)]
+#![feature(async_fn_traits, fn_traits, unboxed_closures)]
 extern crate core;
 
 use tch::Device;
@@ -28,6 +29,7 @@ pub mod transforms;
 pub mod find_motifs_run_config;
 pub mod dims;
 pub mod applicables;
+mod batches;
 
 pub trait ResourceLoader:Send+Sync {
     type K;
