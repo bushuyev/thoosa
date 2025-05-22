@@ -192,7 +192,7 @@ where
                 let r = applicable.async_apply(input.clone(), runner, ctx_for_future).await;
                 // debug!("run_cached_task: done input={input:?}");
                 let _ = tx.send(r);
-                statistics_clone.write().on_new_load_done(t_0.elapsed().as_millis());
+                // statistics_clone.write().on_new_load_done(t_0.elapsed().as_millis());
             });
         });
 
@@ -270,9 +270,9 @@ where
 
                 let _ = tx.send(from_data.copy_to_device(to_device).await);
 
-                statistics_clone
-                    .write()
-                    .on_copy_done(t_0.elapsed().as_millis());
+                // statistics_clone
+                //     .write()
+                    // .on_copy_done(t_0.elapsed().as_millis());
             });
         });
 
@@ -419,7 +419,7 @@ where
             to_retain
         });
 
-        statistics.write().on_purge_cpu_caches(now.elapsed().as_millis(), purged_count);
+        // statistics.write().on_purge_cpu_caches(now.elapsed().as_millis(), purged_count);
     }
 }
 
@@ -526,7 +526,7 @@ impl FuturesRunner {
 
         match cache.entry(id) {
             Entry::Occupied(mut e) => {
-                self.statistics.write().on_copy(input.id());
+                // self.statistics.write().on_copy(input.id());
 
                 let f = e.get_mut().get_from_any_device(
                     device.ordinal(),
@@ -538,7 +538,7 @@ impl FuturesRunner {
                 f
             },
             Entry::Vacant(v) => {
-                self.statistics.write().on_new_load(input.id());
+                // self.statistics.write().on_new_load(input.id());
 
                 let (device_copy_future, fut) = DataInDevices::new(
                     input,

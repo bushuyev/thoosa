@@ -117,7 +117,7 @@ pub enum LabelNetTypes {
 }
 
 #[derive(Debug)]
-enum LabelNetApplicableAndNetE {
+pub enum LabelNetApplicableAndNetE {
     MaxPadding {
         applicable:Arc<MotifsNetsSelectionApplicable>,
         params: LabelNetParams
@@ -131,7 +131,7 @@ enum LabelNetApplicableAndNetE {
 }
 
 #[derive(Clone, Debug)]
-enum LabelNetInputTensors {
+pub enum LabelNetInputTensors {
     MaxPadding(ChannelsMotifsData),
     FixedNumSlices(ChannelsMotifsFlattenedData)
 }
@@ -655,6 +655,15 @@ pub struct TrainLabelNetsRunConfigResult {
     var_store: VarStore
 }
 
+
+#[async_trait]
+impl Output for Box<TrainLabelNetsRunConfigResult> {
+
+    async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
+        todo!() //TODO not needed for not cachable Outputs
+    }
+}
+
 impl TrainLabelNetsRunConfigResult {
     pub fn new(find_motifs_run_id:RunId, label:String, loss: f32, label_node_params: LabelNetParams, train_motifs_nodes_values: TrainLabelNetsRunConfig, var_store: VarStore) -> Self {
         Self {
@@ -688,7 +697,8 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
     }
 }
 
-pub async  fn run_opt_train_label_nets_2(
+
+/*pub async  fn run_opt_train_label_nets_2(
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
     train_labels_resources:Arc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
     valid_labels_resources:Arc<Vec<(i64, Vec <Resource>)>>,
@@ -700,10 +710,11 @@ pub async  fn run_opt_train_label_nets_2(
     device: Device
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
+
     debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} channels={} cuda_mem={:?}", ws.read().channels(), cuda_mem());
     opt_train_2(
         Arc::clone(fixed_config),
-        async |vs: &VarStore, run_config: TrainLabelNetsRunConfig/*, _listener*/| { //TODO add _listener to train_label_nodes_2
+        async |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| { //TODO add _listener to train_label_nodes_2
             // debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}");
 
 
@@ -728,7 +739,7 @@ pub async  fn run_opt_train_label_nets_2(
 
                 ),
                 async |batch| {
-                    train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, batch, vs, ws, &device).await
+                    train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, batch, vs, &device).await
                         .map(|v| (v,
                                   match &applicable_and_net_enum {
 
@@ -763,7 +774,7 @@ pub async  fn run_opt_train_label_nets_2(
         // todo!()
     })
 }
-
+*/
 
 pub fn run_opt_train_label_nets(
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
@@ -845,7 +856,6 @@ pub async fn train_label_net_2<DI:Dims+Send+'static, DO:Dims+Send+'static, B:Asy
     run_config:&TrainLabelNetsRunConfig,
     mut batch:&mut B,
     var_store: &VarStore,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
     device: &Device,
 ) ->  Result<f32, ThoosaError> {
 
@@ -2040,6 +2050,7 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
     }
 }
 
+
 pub async fn opt_train_2<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
@@ -2050,58 +2061,54 @@ pub async fn opt_train_2<P, R, F, N: Debug + Default>(
 where
     P: FieldName,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone,
-    F: AsyncFnMut(&VarStore, R/*, Box<dyn TrainListener>*/) -> Result<(f32, N), ThoosaError> + Clone,
+    F: for <'a, 'b> AsyncFnMut(&VarStore, R, &'a mut (dyn TrainListener + 'b)) -> Result<(f32, N), ThoosaError> + Clone,
 {
     let const_vals = run_config_source.grid_run_config_source().const_params().clone();
     let mut min_loss = f32::MAX;
     let mut min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
     info!("running opt train {descr} thread name={:?}", thread::current().name());
-    // let x = train.clone();
-    // let train_arc = Arc::new(RwLock::new(train));
-    // let train_clone = Arc::clone(&train_arc);
-    let train_clone = train.clone();
+
+    let vs = VarStore::new(device);
+
 
     for grid_vals in run_config_source.grid_to_vals().into_iter() {
-        let const_vals= const_vals.clone();
-        let grid_vals= grid_vals.clone();
-        let mut train_clone= train_clone.clone();
+        let const_vals = const_vals.clone();
+        let grid_vals = grid_vals.clone();
+        let mut train_clone = train.clone();
         let mut min_var_store_clone = Arc::clone(&min_var_store);
-        let mut opt = AsyncTPEOptimizer::new( async move |opt_vals| {
-          let run_config:R = [
-                const_vals.as_slice(),
-                grid_vals.as_slice(),
-                opt_vals
-            ].concat().into_iter().into();
 
-               let vs = VarStore::new(device);
+        let mut opt = AsyncTPEOptimizer::new(
+            async move |opt_vals| {
+                let run_config: R = [
+                    const_vals.as_slice(),
+                    grid_vals.as_slice(),
+                    opt_vals
+                ].concat().into_iter().into();
 
+                let vs = VarStore::new(device);
 
-                // let mut listener = PlotVecf32::new(format!("_params_{:?}", "id"/*TODO run_config.get_id()*/).as_str()); //motif_id ?
+                let mut listener = PlotVecf32::new(format!("_params_{:?}", "id"/*TODO run_config.get_id()*/).as_str()); //motif_id ?
 
-                // let (loss, node_params) = match panic_to_err_async!(train_clone.async_call_mut((&vs, &run_config, &mut listener)).await) {
-            // train_clone.async_call_mut((&vs, &run_config/*, Box::new(DummyListener),*/)).await;
-               let (loss, node_params) = match panic_to_err_async!(train_clone.async_call_mut((&vs, run_config.clone()/*, &mut DummyListener*/)).await) {
+                let (loss, node_params) = match panic_to_err_async!(train_clone.async_call_mut((&vs, run_config.clone(),  &mut listener/*Arc::new(Mutex::new(Box::new(listener)))*/)).await) {
                     Ok(v) => {
                         v
                     }
                     Err(e) => {
-                        // warn!("opt_train failed with {e:?} on {run_config:?}");
+                        warn!("opt_train failed with {e:?} on {run_config:?}");
                         (f32::MAX, Default::default())
                     }
                 };
-                //
-                // listener.plot();
-                //
+                listener.plot();
 
-            // debug!("opt_train: descr={descr} run_config_values={run_config:?} loss={loss}");
-            if loss < min_loss {
-                min_loss = loss;
-                min_var_store_clone.write().replace((vs, node_params, run_config, min_loss));
-            }
-            print!(".");
-            loss
-        },
+                debug!("opt_train: run_config_values={run_config:?} loss={loss}");//descr={descr}
+                if loss < min_loss {
+                    min_loss = loss;
+                    min_var_store_clone.write().replace((vs, node_params, run_config, min_loss));
+                }
+                print!(".");
+                loss
+            },
             ConfigurationSpace::new(run_config_source.opt_params().clone()),
             opt_config.opt_max_evals,
             opt_config.opt_num_init,
@@ -2112,11 +2119,8 @@ where
         debug!("best_config={:?}", best_config);
         trace!("done opt {descr}");
         info!("opt_train: done opt, descr={descr} best_config={best_config:?} min_loss={min_loss} min_var_store={min_var_store:?}");
-
     }
-    //
-    Arc::into_inner(min_var_store).unwrap().into_inner().ok_or_else(||ThoosaError::new("opt was not run"))
-    // todo!()
+    Arc::into_inner(min_var_store).unwrap().into_inner().ok_or_else(|| ThoosaError::new("opt was not run"))
 }
 
 

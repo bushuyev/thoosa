@@ -10,7 +10,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
-use tch::nn::{batch_norm1d, BatchNorm, BatchNormConfig, Conv1D, Conv2D, Init, LinearConfig, Module, ModuleT, Optimizer, Path};
+use tch::nn::{batch_norm1d, BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, Module, ModuleT, Optimizer, Path};
 use tch::nn::ConvConfig;
 
 use thoosa_shared::*;
@@ -58,7 +58,7 @@ impl <DI:Dims, DO:Dims> MySequential<DI, DO> {
     }
 }
 
-impl <DI:Dims+Send, DO:Dims+Send> ThoModule<DI, DO> for MySequential<DI, DO> {
+impl <DI:Dims+Send+Sync, DO:Dims+Send+Sync> ThoModule<DI, DO> for MySequential<DI, DO> {
     fn debug(&self) {
         for l in &self.layers {
             l.debug();
@@ -153,7 +153,7 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyParallel<DI, DO>{
         t.into()
     }
 }
-
+/*
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for Conv1D {
     fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
         self.forward(t.as_ref()).into()
@@ -164,7 +164,7 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for Conv2D {
     fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
         self.forward(t.as_ref()).into()
     }
-}
+}*/
 
 #[derive(Debug)]
 pub struct MyMaxPool1d {
@@ -212,6 +212,37 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyBatchNorm1d{
     }
 }
 
+unsafe impl  Send for MyBatchNorm1d{}
+unsafe impl  Sync for MyBatchNorm1d{}
+
+#[derive(Debug)]
+pub struct MyConv<ND> {
+    conv: Conv<ND>
+}
+
+impl <ND> MyConv<ND>  {
+    pub fn new(conv: Conv<ND>) -> Self {
+        Self { conv }
+    }
+}
+
+
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyConv<[i64; 1]>{
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        self.conv.forward_t(t.as_ref(), train).into()
+    }
+}
+
+impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyConv<[i64; 2]>{
+    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+        self.conv.forward_t(t.as_ref(), train).into()
+    }
+}
+
+unsafe impl <ND> Send for MyConv<ND>{}
+unsafe impl <ND> Sync for MyConv<ND>{}
+
+
 #[derive(Debug)]
 pub struct MyAvgPool1d {
     kernel_size: i64,
@@ -239,7 +270,7 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyAvgPool1d{
     }
 }
 
-pub trait ThoModule<DI:Dims, DO:Dims>:Debug  + Send  {
+pub trait ThoModule<DI:Dims, DO:Dims>:Debug  + Send  + Sync {
     fn debug(&self){}
     fn mem_size(&self) -> usize {//TODO
         0
@@ -249,6 +280,8 @@ pub trait ThoModule<DI:Dims, DO:Dims>:Debug  + Send  {
 
 }
 
+// unsafe impl <DI:Dims, DO:Dims>  Send for ThoModuleWithStore<DI, DO>{}
+// unsafe impl <DI:Dims, DO:Dims>  Sync for ThoModuleWithStore<DI, DO>{}
 
 
 pub type Fp = fn(&Tensor)->Tensor;
@@ -286,6 +319,9 @@ pub struct MyClosureModule {
     func: Box<dyn Fn(&Tensor)->Tensor + Send>
 }
 
+// unsafe impl Send for MyClosureModule {}
+unsafe impl Sync for MyClosureModule {}
+
 impl MyClosureModule {
     pub fn new(func: Box<impl Fn(&Tensor) -> Tensor  + Send + 'static>) -> Self {
         Self { func }
@@ -300,7 +336,7 @@ impl Debug for MyClosureModule {
 }
 
 
-impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyClosureModule{
+impl <DI:Dims+Send+Sync, DO:Dims+Send+Sync> ThoModule<DI, DO> for MyClosureModule{
     fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
         (self.func)(t.as_ref()).into()
     }
@@ -318,8 +354,11 @@ pub struct MyLinear<DI:Dims, DO:Dims> {
     descr:String,
 }
 
+unsafe impl <DI:Dims, DO:Dims> Send for MyLinear<DI, DO> {}
+unsafe impl <DI:Dims, DO:Dims> Sync for MyLinear<DI, DO> {}
 
-impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyLinear<DI, DO>{
+
+impl <DI:Dims+Send+Sync, DO:Dims+Send+Sync> ThoModule<DI, DO> for MyLinear<DI, DO>{
 
     fn debug(&self) {
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
