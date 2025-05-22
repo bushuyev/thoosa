@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
-use std::{fs, process};
+use std::{fs, process, thread};
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -684,7 +684,7 @@ impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for 
         opt_train_2(
             Arc::clone(&input.fixed_config),
             async move |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| { //TODO add _listener to train_label_nodes_2
-                // debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}");
+                debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}  thread name={:?}", std::thread::current().name());
 
                 let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
                     &run_config.net, &input_for_train.motifs_nets_selection_applicable_arc,  &input_for_train.ws
@@ -704,19 +704,17 @@ impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for 
                 let result = train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, &mut batch, vs, &device_for_train).await
                     .map(|v| (v,
                               match &applicable_and_net_enum {
-
                                   LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
-                                      debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}");
+                                      debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}  thread name={:?}", thread::current().name());
 
                                       params.clone()
                                   }
                                   LabelNetApplicableAndNetE::FixedNumSlices { applicable, params } => {
-                                      debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}");
+                                      debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}  thread name={:?}", thread::current().name());
 
                                       params.clone()
                                   }
                               }
-
                     ));
                 Ok(result.expect("no result from train_label_nodes"))
             },
@@ -846,7 +844,7 @@ pub async fn run_train_label_nets_2(
                                 train_labels_resources,
                                 valid_labels_resources,
                                 motifs_nets_selection_applicable_arc,
-                                label: "".to_string(),
+                                label: label.clone(),
                                 fixed_config: Arc::clone(fixed_config),
                                 ws: Arc::clone(ws),
                             }),

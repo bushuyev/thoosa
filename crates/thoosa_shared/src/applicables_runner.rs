@@ -10,10 +10,14 @@ use rayon::ThreadPool;
 use std::borrow::{Borrow, BorrowMut, Cow};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::future::Future;
 use std::hash::Hash;
 use std::io::Write;
 use std::ops::{Deref, DerefMut, Sub};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::thread;
 use std::time::Instant;
 use log::debug;
 use crate::resource::Resource;
@@ -94,6 +98,7 @@ impl  Debug for FuturesRunner {
 }
 
 struct DeviceThreadPools {
+    main_pool: ThreadPool,
     cpu_pool: ThreadPool,
     gpu_pools: HashMap<usize, ThreadPool>,
 }
@@ -101,6 +106,24 @@ struct DeviceThreadPools {
 impl DeviceThreadPools {
 
     fn new(cpu_threads: usize, gpu_threads: &[usize]) -> Self {
+
+        let main_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .spawn_handler(|thread_builder| {
+                debug!("spawning main_pool thread index={}", thread_builder.index());
+
+                let b = std::thread::Builder::new();
+
+                b.name(format!("{}/{:?}", "main_pool", thread_builder.index()))
+                    .spawn(|| thread_builder.run())?;
+
+                Ok(())
+            })
+
+            .build()
+            .expect("Main pool");
+
+
 
         let cpu_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(cpu_threads)
@@ -138,7 +161,7 @@ impl DeviceThreadPools {
             gpu_pools.insert(device_id, pool);
         }
 
-        Self { cpu_pool, gpu_pools }
+        Self { main_pool, cpu_pool, gpu_pools }
     }
 
     fn get_pool(&self, device: &dyn ToOrdinal) -> &rayon::ThreadPool {
@@ -175,6 +198,8 @@ where
         -> (Self, Shared<BoxFuture<'static, Arc<O>>>)
     where I: Input+Send+Sync+'static
     {
+        debug!("DataInDevices: new input={input:?} device_ordinal={device_ordinal}  thread name={:?}", thread::current().name());
+
         let (tx, rx) = oneshot::channel();
         let statistics_clone = statistics.clone();
         /*
@@ -519,41 +544,58 @@ impl FuturesRunner {
         O: Output + Send + Sync + 'static,
         I: Input+Send+Sync+'static,
     {
-        let device = applicable.device();
-        let id = applicable.applied_id(input.id());
+        self.device_pools.main_pool.install(move || {
+            let device = applicable.device();
+            let id = applicable.applied_id(input.id());
 
-        debug!("run_cached_task: id={id:?}");
+            debug!("run_cached_task: id={id:?} thread name={:?}",  thread::current().name());
+            let debug_id = id.clone();
 
-        match cache.entry(id) {
-            Entry::Occupied(mut e) => {
-                // self.statistics.write().on_copy(input.id());
-
-                let f = e.get_mut().get_from_any_device(
-                    device.ordinal(),
-                    self.device_pools.get_pool(&device),
-                    &self.statistics,
-                    ctx
-                ).clone();
-
-                f
-            },
-            Entry::Vacant(v) => {
-                // self.statistics.write().on_new_load(input.id());
-
-                let (device_copy_future, fut) = DataInDevices::new(
-                    input,
-                    device.ordinal(),
-                    self.num_devices,
-                    self.device_pools.get_pool(&device),
-                    Arc::clone(applicable),
-                    Arc::clone(&runner),
-                    &self.statistics,
-                    ctx
-                );
-                v.insert(device_copy_future);
-                fut
+            let mut entry = None::<Entry<AppliedId, DataInDevices<O>>>;
+            while entry.is_none() {
+                entry = cache.try_entry(id.clone());
+                if entry.is_none() {
+                    debug!("run_cached_task: id={id:?} yielding thread name={:?}",  thread::current().name());
+                    rayon::yield_now();
+                } else {
+                    debug!("run_cached_task: id={id:?} got entry thread name={:?}",  thread::current().name());
+                }
             }
-        }
+
+            match entry.unwrap() {
+                Entry::Occupied(mut e) => {
+                    // self.statistics.write().on_copy(input.id());
+                    debug!("run_cached_task: id={debug_id:?} Occupied thread name={:?}",  thread::current().name());
+
+                    let f = e.get_mut().get_from_any_device(
+                        device.ordinal(),
+                        self.device_pools.get_pool(&device),
+                        &self.statistics,
+                        ctx
+                    ).clone();
+
+                    f
+                },
+                Entry::Vacant(v) => {
+                    // self.statistics.write().on_new_load(input.id());
+                    debug!("run_cached_task: id={debug_id:?} Vacant thread name={:?}",  thread::current().name());
+
+                    let (device_copy_future, fut) = DataInDevices::new(
+                        input,
+                        device.ordinal(),
+                        self.num_devices,
+                        self.device_pools.get_pool(&device),
+                        Arc::clone(applicable),
+                        Arc::clone(&runner),
+                        &self.statistics,
+                        ctx
+                    );
+                    v.insert(device_copy_future);
+                    fut
+                }
+            }
+        })
+
     }
 
 
@@ -633,6 +675,25 @@ pub async fn dummy_load(statistics: &RwLock<Statistics>, input: &Arc<AppliedId>)
 }
 
 const DUMMY_LOAD_N:u32 = 3;
+
+fn yield_n(n: usize) -> impl Future<Output = ()> {
+    struct YieldN { left: usize }
+    impl Future for YieldN {
+        type Output = ();
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.left == 0 {
+                Poll::Ready(())
+            } else {
+                self.left -= 1;
+                // ask the executor (our dummy runner) to poll us again
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+    YieldN { left: n }
+}
+
 
 #[cfg(test)]
 mod tests {
