@@ -900,8 +900,8 @@ mod tests {
 
 
         // fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        // let store = Arc::new(RwLock::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
 
         let _resources = import_resources(
             &ws,
@@ -922,7 +922,7 @@ mod tests {
             true
         )?;
 
-        let labels = store.lock().list_labels()?;
+        let labels = store.read().list_labels()?;
 
         assert_eq!(
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
