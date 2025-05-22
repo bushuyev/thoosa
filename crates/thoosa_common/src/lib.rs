@@ -29,7 +29,7 @@ pub mod transforms;
 pub mod find_motifs_run_config;
 pub mod dims;
 pub mod applicables;
-mod batches;
+pub mod batches;
 
 pub trait ResourceLoader:Send+Sync {
     type K;

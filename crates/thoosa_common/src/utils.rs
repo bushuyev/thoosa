@@ -22,6 +22,7 @@ use rand::thread_rng;
 use rand::Rng;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
+use parking_lot::lock_api::{RawRwLock, RwLock};
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::Optimizer;
@@ -402,6 +403,23 @@ pub trait Splittable<const SIZE: usize> {
     fn split(&self) -> Option<[Self; SIZE]> where Self: Sized;
 }
 
+struct Z {
+
+}
+//
+// impl <const SIZE: usize, S> for Rw {
+//
+// }
+
+impl <R, S> Splittable<1> for RwLock<R,S>
+where R: RawRwLock {
+    fn split(&self) -> Option<[Self; 1]>
+    where
+        Self: Sized
+    {
+        todo!()
+    }
+}
 
 pub trait Splitter<const SIZE: usize> {
     type S:Splittable<SIZE>;
@@ -483,18 +501,50 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
     }
 }
 
-pub async fn run_split_on_oom_2<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter: S, mut f: F, mut on_ok: OkF, max_attempts: i32) -> Result<(), ThoosaError>
+// impl <R, T> Splitter<1> for Reducer<RwLock<R, T>> where R:RawRwLock, T:Debug + Splittable<1> {
+//     type S = RwLock<R, T>;
+// 
+//     fn next(&mut self) -> Option<Self::S> {
+//         self.value.take()
+//     }
+// 
+//     fn split(&mut self, v: Self::S) -> Result<(), ThoosaError> {
+//         match v.split() {
+//             None => {
+//                 Err(ThoosaError::new("Can't split anymore".to_owned()))
+//             }
+//             Some(a) => {
+//                 let [v_0] = a;
+//                 self.value = Some(v_0);
+// 
+//                 Ok(())
+//             }
+//         }
+//     }
+// }
+
+
+
+pub async fn run_split_on_oom_2<'s, 'v, 'fr, const SIZE: usize, S: 's, SV: 'v, F, FR: 'fr>(
+    mut splitter: S, mut f: F, /*mut on_ok: OkF, */max_attempts: i32
+) -> Result<(), ThoosaError>
 where
-    F: AsyncFnMut(&mut V) -> Result<FR, ThoosaError>,
-    S: Splitter<SIZE, S=V>,
-    OkF: FnMut(FR, &mut V) -> OkR,
+    SV:Splittable<SIZE>,
+    S: for <'x> Splitter<SIZE, S=SV>,
+    //F: for <'f> AsyncFnMut(&'f mut V) -> Result<FR, ThoosaError>,
+    F: for<'a, 'b> AsyncFnMut(&'a mut (dyn Splittable<SIZE> + 'b)) -> Result<FR, ThoosaError>,
+    // OkF: FnMut(FR, &mut V) -> OkR,
 {
 
     'out: while let Some(mut split_0) = splitter.next() {
+
+        // f.async_call_mut((&mut split_0,)).await;
+        // f.async_call_mut((&mut 0,)).await;
+
         for attempt in 0..max_attempts {
             match panic_to_err_async!(f.async_call_mut((&mut split_0,)).await) {
                 Ok(fr) => {
-                    on_ok(fr, &mut split_0);
+                    // on_ok(fr, &mut split_0);
                     continue 'out;
                 }
                 Err(e) if e.is_oom() => {
@@ -1490,7 +1540,7 @@ pub trait SplittableDataBatch<D:Dims>: DataBatch<D> + Splittable<1> + Debug {
 }
 
 
-pub trait TrainListener:Send {
+pub trait TrainListener:Send + Sync {
     fn on_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse {
         ListenerResponse::Nope
     }
