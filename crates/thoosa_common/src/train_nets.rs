@@ -682,8 +682,8 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         self.loss
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        let run_config_id =  store.lock().save_run_config(
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+        let run_config_id =  store.write().save_run_config(
             Some(&[self.select_motifs_for_label_run_id]),
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
@@ -950,14 +950,14 @@ pub fn run_opt_train_final_net(
     valid_resources: Vec<(Resource, Vec<f32>)>,
     fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock< LoadRunner<Tensor>>>,
     device: &Device,
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
 
     let device = device.clone();
 
-    let labels = store.lock().list_labels()?;
+    let labels = store.read().list_labels()?;
 
     debug!("run_opt_train_final: labels={labels:?}");
 
@@ -1025,8 +1025,8 @@ impl SavableResult for TrainFinalNodesRunConfigResult {
         self.loss
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
-        let run_config_id =                 store.lock().save_run_config(
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+        let run_config_id =                 store.write().save_run_config(
             Some(&self.train_label_nodes_run_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
@@ -1352,21 +1352,21 @@ pub struct MotifsNetsSelectionApplicable {
 
 impl MotifsNetsSelectionApplicable {
 
-    pub fn new(motif_selection_run_id:RunId, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, nets_device:Device) -> Self {
+    pub fn new(motif_selection_run_id:RunId, store:&Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, nets_device:Device) -> Self {
         let channels = ws.read().channels();
 
         debug!("MotifsNetsSelectionApplicable::new: motif_selection_run_id={motif_selection_run_id} channels={channels:?}");
 
-        let find_motifs_run_config_ids = store.lock().get_input_run_ids(motif_selection_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for motif_selection_run_id={motif_selection_run_id:?} not found").as_str());
+        let find_motifs_run_config_ids = store.read().get_input_run_ids(motif_selection_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for motif_selection_run_id={motif_selection_run_id:?} not found").as_str());
         assert_eq!(find_motifs_run_config_ids.len(), 1);
 
 
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_config_ids[0], &store.lock().list_run_config_values(find_motifs_run_config_ids[0]).expect("list_run_params")).unwrap();
+        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motifs_run_config_ids[0], &store.read().list_run_config_values(find_motifs_run_config_ids[0]).expect("list_run_params")).unwrap();
 
         debug!("MotifsNetsSelectionApplicable::new: find_motifs_run_config={find_motifs_run_config:?}");
 
         let channels_motifs = store
-            .lock()
+            .read()
             .list_selected_motifs(motif_selection_run_id, channels)
             .expect("list_selected_motifs") //TODO move out
             .into_iter()
@@ -2032,11 +2032,11 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
         self.loss
     }
 
-    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+    fn save(&mut self, store:&Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
 
         debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
-        let run_config_id = store.lock().save_run_config(
+        let run_config_id = store.write().save_run_config(
             Some(&[self.find_motifs_run_id]),
             &TrainMotifsNetsRunConfig::type_name(),
             "TrainMotifsNetsRunConfigResult2",
@@ -2363,7 +2363,7 @@ pub struct LabelNetsApplicable {
 
 impl LabelNetsApplicable {
 
-    pub fn load_all_filtered_by_run_ids(train_label_nodes_run_ids: Option<&[RunId]>, labels:Vec<String>, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> LabelNetsApplicable {
+    pub fn load_all_filtered_by_run_ids(train_label_nodes_run_ids: Option<&[RunId]>, labels:Vec<String>, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> LabelNetsApplicable {
         let label_models = ws.read().load_label_nets(train_label_nodes_run_ids, &device).expect("load_all_label_models_ws");
 
         LabelNetsApplicable {
@@ -2373,7 +2373,7 @@ impl LabelNetsApplicable {
                 let label_applicables = label_run_id_nodes.into_iter().map(|(label_run_id, label_net_params, module)| {
 
                     let motif_selection_run_ids = store
-                        .lock()
+                        .read()
                         .get_input_run_ids(label_run_id, Some(&SelectMotifsRunConfig::type_name()))
                         .expect("get_input_run_ids(motif_node_params_selection_run_ids")
                         .into_iter()
@@ -2536,9 +2536,9 @@ pub struct FinalNetApplicable {
 
 impl FinalNetApplicable {
 
-    pub fn new(final_run_id:RunId, labels:Vec<String>, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> FinalNetApplicable {
+    pub fn new(final_run_id:RunId, labels:Vec<String>, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> FinalNetApplicable {
 
-        let train_label_node_run_ids = store.lock().get_input_run_ids(
+        let train_label_node_run_ids = store.read().get_input_run_ids(
             final_run_id,
             Some(&TrainLabelNetsRunConfig::type_name())
         ).expect(format!("FinalNetApplicable: final_run_id={final_run_id} not found").as_str());
@@ -2885,7 +2885,7 @@ mod train_tests {
 
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],
                 vec![(0, 1.0)]
             ]))),
@@ -2977,7 +2977,7 @@ mod train_tests {
 
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],
                 vec![(0, 1.0)]
             ]))),
@@ -3047,7 +3047,7 @@ mod train_tests {
         let applicable = LabelNetsApplicable::load_all_filtered_by_run_ids(
             Some(&[1, 2]),
             vec!["Label_0".to_string(), "Label_1".to_string()],
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],
                 vec![(0, 1.0)]
             ]))),
@@ -3110,7 +3110,7 @@ mod train_tests {
         let applicable = LabelNetsApplicable::load_all_filtered_by_run_ids(
             Some(&[1, 2]),
             vec!["Label_0".to_string(), "Label_1".to_string()],
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],
                 vec![(0, 1.0)]
             ]))),
@@ -3208,7 +3208,7 @@ mod train_tests {
 
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(input_slice_step as i32, motif_width as i32, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(input_slice_step as i32, motif_width as i32, vec![
                 vec![(0, 1.0)]
             ]))),
             &Arc::new(RwLock::new(
@@ -3252,7 +3252,7 @@ mod train_tests {
 
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(step, motif_width as i32, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],
                 vec![(0, 1.0)]
             ]))),
@@ -3443,7 +3443,7 @@ mod train_tests {
 
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(100, 100, vec![
                 vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
                 vec![(0, 1.0), (1, 1.0), (2, 1.0)]
             ]))),
@@ -3894,7 +3894,7 @@ mod train_tests {
 
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(Mutex::new(mock_store_with_find_motifs_run_config(100, 100, vec![
+            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(100, 100, vec![
                 vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
                 vec![(0, 1.0), (1, 1.0), (2, 1.0)]
             ]))),

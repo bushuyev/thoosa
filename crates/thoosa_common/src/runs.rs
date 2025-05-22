@@ -37,16 +37,16 @@ impl Simple {
 impl ResourcesConfig for Simple {
     type Result = Vec<Resource>;
 
-    fn to_resources<S:ResourceStore + ?Sized>(&self, store:&Arc<Mutex<Box<S>>>) -> Result<Vec<Resource>, ThoosaError>{
+    fn to_resources<S:ResourceStore + ?Sized>(&self, store:&Arc<RwLock<Box<S>>>) -> Result<Vec<Resource>, ThoosaError>{
         Ok(match self.resources() {
             ResourceType::List(list) => {
-                store.lock().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect::<Vec<_>>()).expect("list_resources_by_file_stems")
+                store.read().list_resources_by_file_stems(&list.into_iter().map(|v|v.as_str()).collect::<Vec<_>>()).expect("list_resources_by_file_stems")
             }
             ResourceType::Set(set) => {
-                store.lock().list_resource_set_resources_by_descr(set).expect("list_resource_set_resources")
+                store.read().list_resource_set_resources_by_descr(set).expect("list_resource_set_resources")
             }
             ResourceType::Group(group) => {
-                let mut store_guard = store.lock();
+                let mut store_guard = store.read();
                 store_guard.list_resource_set_group_sets(group).expect("list_resource_set_group_sets").into_iter().flat_map(|v|
                     store_guard.list_resource_set_resources_by_descr(&v.1).expect("list_resource_set_resources_by_descr")
                 ).collect()
@@ -60,7 +60,7 @@ pub struct  Empty  {}
 impl ResourcesConfig for Empty {
     type Result = ();
 
-    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Self::Result, ThoosaError> {
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<Self::Result, ThoosaError> {
         Ok(())
     }
 }
@@ -89,8 +89,8 @@ impl ResourcesConfig for Labeled {
     // (label, resources)
     type Result = Vec<(String,Vec<Resource>)>;
 
-    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Vec<(String, Vec<Resource>)>, ThoosaError> {
-        let mut store_guard = store.lock();
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<Vec<(String, Vec<Resource>)>, ThoosaError> {
+        let mut store_guard = store.read();
 
         store_guard.list_group_labeled_resources_sets(&self.group)?.into_iter().map(|(label, resource_set)| {
             store_guard.list_resource_set_resources_by_descr(&resource_set)
@@ -123,8 +123,8 @@ impl ResourcesConfig for Logits {
     // (label, resources)
     type Result = Vec<(Resource,Vec<f32>)>;
 
-    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<Vec<(Resource,Vec<f32>)>, ThoosaError> {
-        store.lock().list_resource_random_in_group(&self.group)?
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<Vec<(Resource,Vec<f32>)>, ThoosaError> {
+        store.read().list_resource_random_in_group(&self.group)?
             .into_iter()
             .map(move |(resourceId, labels_p)| {
                 debug!("ResourcesConfig::to_resources resourceId={resourceId:?} labels_p={:?}", labels_p);
@@ -164,7 +164,7 @@ impl <RC:ResourcesConfig> NetResources<RC> {
 impl <RC:ResourcesConfig> ResourcesConfig for NetResources<RC> {
     type Result = (RC::Result, RC::Result);
 
-    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<Mutex<Box<S>>>) -> Result<(RC::Result, RC::Result), ThoosaError> {
+    fn to_resources<S: ResourceStore + ?Sized>(&self, store: &Arc<RwLock<Box<S>>>) -> Result<(RC::Result, RC::Result), ThoosaError> {
         self.train_resources.to_resources(store).and_then(|train|self.valid_resources.to_resources(store).map(|valid|(train, valid)))
     }
 }
@@ -177,7 +177,7 @@ impl <R:ResourcesConfig> Display for NetResources<R> {
 
 pub trait SavableResult:Sync+Send+Debug{
     fn value(&self)->f32;
-    fn save(&mut self, store:&Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError>;
+    fn save(&mut self, store:&Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError>;
 }
 
 #[derive(Debug)]
@@ -194,7 +194,7 @@ impl SavableResult for DummySavableOptResult {
         0.
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
         Ok(0)
     }
 }
