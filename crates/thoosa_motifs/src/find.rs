@@ -136,7 +136,7 @@ pub fn find_min_euc_dist(
     resource_config: &Simple,
     common_config: &FixedFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock< LoadRunner<Tensor>>>,
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
@@ -228,7 +228,7 @@ pub fn find_motifs_by_euc_dist_2(
     resource_config: &Simple,
     common_config: &FixedFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<ThoRunner>,
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
@@ -391,7 +391,7 @@ pub fn find_motifs_by_euc_dist(
     resource_config: &Simple,
     common_config: &FixedFindMotifsConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
@@ -556,7 +556,7 @@ impl SavableResult for FindMotifsSavableResult {
         0.0
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
 
         Ok(self.run_config.id.expect("id"))
     }
@@ -1297,7 +1297,7 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    fn build_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
+    fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoosaError>{
         self.dumper.load_slices_into_groups(store, self.max_slices_counts)
     }
 
@@ -1576,7 +1576,7 @@ pub fn select_motifs_for_label_2(
     resource_config: &Labeled,
     _common_config: &(),
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     runner: &Arc<ThoRunner>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
@@ -1587,11 +1587,11 @@ pub fn select_motifs_for_label_2(
     trace!("select_motifs_for_label: labels_resources={labels_resources:?}");
     let find_motifs_run_config_motifs_tensors:Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))>, ThoosaError> = block_on(async move {
         let mut find_motifs_run_config_motifs_tensors: Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))> = try_join_all(find_motif_run_ids.expect("input_run_ids").iter().map(async |find_motif_run_id| {
-            let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
+            let resource_id_motif_slices = store.read().list_motifs_slices(*find_motif_run_id)?;
             trace!("select_motifs_for_label: resource_id_motif_slices={resource_id_motif_slices:?}");
 
-            // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.lock().list_run_config_values(*find_motif_run_id)?);
-            let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(*find_motif_run_id, &store.lock().list_run_config_values(*find_motif_run_id)?)?;
+            // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.read().list_run_config_values(*find_motif_run_id)?);
+            let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(*find_motif_run_id, &store.read().list_run_config_values(*find_motif_run_id)?)?;
 
             motifs_to_tensor_2(
                 resource_id_motif_slices,
@@ -1711,7 +1711,7 @@ pub fn select_motifs_for_label_2(
                             .collect::<Vec<(u32, f64)>>();
 
                         info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
-                        // a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
+                        // a.push(store.write().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
                         Some(Box::new(SelectMotifsSavableResult::new(find_motif_run_cfg.id.expect("find_motif_run_cfg.id"), select_motif_run_config.clone(), good_motif_ids_rates)) as Box<dyn SavableResult>)
                     }
                 }
@@ -1728,7 +1728,7 @@ pub fn select_motifs_for_label_2(
      resource_config: &Labeled,
      _common_config: &(),
      ws: &Arc<RwLock<Box<dyn Workspace>>>,
-     store: &Arc<Mutex<Box<dyn Store>>>,
+     store: &Arc<RwLock<Box<dyn Store>>>,
      loader: &Arc<RwLock< LoadRunner<Tensor>>>,
      devices:Vec<Device>
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>{
@@ -1741,11 +1741,11 @@ pub fn select_motifs_for_label_2(
 
     let mut find_motifs_run_config_motifs_tensors = find_motif_run_ids.expect("input_run_ids").iter().map(|find_motif_run_id|{
 
-        let resource_id_motif_slices = store.lock().list_motifs_slices(*find_motif_run_id)?;
+        let resource_id_motif_slices = store.read().list_motifs_slices(*find_motif_run_id)?;
         trace!("select_motifs_for_label: resource_id_motif_slices={resource_id_motif_slices:?}");
 
-        // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.lock().list_run_config_values(*find_motif_run_id)?);
-        let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(*find_motif_run_id, &store.lock().list_run_config_values(*find_motif_run_id)?)?;
+        // let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_(*find_motif_run_id, store.read().list_run_config_values(*find_motif_run_id)?);
+        let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(*find_motif_run_id, &store.read().list_run_config_values(*find_motif_run_id)?)?;
 
         motifs_to_tensor(
             resource_id_motif_slices,
@@ -1867,7 +1867,7 @@ pub fn select_motifs_for_label_2(
                              .collect::<Vec<(u32, f64)>>();
 
                          info!("num good motifs: {} good_motif_ids_rates={good_motif_ids_rates:?}", good_motifs.sum(Kind::Int));
-                         // a.push(store.lock().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
+                         // a.push(store.write().save_selected_motifs(run_config.id.expect("no cfg id"), good_motif_ids_rates)?);
                          Some(Box::new(SelectMotifsSavableResult::new(find_motif_run_cfg.id.expect("find_motif_run_cfg.id"), select_motif_run_config.clone(), good_motif_ids_rates)) as Box<dyn SavableResult>)
                      }
                  }
@@ -1899,9 +1899,9 @@ impl SavableResult for SelectMotifsSavableResult {
         0.1
     }
 
-    fn save(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
+    fn save(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoosaError> {
         let run_config_id = store
-            .lock()
+            .write()
             .save_run_config(
                 Some(&[self.find_motif_run_cfg_id]),
                 &SelectMotifsRunConfig::type_name(),
@@ -1912,7 +1912,7 @@ impl SavableResult for SelectMotifsSavableResult {
 
         self.run_config.set_id(run_config_id);
 
-        store.lock().save_selected_motifs(run_config_id, self.good_motif_ids_rates.clone())?;//TODO mem::replace?
+        store.write().save_selected_motifs(run_config_id, self.good_motif_ids_rates.clone())?;//TODO mem::replace?
 
         Ok(run_config_id)
     }
@@ -2455,8 +2455,8 @@ mod motif_find_tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
+        // let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
         let n = 10i64;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 1000, n as u32)));
@@ -2506,7 +2506,7 @@ mod motif_find_tests {
         ]))?;
         let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, None, None);
 
-        let run_config_id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        let run_config_id = store.write().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
 
         let run_ids = vec![1];
 
@@ -2532,8 +2532,8 @@ mod motif_find_tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
+        // let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist.db3"))?));
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
 
@@ -2583,7 +2583,7 @@ mod motif_find_tests {
         ]))?;
         let run_config = FindMotifsRunConfig::new(Some(1), 100, 100, None, None);
 
-        let run_config_id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        let run_config_id = store.write().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
 
         let run_ids = vec![1];
 
@@ -2598,8 +2598,8 @@ mod motif_find_tests {
             vec![Cpu]
         )?;
 
-        // debug!("{:?}", store.lock().list_run_resources(1)?);
-        let slices = store.lock().list_motifs_slices(run_ids[0])?;
+        // debug!("{:?}", store.read().list_run_resources(1)?);
+        let slices = store.read().list_motifs_slices(run_ids[0])?;
 
         debug!("run_ids={run_ids:?} slices: {slices:?}");
         debug!("0: {:?}", slices.get(&resources[0]));
@@ -2619,15 +2619,15 @@ mod motif_find_tests {
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
 
         // std::fs::remove_file("/tmp/test_db.db3").unwrap_or(());
-        // let mut store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_db.db3")?));
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        // let mut store = Arc::new(RwLock::new(SqlStore::from_path("/tmp/test_db.db3")?));
+        // let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
 
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
 
         // let ws = Arc::new(RwLock::new(mock_workspace_simp(1, 1000)?));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
         // let pulse = pulse_v(50., 10., 100, 20.);
         let pulse_0 = sig_one_imp(100, 30.0, None, Some(2. ..2.01), 0.0);
@@ -2684,7 +2684,7 @@ mod motif_find_tests {
 
 
         let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, None);
-        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        let id = store.write().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
         let run_ids = find_motifs_by_euc_dist(
@@ -2698,7 +2698,7 @@ mod motif_find_tests {
             vec![Cpu]
         )?;
 
-        let slices = store.lock().list_motifs_slices(id)?;
+        let slices = store.read().list_motifs_slices(id)?;
 
         let motif_id_set = slices
             .iter()
@@ -2810,7 +2810,7 @@ mod motif_find_tests {
     }
 
 
-    fn test_init_store(store: &Arc<Mutex<Box<dyn Store>>>, labels: &[&str], resources: HashMap<String, (ResourceStats, Vec<(String, f32)>)>) -> Result<Vec<Resource>, ThoosaError> {
+    fn test_init_store(store: &Arc<RwLock<Box<dyn Store>>>, labels: &[&str], resources: HashMap<String, (ResourceStats, Vec<(String, f32)>)>) -> Result<Vec<Resource>, ThoosaError> {
         {
             let mut store_guard = store.lock();
 
@@ -2827,7 +2827,7 @@ mod motif_find_tests {
             t.commit().expect("commit");
         }
 
-        store.lock().list_resources_by_file_stems(&vec!["1111", "2222", "3333"])
+        store.read().list_resources_by_file_stems(&vec!["1111", "2222", "3333"])
     }
 
     #[test]
@@ -2837,7 +2837,7 @@ mod motif_find_tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
 
         let eeg_id_series:Vec<String> = vec!["1111".into(), "2222".into(), "3333".into()];
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
 
         let pulse = pulse_v(50., 10., 100, 20.);
         let n = 1000i64;
@@ -2886,7 +2886,7 @@ mod motif_find_tests {
         ]))?;
 
         let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, Some(0.01));
-        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        let id = store.write().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
         let run_ids = find_motifs_by_euc_dist(
@@ -2903,8 +2903,8 @@ mod motif_find_tests {
 
         debug!("run_ids={:?}", run_ids);
 
-        debug!("{:?}", store.lock().list_run_resources(1)?);
-        let slices = store.lock().list_motifs_slices(id)?;
+        debug!("{:?}", store.read().list_run_resources(1)?);
+        let slices = store.read().list_motifs_slices(id)?;
         debug!("0: {:?}", slices.get(&resources[0]));
         debug!("1: {:?}", slices.get(&resources[1]));
         debug!("2: {:?}", slices.get(&resources[2]));
@@ -2922,11 +2922,11 @@ mod motif_find_tests {
     fn test_find_motifs_by_euc_dist_diff_sizes() -> Result<(), ThoosaError> {
         let eeg_id_series:Vec<String> = vec!["0000".into(), "1111".into(), "2222".into()];
         // let store_path = format!("/tmp/test_store_{}.db3", cdt_for_dir());
-        // let store = Arc::new(Mutex::new(SqlStore::from_path(store_path)?));
-        // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        // let store = Arc::new(RwLock::new(SqlStore::from_path(store_path)?));
+        // let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         create_dir_all(&test_dir)?;
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist_diff_sizes.db3"))?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("test_find_motifs_by_euc_dist_diff_sizes.db3"))?));
 
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
@@ -2975,7 +2975,7 @@ mod motif_find_tests {
 
 
         let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, Some(0.01));
-        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        let id = store.write().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
         let run_ids = find_motifs_by_euc_dist(
@@ -2989,8 +2989,8 @@ mod motif_find_tests {
             vec![Cpu]
         )?;
 
-        debug!("{:?}", store.lock().list_run_resources(1)?);
-        let eeg_slices = store.lock().list_motifs_slices(1)?;
+        debug!("{:?}", store.read().list_run_resources(1)?);
+        let eeg_slices = store.read().list_motifs_slices(1)?;
 
         debug!("eeg_slices={eeg_slices:?}");
         //TODO
@@ -3005,7 +3005,7 @@ mod motif_find_tests {
     #[test]
     pub fn test_find_motifs_by_euc_dist_wrong_index() -> Result<(), ThoosaError> {
 
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         create_dir_all(&test_dir)?;
         let ws = Arc::new(RwLock::new(mock_ws_simp(Some(&test_dir), 1, 1000, 1000)));
@@ -3048,7 +3048,7 @@ mod motif_find_tests {
 
 
         let mut run_config = FindMotifsRunConfig::new(None, 50, 100, None, Some(0.01));
-        let id = store.lock().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
+        let id = store.write().save_run_config(None, &FindMotifsRunConfig::type_name(), "test", "test", run_config.to_properties_iter(None).collect())?;
         run_config.set_id(id);
 
         let run_ids = find_motifs_by_euc_dist(
@@ -3062,8 +3062,8 @@ mod motif_find_tests {
             vec![Cpu]
         )?;
 
-        debug!("{:?}", store.lock().list_run_resources(1)?);
-        let motif_slices = store.lock().list_motifs_slices(1)?;
+        debug!("{:?}", store.read().list_run_resources(1)?);
+        let motif_slices = store.read().list_motifs_slices(1)?;
 
         assert!(motif_slices.len() >= 3);//may not be able to find all matches
 
@@ -3093,7 +3093,7 @@ mod motif_find_tests {
             Ok(())
         }
 
-        fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
+        fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
             todo!()
         }
 
@@ -3930,14 +3930,14 @@ mod motif_find_tests {
 
 }
 
-pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, motif_id: u32, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
-    let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, limit, None)?;
+pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<RwLock<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, motif_id: u32, limit: Option<u32>, device: &Device) -> Result<(), ThoosaError> {
+    let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(motif_id, limit, None)?;
     let slices_len = slices.len();
     // if slices_len < 3 {
     //     return Ok(())
     // }
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(run_id, &store.lock().list_run_config_values(run_id)?)?;
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(run_id, &store.read().list_run_config_values(run_id)?)?;
 
     let resources_slices = load_motif_slices(channel, &find_motifs_run_config.to_applicable(ws.read().deref(), *device), slices.into_iter().map(|s| TensorIdSliceIdx(s.0.into(), s.1)).collect(), resources_map, loader); //TODO Into for TensorSliceIdx
 
@@ -3984,7 +3984,7 @@ pub fn plot_motif_slices(ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex
     Ok(())
 }
 
-pub fn plot_resource<>(resource_config: Simple, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Mutex<Box<dyn Store>>>) -> Result<(), ThoosaError>{
+pub fn plot_resource<>(resource_config: Simple, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoosaError>{
     let tensors_path = ws.read().tensors_path().clone();
     let channel = 0; //TODO
 

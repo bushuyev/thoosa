@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use bytemuck::{AnyBitPattern, Pod, Zeroable};
 use log::{debug, error, info, trace};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rand::{thread_rng, Rng};
 use zstd_framed::{ZstdReader, ZstdWriter};
 use zstd_framed::table::{ZstdFrame, ZstdSeekTable};
@@ -76,7 +76,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(&mut self, store: &Arc<Mutex<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
+    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
         self.writer.shutdown()?;
         let mut slice_id = 0;
 
@@ -93,7 +93,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             })
         );
         info!("inserting {} groups {} slices", groups.len(), groups.values().map(|s|s.len()).sum::<usize>());
-        store.lock().save_groups_as_motifs(
+        store.write().save_groups_as_motifs(
             self.run_id, self.channel as i64,
             filter_groups_by_slices_count(max_slices_counts, groups)
         )
@@ -184,11 +184,11 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
 
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -205,8 +205,8 @@ mod tests {
 
         file_store.load_slices_into_groups(&store, None)?;
 
-        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
-        let map = store.lock().list_motifs_slices(run_id)?;
+        let resources = store.read().list_resources_by_ids(&resource_ids)?;
+        let map = store.read().list_motifs_slices(run_id)?;
 
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
@@ -228,11 +228,11 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
 
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -249,8 +249,8 @@ mod tests {
 
         file_store.load_slices_into_groups(&store, None)?;
 
-        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
-        let map = store.lock().list_motifs_slices(run_id)?;
+        let resources = store.read().list_resources_by_ids(&resource_ids)?;
+        let map = store.read().list_motifs_slices(run_id)?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let resoruce_0_motifs = motifs_slices.iter().map(|ms|ms.motif_id).collect::<HashSet<_>>();
@@ -285,11 +285,11 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
 
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -306,8 +306,8 @@ mod tests {
 
         file_store.load_slices_into_groups(&store, None)?;
 
-        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
-        let map = store.lock().list_motifs_slices(run_id)?;
+        let resources = store.read().list_resources_by_ids(&resource_ids)?;
+        let map = store.read().list_motifs_slices(run_id)?;
 
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
@@ -339,11 +339,11 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
 
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -363,8 +363,8 @@ mod tests {
 
         file_store.load_slices_into_groups(&store, None)?;
 
-        let resources = store.lock().list_resources_by_ids(&resource_ids)?;
-        let map = store.lock().list_motifs_slices(run_id)?;
+        let resources = store.read().list_resources_by_ids(&resource_ids)?;
+        let map = store.read().list_motifs_slices(run_id)?;
 
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
@@ -387,11 +387,11 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
 
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
 
         let resource_ids= crate::store_tests::init_test_store(&mut store)?;
 
-        let run_id = store.lock().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
+        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
         let mut file_store = FileMotifTrackerStore::new(
             test_dir,
@@ -401,7 +401,7 @@ mod tests {
 
         file_store.load_slices_into_groups(&store, None)?;
 
-        let map = store.lock().list_motifs_slices(run_id)?;
+        let map = store.read().list_motifs_slices(run_id)?;
 
         assert_eq!(0, map.len());
 
@@ -440,10 +440,10 @@ mod tests {
          fs::copy("/tmp/ws_test/main_db.db3", &sql_file)?;
 
          debug!("sql_file={sql_file:?}");
-         let store = Arc::new(Mutex::new(SqlStore::from_path(sql_file)?));
-         // let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+         let store = Arc::new(RwLock::new(SqlStore::from_path(sql_file)?));
+         // let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
 
-         match store.lock().save_groups_as_motifs(
+         match store.write().save_groups_as_motifs(
              28, 19,
              filter_groups_by_slices_count(None, groups)
          ) {

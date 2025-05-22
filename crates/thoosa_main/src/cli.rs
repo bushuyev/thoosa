@@ -201,7 +201,7 @@ where
     }
 
 
-    let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
+    let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
     let devices = list_devices();
 
@@ -547,10 +547,10 @@ where
     Ok(())
 }
 
-fn save_run_configs<R:RunConfig+thoosa_properties_map::ToHashmap>(input_run_ids: Option<&[RunId]>, store: &Arc<Mutex<Box<dyn Store>>>, run_configs: &mut Vec<R>, descr: &str) -> Vec<RunId>{
+fn save_run_configs<R:RunConfig+thoosa_properties_map::ToHashmap>(input_run_ids: Option<&[RunId]>, store: &Arc<RwLock<Box<dyn Store>>>, run_configs: &mut Vec<R>, descr: &str) -> Vec<RunId>{
     run_configs.into_iter().map(|run_config| {
         let run_config_id = store
-            .lock()
+            .write()
             .save_run_config(
                 input_run_ids,
                 &<R>::type_name(),
@@ -573,7 +573,7 @@ pub fn run_train_final_nets(
     fixed_config: &OptConfig,
     resource_config: &NetResources<Logits>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
@@ -597,7 +597,7 @@ pub fn run_train_final_nets(
 
 pub fn run_infer<F>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     infer_params: &InferArgs,
     device: Device,
     load_tensor: F,
@@ -605,7 +605,7 @@ pub fn run_infer<F>(
 where
     F: Fn(&PathBuf) -> Result<Tensor, ThoosaError> + Sync,
 {
-    let labels = store.lock().list_labels()?;
+    let labels = store.read().list_labels()?;
     let final_applicable = FinalNetApplicable::new(infer_params.final_run_id, labels.clone(), store, ws, device);
 
 
@@ -751,7 +751,7 @@ pub async fn run_train_label_nets_2(
     fixed_config: &Arc<OptConfig>,
     resource_config: &NetResources<Labeled>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     runner: &Arc<ThoRunner>,
     devices: Vec<Device>,
 ) -> Result<Vec<Box<dyn SavableResult>>, ThoosaError> {
@@ -822,11 +822,11 @@ pub async fn run_train_label_nets_2(
 
                 let train_labels_resources = Arc::new(vec![
                     (1, resource_keys.clone()),
-                    (0, store.lock().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
+                    (0, store.read().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
                 ]);
                 let valid_labels_resources = Arc::new(vec![
                     (1, valid_resource_keys),
-                    (0, store.lock().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
+                    (0, store.read().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
                 ]);
 
                 debug!("run_train_label_nodes: label={label} \ntrain_labels_resource_rc[0]={:?} \ntrain_labels_resource_rc[1]={:?} cuda_mem={:?}", train_labels_resources[0], valid_labels_resources[1], cuda_mem());
@@ -865,7 +865,7 @@ pub fn run_train_label_nets(
     fixed_config: &OptConfig,
     resource_config: &NetResources<Labeled>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
@@ -939,11 +939,11 @@ pub fn run_train_label_nets(
 
                 let train_labels_resource_rc = Rc::new(vec![
                     (1, resource_keys.clone()),
-                    (0, store.lock().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
+                    (0, store.read().list_resource_random_not_label(label.as_str(), train_resource_keys_len as i64).expect("list_resource_random_not_label for train"))
                 ]);
                 let valid_labels_resources_rc = Rc::new(vec![
                     (1, valid_resource_keys),
-                    (0, store.lock().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
+                    (0, store.read().list_resource_random_not_label(label.as_str(), valid_resource_keys_len as i64).expect("list_resource_random_not_label for valid"))
                 ]);
 
                 debug!("run_train_label_nodes: label={label} \ntrain_labels_resource_rc[0]={:?} \ntrain_labels_resource_rc[1]={:?} cuda_mem={:?}", train_labels_resource_rc[0], train_labels_resource_rc[1], cuda_mem());
@@ -991,7 +991,7 @@ async fn run_train_motif_nodes_on_motif_selection_2(
     fixed_config:&Arc<OptConfig>,
     _resource_config: &Empty,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     runner: &Arc<ThoRunner>,
     devices: Vec<Device>,
 ) -> Result<Vec<Box<dyn SavableResult>>, ThoosaError> {
@@ -1016,10 +1016,10 @@ async fn run_train_motif_nodes_on_motif_selection_2(
             debug!("run_train_motif_nodes_on_motif_selection: motif_selection_run_ids_chunk={motif_selection_run_ids_chunk:?}");
             let train_motifs_nodes_run_configs_arc = Arc::clone(&train_motifs_nodes_run_configs_arc);
             motif_selection_run_ids_chunk.iter().flat_map(move |motif_selection_run_id| {
-                let find_motifs_run_ids = store.lock().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
+                let find_motifs_run_ids = store.read().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
                 debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?}");
 
-                let selected_motifs = store.lock().list_selected_motifs(*motif_selection_run_id, ws.read().channels()).expect("list_selected_motifs");
+                let selected_motifs = store.read().list_selected_motifs(*motif_selection_run_id, ws.read().channels()).expect("list_selected_motifs");
                 selected_motifs.into_iter()
                     .flat_map(|channel_motifs| channel_motifs.into_iter())
                     .flat_map({
@@ -1029,7 +1029,7 @@ async fn run_train_motif_nodes_on_motif_selection_2(
                             let train_motifs_nodes_run_configs_arc = Arc::clone(&train_motifs_nodes_run_configs_arc);
 
                             <Vec<u32> as Clone>::clone(&find_motifs_run_ids).into_iter().map( move |find_motifs_run_id| {
-                                let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params")).unwrap()
+                                let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.read().list_run_config_values(find_motifs_run_id).expect("list_run_params")).unwrap()
                                     .to_applicable(ws.read().deref(), device);
 
 
@@ -1066,7 +1066,7 @@ fn run_train_motif_nodes_on_motif_selection(
     fixed_config:&OptConfig,
     _resource_config: &Empty,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
@@ -1090,10 +1090,10 @@ fn run_train_motif_nodes_on_motif_selection(
 
             motif_selection_run_ids_chunk.iter().map(|motif_selection_run_id| {
 
-                let find_motifs_run_ids = store.lock().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
+                let find_motifs_run_ids = store.read().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
                 debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?}");
 
-                let motifs = store.lock().list_selected_motifs(*motif_selection_run_id, ws.read().channels()).expect("list_selected_motifs")
+                let motifs = store.read().list_selected_motifs(*motif_selection_run_id, ws.read().channels()).expect("list_selected_motifs")
                     .into_iter()
                     .flat_map(|channel_motifs| channel_motifs.into_iter())
                     .map(|(motif_id, _corr)| motif_id).collect::<Vec<u32>>();
@@ -1104,7 +1104,7 @@ fn run_train_motif_nodes_on_motif_selection(
                     // assert_eq!(find_motifs_run_ids.len(), 1, "expected single find_motifs_run_id:  input motif_selection_run_id={motif_selection_run_id} find_motifs_run_ids={find_motifs_run_ids:?}"); //selection has single input
                     // let find_motifs_run_id = find_motifs_run_ids[0];
 
-                    let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.lock().list_run_config_values(find_motifs_run_id).expect("list_run_params"))?
+                    let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.read().list_run_config_values(find_motifs_run_id).expect("list_run_params"))?
                         .to_applicable(ws.read().deref(), device);
 
 
@@ -1137,20 +1137,19 @@ fn run_train_motif_nodes_on_motif_selection(
 
 fn motifs_to_tensor_cmd(
     cli: &Cli,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     device: Device,
     choose_fragments_params: &MotifsToTensorArgs,
     ws:&Arc<RwLock<Box<dyn Workspace>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
 ) -> Result<(), ThoosaError> {
-    let mut store_guard = store.lock();
 
     let find_motif_run_id = choose_fragments_params.run_id();
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motif_run_id, &store.lock().list_run_config_values(find_motif_run_id)?)?;
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map__(find_motif_run_id, &store.read().list_run_config_values(find_motif_run_id)?)?;
 
     let t = motifs_to_tensor(
-        store_guard.list_motifs_slices(find_motif_run_id)?,
+        store.read().list_motifs_slices(find_motif_run_id)?,
         loader,
         &find_motifs_run_config,
         20,
@@ -1169,7 +1168,7 @@ fn motifs_to_tensor_cmd(
 
 pub fn import_resources<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
@@ -1179,7 +1178,7 @@ where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
     R: Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send,
 {
-    let mut store_guard = store.lock();
+    let mut store_guard = store.write();
 
     let mut conn_guard = store_guard.conn().lock();
     let t = conn_guard.transaction()?;
@@ -1261,7 +1260,7 @@ where
 
 fn run_plot_motif_slices(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
@@ -1277,7 +1276,7 @@ fn run_plot_motif_slices(
             fs::create_dir_all(ws.read().plots_path().join(run_id.to_string()))?;
 
             //TODO add list for  motif_ids only without grouping by  slice_matches
-            let motif_distances = store.lock().list_motifs(run_id)?;
+            let motif_distances = store.read().list_motifs(run_id)?;
             let motifs_len = motif_distances.len();
             let mut done_cnt = AtomicU32::new(0);
             motif_distances /*.into_iter()*/
@@ -1304,7 +1303,7 @@ async fn run_train_motif_nets_2(
     find_motifs_run_config_applicable: FindMotifsApplicable,
     fixed_config: &Arc<OptConfig>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Mutex<Box<dyn Store>>>,
+    store: Arc<RwLock<Box<dyn Store>>>,
     runner: &Arc<ThoRunner>,
     device: Device,
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
@@ -1321,7 +1320,7 @@ async fn run_train_motif_nets_2(
         // let mut store_guard = store.try_lock().expect("store lock");
         // debug!("train_on_motif: 1. after store lock");
 
-        let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, None, None)?;
+        let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(motif_id, None, None)?;
 
         assert_eq!(run_id, find_motifs_run_id);
 
@@ -1333,7 +1332,7 @@ async fn run_train_motif_nets_2(
         );
 
         //list motifs which are NOT motif_id and NOT from run_id
-        let (channel, run_id, slices, resources_map) = store.lock().list_motif_slices(motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
+        let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
 
         debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
         trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
@@ -1378,7 +1377,7 @@ fn run_train_motif_nets(
     find_motifs_run_config_applicable: &FindMotifsApplicable,
     fixed_config: &OptConfig,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: Arc<Mutex<Box<dyn Store>>>,
+    store: Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     device: Device,
 ) -> Result<Vec<Box<dyn SavableResult>>, ThoosaError> {
@@ -1386,9 +1385,8 @@ fn run_train_motif_nets(
 
     motifs.into_iter().map(|motif_id| {
         let (all_slices_0, all_slices_1, channel) = {
-            let mut store_guard = store.lock();
 
-            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, None, None)?;
+            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, None, None)?;
 
             assert_eq!(run_id, find_motifs_run_id);
 
@@ -1400,7 +1398,7 @@ fn run_train_motif_nets(
             );
 
             //list motifs which are NOT motif_id and NOT from run_id
-            let (channel, run_id, slices, resources_map) = store_guard.list_motif_slices(*motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
+            let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(*motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
 
             debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
             trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
@@ -1552,7 +1550,7 @@ pub fn run_opt_step_2<RC, RCRV, CC, R, ST/* F*/>(
     resource_config:&R,
     opt_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     runner: &Arc<ThoRunner>,
     devices: Vec<Device>,
     descr: &str,
@@ -1565,7 +1563,7 @@ where
         &Arc<CC>,
         &R,
         &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<Mutex<Box<dyn Store>>>,
+        &Arc<RwLock<Box<dyn Store>>>,
         &Arc<ThoRunner>,
         Vec<Device>,
     ) -> Result<Vec<Box<dyn SavableResult>>, ThoosaError>,//TODO remove Option & Vec
@@ -1604,7 +1602,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     resource_config:&R,
     opt_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
     descr: &str,
@@ -1616,7 +1614,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
             &CC,
             &R,
             &Arc<RwLock<Box<dyn Workspace>>>,
-            &Arc<Mutex<Box<dyn Store>>>,
+            &Arc<RwLock<Box<dyn Store>>>,
             &Arc<RwLock<LoadRunner<Tensor>>>,
             Vec<Device>,
         ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,//TODO remove Option & Vec
@@ -1662,7 +1660,7 @@ pub fn run_all_grid_step_2<RC, RCRV, R, FC, ST>(
     resource_config:&R,
     grid_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     runner: &Arc<ThoRunner>,
     devices: Vec<Device>,
     descr: &str,
@@ -1675,7 +1673,7 @@ where
         &R,
         &FC,
         &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<Mutex<Box<dyn Store>>>,
+        &Arc<RwLock<Box<dyn Store>>>,
         &Arc<ThoRunner>,
         Vec<Device>,
     ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,
@@ -1733,7 +1731,7 @@ pub fn run_all_grid_step<RC, RCRV, R, FC, ST>(
     resource_config:&R,
     grid_step: ST,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Mutex<Box<dyn Store>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
     loader: &Arc<RwLock<LoadRunner<Tensor>>>,
     devices: Vec<Device>,
     descr: &str,
@@ -1746,7 +1744,7 @@ where
         &R,
         &FC,
         &Arc<RwLock<Box<dyn Workspace>>>,
-        &Arc<Mutex<Box<dyn Store>>>,
+        &Arc<RwLock<Box<dyn Store>>>,
         &Arc<RwLock<LoadRunner<Tensor>>>,
         Vec<Device>,
     ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,
@@ -1928,7 +1926,7 @@ mod cli_tests {
             100, 2,
         )));
 
-        let mut store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
         let imported_ids = import_resources(
             &ws,
@@ -1950,7 +1948,7 @@ mod cli_tests {
             true,
         )?;
 
-        let resources = store.lock().list_resources_by_ids(&imported_ids)?;
+        let resources = store.read().list_resources_by_ids(&imported_ids)?;
 
         let resources_0_0 = resources
             .iter()
@@ -1996,7 +1994,7 @@ mod cli_tests {
             true,
         )?;
 
-        let mut slices = store.lock().list_motifs_slices(run_ids[0])?;
+        let mut slices = store.read().list_motifs_slices(run_ids[0])?;
 
         debug!("slices={slices:?}");
 
@@ -2035,11 +2033,11 @@ mod cli_tests {
         // let slice_1_1 = slices.get(resources_1_1).unwrap().into_iter().find(|s|s.channel == 1).expect("1_1");
         // assert_eq!(slice_1_1.slice_idx, 2000);
         //
-        // let motif_dists = store.lock().list_motifs(run_ids[0])?;
+        // let motif_dists = store.read().list_motifs(run_ids[0])?;
         // debug!("test_motifs: motif_dists={motif_dists:?}");
         //
         // for motif_id in motif_dists.keys() {
-        //     let (channel, run_id, motif_slice) = store.lock().list_motif_slices(*motif_id, None, None)?;
+        //     let (channel, run_id, motif_slice) = store.read().list_motif_slices(*motif_id, None, None)?;
         //     debug!("test_motifs: motif_id={motif_id} channel={channel} motif_slice={motif_slice:?}");
         // }
 
@@ -2060,13 +2058,13 @@ mod cli_tests {
         ).expect("select_motifs_in_class");
 
         debug!("test_motifs_with_tpe: select_motifs_run_ids={select_motifs_run_ids:?}");
-        let motif_selection_id = store.lock().list_input_run_ids(&select_motifs_run_ids)?;
+        let motif_selection_id = store.read().list_input_run_ids(&select_motifs_run_ids)?;
         debug!("test_motifs_with_tpe: motif_selection_id={motif_selection_id:?}");
 
-        // store.lock().list_selected_motifs();
+        // store.read().list_selected_motifs();
 
         // there are motifs with corr 1.0 for each label
-        let selected_motifs_0 = store.lock().list_selected_motifs(
+        let selected_motifs_0 = store.read().list_selected_motifs(
             select_motifs_run_ids[0]
             // select_motifs_run_ids.iter().find(|(id, run_id)|label.eq("label_0")).expect("label_0").1
             //0 channel
@@ -2075,7 +2073,7 @@ mod cli_tests {
         //TODO
         // assert!(selected_motifs_0[0].iter().find(|(motif_id, corr)|corr == &1.0).is_some());
 
-        let selected_motifs_1 = store.lock().list_selected_motifs(
+        let selected_motifs_1 = store.read().list_selected_motifs(
             select_motifs_run_ids[1]
             // corrs.iter().find(|(id, run_id)|label.eq("label_1")).expect("label_1").1
         )?;
@@ -2086,10 +2084,10 @@ mod cli_tests {
     }
 
     fn init_test_store(
-        mut store: &Arc<Mutex<Box<dyn Store>>>,
+        mut store: &Arc<RwLock<Box<dyn Store>>>,
         tensors_per_label: i32,
     ) -> Result<Vec<ResourceId>, ThoosaError> {
-        let store_guard = store.lock();
+        let store_guard = store.write();
         let mut mutex_guard = store_guard.conn().lock();
         let t = mutex_guard.transaction()?;
 
@@ -2589,7 +2587,7 @@ mod cli_tests {
 
 
 
-    fn verify_infer(test_dir: &PathBuf, n: u32, max_y: f32, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, devices: Vec<Device>, train_final_nodes_run_ids: Vec<RunId>, max_mse: f64) -> Result<(), ThoosaError> {
+    fn verify_infer(test_dir: &PathBuf, n: u32, max_y: f32, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<RwLock<Box<dyn Store>>>, devices: Vec<Device>, train_final_nodes_run_ids: Vec<RunId>, max_mse: f64) -> Result<(), ThoosaError> {
         let input_dir = test_dir.join("infer_input");
 
         debug!("run_infer: input_dir={input_dir:?}");
@@ -2680,7 +2678,7 @@ mod cli_tests {
         ])
     }
 
-    fn prepare_test_data(n:u32, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Mutex<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Tensor>>>, Arc<ThoRunner>, Vec<Device>), ThoosaError> {
+    fn prepare_test_data(n:u32, max_y:f32, test_dir: &PathBuf) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, String, Arc<RwLock<LoadRunner<Tensor>>>, Arc<ThoRunner>, Vec<Device>), ThoosaError> {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -2739,7 +2737,7 @@ mod cli_tests {
             "test_find_motifs_by_euc_dist", (1000, 500), &ws.read().plots_path().join("1.png").to_path_buf(),
         )?;*/
 
-        let store = Arc::new(Mutex::new(SqlStore::from_path(ws.read().store_path())?));
+        let store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
         init_test_store(&store, tensors_per_label)?;
         let group_name = format!("pure group {tensors_per_label}");
@@ -2774,7 +2772,7 @@ mod cli_tests {
         Ok((ws, store, group_name, loader, runner,  devices))
     }
 
-    fn run_all_steps(find_motifs_run_config: &str, select_motifs_run_config: &str, train_motif_nodes_run_config: &str, train_label_nodes_run_config: &str, train_final_nodes_run_config: &str, group_name: &String, opt_config: OptConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<Mutex<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, devices: &Vec<Device>, runner: &Arc<ThoRunner>) -> Result<Vec<RunId>, ThoosaError> {
+    fn run_all_steps(find_motifs_run_config: &str, select_motifs_run_config: &str, train_motif_nodes_run_config: &str, train_label_nodes_run_config: &str, train_final_nodes_run_config: &str, group_name: &String, opt_config: OptConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<RwLock<Box<dyn Store>>>, loader: &Arc<RwLock<LoadRunner<Tensor>>>, devices: &Vec<Device>, runner: &Arc<ThoRunner>) -> Result<Vec<RunId>, ThoosaError> {
         let opt_config_arc = Arc::new(opt_config.clone());
 
         let find_motifs_run_ids = run_all_grid_step_2(
@@ -2817,7 +2815,7 @@ mod cli_tests {
         debug!("test_run_step: select_motifs_for_label_run_ids={select_motifs_for_label_run_ids:?}");
 
         for select_motifs_for_label_run_id in &select_motifs_for_label_run_ids {
-            let selected_motifs = store.lock().list_selected_motifs(
+            let selected_motifs = store.read().list_selected_motifs(
                 *select_motifs_for_label_run_id,
                 ws.read().channels() as u32,
             )?;
@@ -2885,9 +2883,9 @@ mod cli_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 2 * n as u32, 32000)?));
 
-        let store = Arc::new(Mutex::new(SqlStore::in_mem()?));
+        let store = Arc::new(RwLock::new(SqlStore::in_mem()?));
         // std::fs::remove_file("/tmp/test_main_db.db3").unwrap_or(());
-        // let store = Arc::new(Mutex::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
+        // let store = Arc::new(RwLock::new(SqlStore::from_path("/tmp/test_main_db.db3")?));
 
         let imported_ids = import_resources(
             &ws,
@@ -2905,7 +2903,7 @@ mod cli_tests {
             true,
         )?;
 
-        let imported_resources = store.lock().list_resources_by_ids(&imported_ids)?;
+        let imported_resources = store.read().list_resources_by_ids(&imported_ids)?;
 
         debug!("imported={imported_resources:?}");
         let mut imported_keys = imported_resources
