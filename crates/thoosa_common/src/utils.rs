@@ -7,7 +7,7 @@ use std::iter::Map;
 use std::ops::ControlFlow::Continue;
 use std::ops::{Add, Div, Mul, Range};
 use std::time::Instant;
-use std::{fs, mem, ptr};
+use std::{fs, mem, ptr, thread};
 
 use chrono::SecondsFormat;
 use cudarc::driver::CudaDevice;
@@ -503,11 +503,11 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
 
 // impl <R, T> Splitter<1> for Reducer<RwLock<R, T>> where R:RawRwLock, T:Debug + Splittable<1> {
 //     type S = RwLock<R, T>;
-// 
+//
 //     fn next(&mut self) -> Option<Self::S> {
 //         self.value.take()
 //     }
-// 
+//
 //     fn split(&mut self, v: Self::S) -> Result<(), ThoosaError> {
 //         match v.split() {
 //             None => {
@@ -516,7 +516,7 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
 //             Some(a) => {
 //                 let [v_0] = a;
 //                 self.value = Some(v_0);
-// 
+//
 //                 Ok(())
 //             }
 //         }
@@ -1571,10 +1571,10 @@ where F:Fn(ThoTensor<Batch<DI>>)->ThoTensor<Batch<DI>> {
     let mut last_valid_loss = [0f32;3];
 
     for idx in 1..cycles {
-        debug!("train:  cuda_mem={:?}", cuda_mem());
+        debug!("train:  cuda_mem={:?} before train_batch thread name={:?}", cuda_mem(), thread::current().name());
         let (x_t_0, expected_y) = data.train_batch().await;
         debug!("train: device={:?} x_t_0.size()={:?}", device, x_t_0.size());
-        debug!("train: 0. cuda_mem={:?}", cuda_mem());
+        debug!("train: 0. cuda_mem={:?} after train_batch thread name={:?}", cuda_mem(), thread::current().name());
 
         let x_t = x_f(x_t_0);
 
@@ -1603,8 +1603,9 @@ where F:Fn(ThoTensor<Batch<DI>>)->ThoTensor<Batch<DI>> {
 
         if idx % 10 == 0 {
 
-
+            debug!("train:  cuda_mem={:?} before valid_batch thread name={:?}", cuda_mem(), thread::current().name());
             let (x_t_0, y_t) = data.valid_batch().await;
+            debug!("train:  cuda_mem={:?} after valid_batch thread name={:?}", cuda_mem(), thread::current().name());
             // debug!("train: x_t_0.size={:?}", x_t_0.size());
 
             let rs = tch::no_grad(|| {

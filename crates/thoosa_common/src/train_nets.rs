@@ -858,7 +858,7 @@ pub async fn train_label_net_2<DI:Dims+Send+'static, DO:Dims+Send+'static, B:Asy
     var_store: &VarStore,
     device: &Device,
 ) ->  Result<f32, ThoosaError> {
-
+    debug!("train_label_net:  thread name={:?}", thread::current().name());
 
     let device = device.clone();
 
@@ -2067,7 +2067,7 @@ where
     let mut min_loss = f32::MAX;
     let mut min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
-    info!("running opt train {descr} thread name={:?}", thread::current().name());
+    info!("opt_train_2: running opt train {descr} thread name={:?}", thread::current().name());
 
     let vs = VarStore::new(device);
 
@@ -2080,6 +2080,8 @@ where
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
+                debug!("opt_train: opt_vals={opt_vals:?}  thread name={:?}", thread::current().name());//descr={descr}
+
                 let run_config: R = [
                     const_vals.as_slice(),
                     grid_vals.as_slice(),
@@ -2095,13 +2097,13 @@ where
                         v
                     }
                     Err(e) => {
-                        warn!("opt_train failed with {e:?} on {run_config:?}");
+                        warn!("opt_train failed with {e:?} on {run_config:?} thread name={:?}", thread::current().name());
                         (f32::MAX, Default::default())
                     }
                 };
                 listener.plot();
 
-                debug!("opt_train: run_config_values={run_config:?} loss={loss}");//descr={descr}
+                debug!("opt_train: run_config_values={run_config:?} loss={loss} thread name={:?}", thread::current().name());//descr={descr}
                 if loss < min_loss {
                     min_loss = loss;
                     min_var_store_clone.write().replace((vs, node_params, run_config, min_loss));
@@ -2113,7 +2115,7 @@ where
             opt_config.opt_max_evals,
             opt_config.opt_num_init,
         );
-
+        info!("opt_train_2: wait on optimize thread name={:?}", thread::current().name());
         let best_config = opt.optimize().await;
 
         debug!("best_config={:?}", best_config);
@@ -2139,7 +2141,7 @@ where
     let const_vals = run_config_source.grid_run_config_source().const_params();
     let mut min_loss = f32::MAX;
     let mut min_var_store: Option<(VarStore, N, R, f32)> = None;
-    info!("running opt train {descr} thread name={:?}", thread::current().name());
+    info!("opt_train: running opt train {descr} thread name={:?}", thread::current().name());
 
     run_config_source.grid_to_vals().into_iter().for_each(|grid_vals| {
 
