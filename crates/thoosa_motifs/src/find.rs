@@ -2812,7 +2812,7 @@ mod motif_find_tests {
 
     fn test_init_store(store: &Arc<RwLock<Box<dyn Store>>>, labels: &[&str], resources: HashMap<String, (ResourceStats, Vec<(String, f32)>)>) -> Result<Vec<Resource>, ThoosaError> {
         {
-            let mut store_guard = store.lock();
+            let mut store_guard = store.write();
 
             let mut conn_guard = store_guard.conn().lock();
             let t = conn_guard.transaction()?;

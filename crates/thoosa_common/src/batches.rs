@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, thread};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -87,7 +87,7 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         device: &Device,
         transform_fn: Option<Arc<RwLock<Box<F>>>>,
     ) -> (ThoTensor<Batch<DO>>, Tensor) {
-        debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
+        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
 
         // let wg = WaitGroup::new();
@@ -95,7 +95,7 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         let mut x_y_acc:Vec<(ThoTensor<DO>, i64)> = vec![];
 
         if batch_size <  class_resources.len() {
-            debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size <  class_resources.len");
+            debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: batch_size <  class_resources.len");
 
             for _ in 0..batch_size {
                 // let x_y_acc_in_exec = Arc::clone(&x_y_acc);
@@ -114,7 +114,7 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         }
 
         let per_class_len = batch_size / class_resources.len();
-        debug!("LoadingTensorsDataBatch::choose_for_batch: class_tensors={} per_class_len={per_class_len}", class_resources.len());
+        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: class_tensors={} per_class_len={per_class_len}", class_resources.len());
 
         let mut x_y_vecs = vec![];
         for (class, resources) in class_resources{
@@ -149,8 +149,8 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         // wg.wait();
 
 
-        debug!("LoadingTensorsDataBatch::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}", x_y_vecs.len());
-        // loader.read().debug("LoadingTensorsDataBatch::choose_for_batch");
+        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}", x_y_vecs.len());
+        // loader.read().debug("AsyncLoadingTensorsDataBatch::choose_for_batch");
 
         //TODO throw if not enough tensors for batch?
         (x_y_vecs.len()..batch_size).for_each(|i|{
@@ -175,25 +175,25 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         resource_id: Resource,
         class: i64
     ) {
-        debug!("LoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area:?}");
+        debug!("AsyncLoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area:?} thread name={:?}",  thread::current().name());
 
         // loader.write().exec_scoped(move |future_id, loader, keys_purge, done_sender| {
         //     async move {
-                debug!("LoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area:?}");
+                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area:?}  thread name={:?}",  thread::current().name());
                 let resource_id_debug = resource_id.clone();
                 // let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area, future_id, done_sender).await;
                 let t = loader.run_loader(&resource_id, &Device::Cpu, Some(area.clone())).await;//TODO device
 
-                debug!("LoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?}");
+                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
 
                 let t = if let Some(transform) = transform_fn {
                     transform.read()(t.shallow_clone().into())//TODO move load_tensor into Batch args to return correct DO
                 } else {
                     t.shallow_clone().into()
                 };
-                debug!("LoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?}");
+                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
                 x_y_acc_in_exec.push((t.into(), class));
-                debug!("LoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?}");
+                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
                 // drop(wg_exec);
         //     }.boxed()
         // });
@@ -207,7 +207,7 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
             0,
         ).to_device(*device).set_requires_grad(true);
 
-        debug!("LoadingTensorsDataBatch::choose_for_batch: tensor.size={:?} tensor_size_in_bytes={:?} tensor.device()={:?}", tensor.size(), tensor_mem_size(&tensor), tensor.device());
+        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: tensor.size={:?} tensor_size_in_bytes={:?} tensor.device()={:?}", tensor.size(), tensor_mem_size(&tensor), tensor.device());
 
         (
             tensor.totype(Float).into(),
