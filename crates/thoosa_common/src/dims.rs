@@ -6,7 +6,7 @@ use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::{AppliedId, Input, Output};
 use crate::applicables::ThoDevice;
 
-pub trait Dims:Send + Clone + Debug {}
+pub trait Dims:Send +Sync+ Clone + Debug {}
 
 #[derive(Clone, Debug)]
 pub struct ChannelsData;
