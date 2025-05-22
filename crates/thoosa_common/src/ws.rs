@@ -5,7 +5,7 @@ use parking_lot::RwLock;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::fs;
 use std::fs::{read_dir, ReadDir};
 use std::num::ParseIntError;
@@ -21,6 +21,7 @@ use thoosa_shared::run_configs::RunId;
 use crate::dims::{LabelProbability, SlicesData, MotifsNetsSelectionDims, ChannelsSlicesData, ChannelsMotifsData, MotifData, Dims, Batch};
 use crate::find_motifs_run_config::FindMotifsRunConfig;
 
+#[derive(Debug)]
 pub struct FsWorkspace {
     base_path:PathBuf,
     store_path:PathBuf,
@@ -37,6 +38,7 @@ pub struct FsWorkspace {
     sample_rate:u32,
     max_input:u32 //TODO move into input meta
 }
+
 
 impl FsWorkspace {
 
@@ -361,7 +363,7 @@ impl Workspace for FsWorkspace {
 }
 
 #[automock]
-pub trait Workspace:Sync + Send {
+pub trait Workspace:Sync + Send + Debug {
     fn import_tensor<'a>(&self, t:Tensor, import_id:u32, key:&'a str)-> Result<ResourceStats, ThoosaError>;
     fn base_path_as_str(&self) -> String;
     fn base_path(&self) -> &PathBuf;

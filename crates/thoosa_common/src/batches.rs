@@ -19,7 +19,7 @@ use crate::loader::{LoadRunner, Loader};
 use crate::utils::{tensor_mem_size, Splittable, SplittableDataBatch};
 
 #[async_trait]
-pub trait AsyncDataBatch<D:Dims>  {
+pub trait AsyncDataBatch<D:Dims>:Send  {
     /// returns (inputs, labels)
     async fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
     async fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
@@ -31,7 +31,7 @@ pub trait AsyncDataBatch<D:Dims>  {
 * TODO rename
 */
 #[derive(Clone)]
-pub struct AsyncLoadingTensorsDataBatch<'b, DI:Dims, DO:Dims + Send, F: (Fn(ThoTensor<DI>)->ThoTensor<DO>) + Send + Sync + Clone> {
+pub struct AsyncLoadingTensorsDataBatch<DI:Dims, DO:Dims + Send, F: (Fn(ThoTensor<DI>)->ThoTensor<DO>) + Send + Sync> {
     train_resources: Arc<Vec<(i64, Vec <Resource>)>>,
     valid_resources: Arc<Vec<(i64, Vec <Resource>)>>,
 
@@ -39,12 +39,12 @@ pub struct AsyncLoadingTensorsDataBatch<'b, DI:Dims, DO:Dims + Send, F: (Fn(ThoT
     runner: Arc<ThoRunner>,
     device:Device,
     transform_fn:Option<Arc<RwLock<Box<F>>>>, //for single tensor, wrap into BatchTransform for per-batch transform
-    _pd_b:PhantomData<&'b DI>,
+    _pd_di:PhantomData<DI>,
     _pd_do:PhantomData<DO>,
 }
 
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> Debug for AsyncLoadingTensorsDataBatch<'_, DI, DO, F> {
+impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync> Debug for AsyncLoadingTensorsDataBatch<DI, DO, F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("")
             .field("train", &self.train_resources)
@@ -56,7 +56,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
 }
 
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> AsyncLoadingTensorsDataBatch<'b, DI, DO, F> {
+impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync> AsyncLoadingTensorsDataBatch<DI, DO, F> {
 
     pub fn new(
         train: Arc<Vec<(i64, Vec <Resource>)>>,
@@ -75,7 +75,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
             device,
             transform_fn: transform_fn.map(|f|Arc::new(RwLock::new(f))),
 
-            _pd_b:PhantomData,
+            _pd_di:PhantomData,
             _pd_do:PhantomData,
         }
     }
@@ -218,7 +218,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
 
 
 #[async_trait]
-impl <'b, DI:Dims + Sync, DO:Dims + Send + Sync, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<'_, DI, DO, F> {
+impl <DI:Dims + Sync, DO:Dims + Send + Sync, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync> AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F> {
 
     async fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
         tch::no_grad(|| {
@@ -234,12 +234,24 @@ impl <'b, DI:Dims + Sync, DO:Dims + Send + Sync, F: Fn(ThoTensor<DI>)->ThoTensor
 }
 
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> Splittable<1> for AsyncLoadingTensorsDataBatch<'_, DI, DO, F> {
+impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync> Splittable<1> for AsyncLoadingTensorsDataBatch<DI, DO, F> {
+    //TODO change to spelt(self)?
     fn split(&self) -> Option<[Self; 1]>
     where
         Self: Sized
     {
-        let mut batch = self.clone();
+
+        let mut batch = AsyncLoadingTensorsDataBatch {
+            train_resources: self.train_resources.clone(),
+            valid_resources: self.valid_resources.clone(),
+            batch_size: self.batch_size,
+            runner: Arc::clone(&self.runner),
+            device: self.device,
+            transform_fn: self.transform_fn.as_ref().map(|arc|Arc::clone(arc)),
+            _pd_di: Default::default(),
+            _pd_do: Default::default(),
+        };
+
         batch.batch_size = batch.batch_size/2;//TODO param
 
         if batch.batch_size > 0 {
@@ -252,7 +264,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
     }
 }
 
-// impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> SplittableDataBatch<DO> for AsyncLoadingTensorsDataBatch<'_, DI, DO, F> {}
+// impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> SplittableDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F> {}
 
 
 #[cfg(test)]

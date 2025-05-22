@@ -6,7 +6,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, Module};
 
 use thoosa_shared::ThoosaError;
 use crate::dims::{AnyDims, Dims};
-use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule};
+use crate::my_tch::{Fp, my_linear, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, ThoModule, MyConv};
 use crate::train_nets::ThoModuleWithStore;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
@@ -107,11 +107,11 @@ impl Node {
             }
 
             Node::Conv1d { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv1d(vs/ "cnn_1d", in_channels as i64, out_channels as i64, kernel as i64, config))
+                Box::new(MyConv::new(nn::conv1d(vs/ "cnn_1d", in_channels as i64, out_channels as i64, kernel as i64, config)))
             }
 
             Node::Conv2d { kernel, in_channels, out_channels, config} => {
-                Box::new(nn::conv2d(vs/ "cnn_2d", in_channels as i64, out_channels as i64, kernel as i64, config))
+                Box::new(MyConv::new(nn::conv2d(vs/ "cnn_2d", in_channels as i64, out_channels as i64, kernel as i64, config)))
             }
 
             Node::BatchNorm { num_features, config } => {
