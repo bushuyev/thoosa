@@ -202,9 +202,9 @@ impl ThoRunner {
     ) -> Shared<BoxFuture<'static, Arc<TCD>>> {
         let applicable = &self.tcd_loaders[ThoDevice::from(*on_device).ordinal()];
 
-        if let Some(ctx) = ctx.as_ref() {
-            ctx.write().loaded.push(applicable.applied_id(Input::id(input)));
-        }
+        // if let Some(ctx) = ctx.as_ref() {
+        //     ctx.write().loaded.push(applicable.applied_id(Input::id(input)));
+        // }
 
         self.futures_runner.run_cached_task(
             &self.loader_cache_fut,
@@ -222,9 +222,9 @@ impl ThoRunner {
         ctx: Option<Arc<RwLock<ThoRunCtx>>>
     ) -> Shared<BoxFuture<'static, Arc<TCDF>>> {
 
-        if let Some(ctx) = ctx.as_ref() {
-            ctx.write().loaded.push(<FindMotifsApplicable as Applicable<TCD, TCDF, ()>>::applied_id(applicable, input.id()));
-        }
+        // if let Some(ctx) = ctx.as_ref() {
+        //     ctx.write().loaded.push(<FindMotifsApplicable as Applicable<TCD, TCDF, ()>>::applied_id(applicable, input.id()));
+        // }
 
         self.futures_runner.run_cached_task(
             &self.find_motifs_cache_fut,

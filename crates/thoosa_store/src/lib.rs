@@ -134,7 +134,7 @@ pub trait Store:ResourceStore + Sync + Send {
     fn list_motifs_slices(&self, run_id: RunId) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
     fn list_motif_slices(&self, motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>) -> Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoosaError>;
 
-    fn list_run_resources(&mut self, run_id: RunId) -> Result<Vec<String>, ThoosaError>;
+    fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoosaError>;
     fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoosaError>;
     fn save_selected_motifs(&mut self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoosaError>;
     fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>; //corr_run_id, run_id, label
@@ -1070,7 +1070,7 @@ impl Store for SqlStore {
     }
 
 
-    fn list_run_resources(&mut self, run_id: RunId) -> Result<Vec<String>, ThoosaError> {
+    fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoosaError> {
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
