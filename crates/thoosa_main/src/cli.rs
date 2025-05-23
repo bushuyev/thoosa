@@ -811,13 +811,13 @@ pub async fn run_train_label_nets_2(
     let savables_res = try_join_all(devices__resources
         .into_iter()
         .flat_map(move |(device_i, train_resource_keys_chunk)| {
-
+            let ctx = Arc::clone(&ctx);
             let valid_datasets_map_clone = valid_datasets_map.clone(); //TODO
             let selected_motifs_for_label_applicable = selected_motifs_for_label_applicable.clone(); //TODO
 
             train_resource_keys_chunk.iter().flat_map( move |(label, resource_keys)| {
                 debug!("run_train_label_nodes: label={label} resource_keys={resource_keys:?} cuda_mem={:?}", cuda_mem());
-
+                let ctx = Arc::clone(&ctx);
                 let train_resource_keys_len = resource_keys.len();
                 let valid_resource_keys = valid_datasets_map_clone.get(label).expect(format!("valid dataset for {}", label).as_str()).clone();
                 let valid_resource_keys_len = valid_resource_keys.len();
@@ -842,6 +842,7 @@ pub async fn run_train_label_nets_2(
                     let train_labels_resources =  Arc::clone(&train_labels_resources);
                     let valid_labels_resources = Arc::clone(&valid_labels_resources);
                     let motifs_nets_selection_applicable_arc = Arc::clone(&motifs_nets_selection_applicable);
+                    let ctx = Arc::clone(&ctx);
                     async move {
                         Ok(Arc::into_inner(runner.futures_runner().run_task(
                             Arc::new(TrainLabelNetInput {
@@ -855,14 +856,16 @@ pub async fn run_train_label_nets_2(
                             }),
                             &Arc::new(TrainLabelNetApplicable { device: device_i }),
                             runner,
-                            None
+                            Some(ctx)
                         ).await).unwrap() as Box<dyn SavableResult>)
                     }
                 })
             })
         })).await;
 
-    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_purge).expect("Arc::into_inner ").into_inner(), device_for_purge).await;
+
+    let arc_count = Arc::strong_count(&ctx_for_purge);
+    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_purge).expect(&format!("Arc::into_inner(ctx_for_purge) in train label nets: arc_count={arc_count}")).into_inner(), device_for_purge).await;
 
     savables_res
 }
@@ -1073,10 +1076,11 @@ async fn run_train_motif_nodes_on_motif_selection_2(
 
         })).await;
 
-    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_purge).unwrap().into_inner(), device_for_purge).await;
+
+    let arc_count = Arc::strong_count(&ctx_for_purge);
+    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_purge).expect(&format!("Arc::into_inner(ctx_for_purge) in train motif nets: arc_count={arc_count}")).into_inner(), device_for_purge).await;
 
     savables_res
-
 
 }
 
