@@ -697,85 +697,6 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
     }
 }
 
-
-/*pub async  fn run_opt_train_label_nets_2(
-    run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
-    train_labels_resources:Arc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
-    valid_labels_resources:Arc<Vec<(i64, Vec <Resource>)>>,
-    motifs_nets_selection_applicable_arc:Arc<MotifsNetsSelectionApplicable>,
-    label: &String,
-    fixed_config: &Arc<OptConfig>,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    runner: &Arc<ThoRunner>,
-    device: Device
-) -> Result<Box<dyn SavableResult>, ThoosaError> {
-
-
-    debug!("run_opt_train_label_nodes: label={label:?} run_configs={run_configs:?} channels={} cuda_mem={:?}", ws.read().channels(), cuda_mem());
-    opt_train_2(
-        Arc::clone(fixed_config),
-        async |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| { //TODO add _listener to train_label_nodes_2
-            // debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}");
-
-
-            let mut result = None::<(f32, LabelNetParams)>;
-
-            let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
-                &run_config.net, &motifs_nets_selection_applicable_arc,  ws
-            );
-
-            run_split_on_oom_2(
-                Reducer::new(
-                    AsyncLoadingTensorsDataBatch::<ChannelsData, LabelNetInputTensors, _>::new(
-                        Arc::clone(&train_labels_resources),
-                        Arc::clone(&valid_labels_resources),
-                        run_config.common_training_args.batch_size as usize,
-                        Arc::clone(&runner),
-                        device.clone(),
-                        Some(Box::new( |t:TCD|{
-                            applicable_and_net_enum.apply(&t).expect("applicable_and_net_enum.apply failed")
-                        }))
-                    )
-
-                ),
-                async |batch| {
-                    train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, batch, vs, &device).await
-                        .map(|v| (v,
-                                  match &applicable_and_net_enum {
-
-                                      LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
-                                          debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}");
-
-                                          params.clone()
-                                      }
-                                      LabelNetApplicableAndNetE::FixedNumSlices { applicable, params } => {
-                                          debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}");
-
-                                          params.clone()
-                                      }
-                                  }
-                        ))
-                },
-                |v, i| {
-                    debug!("v={v:?}");
-                    result.replace(v);
-                },
-                3, //TODO config
-            ).await?;
-
-            Ok(result.expect("no result from train_label_nodes"))
-            // Err(ThoosaError::new("zzz"))
-        },
-        Arc::clone(run_configs),
-        device,
-        "label",
-    ).await.map(|(var_store, label_node_params, run_config, min_loss)| {
-        Box::new(TrainLabelNetsRunConfigResult::new(motifs_nets_selection_applicable_arc.motif_selection_run_id, label.clone(), min_loss, label_node_params, run_config, var_store)) as Box<dyn SavableResult>
-        // todo!()
-    })
-}
-*/
-
 pub fn run_opt_train_label_nets(
     run_configs: &Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
     train_labels_resources:Rc<Vec<(i64, Vec <Resource>)>>, //TODO i64 to 1/0 enum for binary class
@@ -895,7 +816,6 @@ pub async fn train_label_net_2<DI:Dims+Send+'static, DO:Dims+Send+'static, B:Asy
 
     Ok(loss)
 }
-
 
 pub fn train_label_net<DI:Dims+Send+'static, DO:Dims+Send+'static, B:DataBatch<DI>> (
     net:&Box<dyn ThoModule<Batch<DI>, DO>>,
@@ -2069,13 +1989,13 @@ where
 
     info!("opt_train_2: running opt train {descr} thread name={:?}", thread::current().name());
 
-    let vs = VarStore::new(device);
 
 
     for grid_vals in run_config_source.grid_to_vals().into_iter() {
         let const_vals = const_vals.clone();
         let grid_vals = grid_vals.clone();
         let mut train_clone = train.clone();
+
         let mut min_var_store_clone = Arc::clone(&min_var_store);
 
         let mut opt = AsyncTPEOptimizer::new(
