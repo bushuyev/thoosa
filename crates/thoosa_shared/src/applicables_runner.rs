@@ -187,7 +187,7 @@ where
             statistics_clone.on_new_load_done(t_0.elapsed().as_millis() as u64);
             r
         }.boxed().shared();
-      
+
 
 
         let mut device_futures = vec![const { None }; num_devices].into_boxed_slice();
@@ -256,7 +256,7 @@ where
             let r = from_data.copy_to_device(to_device).await;
 
             statistics_arc.on_copy_done(t_0.elapsed().as_millis() as u64);
-            
+
             r
         }.boxed().shared();
 
@@ -282,6 +282,8 @@ pub struct Statistics {
     loaded_keys:DashSet<AppliedId>,
     copied_keys:DashSet<AppliedId>,
 
+    purge_gpu_count:AtomicU64,
+
     purge_cpu_count:AtomicU64,
     purge_cpu_time: AtomicU64,
 }
@@ -299,6 +301,7 @@ impl Statistics {
             copy_time: 0.into(),
             loaded_keys: Default::default(),
             copied_keys: Default::default(),
+            purge_gpu_count: 0.into(),
             purge_cpu_count: 0.into(),
             purge_cpu_time: 0.into(),
         }
@@ -336,6 +339,11 @@ impl Statistics {
         self.copy_time.fetch_add(copy_time, Ordering::Relaxed);
         self.copy_ended_count.fetch_add(1, Ordering::Relaxed);
     }
+
+    pub fn on_purge_gpu_caches(&self) {
+        self.purge_gpu_count.fetch_add(1, Ordering::Relaxed);
+    }
+
 
     pub fn on_purge_cpu_caches(&self, purge_cpu_caches_time:u64, purged_count:u64) {
         self.purge_cpu_count.fetch_add(purged_count, Ordering::Relaxed);
@@ -404,6 +412,7 @@ where
 
             let new_mask = remove_mask(entry.device_cache_areas[device_idx], cache_area);
             if device_idx != 0 && new_mask == 0 {//device_idx == 0 it's on CPU and will be purged by purge_cpu_caches
+                statistics.on_purge_gpu_caches();
 
                 if entry.device_futures[0].is_none() {
                     entry
@@ -488,6 +497,7 @@ impl FuturesRunner {
         input: Arc<I>,
         applicable:&Arc<A>,
         runner:&Arc<A::R>,
+        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>,
     ) -> BoxFuture<'static, Arc<O>>
     where
         O: Output + Send + Sync + 'static,
@@ -509,7 +519,7 @@ impl FuturesRunner {
 
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
-                let r = applicable.async_apply(input.clone(), runner, None).await;
+                let r = applicable.async_apply(input.clone(), runner, ctx).await;
                 debug!("run_task: done input={input:?}");
                 let _ = tx.send(r);
                 statistics_arc.on_new_load_done(t_0.elapsed().as_millis() as u64);
@@ -604,7 +614,7 @@ impl FuturesRunner {
             self.device_pools.get_pool(&device).install(||{
                 RayonFuture::<()>::install_future(fut.clone());
             });
-            
+
             fut
         })
 
@@ -1244,9 +1254,9 @@ mod tests {
             my_loader.futures_runner.statistics.load_started_count.load(Ordering::Relaxed),
             my_loader.futures_runner.statistics.load_ended_count.load(Ordering::Relaxed)
         );
-        
+
         assert_eq!(my_loader.futures_runner.statistics.load_started_count.load(Ordering::Relaxed), 10/*(n*3) as u128*/);//3: Loader -> ApplicableA -> ApplicableB
-        
+
         assert_eq!(my_loader.futures_runner.statistics.copy_started_count.load(Ordering::Relaxed), 0);
 
     }
