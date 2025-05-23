@@ -1,6 +1,6 @@
 use crate::rayon_future::{RayonFuture, ScopeFutureExt};
 use async_trait::async_trait;
-use dashmap::{DashMap, Entry, Map};
+use dashmap::{DashMap, DashSet, Entry, Map};
 use futures::channel::oneshot;
 use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
@@ -16,6 +16,7 @@ use std::io::Write;
 use std::ops::{Deref, DerefMut, Sub};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::Instant;
@@ -52,38 +53,6 @@ pub trait ToOrdinal:Debug + Sync + Send {
 pub trait Runner {
     type Ctx:RunCtx;
 }
-
-
-// #[async_trait]
-// pub trait Applicable<In, Out>: Sync + Send
-//     where  In: Input + Send + Sync,
-//             Out: Output + Send + Sync
-// {
-//     type R: Runner + Sync + Send;
-// 
-//     async fn apply(
-//         self:Arc<Self>,
-//         input: Arc<In>,
-//         runner: Arc<Self::R>,
-//         ctx: Option<Arc<RwLock<<<Self as Applicable<In, Out>>::R as Runner>::Ctx>>>
-//     ) -> Arc<Out>;
-// 
-//     
-// 
-//     fn format_id(&self, input_id:&AppliedId) -> AppliedId {
-//         format!("{}:{}_{}", input_id, self.name(), self.run_id())
-//     }
-// 
-//     fn format_0(prev_id:&str) -> AppliedId {
-//         format!("{}", prev_id)
-//     }
-// 
-//     fn applied_id(&self, input_id:&AppliedId) -> AppliedId;
-//     fn name(&self)->String;
-//     fn run_id(&self)->String;
-// 
-//     fn device(&self) -> &impl ToOrdinal;
-// }
 
 
 impl  Debug for FuturesRunner {
@@ -192,7 +161,7 @@ where
         pool: &ThreadPool,
         applicable: Arc<A>,
         runner: Arc<A::R>,
-        statistics: &Arc<RwLock<Statistics>>,
+        statistics: &Arc<Statistics>,
         ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>
     )
         -> (Self, Shared<BoxFuture<'static, Arc<O>>>)
@@ -215,9 +184,9 @@ where
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
                 let r = applicable.async_apply(input.clone(), runner, ctx_for_future).await;
-                // debug!("run_cached_task: done input={input:?}");
+                debug!("run_cached_task: done input={input:?}");
                 let _ = tx.send(r);
-                // statistics_clone.write().on_new_load_done(t_0.elapsed().as_millis());
+                statistics_clone.on_new_load_done(t_0.elapsed().as_millis() as u64);
             });
         });
 
@@ -242,8 +211,8 @@ where
         )
     }
 
-    fn get_from_any_device<R:RunCtx>(&mut self, device_ordinal:usize, pool:&ThreadPool, statistics: &Arc<RwLock<Statistics>>, ctx: Option<Arc<RwLock<R>>> ) -> Shared<BoxFuture<'static, Arc<O>>> {
-        // debug!("get_from_any_device: device_ordinal={device_ordinal} ctx={ctx:?} self.device_cache_areas[device_ordinal]={:?}", self.device_cache_areas[device_ordinal]);
+    fn get_from_any_device<R:RunCtx>(&mut self, device_ordinal:usize, pool:&ThreadPool, statistics: &Arc<Statistics>, ctx: Option<Arc<RwLock<R>>> ) -> Shared<BoxFuture<'static, Arc<O>>> {
+        debug!("get_from_any_device: device_ordinal={device_ordinal} ctx={ctx:?} self.device_cache_areas[device_ordinal]={:?}", self.device_cache_areas[device_ordinal]);
 
         self.device_cache_areas[device_ordinal] |= ctx.map(|v|v.read().cache_area()).unwrap_or(0);
 
@@ -275,7 +244,7 @@ where
         from_device: usize,
         to_device: usize,
         pool: &ThreadPool,
-        statistics: &Arc<RwLock<Statistics>>,
+        statistics: &Arc<Statistics>,
     ) -> Shared<BoxFuture<'static, Arc<O>>> {
 
         let data_fut = self.device_futures[from_device]
@@ -284,7 +253,7 @@ where
             .clone();
 
         let (tx, rx) = oneshot::channel();
-        let statistics_clone = statistics.clone();
+        let statistics_arc = Arc::clone(&statistics);
         let t_0 = Instant::now();
 
 
@@ -295,9 +264,7 @@ where
 
                 let _ = tx.send(from_data.copy_to_device(to_device).await);
 
-                // statistics_clone
-                //     .write()
-                    // .on_copy_done(t_0.elapsed().as_millis());
+                statistics_arc.on_copy_done(t_0.elapsed().as_millis() as u64);
             });
         });
 
@@ -315,83 +282,83 @@ where
 #[derive(Debug)]
 pub struct Statistics {
 
-    load_started_count:u64,
-    load_ended_count:u64,
-    pure_run_time: u128,
-    load_time: u128,
+    load_started_count:AtomicU64,
+    load_ended_count:AtomicU64,
+    pure_run_time: AtomicU64,
+    load_time: AtomicU64,
 
-    copy_started_count:u64,
-    copy_ended_count:u64,
-    copy_time: u128,
+    copy_started_count:AtomicU64,
+    copy_ended_count:AtomicU64,
+    copy_time: AtomicU64,
 
-    loaded_keys:HashSet<AppliedId>,
-    copied_keys:HashSet<AppliedId>,
+    loaded_keys:DashSet<AppliedId>,
+    copied_keys:DashSet<AppliedId>,
 
-    purge_cpu_count:u64,
-    purge_cpu_time: u128,
+    purge_cpu_count:AtomicU64,
+    purge_cpu_time: AtomicU64,
 }
 
-
+//TODO feature to enable statistics
 impl Statistics {
     pub fn new() -> Self {
         Self {
-            load_started_count:0,
-            load_ended_count:0,
-            pure_run_time: 0,
-            load_time: 0,
-            copy_started_count: 0,
-            copy_ended_count: 0,
-            copy_time: 0,
+            load_started_count:0.into(),
+            load_ended_count:0.into(),
+            pure_run_time: 0.into(),
+            load_time: 0.into(),
+            copy_started_count: 0.into(),
+            copy_ended_count: 0.into(),
+            copy_time: 0.into(),
             loaded_keys: Default::default(),
             copied_keys: Default::default(),
-            purge_cpu_count: 0,
-            purge_cpu_time: 0,
+            purge_cpu_count: 0.into(),
+            purge_cpu_time: 0.into(),
         }
     }
 
-    pub fn load_time(&self) -> u128 {
-        self.load_time
+    pub fn load_time(&self) -> u64 {
+        self.load_time.load(Ordering::Relaxed)
     }
 
-    pub fn on_new_load(&mut self, input: &AppliedId) {
-        self.load_started_count +=1;
+    pub fn on_new_load(&self, input: &AppliedId) {
+        self.load_started_count.fetch_add(1, Ordering::Relaxed);
         self.loaded_keys.insert(input.clone());
     }
 
-    pub fn on_new_load_done(&mut self, load_time:u128) {
-        self.load_ended_count +=1;
-        self.load_time += load_time;
+    pub fn on_new_load_done(&self, load_time:u64) {
+        self.load_ended_count.fetch_add(1, Ordering::Relaxed);
+        self.load_time.fetch_add(load_time, Ordering::Relaxed);
     }
 
-    pub fn track_pure_run_time(&mut self, pure_run_time:u128) {
-        self.pure_run_time += pure_run_time;
+    pub fn track_pure_run_time(&self, pure_run_time:u64) {
+        self.pure_run_time.fetch_add(pure_run_time, Ordering::Relaxed);
 
     }
 
-    pub fn copy_time(&self) -> u128 {
-        self.copy_time
+    pub fn copy_time(&self) -> u64 {
+        self.copy_time.load(Ordering::Relaxed)
     }
 
-    pub fn on_copy(&mut self, input: &AppliedId) {
-        self.copy_started_count +=1;
+    pub fn on_copy(&self, input: &AppliedId) {
+        self.copy_started_count.fetch_add(1, Ordering::Relaxed);
         self.copied_keys.insert(input.clone());
     }
 
-    pub fn on_copy_done(&mut self, copy_time:u128) {
-        self.copy_time += copy_time;
-        self.copy_ended_count +=1;
+    pub fn on_copy_done(&self, copy_time:u64) {
+        self.copy_time.fetch_add(copy_time, Ordering::Relaxed);
+        self.copy_ended_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn on_purge_cpu_caches(&mut self, purge_cpu_caches_time:u128, purged_count:u64) {
-        self.purge_cpu_count += purged_count;
-        self.purge_cpu_time += purge_cpu_caches_time;
+    pub fn on_purge_cpu_caches(&self, purge_cpu_caches_time:u64, purged_count:u64) {
+        self.purge_cpu_count.fetch_add(purged_count, Ordering::Relaxed);
+        self.purge_cpu_time.fetch_add(purge_cpu_caches_time, Ordering::Relaxed);
     }
 }
 
 #[async_trait]
 pub trait FuturesRunnerMap:Sync+Send{
-    async fn purge_gpu_cache_area(&self, key: AppliedId, cache_area:u64, pool:&ThreadPool, device:&dyn ToOrdinal, statistics: Arc<RwLock<Statistics>>);
-    fn purge_cpu_caches(&self, statistics: &Arc<RwLock<Statistics>>, older_than:&Instant);
+    async fn purge_gpu_cache_area(&self, key: AppliedId, cache_area:u64, pool:&ThreadPool, device:&dyn ToOrdinal, statistics: Arc<Statistics>);
+    fn purge_cpu_caches(&self, statistics: &Arc<Statistics>, older_than:&Instant);
 
 }
 #[async_trait]
@@ -405,7 +372,7 @@ where
         cache_area: u64,
         pool: &ThreadPool,
         device:&dyn ToOrdinal,
-        statistics: Arc<RwLock<Statistics>>,
+        statistics: Arc<Statistics>,
     ) {
 
         debug!("purge_gpu_cache_area: key={key:?} cache_area={cache_area:?} device={device:?}");
@@ -428,7 +395,7 @@ where
         }
     }
 
-    fn purge_cpu_caches(&self, statistics: &Arc<RwLock<Statistics>>, older_than: &Instant) {
+    fn purge_cpu_caches(&self, statistics: &Arc<Statistics>, older_than: &Instant) {
         let now = Instant::now();
 
         let mut purged_count = 0u64;
@@ -444,7 +411,7 @@ where
             to_retain
         });
 
-        // statistics.write().on_purge_cpu_caches(now.elapsed().as_millis(), purged_count);
+        statistics.on_purge_cpu_caches(now.elapsed().as_millis() as u64, purged_count);
     }
 }
 
@@ -453,7 +420,7 @@ pub struct FuturesRunner {
     device_pools: DeviceThreadPools,
 
     caches_areas: RwLock<CacheAreasKeeper>,
-    statistics: Arc<RwLock<Statistics>>
+    statistics: Arc<Statistics>
 }
 
 struct CacheAreasKeeper {
@@ -489,7 +456,7 @@ impl FuturesRunner {
 
 
             caches_areas: RwLock::new(CacheAreasKeeper::new()),
-            statistics: Arc::new(RwLock::new(Statistics::new()))
+            statistics: Arc::new(Statistics::new())
         }
     }
 
@@ -509,7 +476,7 @@ impl FuturesRunner {
         debug!("run_task");
 
         let (tx, rx) = oneshot::channel();
-        // let statistics_clone = statistics.clone();
+        let statistics_arc = Arc::clone(&self.statistics);
 
         let t_0 = Instant::now();
         let device = applicable.device();
@@ -520,9 +487,9 @@ impl FuturesRunner {
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
                 let r = applicable.async_apply(input.clone(), runner, None).await;
-                // debug!("run_cached_task: done input={input:?}");
+                debug!("run_cached_task: done input={input:?}");
                 let _ = tx.send(r);
-                // statistics_clone.write().on_new_load_done(t_0.elapsed().as_millis());
+                statistics_arc.on_new_load_done(t_0.elapsed().as_millis() as u64);
             });
         });
 
@@ -633,8 +600,8 @@ impl FuturesRunner {
         self.caches_areas.write().next_available_cache_area()
     }
 
-    pub fn statistics(self:&Arc<Self>) -> impl Deref<Target = Statistics> + '_ {
-        self.statistics.read()
+    pub fn statistics(self:&Arc<Self>) -> &Statistics {
+        &self.statistics
     }
 }
 
@@ -652,7 +619,7 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
 
 
 #[cfg(test)]
-pub async fn dummy_load(statistics: &RwLock<Statistics>, input: &Arc<AppliedId>) {
+pub async fn dummy_load(statistics: &Statistics, input: &Arc<AppliedId>) {
 
 
     for i in 0..DUMMY_LOAD_N {
@@ -665,7 +632,7 @@ pub async fn dummy_load(statistics: &RwLock<Statistics>, input: &Arc<AppliedId>)
             let b = vec![0.1; 1_000_000];
             let c = a.into_iter().zip(b.into_iter()).map(|(a, b)| a + b).collect::<Vec<f32>>();
 
-            statistics.write().track_pure_run_time(t_0.elapsed().as_millis());
+            statistics.track_pure_run_time(t_0.elapsed().as_millis() as u64);
 
         }.await;
 
@@ -708,10 +675,10 @@ mod tests {
     use rayon::iter::ParallelIterator;
     use rayon::prelude::ParallelBridge;
     use rayon::ThreadPool;
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use log::debug;
+    use log::{debug, set_max_level, Level, LevelFilter};
 
     #[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
     pub enum Devices {
@@ -1173,6 +1140,7 @@ mod tests {
 
     #[test]
     fn test_load(){
+        set_max_level(LevelFilter::Info);
 
         let resources = ["aaa", "bbb", "ccc", "ddd", "eee"];
         let devices = [Devices::Cpu, Devices::Cuda(0), Devices::Cuda(1)];
@@ -1211,16 +1179,16 @@ mod tests {
         });
 
         debug!("futures_runner={my_loader:?}");
-        debug!("done in {:?} futures_runner.statistics={:?}", t_0.elapsed().as_millis(), my_loader.futures_runner.statistics.read());
+        debug!("done in {:?} futures_runner.statistics={:?}", t_0.elapsed().as_millis(), my_loader.futures_runner.statistics);
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), n);
         assert_eq!(
-            my_loader.futures_runner.statistics.read().load_started_count,
-            my_loader.futures_runner.statistics.read().load_ended_count
+            my_loader.futures_runner.statistics.load_started_count.load(Ordering::Relaxed),
+            my_loader.futures_runner.statistics.load_ended_count.load(Ordering::Relaxed)
         );
 
-        assert_eq!(my_loader.futures_runner.statistics.read().load_started_count, 30/*(n*3) as u128*/);//3: Loader -> ApplicableA -> ApplicableB
+        assert_eq!(my_loader.futures_runner.statistics.load_started_count.load(Ordering::Relaxed), 30/*(n*3) as u128*/);//3: Loader -> ApplicableA -> ApplicableB
 
-        assert_eq!(my_loader.futures_runner.statistics.read().copy_started_count, 0);
+        assert_eq!(my_loader.futures_runner.statistics.copy_started_count.load(Ordering::Relaxed), 0);
 
     }
 
@@ -1263,16 +1231,16 @@ mod tests {
 
         });
 
-        debug!("done in {:?} futures_runner.statistics={:?}", t_0.elapsed().as_millis(), my_loader.futures_runner.statistics.read());
+        debug!("done in {:?} futures_runner.statistics={:?}", t_0.elapsed().as_millis(), my_loader.futures_runner.statistics);
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), n);
         assert_eq!(
-            my_loader.futures_runner.statistics.read().load_started_count,
-            my_loader.futures_runner.statistics.read().load_ended_count
+            my_loader.futures_runner.statistics.load_started_count.load(Ordering::Relaxed),
+            my_loader.futures_runner.statistics.load_ended_count.load(Ordering::Relaxed)
         );
 
-        assert_eq!(my_loader.futures_runner.statistics.read().load_started_count, 15/*( n*3 / (n/resources.len() as u32)) as u128*/);//3: Loader -> ApplicableA -> ApplicableB
+        assert_eq!(my_loader.futures_runner.statistics.load_started_count.load(Ordering::Relaxed), 15/*( n*3 / (n/resources.len() as u32)) as u128*/);//3: Loader -> ApplicableA -> ApplicableB
 
-        assert_eq!(my_loader.futures_runner.statistics.read().copy_started_count, 5);
+        assert_eq!(my_loader.futures_runner.statistics.copy_started_count.load(Ordering::Relaxed), 5);
 
     }
 
@@ -1446,7 +1414,7 @@ mod tests {
         my_loader.futures_runner.purge_all_cpu_caches(&(Instant::now()-Duration::from_millis(100)), my_loader.to_futs_iter());
 
         debug!("statistics={:?}", my_loader.futures_runner.statistics);
-        assert_eq!(my_loader.futures_runner.statistics.read().purge_cpu_count, 15);//(aaa, bbb, ccc, ddd, xxx) x (loader, applicable_a, applicable_b)
+        assert_eq!(my_loader.futures_runner.statistics.purge_cpu_count.load(Ordering::Relaxed), 15);//(aaa, bbb, ccc, ddd, xxx) x (loader, applicable_a, applicable_b)
     }
 
     fn main_pool(num_threads: usize) -> ThreadPool {
