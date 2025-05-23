@@ -6,10 +6,11 @@ use parking_lot::RwLock;
 use std::ops::Deref;
 use std::sync::Arc;
 use log::debug;
+use rayon::ThreadPool;
 use tch::{Device, Tensor};
 use tch::Kind::Float;
 use crate::dims::{TCD, TCDF, TCSD};
-use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, RunCtx, Runner, Statistics, ToOrdinal};
+use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input, MapWithThread, Output, RunCtx, Runner, Statistics, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::Applicable;
 use crate::find_motifs_run_config::FindMotifsApplicable;
@@ -148,8 +149,8 @@ impl ToOrdinal for ThoDevice {
 pub struct ThoRunner {
     futures_runner:Arc<FuturesRunner>,
 
-    loader_cache_fut: DashMap<AppliedId, DataInDevices<TCD>>,
-    find_motifs_cache_fut: DashMap<AppliedId, DataInDevices<TCDF>>,
+    loader_cache_fut: MapWithThread<TCD>,
+    find_motifs_cache_fut: MapWithThread<TCDF>,
 
     tcd_loaders:Vec<Arc<TCDLoader>>
 }
@@ -176,8 +177,10 @@ impl ThoRunner {
 
         Self {
             futures_runner: Arc::new(FuturesRunner::new(&devices_threads)),//TODO config
-            loader_cache_fut: Default::default(),
-            find_motifs_cache_fut: Default::default(),
+
+            loader_cache_fut: MapWithThread::new("loader_cache"),
+
+            find_motifs_cache_fut: MapWithThread::new("find_motifs_cache"),
             tcd_loaders
         }
     }
@@ -211,7 +214,7 @@ impl ThoRunner {
             Arc::new(input.clone()),
             applicable,
             self,
-            ctx
+            ctx,
         )
     }
 
@@ -231,7 +234,7 @@ impl ThoRunner {
             Arc::clone(&input),
             applicable,
             self,
-            ctx
+            ctx,
         )
     }
 
@@ -255,11 +258,11 @@ impl ThoRunner {
     }
     
     pub fn loader_keys(&self) -> Vec<String> {
-        self.loader_cache_fut.iter().map(|v|v.key().clone()).collect::<Vec<String>>()
+        self.loader_cache_fut.keys()
     }
     
     pub fn find_motif_keys(&self) -> Vec<String> {
-        self.find_motifs_cache_fut.iter().map(|v|v.key().clone()).collect::<Vec<String>>()
+        self.find_motifs_cache_fut.keys()
     }
 }
 
@@ -294,7 +297,7 @@ mod tests {
             None
         ));
 
-        debug!("loader_cache keys:{:?}", runner.loader_cache_fut.iter().map(|v|v.key().clone()).collect::<Vec<String>>());
+        debug!("loader_cache keys:{:?}", runner.loader_cache_fut.keys());
         debug!("got res={res:?} in {:?}", t_0.elapsed());
 
         assert_eq!(res.size(), [1000]);
