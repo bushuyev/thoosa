@@ -6,10 +6,11 @@ use parking_lot::RwLock;
 use std::ops::Deref;
 use std::sync::Arc;
 use log::debug;
+use rayon::ThreadPool;
 use tch::{Device, Tensor};
 use tch::Kind::Float;
 use crate::dims::{TCD, TCDF, TCSD};
-use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, RunCtx, Runner, Statistics, ToOrdinal};
+use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input, Output, RunCtx, Runner, Statistics, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::Applicable;
 use crate::find_motifs_run_config::FindMotifsApplicable;
@@ -149,7 +150,9 @@ pub struct ThoRunner {
     futures_runner:Arc<FuturesRunner>,
 
     loader_cache_fut: DashMap<AppliedId, DataInDevices<TCD>>,
+    loader_cache_pool: ThreadPool,
     find_motifs_cache_fut: DashMap<AppliedId, DataInDevices<TCDF>>,
+    find_motifs_cache_pool: ThreadPool,
 
     tcd_loaders:Vec<Arc<TCDLoader>>
 }
@@ -177,7 +180,9 @@ impl ThoRunner {
         Self {
             futures_runner: Arc::new(FuturesRunner::new(&devices_threads)),//TODO config
             loader_cache_fut: Default::default(),
+            loader_cache_pool: DeviceThreadPools::map_pool("loader_cache_pool"),
             find_motifs_cache_fut: Default::default(),
+            find_motifs_cache_pool: DeviceThreadPools::map_pool("find_motifs_cache_pool"),
             tcd_loaders
         }
     }
@@ -211,7 +216,8 @@ impl ThoRunner {
             Arc::new(input.clone()),
             applicable,
             self,
-            ctx
+            ctx,
+            &self.loader_cache_pool,
         )
     }
 
@@ -231,7 +237,8 @@ impl ThoRunner {
             Arc::clone(&input),
             applicable,
             self,
-            ctx
+            ctx,
+            &self.find_motifs_cache_pool,
         )
     }
 

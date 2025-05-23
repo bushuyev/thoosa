@@ -66,32 +66,32 @@ impl  Debug for FuturesRunner {
     }
 }
 
-struct DeviceThreadPools {
-    main_pool: ThreadPool,
+pub struct DeviceThreadPools {
     cpu_pool: ThreadPool,
     gpu_pools: HashMap<usize, ThreadPool>,
 }
 
 impl DeviceThreadPools {
 
-    fn new(cpu_threads: usize, gpu_threads: &[usize]) -> Self {
-
-        let main_pool = rayon::ThreadPoolBuilder::new()
+    pub fn map_pool(pool_name:&str)->ThreadPool {
+        rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .spawn_handler(|thread_builder| {
-                debug!("spawning main_pool thread index={}", thread_builder.index());
+                debug!("spawning {pool_name} thread index={}", thread_builder.index());
 
                 let b = std::thread::Builder::new();
 
-                b.name(format!("{}/{:?}", "main_pool", thread_builder.index()))
+                b.name(format!("{}/{:?}", pool_name, thread_builder.index()))
                     .spawn(|| thread_builder.run())?;
 
                 Ok(())
             })
 
             .build()
-            .expect("Main pool");
+            .expect(pool_name)
+    }
 
+    fn new(cpu_threads: usize, gpu_threads: &[usize]) -> Self {
 
 
         let cpu_pool = rayon::ThreadPoolBuilder::new()
@@ -130,7 +130,7 @@ impl DeviceThreadPools {
             gpu_pools.insert(device_id, pool);
         }
 
-        Self { main_pool, cpu_pool, gpu_pools }
+        Self { cpu_pool, gpu_pools }
     }
 
     fn get_pool(&self, device: &dyn ToOrdinal) -> &rayon::ThreadPool {
@@ -184,7 +184,7 @@ where
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
                 let r = applicable.async_apply(input.clone(), runner, ctx_for_future).await;
-                debug!("run_cached_task: done input={input:?}");
+                debug!("run_cached_task: done input={input:?}  thread name={:?}", thread::current().name());
                 let _ = tx.send(r);
                 statistics_clone.on_new_load_done(t_0.elapsed().as_millis() as u64);
             });
@@ -487,7 +487,7 @@ impl FuturesRunner {
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
                 let r = applicable.async_apply(input.clone(), runner, None).await;
-                debug!("run_cached_task: done input={input:?}");
+                debug!("run_task: done input={input:?}");
                 let _ = tx.send(r);
                 statistics_arc.on_new_load_done(t_0.elapsed().as_millis() as u64);
             });
@@ -505,20 +505,21 @@ impl FuturesRunner {
         input: Arc<I>,
         applicable:&Arc<A>,
         runner:&Arc<A::R>,
-        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>
+        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>,
+        map_pool: &ThreadPool
     ) -> Shared<BoxFuture<'static, Arc<O>>>
     where
         O: Output + Send + Sync + 'static,
         I: Input+Send+Sync+'static,
     {
-        self.device_pools.main_pool.install(move || {
+        map_pool.install(move || {
             let device = applicable.device();
             let id = applicable.applied_id(input.id());
 
             debug!("run_cached_task: id={id:?} thread name={:?}",  thread::current().name());
             let debug_id = id.clone();
 
-            let mut entry = None::<Entry<AppliedId, DataInDevices<O>>>;
+            /*let mut entry = None::<Entry<AppliedId, DataInDevices<O>>>;
             while entry.is_none() {
                 entry = cache.try_entry(id.clone());
                 if entry.is_none() {
@@ -528,8 +529,10 @@ impl FuturesRunner {
                     debug!("run_cached_task: id={id:?} got entry thread name={:?}",  thread::current().name());
                 }
             }
-
             match entry.unwrap() {
+            */
+
+            match cache.entry(id.clone()) {
                 Entry::Occupied(mut e) => {
                     // self.statistics.write().on_copy(input.id());
                     debug!("run_cached_task: id={debug_id:?} Occupied thread name={:?}",  thread::current().name());
@@ -665,7 +668,7 @@ fn yield_n(n: usize) -> impl Future<Output = ()> {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-    use super::{dummy_load, Applicable, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, AppliedId, RunCtx, Runner, ToOrdinal};
+    use super::{dummy_load, Applicable, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, AppliedId, RunCtx, Runner, ToOrdinal, DeviceThreadPools};
     use crate::rayon_future::ScopeFutureExt;
     use async_trait::async_trait;
     use dashmap::DashMap;
@@ -985,8 +988,13 @@ mod tests {
         futures_runner:Arc<FuturesRunner>,
 
         loader_cache_fut: DashMap<AppliedId, DataInDevices<LoaderOutput>>,
+        loader_cache_pool: ThreadPool,
+
         applicable_a_cache_fut: DashMap<AppliedId, DataInDevices<ApplicableAOutput>>,
+        applicable_a_cache_pool: ThreadPool,
+
         applicable_b_cache_fut: DashMap<AppliedId, DataInDevices<ApplicableBOutput>>,
+        applicable_b_cache_pool: ThreadPool,
     }
 
     impl Runner for MyRunner {
@@ -999,8 +1007,13 @@ mod tests {
                 futures_runner: Arc::new(FuturesRunner::new(&[10, 2, 2])),
 
                 loader_cache_fut: Default::default(),
+                loader_cache_pool: DeviceThreadPools::map_pool("loader_cache_pool"),
+                
                 applicable_a_cache_fut: Default::default(),
+                applicable_a_cache_pool: DeviceThreadPools::map_pool("applicable_a_cache_pool"),
+                
                 applicable_b_cache_fut: Default::default(),
+                applicable_b_cache_pool: DeviceThreadPools::map_pool("applicable_b_cache_pool"),
             }
         }
 
@@ -1021,7 +1034,8 @@ mod tests {
                 Arc::new(input.clone()),
                 applicable,
                 self,
-                ctx
+                ctx,
+                &self.loader_cache_pool
             )
         }
 
@@ -1042,6 +1056,7 @@ mod tests {
                 applicable,
                 self,
                 ctx,
+                &self.applicable_a_cache_pool,
             )
         }
 
@@ -1061,7 +1076,8 @@ mod tests {
                 Arc::new(input.clone()),
                 applicable,
                 self,
-                ctx
+                ctx,
+                &self.applicable_b_cache_pool
             )
         }
 
