@@ -52,7 +52,7 @@ use thoosa_shared::{
 };
 use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
-use thoosa_common::applicables::{ThoDevice, ThoRunner};
+use thoosa_common::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use thoosa_common::batches::AsyncLoadingTensorsDataBatch;
 use thoosa_common::dims::{ChannelsData, ThoTensor, TCD};
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
@@ -796,6 +796,7 @@ pub async fn run_train_label_nets_2(
     let chunk_len = max(1, train_labels_resource_keys.len() / devices.len());
 
     debug!("run_train_label_nodes:  chunk_len={chunk_len}");
+    let device_for_purge = devices[0].clone();
 
     let devices__resources = devices
         .into_iter()
@@ -803,7 +804,11 @@ pub async fn run_train_label_nets_2(
         .zip(train_labels_resource_keys.chunks(chunk_len).into_iter())
         .collect::<Vec<(Device, &[(String, Vec<Resource>)])>>();
 
-    try_join_all(devices__resources
+    let ctx = runner.next_ctx();
+    let runner_for_purge = Arc::clone(&runner);
+    let ctx_for_purge = Arc::clone(&ctx);
+
+    let savables_res = try_join_all(devices__resources
         .into_iter()
         .flat_map(move |(device_i, train_resource_keys_chunk)| {
 
@@ -849,12 +854,17 @@ pub async fn run_train_label_nets_2(
                                 ws: Arc::clone(ws),
                             }),
                             &Arc::new(TrainLabelNetApplicable { device: device_i }),
-                            runner
+                            runner,
+                            None
                         ).await).unwrap() as Box<dyn SavableResult>)
                     }
                 })
             })
-        })).await
+        })).await;
+
+    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_purge).expect("Arc::into_inner ").into_inner(), device_for_purge).await;
+
+    savables_res
 }
 
 pub fn run_train_label_nets(
@@ -1000,6 +1010,7 @@ async fn run_train_motif_nodes_on_motif_selection_2(
 
     debug!("run_train_motif_nodes_on_motif_selection: motif_selection_run_ids={motif_selection_run_ids:?} train_motifs_nodes_run_config={train_motifs_nodes_run_configs:?} devices={devices:?} chunk_len={chunk_len}");
     let train_motifs_nodes_run_configs_arc = Arc::new(train_motifs_nodes_run_configs);
+    let device_for_purge = devices[0].clone();
 
     let devices_motif_selection = devices
         .into_iter()
@@ -1007,24 +1018,34 @@ async fn run_train_motif_nodes_on_motif_selection_2(
         .zip(motif_selection_run_ids.chunks(chunk_len).into_iter())
         .collect::<Vec<(Device, &[RunId])>>();
 
+    let ctx = runner.next_ctx();
+    let runner_for_purge = Arc::clone(&runner);
+    let ctx_for_purge = Arc::clone(&ctx);
 
-    try_join_all(devices_motif_selection
+
+    let savables_res = try_join_all(devices_motif_selection
         .into_iter()
         .flat_map(move |(device, motif_selection_run_ids_chunk)| {
             debug!("run_train_motif_nodes_on_motif_selection: motif_selection_run_ids_chunk={motif_selection_run_ids_chunk:?}");
             let train_motifs_nodes_run_configs_arc = Arc::clone(&train_motifs_nodes_run_configs_arc);
+            let ctx = Arc::clone(&ctx);
+
             motif_selection_run_ids_chunk.iter().flat_map(move |motif_selection_run_id| {
                 let find_motifs_run_ids = store.read().get_input_run_ids(*motif_selection_run_id, None).expect("motif_selection_id failed");
                 debug!("run_train_motif_nodes_on_motif_selection: find_motifs_run_ids={find_motifs_run_ids:?}");
 
+
                 let selected_motifs = store.read().list_selected_motifs(*motif_selection_run_id, ws.read().channels()).expect("list_selected_motifs");
+
                 selected_motifs.into_iter()
                     .flat_map(|channel_motifs| channel_motifs.into_iter())
                     .flat_map({
                         let train_motifs_nodes_run_configs_arc = Arc::clone(&train_motifs_nodes_run_configs_arc);
+                        let ctx = Arc::clone(&ctx);
 
                         move |(motif_id, _corr)| {
                             let train_motifs_nodes_run_configs_arc = Arc::clone(&train_motifs_nodes_run_configs_arc);
+                            let ctx = Arc::clone(&ctx);
 
                             <Vec<u32> as Clone>::clone(&find_motifs_run_ids).into_iter().map( move |find_motifs_run_id| {
                                 let find_motifs_run_config_applicable = FindMotifsRunConfig::from_properties_map__(find_motifs_run_id, &store.read().list_run_config_values(find_motifs_run_id).expect("list_run_params")).unwrap()
@@ -1042,14 +1063,19 @@ async fn run_train_motif_nodes_on_motif_selection_2(
                                     ws,
                                     Arc::clone(store),
                                     runner,
-                                    device
+                                    device,
+                                    Arc::clone(&ctx)
                                 )
                             })
 
                         }})
             })
 
-        })).await
+        })).await;
+
+    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_purge).unwrap().into_inner(), device_for_purge).await;
+
+    savables_res
 
 
 }
@@ -1304,19 +1330,17 @@ async fn run_train_motif_nets_2(
     store: Arc<RwLock<Box<dyn Store>>>,
     runner: &Arc<ThoRunner>,
     device: Device,
+    ctx: Arc<RwLock<ThoRunCtx>>,
 ) -> Result<Box<dyn SavableResult>, ThoosaError> {
     debug!("train_on_motifs: device={device:?}, find_motifs_run_id={find_motifs_run_id} motifs={motif_id:?}");
 
-    let ctx = runner.next_ctx();
+
     let find_motifs_run_config_applicable = Arc::new(find_motifs_run_config_applicable);
 
-    let ctx = Arc::clone(&ctx);
     let find_motifs_run_config_applicable = Arc::clone(&find_motifs_run_config_applicable);
 
     let (all_slices_0, all_slices_1, channel) = {
         debug!("train_on_motif: 1. before store lock on thread={:?}", std::thread::current().name());
-        // let mut store_guard = store.try_lock().expect("store lock");
-        // debug!("train_on_motif: 1. after store lock");
 
         let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(motif_id, None, None)?;
 
@@ -1329,14 +1353,13 @@ async fn run_train_motif_nets_2(
             load_motif_slices_2(channel, &find_motifs_run_config_applicable, slices, resources_map, runner, &device, Arc::clone(&ctx)).await
         );
 
-        //list motifs which are NOT motif_id and NOT from run_id
         let (channel, run_id, slices, resources_map) = store.read().list_motif_slices(motif_id, Some(all_slices_1.len() as u32), Some((find_motifs_run_id, channel as u32)))?;
 
         debug!("train_on_motif: 0. channel={channel}, run_id={run_id}, slices.len={}", slices.len());
         trace!("train_on_motif: 0. slices={slices:?}, resources_map={resources_map:?}");
 
         let all_slices_0 = train_nets::slices_in_all_resources(
-            load_motif_slices_2(channel, &find_motifs_run_config_applicable, slices, resources_map, runner, &device, ctx).await
+            load_motif_slices_2(channel, &find_motifs_run_config_applicable, slices, resources_map, runner, &device, Arc::clone(&ctx)).await
         );
 
         debug!("train_on_motif: 0. run_id={}, done", run_id);
@@ -1362,7 +1385,8 @@ async fn run_train_motif_nets_2(
             channel: channel as u32,
         }),
         &Arc::new(TrainMotifNetApplicable{device}),
-        runner
+        runner,
+        Some(ctx)
     ).await).unwrap() as Box<dyn SavableResult>)//TODO unwrap
 
 }
@@ -1502,8 +1526,7 @@ impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult
                 );
 
                 run_train_motif_net(window, &run_config, &self.device, &mut batch, vs, &mut DummyListener/*, listener*/)
-                // todo!()
-                // Err(ThoosaError::new("zzz"))
+
             },
             train_motifs_nodes_run_configs,
             device,
@@ -2872,6 +2895,8 @@ mod cli_tests {
             devices.clone(),
             "Test/TrainFinalNets",
         )?;
+        
+        info!("runner.statistics: {:?}", runner.futures_runner().statistics());
         Ok(train_final_nodes_run_ids)
     }
 
