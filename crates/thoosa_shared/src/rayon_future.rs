@@ -217,7 +217,7 @@ mod tests {
 
 
         let t_0 = Instant::now();
-        let statistics = Arc::new(RwLock::new(Statistics::new()));
+        let statistics = Arc::new(Statistics::new());
 
         main_pool.scope(|scope| {
             let _ = (0..10).into_par_iter().map(|_| {
@@ -227,10 +227,10 @@ mod tests {
                 });
             }).collect::<Vec<_>>();
         });
-        println!("done in {:?} load time 0={}", t_0.elapsed().as_millis(), statistics.read().load_time());
+        println!("done in {:?} load time 0={}", t_0.elapsed().as_millis(), statistics.load_time());
 
         let t_1 = Instant::now();
-        let load_time_1 = Arc::new(RwLock::new(Statistics::new()));
+        let load_time_1 = Arc::new(Statistics::new());
 
         main_pool.scope(|scope| {
             let _ = block_on(join_all((0..10)./*into_par_iter().*/map(|_| {
@@ -242,11 +242,11 @@ mod tests {
         });
 
 
-        println!("done in {:?} load time 1={}", t_1.elapsed().as_millis(),  load_time_1.read().load_time());
+        println!("done in {:?} load time 1={}", t_1.elapsed().as_millis(),  load_time_1.load_time());
 
 
         let t_2 = Instant::now();
-        let load_time_2 = Arc::new(RwLock::new(Statistics::new()));
+        let load_time_2 = Arc::new(Statistics::new());
         main_pool.install(|| {
             let _ = block_on(join_all((0..10)./*into_par_iter().*/map(|_| {
                 let load_time = Arc::clone(&load_time_2);
@@ -257,7 +257,7 @@ mod tests {
         });
 
 
-        println!("done in {:?} load time 2={}", t_2.elapsed().as_millis(),  load_time_2.read().load_time());
+        println!("done in {:?} load time 2={}", t_2.elapsed().as_millis(),  load_time_2.load_time());
     }
 
 }
