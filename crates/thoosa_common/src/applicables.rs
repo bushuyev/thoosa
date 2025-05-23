@@ -194,7 +194,7 @@ impl ThoRunner {
         O: Output + Send + Sync + 'static,
         I: Input+Send+Sync+'static,
     {
-        self.futures_runner.run_task(input, applicable, self)
+        self.futures_runner.run_task(input, applicable, self, None)
     }
 
     pub fn run_loader(
