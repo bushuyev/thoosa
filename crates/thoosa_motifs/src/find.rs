@@ -222,7 +222,7 @@ pub fn find_min_euc_dist(
     Ok(None)
 }
 
-pub fn find_motifs_by_euc_dist_2(
+pub async fn find_motifs_by_euc_dist_2(
     _: Option<&Vec<RunId>>, //first step, no input run ids
     mut run_configs: Vec<FindMotifsRunConfig>,
     resource_config: &Simple,
@@ -361,7 +361,7 @@ pub fn find_motifs_by_euc_dist_2(
         },
         loader,
         Device::Cpu
-    )?;
+    ).await?;
 
 
     let total_trackers  = run_config__channels_trackers.values().map(|v| v.len()).sum::<usize>();
@@ -770,7 +770,7 @@ where
     Ok(())
 }
 
-fn chunk_and_slice_2x_2<G, C, D>(
+async fn chunk_and_slice_2x_2<G, C, D>(
     resources: Vec <Resource>,
     chunk_size: usize,
     find_motifs_applicables:Arc<Vec<Arc<FindMotifsApplicable>>>,
@@ -795,7 +795,30 @@ where
     let mut num_tasks_arc = Arc::clone(&num_tasks);
 
 
-    block_on(async move {
+    /*let trackers_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(thread::available_parallelism().map(|v|v.get()/2).unwrap_or(16))//TODO config
+        .spawn_handler(|thread_builder| {
+
+            let b = thread::Builder::new();
+            b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
+                .spawn(|| thread_builder.run())?;
+
+            Ok(())
+        }).build().expect("trackers_pool");
+
+    trackers_pool.spawn(|s| {
+        for (run_config_id, t, chunk_0, chunk_1) in rx.iter() {
+            debug!("chunk_and_slice_2x: getting chunks for run_config_id={run_config_id}");
+            num_tasks.fetch_add(1, Relaxed);
+            let num_tasks = Arc::clone(&num_tasks);
+            s.spawn(move |scope| {
+                cpu_fn(run_config_id, t, chunk_0, chunk_1);
+                num_tasks.fetch_sub(1, Relaxed);
+            });
+        }
+    });*/
+
+    async move {//TODO remove
         let resource_chunks = resources.chunks(chunk_size)
             .map(|v| Arc::new(v.iter().map(|k| k.clone()).collect::<Vec<Resource>>())) //TODO k.clone()
             .collect::<Vec<Arc<Vec<Resource>>>>(); //[Resource]
@@ -925,7 +948,7 @@ where
                         },
                         |cpu_t, chunk_1_split|{
                             chunk_1_split.drop_tensor();
-
+                            debug!("chunk_and_slice_2x: sending chunks for run_config.id()={}", run_config.id());
                             match tx.send((
                                 run_config.id(),
                                 cpu_t,
@@ -951,31 +974,9 @@ where
             info!("done {chunk_0_i} chunks out of {} in {} mls, slept {slept_times_arc:?} times", resource_chunks.len(), i_0.elapsed().as_millis());
         }
 
-    });
+    }.await;
 
-
-    let trackers_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(thread::available_parallelism().map(|v|v.get()/2).unwrap_or(16))//TODO config
-        .spawn_handler(|thread_builder| {
-
-            let b = thread::Builder::new();
-            b.name(format!("{}/{:?}", "trackers_pool", thread_builder.index()))
-                .spawn(|| thread_builder.run())?;
-
-            Ok(())
-        }).build().expect("trackers_pool");
-
-    trackers_pool.scope(|s| {
-        for (run_config_id, t, chunk_0, chunk_1) in rx.iter() {
-
-            num_tasks.fetch_add(1, Relaxed);
-            let num_tasks = Arc::clone(&num_tasks);
-            s.spawn(move |scope| {
-                cpu_fn(run_config_id, t, chunk_0, chunk_1);
-                num_tasks.fetch_sub(1, Relaxed);
-            });
-        }
-    });
+    debug!("chunk_and_slice_2x: after block_on");
 
     debug!("chunk_and_slice_2x done: statistics={:?}", runner.futures_runner().statistics().deref());
     Ok(())
@@ -1570,7 +1571,7 @@ fn select_motifs_by_label_variance(labels_channels_motifs_counts: &Tensor, mask:
     (idx_dispersion.ge_tensor(&idx_dispersion_mean), idx_dispersion/ max)
 }
 
-pub fn select_motifs_for_label_2(
+pub async fn select_motifs_for_label_2(
     find_motif_run_ids: Option<&Vec<RunId>>,
     select_motif_run_configs: Vec<SelectMotifsRunConfig>,
     resource_config: &Labeled,
@@ -2148,8 +2149,7 @@ mod motif_find_tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::atomic::{AtomicU32, AtomicU64};
     use std::sync::Arc;
-
-
+    use futures::executor::block_on;
     use log::LevelFilter::Trace;
     use log::{debug, set_max_level, trace};
     use parking_lot::RwLock;
@@ -3448,7 +3448,7 @@ mod motif_find_tests {
 
 
 
-        crate::find::chunk_and_slice_2x_2(
+        block_on(crate::find::chunk_and_slice_2x_2(
             resources,
             2,
             Arc::new( vec![
@@ -3471,7 +3471,7 @@ mod motif_find_tests {
             },
             &runner,
             Device::Cuda(0)
-        )?;
+        ))?;
 
         trace!("test_chunk_and_slice_2: loader_keys={:?}", runner.loader_keys());
         trace!("test_chunk_and_slice_2: find_motif_keys={:?}", runner.find_motif_keys());
