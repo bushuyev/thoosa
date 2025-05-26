@@ -419,8 +419,6 @@ pub fn comp_sin_k_v(n: i64, k_v:Vec<f32>, scale:f32) -> Vec<f32> {
     comp_sin_k(n, k_v, scale).collect::<Vec<f32>>()
 }
 
-
-
 pub fn pulse_v(μ: f32, σ: f32, n: i64, f: f32) -> Vec<f32> {
     gauss_i(μ, σ, n).enumerate().map(|(i, x)| (f * 2. * PI *  i as f32 / n as f32).sin() * x).collect::<Vec<_>>()
 }

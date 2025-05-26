@@ -62,7 +62,7 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
-use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunConfig, RunId};
+use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
 use thoosa_shared::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
 
@@ -674,10 +674,10 @@ impl Input for TrainLabelNetInput {
 
 
 #[async_trait]
-impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for TrainLabelNetApplicable {
+impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for TrainLabelNetApplicable {
     type R = ThoRunner;
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TrainLabelNetInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainLabelNetsRunConfigResult>> {
+    async fn async_apply(self: Arc<Self>, input: Arc<TrainLabelNetInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainLabelNetsRunConfigResult>> {
         let input_for_train = Arc::clone(&input);
         let device_for_train = self.device.clone();
         //TODO use run_split_on_oom_2
@@ -687,7 +687,7 @@ impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for 
                 debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}  thread name={:?}", std::thread::current().name());
 
                 let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
-                    &run_config.net, &input_for_train.motifs_nets_selection_applicable_arc,  &input_for_train.ws
+                    &run_config.net, &input_for_train.motifs_nets_selection_applicable_arc, &input_for_train.ws
                 );
 
                 let mut batch = AsyncLoadingTensorsDataBatch::<ChannelsData, LabelNetInputTensors, _>::new(
@@ -696,7 +696,7 @@ impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for 
                     run_config.common_training_args.batch_size as usize,
                     Arc::clone(&runner),
                     device_for_train,
-                    Some(Box::new( |t:TCD|{
+                    Some(Box::new(|t: TCD| {
                         applicable_and_net_enum.apply(&t).expect("applicable_and_net_enum.apply failed")
                     }))
                 );
@@ -725,7 +725,14 @@ impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for 
             Arc::new(Box::new(TrainLabelNetsRunConfigResult::new(input.motifs_nets_selection_applicable_arc.motif_selection_run_id, input.label.clone(), min_loss, label_node_params, run_config, var_store)))
         }).expect("")
     }
+    fn device(&self) -> impl ToOrdinal {
+        ThoDevice::from(self.device)
+    }
 
+}
+
+#[async_trait]
+impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for TrainLabelNetApplicable {
     fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
         todo!()
     }
@@ -738,9 +745,6 @@ impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for 
         todo!()
     }
 
-    fn device(&self) -> impl ToOrdinal {
-        ThoDevice::from(self.device)
-    }
 }
 
 pub async fn run_train_label_nets_2(
@@ -1501,11 +1505,10 @@ impl Input for TrainMotifNetApplicableInput {
 }
 
 #[async_trait]
-impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()> for TrainMotifNetApplicable {
+impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()> for TrainMotifNetApplicable {
     type R = ThoRunner;
 
-
-    async fn async_apply(self: Arc<Self>, input: Arc<TrainMotifNetApplicableInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
+    async fn async_apply(self: Arc<Self>, input: Arc<TrainMotifNetApplicableInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
         let train_motifs_nodes_run_configs = Arc::clone(&input.train_motifs_nodes_run_configs);
         let all_slices_0_cl = Arc::clone(&input.all_slices_0);
         let all_slices_1_cl = Arc::clone(&input.all_slices_1);
@@ -1514,10 +1517,10 @@ impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult
 
         opt_train_2(
             Arc::clone(&input.fixed_config),
-            async move |vs:&VarStore, run_config:TrainMotifsNetsRunConfig, listener|{
+            async move |vs: &VarStore, run_config: TrainMotifsNetsRunConfig, listener| {
                 //TODO batch size
-                let all_slices_0_cl = all_slices_0_cl.iter().map(|v|v.shallow_clone()).collect::<Vec<_>>();
-                let all_slices_1_cl = all_slices_1_cl.iter().map(|v|v.shallow_clone()).collect::<Vec<_>>();
+                let all_slices_0_cl = all_slices_0_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
+                let all_slices_1_cl = all_slices_1_cl.iter().map(|v| v.shallow_clone()).collect::<Vec<_>>();
 
                 let mut batch = TensorsDataBatch::new(
                     vec![
@@ -1525,23 +1528,27 @@ impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult
                         all_slices_1_cl
                     ],
                     run_config.common_training_args.batch_size,
-                    0.8,//TODO config
+                    0.8, //TODO config
                     device
                 );
 
                 run_train_motif_net(window, &run_config, &self.device, &mut batch, vs, &mut DummyListener/*, listener*/)
-
             },
             train_motifs_nodes_run_configs,
             device,
             "motifs"
-        ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)|{
+        ).await.map(|(var_store, motif_node_params, train_motifs_nets_run_config, min_loss)| {
             Arc::new(Box::new(TrainMotifsNetsRunConfigResult::new(min_loss, input.channel, input.motif_id, var_store, input.find_motifs_run_config.id.unwrap()/* TODO train_motifs_run_config.id.expect("id")*/, motif_node_params, train_motifs_nets_run_config)))
-
         }).expect("TODO opt_train failed")
-
+    }
+    fn device(&self) -> impl ToOrdinal {
+        ThoDevice::from(self.device)
     }
 
+}
+
+#[async_trait]
+impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()> for TrainMotifNetApplicable {
     fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
         todo!()
     }
@@ -1554,9 +1561,6 @@ impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult
         todo!()
     }
 
-    fn device(&self) -> impl ToOrdinal {
-        ThoDevice::from(self.device)
-    }
 }
 
 fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) -> String {
@@ -1692,7 +1696,7 @@ pub fn run_all_grid_step_2<RC, RCRV, R, FC, ST>(
     presave: bool,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    ST: FnOnce(
+    ST: AsyncFnOnce(
         Option<&Vec<RunId>>,
         Vec<RC>,
         &R,
@@ -1718,7 +1722,7 @@ where
 
     debug!("FindMotifs2: run_configs={run_configs:?}");
 
-    let mut opt_run_configs_opt = grid_step(
+    let mut opt_run_configs_opt = block_on(grid_step.async_call_once((
         input_run_ids.as_ref(),
         run_configs,
         resource_config,
@@ -1727,7 +1731,7 @@ where
         store,
         runner,
         devices
-    )?;
+    )))?;
 
     if let Some(mut opt_run_configs) = opt_run_configs_opt {
         debug!(

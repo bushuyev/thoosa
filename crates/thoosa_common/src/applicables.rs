@@ -12,7 +12,7 @@ use tch::Kind::Float;
 use crate::dims::{TCD, TCDF, TCSD};
 use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input, MapWithThread, Output, RunCtx, Runner, Statistics, ToOrdinal};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::Applicable;
+use thoosa_shared::run_configs::{Applicable, Runnable};
 use crate::find_motifs_run_config::FindMotifsApplicable;
 
 #[derive(Debug, Clone)]
@@ -107,14 +107,20 @@ impl Debug for TCDLoader {
 }
 
 #[async_trait]
-impl Applicable<Resource, TCD, ()> for TCDLoader {
+impl Runnable<Resource, TCD, ()> for TCDLoader {
     type R = ThoRunner;
 
     async fn async_apply(self: Arc<Self>, input: Arc<Resource>, runner: Arc<ThoRunner>, ctx: Option<Arc<RwLock<ThoRunCtx>>>) -> Arc<TCD> {
-
         Arc::new((self.loader_fn)(&input, &*self.device))
     }
+    fn device(&self) -> impl ToOrdinal {
+        self.device.clone()
+    }
+}
 
+#[async_trait]
+impl Applicable<Resource, TCD, ()> for TCDLoader {
+   
     fn applied_id(&self, prev_id: &AppliedId) -> AppliedId {
         Self::format_0(&prev_id)
     }
@@ -127,9 +133,7 @@ impl Applicable<Resource, TCD, ()> for TCDLoader {
         "".to_string()
     }
 
-    fn device(&self) -> impl ToOrdinal {
-        self.device.clone()
-    }
+   
 }
 
 impl ToOrdinal for ThoDevice {

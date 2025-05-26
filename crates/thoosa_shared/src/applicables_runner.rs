@@ -22,7 +22,7 @@ use std::thread;
 use std::time::Instant;
 use log::{debug, error};
 use crate::resource::Resource;
-use crate::run_configs::Applicable;
+use crate::run_configs::{Applicable, Runnable};
 
 pub type AppliedId = String;
 
@@ -161,7 +161,7 @@ where
         applicable: Arc<A>,
         runner: Arc<A::R>,
         statistics: &Arc<Statistics>,
-        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>
+        ctx: Option<Arc<RwLock<<<A as Runnable<I, O, ()>>::R as Runner>::Ctx>>>
     )
         -> (Self, Shared<BoxFuture<'static, Arc<O>>>)
     where I: Input+Send+Sync+'static
@@ -420,7 +420,7 @@ where
                         .await;
                 }
 
-                entry.device_futures[device_idx] = None;//TODO Cancel if pending?
+                entry.device_futures[device_idx] = None;//TODO Cancel if pending (causing Canceled errors)?
                 entry.in_cpu_since = Some(Instant::now());
             }
             entry.device_cache_areas[device_idx] = new_mask;
@@ -492,12 +492,12 @@ impl FuturesRunner {
         }
     }
 
-    pub fn run_task<I, O, A: Applicable<I, O, ()> + 'static>(
+    pub fn run_task<I, O, A: Runnable<I, O, ()> + 'static>(
         self: &Arc<Self>,
         input: Arc<I>,
         applicable:&Arc<A>,
         runner:&Arc<A::R>,
-        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>,
+        ctx: Option<Arc<RwLock<<<A as Runnable<I, O, ()>>::R as Runner>::Ctx>>>,
     ) -> BoxFuture<'static, Arc<O>>
     where
         O: Output + Send + Sync + 'static,
@@ -538,7 +538,7 @@ impl FuturesRunner {
         input: Arc<I>,
         applicable:&Arc<A>,
         runner:&Arc<A::R>,
-        ctx: Option<Arc<RwLock<<<A as Applicable<I, O, ()>>::R as Runner>::Ctx>>>
+        ctx: Option<Arc<RwLock<<<A as Runnable<I, O, ()>>::R as Runner>::Ctx>>>
     ) -> Shared<BoxFuture<'static, Arc<O>>>
     where
         O: Output + Send + Sync + 'static,
@@ -735,6 +735,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
     use log::{debug, set_max_level, Level, LevelFilter};
+    use crate::run_configs::Runnable;
     use crate::test_utils::set_panic_hook;
 
     #[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
@@ -876,7 +877,7 @@ mod tests {
     unsafe impl Send for LoaderOutput {}
 
     #[async_trait]
-    impl Applicable<LoaderInputId, LoaderOutput, ()> for TestLoader {
+    impl Runnable<LoaderInputId, LoaderOutput, ()> for TestLoader {
         type R = MyRunner;
 
         async fn async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<LoaderOutput> {
@@ -892,6 +893,15 @@ mod tests {
             Arc::new(LoaderOutput(DataResource::new(input.id().clone(), self.device, vec![0.1, 0.2, 0.3, 0.4])))
         }
 
+        fn device(&self) -> impl ToOrdinal {
+            self.device.clone()
+        }
+    }
+
+    #[async_trait]
+    impl Applicable<LoaderInputId, LoaderOutput, ()> for TestLoader {
+
+
         fn applied_id(&self, prev_id: &AppliedId) -> String {
             Self::format_0(&prev_id)
         }
@@ -904,9 +914,6 @@ mod tests {
             "".to_string()
         }
 
-        fn device(&self) -> impl ToOrdinal {
-            self.device.clone()
-        }
     }
 
 
@@ -943,8 +950,9 @@ mod tests {
         }
     }
 
+
     #[async_trait]
-    impl Applicable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
+    impl Runnable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
         type R = MyRunner;
 
         async fn async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableAOutput> {
@@ -955,9 +963,15 @@ mod tests {
 
 
             Arc::new(ApplicableAOutput(DataResource::new(self.applied_id(input.id()), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_0.0.data.clone()].concat())))
-
         }
 
+        fn device(&self) -> impl ToOrdinal {
+            self.device.clone()
+        }
+    }
+
+    #[async_trait]
+    impl Applicable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
         fn applied_id(&self, prev_id: &AppliedId) -> String {
             Applicable::format_id(self, &self.loader.applied_id(prev_id))
         }
@@ -971,9 +985,6 @@ mod tests {
             self.run_id.clone()
         }
 
-        fn device(&self) -> impl ToOrdinal {
-            self.device.clone()
-        }
     }
 
     #[derive(Debug)]
@@ -1012,7 +1023,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Applicable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
+    impl Runnable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
         type R = MyRunner;
 
         async fn  async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableBOutput> {
@@ -1025,6 +1036,13 @@ mod tests {
             Arc::new(ApplicableBOutput(DataResource::new(self.applied_id(input.id()), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_a.0.data.clone()].concat())))
         }
 
+        fn device(&self) -> impl ToOrdinal {
+            self.device.clone()
+        }
+    }
+
+    #[async_trait]
+    impl Applicable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
         fn applied_id(&self, input_id: &AppliedId) -> String {
             Applicable::format_id(self, &self.applicable_a.applied_id(input_id))
         }
@@ -1037,9 +1055,7 @@ mod tests {
             self.run_id.clone()
         }
 
-        fn device(&self) -> impl ToOrdinal {
-            self.device.clone()
-        }
+
     }
 
 
@@ -1434,7 +1450,7 @@ mod tests {
                 let ctx_1 = Arc::clone(&ctx_1);
                 let futures_runner_1 = Arc::clone(&my_loader);
                 // scope.spawn(|_|{
-                let resources = block_on(scope.spawn_future(async move {
+                let roesources = block_on(scope.spawn_future(async move {
                     join_all([
                         futures_runner_1.run_applicable_b(&"xxx".into(), &Arc::new(ApplicableB::new("1".to_string(), "0".to_string(), Devices::Cuda(0))), Some(ctx_1.clone())),
                         futures_runner_1.run_applicable_b(&"ccc".into(), &Arc::new(ApplicableB::new("1".to_string(), "0".to_string(), Devices::Cuda(0))), Some(ctx_1.clone())),

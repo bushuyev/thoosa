@@ -32,6 +32,7 @@ use thoosa_common::applicables::{ThoRunCtx, ThoRunner};
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsApplicable, FindMotifsRunConfigOptions};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::{Applicable, RunId};
+use thoosa_shared::run_configs::Runnable;
 
 #[derive(Debug, Args)]
 pub struct MotifsToFragmentsParams {
