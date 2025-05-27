@@ -27,7 +27,11 @@ pub struct FileMotifTrackerStore {
 
 impl Debug for FileMotifTrackerStore {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        f.debug_struct("FileMotifTrackerStore")
+            .field("run_id", &self.run_id)
+            .field("channel", &self.channel)
+            .field("path", &self.path)
+            .finish()
     }
 }
 
@@ -77,6 +81,8 @@ impl MotifTrackerStore for FileMotifTrackerStore {
     }
 
     fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
+        debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
+        
         self.writer.shutdown()?;
         let mut slice_id = 0;
 
