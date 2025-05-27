@@ -2,11 +2,11 @@ use core::f32;
 use std::ops::Add;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
-use log::{debug, log_enabled, trace};
+use log::{debug, error, log_enabled, trace};
 use log::Level::Trace;
 use parking_lot::{Mutex, RwLock};
 use tch::{IndexOp, TchError, Tensor};
-use tch::Device::Cpu;
+use tch::Device::{Cpu, Cuda};
 use tch::Kind;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Bool;
@@ -42,13 +42,16 @@ pub enum MaskMaker<'a> {
     LeRunningMean {k:f32, avg:&'a Mutex<Tensor>, total_samples:&'a Mutex<Tensor>},
     Diagonal,
     Tril,
-    Le {v:Tensor},//channels x thresholds
+    Le {v:Tensor}, //channels x thresholds
     Gt {v:Tensor}, //channels x thresholds
     LocalMin
 }
 
 impl <'a> MaskMaker<'a> {
+
     pub fn make_mask(&mut self, prev_mask:Option<Tensor>, dists:&Tensor) -> Tensor {
+        debug!("make_mask: prev_mask={prev_mask:?} dists={dists:?} self={self:?}");
+
         match self {
             MaskMaker::LeQuantile { q, with_mask } => {
                 Self::apply_prev(&prev_mask, quantile_mask(*q as f64, dists, if *with_mask { prev_mask.as_ref() } else {None}))
@@ -71,7 +74,14 @@ impl <'a> MaskMaker<'a> {
                 prev.triu(1)
             }
             MaskMaker::Le { v } => {
-                Self::apply_prev(&prev_mask, dists.le_tensor(v))
+                let le = match dists.f_le_tensor(v){
+                    Ok(v) => v,
+                    Err(e) => {
+                        error!("MaskMaker::Le: e={e:?}");
+                        panic!("MaskMaker::Le: e={e:?}");
+                    }
+                };
+                Self::apply_prev(&prev_mask, le)
             }
             MaskMaker::Gt { v } => {
                 Self::apply_prev(&prev_mask, dists.gt_tensor(v))
@@ -86,12 +96,19 @@ impl <'a> MaskMaker<'a> {
     }
 
     fn apply_prev(perv_mask: &Option<Tensor>, mask: Tensor) -> Tensor {
+        trace!("apply_prev: perv_mask={perv_mask:?} mask=\n{mask}");
         match perv_mask {
             None => {
                 mask
             }
             Some(prev) => {
-                prev.logical_and(&mask)
+                match prev.f_logical_and(&mask){
+                    Ok(v) => v,
+                    Err(e) => {
+                        error!("prev.f_logical_and(&mask) failed: {:?}", e);
+                        panic!("prev.f_logical_and(&mask)");
+                    }
+                }
             }
         }
     }
@@ -181,18 +198,28 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Tenso
 /// * returns - Bool tensor of same size with true for local minimums for  slice 1 along slices 0.
 fn local_min_mask(distances: &Tensor) -> Tensor {
     debug!("local_min_mask: distances.size={:?}", distances.size());
+    trace!("local_min_mask: distances=\n{distances}");
     let distances_size = distances.size();
 
     let first_min = distances
-        .narrow(1, 0, 1)
-        .lt_tensor(&distances.narrow(1, 1, 1));
+        .f_narrow(1, 0, 1).map_err(|e|{
+        debug!("local_min_mask: f_narrow e={e:?}");
+        error!("local_min_mask: f_narrow e={e:?}");
+        e
+    }).unwrap()
+        .f_lt_tensor(&distances.narrow(1, 1, 1)).map_err(|e|{
+        debug!("local_min_mask: f_lt_tensor e={e:?}");
+        error!("local_min_mask: f_lt_tensor e={e:?}");
+        e
+    }).unwrap();
 
+    trace!("local_min_mask: first_min=\n{first_min}");
 
     let last_min = distances
         .narrow(1, distances_size[1] - 1, 1)
         .lt_tensor(&distances.narrow(1, distances_size[1] - 2, 1));
 
-    trace!("local_min_mask: first_min=\n{first_min}");
+
     trace!("local_min_mask: last_min=\n{first_min}");
 
 
@@ -254,7 +281,9 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&M
     debug!("mean_mask: samples.size={:?} mean_t.size={:?}", distances.size(), mean_t.size());
 
 
-    debug!("mean_mask: total_samples={total_samples:?} counts={:?}", counts_t);
+    debug!("mean_mask: total_samples={total_samples:?} counts={counts_t:?}");
+    debug!("mean_mask: total_samples.device={:?} counts.device={:?}", total_samples.lock().device(), counts_t.device());
+    let (mean_t, counts_t) =  (mean_t.to_device(Cuda(0)), counts_t.to_device(Cuda(0)));
 
     //TODO update means_acc
     // total_means = (total_means * total_samples + current_means * batch_size_i)
@@ -262,17 +291,51 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&M
     // total_samples += batch_size_i;
 
     let mut means_guard = means_acc.lock();
+    debug!("new_total_means: 0. means_guard=\n{means_guard} thread name={:?}", std::thread::current().name());
+
     let mut total_samples_guard = total_samples.lock();
-    debug!("new_total_means: 1. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
+    debug!("new_total_means: 1. total_samples_guard=\n{total_samples_guard} thread name={:?}", std::thread::current().name());
 
-    let means_device = total_samples_guard.device();
+    // let means_device = total_samples_guard.device();
 
-    *means_guard = ((means_guard.multiply(&total_samples_guard)  + mean_t * counts_t.shallow_clone())/counts_t.f_add(&total_samples_guard).expect("counts_t._add")).to_device(means_device);
-    *total_samples_guard += counts_t.to_device(means_device);
+    let count_t_added = match counts_t.f_add(&total_samples_guard) {
+        Ok(v) => v,
+        Err(e) => {
 
-    debug!("new_total_means: 2. means_guard=\n{means_guard} total_samples_guard=\n{total_samples_guard}");
+            error!("counts_t.f_add(&total_samples_guard) failed: {:?}", e);
+            panic!("counts_t.f_add(&total_samples_guard)")
+        }
+    };
 
-    let le = distances.le_tensor(&means_guard.multiply_scalar(k).view((-1, 1, 1)).broadcast_to(distances_size)); //channels x motifs x num_slices
+    debug!("new_total_means: 1. count_t_added=\n{count_t_added} device={:?} thread name={:?}", count_t_added.device(), std::thread::current().name());
+
+    *means_guard = ((means_guard.multiply(&total_samples_guard)  + mean_t * counts_t.shallow_clone())/ count_t_added); //.to_device(means_device);
+    debug!("new_total_means: 2.0 means_guard=\n{means_guard}");
+
+    *total_samples_guard += counts_t; //.to_device(means_device);
+
+    debug!("new_total_means: 2.1 total_samples_guard=\n{total_samples_guard}");
+
+    let tensor_0 = means_guard.multiply_scalar(k);
+
+    debug!("new_total_means: tensor_0=\n{tensor_0}");
+
+    let tensor_1 = tensor_0.view((-1, 1, 1));
+    debug!("new_total_means: tensor_1=\n{tensor_1}");
+
+    let tensor_2 = match tensor_1.f_broadcast_to(distances_size){
+        Ok(v) => v,
+        Err(e) => {
+            error!("tensor_1.f_broadcast_to failed: {:?}", e);
+            panic!("tensor_1.f_broadcast_to")
+        }
+    };
+    trace!("new_total_means: tensor_2=\n{tensor_2}");
+    debug!("new_total_means: distances.dev={:?} tensor_1.device={:?}", distances.device(), tensor_1.device());
+
+    let le = distances.f_le_tensor(&tensor_2).map_err(|e|{
+        error!("distances.f_le_tensor: e={e:?}");
+    }).unwrap(); //channels x motifs x num_slices
 
     trace!("mean_mask:  le=\n{le}");
 
@@ -281,7 +344,7 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&M
 
 
 pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
-
+    debug!("clc_dist_d2: t_0.device={:?}, t_1.device{:?}", t_0.device(), t_1.device());
 
     let t_0 = t_0.unsqueeze(dim+1); // channels x motifs x 1 x motif_len
     let t_1 = t_1.unsqueeze(dim); // channels x 1 x num_slices x motif_len
@@ -1174,6 +1237,33 @@ mod distance_tests {
             0.2, 0.2, 0.1, 0.3, 0.3,
             0.2, 0.2, 0.1, 0.3, 0.3
         ]).view((1, 5, 2));
+
+        debug!("distances=\n{distances}");
+
+        let mask = local_min_mask(&distances);
+
+        debug!("mask=\n{mask}");
+
+        assert_eq!(
+            Tensor::from_slice(&[
+              false, true ,
+              true , false,
+              false, false,
+              true , true ,
+              false, false
+            ]).view((1,5,2)),
+            mask
+        );
+    }
+
+    #[test]
+    fn test_local_min_mask_0(){
+
+        // set_max_level(Trace);
+
+        let distances = Tensor::from_slice(&[
+            0.
+        ]).view((1, 1, 1));
 
         debug!("distances=\n{distances}");
 
