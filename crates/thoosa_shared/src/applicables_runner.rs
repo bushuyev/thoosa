@@ -13,6 +13,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::io::Write;
+use std::marker::Tuple;
 use std::ops::{Deref, DerefMut, Sub};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -492,23 +493,47 @@ impl FuturesRunner {
         }
     }
 
+    //TODO remove, Runnable should be OfMemSize
+    pub fn run_async_fn<I, O, AF>(
+        self: &Arc<Self>,
+        input: I,
+        mut async_fn:AF,
+        device:&impl ToOrdinal
+    ) -> BoxFuture<'static, O>
+    where
+        O: Send + Sync + 'static,
+        I: Tuple + Debug + Send + Sync + 'static,
+        AF: AsyncFnMut(I)->O + Send,
+        for <'a> <AF as AsyncFnMut<(I,)>>::CallRefFuture<'a>: Future<Output = O>  + 'static,
+    {
+
+        // let pool = self.device_pools.get_pool(device);
+        //
+        // pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
+        //     RayonFuture::<()>::install_future(
+        //         async_fn(input)
+        //     )
+        // }).boxed()
+
+        todo!()
+
+    }
+
+
     pub fn run_task<I, O, A: Runnable<I, O, ()> + 'static>(
         self: &Arc<Self>,
         input: Arc<I>,
         applicable:&Arc<A>,
         runner:&Arc<A::R>,
         ctx: Option<Arc<RwLock<<<A as Runnable<I, O, ()>>::R as Runner>::Ctx>>>,
-    ) -> BoxFuture<'static, Arc<O>>
+    ) -> BoxFuture<'static, O>
     where
         O: Output + Send + Sync + 'static,
         I: Input+Send+Sync+'static,
     {
-        let device = applicable.device();
-        // let id = applicable.applied_id(input.id());
-
         debug!("run_task");
 
-        let (tx, rx) = oneshot::channel();
+
         let statistics_arc = Arc::clone(&self.statistics);
 
         let t_0 = Instant::now();
@@ -520,14 +545,13 @@ impl FuturesRunner {
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
                 let r = applicable.async_apply(input.clone(), runner, ctx).await;
-                debug!("run_task: done input={input:?}");
-                let _ = tx.send(r);
-                statistics_arc.on_new_load_done(t_0.elapsed().as_millis() as u64);
-            });
-        });
+                // debug!("run_task: done input={input:?}");
 
-        async move { rx.await.expect("Task execution failed") }
-            .boxed()
+                // statistics_arc.on_new_load_done(t_0.elapsed().as_millis() as u64);
+
+                Arc::into_inner(r).unwrap()//TODO add arc in Applicable, remove for Runnable
+            })
+        }).boxed()
 
     }
 

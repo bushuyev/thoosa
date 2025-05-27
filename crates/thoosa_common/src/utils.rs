@@ -22,6 +22,7 @@ use rand::thread_rng;
 use rand::Rng;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
+use std::sync::Arc;
 use parking_lot::lock_api::{RawRwLock, RwLock};
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -525,26 +526,24 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
 
 
 
-pub async fn run_split_on_oom_2<'s, 'v, 'fr, const SIZE: usize, S: 's, SV: 'v, F, FR: 'fr>(
-    mut splitter: S, mut f: F, /*mut on_ok: OkF, */max_attempts: i32
+pub async fn run_split_on_oom_2<'s, 'v, 'fr, const SIZE: usize, S: 's, SV: 'v, F, FR: 'fr, OkF, OkR>(
+    mut splitter: S, mut f: F, mut on_ok: OkF, max_attempts: i32
 ) -> Result<(), ThoosaError>
 where
     SV:Splittable<SIZE>,
     S: for <'x> Splitter<SIZE, S=SV>,
     //F: for <'f> AsyncFnMut(&'f mut V) -> Result<FR, ThoosaError>,
-    F: for<'a, 'b> AsyncFnMut(&'a mut (dyn Splittable<SIZE> + 'b)) -> Result<FR, ThoosaError>,
-    // OkF: FnMut(FR, &mut V) -> OkR,
+    // F: for<'a, 'b> AsyncFnMut(&'a mut (dyn Splittable<SIZE> + 'b)) -> Result<FR, ThoosaError>,
+    F:  AsyncFnMut(Arc<SV>) -> Result<FR, ThoosaError>,
+    OkF:AsyncFn(FR, Arc<SV>) -> OkR,
 {
 
     'out: while let Some(mut split_0) = splitter.next() {
-
-        // f.async_call_mut((&mut split_0,)).await;
-        // f.async_call_mut((&mut 0,)).await;
-
+        let split_0_arc = Arc::new(split_0);
         for attempt in 0..max_attempts {
-            match panic_to_err_async!(f.async_call_mut((&mut split_0,)).await) {
+            match panic_to_err_async!(f(Arc::clone(&split_0_arc)).await) {
                 Ok(fr) => {
-                    // on_ok(fr, &mut split_0);
+                    on_ok(fr, Arc::clone(&split_0_arc)).await;
                     continue 'out;
                 }
                 Err(e) if e.is_oom() => {
@@ -556,7 +555,7 @@ where
                 }
             }
         }
-        if let Err(e) = splitter.split(split_0) {
+        if let Err(e) = splitter.split(Arc::into_inner(split_0_arc).unwrap()) {
             return Err(e);
         }
     }
@@ -683,6 +682,8 @@ pub mod tests {
     use std::str::FromStr;
     use chrono::format::Item;
     use clap::builder::Str;
+    use futures::executor::block_on;
+    use futures_util::FutureExt;
     use serde::{Deserialize, Serialize};
     use tch::kind::FLOAT_CPU;
     use tch::Device::{Cpu, Cuda};
@@ -699,6 +700,7 @@ pub mod tests {
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::{add_prefix, add_range_or_value, cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
+    use thoosa_shared::rayon_future::ScopeFutureExt;
     use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunConfig, RunId};
     use crate::dims::{Dims, AnyDims};
     use crate::find_motifs_run_config::InputFilter;
@@ -735,6 +737,27 @@ pub mod tests {
         ]);
         //TODO
     }
+
+    // #[test]
+    // fn test_run_split_on_oom_2(){
+    //
+    //
+    //     fn run_step<ST>(step:ST)
+    //     where ST:AsyncFnOnce()->Result<(), ThoosaError> + Send + 'static {
+    //
+    //
+    //         rayon::scope(|scope|{
+    //             scope.spawn_future(
+    //                 step
+    //             );
+    //         });
+    //     }
+    //
+    //     run_step(async || {
+    //         Ok(())
+    //     });
+    //
+    // }
 
     #[test]
     fn test_clc_step(){
