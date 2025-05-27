@@ -97,10 +97,6 @@ pub struct RayonFuture<T> {
 }
 
 impl<T> RayonFuture<T> {
-    pub fn wait(self) -> T {
-        futures::executor::block_on(self)
-    }
-
 
     pub fn install_future<Fut>(future: Fut) -> RayonFuture<Fut::Output>
     where

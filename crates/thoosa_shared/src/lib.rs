@@ -1,5 +1,6 @@
 #![feature(backtrace_frames)]
-// #![feature(unboxed_closures)]
+#![feature(async_fn_traits, fn_traits, unboxed_closures)]
+#![feature(tuple_trait)]
 
 
 use std::backtrace::Backtrace;

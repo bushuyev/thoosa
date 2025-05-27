@@ -120,7 +120,7 @@ impl Runnable<Resource, TCD, ()> for TCDLoader {
 
 #[async_trait]
 impl Applicable<Resource, TCD, ()> for TCDLoader {
-   
+
     fn applied_id(&self, prev_id: &AppliedId) -> AppliedId {
         Self::format_0(&prev_id)
     }
@@ -133,7 +133,7 @@ impl Applicable<Resource, TCD, ()> for TCDLoader {
         "".to_string()
     }
 
-   
+
 }
 
 impl ToOrdinal for ThoDevice {
@@ -189,11 +189,11 @@ impl ThoRunner {
         }
     }
 
-    pub fn run_task<I, O, A: Applicable<I, O, (), R=Self> + 'static>(
+    pub fn run_task<I, O, A: Runnable<I, O, (), R=Self> + 'static>(
         self: &Arc<Self>,
         input: Arc<I>,
         applicable:&Arc<A>,
-    ) -> BoxFuture<'static, Arc<O>>
+    ) -> BoxFuture<'static, O>
     where
         O: Output + Send + Sync + 'static,
         I: Input+Send+Sync+'static,

@@ -29,7 +29,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures::executor::block_on;
 use futures_util::FutureExt;
-use futures_util::future::{join_all, try_join_all};
+use futures_util::future::{join_all, try_join_all, BoxFuture};
 use tch::nn::{Module, VarStore};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
@@ -65,6 +65,7 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConf
 use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
 use thoosa_shared::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
+use thoosa_shared::rayon_future::ScopeFutureExt;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -848,7 +849,7 @@ pub async fn run_train_label_nets_2(
                     let motifs_nets_selection_applicable_arc = Arc::clone(&motifs_nets_selection_applicable);
                     let ctx = Arc::clone(&ctx);
                     async move {
-                        Ok(Arc::into_inner(runner.futures_runner().run_task(
+                        Ok(runner.futures_runner().run_task(
                             Arc::new(TrainLabelNetInput {
                                 run_configs: Arc::clone(run_configs),
                                 train_labels_resources,
@@ -861,7 +862,7 @@ pub async fn run_train_label_nets_2(
                             &Arc::new(TrainLabelNetApplicable { device: device_i }),
                             runner,
                             Some(ctx)
-                        ).await).unwrap() as Box<dyn SavableResult>)
+                        ).await as Box<dyn SavableResult>)
                     }
                 })
             })
@@ -1382,7 +1383,7 @@ async fn run_train_motif_nets_2(
     debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
 
 
-    Ok(Arc::into_inner(runner.futures_runner().run_task(
+    Ok(runner.futures_runner().run_task(
         Arc::new(TrainMotifNetApplicableInput{
             motif_id,
             fixed_config: Arc::clone(&fixed_config),
@@ -1395,7 +1396,7 @@ async fn run_train_motif_nets_2(
         &Arc::new(TrainMotifNetApplicable{device}),
         runner,
         Some(ctx)
-    ).await).unwrap() as Box<dyn SavableResult>)//TODO unwrap
+    ).await as Box<dyn SavableResult>)//TODO unwrap
 
 }
 
@@ -1682,7 +1683,7 @@ pub fn run_opt_step<RC, RCRV, CC, R, ST>(
     }
 }
 
-pub fn run_all_grid_step_2<RC, RCRV, R, FC, ST>(
+pub fn run_all_grid_step_2<RC:Send, RCRV, R:Send+Sync, FC:Send+Sync, ST>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv:RCRV,
     fixed_config:&FC,
@@ -1699,16 +1700,16 @@ where
     ST: AsyncFnOnce(
         Option<&Vec<RunId>>,
         Vec<RC>,
-        &R,
+        &R ,
         &FC,
         &Arc<RwLock<Box<dyn Workspace>>>,
         &Arc<RwLock<Box<dyn Store>>>,
         &Arc<ThoRunner>,
         Vec<Device>,
-    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError>,
+    ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> + Send,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>> + thoosa_properties_map::ToHashmap,
     RCRV:GridRunConfigSource,
-    R: ResourcesConfig,
+    R: ResourcesConfig+Send,
 {
 
     let grid_run_configs = rcrv.grid_run_configs();
@@ -1722,7 +1723,10 @@ where
 
     debug!("FindMotifs2: run_configs={run_configs:?}");
 
-    let mut opt_run_configs_opt = block_on(grid_step.async_call_once((
+    // let mut opt_run_configs_opt = block_on(rayon::scope(move |scope|scope.spawn_future(
+    let mut opt_run_configs_opt = block_on(
+
+    grid_step.async_call_once((
         input_run_ids.as_ref(),
         run_configs,
         resource_config,
