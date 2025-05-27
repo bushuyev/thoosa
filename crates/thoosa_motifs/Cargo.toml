@@ -19,6 +19,7 @@ torch-sys.workspace = true
 parking_lot.workspace = true
 futures.workspace = true
 futures-util.workspace = true
+async-trait.workspace = true
 clap.workspace = true
 regex.workspace = true
 crossbeam-channel.workspace = true

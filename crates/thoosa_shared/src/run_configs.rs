@@ -148,6 +148,7 @@ where  In: Input + Send + Sync,
     fn device(&self) -> impl ToOrdinal;
 }
 
+//TODO rename to Cachable
 #[async_trait]
 pub trait Applicable<In, Out, P>:Runnable<In, Out, P> + Debug + Sync + Send
     where  In: Input + Send + Sync,
