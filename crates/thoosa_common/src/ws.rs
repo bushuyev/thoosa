@@ -406,7 +406,11 @@ pub fn mock_ws_simp(path: Option<&PathBuf>, channels:u32, sample_rate: u32, max_
 }
 
 fn _mock_simp(path: Option<&PathBuf>, channels: u32, sample_rate: u32, max_input: u32) -> MockWorkspace {
-    let base = path.map(|v|v.clone()).unwrap_or_else(||Path::new("/tmp").join(cdt_for_dir()));
+    let base = path.map(|v|v.clone()).unwrap_or_else(||{
+        let p = Path::new("/tmp").join(cdt_for_dir());
+        fs::create_dir_all(&p).expect("can't create tmp dir");
+        p
+    });
 
     let mut ws_mock = MockWorkspace::new();
 
