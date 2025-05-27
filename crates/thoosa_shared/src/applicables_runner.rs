@@ -35,6 +35,7 @@ pub trait Input:Send+Sync+Debug {
 
 #[async_trait]
 pub trait Output:Send+Sync+Debug {
+    //TODO not needed for runnable
     async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self>;
 }
 
