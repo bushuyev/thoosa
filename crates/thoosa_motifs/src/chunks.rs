@@ -120,10 +120,7 @@ impl  ChunkOfSlicedTensors {
             applicable.step(),
             device.map(|d|tensor.to_device(d)).unwrap_or(tensor),
         )
-
-
     }
-
 
     pub fn start_split_queue(chunk:ChunkOfSlicedTensors) -> SplitQueue<2, ChunkOfSlicedTensors>{
         SplitQueue::new(chunk)

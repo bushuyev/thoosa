@@ -39,7 +39,7 @@ pub fn dist_d2(slice_0: &Tensor, slice_1: &Tensor) -> Result<Tensor, ThoosaError
 #[derive(Debug)]
 pub enum MaskMaker<'a> {
     LeQuantile {q:f32, with_mask:bool},
-    LeRunningMean {k:f32, avg:&'a mut Mutex<Tensor>, total_samples:&'a mut Mutex<Tensor>},
+    LeRunningMean {k:f32, avg:&'a Mutex<Tensor>, total_samples:&'a Mutex<Tensor>},
     Diagonal,
     Tril,
     Le {v:Tensor},//channels x thresholds
@@ -221,7 +221,7 @@ fn local_min_mask(distances: &Tensor) -> Tensor {
 }
 
 /// distances - [channels x slices 0 x slices 1]
-fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&mut Mutex<Tensor>, total_samples:&mut Mutex<Tensor>) -> Tensor {
+fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&Mutex<Tensor>, total_samples:&Mutex<Tensor>) -> Tensor {
     let distances_size = distances.size();
 
     trace!("mean_mask: after pre_mask distances=\n{distances}");
