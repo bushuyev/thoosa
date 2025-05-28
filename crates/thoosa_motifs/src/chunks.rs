@@ -13,7 +13,7 @@ use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsAppli
 use thoosa_common::loader::SyncWrapper;
 use thoosa_common::utils::{SplitQueue, Splittable};
 use thoosa_shared::resource::ResourceId;
-use thoosa_shared::run_configs::Applicable;
+use thoosa_shared::run_configs::Cachable;
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::run_configs::Runnable;
 
@@ -75,7 +75,7 @@ impl  ChunkOfSlicedTensors {
 
         debug!("ChunkOfSlicedTensors: applicable={run_config:?}");
 
-        let  FindMotifsApplicableOutput {t, sizes} = run_config.apply(tensors_chunk.into(), ()).expect("ChunkOfSlicedTensors apply failed"); //(Tensor::rand(&[10,5], FLOAT_CPU), vec![1,2,3]); //
+        let  FindMotifsApplicableOutput {t, sizes} = run_config.run(tensors_chunk.into(), ()).expect("ChunkOfSlicedTensors apply failed"); //(Tensor::rand(&[10,5], FLOAT_CPU), vec![1,2,3]); //
 
 
         debug!("ChunkOfSlicedTensors::slice_tensors_chunk: final tensor.size={:?} device={:?}", t.size(), t.device());

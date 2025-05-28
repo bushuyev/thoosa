@@ -49,9 +49,9 @@ use async_trait::async_trait;
 use log::Level::Debug as DebugLevel;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_shared::run_configs::{Applicable, RunConfig, Runnable};
+use thoosa_shared::run_configs::{Cachable, RunConfig, Runnable};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{AppliedId, Output, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{CachableId, Output, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use crate::applicables::{ThoDevice, ThoRunner};
@@ -182,13 +182,13 @@ impl LabelNetApplicableAndNetE {
         match self {
             LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
                 debug!("LabelNetApplicableAndNetE::MaxPadding apply: params={params:?}");
-                applicable.apply(t.shallow_clone().into(), ()).map(|t| {
+                applicable.run(t.shallow_clone().into(), ()).map(|t| {
                     t.into()
                 })
             }
             LabelNetApplicableAndNetE::FixedNumSlices { applicable, params } => {
                 debug!("LabelNetApplicableAndNetE::FixedNumSlices apply: params={params:?}");
-                applicable.apply(t.shallow_clone().into(), params.slices_len).map(|t|{
+                applicable.run(t.shallow_clone().into(), params.slices_len).map(|t|{
                     t.into()
                 })
             }
@@ -903,7 +903,7 @@ pub fn run_opt_train_final_net(
                 label_nets_applicable.label_nets_num(),
                 label_nets_applicable.labels_num(),
                 &mut BatchTransform::new(Rc::clone(&batch), |t:ThoTensor<Batch<ChannelsData>>|{
-                    label_nets_applicable_rc.apply(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
+                    label_nets_applicable_rc.run(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
                 }),
                 vs,
                 &device
@@ -1296,7 +1296,7 @@ impl MotifsNetsSelectionApplicable {
 
                 channels_motifs
                     .into_iter()
-                    .flat_map(move |(motif_id, corr)| {
+                    .flat_map(move |(motif_id, _corr)| {
                         debug!("MotifsNetsSelectionApplicable::new: channels_motifs: channel={channel} motif_id={motif_id}");
                         ws.read().load_motif_nets(channel as u32, motif_id, &nets_device)
                             .expect("load_motif_models")
@@ -1336,10 +1336,10 @@ pub enum NetsPadding {
 impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: TCD, params: ()) -> Result<ThoTensor<ChannelsMotifsData>, ThoosaError> {
+    fn run(&self, input: TCD, params: ()) -> Result<ThoTensor<ChannelsMotifsData>, ThoosaError> {
         let motif_width = self.find_motifs_applicable.run_config().window;
 
-        let unfolded = self.find_motifs_applicable.apply(input, FindMotifsRunConfigOptions::FilterUnfold)?;
+        let unfolded = self.find_motifs_applicable.run(input, FindMotifsRunConfigOptions::FilterUnfold)?;
 
         trace!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded=\n{unfolded}");
 
@@ -1417,8 +1417,8 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
         ).into())
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsData>> {
-        Arc::new(self.apply(input.deref().shallow_clone(), ()).unwrap())
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsData>> {
+        Arc::new(self.run(input.deref().shallow_clone(), ()).unwrap())
     }
 
     fn device(&self) -> impl ToOrdinal {
@@ -1428,10 +1428,10 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
 }
 
 #[async_trait]
-impl Applicable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApplicable {
+impl Cachable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApplicable {
 
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
-        <MotifsNetsSelectionApplicable as Applicable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::format_0(input_id)
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
+        <MotifsNetsSelectionApplicable as Cachable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::format_0(input_id)
     }
 
     fn name(&self) -> String {
@@ -1448,10 +1448,10 @@ impl Applicable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionA
 impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSelectionApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: TCD, slices_len: u32) -> Result<ThoTensor<ChannelsMotifsFlattenedData>, ThoosaError> {
+    fn run(&self, input: TCD, slices_len: u32) -> Result<ThoTensor<ChannelsMotifsFlattenedData>, ThoosaError> {
         let motif_width = self.find_motifs_applicable.run_config().window;
 
-        let filtered = self.find_motifs_applicable.apply(
+        let filtered = self.find_motifs_applicable.run(
             input, FindMotifsRunConfigOptions::Filter
         )?;
         debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: filtered.size={:?} motif_width={motif_width} slices_len={slices_len}", filtered.as_ref().size());
@@ -1522,7 +1522,7 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSe
         ).into())
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsFlattenedData>> {
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsFlattenedData>> {
         todo!()
     }
 
@@ -1532,8 +1532,8 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSe
 }
 
 #[async_trait]
-impl Applicable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSelectionApplicable {
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+impl Cachable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSelectionApplicable {
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
 
@@ -2341,7 +2341,7 @@ impl LabelNetsApplicable {
 impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()> for LabelNetApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: ThoTensor<Batch<ChannelsData>>, _: ()) -> Result<ThoTensor<Batch<LabelProbability>>, ThoosaError> {
+    fn run(&self, input: ThoTensor<Batch<ChannelsData>>, _: ()) -> Result<ThoTensor<Batch<LabelProbability>>, ThoosaError> {
         debug!("Applicable for LabelNetApplicable::apply: batch.size={:?}", input.size());
 
         Ok(
@@ -2352,7 +2352,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
                         &Tensor::stack(
                             (0..input.size()[0])
                                 .map(|i| {
-                                    let t: ThoTensor<ChannelsMotifsData> = self.motifs_nets_selection_applicable.apply(
+                                    let t: ThoTensor<ChannelsMotifsData> = self.motifs_nets_selection_applicable.run(
                                         input.as_ref().i((i, .., ..)).into(), () //NetsPadding::Max
                                     )?;
 
@@ -2371,7 +2371,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
                         &Tensor::stack(
                             (0..input.size()[0])
                                 .map(|i| {
-                                    let t: ThoTensor<ChannelsMotifsFlattenedData> = self.motifs_nets_selection_applicable.apply(
+                                    let t: ThoTensor<ChannelsMotifsFlattenedData> = self.motifs_nets_selection_applicable.run(
                                         input.as_ref().i((i, .., ..)).into(), self.label_net_params.slices_len //TODO dims
                                     )?;
 
@@ -2388,7 +2388,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
         )
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<ThoTensor<Batch<ChannelsData>>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Batch<LabelProbability>>> {
+    async fn async_run(self: Arc<Self>, input: Arc<ThoTensor<Batch<ChannelsData>>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Batch<LabelProbability>>> {
         todo!()
     }
 
@@ -2398,8 +2398,8 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
 }
 
 #[async_trait]
-impl Applicable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()> for LabelNetApplicable {
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+impl Cachable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()> for LabelNetApplicable {
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
 
@@ -2417,7 +2417,7 @@ impl Applicable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability
 impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()> for LabelNetsApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: ThoTensor<Batch<ChannelsData>>, _: ()) -> Result<ThoTensor<Batch<LabelNetsProbabilities>>, ThoosaError> {
+    fn run(&self, input: ThoTensor<Batch<ChannelsData>>, _: ()) -> Result<ThoTensor<Batch<LabelNetsProbabilities>>, ThoosaError> {
         debug!("Applicable for LabelNetsApplicable::apply: self.labels_applicables={:?} input.size={:?}", self.labels_applicables, input.size());
 
         let t = Tensor::stack(
@@ -2425,7 +2425,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabili
                 .map(|label| (label, self.labels_applicables.get(label).expect(format!("no {label} in labels applicable").as_str())))
                 .flat_map(|(label, label_applicables)| {
                     label_applicables.iter().map(|label_applicable| {
-                        label_applicable.apply(input.shallow_clone(), ()).map(|v| v.as_ref().shallow_clone())
+                        label_applicable.run(input.shallow_clone(), ()).map(|v| v.as_ref().shallow_clone())
                     })
                 }).collect::<Result<Vec<_>, _>>()?.as_slice(),
             1
@@ -2436,7 +2436,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabili
         Ok(t.into())
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<ThoTensor<Batch<ChannelsData>>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Batch<LabelNetsProbabilities>>> {
+    async fn async_run(self: Arc<Self>, input: Arc<ThoTensor<Batch<ChannelsData>>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Batch<LabelNetsProbabilities>>> {
         todo!()
     }
     fn device(&self) -> impl ToOrdinal {
@@ -2445,8 +2445,8 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabili
 }
 
 #[async_trait]
-impl Applicable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()> for LabelNetsApplicable {
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+impl Cachable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()> for LabelNetsApplicable {
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
 
@@ -2493,18 +2493,18 @@ impl FinalNetApplicable {
 impl Runnable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: TCD, options: ()) -> Result<ThoTensor<Final>, ThoosaError> {
+    fn run(&self, input: TCD, options: ()) -> Result<ThoTensor<Final>, ThoosaError> {
         assert_eq!(input.tensor.size().len(), 2); //single tensor - channels x data
 
         Ok(self.final_net_module.infer(
-            &self.label_nets_applicable.apply(
+            &self.label_nets_applicable.run(
                 input.as_ref().unsqueeze(0).into(),
                 options
             )?.as_ref().view((1, -1)).into()
         ).as_ref().shallow_clone().into())
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<Final>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Final>> {
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<Final>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Final>> {
         todo!()
     }
 
@@ -2515,9 +2515,9 @@ impl Runnable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
 }
 
 #[async_trait]
-impl Applicable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
+impl Cachable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
 
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
 
@@ -2715,7 +2715,7 @@ mod train_tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, ThoosaError};
-    use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunId};
+    use thoosa_shared::run_configs::{Cachable, OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use crate::dims::{Batch, Dims, AnyDims, ThoTensor, SlicesData, MotifData, MotifsNetsSelectionDims, LabelProbability};
@@ -2851,7 +2851,7 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(t_0.into(), ())?;
+        let t_0_applied = applicable.run(t_0.into(), ())?;
 
         debug!("t_0_applied.size={:?}", t_0_applied.size());
         trace!("t_0_0_applied=\n{}", t_0_applied.as_ref().i((0, ..)));
@@ -2876,7 +2876,7 @@ mod train_tests {
 
         assert_eq!(channel_1_motifs, t_0_applied.as_ref().i((1, ..)).view((1, 2, 10)));
 
-        let t_1_applied = applicable.apply(t_1.into(), ())?;
+        let t_1_applied = applicable.run(t_1.into(), ())?;
 
         debug!("t_1_applied.size={:?}", t_1_applied.size());
         trace!("t_1_applied=\n{}", t_1_applied.as_ref().i((0, ..)));
@@ -2943,7 +2943,7 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(t_0.into(), 11)?;
+        let t_0_applied = applicable.run(t_0.into(), 11)?;
 
         debug!("t_0_applied.size={:?}", t_0_applied.size());
         trace!("t_0_applied=\n{}", t_0_applied);
@@ -2956,7 +2956,7 @@ mod train_tests {
 
         assert_eq!(&channel_0_motifs, t_0_applied.as_ref());
 
-        let t_1_applied = applicable.apply(t_1.into(), 11)?;
+        let t_1_applied = applicable.run(t_1.into(), 11)?;
 
         debug!("t_1_applied.size={:?}", t_1_applied.size());
         trace!("t_1_applied=\n{}", t_1_applied);
@@ -3017,7 +3017,7 @@ mod train_tests {
             Cpu
         );
 
-        let t_0_applied = applicable.apply(t_0.unsqueeze(0).into(), ())?;
+        let t_0_applied = applicable.run(t_0.unsqueeze(0).into(), ())?;
 
         trace!("t_0_applied=\n{t_0_applied}");
         assert!(
@@ -3080,7 +3080,7 @@ mod train_tests {
             Cpu
         );
 
-        let tho_tensor = applicable.apply(t_0.unsqueeze(0).into(), ())?;
+        let tho_tensor = applicable.run(t_0.unsqueeze(0).into(), ())?;
         let t_0_applied = tho_tensor.as_ref();
         trace!("t_0_applied=\n{t_0_applied}");
 
@@ -3168,7 +3168,7 @@ mod train_tests {
             Cuda(0)
         );
 
-        let out = applicable.apply(channel.into(),())?;
+        let out = applicable.run(channel.into(), ())?;
 
         // let channel_1_t = apply_channel_motifs(&mut motif_nets, channel, motif_width, 1, max_dists_len, &Cuda(0))?.view(max_dists_len as i64);
 
@@ -3219,12 +3219,12 @@ mod train_tests {
             Cpu
         );
 
-        let channels_motifs_0 = applicable.apply(t_0.into(), ())?;
+        let channels_motifs_0 = applicable.run(t_0.into(), ())?;
 
         // let channels_motifs_0 = apply_motif_nets(&t_0, Arc::clone(&motif_nets), &Cpu, input_n_0 as u32);
 
         debug!("channels_motifs_0.size={:?}", channels_motifs_0.size());
-        let channels_motifs_1 = applicable.apply(t_1.into(), ())?;
+        let channels_motifs_1 = applicable.run(t_1.into(), ())?;
 
         debug!("channels_motifs_1.size={:?}", channels_motifs_1.size());
 
