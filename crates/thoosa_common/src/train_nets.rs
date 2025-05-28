@@ -1272,10 +1272,9 @@ pub struct MotifsNetsSelectionApplicable {
 
 impl MotifsNetsSelectionApplicable {
 
-    pub fn new(motif_selection_run_id:RunId, store:&Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, nets_device:Device) -> Self {
-        let channels = ws.read().channels();
+    pub fn new(motif_selection_run_id:RunId, store:&Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device:Device, channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>>) -> Self {
 
-        debug!("MotifsNetsSelectionApplicable::new: motif_selection_run_id={motif_selection_run_id} channels={channels:?}");
+        debug!("MotifsNetsSelectionApplicable::new: motif_selection_run_id={motif_selection_run_id}");
 
         let find_motifs_run_config_ids = store.read().get_input_run_ids(motif_selection_run_id, Some(&FindMotifsRunConfig::type_name())).expect(format!("FindMotifsRunConfig for motif_selection_run_id={motif_selection_run_id:?} not found").as_str());
         assert_eq!(find_motifs_run_config_ids.len(), 1);
@@ -1285,34 +1284,15 @@ impl MotifsNetsSelectionApplicable {
 
         debug!("MotifsNetsSelectionApplicable::new: find_motifs_run_config={find_motifs_run_config:?}");
 
-        let channels_motifs = store
-            .read()
-            .list_selected_motifs(motif_selection_run_id, channels)
-            .expect("list_selected_motifs") //TODO move out
-            .into_iter()
-            .enumerate()
-            .map(|(channel, channels_motifs)| {
-                debug!("MotifsNetsSelectionApplicable::new: channels_motifs: channel={channel} channels_motifs={channels_motifs:?}");
 
-                channels_motifs
-                    .into_iter()
-                    .flat_map(move |(motif_id, _corr)| {
-                        debug!("MotifsNetsSelectionApplicable::new: channels_motifs: channel={channel} motif_id={motif_id}");
-                        ws.read().load_motif_nets(channel as u32, motif_id, &nets_device)
-                            .expect("load_motif_models")
-                    })
-                    .collect::<Vec<_>>()
-
-            })
-            .collect::<Vec<Vec<_>>>();
 
         debug!("MotifsNetsSelectionApplicable::new: channels_motifs={:?}", channels_motifs.iter().map(|c|c.len()).collect::<Vec<_>>());
 
         MotifsNetsSelectionApplicable {
             motif_selection_run_id,
-            find_motifs_applicable: find_motifs_run_config.to_applicable(&ws.read(), nets_device),
+            find_motifs_applicable: find_motifs_run_config.to_applicable(&ws.read(), device),
             channels_motifs,
-            device: nets_device,
+            device,
             max_input: ws.read().max_input()
         }
     }
@@ -2291,6 +2271,33 @@ pub struct LabelNetsApplicable {
     labels:Vec<String>
 }
 
+pub fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>, device:Device) -> Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> {
+    store
+        .read()
+        .list_selected_motifs(motif_selection_run_id, ws.read().channels())
+        .expect("list_selected_motifs") //TODO move out
+        .into_iter()
+        .enumerate()
+        .map(|(channel, channels_motifs)| {
+            debug!("MotifsNetsSelectionApplicable::new: channels_motifs: channel={channel} channels_motifs={channels_motifs:?}");
+
+            channels_motifs
+                .into_iter()
+                .flat_map(move |(motif_id, _corr)| {
+                    
+                    debug!("MotifsNetsSelectionApplicable::new: channels_motifs: channel={channel} motif_id={motif_id}");
+                    ws.read().load_motif_nets(channel as u32, motif_id, &device)
+                        .expect("load_motif_models")
+
+
+                })
+                .collect::<Vec<_>>()
+
+        })
+        .collect::<Vec<Vec<_>>>()
+}
+
+
 impl LabelNetsApplicable {
 
     pub fn load_all_filtered_by_run_ids(train_label_nodes_run_ids: Option<&[RunId]>, labels:Vec<String>, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> LabelNetsApplicable {
@@ -2312,9 +2319,18 @@ impl LabelNetsApplicable {
                     debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
 
                     assert_eq!(motif_selection_run_ids.len(), 1);
+                    let select_motifs_for_label_run_id = motif_selection_run_ids.into_iter().next().unwrap();
+
+                    let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+                        select_motifs_for_label_run_id,
+                        ws,
+                        store,
+                        device
+                    );
+
 
                     LabelNetApplicable {
-                        motifs_nets_selection_applicable: MotifsNetsSelectionApplicable::new(motif_selection_run_ids.into_iter().next().unwrap(), store, ws, device),
+                        motifs_nets_selection_applicable: MotifsNetsSelectionApplicable::new(select_motifs_for_label_run_id, store, ws, device, channels_motifs),
                         label_net_params,
                         module,
                         device
@@ -2685,7 +2701,7 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, InputFilterRangeOrValue, LabelNetTypeArgs, RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, NetsPadding, LabelNetTypeArgsRangeOrValue, MaxPaddingNetParams, FixedNumSlicesNetParams, LabelNetApplicable, LabelNetsApplicable, FinalNetArgs, LabelNetTypeParams, LabelNetApplicableAndNetE, LabelNetInputTensors};
+    use crate::train_nets::{opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, InputFilterRangeOrValue, LabelNetTypeArgs, RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, NetsPadding, LabelNetTypeArgsRangeOrValue, MaxPaddingNetParams, FixedNumSlicesNetParams, LabelNetApplicable, LabelNetsApplicable, FinalNetArgs, LabelNetTypeParams, LabelNetApplicableAndNetE, LabelNetInputTensors, load_channels_motifs};
     use crate::train_nets::{ InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
@@ -2826,29 +2842,38 @@ mod train_tests {
         let t_1 =     lin_test_tensor(input_n/2, 5);
         // ], 0);
 
+        let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
+            vec![(0, 1.0), (1, 1.0)],
+            vec![(0, 1.0)]
+        ])));
+
+        let ws = Arc::new(RwLock::new(
+            WsMockBuilder::new(None, 5, 100, input_n as u32)
+                .with_motif_nets(
+                    vec![
+                        vec![ //channel 0
+                              motif_test_net(motif_width, 1., Cpu),
+                              motif_test_net(motif_width, 2., Cpu),
+                        ],
+                        vec![ //channel 1
+                              motif_test_net(motif_width, 10., Cpu),
+                        ]
+                    ]
+                )
+                .build()
+        ));
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+            1,
+            &ws,
+            &store,
+            Cuda(0)
+        );
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
-                vec![(0, 1.0), (1, 1.0)],
-                vec![(0, 1.0)]
-            ]))),
-            &Arc::new(RwLock::new(
-                WsMockBuilder::new(None, 5, 100, input_n as u32)
-                    .with_motif_nets(
-                        vec![
-                            vec![ //channel 0
-                                  motif_test_net(motif_width, 1., Cpu),
-                                  motif_test_net(motif_width, 2., Cpu),
-                            ],
-                            vec![ //channel 1
-                                  motif_test_net(motif_width, 10., Cpu),
-                            ]
-                        ]
-                    )
-                    .build()
-
-            )),
-            Cpu
+            &store,
+            &ws,
+            Cpu,
+            channels_motifs
         );
 
         let t_0_applied = applicable.run(t_0.into(), ())?;
@@ -2918,14 +2943,16 @@ mod train_tests {
         let t_1 =     lin_test_tensor(input_n/2, 5);
 
 
-        let applicable = MotifsNetsSelectionApplicable::new(
-            1,
-            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
-                vec![(0, 1.0), (1, 1.0)],
-                vec![(0, 1.0)]
-            ]))),
-            &Arc::new(RwLock::new(
-                WsMockBuilder::new(None, 5, 100, input_n as u32)
+
+
+        let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
+            vec![(0, 1.0), (1, 1.0)],
+            vec![(0, 1.0)]
+        ])));
+
+
+        let ws = Arc::new(RwLock::new(
+            WsMockBuilder::new(None, 5, 100, input_n as u32)
                 .with_motif_nets(
                     vec![
                         vec![ //channel 0
@@ -2938,9 +2965,19 @@ mod train_tests {
                     ]
                 )
                 .build()
-
-            )),
-            Cpu
+        ));
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+            1,
+            &ws,
+            &store,
+            Cuda(0)
+        );
+        let applicable = MotifsNetsSelectionApplicable::new(
+            1,
+            &store,
+            &ws,
+            Cpu,
+            channels_motifs
         );
 
         let t_0_applied = applicable.run(t_0.into(), 11)?;
@@ -3149,11 +3186,22 @@ mod train_tests {
         //     (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cuda(0), "test_net")?))
         // ];
 
+
+
+        let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(input_slice_step as i32, motif_width as i32, vec![
+            vec![(0, 1.0)]
+        ])));
+
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+            1,
+            &Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000))),
+            &store,
+            Cuda(0)
+        );
+
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(input_slice_step as i32, motif_width as i32, vec![
-                vec![(0, 1.0)]
-            ]))),
+            &store,
             &Arc::new(RwLock::new(
                 WsMockBuilder::new(None, 5, 100, input_n as u32)
                     .with_motif_nets(
@@ -3165,7 +3213,8 @@ mod train_tests {
                     )
                     .build()
             )),
-            Cuda(0)
+            Cuda(0),
+            channels_motifs
         );
 
         let out = applicable.run(channel.into(), ())?;
@@ -3193,30 +3242,38 @@ mod train_tests {
         let motif_batch_size = 13;
         let step= 100;
 
+        let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step, motif_width as i32, vec![
+            vec![(0, 1.0), (1, 1.0)],
+            vec![(0, 1.0)]
+        ])));
+
+        let ws = Arc::new(RwLock::new(WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
+            .with_motif_nets(
+                vec![
+                    vec![ //channel 0
+                          motif_test_net(motif_width, 1., Cpu),
+                          motif_test_net(motif_width, 1., Cpu),
+                    ],
+                    vec![ //channel 1
+                          motif_test_net(motif_width, 10., Cpu),
+                    ],
+                    vec![]
+                ]
+            )
+            .build()));
+
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+            1,
+            &ws,
+            &store,
+            Cuda(0)
+        );
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step, motif_width as i32, vec![
-                vec![(0, 1.0), (1, 1.0)],
-                vec![(0, 1.0)]
-            ]))),
-            &Arc::new(RwLock::new(
-                WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
-                    .with_motif_nets(
-                        vec![
-                            vec![ //channel 0
-                                  motif_test_net(motif_width, 1., Cpu),
-                                  motif_test_net(motif_width, 1., Cpu),
-                            ],
-                            vec![ //channel 1
-                                  motif_test_net(motif_width, 10., Cpu),
-                            ],
-                            vec![]
-                        ]
-                    )
-                    .build()
-
-            )),
-            Cpu
+            &store,
+            &ws,
+            Cpu,
+            channels_motifs
         );
 
         let channels_motifs_0 = applicable.run(t_0.into(), ())?;
@@ -3384,14 +3441,22 @@ mod train_tests {
             }
         }
 
+        let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(100, 100, vec![
+            vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
+            vec![(0, 1.0), (1, 1.0), (2, 1.0)]
+        ])));
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+            1,
+            &ws,
+            &store,
+            Cuda(0)
+        );
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(100, 100, vec![
-                vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
-                vec![(0, 1.0), (1, 1.0), (2, 1.0)]
-            ]))),
+            &store,
             &ws,
-            Cpu
+            Cpu,
+            channels_motifs
         ));
 
         impl Splittable<1> for DummyLabelBatch {
@@ -3835,14 +3900,22 @@ mod train_tests {
 
         let batch = DummyLabelBatch::new();
 
+        let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(100, 100, vec![
+            vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
+            vec![(0, 1.0), (1, 1.0), (2, 1.0)]
+        ])));
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+            1,
+            &ws,
+            &store,
+            Cuda(0)
+        );
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
-            &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(100, 100, vec![
-                vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
-                vec![(0, 1.0), (1, 1.0), (2, 1.0)]
-            ]))),
+            &store,
             &ws,
-            Cpu
+            Cpu,
+            channels_motifs
         ));
 
         let run_config = TrainLabelNetsRunConfig::new(

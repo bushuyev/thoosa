@@ -38,7 +38,7 @@ use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{DummySavableOptResult, Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use thoosa_common::train_nets::{load_final_model, opt_train, opt_train_2, run_opt_train_final_net, run_opt_train_label_nets/*, run_opt_train_label_nets_2*/, run_train_motif_net, train_label_net_2, CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
+use thoosa_common::train_nets::{load_channels_motifs, load_final_model, opt_train, opt_train_2, run_opt_train_final_net, run_opt_train_label_nets, run_train_motif_net, train_label_net_2, CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, plot_series, run_split_on_oom_2, DummyListener, Reducer, TrainListener};
 use thoosa_common::{train_nets, ResourceLoader};
 use thoosa_motifs::find;
@@ -54,7 +54,7 @@ use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use thoosa_common::batches::AsyncLoadingTensorsDataBatch;
-use thoosa_common::dims::{ChannelsData, ThoTensor, TCD};
+use thoosa_common::dims::{ChannelsData, MotifData, SlicesData, ThoTensor, TCD};
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InputFilter, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue};
 use crate::version::VERSION;
 use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -496,7 +496,7 @@ where
                     <Path as AsRef<Path>>::as_ref(path),
                     *devices.first().expect("first device"),
                 )
-            })?;
+            }, &runner)?;
         }
 
         Some(PlotMotifSlices(plot_motif_slices_params)) => {
@@ -602,6 +602,7 @@ pub fn run_infer<F>(
     infer_params: &InferArgs,
     device: Device,
     load_tensor: F,
+    runner: &Arc<ThoRunner>,
 ) -> Result<InputProbs, ThoosaError>
 where
     F: Fn(&PathBuf) -> Result<Tensor, ThoosaError> + Sync,
@@ -773,10 +774,15 @@ pub async fn run_train_label_nets_2(
         selected_motifs_for_label_run_ids
         .iter()
         .map(|select_motifs_for_label_run_id| {
-            
-            
+            let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+                *select_motifs_for_label_run_id,
+                ws,
+                store,
+                devices[0]
+            );
+
             Arc::new(
-                MotifsNetsSelectionApplicable::new(*select_motifs_for_label_run_id, store, ws, devices[0])
+                MotifsNetsSelectionApplicable::new(*select_motifs_for_label_run_id, store, ws, devices[0], channels_motifs)
             )
         })
         .collect::<Vec<Arc<MotifsNetsSelectionApplicable>>>());
@@ -859,6 +865,7 @@ pub async fn run_train_label_nets_2(
     savables_res
 }
 
+
 pub fn run_train_label_nets(
     selected_motifs_for_label_run_ids: Option<&Vec<RunId>>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
@@ -907,7 +914,7 @@ pub fn run_train_label_nets(
         .iter()
         .map(|select_motifs_for_label_run_id| {
                 Arc::new(
-                    MotifsNetsSelectionApplicable::new(*select_motifs_for_label_run_id, store, ws, devices[0])
+                    MotifsNetsSelectionApplicable::new(*select_motifs_for_label_run_id, store, ws, devices[0], vec![])//TODO if not removed
                 )
         })
         .collect::<Vec<Arc<MotifsNetsSelectionApplicable>>>();
@@ -2250,7 +2257,7 @@ mod cli_tests {
         debug!("train_final_nodes_run_ids={train_final_nodes_run_ids:?}");
 
 
-        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2)?;
+        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2, &runner)?;
 
         Ok(())
     }
@@ -2324,7 +2331,7 @@ mod cli_tests {
         debug!("train_final_nodes_run_ids={train_final_nodes_run_ids:?}");
 
 
-        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2)?;
+        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2, &runner)?;
 
         Ok(())
     }
@@ -2401,7 +2408,7 @@ mod cli_tests {
         debug!("train_final_nodes_run_ids={train_final_nodes_run_ids:?}");
 
 
-        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2)?;
+        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2, &runner)?;
 
         Ok(())
     }
@@ -2485,7 +2492,7 @@ mod cli_tests {
         debug!("train_final_nodes_run_ids={train_final_nodes_run_ids:?}");
 
 
-        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2)?;
+        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2, &runner)?;
 
         Ok(())
     }
@@ -2570,14 +2577,14 @@ mod cli_tests {
         debug!("train_final_nodes_run_ids={train_final_nodes_run_ids:?}");
 
 
-        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2)?;
+        verify_infer(&test_dir, n, max_y, &ws, &store, devices, train_final_nodes_run_ids, 0.2, &runner)?;
 
         Ok(())
     }
 
 
 
-    fn verify_infer(test_dir: &PathBuf, n: u32, max_y: f32, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<RwLock<Box<dyn Store>>>, devices: Vec<Device>, train_final_nodes_run_ids: Vec<RunId>, max_mse: f64) -> Result<(), ThoosaError> {
+    fn verify_infer(test_dir: &PathBuf, n: u32, max_y: f32, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &Arc<RwLock<Box<dyn Store>>>, devices: Vec<Device>, train_final_nodes_run_ids: Vec<RunId>, max_mse: f64, runner:&Arc<ThoRunner>) -> Result<(), ThoosaError> {
         let input_dir = test_dir.join("infer_input");
 
         debug!("run_infer: input_dir={input_dir:?}");
@@ -2620,6 +2627,7 @@ mod cli_tests {
             // &InferParams::new(*train_final_nodes_run_ids.last().expect("train_final_nodes_run_ids"), ws.read().tensors_path().to_string_lossy().to_string(), test_dir.join("infer_output").as_path().to_string_lossy().to_string(), 100),
             devices[0],
             |path| Ok(Tensor::load(path)?),
+            runner
         )?;
 
         info!("inferred: labels={:?}", inferred.labels());
