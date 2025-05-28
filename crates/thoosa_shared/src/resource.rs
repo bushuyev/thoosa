@@ -7,7 +7,7 @@ use log::{debug, trace};
 use std::sync::Arc;
 use mockall::automock;
 use parking_lot::{Mutex, RwLock};
-use crate::applicables_runner::{AppliedId, Input};
+use crate::applicables_runner::{CachableId, Input};
 use crate::ThoosaError;
 
 #[automock]
@@ -26,7 +26,7 @@ pub struct Resource {
     import_id:u32,
     file_stem:String,
     length:u32,
-    applied_id: AppliedId
+    applied_id: CachableId
 }
 
 
@@ -55,7 +55,7 @@ impl Resource {
 }
 
 impl Input for Resource {
-    fn id(&self) -> &AppliedId{
+    fn id(&self) -> &CachableId {
         &self.applied_id
     }
 }

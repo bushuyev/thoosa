@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use tch::{Device, Tensor};
-use thoosa_shared::applicables_runner::{AppliedId, Input, Output};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use crate::applicables::ThoDevice;
 
 pub trait Dims:Send +Sync+ Clone + Debug {}
@@ -76,7 +76,7 @@ pub trait Dimensional {
 
 #[derive(Debug)]
 pub struct ThoTensor<D: Dims> {
-    id:AppliedId,
+    id: CachableId,
     pub tensor: Tensor, // attach the actual tensor
     pub _pd: PhantomData<D>,
 }
@@ -139,14 +139,14 @@ impl <D:Dims> Output for ThoTensor<D> {
 }
 
 impl <D:Dims> Input for ThoTensor<D> {
-    fn id(&self) -> &AppliedId {
+    fn id(&self) -> &CachableId {
         &self.id
     }
 }
 
 
 impl <D:Dims> Input for &ThoTensor<D> {
-    fn id(&self) -> &AppliedId {
+    fn id(&self) -> &CachableId {
         &self.id
     }
 }
@@ -192,7 +192,7 @@ impl <D:Dims> ThoTensor<D> {
         }
     }
 
-    pub fn new(id: AppliedId, tensor: Tensor) -> Self {
+    pub fn new(id: CachableId, tensor: Tensor) -> Self {
         Self { 
             id, tensor, _pd: PhantomData 
         }

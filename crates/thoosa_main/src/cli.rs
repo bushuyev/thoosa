@@ -62,9 +62,9 @@ use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
-use thoosa_shared::run_configs::{Applicable, OptRunConfigs, RunConfig, RunId, Runnable};
+use thoosa_shared::run_configs::{Cachable, OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource, RunConfigRangeOrValue};
-use thoosa_shared::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
 use thoosa_shared::rayon_future::ScopeFutureExt;
 
 #[derive(Parser, Clone, Debug)]
@@ -620,7 +620,7 @@ where
 
         debug!("run_infer:={path:?} label=\n{t} t.view((1,-1))=\n{}",t.view((1, -1)));
 
-        let logits = final_applicable.apply(t.into(), ())?; //batch(1 for infer) x classes
+        let logits = final_applicable.run(t.into(), ())?; //batch(1 for infer) x classes
         let probs = logits.tensor.softmax(-1, Float);
 
         debug!("run_infer:={path:?} logits=\n{logits} probs=\n{probs}");
@@ -651,6 +651,12 @@ pub struct TrainLabelNetApplicable {
     device: Device,
 }
 
+impl TrainLabelNetApplicable {
+    pub fn new(device: Device) -> Self {
+        Self { device }
+    }
+}
+
 #[derive(Debug)]
 pub struct TrainLabelNetInput {
     run_configs: Arc<OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>>,
@@ -663,22 +669,11 @@ pub struct TrainLabelNetInput {
 }
 
 
-unsafe impl Sync for TrainLabelNetInput{}
-unsafe impl Send for TrainLabelNetInput{}
-
-
-impl Input for TrainLabelNetInput {
-    fn id(&self) -> &AppliedId {
-        todo!()
-    }
-}
-
-
 #[async_trait]
 impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for TrainLabelNetApplicable {
     type R = ThoRunner;
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TrainLabelNetInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainLabelNetsRunConfigResult>> {
+    async fn async_run(self: Arc<Self>, input: Arc<TrainLabelNetInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainLabelNetsRunConfigResult>> {
         let input_for_train = Arc::clone(&input);
         let device_for_train = self.device.clone();
         //TODO use run_split_on_oom_2
@@ -704,18 +699,18 @@ impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for Tr
 
                 let result = train_label_net_2(&applicable_and_net_enum.module(vs).unwrap(), &run_config, &mut batch, vs, &device_for_train).await
                     .map(|v| (v,
-                              match &applicable_and_net_enum {
-                                  LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
-                                      debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}  thread name={:?}", thread::current().name());
+                          match &applicable_and_net_enum {
+                              LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
+                                  debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}  thread name={:?}", thread::current().name());
 
-                                      params.clone()
-                                  }
-                                  LabelNetApplicableAndNetE::FixedNumSlices { applicable, params } => {
-                                      debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}  thread name={:?}", thread::current().name());
-
-                                      params.clone()
-                                  }
+                                  params.clone()
                               }
+                              LabelNetApplicableAndNetE::FixedNumSlices { applicable, params } => {
+                                  debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}  thread name={:?}", thread::current().name());
+
+                                  params.clone()
+                              }
+                          }
                     ));
                 Ok(result.expect("no result from train_label_nodes"))
             },
@@ -732,21 +727,6 @@ impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for Tr
 
 }
 
-#[async_trait]
-impl Applicable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for TrainLabelNetApplicable {
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
-        todo!()
-    }
-
-    fn name(&self) -> String {
-        todo!()
-    }
-
-    fn run_id(&self) -> String {
-        todo!()
-    }
-
-}
 
 pub async fn run_train_label_nets_2(
     selected_motifs_for_label_run_ids: Option<&Vec<RunId>>,
@@ -789,9 +769,12 @@ pub async fn run_train_label_nets_2(
 
     debug!("run_train_label_nodes: select_motifs_for_label_run_ids={selected_motifs_for_label_run_ids:?} run_configs={run_configs:?} devices={devices:?}");
 
-    let selected_motifs_for_label_applicable = Arc::new(selected_motifs_for_label_run_ids
+    let selected_motifs_for_label_applicable = Arc::new(
+        selected_motifs_for_label_run_ids
         .iter()
         .map(|select_motifs_for_label_run_id| {
+            
+            
             Arc::new(
                 MotifsNetsSelectionApplicable::new(*select_motifs_for_label_run_id, store, ws, devices[0])
             )
@@ -813,12 +796,14 @@ pub async fn run_train_label_nets_2(
     let runner_for_purge = Arc::clone(&runner);
     let ctx_for_purge = Arc::clone(&ctx);
 
+
     let savables_res = try_join_all(devices__resources
         .into_iter()
         .flat_map(move |(device_i, train_resource_keys_chunk)| {
             let ctx = Arc::clone(&ctx);
             let valid_datasets_map_clone = valid_datasets_map.clone(); //TODO
             let selected_motifs_for_label_applicable = selected_motifs_for_label_applicable.clone(); //TODO
+            let train_label_net_applicable = Arc::new(TrainLabelNetApplicable::new(device_i));
 
             train_resource_keys_chunk.iter().flat_map( move |(label, resource_keys)| {
                 debug!("run_train_label_nodes: label={label} resource_keys={resource_keys:?} cuda_mem={:?}", cuda_mem());
@@ -826,7 +811,7 @@ pub async fn run_train_label_nets_2(
                 let train_resource_keys_len = resource_keys.len();
                 let valid_resource_keys = valid_datasets_map_clone.get(label).expect(format!("valid dataset for {}", label).as_str()).clone();
                 let valid_resource_keys_len = valid_resource_keys.len();
-
+                let train_label_net_applicable = Arc::clone(&train_label_net_applicable);
 
                 let train_labels_resources = Arc::new(vec![
                     (1, resource_keys.clone()),
@@ -848,8 +833,9 @@ pub async fn run_train_label_nets_2(
                     let valid_labels_resources = Arc::clone(&valid_labels_resources);
                     let motifs_nets_selection_applicable_arc = Arc::clone(&motifs_nets_selection_applicable);
                     let ctx = Arc::clone(&ctx);
+                    let train_label_net_applicable = Arc::clone(&train_label_net_applicable);
                     async move {
-                        Ok(runner.futures_runner().run_task(
+                        Ok(runner.run(
                             Arc::new(TrainLabelNetInput {
                                 run_configs: Arc::clone(run_configs),
                                 train_labels_resources,
@@ -859,9 +845,7 @@ pub async fn run_train_label_nets_2(
                                 fixed_config: Arc::clone(fixed_config),
                                 ws: Arc::clone(ws),
                             }),
-                            &Arc::new(TrainLabelNetApplicable { device: device_i }),
-                            runner,
-                            Some(ctx)
+                            &train_label_net_applicable,
                         ).await as Box<dyn SavableResult>)
                     }
                 })
@@ -1383,7 +1367,7 @@ async fn run_train_motif_nets_2(
     debug!("train_on_motif:  all_slices_0.len()={:?}, all_slices_0[0].size()={:?}, all_slices_1.len()={:?}, all_slices_1[0].size()={:?}", all_slices_0.len(), all_slices_0[0].size(), all_slices_1.len(), all_slices_1[0].size());
 
 
-    Ok(runner.futures_runner().run_task(
+    Ok(runner.run(
         Arc::new(TrainMotifNetApplicableInput{
             motif_id,
             fixed_config: Arc::clone(&fixed_config),
@@ -1394,8 +1378,6 @@ async fn run_train_motif_nets_2(
             channel: channel as u32,
         }),
         &Arc::new(TrainMotifNetApplicable{device}),
-        runner,
-        Some(ctx)
     ).await as Box<dyn SavableResult>)//TODO unwrap
 
 }
@@ -1496,20 +1478,12 @@ struct TrainMotifNetApplicableInput {
     channel:u32
 }
 
-unsafe impl Sync for TrainMotifNetApplicableInput{}
-unsafe impl Send for TrainMotifNetApplicableInput{}
-
-impl Input for TrainMotifNetApplicableInput {
-    fn id(&self) -> &AppliedId {
-        todo!()
-    }
-}
 
 #[async_trait]
 impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()> for TrainMotifNetApplicable {
     type R = ThoRunner;
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TrainMotifNetApplicableInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
+    async fn async_run(self: Arc<Self>, input: Arc<TrainMotifNetApplicableInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()>>::R as Runner>::Ctx>>>) -> Arc<Box<TrainMotifsNetsRunConfigResult>> {
         let train_motifs_nodes_run_configs = Arc::clone(&input.train_motifs_nodes_run_configs);
         let all_slices_0_cl = Arc::clone(&input.all_slices_0);
         let all_slices_1_cl = Arc::clone(&input.all_slices_1);
@@ -1548,22 +1522,6 @@ impl Runnable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>,
 
 }
 
-#[async_trait]
-impl Applicable<TrainMotifNetApplicableInput, Box<TrainMotifsNetsRunConfigResult>, ()> for TrainMotifNetApplicable {
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
-        todo!()
-    }
-
-    fn name(&self) -> String {
-        "TrainMotifNetApplicable".to_string()
-    }
-
-    fn run_id(&self) -> String {
-        todo!()
-    }
-
-}
-
 fn resource_path(base_path: &str, resource_pattern: &str, resource_key: &str) -> String {
     //TODO change to impl AsRef<Path> + in ParquetLoader
     Path::new(base_path)
@@ -1586,7 +1544,6 @@ pub fn run_opt_step_2<RC, RCRV, CC, R, ST/* F*/>(
     descr: &str,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
-    // F:Future<Output=Result<Vec<Box<dyn SavableResult>>, ThoosaError>>,
     ST: AsyncFnOnce(
         Option<&Vec<RunId>>,
         &Arc<OptRunConfigs<Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>, Vec<NamedRange<<RCRV as OptRunConfigSource>::P>>, Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>, <RCRV as OptRunConfigSource>::P>>,
