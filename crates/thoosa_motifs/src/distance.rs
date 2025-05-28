@@ -283,7 +283,7 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&M
 
     debug!("mean_mask: total_samples={total_samples:?} counts={counts_t:?}");
     debug!("mean_mask: total_samples.device={:?} counts.device={:?}", total_samples.lock().device(), counts_t.device());
-    let (mean_t, counts_t) =  (mean_t.to_device(Cuda(0)), counts_t.to_device(Cuda(0)));
+    let (mean_t, counts_t) =  (mean_t.to_device(distances.device()), counts_t.to_device(distances.device()));
 
     //TODO update means_acc
     // total_means = (total_means * total_samples + current_means * batch_size_i)
@@ -444,7 +444,7 @@ mod distance_tests {
     use thoosa_common::ws::{mock_ws_simp};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
-    use thoosa_shared::run_configs::Applicable;
+    use thoosa_shared::run_configs::Cachable;
     use crate::distance::{average_euclidean_distance, clc_dist_d2, clc_dist_d2_and_mask, local_min_mask, mean_mask, slice_t, z_normalized_euclidean, MaskMaker};
     use crate::chunks::ChunkOfSlicedTensors;
     use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeRunningMean, LocalMin, Tril};

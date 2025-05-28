@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::applicables_runner::{AppliedId, Input, Output, RunCtx, Runner, ToOrdinal};
-use thoosa_shared::run_configs::{Applicable, RunConfig, RunId, Runnable};
+use thoosa_shared::applicables_runner::{CachableId, Input, Output, RunCtx, Runner, ToOrdinal};
+use thoosa_shared::run_configs::{Cachable, RunConfig, RunId, Runnable};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::val::Val;
 use crate::applicables::{ThoDevice, ThoRunner};
@@ -160,7 +160,7 @@ pub enum FindMotifsRunConfigOptions {
 impl Runnable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: TCD, options: FindMotifsRunConfigOptions) -> Result<TCSD, ThoosaError> {
+    fn run(&self, input: TCD, options: FindMotifsRunConfigOptions) -> Result<TCSD, ThoosaError> {
         debug!("Applicable for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
 
         let t = match self.kernel.as_ref() {
@@ -192,7 +192,7 @@ impl Runnable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
         }
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, TCSD, FindMotifsRunConfigOptions>>::R as Runner>::Ctx>>>) -> Arc<TCSD> {
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, TCSD, FindMotifsRunConfigOptions>>::R as Runner>::Ctx>>>) -> Arc<TCSD> {
         todo!()
     }
     fn device(&self) -> impl ToOrdinal {
@@ -201,9 +201,9 @@ impl Runnable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
 }
 
 #[async_trait]
-impl Applicable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
+impl Cachable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable {
 
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
 
@@ -222,11 +222,11 @@ impl Applicable<TCD, TCSD, FindMotifsRunConfigOptions> for FindMotifsApplicable 
 impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
     type R = ThoRunner;
 
-    fn apply(&self, input: TCD, _: ()) -> Result<TCDF, ThoosaError> {
+    fn run(&self, input: TCD, _: ()) -> Result<TCDF, ThoosaError> {
         todo!()
     }
 
-    async fn async_apply(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, TCDF, ()>>::R as Runner>::Ctx>>>) -> Arc<TCDF> {
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, TCDF, ()>>::R as Runner>::Ctx>>>) -> Arc<TCDF> {
         debug!("Applicable<TCD, TCSD, ()> for FindMotifsRunConfigApplicable::apply self.kernel={:?} tensor.size={:?}", self.kernel, input.size());
 
         let t = match self.kernel.as_ref() {
@@ -252,7 +252,7 @@ impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
             // debug!("Applicable<TCD, TCD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
             Arc::new(ThoTensor::<ChannelsDataFiltered>::new(
-                <FindMotifsApplicable as Applicable<TCD, TCDF, ()>>::applied_id(&self, input.id()),
+                <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(&self, input.id()),
                 t
             ))
         } else {
@@ -270,9 +270,9 @@ impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
 }
 
 #[async_trait]
-impl Applicable<TCD, TCDF, ()> for FindMotifsApplicable {
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
-        Applicable::<TCD, TCDF, ()>::format_id(self, input_id)
+impl Cachable<TCD, TCDF, ()> for FindMotifsApplicable {
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
+        Cachable::<TCD, TCDF, ()>::format_id(self, input_id)
     }
 
     fn name(&self) -> String {
@@ -302,7 +302,7 @@ impl From<&[SyncWrapper<Tensor>]> for FindMotifsApplicableInput {
 }
 
 impl Input for FindMotifsApplicableInput {
-    fn id(&self) -> &AppliedId {
+    fn id(&self) -> &CachableId {
         todo!()
     }
 }
@@ -331,7 +331,7 @@ impl RunCtx for DummyRunnerCtx {
         todo!()
     }
 
-    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<AppliedId>> {
+    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<CachableId>> {
         [].into_iter()
     }
 }
@@ -342,7 +342,7 @@ impl Runnable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for Fin
     type R = DummyRunner;
 
     /// applying transform (Filter) and unfolding tensors one by one since they have varying sizes - can't concat into batch to avoid slices spanning different tensors
-    fn apply(&self, tensors_chunk: FindMotifsApplicableInput, options: ()) -> Result<FindMotifsApplicableOutput, ThoosaError> {
+    fn run(&self, tensors_chunk: FindMotifsApplicableInput, options: ()) -> Result<FindMotifsApplicableOutput, ThoosaError> {
         let mut slices = Vec::with_capacity(tensors_chunk.0.len());
         let mut slice_sizes = Vec::with_capacity(tensors_chunk.0.len());
         if log_enabled!(DebugLevel) {
@@ -351,7 +351,7 @@ impl Runnable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for Fin
 
         for tensor_wrapped in tensors_chunk.0.iter() {
             // let tcd:TCD = ThoTensor::<ChannelsData>::from(tensor_wrapped.deref());
-            match self.apply(tensor_wrapped.deref().into(), FindMotifsRunConfigOptions::FilterUnfold) {
+            match self.run(tensor_wrapped.deref().into(), FindMotifsRunConfigOptions::FilterUnfold) {
                 Ok(t) => {
                     slice_sizes.push(t.size()[1]);
                     slices.push(t.as_ref().shallow_clone());
@@ -375,7 +375,7 @@ impl Runnable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for Fin
         )
     }
 
-    async fn async_apply(
+    async fn async_run(
         self: Arc<Self>,
         input: Arc<FindMotifsApplicableInput>,
         runner: Arc<Self::R>,
@@ -390,8 +390,8 @@ impl Runnable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for Fin
 }
 
 #[async_trait]
-impl Applicable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for FindMotifsApplicable {
-    fn applied_id(&self, input_id: &AppliedId) -> AppliedId {
+impl Cachable<FindMotifsApplicableInput, FindMotifsApplicableOutput, ()> for FindMotifsApplicable {
+    fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
 
