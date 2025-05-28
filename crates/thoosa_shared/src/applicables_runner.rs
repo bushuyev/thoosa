@@ -23,25 +23,24 @@ use std::thread;
 use std::time::Instant;
 use log::{debug, error};
 use crate::resource::Resource;
-use crate::run_configs::{Applicable, Runnable};
+use crate::run_configs::{Cachable, Runnable};
 
-pub type AppliedId = String;
+pub type CachableId = String;
 
 pub trait Input:Send+Sync+Debug {
-    fn id(&self) -> &AppliedId;
+    fn id(&self) -> &CachableId;
 }
 
 
 
 #[async_trait]
 pub trait Output:Send+Sync+Debug {
-    //TODO not needed for runnable
     async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self>;
 }
 
 
-impl Input for AppliedId {
-    fn id(&self) -> &AppliedId {
+impl Input for CachableId {
+    fn id(&self) -> &CachableId {
         self
     }
 }
@@ -61,9 +60,8 @@ impl  Debug for FuturesRunner {
 
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FuturesRunner")
-            // .field("loader_cache", &self.loader_cache_fut)
-            // .field("applicable_a_cache", &self.applicable_a_cache_fut)
-            // .field("applicable_b_cache", &self.applicable_b_cache_fut)
+            .field("num_devices", &self.num_devices)
+            .field("caches_areas", &self.caches_areas.read().cache_areas)
             .finish_non_exhaustive()
     }
 }
@@ -156,7 +154,7 @@ where
 
 {
 
-    fn new_with_future<I, A: Applicable<I, O, ()> + 'static> (
+    fn new_with_future<I, A: Cachable<I, O, ()> + 'static> (
         input: Arc<I>,
         device_ordinal: usize,
         num_devices: usize,
@@ -183,9 +181,8 @@ where
 
 
         let fut = async move {
-            let r = applicable.async_apply(input.clone(), runner, ctx_for_future).await;
+            let r = applicable.async_run(input.clone(), runner, ctx_for_future).await;
             debug!("run_cached_task: done input={input:?}  thread name={:?}", thread::current().name());
-            // let _ = tx.send(r);
             statistics_clone.on_new_load_done(t_0.elapsed().as_millis() as u64);
             r
         }.boxed().shared();
@@ -281,8 +278,8 @@ pub struct Statistics {
     copy_ended_count:AtomicU64,
     copy_time: AtomicU64,
 
-    loaded_keys:DashSet<AppliedId>,
-    copied_keys:DashSet<AppliedId>,
+    loaded_keys:DashSet<CachableId>,
+    copied_keys:DashSet<CachableId>,
 
     purge_gpu_count:AtomicU64,
 
@@ -313,7 +310,7 @@ impl Statistics {
         self.load_time.load(Ordering::Relaxed)
     }
 
-    pub fn on_new_load(&self, input: &AppliedId) {
+    pub fn on_new_load(&self, input: &CachableId) {
         self.load_started_count.fetch_add(1, Ordering::Relaxed);
         self.loaded_keys.insert(input.clone());
     }
@@ -332,7 +329,7 @@ impl Statistics {
         self.copy_time.load(Ordering::Relaxed)
     }
 
-    pub fn on_copy(&self, input: &AppliedId) {
+    pub fn on_copy(&self, input: &CachableId) {
         self.copy_started_count.fetch_add(1, Ordering::Relaxed);
         self.copied_keys.insert(input.clone());
     }
@@ -357,7 +354,7 @@ impl Statistics {
 pub struct MapWithThread<O>
 where
     O: Output + Send + Sync + 'static {
-    map:DashMap<AppliedId, DataInDevices<O>>,
+    map:DashMap<CachableId, DataInDevices<O>>,
     pool:ThreadPool,
     name:String
 }
@@ -383,14 +380,14 @@ where
 
     #[cfg(test)]
     pub fn get_cache_areas(&self, key:&str) -> Box<[u64]> {
-        self.map.get::<AppliedId>(&key.to_string()).expect(&format!("no {:?}", key)).device_cache_areas.clone()
+        self.map.get::<CachableId>(&key.to_string()).expect(&format!("no {:?}", key)).device_cache_areas.clone()
     }
 
 }
 
 #[async_trait]
 pub trait FuturesRunnerMap:Sync+Send{
-    async fn purge_gpu_cache_area(&self, key: AppliedId, cache_area:u64, pool:&ThreadPool, device:&dyn ToOrdinal, statistics: Arc<Statistics>);
+    async fn purge_gpu_cache_area(&self, key: CachableId, cache_area:u64, pool:&ThreadPool, device:&dyn ToOrdinal, statistics: Arc<Statistics>);
     fn purge_cpu_caches(&self, statistics: &Arc<Statistics>, older_than:&Instant);
 }
 
@@ -401,7 +398,7 @@ where
 {
     async fn purge_gpu_cache_area(
         &self,
-        key: AppliedId,
+        key: CachableId,
         cache_area: u64,
         pool: &ThreadPool,
         device:&dyn ToOrdinal,
@@ -477,7 +474,7 @@ impl CacheAreasKeeper {
 
 pub trait RunCtx:Debug + Send + Sync {
     fn cache_area(&self) -> u64;
-    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<AppliedId>>;
+    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<CachableId>>;
 }
 
 impl FuturesRunner {
@@ -494,7 +491,7 @@ impl FuturesRunner {
         }
     }
 
-    //TODO remove, Runnable should be OfMemSize
+    //TODO OfMemSize param
     pub fn run_async_fn<I, O, AF>(
         self: &Arc<Self>,
         input: I,
@@ -505,32 +502,53 @@ impl FuturesRunner {
         O: Send + Sync + 'static,
         I: Tuple + Debug + Send + Sync + 'static,
         AF: AsyncFnMut(I)->O + Send,
-        for <'a> <AF as AsyncFnMut<(I,)>>::CallRefFuture<'a>: Future<Output = O>  + 'static,
+        for <'a> <AF as AsyncFnMut<(I,)>>::CallRefFuture<'a>: Future<Output = O>  + Send + 'static,
     {
 
-        // let pool = self.device_pools.get_pool(device);
-        //
-        // pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
-        //     RayonFuture::<()>::install_future(
-        //         async_fn(input)
-        //     )
-        // }).boxed()
+        let pool = self.device_pools.get_pool(device);
 
-        todo!()
+        pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
+            RayonFuture::<()>::install_future(
+                async_fn(input)
+            )
+        }).boxed()
 
     }
 
+    //TODO OfMemSize param
+    pub fn run_fn<I, O, AF>(
+        self: &Arc<Self>,
+        input: I,
+        mut fun:AF,
+        device:&impl ToOrdinal
+    ) -> O
+    where
+        O: Send + Sync + 'static,
+        I: Tuple + Debug + Send + Sync + 'static,
+        AF: FnMut(I)->O + Send,
+    {
 
-    pub fn run_task<I, O, A: Runnable<I, O, ()> + 'static>(
+        let pool = self.device_pools.get_pool(device);
+
+        pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
+
+            fun(input)
+
+        })
+    }
+
+
+
+    pub fn run<I, O, A: Runnable<I, O, ()> + 'static>(
         self: &Arc<Self>,
         input: Arc<I>,
-        applicable:&Arc<A>,
+        runnable:&Arc<A>,
         runner:&Arc<A::R>,
         ctx: Option<Arc<RwLock<<<A as Runnable<I, O, ()>>::R as Runner>::Ctx>>>,
     ) -> BoxFuture<'static, O>
     where
-        O: Output + Send + Sync + 'static,
-        I: Input+Send+Sync+'static,
+        O: Debug + Send + Sync + 'static,
+        I: Debug + Send+Sync+'static,
     {
         debug!("run_task");
 
@@ -538,17 +556,17 @@ impl FuturesRunner {
         let statistics_arc = Arc::clone(&self.statistics);
 
         let t_0 = Instant::now();
-        let device = applicable.device();
+        let device = runnable.device();
         let pool = self.device_pools.get_pool(&device);
-        let applicable= Arc::clone(applicable);
+        let applicable= Arc::clone(runnable);
         let runner= Arc::clone(runner);
 
         pool.install(move ||{//or pool.scope(move |scope| { scope.spawn_future(async move {
             RayonFuture::<()>::install_future(async move {
-                let r = applicable.async_apply(input.clone(), runner, ctx).await;
-                // debug!("run_task: done input={input:?}");
+                let r = applicable.async_run(input.clone(), runner, ctx).await;
+                debug!("run_task: done input={input:?}");
 
-                // statistics_arc.on_new_load_done(t_0.elapsed().as_millis() as u64);
+                statistics_arc.on_new_load_done(t_0.elapsed().as_millis() as u64);
 
                 Arc::into_inner(r).unwrap()//TODO add arc in Applicable, remove for Runnable
             })
@@ -557,7 +575,7 @@ impl FuturesRunner {
     }
 
 
-    pub fn run_cached_task<I, O, A: Applicable<I, O, ()> + 'static>(
+    pub fn run_cached_task<I, O, A: Cachable<I, O, ()> + 'static>(
         self: &Arc<Self>,
         map_with_thread: &MapWithThread<O>,
         input: Arc<I>,
@@ -699,7 +717,7 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
 
 
 #[cfg(test)]
-pub async fn dummy_load(statistics: &Statistics, input: &Arc<AppliedId>) {
+pub async fn dummy_load(statistics: &Statistics, input: &Arc<CachableId>) {
 
 
     for i in 0..DUMMY_LOAD_N {
@@ -745,7 +763,7 @@ fn yield_n(n: usize) -> impl Future<Output = ()> {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-    use super::{dummy_load, Applicable, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, AppliedId, RunCtx, Runner, ToOrdinal, DeviceThreadPools, MapWithThread, yield_n};
+    use super::{dummy_load, Cachable, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, CachableId, RunCtx, Runner, ToOrdinal, DeviceThreadPools, MapWithThread, yield_n};
     use crate::rayon_future::ScopeFutureExt;
     use async_trait::async_trait;
     use dashmap::DashMap;
@@ -753,13 +771,15 @@ mod tests {
     use futures_util::future::{join_all, BoxFuture, Shared};
     use parking_lot::RwLock;
     use rayon::iter::ParallelIterator;
-    use rayon::prelude::ParallelBridge;
+    use rayon::prelude::{IntoParallelRefIterator, ParallelBridge};
     use rayon::ThreadPool;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
+    use crossbeam::sync::WaitGroup;
     use log::{debug, set_max_level, Level, LevelFilter};
+    use crate::applicables_runner::tests::Devices::Cpu;
     use crate::run_configs::Runnable;
     use crate::test_utils::set_panic_hook;
 
@@ -790,7 +810,7 @@ mod tests {
 
     #[derive(Debug)]
     struct DataResource {
-        id: AppliedId,
+        id: CachableId,
         device: Devices,
         data: Vec<f32>,
     }
@@ -811,7 +831,7 @@ mod tests {
 
 
     impl Input for DataResource {
-        fn id(&self) -> &AppliedId {
+        fn id(&self) -> &CachableId {
             &self.id
         }
 
@@ -822,9 +842,9 @@ mod tests {
     pub struct MyRunCtx {
         cache_area: u64,
 
-        loaded_cached: Vec<AppliedId>,
-        applicable_a_cached: Vec<AppliedId>,
-        applicable_b_cached: Vec<AppliedId>,
+        loaded_cached: Vec<CachableId>,
+        applicable_a_cached: Vec<CachableId>,
+        applicable_b_cached: Vec<CachableId>,
     }
 
     impl MyRunCtx {
@@ -835,7 +855,7 @@ mod tests {
     }
 
     impl RunCtx for MyRunCtx {
-        fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<AppliedId>> {
+        fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<CachableId>> {
             [
                 self.loaded_cached,
                 self.applicable_a_cached,
@@ -868,7 +888,7 @@ mod tests {
     struct LoaderInputId {
         id:String,
         import_id:String,
-        applied_id:AppliedId
+        applied_id: CachableId
     }
 
     impl LoaderInputId {
@@ -879,7 +899,7 @@ mod tests {
     }
 
     impl Input for LoaderInputId {
-        fn id(&self) -> &AppliedId {
+        fn id(&self) -> &CachableId {
             &self.applied_id
         }
     }
@@ -905,7 +925,7 @@ mod tests {
     impl Runnable<LoaderInputId, LoaderOutput, ()> for TestLoader {
         type R = MyRunner;
 
-        async fn async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<LoaderOutput> {
+        async fn async_run(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<LoaderOutput> {
             debug!("Loader::async_apply: input={input:?} thread name={:?}",  thread::current().name());
             // thread::sleep(Duration::new(0, 1000));
             dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
@@ -924,10 +944,10 @@ mod tests {
     }
 
     #[async_trait]
-    impl Applicable<LoaderInputId, LoaderOutput, ()> for TestLoader {
+    impl Cachable<LoaderInputId, LoaderOutput, ()> for TestLoader {
 
 
-        fn applied_id(&self, prev_id: &AppliedId) -> String {
+        fn applied_id(&self, prev_id: &CachableId) -> String {
             Self::format_0(&prev_id)
         }
 
@@ -961,7 +981,7 @@ mod tests {
 
 
     impl Input for LoaderOutput {
-        fn id(&self) -> &AppliedId {
+        fn id(&self) -> &CachableId {
             self.0.id()
         }
     }
@@ -980,7 +1000,7 @@ mod tests {
     impl Runnable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
         type R = MyRunner;
 
-        async fn async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableAOutput> {
+        async fn async_run(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableAOutput> {
             let resource_0 = runner.clone().run_loader(&input, &self.loader, ctx).await;
             // debug!("ApplicableA::apply: input={input:?}");
 
@@ -996,9 +1016,9 @@ mod tests {
     }
 
     #[async_trait]
-    impl Applicable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
-        fn applied_id(&self, prev_id: &AppliedId) -> String {
-            Applicable::format_id(self, &self.loader.applied_id(prev_id))
+    impl Cachable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
+        fn applied_id(&self, prev_id: &CachableId) -> String {
+            Cachable::format_id(self, &self.loader.applied_id(prev_id))
         }
 
 
@@ -1033,7 +1053,7 @@ mod tests {
 
 
     impl Input for ApplicableAOutput {
-        fn id(&self) -> &AppliedId {
+        fn id(&self) -> &CachableId {
             self.0.id()
         }
     }
@@ -1051,7 +1071,7 @@ mod tests {
     impl Runnable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
         type R = MyRunner;
 
-        async fn  async_apply(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableBOutput> {
+        async fn async_run(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<ApplicableBOutput> {
             let resource_a = runner.clone().run_applicable_a(&input, &self.applicable_a, ctx).await;
             debug!("ApplicableB::apply: input={input:?}");
 
@@ -1067,9 +1087,9 @@ mod tests {
     }
 
     #[async_trait]
-    impl Applicable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
-        fn applied_id(&self, input_id: &AppliedId) -> String {
-            Applicable::format_id(self, &self.applicable_a.applied_id(input_id))
+    impl Cachable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
+        fn applied_id(&self, input_id: &CachableId) -> String {
+            Cachable::format_id(self, &self.applicable_a.applied_id(input_id))
         }
 
         fn name(&self) -> String {
@@ -1309,7 +1329,7 @@ mod tests {
         set_panic_hook();
 
         let resources = ["aaa", "bbb", "ccc", "ddd", "eee"];
-        let devices = [Devices::Cpu, Devices::Cuda(0), Devices::Cuda(1)];
+        let devices = [Cpu, Devices::Cuda(0), Devices::Cuda(1)];
 
         let my_loader = Arc::new(MyRunner::new());
         let count = AtomicU32::new(0);
@@ -1389,11 +1409,7 @@ mod tests {
                         Arc::clone(&my_loader).run_applicable_b(&format!("{resource}").as_str().into(), &Arc::new(ApplicableB::new("1".to_string(), "0".to_string(), device)), None)
                     );
 
-                    // debug!("resource={resource:?}, device={device:?} res={res:?} done");
-
                     count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-                    // debug!("resource={resource:?}, device={device:?} res={res:?}");
                 });
 
         });
@@ -1442,20 +1458,22 @@ mod tests {
 
         let t_0 = Instant::now();
 
-        let my_loader = Arc::new(MyRunner::new());
+        let my_runner = Arc::new(MyRunner::new());
 
         let main_pool = main_pool(10);
 
+        // let wg = WaitGroup::new();
+        // let wg_pool = wg.clone();
 
         main_pool.scope(|scope| {
-            let ctx_0 = my_loader.next_ctx();
+            let ctx_0 = my_runner.next_ctx();
             debug!("ctx_1={ctx_0:?}");
-            let ctx_1 = my_loader.next_ctx();
+            let ctx_1 = my_runner.next_ctx();
             debug!("ctx_2={ctx_1:?}");
 
             main_pool.scope(|scope| {
                 let ctx_0 = Arc::clone(&ctx_0);
-                let futures_runner_0 = Arc::clone(&my_loader);
+                let futures_runner_0 = Arc::clone(&my_runner);
                 // scope.spawn(|_|{
                 let resources = block_on(scope.spawn_future(async move {
                     join_all([
@@ -1473,7 +1491,7 @@ mod tests {
                 // });
 
                 let ctx_1 = Arc::clone(&ctx_1);
-                let futures_runner_1 = Arc::clone(&my_loader);
+                let futures_runner_1 = Arc::clone(&my_runner);
                 // scope.spawn(|_|{
                 let roesources = block_on(scope.spawn_future(async move {
                     join_all([
@@ -1493,55 +1511,55 @@ mod tests {
             });
 
             debug!("loader_cache_fut:");
-            debug!("aaa cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas(&"aaa".to_string()));
-            debug!("ccc cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas(&"ccc".to_string()));
-            debug!("xxx cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas(&"xxx".to_string()));
-            assert_eq!(*my_loader.loader_cache_fut.get_cache_areas(&"aaa".to_string()), [0, 1, 0]);//loaded into area 0
-            assert_eq!(*my_loader.loader_cache_fut.get_cache_areas(&"ccc".to_string()), [0, 2, 0]);//loaded into area 1
-            assert_eq!(*my_loader.loader_cache_fut.get_cache_areas(&"xxx".to_string()), [0, 1, 0]);//loaded into area 0, not used for are 1, xxx:ApplicableA_0:ApplicableB_1 is taken form cache
+            debug!("aaa cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas(&"aaa".to_string()));
+            debug!("ccc cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas(&"ccc".to_string()));
+            debug!("xxx cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas(&"xxx".to_string()));
+            assert_eq!(*my_runner.loader_cache_fut.get_cache_areas(&"aaa".to_string()), [0, 1, 0]);//loaded into area 0
+            assert_eq!(*my_runner.loader_cache_fut.get_cache_areas(&"ccc".to_string()), [0, 2, 0]);//loaded into area 1
+            assert_eq!(*my_runner.loader_cache_fut.get_cache_areas(&"xxx".to_string()), [0, 1, 0]);//loaded into area 0, not used for are 1, xxx:ApplicableA_0:ApplicableB_1 is taken form cache
 
             debug!("applicable_a_cache_fut:");//loaded into area 0
-            debug!("aaa cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas(&"aaa:ApplicableA_0".to_string()));
-            debug!("ccc cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas(&"ccc:ApplicableA_0".to_string()));
-            debug!("xxx cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas(&"xxx:ApplicableA_0".to_string()));
-            assert_eq!(*my_loader.applicable_a_cache_fut.get_cache_areas(&"aaa:ApplicableA_0".to_string()), [0, 1, 0]);
-            assert_eq!(*my_loader.applicable_a_cache_fut.get_cache_areas(&"ccc:ApplicableA_0".to_string()), [0, 2, 0]);
-            assert_eq!(*my_loader.applicable_a_cache_fut.get_cache_areas(&"xxx:ApplicableA_0".to_string()), [0, 1, 0]);
+            debug!("aaa cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas(&"aaa:ApplicableA_0".to_string()));
+            debug!("ccc cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas(&"ccc:ApplicableA_0".to_string()));
+            debug!("xxx cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas(&"xxx:ApplicableA_0".to_string()));
+            assert_eq!(*my_runner.applicable_a_cache_fut.get_cache_areas(&"aaa:ApplicableA_0".to_string()), [0, 1, 0]);
+            assert_eq!(*my_runner.applicable_a_cache_fut.get_cache_areas(&"ccc:ApplicableA_0".to_string()), [0, 2, 0]);
+            assert_eq!(*my_runner.applicable_a_cache_fut.get_cache_areas(&"xxx:ApplicableA_0".to_string()), [0, 1, 0]);
 
             debug!("applicable_b_cache_fut:");
-            debug!("aaa cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas(&"aaa:ApplicableA_0:ApplicableB_1".to_string()));
-            debug!("ccc cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas(&"ccc:ApplicableA_0:ApplicableB_1".to_string()));
-            debug!("xxx cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas(&"xxx:ApplicableA_0:ApplicableB_1".to_string()));
-            assert_eq!(*my_loader.applicable_b_cache_fut.get_cache_areas(&"aaa:ApplicableA_0:ApplicableB_1".to_string()), [0, 1, 0]);
-            assert_eq!(*my_loader.applicable_b_cache_fut.get_cache_areas(&"ccc:ApplicableA_0:ApplicableB_1".to_string()), [0, 2, 0]);
-            assert_eq!(*my_loader.applicable_b_cache_fut.get_cache_areas(&"xxx:ApplicableA_0:ApplicableB_1".to_string()), [0, 3, 0]);
+            debug!("aaa cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas(&"aaa:ApplicableA_0:ApplicableB_1".to_string()));
+            debug!("ccc cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas(&"ccc:ApplicableA_0:ApplicableB_1".to_string()));
+            debug!("xxx cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas(&"xxx:ApplicableA_0:ApplicableB_1".to_string()));
+            assert_eq!(*my_runner.applicable_b_cache_fut.get_cache_areas(&"aaa:ApplicableA_0:ApplicableB_1".to_string()), [0, 1, 0]);
+            assert_eq!(*my_runner.applicable_b_cache_fut.get_cache_areas(&"ccc:ApplicableA_0:ApplicableB_1".to_string()), [0, 2, 0]);
+            assert_eq!(*my_runner.applicable_b_cache_fut.get_cache_areas(&"xxx:ApplicableA_0:ApplicableB_1".to_string()), [0, 3, 0]);
 
             debug!("------------------");
             // debug!("my_loader: {:?}", my_loader);
 
             main_pool.scope( |scope| {
-                block_on(scope.spawn_future(my_loader.clone().purge_all_gpu_caches(Arc::into_inner(ctx_0).unwrap().into_inner(), Devices::Cuda(0))));
+                block_on(scope.spawn_future(my_runner.clone().purge_all_gpu_caches(Arc::into_inner(ctx_0).unwrap().into_inner(), Devices::Cuda(0))));
             });
 
             debug!("loader_cache_fut:");
-            debug!("aaa cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas(&"aaa".to_string()));
-            debug!("ccc cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas(&"ccc".to_string()));
-            debug!("xxx cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas(&"xxx".to_string()));
+            debug!("aaa cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas(&"aaa".to_string()));
+            debug!("ccc cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas(&"ccc".to_string()));
+            debug!("xxx cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas(&"xxx".to_string()));
 
             debug!("applicable_a_cache_fut:");
-            debug!("aaa cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas(&"aaa:ApplicableA_0".to_string()));
-            debug!("ccc cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas(&"ccc:ApplicableA_0".to_string()));
-            debug!("xxx cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas(&"xxx:ApplicableA_0".to_string()));
+            debug!("aaa cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas(&"aaa:ApplicableA_0".to_string()));
+            debug!("ccc cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas(&"ccc:ApplicableA_0".to_string()));
+            debug!("xxx cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas(&"xxx:ApplicableA_0".to_string()));
 
             debug!("applicable_b_cache_fut:");
-            debug!("aaa cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas(&"aaa:ApplicableA_0:ApplicableB_1".to_string()));
-            debug!("ccc cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas(&"ccc:ApplicableA_0:ApplicableB_1".to_string()));
-            debug!("xxx cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas(&"xxx:ApplicableA_0:ApplicableB_1".to_string()));
+            debug!("aaa cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas(&"aaa:ApplicableA_0:ApplicableB_1".to_string()));
+            debug!("ccc cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas(&"ccc:ApplicableA_0:ApplicableB_1".to_string()));
+            debug!("xxx cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas(&"xxx:ApplicableA_0:ApplicableB_1".to_string()));
             debug!("------------------");
             // debug!("futures_runner: {:?}", futures_runner);
 
             main_pool.scope(|scope| {
-                block_on(scope.spawn_future(my_loader.clone().purge_all_gpu_caches(Arc::into_inner(ctx_1).unwrap().into_inner(), Devices::Cuda(0))));
+                block_on(scope.spawn_future(my_runner.clone().purge_all_gpu_caches(Arc::into_inner(ctx_1).unwrap().into_inner(), Devices::Cuda(0))));
             });
 
             // debug!("futures_runner: {:?}", futures_runner);
@@ -1551,37 +1569,37 @@ mod tests {
         // debug!("futures_runner: {:?}", futures_runner);
         // debug!("statistics: {:?}", my_loader.statistics);
         debug!("loader_cache_fut:");
-        debug!("aaa cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas("aaa"));
-        debug!("ccc cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas("ccc"));
-        debug!("xxx cache_areas={:?}", my_loader.loader_cache_fut.get_cache_areas("xxx"));
-        assert_eq!(*my_loader.loader_cache_fut.get_cache_areas("aaa"), [1, 0, 0]);
-        assert_eq!(*my_loader.loader_cache_fut.get_cache_areas("ccc"), [2, 0, 0]);
-        assert_eq!(*my_loader.loader_cache_fut.get_cache_areas("xxx"), [1, 0, 0]);
+        debug!("aaa cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas("aaa"));
+        debug!("ccc cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas("ccc"));
+        debug!("xxx cache_areas={:?}", my_runner.loader_cache_fut.get_cache_areas("xxx"));
+        assert_eq!(*my_runner.loader_cache_fut.get_cache_areas("aaa"), [1, 0, 0]);
+        assert_eq!(*my_runner.loader_cache_fut.get_cache_areas("ccc"), [2, 0, 0]);
+        assert_eq!(*my_runner.loader_cache_fut.get_cache_areas("xxx"), [1, 0, 0]);
 
 
         debug!("applicable_a_cache_fut:");
-        debug!("aaa cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas("aaa:ApplicableA_0"));
-        debug!("ccc cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas("ccc:ApplicableA_0"));
-        debug!("xxx cache_areas={:?}", my_loader.applicable_a_cache_fut.get_cache_areas("xxx:ApplicableA_0"));
-        assert_eq!(*my_loader.applicable_a_cache_fut.get_cache_areas("aaa:ApplicableA_0"), [1, 0, 0]);
-        assert_eq!(*my_loader.applicable_a_cache_fut.get_cache_areas("ccc:ApplicableA_0"), [2, 0, 0]);
-        assert_eq!(*my_loader.applicable_a_cache_fut.get_cache_areas("xxx:ApplicableA_0"), [1, 0, 0]);
+        debug!("aaa cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas("aaa:ApplicableA_0"));
+        debug!("ccc cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas("ccc:ApplicableA_0"));
+        debug!("xxx cache_areas={:?}", my_runner.applicable_a_cache_fut.get_cache_areas("xxx:ApplicableA_0"));
+        assert_eq!(*my_runner.applicable_a_cache_fut.get_cache_areas("aaa:ApplicableA_0"), [1, 0, 0]);
+        assert_eq!(*my_runner.applicable_a_cache_fut.get_cache_areas("ccc:ApplicableA_0"), [2, 0, 0]);
+        assert_eq!(*my_runner.applicable_a_cache_fut.get_cache_areas("xxx:ApplicableA_0"), [1, 0, 0]);
 
 
         debug!("applicable_b_cache_fut:");
-        debug!("aaa cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas("aaa:ApplicableA_0:ApplicableB_1"));
-        debug!("ccc cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas("ccc:ApplicableA_0:ApplicableB_1"));
-        debug!("xxx cache_areas={:?}", my_loader.applicable_b_cache_fut.get_cache_areas("xxx:ApplicableA_0:ApplicableB_1"));
-        assert_eq!(*my_loader.applicable_b_cache_fut.get_cache_areas("aaa:ApplicableA_0:ApplicableB_1"), [1, 0, 0]);
-        assert_eq!(*my_loader.applicable_b_cache_fut.get_cache_areas("ccc:ApplicableA_0:ApplicableB_1"), [2, 0, 0]);
-        assert_eq!(*my_loader.applicable_b_cache_fut.get_cache_areas("xxx:ApplicableA_0:ApplicableB_1"), [2, 0, 0]);
+        debug!("aaa cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas("aaa:ApplicableA_0:ApplicableB_1"));
+        debug!("ccc cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas("ccc:ApplicableA_0:ApplicableB_1"));
+        debug!("xxx cache_areas={:?}", my_runner.applicable_b_cache_fut.get_cache_areas("xxx:ApplicableA_0:ApplicableB_1"));
+        assert_eq!(*my_runner.applicable_b_cache_fut.get_cache_areas("aaa:ApplicableA_0:ApplicableB_1"), [1, 0, 0]);
+        assert_eq!(*my_runner.applicable_b_cache_fut.get_cache_areas("ccc:ApplicableA_0:ApplicableB_1"), [2, 0, 0]);
+        assert_eq!(*my_runner.applicable_b_cache_fut.get_cache_areas("xxx:ApplicableA_0:ApplicableB_1"), [2, 0, 0]);
 
 
         std::thread::sleep(Duration::from_millis(100));
-        my_loader.futures_runner.purge_all_cpu_caches(&(Instant::now()-Duration::from_millis(100)), my_loader.to_futs_iter());
+        my_runner.futures_runner.purge_all_cpu_caches(&(Instant::now()-Duration::from_millis(100)), my_runner.to_futs_iter());
 
-        debug!("statistics={:?}", my_loader.futures_runner.statistics);
-        assert_eq!(my_loader.futures_runner.statistics.purge_cpu_count.load(Ordering::Relaxed), 15);//(aaa, bbb, ccc, ddd, xxx) x (loader, applicable_a, applicable_b)
+        debug!("statistics={:?}", my_runner.futures_runner.statistics);
+        assert_eq!(my_runner.futures_runner.statistics.purge_cpu_count.load(Ordering::Relaxed), 15);//(aaa, bbb, ccc, ddd, xxx) x (loader, applicable_a, applicable_b)
     }
 
     fn main_pool(num_threads: usize) -> ThreadPool {
@@ -1607,4 +1625,38 @@ mod tests {
         assert_eq!(0b01, super::remove_mask(v, sub));     // ← fails: returns 0
     }
 
+    #[test]
+    fn test_run_async_fn(){
+        let my_runner = Arc::new(MyRunner::new());
+        let input = (0..10).map(|i| i).collect::<Vec<_>>();
+
+        let sum = block_on(my_runner.futures_runner.run_async_fn((input,),async move |(input,):(Vec<i32>,)|{
+            debug!("input={input:?}");
+            input.par_iter().map(|i| {
+                debug!("input={input:?} i={i} th name={:?}", thread::current().name());
+                i*10
+            }).sum::<i32>()
+
+        }, &Cpu));
+
+        debug!("sum={sum:?}");
+        assert_eq!(sum, 450);
+    }
+
+    #[test]
+    fn test_run_fn(){
+        let my_runner = Arc::new(MyRunner::new());
+        let input = (0..10).map(|i| i).collect::<Vec<_>>();
+
+        let sum = my_runner.futures_runner.run_fn((input,), move |(input,):(Vec<i32>,)|{
+            debug!("input={input:?}");
+            input.par_iter().map(|i| {
+                debug!("input={input:?} i={i} th name={:?}", thread::current().name());
+                i*10
+            }).sum::<i32>()
+        }, &Cpu);
+
+        debug!("sum={sum:?}");
+        assert_eq!(sum, 450);
+    }
 }

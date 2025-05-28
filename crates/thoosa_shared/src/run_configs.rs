@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::{make_combos, ThoosaError};
-use crate::applicables_runner::{AppliedId, Input, Output, Runner, ToOrdinal};
+use crate::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
 use crate::val::{NamedRange, NamedVal, Val};
 
 ////
@@ -129,16 +129,16 @@ pub trait RunConfig:Debug {
 
 #[async_trait]
 pub trait Runnable<In, Out, P>:Debug + Sync + Send
-where  In: Input + Send + Sync,
-       Out: Output + Send + Sync
+where  In: Send + Sync,
+       Out:  Send + Sync
 {
     type R: Runner + Sync + Send;
 
-    fn apply(&self, input: In, params: P) -> Result<Out, ThoosaError> {
+    fn run(&self, input: In, params: P) -> Result<Out, ThoosaError> {
         Err(ThoosaError::new("Not implemented yet"))
     }
 
-    async fn async_apply(
+    async fn async_run(
         self: Arc<Self>,
         input: Arc<In>,
         runner: Arc<Self::R>,
@@ -148,22 +148,22 @@ where  In: Input + Send + Sync,
     fn device(&self) -> impl ToOrdinal;
 }
 
-//TODO rename to Cachable
+
 #[async_trait]
-pub trait Applicable<In, Out, P>:Runnable<In, Out, P> + Debug + Sync + Send
+pub trait Cachable<In, Out, P>:Runnable<In, Out, P> + Debug + Sync + Send
     where  In: Input + Send + Sync,
            Out: Output + Send + Sync {
 
-    fn format_id(&self, input_id:&AppliedId) -> AppliedId {
+    fn format_id(&self, input_id:&CachableId) -> CachableId {
         format!("{}:{}_{}", input_id, self.name(), self.run_id())
     }
 
-    fn format_0(prev_id:&str) -> AppliedId {
+    fn format_0(prev_id:&str) -> CachableId {
         format!("{}", prev_id)
     }
 
 
-    fn applied_id(&self, input_id:&AppliedId) -> AppliedId;
+    fn applied_id(&self, input_id:&CachableId) -> CachableId;
     fn name(&self)->String;//TODO &'static str
     fn run_id(&self)->String;
 

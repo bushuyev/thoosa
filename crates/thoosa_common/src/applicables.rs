@@ -10,9 +10,9 @@ use rayon::ThreadPool;
 use tch::{Device, Tensor};
 use tch::Kind::Float;
 use crate::dims::{TCD, TCDF, TCSD};
-use thoosa_shared::applicables_runner::{AppliedId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input, MapWithThread, Output, RunCtx, Runner, Statistics, ToOrdinal};
+use thoosa_shared::applicables_runner::{CachableId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input, MapWithThread, Output, RunCtx, Runner, Statistics, ToOrdinal};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::{Applicable, Runnable};
+use thoosa_shared::run_configs::{Cachable, Runnable};
 use crate::find_motifs_run_config::FindMotifsApplicable;
 
 #[derive(Debug, Clone)]
@@ -52,8 +52,8 @@ impl From<usize> for ThoDevice {
 pub struct ThoRunCtx {
     cache_area: u64,
 
-    loaded: Vec<AppliedId>,
-    find_motifs: Vec<AppliedId>,
+    loaded: Vec<CachableId>,
+    find_motifs: Vec<CachableId>,
 }
 
 impl ThoRunCtx {
@@ -67,7 +67,7 @@ impl ThoRunCtx {
 }
 
 impl RunCtx for ThoRunCtx {
-    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<AppliedId>> {
+    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<CachableId>> {
         [
             self.loaded,
             self.find_motifs,
@@ -110,7 +110,7 @@ impl Debug for TCDLoader {
 impl Runnable<Resource, TCD, ()> for TCDLoader {
     type R = ThoRunner;
 
-    async fn async_apply(self: Arc<Self>, input: Arc<Resource>, runner: Arc<ThoRunner>, ctx: Option<Arc<RwLock<ThoRunCtx>>>) -> Arc<TCD> {
+    async fn async_run(self: Arc<Self>, input: Arc<Resource>, runner: Arc<ThoRunner>, ctx: Option<Arc<RwLock<ThoRunCtx>>>) -> Arc<TCD> {
         Arc::new((self.loader_fn)(&input, &*self.device))
     }
     fn device(&self) -> impl ToOrdinal {
@@ -119,9 +119,9 @@ impl Runnable<Resource, TCD, ()> for TCDLoader {
 }
 
 #[async_trait]
-impl Applicable<Resource, TCD, ()> for TCDLoader {
+impl Cachable<Resource, TCD, ()> for TCDLoader {
 
-    fn applied_id(&self, prev_id: &AppliedId) -> AppliedId {
+    fn applied_id(&self, prev_id: &CachableId) -> CachableId {
         Self::format_0(&prev_id)
     }
 
@@ -189,16 +189,16 @@ impl ThoRunner {
         }
     }
 
-    pub fn run_task<I, O, A: Runnable<I, O, (), R=Self> + 'static>(
+    pub fn run<I, O, A: Runnable<I, O, (), R=Self> + 'static>(
         self: &Arc<Self>,
         input: Arc<I>,
         applicable:&Arc<A>,
     ) -> BoxFuture<'static, O>
     where
-        O: Output + Send + Sync + 'static,
-        I: Input+Send+Sync+'static,
+        O: Debug + Send + Sync + 'static,
+        I: Debug + Send + Sync + 'static,
     {
-        self.futures_runner.run_task(input, applicable, self, None)
+        self.futures_runner.run(input, applicable, self, None)
     }
 
     pub fn run_loader(
@@ -209,9 +209,9 @@ impl ThoRunner {
     ) -> Shared<BoxFuture<'static, Arc<TCD>>> {
         let applicable = &self.tcd_loaders[ThoDevice::from(*on_device).ordinal()];
 
-        // if let Some(ctx) = ctx.as_ref() {
-        //     ctx.write().loaded.push(applicable.applied_id(Input::id(input)));
-        // }
+        if let Some(ctx) = ctx.as_ref() {
+            ctx.write().loaded.push(applicable.applied_id(Input::id(input)));
+        }
 
         self.futures_runner.run_cached_task(
             &self.loader_cache_fut,
@@ -229,9 +229,9 @@ impl ThoRunner {
         ctx: Option<Arc<RwLock<ThoRunCtx>>>
     ) -> Shared<BoxFuture<'static, Arc<TCDF>>> {
 
-        // if let Some(ctx) = ctx.as_ref() {
-        //     ctx.write().loaded.push(<FindMotifsApplicable as Applicable<TCD, TCDF, ()>>::applied_id(applicable, input.id()));
-        // }
+        if let Some(ctx) = ctx.as_ref() {
+            ctx.write().loaded.push(<FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(applicable, input.id()));
+        }
 
         self.futures_runner.run_cached_task(
             &self.find_motifs_cache_fut,
