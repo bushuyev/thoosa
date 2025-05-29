@@ -46,6 +46,7 @@ use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use async_trait::async_trait;
+use futures_util::future::join_all;
 use log::Level::Debug as DebugLevel;
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -864,61 +865,61 @@ pub fn train_label_net<DI:Dims+Send+'static, DO:Dims+Send+'static, B:DataBatch<D
 }
 
 
-pub fn run_opt_train_final_net(
-    train_label_nodes_run_ids: Option<&Vec<RunId>>,
-    train_final_run_config: &OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
-    train_resources:Vec<(Resource, Vec<f32>)>,
-    valid_resources: Vec<(Resource, Vec<f32>)>,
-    fixed_config: &OptConfig,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<RwLock<Box<dyn Store>>>,
-    loader: &Arc<RwLock< LoadRunner<Tensor>>>,
-    device: &Device,
-) -> Result<Box<dyn SavableResult>, ThoosaError> {
-
-    let device = device.clone();
-
-    let labels = store.read().list_labels()?;
-
-    debug!("run_opt_train_final: labels={labels:?}");
-
-
-    let label_nets_applicable = Arc::new(LabelNetsApplicable::load_all_filtered_by_run_ids(train_label_nodes_run_ids.map(|v|v.as_slice()), labels, store, ws, device));
-
-    opt_train(
-        fixed_config,
-         |vs:&VarStore, run_config_values:&TrainFinalNetRunConfig, listener: &mut dyn TrainListener|{
-             let label_nets_applicable_rc = Arc::clone(&label_nets_applicable);
-
-            let  batch = Rc::new(Box::new(ClassTensorsLoaderData::<ChannelsData, ChannelsData>::new(
-                train_resources.clone(),
-                valid_resources.clone(),
-                run_config_values.common_training_args.batch_size as usize,
-                Arc::clone(&loader),
-                device.clone(),
-                None,
-            )));
-
-            train_final_net(
-                run_config_values,
-                label_nets_applicable.label_nets_num(),
-                label_nets_applicable.labels_num(),
-                &mut BatchTransform::new(Rc::clone(&batch), |t:ThoTensor<Batch<ChannelsData>>|{
-                    label_nets_applicable_rc.run(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
-                }),
-                vs,
-                &device
-            )
-        },
-        &train_final_run_config,
-        device,
-        "final"
-    ).map(|(var_store, final_node_params, train_final_nodes_values, min_loss)| {
-        debug!("run_opt_train_final: done, min_loss={min_loss} final_node_params={final_node_params:?}");
-        Box::new(TrainFinalNetsRunConfigResult::new(train_label_nodes_run_ids, min_loss, var_store, final_node_params, train_final_nodes_values)) as Box<dyn SavableResult>
-    })
-
-}
+// pub fn run_opt_train_final_net(
+//     train_label_nodes_run_ids: Option<&Vec<RunId>>,
+//     train_final_run_config: &OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
+//     train_resources:Vec<(Resource, Vec<f32>)>,
+//     valid_resources: Vec<(Resource, Vec<f32>)>,
+//     fixed_config: &OptConfig,
+//     ws: &Arc<RwLock<Box<dyn Workspace>>>,
+//     store: &Arc<RwLock<Box<dyn Store>>>,
+//     loader: &Arc<RwLock< LoadRunner<Tensor>>>,
+//     device: &Device,
+// ) -> Result<Box<dyn SavableResult>, ThoosaError> {
+//
+//     let device = device.clone();
+//
+//     let labels = store.read().list_labels()?;
+//
+//     debug!("run_opt_train_final: labels={labels:?}");
+//
+//
+//     let label_nets_applicable = Arc::new(LabelNetsApplicable::load_all_filtered_by_run_ids(train_label_nodes_run_ids.map(|v|v.as_slice()), labels, store, ws, device));
+//
+//     opt_train(
+//         fixed_config,
+//          |vs:&VarStore, run_config_values:&TrainFinalNetRunConfig, listener: &mut dyn TrainListener|{
+//              let label_nets_applicable_rc = Arc::clone(&label_nets_applicable);
+//
+//             let  batch = Rc::new(Box::new(ClassTensorsLoaderData::<ChannelsData, ChannelsData>::new(
+//                 train_resources.clone(),
+//                 valid_resources.clone(),
+//                 run_config_values.common_training_args.batch_size as usize,
+//                 Arc::clone(&loader),
+//                 device.clone(),
+//                 None,
+//             )));
+//
+//             train_final_net(
+//                 run_config_values,
+//                 label_nets_applicable.label_nets_num(),
+//                 label_nets_applicable.labels_num(),
+//                 &mut BatchTransform::new(Rc::clone(&batch), |t:ThoTensor<Batch<ChannelsData>>|{
+//                     label_nets_applicable_rc.run(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
+//                 }),
+//                 vs,
+//                 &device
+//             )
+//         },
+//         &train_final_run_config,
+//         device,
+//         "final"
+//     ).map(|(var_store, final_node_params, train_final_nodes_values, min_loss)| {
+//         debug!("run_opt_train_final: done, min_loss={min_loss} final_node_params={final_node_params:?}");
+//         Box::new(TrainFinalNetsRunConfigResult::new(train_label_nodes_run_ids, min_loss, var_store, final_node_params, train_final_nodes_values)) as Box<dyn SavableResult>
+//     })
+//
+// }
 
 #[derive(Debug)]
 pub struct TrainFinalNetsRunConfigResult {
@@ -2318,7 +2319,7 @@ pub struct LabelNetsApplicable {
     labels:Vec<String>
 }
 
-pub fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>, device:Device) -> Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> {
+pub async fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>, device:Device) -> Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> {
     store
         .read()
         .list_selected_motifs(motif_selection_run_id, ws.read().channels())
@@ -2336,7 +2337,6 @@ pub fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dy
                     ws.read().load_motif_nets(channel as u32, motif_id, &device)
                         .expect("load_motif_models")
 
-
                 })
                 .collect::<Vec<_>>()
 
@@ -2347,43 +2347,44 @@ pub fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dy
 
 impl LabelNetsApplicable {
 
-    pub fn load_all_filtered_by_run_ids(train_label_nodes_run_ids: Option<&[RunId]>, labels:Vec<String>, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> LabelNetsApplicable {
+    pub async fn load_all_filtered_by_run_ids(train_label_nodes_run_ids: Option<&[RunId]>, labels:Vec<String>, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> LabelNetsApplicable {
         let label_models = ws.read().load_label_nets(train_label_nodes_run_ids, &device).expect("load_all_label_models_ws");
 
         LabelNetsApplicable {
 
-            labels_applicables: label_models.into_iter().fold(HashMap::new(), |mut a, (label, label_run_id_nodes)| {
+            labels_applicables: join_all(label_models.into_iter().map( | (label, label_run_id_nodes)| {
+                async {
+                    let label_applicables = join_all(label_run_id_nodes.into_iter().map(async |(label_run_id, label_net_params, module)| {
+                        let motif_selection_run_ids = store
+                            .read()
+                            .get_input_run_ids(label_run_id, Some(&SelectMotifsRunConfig::type_name()))
+                            .expect("get_input_run_ids(motif_node_params_selection_run_ids")
+                            .into_iter()
+                            .collect::<HashSet<RunId>>(); //TODO distinct in sql?
 
-                let label_applicables = label_run_id_nodes.into_iter().map(|(label_run_id, label_net_params, module)| {
+                        debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
 
-                    let motif_selection_run_ids = store
-                        .read()
-                        .get_input_run_ids(label_run_id, Some(&SelectMotifsRunConfig::type_name()))
-                        .expect("get_input_run_ids(motif_node_params_selection_run_ids")
-                        .into_iter()
-                        .collect::<HashSet<RunId>>(); //TODO distinct in sql?
+                        assert_eq!(motif_selection_run_ids.len(), 1);
+                        let select_motifs_for_label_run_id = motif_selection_run_ids.into_iter().next().unwrap();
 
-                    debug!("load_all_label_and_motif_models: label={label} label_run_id={label_run_id} motif_selection_run_ids={motif_selection_run_ids:?}");
-
-                    assert_eq!(motif_selection_run_ids.len(), 1);
-                    let select_motifs_for_label_run_id = motif_selection_run_ids.into_iter().next().unwrap();
-
-                    let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
-                        select_motifs_for_label_run_id,
-                        ws,
-                        store,
-                        device
-                    );
+                        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+                            select_motifs_for_label_run_id,
+                            ws,
+                            store,
+                            device
+                        ).await;
 
 
-                    LabelNetApplicable {
-                        motifs_nets_selection_applicable: MotifsNetsSelectionApplicable::new(select_motifs_for_label_run_id, store, ws, device, channels_motifs),
-                        label_net_params,
-                        module,
-                        device
-                    }
-                }).collect::<Vec<_>>();
-
+                        LabelNetApplicable {
+                            motifs_nets_selection_applicable: MotifsNetsSelectionApplicable::new(select_motifs_for_label_run_id, store, ws, device, channels_motifs),
+                            label_net_params,
+                            module,
+                            device
+                        }
+                    }).collect::<Vec<_>>()).await;
+                    (label, label_applicables)
+                }
+            })).await.into_iter().fold(HashMap::new(), |mut a, (label, label_applicables)|{
                 a.insert(label, label_applicables);
                 a
             }),
@@ -2535,17 +2536,14 @@ pub struct FinalNetApplicable {
 
 impl FinalNetApplicable {
 
-    pub fn new(final_run_id:RunId, labels:Vec<String>, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device) -> FinalNetApplicable {
+    pub fn new(final_run_id:RunId, labels:Vec<String>, store: &Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device: Device, label_nets_applicable: LabelNetsApplicable) -> FinalNetApplicable {
 
-        let train_label_node_run_ids = store.read().get_input_run_ids(
-            final_run_id,
-            Some(&TrainLabelNetsRunConfig::type_name())
-        ).expect(format!("FinalNetApplicable: final_run_id={final_run_id} not found").as_str());
+
 
         let (final_net_params, final_net_module) = load_final_model(final_run_id, ws, &device).expect("load_final_model failed");
 
         FinalNetApplicable {
-            label_nets_applicable: LabelNetsApplicable::load_all_filtered_by_run_ids(Some(&train_label_node_run_ids), labels.clone(), store, ws, device),
+            label_nets_applicable,
             final_net_params,
             final_net_module,
             labels
@@ -2765,6 +2763,7 @@ mod train_tests {
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::sync::Arc;
+    use futures::executor::block_on;
     use mockall::automock;
     use mockall_double::double;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
@@ -2909,12 +2908,12 @@ mod train_tests {
                 )
                 .build()
         ));
-        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = block_on(load_channels_motifs(
             1,
             &ws,
             &store,
             Cuda(0)
-        );
+        ));
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
             &store,
@@ -3013,12 +3012,12 @@ mod train_tests {
                 )
                 .build()
         ));
-        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = block_on(load_channels_motifs(
             1,
             &ws,
             &store,
             Cuda(0)
-        );
+        ));
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
             &store,
@@ -3071,7 +3070,7 @@ mod train_tests {
         // let batch = Tensor::stack(&[t_0, t_1], 0);
 
 
-        let applicable = LabelNetsApplicable::load_all_filtered_by_run_ids(
+        let applicable = block_on(LabelNetsApplicable::load_all_filtered_by_run_ids(
             Some(&[1, 2]),
             vec!["Label_0".to_string(), "Label_1".to_string()],
             &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
@@ -3099,7 +3098,7 @@ mod train_tests {
 
             )),
             Cpu
-        );
+        ));
 
         let t_0_applied = applicable.run(t_0.unsqueeze(0).into(), ())?;
 
@@ -3134,7 +3133,7 @@ mod train_tests {
         // let batch = Tensor::stack(&[t_0, t_1], 0);
 
 
-        let applicable = LabelNetsApplicable::load_all_filtered_by_run_ids(
+        let applicable = block_on(LabelNetsApplicable::load_all_filtered_by_run_ids(
             Some(&[1, 2]),
             vec!["Label_0".to_string(), "Label_1".to_string()],
             &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
@@ -3162,7 +3161,7 @@ mod train_tests {
 
             )),
             Cpu
-        );
+        ));
 
         let tho_tensor = applicable.run(t_0.unsqueeze(0).into(), ())?;
         let t_0_applied = tho_tensor.as_ref();
@@ -3245,12 +3244,12 @@ mod train_tests {
                 .build()
         ));
 
-        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = block_on(load_channels_motifs(
             1,
             &ws,
             &store,
             Cuda(0)
-        );
+        ));
 
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
@@ -3305,12 +3304,12 @@ mod train_tests {
             )
             .build()));
 
-        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = block_on(load_channels_motifs(
             1,
             &ws,
             &store,
             Cuda(0)
-        );
+        ));
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
             &store,
@@ -3488,12 +3487,12 @@ mod train_tests {
             vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
             vec![(0, 1.0), (1, 1.0), (2, 1.0)]
         ])));
-        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = block_on(load_channels_motifs(
             1,
             &ws,
             &store,
             Cuda(0)
-        );
+        ));
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
             &store,
@@ -3947,12 +3946,12 @@ mod train_tests {
             vec![(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0)],
             vec![(0, 1.0), (1, 1.0), (2, 1.0)]
         ])));
-        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+        let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = block_on(load_channels_motifs(
             1,
             &ws,
             &store,
             Cuda(0)
-        );
+        ));
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
             &store,
