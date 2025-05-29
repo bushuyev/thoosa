@@ -863,6 +863,7 @@ pub fn train_label_net<DI:Dims+Send+'static, DO:Dims+Send+'static, B:DataBatch<D
     Ok(loss)
 }
 
+
 pub fn run_opt_train_final_net(
     train_label_nodes_run_ids: Option<&Vec<RunId>>,
     train_final_run_config: &OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
@@ -914,13 +915,13 @@ pub fn run_opt_train_final_net(
         "final"
     ).map(|(var_store, final_node_params, train_final_nodes_values, min_loss)| {
         debug!("run_opt_train_final: done, min_loss={min_loss} final_node_params={final_node_params:?}");
-        Box::new(TrainFinalNodesRunConfigResult::new(train_label_nodes_run_ids, min_loss, var_store, final_node_params, train_final_nodes_values)) as Box<dyn SavableResult>
+        Box::new(TrainFinalNetsRunConfigResult::new(train_label_nodes_run_ids, min_loss, var_store, final_node_params, train_final_nodes_values)) as Box<dyn SavableResult>
     })
 
 }
 
 #[derive(Debug)]
-struct TrainFinalNodesRunConfigResult {
+pub struct TrainFinalNetsRunConfigResult {
     train_label_nodes_run_ids: Vec<RunId>,
     loss: f32,
     var_store: VarStore,
@@ -928,7 +929,7 @@ struct TrainFinalNodesRunConfigResult {
     train_final_net_run_config: TrainFinalNetRunConfig
 }
 
-impl TrainFinalNodesRunConfigResult {
+impl TrainFinalNetsRunConfigResult {
     pub fn new(train_label_nodes_run_ids: Option<&Vec<RunId>>, loss: f32, var_store: VarStore, final_node_params: FinalNetParams, train_final_nodes_values: TrainFinalNetRunConfig) -> Self {
         Self {
             train_label_nodes_run_ids: train_label_nodes_run_ids.expect("train_label_nodes_run_ids").clone(),
@@ -940,7 +941,7 @@ impl TrainFinalNodesRunConfigResult {
     }
 }
 
-impl SavableResult for TrainFinalNodesRunConfigResult {
+impl SavableResult for TrainFinalNetsRunConfigResult {
     fn value(&self) -> f32 {
         self.loss
     }
@@ -959,6 +960,52 @@ impl SavableResult for TrainFinalNodesRunConfigResult {
         Ok(run_config_id)
     }
 }
+
+pub async fn train_final_net_2<B:AsyncDataBatch<LabelNetsProbabilities>>(
+    run_config_values: &TrainFinalNetRunConfig,
+    label_nets_num: u32,
+    labels_num: u32,
+    batch:&mut B,
+    var_store: &VarStore,
+    device: &Device
+) ->  Result<(f32, FinalNetParams), ThoosaError>{
+    let final_node_params= FinalNetParams::new(label_nets_num, labels_num, run_config_values.net.num_layers);
+    debug!("train_final_node: final_node_params={final_node_params:?}");
+
+    let mut optimizer = nn::Adam::default();
+    /* if let Some(adam_w) = run_config_values.adam_w {
+         debug!("train_final_nodes: setting adam_w={adam_w:?}");
+         optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
+     }*/
+
+    let loss = train_2(
+        device,
+        batch,
+        &final_net(&final_node_params).build_tch_module::<Batch<LabelNetsProbabilities>, Batch<LabelsProbabilities>>(&var_store.root())?,
+        |pred: &Tensor, target: &Tensor| {
+
+            debug!("train_final: pred.size={:?} target.size={:?}", pred.size(), target.size());
+            trace!("train_final: pred=\n{pred} target=\n{target}");
+            let pred= pad_to(&pred, &target.size()).expect("pad_to failed");
+            debug!("train_final: padded pred.size={:?}", pred.size());
+
+            pred.cross_entropy_loss::<Tensor>(&target, None, Reduction::Mean, -100, 0.0)
+
+        },
+        run_config_values.common_training_args.cycles as usize,
+        optimizer.build(&var_store, run_config_values.common_training_args.lr)?,
+        |t:ThoTensor<Batch<LabelNetsProbabilities>>|{
+            trace!("train_final: t=\n{t}");
+            debug!("train_final: t.size={:?} ", t.size());
+
+            t.as_ref().squeeze().into()//TODO move squeeze
+        },
+        None
+    ).await?;
+
+    Ok((loss, final_node_params))
+}
+
 
 pub fn train_final_net(
     run_config_values: &TrainFinalNetRunConfig,
@@ -2284,7 +2331,7 @@ pub fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dy
             channels_motifs
                 .into_iter()
                 .flat_map(move |(motif_id, _corr)| {
-                    
+
                     debug!("MotifsNetsSelectionApplicable::new: channels_motifs: channel={channel} motif_id={motif_id}");
                     ws.read().load_motif_nets(channel as u32, motif_id, &device)
                         .expect("load_motif_models")
@@ -3182,19 +3229,25 @@ mod train_tests {
         debug!("tensor_size_in_bytes={:?}M ", tensor_mem_size(&unfolded)/1024/1024);
         trace!("unfolded=\n{unfolded} \nsums=\n{}", sums);
 
-        // let mut motif_nets = vec![
-        //     (MotifNetParams::new(motif_width, 1), ThoModuleWithStore::new(test_net(motif_width, 1., Cuda(0), "test_net")?))
-        // ];
-
-
-
         let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(input_slice_step as i32, motif_width as i32, vec![
             vec![(0, 1.0)]
         ])));
 
+        let ws = Arc::new(RwLock::new(
+            WsMockBuilder::new(None, 5, 100, input_n as u32)
+                .with_motif_nets(
+                    vec![
+                        vec![ //channel 0
+                              motif_test_net(motif_width, 1., Cuda(0)),
+                        ]
+                    ]
+                )
+                .build()
+        ));
+
         let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
             1,
-            &Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000))),
+            &ws,
             &store,
             Cuda(0)
         );
@@ -3202,17 +3255,7 @@ mod train_tests {
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
             &store,
-            &Arc::new(RwLock::new(
-                WsMockBuilder::new(None, 5, 100, input_n as u32)
-                    .with_motif_nets(
-                        vec![
-                            vec![ //channel 0
-                                  motif_test_net(motif_width, 1., Cuda(0)),
-                            ]
-                        ]
-                    )
-                    .build()
-            )),
+            &ws,
             Cuda(0),
             channels_motifs
         );

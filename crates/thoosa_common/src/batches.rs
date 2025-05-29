@@ -1,4 +1,5 @@
 use std::{fmt, thread};
+use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -14,12 +15,12 @@ use tch::{Device, Tensor};
 use tch::Kind::Float;
 use thoosa_shared::resource::Resource;
 use crate::applicables::{ThoRunCtx, ThoRunner};
-use crate::dims::{Batch, Dims, ThoTensor};
+use crate::dims::{AnyDims, Batch, Dims, ThoTensor};
 use crate::loader::{LoadRunner, Loader};
-use crate::utils::{tensor_mem_size, Splittable, SplittableDataBatch};
+use crate::utils::{tensor_mem_size, DataBatch, Splittable, SplittableDataBatch};
 
 #[async_trait]
-pub trait AsyncDataBatch<D:Dims>:Send  {
+pub trait AsyncDataBatch<D:Dims>:Send +Sync {
     /// returns (inputs, labels)
     async fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
     async fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
@@ -104,8 +105,12 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
 
                 let (class, resources) = class_resources.choose(&mut thread_rng()).expect("class_resources.choose failed");
                 let resource_id = resources.choose(&mut thread_rng()).expect("resources.choose failed").clone();
-                let class = *class;
-                Self::load_tensor(&loader, area.clone(), &mut x_y_acc, transform_fn, resource_id, class).await;
+                x_y_acc.push(
+                    (
+                        load_tensor(&loader, &area,/* &mut x_y_acc, */transform_fn, resource_id/*, class*/).await,
+                        *class
+                    )
+                );
 
             }
             // wg.wait();
@@ -120,13 +125,18 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         for (class, resources) in class_resources{
             assert!(resources.len() > 0, "no tensors for class={class} in ClassTensorsDataBatch");
 
-            let class = *class;
+            // let class = *class;
             let map = resources.choose_multiple(&mut thread_rng(), per_class_len).map(|key| key.clone());
             for resource_id in map {
 
                 let transform_fn = transform_fn.as_ref().map(|v|Arc::clone(v));
 
-                Self::load_tensor(&loader, area.clone(), &mut x_y_vecs, transform_fn, resource_id, class).await;
+                x_y_vecs.push(
+                    (
+                    load_tensor(&loader, &area, /*&mut x_y_vecs, */transform_fn, resource_id/*, class*/).await,
+                    *class
+                    )
+                );
             }
         }
 
@@ -166,38 +176,6 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         Self::vec_to_tensors(device, x_y_vecs)
     }
 
-    async fn load_tensor(
-        loader: &Arc<ThoRunner>,
-        area: Arc<RwLock<ThoRunCtx>>,
-        x_y_acc_in_exec: &mut Vec<(ThoTensor<DO>, i64)>,
-        // wg_exec: WaitGroup,
-        transform_fn: Option<Arc<RwLock<Box<F>>>>,
-        resource_id: Resource,
-        class: i64
-    ) {
-        debug!("AsyncLoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area:?} thread name={:?}",  thread::current().name());
-
-        // loader.write().exec_scoped(move |future_id, loader, keys_purge, done_sender| {
-        //     async move {
-                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area:?}  thread name={:?}",  thread::current().name());
-                let resource_id_debug = resource_id.clone();
-                // let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area, future_id, done_sender).await;
-                let t = loader.run_loader(&resource_id, &Device::Cpu, Some(area.clone())).await;//TODO device
-
-                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
-
-                let t = if let Some(transform) = transform_fn {
-                    transform.read()(t.shallow_clone().into())//TODO move load_tensor into Batch args to return correct DO
-                } else {
-                    t.shallow_clone().into()
-                };
-                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
-                x_y_acc_in_exec.push((t.into(), class));
-                debug!("AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
-                // drop(wg_exec);
-        //     }.boxed()
-        // });
-    }
 
     fn vec_to_tensors(device: &Device, mut x_y_vecs: Vec<(ThoTensor<DO>, i64)>) -> (ThoTensor<Batch<DO>>, Tensor) {
         let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice()).to_device(*device);
@@ -215,6 +193,37 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
         )
     }
 }
+
+pub async fn load_tensor<DI:Dims+Send+Sync, DO:Dims+Send+Sync, F:Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync>(
+    loader: &Arc<ThoRunner>,
+    area: &Arc<RwLock<ThoRunCtx>>,
+    // x_y_acc_in_exec: &mut Vec<(ThoTensor<DO>, i64)>,
+    // wg_exec: WaitGroup,
+    transform_fn: Option<Arc<RwLock<Box<F>>>>,
+    resource_id: Resource,
+    // class: i64
+) -> ThoTensor<DO>{
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area:?} thread name={:?}",  thread::current().name());
+
+
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area:?}  thread name={:?}",  thread::current().name());
+    let resource_id_debug = resource_id.clone();
+    // let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area, future_id, done_sender).await;
+    let t = loader.run_loader(&resource_id, &Device::Cpu, Some(Arc::clone(&area))).await;//TODO device
+
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
+
+    let t = if let Some(transform) = transform_fn {
+        transform.read()(t.shallow_clone().into())//TODO move load_tensor into Batch args to return correct DO
+    } else {
+        t.shallow_clone().into()
+    };
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
+    // x_y_acc_in_exec.push((t.into(), class));
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
+    t
+}
+
 
 
 #[async_trait]
@@ -265,6 +274,241 @@ impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync
 }
 
 // impl <DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> SplittableDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F> {}
+
+
+///////////////////////////////////
+pub struct AsyncClassTensorsLoaderData<DI:Dims, DO:Dims/*, F: (Fn(ThoTensor<DI>)->ThoTensor<DO>) + Send + Sync*/>  {
+    train_resources: Arc<Vec<(Resource, Vec<f32>)>>,
+    valid_resources: Arc<Vec<(Resource, Vec<f32>)>>,
+
+    batch_size: usize,
+    loader: Arc<ThoRunner>,
+    device:Device,
+    // transform_fn:Option<Arc<RwLock<Box<F>>>>,
+
+    // _pd_f:PhantomData<F>,
+    _pd_di:PhantomData<DI>,
+    _pd_do:PhantomData<DO>,
+}
+
+impl <DI:Dims, DO:Dims/*, F: (Fn(ThoTensor<DI>)->ThoTensor<DO>) + Send + Sync*/> Debug for AsyncClassTensorsLoaderData<DI, DO/*, F*/> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClassTensorsLoaderData")
+            .field("train_resources", &self.train_resources)
+            .field("valid_resources", &self.valid_resources)
+            .field("batch_size", &self.batch_size)
+            .field("device", &self.device)
+            .finish()
+    }
+}
+
+impl <DI:Dims, DO:Dims, /*F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/> AsyncClassTensorsLoaderData<DI, DO/*, F*/>  {
+
+    pub fn new(
+        train_loader: Arc<Vec<(Resource, Vec<f32>)>>,
+        valid_loader: Arc<Vec<(Resource, Vec<f32>)>>,
+        batch_size: usize,
+        loader: Arc<ThoRunner>,
+        device:Device,
+        // transform_fn:Option<Box<F>>
+    ) -> Self {
+        Self {
+            train_resources: train_loader,
+            valid_resources: valid_loader,
+            batch_size,
+            loader,
+            device,
+            // transform_fn: transform_fn.map(|f|Arc::new(RwLock::new(f))),
+
+            // _pd_f:PhantomData,
+            _pd_di:PhantomData,
+            _pd_do:PhantomData
+        }
+    }
+
+}
+#[async_trait]
+impl <DI:Dims + Sync, DO:Dims + Send + Sync/*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/> AsyncDataBatch<DO> for  AsyncClassTensorsLoaderData<DI, DO/*, F*/> {
+
+    async fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
+        tch::no_grad(|| {
+            Self::choose_for_batch(&self.train_resources, self.batch_size, Arc::clone(&self.loader), &self.device) //self.transform_fn.as_ref())
+        }).await
+    }
+
+    async fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
+        tch::no_grad(|| {
+            Self::choose_for_batch(&self.valid_resources, self.batch_size, Arc::clone(&self.loader), &self.device)//, self.transform_fn.as_ref())
+        }).await
+    }
+}
+
+impl <DI:Dims, DO:Dims,/* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/> AsyncClassTensorsLoaderData<DI, DO/*, F*/> {
+
+    async fn choose_for_batch(
+        resources: &Vec<(Resource, Vec<f32>)>,
+        batch_size: usize,
+        loader: Arc<ThoRunner>,
+        device: &Device,
+        // transform_fn: Option<&Arc<RwLock<Box<F>>>>,
+    ) -> (ThoTensor<Batch<DO>>, Tensor) {
+        debug!("ClassTensorsLoaderData.batch: resources={resources:?} batch_size={batch_size}");
+
+        let x_y_vecs_mx = Arc::new(Mutex::new((vec![], vec![])));
+
+        let x_y_acc_in_exec = Arc::clone(&x_y_vecs_mx);
+
+        // let mut transform_fn = transform_fn.as_ref().map(|v|v.clone());
+
+        let area = loader.next_ctx();
+        let rnd_resoruces = resources.choose_multiple(&mut thread_rng(), batch_size).map(|v|v.clone()).collect::<Vec<_>>();
+
+        let mut resources_to_purge = Vec::with_capacity(batch_size);
+
+        for (resource_id, labels_p) in rnd_resoruces {
+            resources_to_purge.push(resource_id.clone());
+
+            // let t = AsyncLoadingTensorsDataBatch::load_tensor(&loader, &area, transform_fn.map(|v|Arc::clone(v)), resource_id).await;
+            let t = loader.run_loader(&resource_id, device, Some(Arc::clone(&area))).await;
+
+            let mut guard = x_y_acc_in_exec.lock();
+
+            guard.0.push(t);
+            guard.1.push(
+                Tensor::from_slice(labels_p.as_slice())
+            );
+
+        }
+        loader.purge_all_gpu_caches(Arc::into_inner(area).unwrap().into_inner(), *device).await;
+
+
+        debug!("ClassTensorsLoaderData::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}", x_y_vecs_mx.lock().0.len());
+
+        //TODO throw if not enough tensors for batch?
+        let mut guard = x_y_vecs_mx.lock();
+        // let mut inputs = guard.0.drain(..).collect::<Vec<_>>();
+        let mut labels = guard.1.drain(..).collect::<Vec<_>>();
+
+
+        assert!(labels.len() > 0, "No tensors for batch");
+
+/*
+        let mut inputs = if let Some(ref transform) = transform_fn {
+            guard.0.drain(..).collect::<Vec<_>>().iter().map(|t| transform(t.into()).as_ref().shallow_clone()).collect() //TODO par on devices
+        } else {
+            guard.0.drain(..).collect::<Vec<_>>()
+        };*/
+
+        let mut inputs = guard.0.drain(..).map(|tt|tt.tensor.shallow_clone()).collect::<Vec<Tensor>>();//TODO remove shallow clone
+
+        drop(guard);
+        drop(x_y_vecs_mx);
+
+        assert_eq!(labels.len(), inputs.len(), "classes.len() != inputs.len()");
+
+        (inputs.len()..batch_size).for_each(|i|{
+
+            let idx = i - inputs.len();
+            let tensor_x = inputs[idx].shallow_clone();
+            let tensor_y = labels[idx].shallow_clone();
+            inputs.push(tensor_x);
+            labels.push(tensor_y);
+
+        });
+
+        (
+            Tensor::stack(
+                inputs.as_slice(),
+                0,
+            ).to_device(*device).set_requires_grad(true).into(),
+            Tensor::stack(
+                labels.as_slice(),
+                0,
+            ).to_device(*device),
+        )
+    }
+}
+
+///////////////////////
+//batch transform, for the single tensor transform pass transform_fn to the batch impl
+pub struct AsyncBatchTransform<DI:Dims, DO:Dims, B, BF>
+where
+    B: AsyncDataBatch<DI> + Debug,
+    BF: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+{
+    inner: Arc<Box<B>>,
+    transform_fn:Arc<RwLock<BF>>,
+    _pd_di:PhantomData<DI>,
+    _pd_do:PhantomData<DO>
+}
+
+impl<DI:Dims, DO:Dims, B, F> Debug for AsyncBatchTransform<DI, DO, B, F>
+where
+    B: AsyncDataBatch<DI> + Debug,
+    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BatchTransform")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl <DI:Dims, DO:Dims, B, F> AsyncBatchTransform<DI, DO, B, F>
+where
+    B: AsyncDataBatch<DI> + Debug,
+    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+{
+    pub fn new(inner: Arc<Box<B>>, transform_fn: F) -> Self {
+        Self {
+            inner,
+            transform_fn:Arc::new(RwLock::new(transform_fn)),
+            _pd_di: PhantomData,
+            _pd_do: PhantomData,
+        }
+    }
+    pub fn from_rc(inner:Arc<Box<B>>, transform_fn: Arc<RwLock<F>>) -> Self {
+        Self {
+            inner,
+            transform_fn,
+            _pd_di: PhantomData,
+            _pd_do: PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<DI:Dims, DO:Dims, B, F> AsyncDataBatch<DO> for AsyncBatchTransform<DI, DO, B, F>
+where
+    B: AsyncDataBatch<DI> + Debug,
+    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+{
+    async fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+        let (inputs, labels) = self.inner.train_batch().await;
+        (self.transform_fn.write()(inputs), labels)
+    }
+
+    async fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+        let (inputs, labels) = self.inner.valid_batch().await;
+        (self.transform_fn.write()(inputs), labels)
+    }
+}
+
+impl<DI:Dims, DO:Dims + Send, B, F> Splittable<1> for AsyncBatchTransform<DI, DO, B, F>
+where
+    B: SplittableDataBatch<DI> + Debug + AsyncDataBatch<DI>,
+    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+{
+    fn split(&self) -> Option<[Self; 1]>
+    where
+        Self: Sized
+    {
+        let Some([split]) = self.inner.split() else {
+            panic!("BatchTransform::split() called on empty inner");
+        };
+        Some([AsyncBatchTransform::from_rc(Arc::new(Box::new(split)), Arc::clone(&self.transform_fn))])
+    }
+}
 
 
 #[cfg(test)]
