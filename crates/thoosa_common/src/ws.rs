@@ -1,4 +1,4 @@
-use crate::train_nets::{motif_node, FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore};
+use crate::train_nets::{motif_node, FinalNetParams, LabelNetParams, LoadMotifNetOutput, MotifNetParams, ThoModuleWithStore};
 use lazy_static::lazy_static;
 use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
@@ -11,7 +11,10 @@ use std::fs::{read_dir, ReadDir};
 use std::num::ParseIntError;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
+use async_trait::async_trait;
+use futures_util::FutureExt;
 use mockall::automock;
 use tch::nn::VarStore;
 use tch::{Device, TchError, Tensor};
@@ -204,6 +207,7 @@ impl Workspace for FsWorkspace {
 
             Ok((motif_node_params, module))
         }).collect()
+
     }
 
     fn load_label_nets(&self, train_label_nodes_run_ids: Option<&[RunId]>, device: &Device) -> Result<HashMap<String, Vec<(RunId, LabelNetParams, ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>)>>, ThoosaError> {
@@ -442,14 +446,21 @@ impl WsMockBuilder {
         channels_motif_nets: Vec<Vec<(
             Box<dyn Fn() -> MotifNetParams + Sync + Send + 'static>,
             Box<dyn Fn() -> ThoModuleWithStore<SlicesData, MotifData> + Sync + Send + 'static>
-        )>>) -> Self {
+        )>>
+    ) -> Self {
+        let channels_motif_nets_clone = Arc::new(channels_motif_nets);
+
         self.mock.expect_load_motif_nets()
-            .returning(move |channel: u32, motif_id: u32, device| Ok(
-                vec![(
-                    (channels_motif_nets[channel as usize][motif_id as usize].0)(),
-                    (channels_motif_nets[channel as usize][motif_id as usize].1)()
-                )]
-            ));
+            .returning(move |channel: u32, motif_id: u32, device| {
+                let channels_motif_nets_clone = Arc::clone(&channels_motif_nets_clone);
+
+                Ok(
+                    vec![(
+                        (channels_motif_nets_clone[channel as usize][motif_id as usize].0)(),
+                        (channels_motif_nets_clone[channel as usize][motif_id as usize].1)()
+                    )]
+                )
+            });
 
         self
     }

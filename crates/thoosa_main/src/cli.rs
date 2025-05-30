@@ -667,7 +667,7 @@ pub async fn run_train_final_nets_2(
 
 
     let labels = store.read().list_labels()?;
-    let label_nets_applicable = Arc::new(LabelNetsApplicable::load_all_filtered_by_run_ids(train_label_nodes_run_ids.map(|v|v.as_slice()), labels, store, ws, devices[0]).await);
+    let label_nets_applicable = Arc::new(LabelNetsApplicable::load_all_filtered_by_run_ids(train_label_nodes_run_ids.map(|v|v.as_slice()), labels, store, ws, devices[0], &runner).await);
     let train_label_net_applicable = Arc::new(TrainFinalNetApplicable::new(devices[0], label_nets_applicable));
 
     let (train_resource_keys, valid_resource_keys) = resource_config.to_resources(store)?;
@@ -732,7 +732,7 @@ where
         Some(&TrainLabelNetsRunConfig::type_name())
     ).expect(&format!("FinalNetApplicable: final_run_id={} not found", infer_params.final_run_id));
 
-    let final_applicable = FinalNetApplicable::new(infer_params.final_run_id, labels.clone(), store, ws, device, LabelNetsApplicable::load_all_filtered_by_run_ids(Some(&train_label_node_run_ids), labels.clone(), store, ws, device).await);
+    let final_applicable = FinalNetApplicable::new(infer_params.final_run_id, labels.clone(), store, ws, device, LabelNetsApplicable::load_all_filtered_by_run_ids(Some(&train_label_node_run_ids), labels.clone(), store, ws, device, &runner).await);
 
 
     let mut infer_result = InputProbs::new(labels);
@@ -805,7 +805,7 @@ impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for Tr
         opt_train_2(
             Arc::clone(&input.fixed_config),
             async move |vs: &VarStore, run_config: TrainLabelNetsRunConfig, _listener| { //TODO add _listener to train_label_nodes_2
-                debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}  thread name={:?}", std::thread::current().name());
+                debug!("run_opt_train_label_nodes:MaxPadding run_config={run_config:?}  ");
 
                 let applicable_and_net_enum = LabelNetApplicableAndNetE::new(
                     &run_config.net, &input_for_train.motifs_nets_selection_applicable_arc, &input_for_train.ws
@@ -818,6 +818,7 @@ impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for Tr
                     Arc::clone(&runner),
                     device_for_train,
                     Some(Box::new(|t: TCD| {
+                        debug!("Runnable for TrainLabelNetApplicable t={t:?}");
                         applicable_and_net_enum.apply(&t).expect("applicable_and_net_enum.apply failed")
                     }))
                 );
@@ -826,12 +827,12 @@ impl Runnable<TrainLabelNetInput, Box<TrainLabelNetsRunConfigResult>, ()> for Tr
                     .map(|v| (v,
                           match &applicable_and_net_enum {
                               LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
-                                  debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}  thread name={:?}", thread::current().name());
+                                  debug!("run_opt_train_label_nodes:MaxPadding bet params={params:?}  ");
 
                                   params.clone()
                               }
                               LabelNetApplicableAndNetE::FixedNumSlices { applicable, params } => {
-                                  debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}  thread name={:?}", thread::current().name());
+                                  debug!("run_opt_train_label_nodes:FixedNumSlices bet params={params:?}  ");
 
                                   params.clone()
                               }
@@ -898,11 +899,12 @@ pub async fn run_train_label_nets_2(
         selected_motifs_for_label_run_ids
         .iter()
         .map(async |select_motifs_for_label_run_id| {
-            let channels_motifs: Vec<Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>> = load_channels_motifs(
+            let channels_motifs = load_channels_motifs(
                 *select_motifs_for_label_run_id,
                 ws,
                 store,
-                devices[0]
+                devices[0],
+                &runner
             ).await;
 
             Arc::new(
@@ -1920,8 +1922,8 @@ where
 mod cli_tests {
     use crate::cli::{import_resources, resource_path, run_all_grid_step, run_all_grid_step_2, run_infer, run_opt_step, run_opt_step_2, run_plot_motif_slices,  run_train_final_nets_2, run_train_label_nets, run_train_label_nets_2, run_train_motif_nodes_on_motif_selection, run_train_motif_nodes_on_motif_selection_2, Cli};
     use crate::data::ParquetLoader;
-    use log::LevelFilter::{Debug, Trace, Warn};
-    use log::{debug, error, info, trace, LevelFilter};
+    use log::LevelFilter::{Debug, Error, Trace, Warn};
+    use log::{debug, error, info, set_max_level, trace, LevelFilter};
     use parking_lot::lock_api::MutexGuard;
     use parking_lot::{Mutex, RawMutex, RawRwLock, RwLock};
     use plotters::prelude::{IntoLinspace, BLACK};
@@ -2314,6 +2316,8 @@ mod cli_tests {
      */
     #[test]
     fn slow_test_run_all_fixed_slices_basic() -> Result<(), ThoosaError> {
+
+        set_panic_hook();
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 

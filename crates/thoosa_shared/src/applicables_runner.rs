@@ -166,7 +166,7 @@ where
         -> (Self, Shared<BoxFuture<'static, Arc<O>>>)
     where I: Input+Send+Sync+'static
     {
-        debug!("DataInDevices: new input={input:?} device_ordinal={device_ordinal}  thread name={:?}", thread::current().name());
+        debug!("DataInDevices: new input={input:?} device_ordinal={device_ordinal}  ");
 
         let statistics_clone = statistics.clone();
         /*
@@ -182,12 +182,10 @@ where
 
         let fut = async move {
             let r = applicable.async_run(input.clone(), runner, ctx_for_future).await;
-            debug!("run_cached_task: done input={input:?}  thread name={:?}", thread::current().name());
+            debug!("run_cached_task: done input={input:?}  ");
             statistics_clone.on_new_load_done(t_0.elapsed().as_millis() as u64);
             r
         }.boxed().shared();
-
-
 
         let mut device_futures = vec![const { None }; num_devices].into_boxed_slice();
         let mut device_cache_areas = vec![0; num_devices].into_boxed_slice();
@@ -592,7 +590,7 @@ impl FuturesRunner {
             let device = applicable.device();
             let id = applicable.applied_id(input.id());
 
-            debug!("run_cached_task: id={id:?} installed thread name={:?}",  thread::current().name());
+            debug!("run_cached_task: id={id:?} installed ");
             let debug_id = id.clone();
 
             /*let mut entry = None::<Entry<AppliedId, DataInDevices<O>>>;
@@ -616,15 +614,15 @@ impl FuturesRunner {
 
             let entry_op = map_with_thread.map.try_entry(id.clone());
             if entry_op.is_none() {
-                error!("map {map_name} is locked for entry id={id} thread name={:?}",  thread::current().name());
+                error!("map {map_name} is locked for entry id={id} ");
             } else {
-                debug!("map {map_name} is available for entry id={id} thread name={:?}",  thread::current().name());
+                debug!("map {map_name} is available for entry id={id} ");
             }
 
             let fut = match entry_op.unwrap() {
                 Entry::Occupied(mut e) => {
                     self.statistics.on_copy(input.id());
-                    debug!("run_cached_task: id={debug_id:?} Occupied thread name={:?}",  thread::current().name());
+                    debug!("run_cached_task: id={debug_id:?} Occupied ");
 
                     let f = e.get_mut().get_from_any_device(
                         device.ordinal(),
@@ -637,7 +635,7 @@ impl FuturesRunner {
                 },
                 Entry::Vacant(v) => {
                     self.statistics.on_new_load(input.id());
-                    debug!("run_cached_task: id={debug_id:?} Vacant thread name={:?}",  thread::current().name());
+                    debug!("run_cached_task: id={debug_id:?} Vacant ");
 
                     let (data_in_devices_future, fut) = DataInDevices::new_with_future(
                         input,
@@ -649,7 +647,7 @@ impl FuturesRunner {
                         ctx
                     );
                     v.insert(data_in_devices_future);
-                    debug!("run_cached_task: id={id:?} data_in_devices_future inserted thread name={:?}",  thread::current().name());
+                    debug!("run_cached_task: id={id:?} data_in_devices_future inserted ");
                     fut
                 }
             };
@@ -926,7 +924,7 @@ mod tests {
         type R = MyRunner;
 
         async fn async_run(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<LoaderOutput> {
-            debug!("Loader::async_apply: input={input:?} thread name={:?}",  thread::current().name());
+            debug!("Loader::async_apply: input={input:?} ");
             // thread::sleep(Duration::new(0, 1000));
             dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
 
