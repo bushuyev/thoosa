@@ -55,7 +55,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
-use crate::applicables::{ThoDevice, ThoRunner};
+use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use crate::batches::{AsyncDataBatch, AsyncLoadingTensorsDataBatch};
 use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
 use crate::find_motifs_run_config::*;
@@ -2455,7 +2455,7 @@ impl Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
 }
 
 ///returns vec[channels][motifs][LoadMotifNetOutput(motif's net)]
-pub async fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>, device:Device, runner: &Arc<ThoRunner>) -> Vec<Vec<Arc<LoadMotifNetOutput>>> {
+pub async fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>, device:Device, runner: &Arc<ThoRunner>, ctx: Option<Arc<RwLock<ThoRunCtx>>>) -> Vec<Vec<Arc<LoadMotifNetOutput>>> {
     let load_motif_net_cachable = Arc::new(LoadMotifNetCachable::new(device.into(), ws.clone()));
 
     join_all(store
@@ -2466,7 +2466,7 @@ pub async fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<
         .enumerate()
         .flat_map(  |(channel, channels_motifs)| channels_motifs.into_iter().map(move |(motif_id, _)| (channel, motif_id))).map(async |(channel, motif_id)| {
             debug!("load_channels_motifs: channel={channel} motif_id={motif_id}");
-            runner.run_load_motif(&Arc::new(LoadMotifNetInput::new(motif_id, channel as u32)), &load_motif_net_cachable, None).await
+            runner.run_load_motif(&Arc::new(LoadMotifNetInput::new(motif_id, channel as u32)), &load_motif_net_cachable, ctx.as_ref().map(|v|Arc::clone(v))).await
         })).await.into_iter().fold(vec![vec![]; ws.read().channels() as usize], |mut acc, output| {
         acc[output.channel as usize].push(output);
         acc
@@ -2501,7 +2501,8 @@ impl LabelNetsApplicable {
                             ws,
                             store,
                             device,
-                            runner
+                            runner,
+                            None
                         ).await;
 
 
@@ -3098,7 +3099,8 @@ mod train_tests {
             &ws,
             &store,
             Cuda(0),
-            &dummy_runner()
+            &dummy_runner(),
+            None
         ));
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
@@ -3206,7 +3208,8 @@ mod train_tests {
             &ws,
             &store,
             Cuda(0),
-            &dummy_runner()
+            &dummy_runner(),
+            None
         ));
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
@@ -3455,6 +3458,7 @@ mod train_tests {
             &store,
             Cuda(0),
             &dummy_runner(),
+            None,
         ));
 
         let applicable = MotifsNetsSelectionApplicable::new(
@@ -3517,7 +3521,8 @@ mod train_tests {
             &ws,
             &store,
             Cuda(0),
-            &dummy_runner()
+            &dummy_runner(),
+            None
         ));
         let applicable = MotifsNetsSelectionApplicable::new(
             1,
@@ -3701,7 +3706,8 @@ mod train_tests {
             &ws,
             &store,
             Cuda(0),
-            &dummy_runner()
+            &dummy_runner(),
+            None
         ));
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
@@ -4161,7 +4167,8 @@ mod train_tests {
             &ws,
             &store,
             Cuda(0),
-            &dummy_runner()
+            &dummy_runner(),
+            None
         ));
         let motifs_nets_selection_applicable_arc = Arc::new(MotifsNetsSelectionApplicable::new(
             1,
