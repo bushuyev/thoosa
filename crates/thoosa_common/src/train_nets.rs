@@ -1320,14 +1320,14 @@ pub fn motif_node(params: &MotifNetParams) -> Node {
 pub struct MotifsNetsSelectionApplicable {
     pub motif_selection_run_id:RunId,
     pub find_motifs_applicable: FindMotifsApplicable,
-    pub channels_motifs: Vec<Arc<LoadMotifNetOutput>>,
+    pub channels_motifs: Vec<Vec<Arc<LoadMotifNetOutput>>>,
     pub device:Device,
     pub max_input:u32
 }
 
 impl MotifsNetsSelectionApplicable {
 
-    pub fn new(motif_selection_run_id:RunId, store:&Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device:Device, channels_motifs: Vec<Arc<LoadMotifNetOutput>>) -> Self {
+    pub fn new(motif_selection_run_id:RunId, store:&Arc<RwLock<Box<dyn Store>>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, device:Device, channels_motifs: Vec<Vec<Arc<LoadMotifNetOutput>>>) -> Self {
 
         debug!("MotifsNetsSelectionApplicable::new: motif_selection_run_id={motif_selection_run_id}");
 
@@ -1341,7 +1341,7 @@ impl MotifsNetsSelectionApplicable {
 
 
 
-        debug!("MotifsNetsSelectionApplicable::new: channels_motifs={:?}", channels_motifs.iter().map(|c|c.nets.len()).collect::<Vec<_>>());
+        debug!("MotifsNetsSelectionApplicable::new: channels_motifs={:?}", channels_motifs.iter().map(|c|(c, c.len())).collect::<Vec<_>>());
 
         MotifsNetsSelectionApplicable {
             motif_selection_run_id,
@@ -1354,17 +1354,11 @@ impl MotifsNetsSelectionApplicable {
 
     //TODO calculate in costr
     pub fn max_nets(&self) -> u32 {
-        let hash = self.channels_motifs.iter().fold(HashMap::new(), |mut a, motifs| {
-            *a.entry(motifs.channel).or_insert(0) += motifs.nets.len() as u32;
-            a
-        });
-        let max_nets = *hash.values().max().expect("max ");
-        debug!("MotifsNetsSelectionApplicable::max_nets: hash={hash:?} max_nets={max_nets:?}");
-        max_nets
+        self.channels_motifs.iter().map(|motifs| motifs.len() as u32).max().expect("max ")
     }
 
     pub fn nets_count(&self) -> u32 {
-        self.channels_motifs.iter().map(|motifs| motifs.nets.len() as u32).sum()
+        self.channels_motifs.iter().map(|motifs| motifs.len() as u32).sum()
     }
 }
 
@@ -1390,20 +1384,20 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
 
         debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: motif_width={motif_width} self.max_input={} max_num_slices={max_num_slices}", self.max_input);
 
-        Ok(Tensor::stack(
+        let tensor = Tensor::stack(
             self.channels_motifs
                 .iter()
-                .map(|motif_nets| {
-                    let channel= motif_nets.channel;
-                    debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: channel={channel} motif_nodes.len()={}", motif_nets.nets.len());
+                .enumerate()
+                .map(|(channel, motif_nets)| {
+                    debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: channel={channel} motif_nodes.len()={}", motif_nets.len());
 
-                    if motif_nets.nets.is_empty() {
+                    if motif_nets.is_empty() {
                         Ok(Tensor::zeros([self.max_nets() as i64, max_num_slices as i64], (Float, Cpu)))
                     } else {
                         // let unfolded_ref = unfolded.as_ref();
                         // debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded_ref: {unfolded:?} device={:?}", unfolded.device());
 
-                        let unfolded_channel = match unfolded.tensor.f_i((channel as i64, .., ..)){
+                        let unfolded_channel = match unfolded.tensor.f_i((channel as i64, .., ..)) {
                             Ok(v) => v,
                             Err(e) => {
                                 debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max:  f_i failed: {:?}", e);
@@ -1414,16 +1408,16 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
                         debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded.size={:?}", unfolded_channel.size());
                         trace!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded_channel=\n{unfolded_channel}");
 
-                        let motif_dists = motif_nets.nets.iter().map(|(_params, net)| {
+                        let motif_dists = motif_nets.iter().map(|load_motif_output| {
                             // net.set_device(device.clone());
-                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: net={net:?}");
+                            debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: net={load_motif_output:?}");
 
                             let mut motif_distance_splits = vec![];
                             run_split_on_oom(
                                 SplitQueue::<2, _>::new(SplittableTensor::<0/*batch dimension*/>(unfolded_channel.shallow_clone())),
                                 |t| {
                                     debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: forward: t.size={:?}", t.as_ref().size());
-                                    let r = net.infer(
+                                    let r = load_motif_output.nets[0].1.infer(
                                         &t.as_ref().to_device(self.device.clone()).into()
                                     ).as_ref().flatten(0, 1); //flatten - removes always 1-sized distance dimension [ slices, slices_len]->[slices, [distance]]
                                     debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: forward:  r.size={:?}", r.size());
@@ -1466,7 +1460,9 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
                 })
                 .collect::<Result<Vec<_>, ThoosaError>>().unwrap().as_slice(),
             0
-        ).into())
+        );
+        debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: t.size={:?}", tensor.size());
+        Ok(tensor.into())
     }
 
     async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsData>> {
@@ -1516,25 +1512,25 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSe
         Ok(Tensor::concat(
             self.channels_motifs
                 .iter()
-                // .enumerate()
-                .filter(|motif_nodes| !motif_nodes.nets.is_empty())
-                .map(|motif_nets| {
-                    let channel = motif_nets.channel;
+                .enumerate()
+                .filter(|(_, motif_nodes)| !motif_nodes.is_empty())
+                .map(|(channel, motif_nets)| {
+                    // let channel = motif_nets.channel;
                     let unfolded_channel = unfolded.i((channel as i64, .., ..)); //channel, slices, slice
 
                     debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: unfolded.size={:?}", unfolded_channel.size());
                     trace!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: unfolded_channel=\n{unfolded_channel}");
 
-                    let motif_dists = motif_nets.nets.iter().map(|(_params, motif_net)| {
+                    let motif_dists = motif_nets.iter().map(|load_motif_net_output| {
                         // net.set_device(device.clone());
-                        debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: net={motif_net:?}");
+                        debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: load_motif_net_output={load_motif_net_output:?}");
 
                         let mut motif_distance_splits = vec![];
                         run_split_on_oom(
                             SplitQueue::<2, _>::new(SplittableTensor::<0/*batch dimension*/>(unfolded_channel.shallow_clone())),
                             |t| {
                                 debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: forward: t.size={:?}", t.as_ref().size());
-                                let r = motif_net.infer(
+                                let r = load_motif_net_output.nets[0].1.infer(
                                     &t.as_ref().to_device(self.device.clone()).into()
                                 ).as_ref().flatten(0, 1); //flatten - removes always 1-sized distance dimension [ slices, slices_len]->[slices, [distance]]
                                 debug!("Applicable for MotifsNetsSelectionApplicable::apply:Fixed: forward:  r.size={:?}", r.size());
@@ -2383,11 +2379,12 @@ impl Input for LoadMotifNetInput {
 #[derive(Debug)]
 pub struct LoadMotifNetOutput {
     channel:u32,
-    nets:Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>
+    nets:Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>//single motif's nets (of different types)
 }
 
 impl LoadMotifNetOutput {
     pub fn new(channel:u32, nets: Vec<(MotifNetParams, ThoModuleWithStore<SlicesData, MotifData>)>) -> Self {
+
         Self { channel, nets }
     }
 }
@@ -2414,7 +2411,7 @@ impl Runnable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
 
     async fn async_run(self: Arc<Self>, input: Arc<LoadMotifNetInput>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::R as Runner>::Ctx>>>) -> Arc<LoadMotifNetOutput> {
 
-        let channel_motif_models_paths = self.ws.read().motif_models(input.channel as u32, input.motif_id).unwrap();
+       /* let channel_motif_models_paths = self.ws.read().motif_models(input.channel as u32, input.motif_id).unwrap();
         Arc::new(LoadMotifNetOutput::new(input.channel, async {
 
             channel_motif_models_paths.into_iter().map(|(model, config)| {
@@ -2428,7 +2425,11 @@ impl Runnable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
                 (motif_node_params, module)
             }).collect::<Vec<_>>()
 
-        }.await))
+        }.await))*/
+
+        //TODO make loading async - ws return
+        Arc::new(LoadMotifNetOutput::new(input.channel, self.ws.read().load_motif_nets(input.channel, input.motif_id, &self.device).unwrap()))
+
     }
 
     fn device(&self) -> impl ToOrdinal {
@@ -2453,8 +2454,8 @@ impl Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
     }
 }
 
-
-pub async fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>, device:Device, runner: &Arc<ThoRunner>) -> Vec<Arc<LoadMotifNetOutput>> {
+///returns vec[channels][motifs][LoadMotifNetOutput(motif's net)]
+pub async fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<RwLock<Box<dyn Store>>>, device:Device, runner: &Arc<ThoRunner>) -> Vec<Vec<Arc<LoadMotifNetOutput>>> {
     let load_motif_net_cachable = Arc::new(LoadMotifNetCachable::new(device.into(), ws.clone()));
 
     join_all(store
@@ -2464,8 +2465,12 @@ pub async fn load_channels_motifs(motif_selection_run_id:RunId, ws: &Arc<RwLock<
         .into_iter()
         .enumerate()
         .flat_map(  |(channel, channels_motifs)| channels_motifs.into_iter().map(move |(motif_id, _)| (channel, motif_id))).map(async |(channel, motif_id)| {
+            debug!("load_channels_motifs: channel={channel} motif_id={motif_id}");
             runner.run_load_motif(&Arc::new(LoadMotifNetInput::new(motif_id, channel as u32)), &load_motif_net_cachable, None).await
-        })).await
+        })).await.into_iter().fold(vec![vec![]; ws.read().channels() as usize], |mut acc, output| {
+        acc[output.channel as usize].push(output);
+        acc
+    })
 }
 
 
@@ -2491,7 +2496,7 @@ impl LabelNetsApplicable {
                         assert_eq!(motif_selection_run_ids.len(), 1);
                         let select_motifs_for_label_run_id = motif_selection_run_ids.into_iter().next().unwrap();
 
-                        let channels_motifs: Vec<Arc<LoadMotifNetOutput>> = load_channels_motifs(
+                        let channels_motifs: Vec<Vec<Arc<LoadMotifNetOutput>>> = load_channels_motifs(
                             select_motifs_for_label_run_id,
                             ws,
                             store,
@@ -2536,7 +2541,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
         Ok(
             match &self.label_net_params.net_type {
                 LabelNetTypeParams::MaxPadding(params) => {
-                    self.module.infer(
+                    let out = self.module.infer(
                         //label net accepts batch, motif net - single tensor
                         &Tensor::stack(
                             (0..input.size()[0])
@@ -2552,10 +2557,18 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
                                 .collect::<Result<Vec<_>, _>>()?.as_slice(),
                             0,
                         ).to_device(self.device).into()
-                    )
+                    );
+                    debug!("Applicable for LabelNetApplicable MaxPadding::apply:  out.size()={:?}", out.size());
+                    //batch_size x 1
+                    assert_eq!(out.size().len(), 2);
+                    assert_eq!(out.size()[1], 1);
+
+
+
+                    out
                 }
                 LabelNetTypeParams::FixedNumSlices(params) => {
-                    self.module.infer(
+                    let out = self.module.infer(
                         //label net accepts batch, motif net - single tensor
                         &Tensor::stack(
                             (0..input.size()[0])
@@ -2571,7 +2584,15 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
                                 .collect::<Result<Vec<_>, _>>()?.as_slice(),
                             0,
                         ).to_device(self.device).into()
-                    )
+                    );
+
+                    //batch_size x 1
+                    assert_eq!(out.size().len(), 2);
+                    assert_eq!(out.size()[1], 1);
+
+                    debug!("Applicable for LabelNetApplicable FixedNumSlices    ::apply:  out.size()={:?}", out.size());
+
+                    out
                 }
             }
         )
@@ -2613,8 +2634,15 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabili
             self.labels.iter()
                 .map(|label| (label, self.labels_applicables.get(label).expect(format!("no {label} in labels applicable").as_str())))
                 .flat_map(|(label, label_applicables)| {
+                    debug!("Applicable for LabelNetsApplicable::apply: label={label}");
+
                     label_applicables.iter().map(|label_applicable| {
-                        label_applicable.run(input.shallow_clone(), ()).map(|v| v.as_ref().shallow_clone())
+                        label_applicable.run(input.shallow_clone(), ()).map(|v| {
+                            let label_applicable_out = v.as_ref().shallow_clone();
+
+                            debug!("Applicable for LabelNetsApplicable::apply: label_applicable_out.size={label_applicable_out:?}");
+                            label_applicable_out
+                        })
                     })
                 }).collect::<Result<Vec<_>, _>>()?.as_slice(),
             1
@@ -2984,6 +3012,31 @@ mod train_tests {
             .end_seq().build_tch_module(&vs.root())
     }
 
+    ///sums and multiplies inputs by k
+    pub fn test_label_net<DI:Dims + Send + 'static, DO:Dims + Send + 'static>(num_features: u32, k: f64, device: Device, descr: &str, ) -> Result<Box<dyn ThoModule<DI, DO>>, ThoosaError> {
+        let vs = VarStore::new(device);
+
+        SeqBuilder::new(num_features, None)
+            .closure(Box::new(move |t:&Tensor|{
+                debug!("test_label_net: merged final in flatten t.size()={:?}", t.size());
+
+                let t_0 = t.sum_dim_intlist(&[1,2][..], false, None);
+                debug!("test_label_net: merged final out flatten t_0.size()={:?}", t_0.size());
+
+                t_0
+
+            }),
+                     None)
+
+            .linear_s_with_conf(1, LinearConfig {
+                ws_init: init::Init::Const(k),//conflicts with ctor's init
+                bs_init: None,
+                bias: false
+            }, #[cfg(debug_assertions)] descr.to_string())
+            .end_seq().build_tch_module(&vs.root())
+    }
+
+
     #[test]
     fn test_test_net() -> Result<(), ThoosaError>{
         let t_0 = lin_test_tensor(1000, 5);
@@ -3007,6 +3060,7 @@ mod train_tests {
     #[test]
     fn test_apply_motif_nets_padding_max() -> Result<(), ThoosaError>{
         set_max_level(Trace);
+        set_panic_hook();
         reset_print_options();
 
         let input_n = 1000;
@@ -3021,11 +3075,11 @@ mod train_tests {
 
         let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
             vec![(0, 1.0), (1, 1.0)],
-            vec![(0, 1.0)]
+            vec![(0, 1.0)]//motif id == index in mock vec
         ])));
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 5, 100, input_n as u32)
+            WsMockBuilder::new(None, 2, 100, input_n as u32)
                 .with_motif_nets(
                     vec![
                         vec![ //channel 0
@@ -3039,7 +3093,7 @@ mod train_tests {
                 )
                 .build()
         ));
-        let channels_motifs: Vec<Arc<LoadMotifNetOutput>> = block_on(load_channels_motifs(
+        let channels_motifs: Vec<Vec<Arc<LoadMotifNetOutput>>> = block_on(load_channels_motifs(
             1,
             &ws,
             &store,
@@ -3111,6 +3165,7 @@ mod train_tests {
     fn test_apply_motif_nets_padding_fixed() -> Result<(), ThoosaError>{
         set_max_level(Trace);
         reset_print_options();
+        set_panic_hook();
 
         let input_n = 1000;
         let motif_width = 100u32;
@@ -3125,7 +3180,7 @@ mod train_tests {
 
         let store = Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
             vec![(0, 1.0), (1, 1.0)],
-            vec![(0, 1.0)]
+            vec![(2, 1.0)]//2 used as index in with_label_nets
         ])));
 
 
@@ -3138,7 +3193,9 @@ mod train_tests {
                               motif_test_net(motif_width, 2., Cpu),
                         ],
                         vec![ //channel 1
-                              motif_test_net(motif_width, 10., Cpu),
+                              motif_test_net(motif_width, 0., Cpu),//dummy
+                              motif_test_net(motif_width, 0., Cpu),//dummy
+                              motif_test_net(motif_width, 10., Cpu),//taken in with_label_nets by motif_id as index
                         ]
                     ]
                 )
@@ -3211,7 +3268,7 @@ mod train_tests {
             vec!["Label_0".to_string(), "Label_1".to_string()],
             &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],
-                vec![(0, 1.0)]
+                vec![(2, 1.0)]
             ]))),
             &Arc::new(RwLock::new(
                 WsMockBuilder::new(None, 5, 100, input_n as u32)
@@ -3222,7 +3279,9 @@ mod train_tests {
                                 motif_test_net(motif_width, 2., Cpu),
                           ],
                           vec![ //channel 1
-                                motif_test_net(motif_width, 10., Cpu),
+                                motif_test_net(motif_width, 0., Cpu),   //dummy
+                                motif_test_net(motif_width, 0., Cpu),   //dummy
+                                motif_test_net(motif_width, 10., Cpu),  //taken in with_label_nets by motif_id as index
                           ]
                         ]
                 )
@@ -3255,14 +3314,14 @@ mod train_tests {
     }
 
     fn dummy_runner() -> Arc<ThoRunner> {
-        Arc::new(ThoRunner::new(&[1], move |key, _| {
+        Arc::new(ThoRunner::new(&[1, 1], move |key, _| {
             ThoTensor::new(Input::id(key).clone(), Tensor::rand([100, 3], FLOAT_CPU))
         }))
     }
 
     #[test]
     fn test_apply_label_nets_max_padding() -> Result<(), ThoosaError> {
-        set_max_level(Trace);
+        set_max_level(Debug);
         reset_print_options();
 
         let input_n = 1000;
@@ -3270,9 +3329,9 @@ mod train_tests {
         let step = 10; //1 - step==motif_width slices do not overlap so net output - sum(slice)*k
         let slices = (input_n-motif_width)/step + 1;
 
-        //batch 2 x channels 5 x n 1000
-        let t_0 = lin_test_tensor(input_n as i64, 5);
-        let t_1 = lin_test_tensor(input_n as i64 / 2, 5);
+        //batch 2 x channels 2 x n 1000
+        let t_0 = lin_test_tensor(input_n as i64, 2);
+        // let t_1 = lin_test_tensor(input_n as i64 / 2, 2);
         // let batch = Tensor::stack(&[t_0, t_1], 0);
 
 
@@ -3281,10 +3340,10 @@ mod train_tests {
             vec!["Label_0".to_string(), "Label_1".to_string()],
             &Arc::new(RwLock::new(mock_store_with_find_motifs_run_config(step as i32, motif_width as i32, vec![
                 vec![(0, 1.0), (1, 1.0)],
-                vec![(0, 1.0)]
+                vec![(2, 1.0)]
             ]))),
             &Arc::new(RwLock::new(
-                WsMockBuilder::new(None, 5, 100, input_n)
+                WsMockBuilder::new(None, 2, 100, input_n)
                     .with_motif_nets(
                         vec![
                             vec![ //channel 0
@@ -3292,7 +3351,9 @@ mod train_tests {
                                   motif_test_net(motif_width, 2., Cpu),
                             ],
                             vec![ //channel 1
-                                  motif_test_net(motif_width, 10., Cpu),
+                                  motif_test_net(motif_width, 0., Cpu),    //dummy
+                                  motif_test_net(motif_width, 0., Cpu),    //dummy
+                                  motif_test_net(motif_width, 10., Cpu),   //taken in with_label_nets by motif_id as index
                             ]
                         ]
                     )
@@ -3341,7 +3402,7 @@ mod train_tests {
             (
                 0u32,
                 Box::new(move || LabelNetParams::new(2, 3, 3, 100, params.clone())),
-                Box::new(move || ThoModuleWithStore::new(test_net(num_features, k, device, "test_label_net").unwrap()))
+                Box::new(move || ThoModuleWithStore::new(test_label_net(num_features, k, device, "test_label_net").unwrap()))
             )
         ]
     }
@@ -3421,8 +3482,8 @@ mod train_tests {
     fn test_apply_motif_models_diff_len() -> Result<(), ThoosaError>{
         let input_n_0 = 1000;
         let motif_width= 120;
-        let t_0 = lin_test_tensor(input_n_0, 5);//.unsqueeze(0);
-        let t_1 = lin_test_tensor(831, 5);//.unsqueeze(0);
+        let t_0 = lin_test_tensor(input_n_0, 3);//.unsqueeze(0);
+        let t_1 = lin_test_tensor(831, 3);//.unsqueeze(0);
 
         debug!(" t_0.size()={:?}, t_1.size()={:?}", t_0.size(), t_1.size());
 
@@ -3442,6 +3503,8 @@ mod train_tests {
                           motif_test_net(motif_width, 1., Cpu),
                     ],
                     vec![ //channel 1
+                          motif_test_net(motif_width, 0., Cpu),
+                          motif_test_net(motif_width, 0., Cpu),
                           motif_test_net(motif_width, 10., Cpu),
                     ],
                     vec![]
