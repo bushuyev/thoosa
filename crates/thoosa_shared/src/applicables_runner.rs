@@ -585,7 +585,7 @@ impl FuturesRunner {
         O: Output + Send + Sync + 'static,
         I: Input+Send+Sync+'static,
     {
-        let map_name = map_with_thread.name();
+        // let map_name = map_with_thread.name();
         map_with_thread.pool.install(move || {
             let device = applicable.device();
             let id = applicable.applied_id(input.id());
@@ -612,14 +612,14 @@ impl FuturesRunner {
             match entry.unwrap() {*/
 
 
-            let entry_op = map_with_thread.map.try_entry(id.clone());
-            if entry_op.is_none() {
-                error!("map {map_name} is locked for entry id={id} ");
-            } else {
-                debug!("map {map_name} is available for entry id={id} ");
-            }
+            // let entry_op = map_with_thread.map.try_entry(id.clone());
+            // if entry_op.is_none() {
+            //     error!("map {map_name} is locked for entry id={id} ");
+            // } else {
+            //     debug!("map {map_name} is available for entry id={id} ");
+            // }
 
-            let fut = match entry_op.unwrap() {
+            let fut = match map_with_thread.map.entry(id.clone()) {
                 Entry::Occupied(mut e) => {
                     self.statistics.on_copy(input.id());
                     debug!("run_cached_task: id={debug_id:?} Occupied ");
@@ -670,6 +670,7 @@ impl FuturesRunner {
     ) {
         let pool  = self.device_pools.get_pool(device);
         let cache_area = ctx.cache_area();
+        debug!("purge_all_gpu_caches: cache_area={cache_area:?} device={device:?}");
 
         join_all(ctx
             .into_cached_iter_mut()

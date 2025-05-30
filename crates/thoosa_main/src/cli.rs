@@ -867,6 +867,9 @@ pub async fn run_train_label_nets_2(
     debug!("run_train_label_nodes: run_configs={run_configs:?} resource_config={resource_config:?} cuda_mem={:?}", cuda_mem());
 
     let (train_labels_resource_keys, valid_label_resource_keys) = resource_config.to_resources(store)?;
+    let ctx_for_motif_nets = runner.next_ctx();
+    let runner_for_motif_nets_purge = Arc::clone(&runner);
+    // let ctx_for_motif_nets_purge = Arc::clone(&ctx_for_motif_nets);
 
     debug!(
         "run_train_label_nodes: train_resource_keys={:?} valid_resource_keys={:?}",
@@ -904,7 +907,8 @@ pub async fn run_train_label_nets_2(
                 ws,
                 store,
                 devices[0],
-                &runner
+                &runner,
+                Some(Arc::clone(&ctx_for_motif_nets))
             ).await;
 
             Arc::new(
@@ -924,22 +928,19 @@ pub async fn run_train_label_nets_2(
         .zip(train_labels_resource_keys.chunks(chunk_len).into_iter())
         .collect::<Vec<(Device, &[(String, Vec<Resource>)])>>();
 
-    let ctx = runner.next_ctx();
-    let runner_for_purge = Arc::clone(&runner);
-    let ctx_for_purge = Arc::clone(&ctx);
 
 
     let savables_res = try_join_all(devices__resources
         .into_iter()
         .flat_map(move |(device_i, train_resource_keys_chunk)| {
-            let ctx = Arc::clone(&ctx);
+
             let valid_datasets_map_clone = valid_datasets_map.clone(); //TODO
             let selected_motifs_for_label_applicable = selected_motifs_for_label_applicable.clone(); //TODO
             let train_label_net_applicable = Arc::new(TrainLabelNetApplicable::new(device_i));
 
             train_resource_keys_chunk.iter().flat_map( move |(label, resource_keys)| {
                 debug!("run_train_label_nodes: label={label} resource_keys={resource_keys:?} cuda_mem={:?}", cuda_mem());
-                let ctx = Arc::clone(&ctx);
+
                 let train_resource_keys_len = resource_keys.len();
                 let valid_resource_keys = valid_datasets_map_clone.get(label).expect(format!("valid dataset for {}", label).as_str()).clone();
                 let valid_resource_keys_len = valid_resource_keys.len();
@@ -964,7 +965,7 @@ pub async fn run_train_label_nets_2(
                     let train_labels_resources =  Arc::clone(&train_labels_resources);
                     let valid_labels_resources = Arc::clone(&valid_labels_resources);
                     let motifs_nets_selection_applicable_arc = Arc::clone(&motifs_nets_selection_applicable);
-                    let ctx = Arc::clone(&ctx);
+                    
                     let train_label_net_applicable = Arc::clone(&train_label_net_applicable);
                     async move {
                         Ok(runner.run(
@@ -985,8 +986,8 @@ pub async fn run_train_label_nets_2(
         })).await;
 
 
-    let arc_count = Arc::strong_count(&ctx_for_purge);
-    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_purge).expect(&format!("Arc::into_inner(ctx_for_purge) in train label nets: arc_count={arc_count}")).into_inner(), device_for_purge).await;
+    let arc_count = Arc::strong_count(&ctx_for_motif_nets);
+    runner_for_motif_nets_purge.purge_all_gpu_caches(Arc::into_inner(ctx_for_motif_nets).expect(&format!("Arc::into_inner(ctx_for_purge) in train label nets: arc_count={arc_count}")).into_inner(), device_for_purge).await;
 
     savables_res
 }
@@ -3001,7 +3002,8 @@ mod cli_tests {
             devices.clone(),
             "Test/TrainFinalNets",
         )?;
-        
+
+        log::logger().flush();
         info!("runner.statistics: {:?}", runner.futures_runner().statistics());
         Ok(train_final_nodes_run_ids)
     }
