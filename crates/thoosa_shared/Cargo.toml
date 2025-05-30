@@ -30,3 +30,4 @@ crossbeam-channel.workspace = true
 futures.workspace = true
 futures-util.workspace = true
 async-trait.workspace = true
+time="0.3.41"

@@ -291,10 +291,10 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&M
     // total_samples += batch_size_i;
 
     let mut means_guard = means_acc.lock();
-    debug!("new_total_means: 0. means_guard=\n{means_guard} thread name={:?}", std::thread::current().name());
+    debug!("new_total_means: 0. means_guard=\n{means_guard} ");
 
     let mut total_samples_guard = total_samples.lock();
-    debug!("new_total_means: 1. total_samples_guard=\n{total_samples_guard} thread name={:?}", std::thread::current().name());
+    debug!("new_total_means: 1. total_samples_guard=\n{total_samples_guard} ");
 
     // let means_device = total_samples_guard.device();
 

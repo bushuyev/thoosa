@@ -203,24 +203,24 @@ pub async fn load_tensor<DI:Dims+Send+Sync, DO:Dims+Send+Sync, F:Fn(ThoTensor<DI
     resource_id: Resource,
     // class: i64
 ) -> ThoTensor<DO>{
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area:?} thread name={:?}",  thread::current().name());
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area:?} ");
 
 
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area:?}  thread name={:?}",  thread::current().name());
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 1 resource_id={resource_id:?} area={area:?}  ");
     let resource_id_debug = resource_id.clone();
     // let t = Loader::<Tensor>::load_future(Arc::clone(&loader), resource_id, area, future_id, done_sender).await;
     let t = loader.run_loader(&resource_id, &Device::Cpu, Some(Arc::clone(&area))).await;//TODO device
 
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} ");
 
     let t = if let Some(transform) = transform_fn {
         transform.read()(t.shallow_clone().into())//TODO move load_tensor into Batch args to return correct DO
     } else {
         t.shallow_clone().into()
     };
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} ");
     // x_y_acc_in_exec.push((t.into(), class));
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} thread name={:?}", thread::current().name());
+    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} ");
     t
 }
 
@@ -356,7 +356,7 @@ impl <DI:Dims, DO:Dims,/* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/> A
 
         let x_y_vecs_mx = Arc::new(Mutex::new((vec![], vec![])));
 
-        let x_y_acc_in_exec = Arc::clone(&x_y_vecs_mx);
+        let x_y_acc_in_exec = Arc::clone(&x_y_vecs_mx);//TODO join all
 
         // let mut transform_fn = transform_fn.as_ref().map(|v|v.clone());
 
@@ -379,7 +379,7 @@ impl <DI:Dims, DO:Dims,/* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/> A
             );
 
         }
-        loader.purge_all_gpu_caches(Arc::into_inner(area).unwrap().into_inner(), *device).await;
+        // loader.purge_all_gpu_caches(Arc::into_inner(area).unwrap().into_inner(), *device).await;
 
 
         debug!("ClassTensorsLoaderData::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}", x_y_vecs_mx.lock().0.len());
