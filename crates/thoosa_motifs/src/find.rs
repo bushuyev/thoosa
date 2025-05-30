@@ -1731,7 +1731,11 @@ pub async fn select_motifs_for_label_2(
     devices: Vec<Device>,
 ) -> Result<Option<Vec<Box<dyn SavableResult>>>, ThoosaError> {
     let motifs_area = runner.next_ctx();
+    let runner_for_purge = Arc::clone(&runner);
+    
+    let motifs_area_for_purge = Arc::clone(&motifs_area);
     let labels_resources = resource_config.to_resources(store)?;
+    let device = devices[0];//TODO
 
     debug!("select_motifs_for_label: select_motif_run_configs={select_motif_run_configs:?}");
     trace!("select_motifs_for_label: labels_resources={labels_resources:?}");
@@ -1777,7 +1781,7 @@ pub async fn select_motifs_for_label_2(
                 )
             })
         })).await?; //.into_iter().collect::<Result<Vec<(FindMotifsRunConfig, (MotifsTensors, HashMap<String, SyncWrapper<Tensor>>))>, ThoosaError>>()?;
-        // runner.purge_all_gpu_caches(motifs_area, devices[0]);
+        
 
         debug!("select_motifs_for_label: motifs_tensors loaded");
 
@@ -1795,11 +1799,11 @@ pub async fn select_motifs_for_label_2(
                     debug!("select_motifs_for_label: label={label} resources cfg={cfg:?} chunk.t.size={:?} motifs_tensors={:?} broadcast_to_size={broadcast_to_size:?}", chunk.t.size(), motif_tensors); //chunk.t
 
                     let (mask, _) = clc_dist_d2_and_mask(
-                        motif_tensors.channels_motifs_slices.to_device(devices[0]),
-                        chunk.t.to_device(devices[0]),
+                        motif_tensors.channels_motifs_slices.to_device(device),
+                        chunk.t.to_device(device),
                         false,
                         //compare distances between tensor and motifs to motif's average distance
-                        &mut [Le { v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(devices[0]) }],
+                        &mut [Le { v: motif_tensors.channels_motifs_avg_dists.unsqueeze(2).broadcast_to(broadcast_to_size).to_device(device) }],
                     )?;
                     let mask = mask.to_device(Cpu);
                     trace!("select_motifs_for_label: label={label} mask=\n{mask}");
@@ -1825,6 +1829,8 @@ pub async fn select_motifs_for_label_2(
         
         Ok(find_motifs_run_config_motifs_tensors)
     }.await;
+
+    runner_for_purge.purge_all_gpu_caches(Arc::into_inner(motifs_area_for_purge).unwrap().into_inner(), device).await;
 
      Ok(Some(find_motifs_run_config_motifs_tensors?.into_iter()
         .filter(|(find_motif_run_cfg, (motifs_tensors, label_motif_matches_sums))| {
