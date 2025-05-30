@@ -123,7 +123,7 @@ impl <DI:Dims, DO:Dims> MyParallel<DI, DO> {
 
     pub fn new(layers: Vec<Box<dyn ThoModule<DI, DO>>>, split:Box<dyn Fn(&Tensor)->Vec<Tensor> + Send + Sync>, join:Box<dyn Fn(Vec<Tensor>)->Tensor + Send + Sync>) -> Self {
 
-        assert!(layers.len() > 0, "layers len > 0");
+        assert!(layers.len() > 0, "layers len == 0");
 
         Self {
             layers,

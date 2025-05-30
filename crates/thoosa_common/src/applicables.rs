@@ -14,6 +14,7 @@ use thoosa_shared::applicables_runner::{CachableId, DataInDevices, DeviceThreadP
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{Cachable, Runnable};
 use crate::find_motifs_run_config::FindMotifsApplicable;
+use crate::train_nets::{LoadMotifNetCachable, LoadMotifNetInput, LoadMotifNetOutput};
 
 #[derive(Debug, Clone)]
 pub struct ThoDevice(Device);
@@ -54,6 +55,7 @@ pub struct ThoRunCtx {
 
     loaded: Vec<CachableId>,
     find_motifs: Vec<CachableId>,
+    motif_nets: Vec<CachableId>,
 }
 
 impl ThoRunCtx {
@@ -62,6 +64,7 @@ impl ThoRunCtx {
             cache_area,
             loaded: Vec::new(),
             find_motifs: Vec::new(),
+            motif_nets: Vec::new(),
         }
     }
 }
@@ -71,6 +74,7 @@ impl RunCtx for ThoRunCtx {
         [
             self.loaded,
             self.find_motifs,
+            self.motif_nets,
         ].into_iter()
     }
 
@@ -155,6 +159,7 @@ pub struct ThoRunner {
 
     loader_cache_fut: MapWithThread<TCD>,
     find_motifs_cache_fut: MapWithThread<TCDF>,
+    motif_nets_cache_fut: MapWithThread<LoadMotifNetOutput>,
 
     tcd_loaders:Vec<Arc<TCDLoader>>
 }
@@ -185,6 +190,8 @@ impl ThoRunner {
             loader_cache_fut: MapWithThread::new("loader_cache"),
 
             find_motifs_cache_fut: MapWithThread::new("find_motifs_cache"),
+
+            motif_nets_cache_fut: MapWithThread::new("motif_nets_cache_fut"),
             tcd_loaders
         }
     }
@@ -235,6 +242,26 @@ impl ThoRunner {
 
         self.futures_runner.run_cached_task(
             &self.find_motifs_cache_fut,
+            Arc::clone(&input),
+            applicable,
+            self,
+            ctx,
+        )
+    }
+
+    pub fn run_load_motif(
+        self: &Arc<Self>,
+        input: &Arc<LoadMotifNetInput>,
+        applicable: &Arc<LoadMotifNetCachable>,
+        ctx: Option<Arc<RwLock<ThoRunCtx>>>
+    ) -> Shared<BoxFuture<'static, Arc<LoadMotifNetOutput>>> {
+
+        if let Some(ctx) = ctx.as_ref() {
+            ctx.write().motif_nets.push(<LoadMotifNetCachable as Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::applied_id(applicable, input.id()));
+        }
+        
+        self.futures_runner.run_cached_task(
+            &self.motif_nets_cache_fut,
             Arc::clone(&input),
             applicable,
             self,

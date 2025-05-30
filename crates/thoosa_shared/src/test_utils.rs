@@ -1,6 +1,6 @@
 use std::cmp::max;
 use std::sync::atomic::Ordering;
-use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
+use simplelog::{format_description, ColorChoice, CombinedLogger, Config, ConfigBuilder, TermLogger, TerminalMode, ThreadLogMode, ThreadPadding};
 use log::{debug, error, trace, LevelFilter};
 use std::env;
 use std::env::VarError;
@@ -23,7 +23,16 @@ pub fn init_test_logging() {
             vec![
                 TermLogger::new(
                     LevelFilter::Trace,//to let set trace level from tests with set_max_level
-                    Config::default(),
+                    ConfigBuilder::new()
+                        // Optional: pick the exact date/time layout you want
+                        .set_time_format_custom(format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"))
+                        // Print the *name* (or the ID if unnamed); use `Both` to fall back automatically
+                        .set_thread_mode(ThreadLogMode::Names)
+                        // Show it for every record (Error is the highest-priority level, so this means “always”)
+                        .set_thread_level(LevelFilter::Error)
+                        // Optional: pad so columns line up nicely
+                        .set_thread_padding(ThreadPadding::Right(12))
+                        .build(),
                     TerminalMode::Mixed,
                     ColorChoice::Auto
                 )
@@ -31,6 +40,8 @@ pub fn init_test_logging() {
         ).unwrap_or_else(|e| {
             debug!("CombinedLogger::init failed: {:?}", e);
         });
+
+
 
         log::set_max_level(
             env::var("RUST_LOG").and_then(|v| LevelFilter::from_str(v.as_str()).map_err(|e| {
@@ -47,13 +58,36 @@ pub fn init_test_logging() {
 }
 
 pub fn set_panic_hook() {
-    std::panic::set_hook(Box::new(|panic_info| {
-        let backtrace = std::backtrace::Backtrace::capture();
-        error!("Panic info: {:?}", panic_info);
-        for frame in backtrace.frames() {
-            error!("{:?}", frame);
+    // std::panic::set_hook(Box::new(|panic_info| {
+    //     let backtrace = std::backtrace::Backtrace::capture();
+    //     error!("Panic info: {:?}", panic_info);
+    //     for frame in backtrace.frames() {
+    //         error!("{:?}", frame);
+    //     }
+    //
+    // }));
+    let default_hook = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        debug!("Panic info: {:?}", info);
+        // 1. dump the payload (works for both &str and String)
+        if let Some(s) = info.payload().downcast_ref::<&str>() {
+            log::error!("panic payload: {s}");
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            log::error!("panic payload: {s}");
         }
 
+        // 2. optional extra back-trace
+        // log::error!("{:?}", std::backtrace::Backtrace::force_capture());
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        for frame in backtrace.frames() {
+            debug!("{:?}\n", frame);
+        }
+        log::logger().flush();   // make sure async loggers flush
+
+        // 3. hand control back to the standard reporter so you
+        //    still get the nicely formatted panic + back-trace
+        default_hook(info);
     }));
 }
 

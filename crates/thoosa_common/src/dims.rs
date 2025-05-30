@@ -157,7 +157,7 @@ pub type TCSD = ThoTensor<ChannelsSlicesData>;
 
 impl <D:Dims> AsRef<Tensor> for ThoTensor<D>{
     fn as_ref(&self) -> &Tensor{
-        self.tensor.as_ref()
+        &self.tensor
     }
 }
 
