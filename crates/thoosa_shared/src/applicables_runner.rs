@@ -75,7 +75,7 @@ impl DeviceThreadPools {
 
     pub fn map_pool(pool_name:&str)->ThreadPool {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
+            .num_threads(4)
             .spawn_handler(|thread_builder| {
                 debug!("spawning {pool_name} thread index={}", thread_builder.index());
 

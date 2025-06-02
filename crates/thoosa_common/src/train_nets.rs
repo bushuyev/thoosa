@@ -2364,7 +2364,7 @@ impl LoadMotifNetInput {
     pub fn new(motif_id:u32, channel:u32) -> Self {
         Self {
             motif_id,
-            cache_id: format!("MotifId_{}", motif_id).into(),
+            cache_id: format!("MotifNets_{}", motif_id).into(),
             channel
         }
     }
@@ -2441,7 +2441,6 @@ impl Runnable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
 impl Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachable {
 
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
-        // Cachable::format_0(input_id)
         <LoadMotifNetCachable as Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::format_0(input_id)
     }
 
@@ -3411,7 +3410,7 @@ mod train_tests {
     }
 
     #[test]
-    fn slow_test_apply_motif_models() -> Result<(), ThoosaError> {
+    fn s_low_test_apply_motif_models() -> Result<(), ThoosaError> {
 
         let _device = CudaDevice::new(0)?;
         unsafe {
@@ -4622,8 +4621,18 @@ TODO
         //TODO
     }
 
-    // #[test]
-    // fn test_0(){
+    #[test]
+    fn test_0(){
+        struct A;
+
+        fn func(a:&A) {
+
+        }
+
+        let a_rc = Rc::new(A);
+
+        func(&a_rc);
+
     //     struct Outer {
     //         inn:RwLock<Inner>
     //     }
@@ -4666,7 +4675,7 @@ TODO
     //
     //
     //     })
-    // }
+    }
 
 
 }
