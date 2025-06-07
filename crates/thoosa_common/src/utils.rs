@@ -404,13 +404,7 @@ pub trait Splittable<const SIZE: usize> {
     fn split(&self) -> Option<[Self; SIZE]> where Self: Sized;
 }
 
-struct Z {
 
-}
-//
-// impl <const SIZE: usize, S> for Rw {
-//
-// }
 
 impl <R, S> Splittable<1> for RwLock<R,S>
 where R: RawRwLock {

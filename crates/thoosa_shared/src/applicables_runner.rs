@@ -930,7 +930,7 @@ mod tests {
             dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
 
             for step in 0..self.steps {
-                yield_n(1).await;
+                // yield_n(1).await;
                 dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
             }
 
