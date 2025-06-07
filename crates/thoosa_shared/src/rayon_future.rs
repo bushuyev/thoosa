@@ -81,8 +81,7 @@ impl<'scope> ScopeFutureExt<'scope> for rayon::Scope<'scope> {
         }));
 
 
-        let shared_init = shared.clone();
-        self.spawn(move |_| poll_once(&shared_init));
+        self.spawn(move |_| poll_once(&shared));
 
         RayonFuture { rx }
     }
@@ -111,7 +110,6 @@ impl<T> RayonFuture<T> {
             tx: Some(tx),
         }));
 
-        // let shared_init = shared.clone();
         rayon::spawn(move || poll_once(&shared));
 
         RayonFuture { rx }
