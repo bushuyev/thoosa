@@ -5049,6 +5049,7 @@ dependencies = [
  "parking_lot",
  "rand 0.9.2",
  "tch",
+ "thoosa_common",
  "tokio",
  "tokio-utils",
  "torch-sys",
