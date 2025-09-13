@@ -3,7 +3,7 @@ use crate::common::cachable::DataCacheWrapper;
 use crate::common::runnable::Runnable;
 use crate::common::{CopyToDevice, Data, DropIf, Named, OutId};
 use crate::common::{MyError, RunCtx};
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 #[double]
 use crate::global_ctx::GlobalCtx;
 use crate::statistics::Statistics;
@@ -279,7 +279,7 @@ where
         // Identify this task by its output id for Arbiter fairness.
         let out_key = {
             let out_id = task.out_id(input.id());
-            std::sync::Arc::new(out_id) as std::sync::Arc<dyn CachableId>
+            std::sync::Arc::new(out_id) as std::sync::Arc<dyn CachableIdTr>
         };
 
         if run_context.read().acquired_permits() == 0 {

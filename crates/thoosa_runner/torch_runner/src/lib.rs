@@ -102,7 +102,7 @@ mod tests {
     use caching_runner_test::FailUntil::MinPermits;
     use caching_runner_test::{run_mul_task_invocations, FailUntil, ClcOOMRunner, OOMRunnerConfig};
     use caching_runner::common::{Data, DropIf, Input, MyError, Named, OutId, RunCtx, WithId};
-    use caching_runner::common::cachable::CachableId;
+    use caching_runner::common::cachable::CachableIdTr;
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -689,8 +689,8 @@ mod tests {
 
             println!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id.name()={:?}", output_id.name());
 
-            let _set_loaded = [&loaded_id as &dyn CachableId].into_iter().collect::<HashSet<&dyn CachableId>>();
-            let _set_mul = [&output_id as &dyn CachableId].into_iter().collect::<HashSet<&dyn CachableId>>();
+            let _set_loaded = [&loaded_id as &dyn CachableIdTr].into_iter().collect::<HashSet<&dyn CachableIdTr>>();
+            let _set_mul = [&output_id as &dyn CachableIdTr].into_iter().collect::<HashSet<&dyn CachableIdTr>>();
 
             let required_ids = HashMap::from([
                 // (loaded_id_name, &set_loaded),
@@ -1149,11 +1149,11 @@ mod tests {
 
         let mut loaded_tensors_ids = HashSet::new();
         let loaded_tensor_3 = SimpleId::from("loaded_resource_3");
-        loaded_tensors_ids.insert(&loaded_tensor_3 as &dyn CachableId);
+        loaded_tensors_ids.insert(&loaded_tensor_3 as &dyn CachableIdTr);
 
         let mut multed_tensors_ids = HashSet::new();
         let mult_mul_task_0_inp_loaded_resource_3 = SimpleId::from("mult_mul_task_0_inp_loaded_resource_3");
-        multed_tensors_ids.insert(&mult_mul_task_0_inp_loaded_resource_3 as &dyn CachableId);
+        multed_tensors_ids.insert(&mult_mul_task_0_inp_loaded_resource_3 as &dyn CachableIdTr);
 
 
         let mut required_ids = HashMap::new();

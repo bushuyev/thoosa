@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::{Notify, OwnedSemaphorePermit};
 use crate::common::MyError;
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 
 pub mod runner_queue;
 pub mod runner_semaphore;
@@ -36,7 +36,7 @@ pub trait PermitSource:Debug + Send + Sync {
     async fn acquire(
         &self,
         n: NumPermits,
-        out_id: std::sync::Arc<dyn CachableId>,
+        out_id: std::sync::Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, MyError>;
 }
 
