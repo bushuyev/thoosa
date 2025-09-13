@@ -13,7 +13,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let target_ident = &ast.ident;
     let target_ident_prefix = format!("{}::", ast.ident);
 
-    eprintln!("thoosa_args_derive: target_struct_ident={target_ident:?}");
+    //eprintln!("thoosa_args_derive: target_struct_ident={target_ident:?}");
 
     match &ast.data {
         syn::Data::Struct(data_struct) => {
