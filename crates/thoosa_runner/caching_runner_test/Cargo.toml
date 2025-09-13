@@ -1,0 +1,21 @@
+[package]
+name = "caching_runner_test"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+caching_runner = { path = "../caching_runner" }
+
+dashmap.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+parking_lot.workspace = true
+async-trait.workspace = true
+cached_derive.workspace = true
+ambassador.workspace = true
+rand.workspace = true
+
+
+[dev-dependencies]
+mockall.workspace = true
+console-subscriber.workspace = true
