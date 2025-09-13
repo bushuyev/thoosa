@@ -710,24 +710,24 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
 
 
 #[cfg(test)]
-pub async fn dummy_load(statistics: &Statistics, input: &Arc<CachableId>) {
+pub async fn dummy_load(statistics: &Statistics, _input: &Arc<CachableId>) {
 
 
-    for i in 0..DUMMY_LOAD_N {
-        let i = 0;
+    for _i in 0..DUMMY_LOAD_N {
+        let _i = 0;
         async {
 
             let t_0 = Instant::now();
 
             let a = vec![0.1; 1_000_000];
             let b = vec![0.1; 1_000_000];
-            let c = a.into_iter().zip(b.into_iter()).map(|(a, b)| a + b).collect::<Vec<f32>>();
+            let _c = a.into_iter().zip(b.into_iter()).map(|(a, b)| a + b).collect::<Vec<f32>>();
 
             statistics.track_pure_run_time(t_0.elapsed().as_millis() as u64);
 
         }.await;
 
-        debug!("dummy_load i={i} thread={:?}", std::thread::current().name());
+        debug!("dummy_load i={_i} thread={:?}", std::thread::current().name());
     }
 
 }
@@ -757,6 +757,7 @@ fn yield_n(n: usize) -> impl Future<Output = ()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports, dead_code, unused_variables)]
     use std::borrow::Cow;
     use super::{dummy_load, Cachable, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, CachableId, RunCtx, Runner, ToOrdinal, DeviceThreadPools, MapWithThread, yield_n};
     use crate::rayon_future::ScopeFutureExt;

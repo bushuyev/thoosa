@@ -2,19 +2,14 @@ use crate::cli::Commands::{FindMotifs, ImportResources, Infer, MotifsToTensor, P
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors, ParquetLoader};
 use clap::{Args, Parser, Subcommand};
-// removed unused futures_util imports
-// removed unused lazy_static
 use log::{debug, error, info, trace, warn, Level, LevelFilter};
 use parking_lot::RwLock;
-// removed unused plotters BLACK
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::cmp::max;
 use std::collections::HashMap;
-// removed unused std::error::Error
 use std::fmt::Debug;
 use std::fs::{read_dir, File, OpenOptions};
-// removed unused std::hash::Hash
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -23,12 +18,9 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::{fs, process};
-// removed unused std::future::Future
 use std::ops::Deref;
-// removed unused std::pin::Pin
 use async_trait::async_trait;
 use futures::executor::block_on;
-// removed unused futures_util::FutureExt
 use futures_util::future::{join_all, try_join_all};
 use tch::nn::VarStore;
 use tch::Device::Cpu;
@@ -36,7 +28,6 @@ use tch::Kind::Float;
 use tch::{Device, Tensor};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
-// removed unused parzen ConfigurationSpace
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use thoosa_common::train_nets::{load_channels_motifs, load_final_model, opt_train, opt_train_2, run_opt_train_label_nets, run_train_motif_net, train_final_net, train_final_net_2, train_label_net_2, CommonTrainingRunConfig, FinalNetApplicable, FinalNetParams, InferArgs, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetParams, LabelNetsApplicable, MotifNetParams, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TensorsDataBatch, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifsNetsArgs, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigResult};
 use thoosa_common::utils::{cuda_mem, from, list_devices, DummyListener, TrainListener};
@@ -44,7 +35,6 @@ use thoosa_common::train_nets;
 use thoosa_motifs::find;
 use thoosa_motifs::find::{find_motifs_by_euc_dist_2, select_motifs_for_label, FindMotifsArgs, SelectMotifsArgs};
 use thoosa_motifs::fragments::{load_motif_slices, load_motif_slices_2, motifs_to_tensor, MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs};
-// removed unused parse_range_or_value, slices_len
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{
     cdt, cdt_for_dir, ThoosaError,
@@ -57,14 +47,12 @@ use thoosa_common::dims::{Batch, ChannelsData, ThoTensor, TCD};
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
 use crate::version::VERSION;
 use thoosa_common::ws::{FsWorkspace, Workspace};
-// removed unused average_euclidean_distance
 use thoosa_properties_map::ToHashmap;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::{Runner, ToOrdinal};
-// removed unused ScopeFutureExt
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]

@@ -653,6 +653,7 @@ impl DataBatch<ChannelsData> for EEGs {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports, dead_code, unused_variables)]
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::path::Path;

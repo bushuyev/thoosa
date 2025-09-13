@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use lewton::inside_ogg::OggStreamReader;
 use log::debug;
 use ogg::reading::PacketReader;
-// removed unused polars imports while CSV parsing remains commented out
 use tch::Tensor;
 use thoosa_shared::ThoosaError;
 
@@ -112,6 +111,7 @@ pub fn resource_to_tensor(source_path:&dyn AsRef<Path>, key:&str) -> Result<Tens
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports, dead_code, unused_variables)]
     use std::fs;
     use std::fs::OpenOptions;
     use std::io::{BufWriter, Write};

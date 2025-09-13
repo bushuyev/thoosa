@@ -75,6 +75,7 @@ pub fn comment(field: &&Field, field_name: &String) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports)]
     use std::fmt::{Debug, Display, Formatter};
     use std::hash::Hash;
     use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
