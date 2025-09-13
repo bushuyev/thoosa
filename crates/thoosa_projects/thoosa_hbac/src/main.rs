@@ -1,10 +1,8 @@
 mod data;
 
 use std::time::Instant;
-use log::{debug, error, info};
+use log::{error, info};
 use tch::Device::Cpu;
-use tch::kind::FLOAT_CUDA;
-use tch::Tensor;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
 

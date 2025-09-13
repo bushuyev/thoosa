@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::{format_ident, quote, ToTokens};
-use syn::{parse2, parse_macro_input, Attribute, DeriveInput, Field, Lit, Path, Variant};
+use syn::{parse_macro_input, DeriveInput};
 use syn::spanned::Spanned;
 use thoosa_macros_utils::*;
 
@@ -177,7 +177,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                             self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
                                         }
                                     });
-                                    let expect_msg = format!("no {}", field_ident);
+                    let expect_msg = format!("no {}", field_ident);
 
                                     a.builder_assignments.push(quote!{
                                         #field_ident: self.#field_ident.expect(#expect_msg),
@@ -250,8 +250,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     }
                                 });
 
-                                let expect_msg = format!("no {}", field_ident);
-
+                                // keep for clearer error in expect below
                                 a.builder_assignments.push(quote!{
                                     #field_ident: self.#field_ident.clone(),
                                 });
@@ -611,4 +610,3 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
     gen.into()
 }
-

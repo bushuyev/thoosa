@@ -1,13 +1,12 @@
 use std::marker::PhantomData;
 use std::fmt::Debug;
-use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::{make_combos, ThoosaError};
 use crate::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
-use crate::val::{NamedRange, NamedVal, Val};
+use crate::val::{NamedRange, NamedVal};
 
 ////
 #[derive(Debug, Clone)]
@@ -134,7 +133,7 @@ where  In: Send + Sync,
 {
     type R: Runner + Sync + Send;
 
-    fn run(&self, input: In, params: P) -> Result<Out, ThoosaError> {
+    fn run(&self, _input: In, _params: P) -> Result<Out, ThoosaError> {
         Err(ThoosaError::new("Not implemented yet"))
     }
 
@@ -171,6 +170,7 @@ pub trait Cachable<In, Out, P>:Runnable<In, Out, P> + Debug + Sync + Send
 }
 
 //TODO move from_properties_map__ into here + all run config meta data id, description, date, running time
+#[allow(dead_code)]
 pub struct RunConfigHolder<R:RunConfig> {
     id:RunId,
     run_config: R,
@@ -179,7 +179,7 @@ pub struct RunConfigHolder<R:RunConfig> {
 
 impl<R:RunConfig> RunConfigHolder<R> {
 
-    pub fn new(id:RunId, run_config: R, descr:&str) -> Self {
+    pub fn new(id:RunId, run_config: R, _descr:&str) -> Self {
         Self {
             id,
             run_config,
@@ -188,4 +188,3 @@ impl<R:RunConfig> RunConfigHolder<R> {
         }
     }
 }
-

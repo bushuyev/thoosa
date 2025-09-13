@@ -2790,7 +2790,7 @@ pub struct TrainFinalNetRunConfig {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
-struct FinalNetArgs {
+pub struct FinalNetArgs {
     #[in_map]
     #[run_config]
     pub num_layers: u32,

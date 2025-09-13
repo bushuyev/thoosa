@@ -1,12 +1,9 @@
-use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::fmt::Display;
 use std::hash::{Hash, Hasher};
-use clap::builder::Str;
-use log::{debug, trace};
+use log::trace;
 use std::sync::Arc;
 use mockall::automock;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use crate::applicables_runner::{CachableId, Input};
 use crate::ThoosaError;
 
