@@ -4403,13 +4403,13 @@ mod train_tests {
         let mut out = Tensor::zeros(&[n], (Kind::Float, device));
 
         // Fill the m-th entry with the dominant fraction
-        out.get(m).fill_(fraction);
+        let _ = out.get(m).fill_(fraction);
 
         // Prepare indices for all entries except m
         let indices: Vec<i64> = (0..n).filter(|&idx| idx != m).collect();
 
         // Put the scaled_others values into out at positions other than m
-        out.index_put_(&[Some(Tensor::from_slice(indices.as_slice()))], &scaled_others, false);
+        let _ = out.index_put_(&[Some(Tensor::from_slice(indices.as_slice()))], &scaled_others, false);
 
         out
     }

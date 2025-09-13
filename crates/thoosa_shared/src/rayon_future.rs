@@ -133,6 +133,7 @@ impl<T> Future for RayonFuture<T> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports)]
     use std::sync::Arc;
     use std::thread;
     use std::time::Instant;
@@ -212,7 +213,7 @@ mod tests {
         let t_0 = Instant::now();
         let statistics = Arc::new(Statistics::new());
 
-        main_pool.scope(|scope| {
+        main_pool.scope(|_scope| {
             let _ = (0..10).into_par_iter().map(|_| {
                 let load_time = Arc::clone(&statistics);
                 block_on(async move {//done in 5567 load time=54473

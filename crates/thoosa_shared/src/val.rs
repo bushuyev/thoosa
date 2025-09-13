@@ -616,8 +616,7 @@ impl <T: FieldName> TryFrom<&NamedVal<T>> for u32 {
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
-    use crate::RangeOrValue;
+    
     use crate::val::{NamedRange, NamedVal, Val};
 
 

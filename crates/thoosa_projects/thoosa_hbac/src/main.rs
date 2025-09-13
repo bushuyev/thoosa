@@ -49,6 +49,7 @@ fn main()  {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports, dead_code, unused_variables)]
     use std::any::Any;
     use std::ffi::c_void;
     use std::sync::atomic::AtomicU64;

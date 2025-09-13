@@ -17,12 +17,10 @@ use chrono::SecondsFormat;
 use log::{debug, error, trace};
 use rand::Rng;
 use regex::Regex;
-// removed unused simplelog/env imports
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use bytemuck::{Pod, Zeroable};
-// removed unused clap::Subcommand
 use lazy_static::lazy_static;
 use num_traits::PrimInt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -34,7 +32,6 @@ pub mod repeat_iter;
 pub mod val;
 pub mod resource;
 
-#[cfg(test)]
 pub mod test_utils;
 pub mod colors_iter;
 pub mod hyperparameter;
@@ -990,6 +987,7 @@ pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<(f64, u32)> {
 
 #[cfg(test)]
 mod shared_tests {
+    #![allow(unused_imports, redundant_semicolons, dead_code)]
     /*
       a - b
       a - c
@@ -1075,11 +1073,11 @@ mod shared_tests {
         values.sort_by(|a, b|b.len().cmp(&a.len()));
 
 
-        let mut group_0 = values.get_mut(0).unwrap().iter().collect::<Vec<_>>();;
+        let mut group_0 = values.get_mut(0).unwrap().iter().collect::<Vec<_>>();
         group_0.sort();
         assert_eq!(vec!["a", "b", "v", "w", "x", "y"], group_0);
 
-        let mut group_1 = values.get_mut(1).unwrap().iter().collect::<Vec<_>>();;
+        let mut group_1 = values.get_mut(1).unwrap().iter().collect::<Vec<_>>();
         group_1.sort();
         assert_eq!(vec!["l", "m"], group_1);
 

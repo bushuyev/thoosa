@@ -1,10 +1,9 @@
 use std::sync::atomic::Ordering;
-use simplelog::{format_description, ColorChoice, CombinedLogger, Config, ConfigBuilder, TermLogger, TerminalMode, ThreadLogMode, ThreadPadding};
-use log::{debug, error, trace, LevelFilter};
+use simplelog::{format_description, ColorChoice, CombinedLogger, ConfigBuilder, TermLogger, TerminalMode, ThreadLogMode, ThreadPadding};
+use log::{debug, trace, LevelFilter};
 use std::env;
 use std::env::VarError;
 use std::fmt::Debug;
-use std::ops::{Add, Div, Sub};
 use std::str::FromStr;
 use num_traits::{Num, Signed, ToPrimitive};
 use crate::LOG_INIT;

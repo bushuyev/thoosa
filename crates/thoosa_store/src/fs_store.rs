@@ -9,7 +9,6 @@ use std::sync::Arc;
 use bytemuck::AnyBitPattern;
 use log::{debug, error, info, trace};
 use parking_lot::RwLock;
-// removed unused rand imports
 use zstd_framed::{ZstdReader, ZstdWriter};
 use zstd_framed::table::ZstdFrame;
 use thoosa_shared::{group_slices, ThoosaError};
