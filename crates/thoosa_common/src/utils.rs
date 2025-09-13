@@ -10,7 +10,6 @@ use std::time::Instant;
 use std::{fs, mem, ptr, thread};
 
 use chrono::SecondsFormat;
-use cudarc::driver::CudaDevice;
 use log::{debug, error, info, trace, warn};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
@@ -319,16 +318,17 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
 
 //free_mem, total_mem
 pub fn cuda_mem() -> (usize, usize){
-    let mut free_mem: usize = 0;
-    let mut total_mem: usize = 0;
+    use cudarc::driver::CudaContext;
+    use cust::sys::cuMemGetInfo_v2;
+
+    let _ctx = CudaContext::new(0).unwrap();
+    let mut free: usize = 0;
+    let mut total: usize = 0;
     unsafe {
-        CudaDevice::new(0);//TODO device
-
-        let cudarc_lib = cudarc::driver::sys::lib();
-        cudarc_lib.cuMemGetInfo_v2(&mut free_mem as *mut usize, &mut total_mem as *mut usize);
-
-        (free_mem, total_mem)
+        let _res = cuMemGetInfo_v2(&mut free, &mut total);
+        // assert_eq!(res, sys::CUresult::CUDA_SUCCESS);
     }
+    (free, total)
 }
 
 #[macro_export]
@@ -664,7 +664,6 @@ pub mod tests {
     use crate::train_nets::{motif_node, opt_train, LabelNetParams, MotifNetParams, ThoModuleWithStore};
     use crate::utils::{hist_1_dim, CompositeReducer, ListenerResponse, Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
-    use cudarc::driver::CudaDevice;
     use log::LevelFilter::{Info, Trace};
     use log::{debug, error, info, set_max_level};
     use std::collections::{HashMap, HashSet};
@@ -1345,57 +1344,6 @@ pub mod tests {
         )
     }
 
-
-
-    // #[test]
-    fn test_mem_track()->Result<(), ThoosaError>{//TODO util
-        let mut free_mem_0: usize = 0;
-        let mut free_mem_1: usize = 0;
-        let mut total_mem: usize = 0;
-        let _device = CudaDevice::new(0)?;
-        let cudarc_lib = unsafe {
-            let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-
-            let cudarc_lib = cudarc::driver::sys::lib();
-            cudarc_lib.cuMemGetInfo_v2(&mut free_mem_0 as *mut usize, &mut total_mem as *mut usize);
-            debug!("Device 0 free_mem: {free_mem_0}, total_mem: {total_mem}");
-            cudarc_lib.cuMemGetInfo_v2(&mut free_mem_0 as *mut usize, &mut total_mem as *mut usize);
-
-            // cudarc_lib.
-
-            cudarc_lib
-        };
-
-        set_max_level(Info);
-        let motif_node_params = MotifNetParams::from_file(&PathBuf::from("/tmp/ws_test/models/motifs/0/31211_366.json"))?;
-
-        let inst_0 = Instant::now();
-        let mut module:ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cpu)?;
-        for i in 0..100 {
-            module.set_device(Cuda(0));
-            module.set_device(Cpu);
-        }
-
-        info!("cuda/cpu done in {}", inst_0.elapsed().as_millis());
-
-        let inst_0 = Instant::now();
-
-        for i in 0..100 {
-            let mut module:ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(motif_node(&motif_node_params), "/tmp/ws_test/models/motifs/0/31211_366.safetensors".into(), Cuda(0))?;
-        }
-
-        info!("cuda load done in {}", inst_0.elapsed().as_millis());
-
-        unsafe {
-            cudarc_lib.cuMemGetInfo_v2(&mut free_mem_1 as *mut usize, &mut total_mem as *mut usize);
-            debug!("Device 0 free_mem: {free_mem_1}, total_mem: {total_mem}");
-        }
-
-        debug!("free_mem_1 diff={}", (free_mem_0 - free_mem_1)/1024/1024);
-
-        Ok(())
-    }
-
     #[test]
     fn test_to_from_hashmap(){
 
@@ -1851,39 +1799,6 @@ pub fn t_1_1(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     ])
 }
 
-
-pub fn copy_cudarc(t:&Tensor) -> *mut c_void {
-    use cudarc::driver::sys::CUdeviceptr_v2;
-    unsafe {
-        let mut host_buffer: *mut c_void = std::ptr::null_mut();
-        let size_in_bytes = t.numel() * size_of::<f32>();
-        let cudarc_lib = cudarc::driver::sys::lib();
-        let r = cudarc_lib.cuMemAllocHost_v2(
-            &mut host_buffer,
-            size_in_bytes
-        );
-
-        let device = cudarc::driver::CudaDevice::new(0).expect("cuda 0");
-
-        let r = cudarc_lib.cuMemcpyAsync(
-            host_buffer as CUdeviceptr_v2,
-            t.data_ptr() as CUdeviceptr_v2,
-            size_in_bytes,
-            *device.cu_stream()
-        );
-        cudarc_lib.cuStreamSynchronize(*device.cu_stream());
-
-        host_buffer
-    }
-
-
-}
-
-pub fn free_cudarc(buf : *mut f32){
-    unsafe {
-        cudarc::driver::sys::lib().cuMemFreeHost(buf as *mut c_void);
-    }
-}
 
 pub fn reset_print_options(){
     let mut printer_options = PrinterOptions::default();

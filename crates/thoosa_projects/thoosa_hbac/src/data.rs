@@ -840,7 +840,7 @@ mod tests {
         let eegs = EEGs::load_eegs (
             "../../data",
             // Some(col("eeg_id").eq(lit(1345588872))),
-            Some(col("patient_id").is_in(lit(Series::new("eegs_".into(), &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])))),
+            Some(col("patient_id").is_in(lit(Series::new("eegs_".into(), &[44615, 8033, 2641, 10111, 30539, 57503, 13252, 17637, 38015, 58327])), true)),
             // Some(col("eeg_id").is_in(lit(good_eegs))),
             // None,
             // Some(col("all_votes").list().max().eq(col("all_votes").list().sum())),

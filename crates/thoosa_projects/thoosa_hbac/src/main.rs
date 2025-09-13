@@ -64,7 +64,6 @@ mod tests {
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{IndexOp, Kind, Tensor};
-    use thoosa_common::utils::{copy_cudarc, free_cudarc, from};
     use thoosa_motifs::distance::{dist_d2, clc_dist_d2_and_mask};
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
     use thoosa_shared::ThoosaError;
@@ -126,47 +125,5 @@ mod tests {
     }
 
 
-    // #[test]
-    fn test_data(){
-        unsafe {
-
-            let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-
-
-            // let t = Tensor::from_slice(&[0.7, 0.2, 0.3]).totype(Float).to_device(Cuda(0));
-            //6_809_600, 7_022_400, 6_968_900
-            let t = Tensor::rand(10_000_000, FLOAT_CUDA);
-
-            println!("t.size()={:?} device={:?}", t.size(), t.device());
-            let mut cuda_t = 0;
-            let  mut tch_t = 0;
-            for c in 0..1000 {
-                let i_0 = Instant::now();
-                for i in 0..3 {
-                    let buf = copy_cudarc(&t) as *mut f32;
-                    cudarc::driver::sys::lib().cuMemFreeHost(buf as *mut c_void);
-                }
-                cuda_t += i_0.elapsed().as_millis();
-
-
-                let i_0 = Instant::now();
-                for i in 0..3 {
-                    let buf = Vec::<f32>::try_from(&t).unwrap();
-                }
-                tch_t += i_0.elapsed().as_millis();
-            }
-
-            println!("cuda_t: {cuda_t} tch_t={tch_t}");
-
-            // println!("buf={:?}", buf);
-            // println!("x={:?}", *(buf));
-
-            // let data = t.data_ptr();
-            // println!("data={:?}", data);
-            // println!("x={:?}", *(data as *mut f32));
-            // println!("x={:?}", *((data.add(4)) as *mut f32));
-        }
-
-    }
 
 }
