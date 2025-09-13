@@ -1328,7 +1328,7 @@ where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
     R: Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send,
 {
-    let mut store_guard = store.write();
+    let store_guard = store.write();
 
     let mut conn_guard = store_guard.conn().lock();
     let t = conn_guard.transaction()?;

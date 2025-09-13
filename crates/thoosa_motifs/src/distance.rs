@@ -440,7 +440,7 @@ mod distance_tests {
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigOptions};
     use thoosa_common::loader::SyncWrapper;
     use thoosa_common::panic_to_err;
-    use thoosa_common::utils::{from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, Reducer, SplitQueue, Splittable, SplittableTensor};
+    use thoosa_common::utils::{cuda_mem, from, hist_1_dim, lin_iter, lin_t, plot_series, plot_series_with_points, reset_print_options, run_split_on_oom, skewness_kurtosis_1_dim, three_sigs_tensor, vec_f32_from, Reducer, SplitQueue, Splittable, SplittableTensor};
     use thoosa_common::ws::{mock_ws_simp};
     use thoosa_shared::{comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v, ThoosaError};
     use thoosa_shared::colors_iter::DistinctColorIter;
@@ -1769,18 +1769,9 @@ mod distance_tests {
     #[test]
     fn test_average_euclidean_distance_max_size() -> Result<(), ThoosaError> {
         set_max_level(Debug);
-        use cudarc::driver::{CudaDevice};
-        let _device = CudaDevice::new(0)?;
 
-        let mut free_mem: usize = 0;
-        let mut total_mem: usize = 0;
 
-        unsafe {
-            let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-
-            let cudarc_lib = cudarc::driver::sys::lib();
-            cudarc_lib.cuMemGetInfo_v2(&mut free_mem as *mut usize, &mut total_mem as *mut usize);
-        }
+        let (free_mem, total_mem)  = cuda_mem();
         debug!("Device 0 free_mem: {free_mem}, total_mem: {total_mem}");
 
         let size = ((free_mem / size_of::<f32>()) as f64).sqrt() as i64 / 32;
