@@ -1,19 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Write};
 use std::marker::PhantomData;
-use std::{io, mem};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use bytemuck::{AnyBitPattern, Pod, Zeroable};
+use bytemuck::AnyBitPattern;
 use log::{debug, error, info, trace};
-use parking_lot::{Mutex, RwLock};
-use rand::{thread_rng, Rng};
+use parking_lot::RwLock;
 use zstd_framed::{ZstdReader, ZstdWriter};
-use zstd_framed::table::{ZstdFrame, ZstdSeekTable};
-use thoosa_shared::resource::ResourceId;
-use thoosa_shared::{group_slices, TensorIdSliceIdx, ThoosaError};
+use zstd_framed::table::ZstdFrame;
+use thoosa_shared::{group_slices, ThoosaError};
 use thoosa_shared::run_configs::RunId;
 use crate::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMatch, Store};
 
@@ -45,7 +43,7 @@ impl FileMotifTrackerStore {
             .append(true)
             .open(path.as_ref().join(format!("{run_id}_{channel}_slices.zstd").as_str()))?;
 
-        let mut writer = ZstdWriter::builder(file)
+        let writer = ZstdWriter::builder(file)
             .with_compression_level(3) // Set compression level
             .with_seek_table(u32::MAX)
             .build()?;

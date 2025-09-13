@@ -698,10 +698,10 @@ pub fn find_motifs_by_euc_dist(
     let total_trackers  = run_config__channels_trackers.values().map(|v| v.len()).sum::<usize>();
     info!("setting motifs in {} configs,  {total_trackers} trackers on {} threads", run_configs.len(), rayon::current_num_threads());
     let num_trackers_per_thread = max(1, total_trackers/rayon::current_num_threads());
-    let run_config__channels_trackers_vec = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).collect::<Vec<_>>();
+    let run_config_channels_trackers_vec = run_config__channels_trackers.values().flat_map(|v| v.into_iter()).collect::<Vec<_>>();
 
     let mut trackers_done = AtomicU32::new(0);
-    run_config__channels_trackers_vec.chunks(num_trackers_per_thread).par_bridge().for_each(|chunk| {
+    run_config_channels_trackers_vec.chunks(num_trackers_per_thread).par_bridge().for_each(|chunk| {
         for mt in chunk {
             mt.lock().build_groups(store).expect("build_groups");
             info!(" {} trackers done", trackers_done.fetch_add(1, Relaxed)+1);
@@ -1127,7 +1127,7 @@ where
 
     debug!("chunk_and_slice_2x: after block_on");
 
-    debug!("chunk_and_slice_2x done: statistics={:?}", runner.futures_runner().statistics().deref());
+    debug!("chunk_and_slice_2x done: statistics={:?}", runner.futures_runner().statistics());
     Ok(())
 }
 

@@ -66,10 +66,12 @@ impl Iterator for DistinctColorIter {
 }
 
 /// Returns an iterator over distinct RGB colors avoiding pure red/green/blue.
+#[allow(dead_code)]
 fn distinct_colors() -> impl Iterator<Item = RGBColor> {
     DistinctColorIter::new()
 }
 
+#[allow(dead_code)]
 fn main() {
     // Example usage:
     for c in distinct_colors().take(10) {

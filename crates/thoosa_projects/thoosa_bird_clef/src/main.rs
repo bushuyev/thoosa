@@ -1,7 +1,5 @@
 use std::time::Instant;
 use log::{error, info};
-use tch::Device::Cpu;
-use tch::Tensor;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
 use crate::data::resource_to_tensor;
