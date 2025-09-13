@@ -6,10 +6,9 @@ use log::debug;
 use polars::datatypes::DataType;
 use polars::frame::DataFrame;
 use tch::{Device, Kind, Tensor};
-use rand::{thread_rng, Rng};
+use rand::Rng;
 use std::io::Write;
 
-use rand::prelude::SliceRandom;
 use thoosa_common::dims::{Batch, ChannelsData, ThoTensor};
 use thoosa_common::utils::DataBatch;
 use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
@@ -311,7 +310,7 @@ impl EEG {
 
     pub fn random_fragemnt_tensor<R>(&self, rnd:&mut R) -> Tensor where R: Rng + ?Sized {
 
-        let fragment_idx = rnd.gen_range(0..self.fragments_rows.len());
+        let fragment_idx = rnd.random_range(0..self.fragments_rows.len());
 
         let i_1 = self.fragments_rows[fragment_idx] as usize;
         let i_2 = i_1 + 50 * 200;
@@ -614,19 +613,22 @@ impl EEGs {
     }
 
     fn random_subset(batch_size: usize, data: &Vec<EEG>) -> (ThoTensor<Batch<ChannelsData>>, Tensor) {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
 
-        let (eegs, votes) = data
-            .choose_multiple(&mut rng, batch_size)
-            .fold((vec![], vec![]), |mut a, eeg| {
+        use std::collections::HashSet;
+        let mut picked = HashSet::with_capacity(batch_size);
+        let mut eegs = Vec::with_capacity(batch_size);
+        let mut votes = Vec::with_capacity(batch_size);
+
+        while eegs.len() < batch_size {
+            let idx = rng.random_range(0..data.len());
+            if picked.insert(idx) {
+                let eeg = &data[idx];
                 let fragemnt_tensor = eeg.random_fragemnt_tensor(&mut rng);
-                // debug!("random_fragemnt_tensor size: {:?}", tensor.size());
-
-                a.0.push(fragemnt_tensor);
-                a.1.push(eeg.votes_tensor());
-
-                a
-            });
+                eegs.push(fragemnt_tensor);
+                votes.push(eeg.votes_tensor());
+            }
+        }
 
         (
             Tensor::stack(
