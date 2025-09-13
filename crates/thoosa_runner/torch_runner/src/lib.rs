@@ -12,13 +12,14 @@ mod model_test;
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
 #[allow(unused_imports)]
-use caching_runner::common::{CopyToDevice, Data, Input, MyError, Named, Output, SimpleId, WithId};
+use caching_runner::common::{CopyToDevice, Data, Input, MyError, Output, SimpleId, WithId};
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::{Device, Kind, TchError, Tensor};
 // test-only imports live under cfg(test)
 use data::ThoTensor;
 use thoosa_common::dims::Dims;
+use thoosa_common::traits::Named;
 
 #[derive(Debug)]
 pub enum MyTchError {
@@ -101,8 +102,7 @@ mod tests {
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use caching_runner_test::FailUntil::MinPermits;
     use caching_runner_test::{run_mul_task_invocations, FailUntil, ClcOOMRunner, OOMRunnerConfig};
-    use caching_runner::common::{Data, DropIf, Input, MyError, Named, OutId, RunCtx, WithId};
-    use caching_runner::common::cachable::CachableIdTr;
+    use caching_runner::common::{Data, DropIf, Input, MyError, OutId, RunCtx, WithId};
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -119,6 +119,7 @@ mod tests {
     use caching_runner::common::runnable::Runnable;
     use caching_runner::panic_to_err;
     use thoosa_common::dims::Dims;
+    use thoosa_common::traits::{CachableIdTr, Named};
     use crate::cuda_utils::cuda_mem;
     use crate::data::ThoTensor;
     use crate::output_builders::BuildAs;

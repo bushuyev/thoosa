@@ -3,7 +3,6 @@ use crate::adjusters::dump_to_cpu::*;
 use crate::oom_handler::{Adjustable, Adjuster, RunCtxContext};
 use ambassador::{delegatable_trait, Delegate};
 use async_trait::async_trait;
-use crate::common::cachable::CachableIdTr;
 use crate::common::RunCtx;
 use crate::common::{DropIf, MyError};
 use parking_lot::RwLock;
@@ -15,6 +14,7 @@ use std::sync::Arc;
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use crate::permits::{NumPermits, RunnerPerm};
+use thoosa_common::traits::CachableIdTr;
 
 pub struct PermitsAdjuster<F, Fut, C>
 where
@@ -184,6 +184,7 @@ where
     }
 }
 
+
 #[derive(Debug, Delegate)]
 #[delegate(PermitsAdjustContext, target = "permits")]
 #[delegate(DumpToCpuContext<'a>, target = "dump_to_cpu")]
@@ -206,10 +207,10 @@ impl<'a> RunCtxContext for PermitsAndDumpToCpuAdjustableContex<'a> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::Named;
     use crate::permits::NumPermits;
     use std::sync::Arc;
     use parking_lot::RwLock;
+    use thoosa_common::traits::Named;
 
     #[derive(Debug)]
     struct TestRunCtx {
