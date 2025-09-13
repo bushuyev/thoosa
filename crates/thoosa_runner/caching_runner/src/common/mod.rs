@@ -231,7 +231,6 @@ pub trait Named {
 
 
 pub trait Dims:Debug + Send + Sync {
-    fn use_data<D:Data>(_t:&D) {}
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
