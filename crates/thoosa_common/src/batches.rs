@@ -7,7 +7,7 @@ use crossbeam_utils::sync::WaitGroup;
 use futures_util::FutureExt;
 use log::debug;
 use parking_lot::{Mutex, RwLock};
-use rand::prelude::SliceRandom;
+use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
