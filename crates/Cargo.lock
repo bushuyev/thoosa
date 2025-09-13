@@ -546,6 +546,7 @@ dependencies = [
  "mockall_double",
  "parking_lot",
  "rand 0.9.2",
+ "thoosa_common",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -565,6 +566,7 @@ dependencies = [
  "mockall",
  "parking_lot",
  "rand 0.9.2",
+ "thoosa_common",
  "tokio",
 ]
 
@@ -4593,6 +4595,7 @@ dependencies = [
 name = "thoosa_common"
 version = "0.1.0"
 dependencies = [
+ "ambassador",
  "argmin",
  "argmin-math",
  "async-trait",

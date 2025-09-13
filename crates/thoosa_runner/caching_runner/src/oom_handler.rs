@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use crate::common::cachable::DataCacheWrapper;
 use crate::common::runnable::Runnable;
-use crate::common::{CopyToDevice, Data, DropIf, Named, OutId};
+use crate::common::{CopyToDevice, Data, DropIf, OutId};
 use crate::common::{MyError, RunCtx};
-use crate::common::cachable::CachableIdTr;
 #[double]
 use crate::global_ctx::GlobalCtx;
 use crate::statistics::Statistics;
@@ -17,6 +16,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use mockall_double::double;
 use tracing::instrument;
+use thoosa_common::traits::{CachableIdTr, Named};
 use crate::permits::MAX_PERMITS;
 
 pub trait Adjustable: Send + Sync {}
@@ -438,7 +438,7 @@ where
 #[cfg(test)]
 pub(crate) mod test_types {
     use super::*;
-    use crate::common::{CopyToDevice, Data, Input, Named, Output, WithId};
+    use crate::common::{CopyToDevice, Data, Input, Output, WithId};
     use crate::test_utils::DummyTensor;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
