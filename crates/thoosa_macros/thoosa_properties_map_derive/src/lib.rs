@@ -89,7 +89,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                     }
 
 
-                    let gen = quote! {
+                    let token_stream = quote! {
                         impl thoosa_properties_map::ToHashmap for #target_ident {
                             fn to_properties_iter(&self, parent: Option<String>,) -> Box<dyn Iterator<Item=(String, thoosa_shared::val::Val)>> {
                                 let prefix = parent.unwrap_or(#target_ident_prefix.to_string());
@@ -116,7 +116,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         }
                     };
 
-                    gen.into()
+                    token_stream.into()
                 }
                 _ => {
                     quote!{}.into()

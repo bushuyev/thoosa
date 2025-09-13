@@ -1,0 +1,27 @@
+[package]
+name = "torch_runner"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+caching_runner = { path = "../caching_runner" }
+cached_derive.workspace = true
+
+tokio.workspace = true
+tch.workspace = true
+libloading.workspace = true
+torch-sys.workspace = true
+cudarc.workspace = true
+cust = "0"
+
+async-trait.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+futures-util.workspace = true
+tokio-utils.workspace = true
+
+[dev-dependencies]
+caching_runner_test = {path = "../caching_runner_test"}
+rand.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
