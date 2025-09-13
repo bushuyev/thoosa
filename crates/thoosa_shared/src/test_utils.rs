@@ -46,10 +46,10 @@ pub fn init_test_logging() {
                 VarError::NotPresent
             })).unwrap_or(LevelFilter::Debug)
         );
-
-        env::set_var("POLARS_FMT_MAX_COLS", "100");
-        env::set_var("POLARS_FMT_MAX_ROWS", "100");
-
+        unsafe {
+            env::set_var("POLARS_FMT_MAX_COLS", "100");
+            env::set_var("POLARS_FMT_MAX_ROWS", "100");
+        }
 
     }
 }
