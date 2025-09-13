@@ -1,0 +1,25 @@
+[package]
+name = "caching_runner"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+
+dashmap.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+parking_lot.workspace = true
+async-trait.workspace = true
+cached_derive.workspace = true
+ambassador.workspace = true
+rand.workspace = true
+mockall.workspace = true
+mockall_double.workspace = true
+
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+
+console-subscriber.workspace = true

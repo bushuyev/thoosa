@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 
 members = [
     "thoosa_shared",
@@ -14,15 +14,22 @@ members = [
     "thoosa_macros/thoosa_properties_map",
     "thoosa_macros/thoosa_properties_map_derive",
 
+    "thoosa_runner/cached_derive",
+    "thoosa_runner/caching_runner",
+    "thoosa_runner/caching_runner_test",
+    "thoosa_runner/torch_runner",
+
     "thoosa_projects/thoosa_hbac",
     "thoosa_projects/thoosa_bird_clef",
 ]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [workspace.dependencies]
+cached_derive = { path = "thoosa_runner/cached_derive" }
+
 rayon = "1"
 rand = "0"
 rand_distr = "0"
@@ -59,8 +66,15 @@ libloading = "0"
 plotters = { version = "0"}
 mockall = "0"
 mockall_double = "0"
+ambassador = "0"
 dashmap = "6"
 #TODO move to polars_utils
 polars = { version = "0", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
+
+tokio = { version = "1", features = ["full", "test-util", "tracing"] }
+tokio-utils = "0"
+tracing = "0"
+tracing-subscriber = { version = "0", features = ["fmt", "env-filter"] }
+console-subscriber = "0"
 [profile.test]
 opt-level = 0
