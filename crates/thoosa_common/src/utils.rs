@@ -17,7 +17,6 @@ use plotters::drawing::IntoDrawingArea;
 use plotters::element::PathElement;
 use plotters::prelude::*;
 use rand::prelude::ThreadRng;
-use rand::thread_rng;
 use rand::Rng;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
@@ -1714,7 +1713,7 @@ pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
 //f(x)=-sin(3x)+x^2+0.7 *x
 pub fn sin3_pow2(n:i64, min: f32, max: f32, with_noise: Option<f32>) -> (Tensor, Tensor, Vec<f32>) {
 
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
     let x = (0..n).map(|i| min + (i as f32 / (n-1) as f32) * (max-min)).into_iter().collect::<Vec<f32>>();
 
     let y_train_full = Tensor::from_slice(x.iter().map(|x|{
@@ -1728,7 +1727,7 @@ pub fn sin3_pow2(n:i64, min: f32, max: f32, with_noise: Option<f32>) -> (Tensor,
 }
 
 fn sin3_pow2_with_noise_f(with_noise: Option<f32>, rng: &mut ThreadRng, x: f32) -> f32 {
-    sin3_pow2_f(x) + with_noise.map(|v| v * rng.gen::<f32>()).unwrap_or(0.)
+    sin3_pow2_f(x) + with_noise.map(|v| v * rng.random::<f32>()).unwrap_or(0.)
 }
 
 pub fn sin3_pow2_f(x: f32) -> f32 {

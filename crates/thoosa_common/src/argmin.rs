@@ -5,7 +5,7 @@ use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
 use argmin_math::{ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminRandom, ArgminSignum, ArgminSub, ArgminZeroLike};
 use log::debug;
-use rand::Rng;
+// Avoid importing rand::Rng to prevent trait version conflicts
 use tch::Tensor;
 
 use thoosa_shared::ThoosaError;
@@ -149,11 +149,7 @@ impl ArgminMul<ArgmTensor, ArgmTensor> for f64 {
     }
 }
 
-impl ArgminRandom for ArgmTensor {
-    fn rand_from_range<R: Rng>(min: &Self, max: &Self, _rng: &mut R) -> Self {
-        ((&max.0 - &min.0).multiply(&Tensor::randn(min.size(), (min.kind(), min.device()))) + &max.0).into()
-    }
-}
+// Impl of ArgminRandom removed to avoid rand trait version conflicts (not required by our usage)
 
 
 

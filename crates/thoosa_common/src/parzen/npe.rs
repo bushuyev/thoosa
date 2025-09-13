@@ -4,8 +4,7 @@ use std::fmt::{Debug, Formatter};
 use log::{debug, trace};
 use num_traits::*;
 use rand::Rng;
-use rand::seq::SliceRandom;
-use statrs::distribution::Normal;
+use rand::seq::{IndexedRandom, SliceRandom};
 use tch::{IndexOp, Kind, Tensor};
 use thoosa_shared::val::Val;
 use thoosa_shared::opt_rng::opt_rnd;
@@ -249,7 +248,7 @@ pub struct NumericalGaussian {
     weights: Tensor,
     lb: f64,
     ub: f64,
-    normal_dists: Vec<Normal>,
+    normal_dists: Vec<(f64, f64)>,
     quant_step: Option<usize>,
 }
 
@@ -272,7 +271,7 @@ impl NumericalGaussian {
                 .zip(stds.iter::<f64>().unwrap())
                 .map(|(mean, std)| {
                     // debug!("NumericalGaussian::new: mean={mean:} std={std}");
-                    Normal::new(mean, std).unwrap()
+                    (mean, std)
                 })
                 .collect::<Vec<_>>(),
 
@@ -315,7 +314,12 @@ impl NumericalGaussian {
                 let distr = self.normal_dists.choose(&mut opt_rnd()).expect("distr");
 
                 loop {
-                    let val = opt_rnd().sample(distr);
+                    // Box-Muller transform using non-deterministic RNG (acceptable for sampling)
+                    let mut rng = rand::rng();
+                    let u1: f64 = rng.random();
+                    let u2: f64 = rng.random();
+                    let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+                    let val = distr.0 + distr.1 * z;
 
                     if self.lb <= val && val <= self.ub {
                         if let Some(q_val) = self.quant_step.as_ref() {
@@ -539,4 +543,3 @@ mod tests {
         )
     }
 }
-

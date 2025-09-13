@@ -18,7 +18,7 @@ use parking_lot::{Mutex, RwLock};
 use log::{debug, error, trace, warn};
 use mockall::automock;
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::Rng;
 use rusqlite::{Connection, Error, params, Transaction};
 use rusqlite::types::Value;
 
@@ -624,7 +624,7 @@ impl Store for SqlStore {
             };
 
             debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len={:?}", labels_cnt_labels_resources.len());
-            let mut rng = thread_rng();
+            let mut rng = rand::rng();
 
             let labels_ids: HashMap<String, usize> = Self::list_labels(&t)?.into_iter().fold(HashMap::new(), |mut a, v| {
                 a.insert(v.1, v.0);

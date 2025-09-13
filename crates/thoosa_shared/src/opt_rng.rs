@@ -3,14 +3,12 @@ use std::rc::Rc;
 
 #[cfg(not(test))]
 use rand::rngs::ThreadRng;
-#[cfg(not(test))]
-use rand::thread_rng;
 #[cfg(test)]
 use rand_mt::Mt19937GenRand32;
 
 #[cfg(not(test))]
 thread_local! {
-    static FOO: Rc<UnsafeCell<ThreadRng>> = Rc::new(UnsafeCell::new(thread_rng()))
+    static FOO: Rc<UnsafeCell<ThreadRng>> = Rc::new(UnsafeCell::new(rand::rng()))
 
 }
 #[cfg(test)]

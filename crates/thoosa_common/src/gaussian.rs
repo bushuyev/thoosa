@@ -3,8 +3,7 @@ use std::fmt;
 
 use log::debug;
 use rand::Rng;
-use rand::thread_rng;
-use statrs::distribution::Normal;
+// Removed dependency on rand distributions here; use tch::Tensor::randn instead
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 
@@ -36,10 +35,7 @@ impl Gaussian {
 
     #[allow(dead_code)]
     pub fn norm(n:i64) -> Tensor{
-        let mut rng = thread_rng();
-        let normal = Normal::new(0., 1.).unwrap();
-
-        Tensor::from_slice((0..n).map(|_x| rng.sample(normal) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1, -1))
+        Tensor::randn([n], FLOAT_CPU).cumsum(0, None).view((1, -1))
     }
 
 }

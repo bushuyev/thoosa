@@ -11,7 +11,6 @@ ctor = "0.2.6"
 bytemuck.workspace = true
 regex.workspace = true
 rand = {workspace = true}
-rand_distr = {workspace = true}
 rand_mt = "4.2.2"
 log = {workspace = true}
 simplelog = {workspace = true}

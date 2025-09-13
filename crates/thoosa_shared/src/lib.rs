@@ -229,11 +229,11 @@ impl MotifSlice {
 }
 
 pub fn random_saw(n: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let step = 25usize;
 
     (0..n/step/2)
-        .map(|_| rng.gen_range(-10. .. 10.))
+        .map(|_| rng.random_range(-10. .. 10.))
         .flat_map(
             |v| {
                 (0..step).map(move |i| v * i as f32).chain((0..step).map(move |i| step as f32 * v - v * i as f32))
@@ -242,7 +242,7 @@ pub fn random_saw(n: usize) -> Vec<f32> {
 }
 
 pub fn saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut y = vec![0.;n];
     let mut x = 0;
@@ -250,12 +250,12 @@ pub fn saw_with_steps(n: usize, steps: usize, max_y: f32) -> Vec<f32> {
     let def_step = n/steps;
 
     loop {
-        let mut dx = min(n-x, (def_step as f32 * rng.gen_range(0.5 .. 1.5)) as usize);
+        let mut dx = min(n-x, (def_step as f32 * rng.random_range(0.5 .. 1.5)) as usize);
         if dx % 2 == 0 {
             dx+=1;
         }
 
-        let max_y = max_y  * rng.gen_range(-1.5 .. 1.5);
+        let max_y = max_y  * rng.random_range(-1.5 .. 1.5);
 
         if dx > 2 {
             let dy = max_y / (dx-1) as f32 * 2.;
@@ -310,9 +310,9 @@ pub fn sig_one_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Op
 }
 
 fn σ_f_params(σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>) -> (f32, f32) {
-    let mut rng = rand::thread_rng();
-    let σ = σ_range.map(|r| rng.gen_range(r)).unwrap_or(20.);
-    let f = f_range.map(|r| rng.gen_range(r)).unwrap_or(20.);
+    let mut rng = rand::rng();
+    let σ = σ_range.map(|r| rng.random_range(r)).unwrap_or(20.);
+    let f = f_range.map(|r| rng.random_range(r)).unwrap_or(20.);
     (σ, f)
 }
 
@@ -424,10 +424,10 @@ pub fn random_v(n: u32, amplitude: f32, max_slope: f32) -> Vec<f32> {
     let mut current_value = 0.0;
     let mut prev_value = 0.0;
 
-    let rnd_vals_0 = (0..n).flat_map(move |_i| std::iter::repeat(      rand::thread_rng().gen_range(-max_slope..max_slope)).take(1)).collect::<Vec<f32>>();
-    let rnd_vals_1 = (0..n / 10).flat_map(move |_i|std::iter::repeat(   rand::thread_rng().gen_range(-max_slope..max_slope)).take(10)).collect::<Vec<f32>>();
-    let rnd_vals_2 = (0..n / 60).flat_map(move |_i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(100)).collect::<Vec<f32>>();
-    let rnd_vals_3 = (0..n / 120).flat_map(move |_i|std::iter::repeat(  rand::thread_rng().gen_range(-max_slope..max_slope)).take(300)).collect::<Vec<f32>>();
+    let rnd_vals_0 = (0..n).flat_map(move |_i| std::iter::repeat(      rand::rng().random_range(-max_slope..max_slope)).take(1)).collect::<Vec<f32>>();
+    let rnd_vals_1 = (0..n / 10).flat_map(move |_i|std::iter::repeat(   rand::rng().random_range(-max_slope..max_slope)).take(10)).collect::<Vec<f32>>();
+    let rnd_vals_2 = (0..n / 60).flat_map(move |_i|std::iter::repeat(  rand::rng().random_range(-max_slope..max_slope)).take(100)).collect::<Vec<f32>>();
+    let rnd_vals_3 = (0..n / 120).flat_map(move |_i|std::iter::repeat(  rand::rng().random_range(-max_slope..max_slope)).take(300)).collect::<Vec<f32>>();
 
     rnd_vals_0.into_iter().zip(
         rnd_vals_1.into_iter().zip(
@@ -811,7 +811,7 @@ pub fn cdt() -> String {
 
 pub fn cdt_for_dir() ->String {//TODO move to shared
     use rand::RngCore;
-    let mut rnd = rand::thread_rng(); //opt_rnd();
+    let mut rnd = rand::rng(); //opt_rnd();
     cdt().replace(':', "_").replace('+', "_") + format!("_{}", rnd.next_u32()).as_str()
 }
 
