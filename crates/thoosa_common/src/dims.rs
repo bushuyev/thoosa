@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use crate::applicables::ThoDevice;
+use crate::traits::{CachableIdTr, Named};
 
 pub trait Dims:Send +Sync+ Clone + Debug {}
 
@@ -75,17 +76,17 @@ pub trait Dimensional {
 
 
 #[derive(Debug)]
-pub struct ThoTensor<D: Dims> {
-    id: CachableId,
+pub struct ThoTensor<D: Dims, Id: Named + Clone> {
+    id: Id,
     pub tensor: Tensor, // attach the actual tensor
     pub _pd: PhantomData<D>,
 }
 
-impl <D:Dims> Dimensional for ThoTensor<D> {
+impl <D:Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
     type Dimensions = D;
 }
 
-impl <D:Dims> Clone for ThoTensor<D> {
+impl <D:Dims, Id: Named + Clone> Clone for ThoTensor<D, Id> {
     fn clone(&self) -> Self {
         ThoTensor {
             id: self.id.clone(),
@@ -95,11 +96,11 @@ impl <D:Dims> Clone for ThoTensor<D> {
     }
 }
 
-unsafe impl <D:Dims> Sync for ThoTensor<D> {}
-unsafe impl <D:Dims> Send for ThoTensor<D> {}
+unsafe impl <D:Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
+unsafe impl <D:Dims, Id: Named + Clone> Send for ThoTensor<D, Id> {}
 
 
-impl <D: Dims> From<Tensor> for ThoTensor<D> {
+impl <D: Dims, Id: Named + Clone> From<Tensor> for ThoTensor<D, Id> {
     fn from(tensor: Tensor) -> Self {
         Self {
             id: "1".to_string(),
@@ -109,7 +110,7 @@ impl <D: Dims> From<Tensor> for ThoTensor<D> {
     }
 }
 
-impl <D: Dims> From<&Tensor> for ThoTensor<D> {
+impl <D: Dims, Id: Named + Clone> From<&Tensor> for ThoTensor<D, Id> {
     fn from(tensor: &Tensor) -> Self {
         Self {
             id: "2".to_string(),
@@ -120,7 +121,7 @@ impl <D: Dims> From<&Tensor> for ThoTensor<D> {
 }
 
 #[async_trait]
-impl <D:Dims> Output for ThoTensor<D> {
+impl <D:Dims, Id: Named + Clone + Debug> Output for ThoTensor<D, Id> {
 
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
         if self.tensor.device().eq(&ThoDevice::from(device_ordinal).into()) {
@@ -138,30 +139,30 @@ impl <D:Dims> Output for ThoTensor<D> {
     }
 }
 
-impl <D:Dims> Input for ThoTensor<D> {
+impl <D:Dims, Id: Named + Clone + Debug> Input for ThoTensor<D, Id> {
     fn id(&self) -> &CachableId {
         &self.id
     }
 }
 
 
-impl <D:Dims> Input for &ThoTensor<D> {
+impl <D:Dims, Id: Named + Clone + Debug> Input for &ThoTensor<D, Id> {
     fn id(&self) -> &CachableId {
         &self.id
     }
 }
 
-pub type TCD = ThoTensor<ChannelsData>;
-pub type TCDF = ThoTensor<ChannelsDataFiltered>;
-pub type TCSD = ThoTensor<ChannelsSlicesData>;
+pub type TCD = ThoTensor<ChannelsData, CachableId>;
+pub type TCDF = ThoTensor<ChannelsDataFiltered, CachableId>;
+pub type TCSD = ThoTensor<ChannelsSlicesData, CachableId>;
 
-impl <D:Dims> AsRef<Tensor> for ThoTensor<D>{
+impl <D:Dims, Id> AsRef<Tensor> for ThoTensor<D, CachableId>{
     fn as_ref(&self) -> &Tensor{
         &self.tensor
     }
 }
 
-impl <D:Dims> ThoTensor<D> {
+impl <D:Dims> ThoTensor<D, CachableId> {
 
 
     pub fn size(&self) -> Vec<i64> {
@@ -172,7 +173,7 @@ impl <D:Dims> ThoTensor<D> {
         self.tensor.device()
     }
 
-    pub fn shallow_clone<DO:Dims>(&self) -> ThoTensor<DO> {
+    pub fn shallow_clone<DO:Dims>(&self) -> ThoTensor<DO, CachableId> {
         ThoTensor {
             id: self.id.clone(),
             tensor: self.tensor.shallow_clone(),
@@ -199,7 +200,7 @@ impl <D:Dims> ThoTensor<D> {
     }
 }
 
-impl <D:Dims> Display for ThoTensor<D> {
+impl <D:Dims> Display for ThoTensor<D, CachableId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.tensor, f)
     }
