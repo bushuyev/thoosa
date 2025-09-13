@@ -1,11 +1,12 @@
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use caching_runner::common::{CopyToDevice, Dims, Input, MyError, Named, Output, WithId};
+use caching_runner::common::{CopyToDevice, Input, MyError, Named, Output, WithId};
 use tch::{Device, Kind, Tensor};
 use async_trait::async_trait;
 use torch_sys::IntList;
 use caching_runner::panic_to_err;
+use thoosa_common::dims::Dims;
 use crate::{ThoDevice, ThoTensorView};
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;

@@ -1,7 +1,8 @@
 use caching_runner::adjusters::splits::OutputBuilder;
-use caching_runner::common::{Dims, WithId};
+use caching_runner::common::{WithId};
 use tch::Device;
 use tch::Kind;
+use thoosa_common::dims::Dims;
 use crate::data::ThoTensor;
 
 
@@ -73,11 +74,11 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use caching_runner::adjusters::splits::OutputBuilder;
-    use caching_runner::common::Dims;
+    use thoosa_common::dims::Dims;
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::data::ThoTensor;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestDims;
     impl Dims for TestDims {}
 
