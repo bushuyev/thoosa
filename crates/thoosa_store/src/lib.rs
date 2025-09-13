@@ -17,7 +17,7 @@ use parking_lot::{Mutex, RwLock};
 
 use log::{debug, error, trace, warn};
 use mockall::automock;
-use rand::prelude::SliceRandom;
+use rand::seq::SliceRandom;
 use rand::thread_rng;
 use rusqlite::{Connection, Error, params, Transaction};
 use rusqlite::types::Value;

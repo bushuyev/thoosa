@@ -4443,6 +4443,7 @@ dependencies = [
  "parking_lot",
  "plotters",
  "rand 0.8.5",
+ "rand_distr",
  "rand_mt",
  "rayon",
  "regex",

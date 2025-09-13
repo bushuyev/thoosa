@@ -1,5 +1,5 @@
 use log::{debug, trace};
-use rand::prelude::SliceRandom;
+use rand::seq::SliceRandom;
 use tch::{IndexOp, Tensor};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Float;

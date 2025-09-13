@@ -15,7 +15,7 @@ use futures::StreamExt;
 use log::{debug, error, info, log_enabled, trace, warn, Log};
 use parking_lot::{Mutex, RawRwLock, RwLock, RwLockReadGuard};
 use plotters::prelude::BLACK;
-use rand::prelude::SliceRandom;
+use rand::seq::SliceRandom;
 use rand::thread_rng;
 use rayon::iter::ParallelBridge;
 use rayon::iter::ParallelIterator;
