@@ -24,7 +24,8 @@ edition = "2021"
 
 [workspace.dependencies]
 rayon = "1"
-rand = "0.8.5"
+rand = "0"
+rand_distr = "0"
 log = "0"
 simplelog = "0"
 chrono = { version = "0" }

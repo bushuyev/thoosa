@@ -7,7 +7,7 @@ use log::{debug, error, info, trace, warn};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::Rng;
 use std::cell::Cell;
 use std::cmp::max;
 use std::collections::HashMap;

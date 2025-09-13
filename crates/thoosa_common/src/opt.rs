@@ -171,8 +171,8 @@ mod opt_tests {
     use plotters::prelude::{BLACK, GREEN, RED};
     use plotters::prelude::ShapeStyle;
     use plotters::style::full_palette::*;
-    use rand::{Rng, thread_rng};
-    use rand::prelude::ThreadRng;
+    use rand::Rng;
+    use rand::rngs::ThreadRng;
     use statrs::distribution::Normal;
     use tch::Device::Cpu;
     use tch::IndexOp;
@@ -193,19 +193,16 @@ mod opt_tests {
 
 
     #[allow(dead_code)]
-    fn sig_1_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
-
-        Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None).view((1,-1))
+    fn sig_1_norm(_norm: Normal, _rng: ThreadRng, n: i64) -> Tensor {
+        Tensor::randn([n], FLOAT_CPU).cumsum(0, None).view((1, -1))
     }
 
 
-    fn sig_3_norm( norm: Normal, mut rng: ThreadRng, n: i64) -> Tensor {
-        let sig_t_0 = Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
-        let sig_t_1 = Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
-        let sig_t_2 = Tensor::from_slice((0..n).map(|_x| rng.sample(norm) as f32).collect::<Vec<f32>>().as_slice()).cumsum(0, None);
-
-        let sig_t = Tensor::stack(&[sig_t_0, sig_t_1, sig_t_2], 0);
-        sig_t
+    fn sig_3_norm(_norm: Normal, _rng: ThreadRng, n: i64) -> Tensor {
+        let sig_t_0 = Tensor::randn([n], FLOAT_CPU).cumsum(0, None);
+        let sig_t_1 = Tensor::randn([n], FLOAT_CPU).cumsum(0, None);
+        let sig_t_2 = Tensor::randn([n], FLOAT_CPU).cumsum(0, None);
+        Tensor::stack(&[sig_t_0, sig_t_1, sig_t_2], 0)
     }
 
     #[test]
@@ -659,7 +656,7 @@ mod opt_tests {
 
 
         let norm = Normal::new(0., 1.).unwrap();
-        let rng = thread_rng();
+        let rng = rand::rng();
         let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
         debug!("sig_t.size={:?}", sig_t.size());
 
@@ -770,7 +767,7 @@ mod opt_tests {
 
 
         let norm = Normal::new(0., 1.).unwrap();
-        let rng = thread_rng();
+        let rng = rand::rng();
         let sig_t = sig_3_norm(norm, rng, n).transpose(0, 1);
         debug!("sig_t.size={:?}", sig_t.size());
 

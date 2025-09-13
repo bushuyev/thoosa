@@ -1,5 +1,7 @@
 use log::{debug, trace};
-use rand::prelude::SliceRandom;
+use rand::seq::SliceRandom;
+use rand::distr::{Distribution as RandDistribution};
+use rand::distr::weighted::WeightedIndex;
 use tch::{IndexOp, Tensor};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::Kind::Float;
@@ -137,9 +139,12 @@ impl Distribution for CategoricalGaussian {
     fn sample(&self, n_samples: usize) -> Vec<Val> {
 
         (0..n_samples).map(|_|{
-            self.indexes.choose_weighted(opt_rnd(), |i|self.probs_vec[*i]).expect("choose_weighted")
+            let dist = WeightedIndex::new(self.indexes.iter().map(|i| self.probs_vec[*i]))
+                .expect("WeightedIndex::new");
+            let pos = dist.sample(opt_rnd());
+            self.indexes[pos]
         })
-        .map(|v|(*v as i32).into())
+        .map(|v|(v as i32).into())
         .collect()
     }
 
