@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use crate::common::cachable::CachableIdTr;
+use thoosa_common::traits::CachableIdTr;
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>

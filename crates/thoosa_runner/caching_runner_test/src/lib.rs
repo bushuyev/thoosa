@@ -4,8 +4,7 @@ use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdj
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
-use caching_runner::common::{Data, MyError, Named, OutId, RunCtx, WithId};
-use caching_runner::common::cachable::CachableIdTr;
+use caching_runner::common::{Data, MyError, OutId, RunCtx, WithId};
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -18,6 +17,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use tokio::task::JoinSet;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
 use caching_runner::common::runnable::Runnable;
+use thoosa_common::traits::{CachableIdTr, Named};
 
 #[derive(Debug)]
 pub enum FailUntil {
@@ -304,7 +304,7 @@ mod tests {
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
-    use caching_runner::common::{CopyToDevice, Data, DropIf, Input, MyError, Named, OutId, Output, RunCtx, SimpleId, WithId};
+    use caching_runner::common::{CopyToDevice, Data, DropIf, Input, MyError, OutId, Output, RunCtx, SimpleId, WithId};
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -316,6 +316,7 @@ mod tests {
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
     use caching_runner::common::runnable::Runnable;
+    use thoosa_common::traits::Named;
 
     static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
         console_subscriber::ConsoleLayer::builder()

@@ -1,4 +1,4 @@
-use crate::common::cachable::{CachableIdTr, DataCacheWrapper};
+use crate::common::cachable::{DataCacheWrapper};
 use crate::common::{CopyToDevice, MyError};
 use crate::common::{Data, Output};
 use async_trait::async_trait;
@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use thoosa_common::traits::CachableIdTr;
 
 pub(crate) const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 

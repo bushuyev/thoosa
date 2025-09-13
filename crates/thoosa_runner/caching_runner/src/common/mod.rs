@@ -1,8 +1,7 @@
 // removed unused feature gate to reduce warnings
 
-use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
+use std::hash::{Hash};
 use std::ops::Range;
 use std::sync::Arc;
 use ambassador::delegatable_trait;
@@ -10,7 +9,7 @@ use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Runnable;
-use crate::common::cachable::CachableIdTr;
+use thoosa_common::traits::{CachableIdTr, Named};
 use crate::permits::{NumPermits, RunnerPerm};
 
 pub mod runnable;
@@ -218,15 +217,6 @@ pub trait OutId:Runnable {
 #[automock]
 pub trait CopyToDevice {
     async fn copy_to_device(&self, dst_device: usize) ->Self;
-}
-
-
-//triggers blanked impl<T: ... Named + 'static> CachableId for T
-#[automock]
-pub trait Named {
-    fn name(&self) -> &'static str {
-        "n/a"
-    }
 }
 
 
