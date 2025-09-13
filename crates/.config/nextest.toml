@@ -1,1 +1,36 @@
-[profile.wonky]
+# .config/nextest.toml
+experimental = ["wrapper-scripts"]
+
+# 1) Concurrency policy for the group (no filter here!)
+[test-groups]
+heavy = { max-threads = 1 }   # never run two heavy tests at once
+
+# 2) Default profile: skip heavies by default
+[profile.default]
+default-filter = 'not test(/::heavy[^:]*$/)'
+
+# Wrapper for all profiles unless overridden
+[[profile.default.scripts]]
+filter = 'all()'
+run-wrapper = 'systemd'
+
+# 3) Heavy profile: only heavy tests, and run each in isolation
+[profile.heavy]
+default-filter = 'test(/::heavy[^:]*$/)'
+
+# When a heavy test runs, occupy all scheduler slots so nothing else overlaps.
+[[profile.heavy.overrides]]
+filter = 'test(/::heavy[^:]*$/)'
+threads-required = "num-cpus"
+
+# 4) Systemd wrapper definition
+[scripts.wrapper.systemd]
+command = [
+    "systemd-run",
+    "--user",
+    "--scope",
+    "-p", "MemoryMax=16G",
+    "-p", "MemorySwapMax=64G",
+    "-p", "AllowedCPUs=0-16",
+    "--"
+]
