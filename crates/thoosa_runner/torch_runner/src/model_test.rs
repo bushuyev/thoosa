@@ -25,9 +25,10 @@ mod tests {
     use crate::data::ThoTensor;
     use std::sync::OnceLock;
     use dashmap::DashMap as DMap;
-    
+
     use rand::{rngs::StdRng, SeedableRng};
     use rand::seq::SliceRandom;
+    use thoosa_common::dims::Dims;
     use crate::tests::TorchRunCtx;
     use crate::ThoDevice;
 
@@ -94,7 +95,7 @@ mod tests {
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ABData;
-    impl caching_runner::common::Dims for ABData {}
+    impl Dims for ABData {}
     impl Adjustable for ThoTensor<ABData, SimpleId> {}
 
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -151,7 +152,7 @@ mod tests {
         }
     }
 
-    
+
 
     // ---------------- Batch Builder: builds (features + label) batch ----------------
     #[derive(Debug, cached_derive::Cached)]
@@ -257,12 +258,12 @@ mod tests {
         }
     }
 
-    
+
 
     // ---------------- Simple Classifier (1 linear layer) ----------------
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClsOut;
-    impl caching_runner::common::Dims for ClsOut {}
+    impl Dims for ClsOut {}
 
     impl ClsOut {
 

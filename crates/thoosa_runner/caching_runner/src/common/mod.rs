@@ -230,9 +230,6 @@ pub trait Named {
 }
 
 
-pub trait Dims:Debug + Send + Sync {
-}
-
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct SimpleId(pub &'static str);
 
