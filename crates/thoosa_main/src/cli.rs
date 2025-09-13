@@ -2308,7 +2308,7 @@ mod cli_tests {
 
      */
     #[test]
-    fn slow_test_run_all_fixed_slices_basic() -> Result<(), ThoosaError> {
+    fn heavy_test_run_all_fixed_slices_basic() -> Result<(), ThoosaError> {
 
         set_panic_hook();
 
@@ -2385,7 +2385,7 @@ mod cli_tests {
     }
 
     #[test]
-    fn slow_test_run_all_max_padding_basic() -> Result<(), ThoosaError> {
+    fn heavy_test_run_all_max_padding_basic() -> Result<(), ThoosaError> {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
@@ -2461,7 +2461,7 @@ mod cli_tests {
 
 
     #[test]
-    fn slow_test_run_all_max_padding_with_mean_grid_lr_opt() -> Result<(), ThoosaError> {
+    fn heavy_test_run_all_max_padding_with_mean_grid_lr_opt() -> Result<(), ThoosaError> {
         set_panic_hook();
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -2537,7 +2537,7 @@ mod cli_tests {
 
 
     #[test]
-    fn slow_test_run_all_max_padding_band_filter() -> Result<(), ThoosaError> {
+    fn heavy_test_run_all_max_padding_band_filter() -> Result<(), ThoosaError> {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
@@ -2621,7 +2621,7 @@ mod cli_tests {
 
 
     #[test]
-    fn slow_test_run_all_fixed_slices_band_filter() -> Result<(), ThoosaError> {
+    fn heavy_test_run_all_fixed_slices_band_filter() -> Result<(), ThoosaError> {
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
 
