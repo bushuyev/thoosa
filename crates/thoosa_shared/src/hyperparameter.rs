@@ -1,6 +1,5 @@
-use std::fmt::{Debug, Display, Formatter};
-use std::mem;
-use std::ops::{Add, Range};
+use std::fmt::{Debug, Display};
+use std::ops::Range;
 use rand::distributions::Uniform;
 use rand::Rng;
 use log::trace;
@@ -31,19 +30,19 @@ impl <T: FieldName> Hyperparameter<T> {
 
     pub fn random_sample(&self) -> Val {
         match self {
-            Hyperparameter::UniformFloat { name, lower, upper } => {
+            Hyperparameter::UniformFloat { name: _name, lower, upper } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = lower + uniform * (upper - lower) ;
                 trace!("UniformFloat={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Val::Real(sample)
             }
-            Hyperparameter::Categorical { name, values } => {
+            Hyperparameter::Categorical { name: _name, values } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = uniform * values.len() as f32;
                 trace!("Categorical={sample:?} values={values:?} ");
                 Val::Int(sample as i64)
             }
-            Hyperparameter::UniformInt { name, lower, upper } => {
+            Hyperparameter::UniformInt { name: _name, lower, upper } => {
                 let uniform = opt_rnd().sample(Uniform::new(0., 1.));
                 let sample = *lower as f64+ uniform * ((upper - lower) as f64) ;
                 trace!("UniformInt={uniform:?} lb={lower} ub={upper} sample={sample} ");

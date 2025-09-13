@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use log::warn;
 use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{parse_macro_input, Data, DeriveInput};
 use thoosa_macros_utils::{get_option_inner_ty, has_attr, is_primitive};
 
 const IN_MAP_ATTR: &'static str = "in_map";
@@ -13,7 +13,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let target_ident = &ast.ident;
     let target_ident_prefix = format!("{}::", ast.ident);
 
-    eprintln!("thoosa_args_derive: target_struct_ident={target_ident:?}");
+    //eprintln!("thoosa_args_derive: target_struct_ident={target_ident:?}");
 
     match &ast.data {
         syn::Data::Struct(data_struct) => {
@@ -46,7 +46,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 });
                             } else {
                                 let field_type = inner_ty.clone();
-                                let field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
+                                let _field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
 
                                 chains_in_to_properties.push(quote! {
                                     .chain(self.#field_ident.as_ref().map(|s|s.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #field_name_path)))).unwrap_or(Box::new(std::iter::empty::<(String, thoosa_shared::val::Val)>())))
@@ -75,7 +75,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
                             } else {
                                 let field_type = field.ty.clone();
-                                let field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
+                                let _field_path = format!("{}::{}", field_type.to_token_stream(), field_name_path);
                                 chains_in_to_properties.push(quote! {
                                     .chain(self.#field_ident.to_properties_iter(Some(thoosa_shared::conc_str(&prefix, #field_name_path))))
                                 });

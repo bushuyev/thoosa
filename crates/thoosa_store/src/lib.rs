@@ -1,4 +1,5 @@
 #![feature(iter_array_chunks)]
+#![allow(unused_imports, unused_variables, unused_mut, dead_code, non_snake_case, redundant_semicolons, noop_method_call)]
 extern crate core;
 
 pub mod fs_store;
@@ -6,11 +7,9 @@ pub mod fs_store;
 use std::array::IntoIter;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
-use std::{fmt, io, mem};
+use std::fmt;
 use std::fmt::{Debug, Display};
-use std::fs::File;
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc};
 use bytemuck::{Pod, Zeroable};
@@ -19,7 +18,7 @@ use parking_lot::{Mutex, RwLock};
 use log::{debug, error, trace, warn};
 use mockall::automock;
 use rand::prelude::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 use rusqlite::{Connection, Error, params, Transaction};
 use rusqlite::types::Value;
 
@@ -29,6 +28,7 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_shared::val::Val;
 use thoosa_shared::val::Val::UInt;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct IdSlice(u32, ResourceId, u32); //id, tensor id, slice idx
 
@@ -85,26 +85,32 @@ impl SetCond {
 }
 
 impl ResourceStore for MockStore {
+    #[allow(unconditional_recursion)]
     fn list_resources_by_file_stems<'a>(&self, file_stems: &'a [&'a str]) -> Result<Vec<Resource>, ThoosaError> {
         self.list_resources_by_file_stems(file_stems)
     }
 
+    #[allow(unconditional_recursion)]
     fn list_resource_set_resources_by_descr(&self, descr: &str) -> Result<Vec<Resource>, ThoosaError> {
         self.list_resource_set_resources_by_descr(descr)
     }
 
+    #[allow(unconditional_recursion)]
     fn list_resource_set_group_sets(&self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError> {
         self.list_resource_set_group_sets(group_descr)
     }
 
+    #[allow(unconditional_recursion)]
     fn list_group_labeled_resources_sets(&self, group_decr: &str) -> Result<Vec<(String, String)>, ThoosaError> {
         self.list_group_labeled_resources_sets(group_decr)
     }
 
+    #[allow(unconditional_recursion)]
     fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoosaError> {
         self.list_resource_set_resources(set_id)
     }
 
+    #[allow(unconditional_recursion)]
     fn list_resource_random_in_group(&self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError> {
         self.list_resource_random_in_group(group_descr)
     }
@@ -113,7 +119,7 @@ impl ResourceStore for MockStore {
 #[automock]
 pub trait Store:ResourceStore + Sync + Send {
     fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
-    fn save_run_config<'a>(&self, input_run_id: Option<&'a[RunId]>, run_config_type: &'a dyn Display, descr: &'a str, keys: &'a str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoosaError>;
+    fn save_run_config<'a>(&self, input_run_id: Option<&'a[RunId]>, run_config_type: &'a dyn Display, descr: &'a str, _keys: &'a str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoosaError>;
     fn get_input_run_ids<'a>(&self, run_id: RunId, input_type: Option<&'a dyn Display>) -> Result<Vec<RunId>, ThoosaError>;
     fn save_resources_set(&mut self, set: String, resource_keys: Vec<String>, group_id: Option<usize>) -> Result<usize, ThoosaError>;
     fn save_resource_set_group(&mut self, descr: String) -> Result<usize, ThoosaError>;
@@ -329,7 +335,7 @@ impl Store for SqlStore {
     }
 
     //TODO resources - save serialized resources config - run_resources is getting to big
-    fn save_run_config(&self, input_run_id: Option<&[RunId]>, run_config_type: &dyn Display, descr: &str, keys: &str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoosaError> {
+    fn save_run_config(&self, input_run_id: Option<&[RunId]>, run_config_type: &dyn Display, descr: &str, _keys: &str, properties_vals: HashMap<String, Val>) -> Result<RunId, ThoosaError> {
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction().map_err(|e| ThoosaError::new(e.to_string()))?; //TODO error
 
@@ -1192,7 +1198,7 @@ impl Store for SqlStore {
         q.pop();
         q.push(")");
 
-        let id__input_id = {
+        let id_input_id = {
             let mut stmt = t.prepare(q.into_iter().collect::<String>().as_str())?;
 
             let r = stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
@@ -1207,7 +1213,7 @@ impl Store for SqlStore {
         t.commit()?;
 
 
-        Ok(id__input_id)
+        Ok(id_input_id)
     }
 
     fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError> {
@@ -1217,7 +1223,7 @@ impl Store for SqlStore {
 
         let q = "SELECT run_id FROM run_configs_input WHERE input_run_id=?";
 
-        let id__input_id = {
+        let id_input_id = {
             let mut stmt = t.prepare(q)?;
 
             let r = stmt.query_map([input_run_id], |row| {
@@ -1229,7 +1235,7 @@ impl Store for SqlStore {
         t.commit()?;
 
 
-        Ok(id__input_id)
+        Ok(id_input_id)
     }
 
     /**k

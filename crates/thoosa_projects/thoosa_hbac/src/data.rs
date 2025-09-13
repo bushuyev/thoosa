@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::collections::HashMap;
 use std::fs;
-use std::fs::DirEntry;
 use polars::prelude::{col, concat_list, lit, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions};
 use log::debug;
 use polars::datatypes::DataType;
@@ -11,7 +10,6 @@ use rand::{thread_rng, Rng};
 use std::io::Write;
 
 use rand::prelude::SliceRandom;
-use regex::Regex;
 use thoosa_common::dims::{Batch, ChannelsData, ThoTensor};
 use thoosa_common::utils::DataBatch;
 use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
@@ -655,6 +653,7 @@ impl DataBatch<ChannelsData> for EEGs {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports, dead_code, unused_variables)]
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::path::Path;

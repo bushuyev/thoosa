@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::{format_ident, quote, ToTokens};
-use syn::{parse2, parse_macro_input, Attribute, DeriveInput, Field, Lit, Path, Variant};
+use syn::{parse_macro_input, DeriveInput};
 use syn::spanned::Spanned;
 use thoosa_macros_utils::*;
 
@@ -14,7 +14,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let target_struct_ident = &ast.ident;
     let target_struct_name = &ast.ident.to_string();
 
-    eprintln!("thoosa_args_derive: target_struct_ident={target_struct_ident:?}");
+    //eprintln!("thoosa_args_derive: target_struct_ident={target_struct_ident:?}");
 
     let range_or_value_struct_ident = format_ident!("{}RangeOrValue", target_struct_ident);
     let fields_enum_ident = format_ident!("{}Fields", target_struct_ident);
@@ -73,7 +73,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         let camel_field_ident = Ident::new(&thoosa_shared::snake_to_camel(&field_ident.to_string()), fields_enum_ident.span());
                         let field_type = field.ty.clone();
 
-                        eprintln!("field_type={}", field_type.to_token_stream());
+                        //eprintln!("field_type={}", field_type.to_token_stream());
 
                         if has_attr(field, RUN_CONFIG_ATTR) {
 
@@ -177,7 +177,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                             self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
                                         }
                                     });
-                                    let expect_msg = format!("no {}", field_ident);
+                    let expect_msg = format!("no {}", field_ident);
 
                                     a.builder_assignments.push(quote!{
                                         #field_ident: self.#field_ident.expect(#expect_msg),
@@ -250,8 +250,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                     }
                                 });
 
-                                let expect_msg = format!("no {}", field_ident);
-
+                                // keep for clearer error in expect below
                                 a.builder_assignments.push(quote!{
                                     #field_ident: self.#field_ident.clone(),
                                 });
@@ -524,9 +523,9 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         })
     };
 
-    eprintln!("range_or_value_type={}", range_or_value_type.to_string());
+    //eprintln!("range_or_value_type={}", range_or_value_type.to_string());
     let builder_enum = if "enum" == &range_or_value_type.to_string() {
-        eprintln!("BuilderENum");
+        //eprintln!("BuilderENum");
 
         quote! {
             #[derive(Debug, PartialEq)]
@@ -611,4 +610,3 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
 
     gen.into()
 }
-

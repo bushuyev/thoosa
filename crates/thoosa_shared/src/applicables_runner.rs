@@ -1,28 +1,22 @@
-use crate::rayon_future::{RayonFuture, ScopeFutureExt};
+use crate::rayon_future::RayonFuture;
 use async_trait::async_trait;
-use dashmap::{DashMap, DashSet, Entry, Map};
-use futures::channel::oneshot;
+use dashmap::{DashMap, DashSet, Entry};
 use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
 use futures_util::future::join_all;
 use parking_lot::RwLock;
 use rayon::ThreadPool;
-use std::borrow::{Borrow, BorrowMut, Cow};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::hash::Hash;
-use std::io::Write;
 use std::marker::Tuple;
-use std::ops::{Deref, DerefMut, Sub};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::Instant;
-use log::{debug, error};
-use crate::resource::Resource;
+use log::debug;
 use crate::run_configs::{Cachable, Runnable};
 
 pub type CachableId = String;
@@ -203,7 +197,7 @@ where
         )
     }
 
-    fn get_from_any_device<R:RunCtx>(&mut self, device_ordinal:usize, pool:&ThreadPool, statistics: &Arc<Statistics>, ctx: Option<Arc<RwLock<R>>> ) -> Shared<BoxFuture<'static, Arc<O>>> {
+    fn get_from_any_device<R:RunCtx>(&mut self, device_ordinal:usize, _pool:&ThreadPool, statistics: &Arc<Statistics>, ctx: Option<Arc<RwLock<R>>> ) -> Shared<BoxFuture<'static, Arc<O>>> {
         debug!("get_from_any_device: device_ordinal={device_ordinal} ctx={ctx:?} self.device_cache_areas[device_ordinal]={:?}", self.device_cache_areas[device_ordinal]);
 
         self.device_cache_areas[device_ordinal] |= ctx.map(|v|v.read().cache_area()).unwrap_or(0);
@@ -398,7 +392,7 @@ where
         &self,
         key: CachableId,
         cache_area: u64,
-        pool: &ThreadPool,
+        _pool: &ThreadPool,
         device:&dyn ToOrdinal,
         statistics: Arc<Statistics>,
     ) {
@@ -675,7 +669,7 @@ impl FuturesRunner {
         join_all(ctx
             .into_cached_iter_mut()
             .zip(maps_iter)
-            .flat_map(|(ctx_keys, mut futs_map)|{
+            .flat_map(|(ctx_keys, futs_map)|{
                 ctx_keys.into_iter().map( |key| {//TODO keys may repeat a lot, fold in a set first?
                     futs_map.purge_gpu_cache_area(
                         key, cache_area, pool, device, Arc::clone(&self.statistics)
@@ -716,30 +710,32 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
 
 
 #[cfg(test)]
-pub async fn dummy_load(statistics: &Statistics, input: &Arc<CachableId>) {
+pub async fn dummy_load(statistics: &Statistics, _input: &Arc<CachableId>) {
 
 
-    for i in 0..DUMMY_LOAD_N {
-        let i = 0;
+    for _i in 0..DUMMY_LOAD_N {
+        let _i = 0;
         async {
 
             let t_0 = Instant::now();
 
             let a = vec![0.1; 1_000_000];
             let b = vec![0.1; 1_000_000];
-            let c = a.into_iter().zip(b.into_iter()).map(|(a, b)| a + b).collect::<Vec<f32>>();
+            let _c = a.into_iter().zip(b.into_iter()).map(|(a, b)| a + b).collect::<Vec<f32>>();
 
             statistics.track_pure_run_time(t_0.elapsed().as_millis() as u64);
 
         }.await;
 
-        debug!("dummy_load i={i} thread={:?}", std::thread::current().name());
+        debug!("dummy_load i={_i} thread={:?}", std::thread::current().name());
     }
 
 }
 
+#[allow(dead_code)]
 const DUMMY_LOAD_N:u32 = 3;
 
+#[allow(dead_code)]
 fn yield_n(n: usize) -> impl Future<Output = ()> {
     struct YieldN { left: usize }
     impl Future for YieldN {
@@ -761,6 +757,7 @@ fn yield_n(n: usize) -> impl Future<Output = ()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports, dead_code, unused_variables)]
     use std::borrow::Cow;
     use super::{dummy_load, Cachable, DataInDevices, FuturesRunner, FuturesRunnerMap, Input, Output, CachableId, RunCtx, Runner, ToOrdinal, DeviceThreadPools, MapWithThread, yield_n};
     use crate::rayon_future::ScopeFutureExt;

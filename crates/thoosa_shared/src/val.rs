@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::ops::Range;
 use num_traits::ToPrimitive;
 use crate::{round_to_digits, RangeOrValue, ThoosaError};
@@ -617,8 +616,7 @@ impl <T: FieldName> TryFrom<&NamedVal<T>> for u32 {
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
-    use crate::RangeOrValue;
+    
     use crate::val::{NamedRange, NamedVal, Val};
 
 

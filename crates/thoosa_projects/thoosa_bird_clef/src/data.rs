@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use lewton::inside_ogg::OggStreamReader;
 use log::debug;
 use ogg::reading::PacketReader;
-use polars::prelude::{CsvParseOptions, CsvReadOptions, LazyCsvReader, LazyFileListReader, SerReader};
 use tch::Tensor;
 use thoosa_shared::ThoosaError;
 
@@ -41,6 +40,7 @@ pub fn ogg_to_tensor<P:AsRef<Path>+Debug>(file: P) -> Result<Tensor, Box<dyn std
     Ok(tensor)
 }
 
+#[allow(dead_code)]
 pub fn clc_tracks<P:AsRef<Path>>(file: P) -> Result<usize, Box<dyn std::error::Error>> {
     let file = File::open(file)?;
     let reader = BufReader::new(file);
@@ -61,7 +61,7 @@ pub fn clc_tracks<P:AsRef<Path>>(file: P) -> Result<usize, Box<dyn std::error::E
 }
 
 
-pub fn labeled_resourses<P:Into<PathBuf>>(path: P) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError> {
+pub fn labeled_resourses<P:Into<PathBuf>>(_path: P) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError> {
 
 
     /*let df_csv = CsvReadOptions::default()
@@ -81,7 +81,7 @@ pub fn labeled_resourses<P:Into<PathBuf>>(path: P) -> Result<HashMap<String, Vec
     for label_dir in read_dir(train_audio_dir)? {
         debug!("label_dir={label_dir:?}");
         let label_dir = label_dir?;
-        let meta = label_dir.metadata()?;
+        let _meta = label_dir.metadata()?;
         let label = label_dir.path().file_stem().expect("file_stem").to_str().expect("label").to_string();
 
         for file in read_dir(label_dir.path())? {
@@ -111,6 +111,7 @@ pub fn resource_to_tensor(source_path:&dyn AsRef<Path>, key:&str) -> Result<Tens
 
 #[cfg(test)]
 mod tests {
+    #![allow(unused_imports, dead_code, unused_variables)]
     use std::fs;
     use std::fs::OpenOptions;
     use std::io::{BufWriter, Write};
