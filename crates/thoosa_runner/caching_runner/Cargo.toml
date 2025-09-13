@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-
+thoosa_common = { path = "../../thoosa_common" }
 
 dashmap.workspace = true
 tokio.workspace = true

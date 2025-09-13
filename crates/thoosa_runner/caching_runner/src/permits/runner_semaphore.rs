@@ -4,9 +4,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
 use tokio::time;
+use thoosa_common::traits::CachableIdTr;
 use crate::common::MyError;
 use crate::permits::{NumPermits, PermitSource, RunnerPerm};
-use crate::common::cachable::CachableIdTr;
 
 impl RunnerSemaphore {
     pub fn new(permits: NumPermits) -> RunnerSemaphore {

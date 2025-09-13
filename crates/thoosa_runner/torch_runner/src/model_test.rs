@@ -11,7 +11,7 @@ mod tests {
     use tch::IndexOp;
 
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-    use caching_runner::common::{DropIf, Input, MyError, Named, OutId, RunCtx, SimpleId, WithId};
+    use caching_runner::common::{DropIf, Input, MyError, OutId, RunCtx, SimpleId, WithId};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::common::runnable::Runnable;
     use caching_runner::test_utils::parse_numeric_part;
@@ -20,7 +20,6 @@ mod tests {
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use caching_runner::permits::{MAX_PERMITS, PermitStep};
-    use caching_runner::common::cachable::CachableIdTr;
 
     use crate::data::ThoTensor;
     use std::sync::OnceLock;
@@ -29,6 +28,7 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use rand::seq::SliceRandom;
     use thoosa_common::dims::Dims;
+    use thoosa_common::traits::{CachableIdTr, Named};
     use crate::tests::TorchRunCtx;
     use crate::ThoDevice;
 

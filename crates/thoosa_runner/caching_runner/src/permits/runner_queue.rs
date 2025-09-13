@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Notify, Semaphore, TryAcquireError};
 use tokio::task::JoinHandle;
-use crate::common::cachable::CachableIdTr;
+use thoosa_common::traits::CachableIdTr;
 
 /// ---------- FIFO Arbiter built on tokio::Semaphore ----------
 
