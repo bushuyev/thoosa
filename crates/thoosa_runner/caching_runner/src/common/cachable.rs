@@ -569,7 +569,7 @@ pub trait Runner {
         runnable: &Arc<Self::R>,
         input: Arc<DataCacheWrapper<<Self::R as Runnable>::In>>,
         ctx: Arc<RwLock<<Self::R as Runnable>::Ctx>>,
-        required_ids: &HashMap<&'static str, &HashSet<&dyn CachableId>>
+        required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>
     ) -> Result<<Self::R as Runnable>::Out, MyError>;
 
 }
@@ -683,14 +683,14 @@ mod tests {
 
 
 #[delegatable_trait]
-pub trait CachableId: Any + Debug + Send + Sync  {
+pub trait CachableIdTr: Any + Debug + Send + Sync  {
 
-    fn eqq(&self, _other:&dyn CachableId) -> bool{
+    fn eqq(&self, _other:&dyn CachableIdTr) -> bool{
         false
     }
 
     fn as_any<'a>(&'a self) ->  (&'a (dyn Any + Send + Sync));
-    fn eq_dyn(&self, other: &dyn CachableId) -> bool;
+    fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool;
     fn hash_dyn(&self, state: &mut dyn Hasher);
 }
 
@@ -704,10 +704,10 @@ pub mod mock_cachable_id{
         #[derive(Debug, Clone, Eq, PartialEq, Hash)]
         pub CachableId {}
 
-        impl CachableId for CachableId {
-            fn eqq(&self, other:&dyn CachableId) -> bool;
+        impl CachableIdTr for CachableId {
+            fn eqq(&self, other:&dyn CachableIdTr) -> bool;
             fn as_any<'a>(&'a self) ->  (&'a (dyn Any + Send + Sync));
-            fn eq_dyn(&self, other: &dyn CachableId) -> bool;
+            fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool;
             fn hash_dyn(&self, state: &mut dyn Hasher);
         }
 
@@ -739,13 +739,13 @@ pub mod mock_cachable_id{
 
 
 // dyn Key itself: Eq/Hash via the object-safe methods
-impl PartialEq for dyn CachableId {
+impl PartialEq for dyn CachableIdTr {
     fn eq(&self, other: &Self) -> bool { self.eq_dyn(other) }
 }
 
-impl Eq for dyn CachableId {}
+impl Eq for dyn CachableIdTr {}
 
-impl Hash for dyn CachableId {
+impl Hash for dyn CachableIdTr {
     fn hash<H: Hasher>(&self, h: &mut H) {
         struct Erased<'h, H2: Hasher>(&'h mut H2);
         impl<'h, H2: Hasher> Hasher for Erased<'h, H2> {
@@ -757,11 +757,11 @@ impl Hash for dyn CachableId {
     }
 }
 
-impl<T: Send + Sync + Debug + Eq + Hash + Named + 'static> CachableId for T {
+impl<T: Send + Sync + Debug + Eq + Hash + Named + 'static> CachableIdTr for T {
 
     fn as_any<'a>(&'a self) ->  (&'a (dyn Any + Send + Sync)) { self }
 
-    fn eq_dyn(&self, other: &dyn CachableId) -> bool {
+    fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool {
         other.as_any().downcast_ref::<T>().map_or(false, |o| self == o)
     }
 
@@ -776,7 +776,7 @@ impl<T: Send + Sync + Debug + Eq + Hash + Named + 'static> CachableId for T {
     }
 }
 
-impl dyn CachableId {
+impl dyn CachableIdTr {
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
         self.as_any().downcast_ref::<T>()
     }

@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 use tokio::time;
 use crate::common::MyError;
 use crate::permits::{NumPermits, PermitSource, RunnerPerm};
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 
 impl RunnerSemaphore {
     pub fn new(permits: NumPermits) -> RunnerSemaphore {
@@ -63,7 +63,7 @@ impl RunnerSemaphore {
 
 #[async_trait]
 impl PermitSource for RunnerSemaphore {
-    async fn acquire(&self, n: NumPermits, _out_id: std::sync::Arc<dyn CachableId>) -> Result<RunnerPerm, MyError> {
+    async fn acquire(&self, n: NumPermits, _out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, MyError> {
         self.acquire_many_owned(n).await
     }
 }

@@ -5,7 +5,7 @@ use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
 use caching_runner::common::{Data, MyError, Named, OutId, RunCtx, WithId};
-use caching_runner::common::cachable::CachableId;
+use caching_runner::common::cachable::CachableIdTr;
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -80,7 +80,7 @@ where
         runnable: &Arc<Self::R>,
         input: Arc<DataCacheWrapper<<Self::R as Runnable>::In>>,
         ctx: Arc<RwLock<<Self::R as Runnable>::Ctx>>,
-        required_ids: &HashMap<&'static str, &HashSet<&dyn CachableId>>,
+        required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<Self::R as Runnable>::Out, MyError>
     {
         let (device_idx, ctx_name) = {
@@ -95,7 +95,7 @@ where
         let mut min_split_len = size.clone();
         min_split_len/=10;
         let out_id = runnable.out_id(input.id()); //.clone();
-        let out_key = std::sync::Arc::new(out_id.clone()) as std::sync::Arc<dyn CachableId>;
+        let out_key = std::sync::Arc::new(out_id.clone()) as std::sync::Arc<dyn CachableIdTr>;
 
 
 
