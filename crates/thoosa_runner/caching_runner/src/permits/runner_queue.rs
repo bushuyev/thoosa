@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Notify, Semaphore, TryAcquireError};
 use tokio::task::JoinHandle;
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 
 /// ---------- FIFO Arbiter built on tokio::Semaphore ----------
 
@@ -24,7 +24,7 @@ pub struct Arbiter {
 struct Req {
     needed: NumPermits,
     reply: oneshot::Sender<Result<RunnerPerm, MyError>>,
-    out_id: Arc<dyn CachableId>,
+    out_id: Arc<dyn CachableIdTr>,
 }
 
 impl Arbiter {
@@ -52,7 +52,7 @@ impl Arbiter {
     async fn send_acquire_rq(
         &self,
         mut needed: NumPermits,
-        out_id: Arc<dyn CachableId>,
+        out_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, MyError> {
         // Clamp to capacity to avoid unfulfillable requests.
         if needed as usize > self.capacity as usize {
@@ -90,9 +90,9 @@ impl Arbiter {
         tokio::spawn(async move {
             let mut q: VecDeque<Req> = VecDeque::new();
             // Track repeated OutOfPermits per out_id to trigger escalation.
-            let mut fail_counts: HashMap<Arc<dyn CachableId>, u32> = HashMap::new();
+            let mut fail_counts: HashMap<Arc<dyn CachableIdTr>, u32> = HashMap::new();
             // When set, only this out_id may receive permits; others get OutOfPermits immediately.
-            let mut super_id: Option<Arc<dyn CachableId>> = None;
+            let mut super_id: Option<Arc<dyn CachableIdTr>> = None;
             const SUPERTASK_FAIL_THRESHOLD: u32 = 3;
             let capacity: u32 = sem.available_permits() as u32;
             loop {
@@ -234,7 +234,7 @@ impl Drop for Arbiter {
 
 #[async_trait]
 impl PermitSource for Arbiter {
-    async fn acquire(&self, n: NumPermits, out_id: Arc<dyn CachableId>) -> Result<RunnerPerm, MyError> {
+    async fn acquire(&self, n: NumPermits, out_id: Arc<dyn CachableIdTr>) -> Result<RunnerPerm, MyError> {
         self.send_acquire_rq(n, out_id).await
     }
 }
@@ -292,7 +292,7 @@ mod tests {
 
         for mut task in tasks {
             let arb = Arc::clone(&arb);
-            let id = Arc::new(SimpleId::from(format!("task-{}", task.i))) as Arc<dyn CachableId>;
+            let id = Arc::new(SimpleId::from(format!("task-{}", task.i))) as Arc<dyn CachableIdTr>;
             js.spawn(async move {
                 loop {
                     // Clamp to capacity to avoid waiting forever on >capacity.
@@ -340,7 +340,7 @@ mod tests {
 
         let arb = Arbiter::new(1);
         // Hold the only permit so next acquire waits
-        let permit = arb.send_acquire_rq(1, Arc::new(SimpleId::from("a")) as Arc<dyn CachableId>).await.unwrap();
+        let permit = arb.send_acquire_rq(1, Arc::new(SimpleId::from("a")) as Arc<dyn CachableIdTr>).await.unwrap();
 
         // Enqueue a request that will wait
         let (reply, recv) = oneshot::channel();
@@ -350,7 +350,7 @@ mod tests {
             .send(Req {
                 needed: 1,
                 reply,
-                out_id: Arc::new(SimpleId::from("b")) as Arc<dyn CachableId>,
+                out_id: Arc::new(SimpleId::from("b")) as Arc<dyn CachableIdTr>,
             })
             .await
             .unwrap();
@@ -376,7 +376,7 @@ mod tests {
     async fn send_after_close_returns_error() {
         let mut arb = Arbiter::new(1);
         drop(arb.tx.take());
-        let res = arb.send_acquire_rq(1, Arc::new(SimpleId::from("c")) as Arc<dyn CachableId>).await;
+        let res = arb.send_acquire_rq(1, Arc::new(SimpleId::from("c")) as Arc<dyn CachableIdTr>).await;
         assert!(matches!(res, Err(MyError::SomethingElse(_))));
     }
 }

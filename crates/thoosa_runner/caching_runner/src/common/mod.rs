@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Runnable;
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 use crate::permits::{NumPermits, RunnerPerm};
 
 pub mod runnable;
@@ -186,7 +186,7 @@ impl <T:ToString> From<T> for MyError {
 #[delegatable_trait]
 #[automock(type ID=DummyCachableId;)]
 pub trait WithId {
-    type ID: CachableId + Send + Sync + Eq + Hash + Clone + Debug;
+    type ID: CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug;
 
     fn id(&self) -> &Self::ID;
 }

@@ -44,6 +44,7 @@ pub mod find_motifs_run_config;
 pub mod dims;
 pub mod applicables;
 pub mod batches;
+pub mod traits;
 
 pub trait ResourceLoader:Send+Sync {
     type K;

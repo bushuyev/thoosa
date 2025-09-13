@@ -1,4 +1,4 @@
-use crate::common::cachable::{CachableId, DataCacheWrapper};
+use crate::common::cachable::{CachableIdTr, DataCacheWrapper};
 use crate::common::{CopyToDevice, MyError};
 use crate::common::{Data, Output};
 use async_trait::async_trait;
@@ -15,7 +15,7 @@ pub(crate) const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
 #[async_trait]
 pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableId>>, device_idx: usize) -> Result<(), MyError>;
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), MyError>;
     // async fn purge(&self, device_idx: usize);
 
     async fn purge_cpu(&self, i: u64);
@@ -26,7 +26,7 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
 impl<K, O> FuturesRunnerMapPurger
 for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, MyError>>>>
 where
-    K: CachableId + Clone + Send + Sync + 'static + Eq + Hash,
+    K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
     O: Data<Sub=O> + CopyToDevice + Output + Send + Sync + 'static,
 {
 
@@ -55,7 +55,7 @@ where
 
     async fn purge_gpu(
         &self,
-        ids_to_keep: Option<&HashSet<&dyn CachableId>>,
+        ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
     ) -> Result<(), MyError> {
 
@@ -69,7 +69,7 @@ where
             .filter(|entry| {
                 let keep = ids_to_keep
                     .map(|set| {
-                        let kd: &dyn CachableId = entry.key();
+                        let kd: &dyn CachableIdTr = entry.key();
                         !set.contains(kd)
                     })
                     .unwrap_or(true);

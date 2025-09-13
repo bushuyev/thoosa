@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>
@@ -32,22 +32,22 @@ where
 
 #[delegatable_trait]
 pub trait DumpToCpuContext<'a>: Debug + RunCtxContext {
-    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableId>>;
+    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>;
 }
 
 #[derive(Debug)]
 pub struct DumpToCpuContextImpl<'a> {
-    ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableId>>
+    ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>
 }
 
 impl <'a> DumpToCpuContextImpl<'a> {
-    pub fn new(ids_to_exclude:&'a HashMap<&'static str, &'a HashSet<&'a dyn CachableId>>) -> Self {
+    pub fn new(ids_to_exclude:&'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>) -> Self {
         Self { ids_to_exclude }
     }
 }
 
 impl <'a> DumpToCpuContext<'a> for DumpToCpuContextImpl<'a> {
-    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableId>>{
+    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>{
         self.ids_to_exclude
     }
 }
