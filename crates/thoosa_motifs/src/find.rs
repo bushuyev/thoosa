@@ -3559,14 +3559,7 @@ mod motif_find_tests {
 
     #[test]
     fn test_chunk_and_slice_2() -> Result<(), ThoosaError> {
-        let mut free_mem: usize = 0;
-        let mut total_mem: usize = 0;
-        unsafe {
-            let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-
-            let cudarc_lib = cudarc::driver::sys::lib();
-            cudarc_lib.cuMemGetInfo_v2(&mut free_mem as *mut usize, &mut total_mem as *mut usize);
-        }
+        let (free_mem, total_mem)  = cuda_mem();
 
         set_max_level(Trace);
 

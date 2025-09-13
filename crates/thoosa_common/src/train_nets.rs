@@ -2904,7 +2904,6 @@ mod train_tests {
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
     use crate::ws::{FsWorkspace, Workspace, WsMockBuilder};
-    use cudarc::driver::CudaDevice;
     use log::LevelFilter::{Debug, Info, Trace};
     use log::{debug, error, info, set_max_level, trace};
     use parking_lot::{Mutex, RwLock};
@@ -3412,7 +3411,7 @@ mod train_tests {
     #[test]
     fn s_low_test_apply_motif_models() -> Result<(), ThoosaError> {
 
-        let _device = CudaDevice::new(0)?;
+        // let _device = CudaDevice::new(0)?;
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
 
@@ -3801,7 +3800,7 @@ mod train_tests {
     fn test_train_basic_oom()->Result<(), ThoosaError> {
         reset_print_options();
         set_max_level(Debug);
-        let _device = CudaDevice::new(0)?;
+        // let _device = CudaDevice::new(0)?;
         let cudarc_lib = unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
@@ -4079,7 +4078,6 @@ mod train_tests {
     #[test]
     fn test_train_oom()->Result<(), ThoosaError>{
 
-        let _device = CudaDevice::new(0)?;
         let cudarc_lib = unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         };
