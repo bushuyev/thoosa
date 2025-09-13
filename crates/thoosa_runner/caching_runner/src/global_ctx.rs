@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use mockall::automock;
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::common::MyError;
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 use crate::permits::NumPermits;
 use crate::permits::{PermitSource, RunnerPerm};
 use crate::permits::runner_queue::Arbiter;
@@ -127,14 +127,14 @@ impl GlobalCtx {
         self.is_all_on_cpu[device_idx].store(false, Relaxed);
     }
 
-    pub async fn acquire_many(&self, ordinal: usize, n: NumPermits, out_id: std::sync::Arc<dyn CachableId>) -> Result<RunnerPerm, MyError> {
+    pub async fn acquire_many(&self, ordinal: usize, n: NumPermits, out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, MyError> {
         self.semaphores[ordinal].acquire(n, out_id).await
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     pub async fn dump_all_to_cpu<'a>(
         &'a self,
-        required_ids: &HashMap<&'static str, &'a HashSet<&'a dyn CachableId>>,
+        required_ids: &HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
         device_idx: usize,
     ) -> Result<(), MyError> {
         assert_ne!(device_idx, 0);

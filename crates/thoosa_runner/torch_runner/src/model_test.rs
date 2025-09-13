@@ -20,7 +20,7 @@ mod tests {
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use caching_runner::permits::{MAX_PERMITS, PermitStep};
-    use caching_runner::common::cachable::CachableId;
+    use caching_runner::common::cachable::CachableIdTr;
 
     use crate::data::ThoTensor;
     use std::sync::OnceLock;
@@ -426,7 +426,7 @@ mod tests {
 
             // Build out_key for fairness and acquisitions
             let out_id = self.clf.out_id(batched.id());
-            let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableId>;
+            let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
 
             // Acquire permits as needed using OOMHandler with Permits and Splits adjusters
             let size = *batched.size();

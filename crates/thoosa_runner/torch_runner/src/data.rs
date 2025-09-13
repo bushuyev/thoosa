@@ -207,7 +207,7 @@ impl<D: Dims, Id: Named + Clone> Display for ThoTensor<D, Id>{
 }
 
 impl<D: Dims, Id> WithId for ThoTensor<D, Id>
-where Id: caching_runner::common::cachable::CachableId + Send + Sync + Eq + std::hash::Hash + Clone + std::fmt::Debug + Named
+where Id: caching_runner::common::cachable::CachableIdTr + Send + Sync + Eq + std::hash::Hash + Clone + std::fmt::Debug + Named
 {
     type ID = Id;
 

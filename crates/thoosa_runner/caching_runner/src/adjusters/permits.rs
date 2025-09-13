@@ -3,7 +3,7 @@ use crate::adjusters::dump_to_cpu::*;
 use crate::oom_handler::{Adjustable, Adjuster, RunCtxContext};
 use ambassador::{delegatable_trait, Delegate};
 use async_trait::async_trait;
-use crate::common::cachable::CachableId;
+use crate::common::cachable::CachableIdTr;
 use crate::common::RunCtx;
 use crate::common::{DropIf, MyError};
 use parking_lot::RwLock;
