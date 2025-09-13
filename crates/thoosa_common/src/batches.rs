@@ -7,8 +7,8 @@ use crossbeam_utils::sync::WaitGroup;
 use futures_util::FutureExt;
 use log::debug;
 use parking_lot::{Mutex, RwLock};
-use rand::prelude::SliceRandom;
-use rand::thread_rng;
+use rand::seq::{SliceRandom, IndexedRandom};
+use rand::Rng;
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -111,10 +111,10 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + S
                 let transform_fn = transform_fn.as_ref().map(|v| Arc::clone(v));
 
                 let (class, resources) = class_resources
-                    .choose(&mut thread_rng())
+                    .choose(&mut rand::rng())
                     .expect("class_resources.choose failed");
                 let resource_id = resources
-                    .choose(&mut thread_rng())
+                    .choose(&mut rand::rng())
                     .expect("resources.choose failed")
                     .clone();
                 x_y_acc.push((
@@ -145,7 +145,7 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + S
 
             // let class = *class;
             let map = resources
-                .choose_multiple(&mut thread_rng(), per_class_len)
+                .choose_multiple(&mut rand::rng(), per_class_len)
                 .map(|key| key.clone());
             for resource_id in map {
                 let transform_fn = transform_fn.as_ref().map(|v| Arc::clone(v));
@@ -463,7 +463,7 @@ impl<DI: Dims, DO: Dims /* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
 
         let area = loader.next_ctx();
         let rnd_resoruces = resources
-            .choose_multiple(&mut thread_rng(), batch_size)
+            .choose_multiple(&mut rand::rng(), batch_size)
             .map(|v| v.clone())
             .collect::<Vec<_>>();
 

@@ -1,7 +1,8 @@
 use std::fmt::{Debug, Display};
+#[cfg(not(test))]
+use rand::RngCore;
 use std::ops::Range;
-use rand::distributions::Uniform;
-use rand::Rng;
+// Use deterministic MT RNG for tests via opt_rnd(); build uniform from next_u32
 use log::trace;
 use crate::opt_rng::opt_rnd;
 use crate::RangeOrValue;
@@ -31,20 +32,20 @@ impl <T: FieldName> Hyperparameter<T> {
     pub fn random_sample(&self) -> Val {
         match self {
             Hyperparameter::UniformFloat { name: _name, lower, upper } => {
-                let uniform = opt_rnd().sample(Uniform::new(0., 1.));
+                let uniform = (opt_rnd().next_u32() as f64) / (u32::MAX as f64);
                 let sample = lower + uniform * (upper - lower) ;
                 trace!("UniformFloat={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Val::Real(sample)
             }
             Hyperparameter::Categorical { name: _name, values } => {
-                let uniform = opt_rnd().sample(Uniform::new(0., 1.));
+                let uniform = (opt_rnd().next_u32() as f32) / (u32::MAX as f32);
                 let sample = uniform * values.len() as f32;
                 trace!("Categorical={sample:?} values={values:?} ");
                 Val::Int(sample as i64)
             }
             Hyperparameter::UniformInt { name: _name, lower, upper } => {
-                let uniform = opt_rnd().sample(Uniform::new(0., 1.));
-                let sample = *lower as f64+ uniform * ((upper - lower) as f64) ;
+                let uniform = (opt_rnd().next_u32() as f64) / (u32::MAX as f64);
+                let sample = *lower as f64 + uniform * ((upper - lower) as f64) ;
                 trace!("UniformInt={uniform:?} lb={lower} ub={upper} sample={sample} ");
                 Val::Int(sample as i64)
             }

@@ -15,8 +15,8 @@ use futures::StreamExt;
 use log::{debug, error, info, log_enabled, trace, warn, Log};
 use parking_lot::{Mutex, RawRwLock, RwLock, RwLockReadGuard};
 use plotters::prelude::BLACK;
-use rand::prelude::SliceRandom;
-use rand::thread_rng;
+use rand::seq::{SliceRandom, IndexedRandom};
+use rand::Rng;
 use rayon::iter::ParallelBridge;
 use rayon::iter::ParallelIterator;
 use regex::Regex;
@@ -350,7 +350,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
     ) -> (ThoTensor<Batch<DO>>, Tensor) {
         debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         let wg = WaitGroup::new();
         let area = loader.write().get_available_cache_area();
         let x_y_acc:Arc<Mutex<Vec<(ThoTensor<DO>, i64)>>> = Arc::new(Mutex::new(vec![]));
@@ -574,7 +574,7 @@ impl <DI:Dims, DO:Dims> ClassTensorsLoaderData<DI, DO> {
         // let mut transform_fn = transform_fn.as_ref().map(|v|v.clone());
 
         let area = loader.write().get_available_cache_area();
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         let rnd_resoruces = resources.choose_multiple(&mut rng, batch_size).map(|v|v.clone()).collect::<Vec<_>>();
         loader.write().exec(move |future_id, loader, keys_purge, done_sender| {
             async move {
@@ -2225,7 +2225,7 @@ impl <D:Dims> TensorsDataBatch<D> {
     }
 
     fn choose_for_batch(class_tensors: &Vec<Vec<Tensor>>, batch_size: u32, device:&Device) -> (ThoTensor<Batch<D>>, Tensor) {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
 
         let per_class_len = batch_size / class_tensors.len() as u32;//TODO make balanced
         debug!("TensorsDataBatch::choose_for_batch: class_tensors={} per_class_len={per_class_len}", class_tensors.len());
@@ -2907,7 +2907,7 @@ mod train_tests {
     use log::LevelFilter::{Debug, Info, Trace};
     use log::{debug, error, info, set_max_level, trace};
     use parking_lot::{Mutex, RwLock};
-    use rand::{thread_rng, Rng};
+    use rand::Rng;
     use rayon::iter::IntoParallelRefMutIterator;
     use std::collections::HashMap;
     use std::{fs, mem};
@@ -3922,14 +3922,14 @@ mod train_tests {
             //     set_requires_grad_in_subpath(&vs_0, "seq_0.split_0", false);
             // }
 
-            let mut rng = thread_rng();
+            let mut rng = rand::rng();
 
             let (input_0, input_1, target):(Vec<Tensor>, Vec<Tensor>, Vec<f32>) = (0..batch_size).map(|i| {
 
                 let mut data = [0.; FEATURES as usize];
                 rng.fill(&mut data);
 
-                if rng.gen_bool(0.5) {
+                if rng.random_bool(0.5) {
                     (
                         asc_t(data),
                         desc_t(data),
@@ -3993,7 +3993,7 @@ mod train_tests {
 
         // debug!("opt_1 optimizer_mem_size: {:?}", optimizer_mem_size(&opt_1));
 
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
 
         // let mut results = vec![];
         for i in 0..100 {
@@ -4352,9 +4352,9 @@ mod train_tests {
     }
 
     fn dummy_final_net_input<const LABELS_SIZE:usize, D:Dims>(batch_size: usize) -> (ThoTensor<D>, Tensor) {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         let data = (0..batch_size).map(|label| {
-            let label = rng.gen_range(0..LABELS_SIZE);
+            let label = rng.random_range(0..LABELS_SIZE);
 
             let x = random_tensor_with_dominant(LABELS_SIZE as i64, label as i64, 0.99, Cpu);
             let mut y = [0.; LABELS_SIZE];

@@ -739,7 +739,7 @@ mod tests {
 
 
     fn load_test_entity_sv(key: &Resource) -> super::SyncWrapper<TestEntity> {
-        thread::sleep(Duration::new(1, rand::thread_rng().gen_range(1e3 as u32..3e6 as u32)));
+        thread::sleep(Duration::new(1, rand::rng().random_range(1000u32..3_000_000u32)));
         // thread::sleep(Duration::new(0, 5e8 as u32));
 
         super::SyncWrapper::wrap(
