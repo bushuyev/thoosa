@@ -1,4 +1,3 @@
-use syn::__private::ToTokens;
 use syn::{Field, GenericArgument, Ident, Lit, PathArguments, Type, TypePath};
 
 pub fn is_primitive(ty: &Type) -> bool {

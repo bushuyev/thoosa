@@ -4,31 +4,27 @@
 
 
 use std::backtrace::Backtrace;
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::f32::consts::PI;
 use std::fmt::{Debug, Display, Formatter};
 use std::{fmt, fs};
 use std::hash::Hash;
-use std::ops::{Div, Mul, Range};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::ops::{Mul, Range};
+use std::sync::atomic::AtomicBool;
 use chrono::SecondsFormat;
-use log::{debug, error, trace, LevelFilter};
-use rand::{Rng, RngCore};
+use log::{debug, error, trace};
+use rand::Rng;
 use regex::Regex;
-use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode};
-use std::env;
-use std::env::VarError;
-use std::ffi::OsStr;
+// removed unused simplelog/env imports
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use bytemuck::{Pod, Zeroable};
-use clap::Subcommand;
+// removed unused clap::Subcommand
 use lazy_static::lazy_static;
-use num_traits::{Num, PrimInt};
-use num_traits::real::Real;
+use num_traits::PrimInt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::hyperparameter::{FieldName, Hyperparameter};
 use crate::resource::ResourceId;
@@ -38,6 +34,7 @@ pub mod repeat_iter;
 pub mod val;
 pub mod resource;
 
+#[cfg(test)]
 pub mod test_utils;
 pub mod colors_iter;
 pub mod hyperparameter;
@@ -299,7 +296,7 @@ pub fn sig_three_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: 
     ], saw_with_steps(n as usize, 20, 0.2*max_y))
 }
 
-pub fn sig_two_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, offset: f32) -> Vec<f32> {
+pub fn sig_two_imp(n: u32, max_y: f32, σ_range: Option<Range<f32>>, f_range: Option<Range<f32>>, _offset: f32) -> Vec<f32> {
     let (σ, f) = σ_f_params(σ_range, f_range);
 
     join_with_offset::<f32>(0., 1.0, &[
@@ -565,7 +562,7 @@ pub fn add_prefix<T: FieldName>(prefix: Option<&T>, field: T) -> T {
         None => {
             field.into()
         }
-        Some(prefix) => {
+        Some(_prefix) => {
             // prefix.extend(field)
             field.into()
         }
@@ -580,7 +577,7 @@ impl IntoIterator for RangeOrValue<u32> {
     fn into_iter(self) -> Self::IntoIter {
         match self {
             RangeOrValue::Range { range, step } => {
-                if let Some((step, mul)) = step {
+                if let Some((step, _mul)) = step {
                     Box::new(
                         (range.start .. range.end).step_by(step as usize)
                     )
@@ -600,7 +597,7 @@ impl IntoIterator for RangeOrValue<i32> {
     fn into_iter(self) -> Self::IntoIter {
         match self {
             RangeOrValue::Range { range, step } => {
-                if let Some((step, mul)) = step {
+                if let Some((step, _mul)) = step {
                     Box::new(
                         (range.start .. range.end)
                             .step_by(step as usize)
@@ -641,7 +638,7 @@ impl IntoIterator for RangeOrValue<f64> {
 impl <V:Display+PrimInt> Display for RangeOrValue<V> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            RangeOrValue::Range{range, step} => {
+            RangeOrValue::Range{range, step: _} => {
                 write!(f, "{}-{}", range.start, range.end)
             }
             RangeOrValue::Value(v) => {
@@ -666,10 +663,10 @@ impl<V> RangeOrValue<V> where V: Clone + 'static  {
 
     pub fn expect_range(&self) -> Result<&Range<V>, ThoosaError> {
         match self {
-            RangeOrValue::Range{range, step} => {
+            RangeOrValue::Range{range, step: _} => {
                 Ok(range)
             }
-            RangeOrValue::Value(v) => {
+            RangeOrValue::Value(_v) => {
                 Err(ThoosaError::new("expected range"))
             }
         }
@@ -984,7 +981,7 @@ pub fn avg_hist(values: &[f64], n_bins: usize) -> Vec<(f64, u32)> {
 
     count_bins.into_iter().zip(value_bins).map(|(count, v)| {
         (
-            v.into_iter().sum::<f64>() / (count as f64 + f64::epsilon()),
+            v.into_iter().sum::<f64>() / (count as f64 + f64::EPSILON),
             count
         )
     }).collect()
@@ -1576,4 +1573,3 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
     let json = parent.join(json);
     (file_stem, json)
 }
-

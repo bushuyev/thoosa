@@ -3,11 +3,9 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Add;
 use std::path::Path;
-use futures_util::StreamExt;
 use parking_lot::{Mutex, RwLock};
 
 use log::debug;
-use polars::io::SerReader;
 use polars::prelude::*;
 use polars::prelude::{
     LazyFrame, NamedFrom,
@@ -20,8 +18,7 @@ use thoosa_common::ResourceLoader;
 use thoosa_common::utils::{from, load_tensor};
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::TensorIdSliceIdx;
-use thoosa_store::{SqlStore, Store};
+use thoosa_store::Store;
 
 #[derive(Default)]
 pub enum Set {
@@ -134,10 +131,10 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
 pub fn load_to_logits_tensors(group: &str, store: Arc<RwLock<Box<dyn Store>>>) -> Vec<(Resource, Vec<f32>)> {
     store.read().list_resource_random_in_group(group).expect("list_resource_random_in_group")
         .into_iter()
-        .map(move |(resourceId, labels_p)| {
-            debug!("load_to_logits_tensors: resourceId={resourceId:?} labels_p={:?}", labels_p);
+        .map(move |(resource_id, labels_p)| {
+            debug!("load_to_logits_tensors: resourceId={resource_id:?} labels_p={:?}", labels_p);
             (
-                resourceId,
+                resource_id,
                 labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
             )
         })
@@ -203,7 +200,7 @@ pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
 pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String, store: Arc<RwLock<Box<dyn Store>>>) -> Vec<(i64, Vec <Resource>)>  {
     debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
 
-    let mut store_lock = store.read();
+    let store_lock = store.read();
 
     vec![
         (

@@ -1,6 +1,3 @@
-use std::fs;
-use chrono::Utc;
-
 fn main() {
     let mut ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
 

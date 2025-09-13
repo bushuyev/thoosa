@@ -4,7 +4,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use futures::channel::oneshot::Canceled;
 use log::error;
 
 pub trait ScopeFutureExt<'scope> {
