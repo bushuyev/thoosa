@@ -16,7 +16,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use mockall_double::double;
 use tracing::instrument;
-use thoosa_common::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named};
 use crate::permits::MAX_PERMITS;
 
 pub trait Adjustable: Send + Sync {}

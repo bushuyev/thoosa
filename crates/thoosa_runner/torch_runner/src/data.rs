@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use torch_sys::IntList;
 use caching_runner::panic_to_err;
 use thoosa_common::dims::Dims;
-use thoosa_common::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named};
 use crate::{ThoDevice, ThoTensorView};
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;

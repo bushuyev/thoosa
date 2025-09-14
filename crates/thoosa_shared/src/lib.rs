@@ -39,6 +39,7 @@ pub mod opt_rng;
 pub mod run_configs;
 pub mod applicables_runner;
 pub mod rayon_future;
+pub mod traits;
 
 //group of similar slices - motif
 pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
@@ -1005,7 +1006,7 @@ mod shared_tests {
     use std::fmt::{Display, Formatter};
     use clap::{Args, Parser};
     use log::debug;
-    use crate::{add_prefix, arg_prefix, batch_windows, camel_to_snake, clc_num_batches, group_slices, avg_hist, make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue, ResourceType, ThoosaError};
+    use crate::{add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue, ResourceType, ThoosaError};
     use crate::hyperparameter::FieldName;
     use crate::pulse_v;
     use crate::val::NamedVal;

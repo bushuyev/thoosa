@@ -19,7 +19,7 @@ use tch::{Device, Kind, TchError, Tensor};
 // test-only imports live under cfg(test)
 use data::ThoTensor;
 use thoosa_common::dims::Dims;
-use thoosa_common::traits::Named;
+use thoosa_shared::traits::Named;
 
 #[derive(Debug)]
 pub enum MyTchError {
@@ -119,7 +119,7 @@ mod tests {
     use caching_runner::common::runnable::Runnable;
     use caching_runner::panic_to_err;
     use thoosa_common::dims::Dims;
-    use thoosa_common::traits::{CachableIdTr, Named};
+    use thoosa_shared::traits::{CachableIdTr, Named};
     use crate::cuda_utils::cuda_mem;
     use crate::data::ThoTensor;
     use crate::output_builders::BuildAs;

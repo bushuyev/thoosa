@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 thoosa_common = { path = "../../thoosa_common" }
+thoosa_shared = { path = "../../thoosa_shared" }
 
 dashmap.workspace = true
 tokio.workspace = true
