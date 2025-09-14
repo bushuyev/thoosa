@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::{Notify, OwnedSemaphorePermit};
-use thoosa_common::traits::CachableIdTr;
+use thoosa_shared::traits::CachableIdTr;
 use crate::common::MyError;
 
 pub mod runner_queue;

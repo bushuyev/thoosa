@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
-use thoosa_common::traits::CachableIdTr;
+use thoosa_shared::traits::CachableIdTr;
 
 pub(crate) const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 

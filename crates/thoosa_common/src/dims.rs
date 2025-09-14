@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use crate::applicables::ThoDevice;
-use crate::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named};
 
 pub trait Dims:Send +Sync+ Clone + Debug {}
 
