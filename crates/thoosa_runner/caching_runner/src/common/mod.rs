@@ -1,7 +1,7 @@
 // removed unused feature gate to reduce warnings
 
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::{Hash};
+use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
 use ambassador::delegatable_trait;
@@ -219,33 +219,6 @@ pub trait CopyToDevice {
     async fn copy_to_device(&self, dst_device: usize) ->Self;
 }
 
-
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub struct SimpleId(pub &'static str);
-
-impl Named for SimpleId {
-    fn name(&self) -> &'static str {
-        "SimpleId"
-    }
-}
-
-impl From<&'static str> for SimpleId {
-    fn from(value: &'static str) -> Self {
-        SimpleId(value)
-    }
-}
-
-impl From<String> for SimpleId {
-    fn from(value: String) -> Self {
-        SimpleId(value.leak())
-    }
-}
-
-impl Display for SimpleId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 #[macro_export]
 macro_rules! panic_to_err {

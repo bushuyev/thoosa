@@ -1498,8 +1498,8 @@ use crate::dims::ThoBatch;
 
 pub trait DataBatch<D:Dims>  {
     /// returns (inputs, labels)
-    fn train_batch(&self) -> (ThoBatch<D, CachableId>, Tensor);
-    fn valid_batch(&self) -> (ThoBatch<D, CachableId>, Tensor);
+    fn train_batch(&self) -> (ThoBatch<D>, Tensor);
+    fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
 }
 
 pub trait SplittableDataBatch<D:Dims>: DataBatch<D> + Splittable<1> + Debug {
