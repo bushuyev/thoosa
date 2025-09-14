@@ -57,7 +57,8 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use crate::batches::{AsyncDataBatch, AsyncLoadingTensorsDataBatch};
-use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
+use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, ThoBatch, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
+use thoosa_shared::applicables_runner::CachableId;
 use crate::find_motifs_run_config::*;
 use crate::transforms::filters::*;
 
@@ -140,14 +141,14 @@ pub enum LabelNetInputTensors {
 impl Dims for LabelNetInputTensors{}
 
 
-impl From<ThoTensor<ChannelsMotifsData>> for ThoTensor<LabelNetInputTensors> {
-    fn from(value: ThoTensor<ChannelsMotifsData>) -> Self {
+impl From<ThoTensor<ChannelsMotifsData, CachableId>> for ThoTensor<LabelNetInputTensors, CachableId> {
+    fn from(value: ThoTensor<ChannelsMotifsData, CachableId>) -> Self {
         ThoTensor::from(value.tensor)
     }
 }
 
-impl From<ThoTensor<ChannelsMotifsFlattenedData>> for ThoTensor<LabelNetInputTensors> {
-    fn from(value: ThoTensor<ChannelsMotifsFlattenedData>) -> Self {
+impl From<ThoTensor<ChannelsMotifsFlattenedData, CachableId>> for ThoTensor<LabelNetInputTensors, CachableId> {
+    fn from(value: ThoTensor<ChannelsMotifsFlattenedData, CachableId>) -> Self {
         ThoTensor::from(value.tensor)
     }
 }
@@ -179,7 +180,7 @@ impl LabelNetApplicableAndNetE {
         }
     }
 
-    pub fn apply(&self, t:&TCD) -> Result<ThoTensor<LabelNetInputTensors>, ThoosaError> {
+    pub fn apply(&self, t:&TCD) -> Result<ThoTensor<LabelNetInputTensors, CachableId>, ThoosaError> {
         match self {
             LabelNetApplicableAndNetE::MaxPadding { applicable, params } => {
                 debug!("LabelNetApplicableAndNetE::MaxPadding apply: params={params:?}");
@@ -214,7 +215,7 @@ impl LabelNetApplicableAndNetE {
 struct BatchTransform<DI:Dims, DO:Dims, B, F>
 where
     B: DataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     inner: Rc<Box<B>>,
     transform_fn:Rc<RefCell<F>>,
@@ -225,7 +226,7 @@ where
 impl<DI:Dims, DO:Dims, B, F> Debug for BatchTransform<DI, DO, B, F>
 where
     B: DataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("BatchTransform")
@@ -237,7 +238,7 @@ where
 impl <DI:Dims, DO:Dims, B, F> BatchTransform<DI, DO, B, F>
 where
     B: DataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     pub fn new(inner: Rc<Box<B>>, transform_fn: F) -> Self {
         Self {
@@ -260,14 +261,14 @@ where
 impl<DI:Dims, DO:Dims, B, F> DataBatch<DO> for BatchTransform<DI, DO, B, F>
 where
     B: DataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
-    fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let (inputs, labels) = self.inner.train_batch();
         (self.transform_fn.borrow_mut()(inputs), labels)
     }
 
-    fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    fn valid_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let (inputs, labels) = self.inner.valid_batch();
         (self.transform_fn.borrow_mut()(inputs), labels)
     }
@@ -276,7 +277,7 @@ where
 impl<DI:Dims, DO:Dims, B, F> Splittable<1> for BatchTransform<DI, DO, B, F>
 where
     B: SplittableDataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     fn split(&self) -> Option<[Self; 1]>
     where
@@ -294,7 +295,7 @@ where
 * TODO rename
 */
 #[derive(Clone)]
-struct LoadingTensorsDataBatch<'b, DI:Dims, DO:Dims + Send, F: (Fn(ThoTensor<DI>)->ThoTensor<DO>) + Send + Sync + Clone> {
+struct LoadingTensorsDataBatch<'b, DI:Dims, DO:Dims + Send, F: (Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId>) + Send + Sync + Clone> {
     train_resources: Rc<Vec<(i64, Vec <Resource>)>>,
     valid_resources: Rc<Vec<(i64, Vec <Resource>)>>,
 
@@ -306,7 +307,7 @@ struct LoadingTensorsDataBatch<'b, DI:Dims, DO:Dims + Send, F: (Fn(ThoTensor<DI>
     _pd_do:PhantomData<DO>,
 }
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> Debug for LoadingTensorsDataBatch<'_, DI, DO, F> {
+impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Send + Sync + Clone> Debug for LoadingTensorsDataBatch<'_, DI, DO, F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("")
             .field("train", &self.train_resources)
@@ -317,7 +318,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
     }
 }
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> LoadingTensorsDataBatch<'b, DI, DO,  F> {
+impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Send + Sync + Clone> LoadingTensorsDataBatch<'b, DI, DO,  F> {
 
     pub fn new(
         train: Rc<Vec<(i64, Vec <Resource>)>>,
@@ -347,13 +348,13 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
         loader: Arc<RwLock<LoadRunner<Tensor>>>,
         device: &Device,
         transform_fn: Option<Arc<RwLock<Box<F>>>>,
-    ) -> (ThoTensor<Batch<DO>>, Tensor) {
+    ) -> (ThoBatch<DO>, Tensor) {
         debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
         let mut rng = rand::rng();
         let wg = WaitGroup::new();
         let area = loader.write().get_available_cache_area();
-        let x_y_acc:Arc<Mutex<Vec<(ThoTensor<DO>, i64)>>> = Arc::new(Mutex::new(vec![]));
+        let x_y_acc:Arc<Mutex<Vec<(ThoTensor<DO, CachableId>, i64)>>> = Arc::new(Mutex::new(vec![]));
 
         if batch_size <  class_resources.len() {
             debug!("LoadingTensorsDataBatch::choose_for_batch: batch_size <  class_resources.len");
@@ -395,7 +396,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
 
         wg.wait();
 
-        let mut x_y_vecs:Vec<(ThoTensor<DO>, i64)> = x_y_vecs_mx.lock().drain(..).collect();
+        let mut x_y_vecs:Vec<(ThoTensor<DO, CachableId>, i64)> = x_y_vecs_mx.lock().drain(..).collect();
 
         debug!("LoadingTensorsDataBatch::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}", x_y_vecs.len());
         loader.read().debug("LoadingTensorsDataBatch::choose_for_batch");
@@ -417,7 +418,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
     fn load_tensor(
         loader: &Arc<RwLock<LoadRunner<Tensor>>>,
         area: u64,
-        x_y_acc_in_exec: Arc<Mutex<Vec<(ThoTensor<DO>, i64)>>>,
+        x_y_acc_in_exec: Arc<Mutex<Vec<(ThoTensor<DO, CachableId>, i64)>>>,
         wg_exec: WaitGroup,
         transform_fn: Option<Arc<RwLock<Box<F>>>>,
         resource_id: Resource,
@@ -446,7 +447,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
         });
     }
 
-    fn vec_to_tensors(device: &Device, mut x_y_vecs: Vec<(ThoTensor<DO>, i64)>) -> (ThoTensor<Batch<DO>>, Tensor) {
+    fn vec_to_tensors(device: &Device, mut x_y_vecs: Vec<(ThoTensor<DO, CachableId>, i64)>) -> (ThoBatch<DO>, Tensor) {
         let classes = Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice()).to_device(*device);
 
         let tensor = Tensor::stack(
@@ -463,15 +464,15 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
     }
 }
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> DataBatch<DO> for LoadingTensorsDataBatch<'_, DI, DO, F> {
+impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Send + Sync + Clone> DataBatch<DO> for LoadingTensorsDataBatch<'_, DI, DO, F> {
 
-    fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
+    fn train_batch(&self) -> (ThoBatch<DO>, Tensor){
         tch::no_grad(|| {
             Self::choose_for_batch(&self.train_resources, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.clone())
         })
     }
 
-    fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
+    fn valid_batch(&self) -> (ThoBatch<DO>, Tensor){
         tch::no_grad(|| {
             Self::choose_for_batch(&self.valid_resources, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.clone())
         })
@@ -479,7 +480,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
 }
 
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> Splittable<1> for LoadingTensorsDataBatch<'_,  DI, DO, F> {
+impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Send + Sync + Clone> Splittable<1> for LoadingTensorsDataBatch<'_,  DI, DO, F> {
     fn split(&self) -> Option<[Self; 1]>
     where
         Self: Sized
@@ -497,7 +498,7 @@ impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + 
     }
 }
 
-impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync + Clone> SplittableDataBatch<DO> for LoadingTensorsDataBatch<'_,  DI, DO, F> {}
+impl <'b, DI:Dims, DO:Dims + Send, F: Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Send + Sync + Clone> SplittableDataBatch<DO> for LoadingTensorsDataBatch<'_,  DI, DO, F> {}
 
 
 struct ClassTensorsLoaderData<DI:Dims, DO:Dims>  {
@@ -507,7 +508,7 @@ struct ClassTensorsLoaderData<DI:Dims, DO:Dims>  {
     batch_size: usize,
     loader: Arc<RwLock< LoadRunner<Tensor>>>,
     device:Device,
-    transform_fn:Option<Box<dyn Fn(ThoTensor<DI>)->ThoTensor<DO> + Sync + Send>>
+    transform_fn:Option<Box<dyn Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Sync + Send>>
 }
 
 impl <DI:Dims, DO:Dims> Debug for ClassTensorsLoaderData<DI, DO> {
@@ -529,7 +530,7 @@ impl <DI:Dims, DO:Dims> ClassTensorsLoaderData<DI, DO>  {
         batch_size: usize,
         loader: Arc<RwLock< LoadRunner<Tensor>>>,
         device:Device,
-        transform_fn:Option<Box<dyn Fn(ThoTensor<DI>)->ThoTensor<DO> + Sync + Send>>
+        transform_fn:Option<Box<dyn Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Sync + Send>>
     ) -> Self {
         Self {
             train_resources: train_loader,
@@ -545,11 +546,11 @@ impl <DI:Dims, DO:Dims> ClassTensorsLoaderData<DI, DO>  {
 
 impl <DI:Dims, DO:Dims> DataBatch<DO> for ClassTensorsLoaderData<DI, DO> {
 
-    fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
+    fn train_batch(&self) -> (ThoBatch<DO>, Tensor){
         Self::batch(&self.train_resources, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.as_ref())
     }
 
-    fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor){
+    fn valid_batch(&self) -> (ThoBatch<DO>, Tensor){
         Self::batch(&self.valid_resources, self.batch_size, Arc::clone(&self.loader), &self.device, self.transform_fn.as_ref())
     }
 }
@@ -561,8 +562,8 @@ impl <DI:Dims, DO:Dims> ClassTensorsLoaderData<DI, DO> {
         batch_size: usize,
         loader: Arc<RwLock< LoadRunner<Tensor>>>,
         device: &Device,
-        transform_fn:Option<&Box<dyn Fn(ThoTensor<DI>)->ThoTensor<DO> + Sync + Send>>
-    ) -> (ThoTensor<Batch<DO>>, Tensor) {
+        transform_fn:Option<&Box<dyn Fn(ThoTensor<DI, CachableId>)->ThoTensor<DO, CachableId> + Sync + Send>>
+    ) -> (ThoBatch<DO>, Tensor) {
         debug!("ClassTensorsLoaderData.batch: resources={resources:?} batch_size={batch_size}");
 
         let x_y_vecs_mx = Arc::new(Mutex::new((vec![], vec![])));
@@ -904,7 +905,7 @@ pub fn train_label_net<DI:Dims+Send+'static, DO:Dims+Send+'static, B:DataBatch<D
 //                 run_config_values,
 //                 label_nets_applicable.label_nets_num(),
 //                 label_nets_applicable.labels_num(),
-//                 &mut BatchTransform::new(Rc::clone(&batch), |t:ThoTensor<Batch<ChannelsData>>|{
+//                 &mut BatchTransform::new(Rc::clone(&batch), |t:ThoBatch<ChannelsData>|{
 //                     label_nets_applicable_rc.run(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
 //                 }),
 //                 vs,
@@ -995,7 +996,7 @@ pub async fn train_final_net_2<B:AsyncDataBatch<LabelNetsProbabilities>>(
         },
         run_config_values.common_training_args.cycles as usize,
         optimizer.build(&var_store, run_config_values.common_training_args.lr)?,
-        |t:ThoTensor<Batch<LabelNetsProbabilities>>|{
+        |t:ThoBatch<LabelNetsProbabilities>|{
             trace!("train_final: t=\n{t}");
             debug!("train_final: t.size={:?} ", t.size());
 
@@ -1041,7 +1042,7 @@ pub fn train_final_net(
         },
         run_config_values.common_training_args.cycles as usize,
         optimizer.build(&var_store, run_config_values.common_training_args.lr)?,
-        |t:ThoTensor<Batch<LabelNetsProbabilities>>|{
+        |t:ThoBatch<LabelNetsProbabilities>|{
             trace!("train_final: t=\n{t}");
             debug!("train_final: t.size={:?} ", t.size());
 
@@ -1065,7 +1066,7 @@ unsafe impl <DI:Dims+Send, DO:Dims+Send> Send for ThoModuleWithStore<DI, DO> {}
 unsafe impl <DI:Dims+Send, DO:Dims+Send> Sync for ThoModuleWithStore<DI, DO> {}
 
 impl <DI:Dims+Send+'static, DO:Dims+Send+'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO> {
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         self.module.tho_forward(t, train)
     }
 }
@@ -1119,7 +1120,7 @@ impl <DI:Dims+Send+'static, DO:Dims+Send+'static> ThoModuleWithStore<DI, DO> {
         self.module.debug();
     }
 
-    pub fn infer(&self, t: &ThoTensor<DI>) -> ThoTensor<DO> {
+    pub fn infer(&self, t: &ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> {
         self.module.tho_forward(t, false)
     }
 
@@ -1369,10 +1370,10 @@ pub enum NetsPadding {
 }
 
 #[async_trait]
-impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApplicable {
+impl Runnable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()> for MotifsNetsSelectionApplicable {
     type R = ThoRunner;
 
-    fn run(&self, input: TCD, params: ()) -> Result<ThoTensor<ChannelsMotifsData>, ThoosaError> {
+    fn run(&self, input: TCD, params: ()) -> Result<ThoTensor<ChannelsMotifsData, CachableId>, ThoosaError> {
         let motif_width = self.find_motifs_applicable.run_config().window;
 
         let unfolded = self.find_motifs_applicable.run(input, FindMotifsRunConfigOptions::FilterUnfold)?;
@@ -1465,7 +1466,7 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
         Ok(tensor.into())
     }
 
-    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsData>> {
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsData, CachableId>> {
         Arc::new(self.run(input.deref().shallow_clone(), ()).unwrap())
     }
 
@@ -1476,10 +1477,10 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
 }
 
 #[async_trait]
-impl Cachable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApplicable {
+impl Cachable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()> for MotifsNetsSelectionApplicable {
 
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
-        <MotifsNetsSelectionApplicable as Cachable<TCD, ThoTensor<ChannelsMotifsData>, ()>>::format_0(input_id)
+        <MotifsNetsSelectionApplicable as Cachable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()>>::format_0(input_id)
     }
 
     fn name(&self) -> String {
@@ -1493,10 +1494,10 @@ impl Cachable<TCD, ThoTensor<ChannelsMotifsData>, ()> for MotifsNetsSelectionApp
 }
 
 #[async_trait]
-impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSelectionApplicable {
+impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData, CachableId>, u32> for MotifsNetsSelectionApplicable {
     type R = ThoRunner;
 
-    fn run(&self, input: TCD, slices_len: u32) -> Result<ThoTensor<ChannelsMotifsFlattenedData>, ThoosaError> {
+    fn run(&self, input: TCD, slices_len: u32) -> Result<ThoTensor<ChannelsMotifsFlattenedData, CachableId>, ThoosaError> {
         let motif_width = self.find_motifs_applicable.run_config().window;
 
         let filtered = self.find_motifs_applicable.run(
@@ -1571,7 +1572,7 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSe
         ).into())
     }
 
-    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsFlattenedData>> {
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData, CachableId>, u32>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<ChannelsMotifsFlattenedData, CachableId>> {
         todo!()
     }
 
@@ -1581,7 +1582,7 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSe
 }
 
 #[async_trait]
-impl Cachable<TCD, ThoTensor<ChannelsMotifsFlattenedData>, u32> for MotifsNetsSelectionApplicable {
+impl Cachable<TCD, ThoTensor<ChannelsMotifsFlattenedData, CachableId>, u32> for MotifsNetsSelectionApplicable {
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
@@ -2224,7 +2225,7 @@ impl <D:Dims> TensorsDataBatch<D> {
         }
     }
 
-    fn choose_for_batch(class_tensors: &Vec<Vec<Tensor>>, batch_size: u32, device:&Device) -> (ThoTensor<Batch<D>>, Tensor) {
+    fn choose_for_batch(class_tensors: &Vec<Vec<Tensor>>, batch_size: u32, device:&Device) -> (ThoBatch<D>, Tensor) {
         let mut rng = rand::rng();
 
         let per_class_len = batch_size / class_tensors.len() as u32;//TODO make balanced
@@ -2276,11 +2277,11 @@ impl <D:Dims> TensorsDataBatch<D> {
 
 impl <D:Dims> DataBatch<D> for TensorsDataBatch<D> {
 
-    fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor) {
+    fn train_batch(&self) -> (ThoBatch<D>, Tensor) {
         Self::choose_for_batch(&self.train, self.batch_size, &self.device)
     }
 
-    fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor) {
+    fn valid_batch(&self) -> (ThoBatch<D>, Tensor) {
         Self::choose_for_batch(&self.val, self.batch_size, &self.device)
     }
 }
@@ -2532,10 +2533,10 @@ impl LabelNetsApplicable {
 }
 
 #[async_trait]
-impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()> for LabelNetApplicable {
+impl Runnable<ThoBatch<ChannelsData>, ThoBatch<LabelProbability>, ()> for LabelNetApplicable {
     type R = ThoRunner;
 
-    fn run(&self, input: ThoTensor<Batch<ChannelsData>>, _: ()) -> Result<ThoTensor<Batch<LabelProbability>>, ThoosaError> {
+    fn run(&self, input: ThoBatch<ChannelsData>, _: ()) -> Result<ThoBatch<LabelProbability>, ThoosaError> {
         debug!("Applicable for LabelNetApplicable::apply: batch.size={:?}", input.size());
 
         Ok(
@@ -2546,7 +2547,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
                         &Tensor::stack(
                             (0..input.size()[0])
                                 .map(|i| {
-                                    let t: ThoTensor<ChannelsMotifsData> = self.motifs_nets_selection_applicable.run(
+                                    let t: ThoTensor<ChannelsMotifsData, CachableId> = self.motifs_nets_selection_applicable.run(
                                         input.as_ref().i((i, .., ..)).into(), () //NetsPadding::Max
                                     )?;
 
@@ -2573,7 +2574,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
                         &Tensor::stack(
                             (0..input.size()[0])
                                 .map(|i| {
-                                    let t: ThoTensor<ChannelsMotifsFlattenedData> = self.motifs_nets_selection_applicable.run(
+                                    let t: ThoTensor<ChannelsMotifsFlattenedData, CachableId> = self.motifs_nets_selection_applicable.run(
                                         input.as_ref().i((i, .., ..)).into(), self.label_net_params.slices_len //TODO dims
                                     )?;
 
@@ -2598,7 +2599,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
         )
     }
 
-    async fn async_run(self: Arc<Self>, input: Arc<ThoTensor<Batch<ChannelsData>>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Batch<LabelProbability>>> {
+    async fn async_run(self: Arc<Self>, input: Arc<ThoBatch<ChannelsData>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoBatch<ChannelsData>, ThoBatch<LabelProbability>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoBatch<LabelProbability>> {
         todo!()
     }
 
@@ -2608,7 +2609,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
 }
 
 #[async_trait]
-impl Cachable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>, ()> for LabelNetApplicable {
+impl Cachable<ThoBatch<ChannelsData>, ThoBatch<LabelProbability>, ()> for LabelNetApplicable {
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
@@ -2624,10 +2625,10 @@ impl Cachable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelProbability>>
 }
 
 #[async_trait]
-impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()> for LabelNetsApplicable {
+impl Runnable<ThoBatch<ChannelsData>, ThoBatch<LabelNetsProbabilities>, ()> for LabelNetsApplicable {
     type R = ThoRunner;
 
-    fn run(&self, input: ThoTensor<Batch<ChannelsData>>, _: ()) -> Result<ThoTensor<Batch<LabelNetsProbabilities>>, ThoosaError> {
+    fn run(&self, input: ThoBatch<ChannelsData>, _: ()) -> Result<ThoBatch<LabelNetsProbabilities>, ThoosaError> {
         debug!("Applicable for LabelNetsApplicable::apply: self.labels_applicables={:?} input.size={:?}", self.labels_applicables, input.size());
 
         let t = Tensor::stack(
@@ -2653,7 +2654,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabili
         Ok(t.into())
     }
 
-    async fn async_run(self: Arc<Self>, input: Arc<ThoTensor<Batch<ChannelsData>>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Batch<LabelNetsProbabilities>>> {
+    async fn async_run(self: Arc<Self>, input: Arc<ThoBatch<ChannelsData>>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<ThoBatch<ChannelsData>, ThoBatch<LabelNetsProbabilities>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoBatch<LabelNetsProbabilities>> {
         todo!()
     }
     fn device(&self) -> impl ToOrdinal {
@@ -2662,7 +2663,7 @@ impl Runnable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabili
 }
 
 #[async_trait]
-impl Cachable<ThoTensor<Batch<ChannelsData>>, ThoTensor<Batch<LabelNetsProbabilities>>, ()> for LabelNetsApplicable {
+impl Cachable<ThoBatch<ChannelsData>, ThoBatch<LabelNetsProbabilities>, ()> for LabelNetsApplicable {
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
     }
@@ -2704,10 +2705,10 @@ impl FinalNetApplicable {
     }
 }
 #[async_trait]
-impl Runnable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
+impl Runnable<TCD, ThoTensor<Final, CachableId>, ()> for FinalNetApplicable {
     type R = ThoRunner;
 
-    fn run(&self, input: TCD, options: ()) -> Result<ThoTensor<Final>, ThoosaError> {
+    fn run(&self, input: TCD, options: ()) -> Result<ThoTensor<Final, CachableId>, ThoosaError> {
         assert_eq!(input.tensor.size().len(), 2); //single tensor - channels x data
 
         Ok(self.final_net_module.infer(
@@ -2718,7 +2719,7 @@ impl Runnable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
         ).as_ref().shallow_clone().into())
     }
 
-    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<Final>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Final>> {
+    async fn async_run(self: Arc<Self>, input: Arc<TCD>, runner: Arc<Self::R>, ctx: Option<Arc<RwLock<<<Self as Runnable<TCD, ThoTensor<Final, CachableId>, ()>>::R as Runner>::Ctx>>>) -> Arc<ThoTensor<Final, CachableId>> {
         todo!()
     }
 
@@ -2729,7 +2730,7 @@ impl Runnable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
 }
 
 #[async_trait]
-impl Cachable<TCD, ThoTensor<Final>, ()> for FinalNetApplicable {
+impl Cachable<TCD, ThoTensor<Final, CachableId>, ()> for FinalNetApplicable {
 
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
         todo!()
@@ -3041,12 +3042,12 @@ mod train_tests {
         let t_0 = lin_test_tensor(1000, 5);
         debug!("t_0.size={:?}", t_0.size());
 
-        let t:ThoTensor<AnyDims> = t_0.unfold(1, 100, 10).into();
+        let t:ThoTensor<AnyDims, CachableId> = t_0.unfold(1, 100, 10).into();
 
         debug!("t.size={:?}", t.size());
 
         //sums and multiplies by k
-        let r_0:ThoTensor<AnyDims> = test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true);
+        let r_0:ThoTensor<AnyDims, CachableId> = test_net(100, 1., Cpu, "test_net")?.tho_forward(&t, true);
         debug!("r_0.size={:?}", r_0.size());
 
         assert_eq!(Tensor::from_slice(&[4950.]), r_0.as_ref().i((0, 0, ..)));
@@ -3678,7 +3679,7 @@ mod train_tests {
 
         impl  DataBatch<LabelNetInputTensors> for DummyLabelBatch {
 
-            fn train_batch(&self) -> (ThoTensor<Batch<LabelNetInputTensors>>, Tensor) {
+            fn train_batch(&self) -> (ThoBatch<LabelNetInputTensors>, Tensor) {
                 (
                     dummy_motif_net_input(&TRAIN_LABELS, CHANNELS, INPUT_SIZE, Some(Box::new(|t|{
                         self.applicable.apply(&t.into()).unwrap().as_ref().shallow_clone()
@@ -3687,7 +3688,7 @@ mod train_tests {
                 )
             }
 
-            fn valid_batch(&self) -> (ThoTensor<Batch<LabelNetInputTensors>>, Tensor) {
+            fn valid_batch(&self) -> (ThoBatch<LabelNetInputTensors>, Tensor) {
                 (
                     dummy_motif_net_input(&TRAIN_LABELS, CHANNELS, INPUT_SIZE, None).into(),
                     Tensor::from_slice(VALID_LABELS.as_slice()).totype(Float)
@@ -4127,14 +4128,14 @@ mod train_tests {
 
         impl <D:Dims> DataBatch<D> for DummyLabelBatch {
 
-            fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor) {
+            fn train_batch(&self) -> (ThoBatch<D>, Tensor) {
                 (
                     dummy_labels_net_input(&TRAIN_LABELS, CHANNELS, MAX_MOTIF_NETS, MAX_SLICES_LEN, None).to_device(Cuda(0)).into(),
                     Tensor::from_slice(TRAIN_LABELS.as_slice()).totype(Float).to_device(Cuda(0))
                 )
             }
 
-            fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor) {
+            fn valid_batch(&self) -> (ThoBatch<D>, Tensor) {
                 (
                     dummy_labels_net_input(&TRAIN_LABELS, CHANNELS, MAX_MOTIF_NETS, MAX_SLICES_LEN, None).to_device(Cuda(0)).into(),
                     Tensor::from_slice(VALID_LABELS.as_slice()).totype(Float).to_device(Cuda(0))
@@ -4322,13 +4323,13 @@ mod train_tests {
 
         impl <D:Dims> DataBatch<D> for DummyLabelBatch {
 
-            fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor) {
+            fn train_batch(&self) -> (ThoBatch<D>, Tensor) {
                 let train_batch = dummy_final_net_input::<LABEL_NETS_SIZE,Batch<D>>(BATCH_SIZE);
                 trace!("train_batch=\n{} \n{}", train_batch.0, train_batch.1);
                 train_batch
             }
 
-            fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor) {
+            fn valid_batch(&self) -> (ThoBatch<D>, Tensor) {
                 let valid_batch= dummy_final_net_input::<LABEL_NETS_SIZE, Batch<D>>(BATCH_SIZE);
                 trace!("valid_batch={} \n{}", valid_batch.0, valid_batch.1);
                 valid_batch
@@ -4351,7 +4352,7 @@ mod train_tests {
         Ok(())
     }
 
-    fn dummy_final_net_input<const LABELS_SIZE:usize, D:Dims>(batch_size: usize) -> (ThoTensor<D>, Tensor) {
+    fn dummy_final_net_input<const LABELS_SIZE:usize, D:Dims>(batch_size: usize) -> (ThoTensor<D, CachableId>, Tensor) {
         let mut rng = rand::rng();
         let data = (0..batch_size).map(|label| {
             let label = rng.random_range(0..LABELS_SIZE);
@@ -4581,7 +4582,7 @@ TODO
             3,
             loader,
             Cpu,
-            Some(Box::new(|t:ThoTensor<AnyDims>|{
+            Some(Box::new(|t:ThoTensor<AnyDims, CachableId>|{
                 t.as_ref().pad([0,10-t.size()[1]], "constant", 0.).into()
             }))
         );

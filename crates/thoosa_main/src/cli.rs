@@ -43,7 +43,7 @@ use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use thoosa_common::batches::{AsyncBatchTransform, AsyncClassTensorsLoaderData, AsyncLoadingTensorsDataBatch};
-use thoosa_common::dims::{Batch, ChannelsData, ThoTensor, TCD};
+use thoosa_common::dims::{Batch, ChannelsData, ThoTensor, ThoBatch, TCD};
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
 use crate::version::VERSION;
 use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -614,7 +614,7 @@ impl Runnable<TrainFinalNetInput, Box<TrainFinalNetsRunConfigResult>, ()> for Tr
                     &run_config_values,
                     label_nets_applicable.label_nets_num(),
                     label_nets_applicable.labels_num(),
-                    &mut AsyncBatchTransform::new(Arc::clone(&batch), |t:ThoTensor<Batch<ChannelsData>>|{
+                    &mut AsyncBatchTransform::new(Arc::clone(&batch), |t:ThoBatch<ChannelsData>|{
                         label_nets_applicable.run(t.as_ref().into(), ()).expect("label_nets_applicable.apply failed")
                     }),
                     vs,

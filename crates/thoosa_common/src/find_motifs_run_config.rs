@@ -145,7 +145,7 @@ impl FindMotifsApplicable {
         self.groups
     }
 
-    pub fn unfold(&self, input: &TCDF) -> ThoTensor<ChannelsSlicesData> {
+    pub fn unfold(&self, input: &TCDF) -> TCSD {
         let input_length = input.size()[1];
         input.tensor.unfold(1, self.run_config.window as i64, self.run_config.step as i64).into()
     }

@@ -22,7 +22,7 @@ impl DummyDs {
 }
 
 impl DataBatch<AnyDims> for DummyDs {
-    fn train_batch(&self) -> (ThoTensor<Batch<AnyDims>>, Tensor) {
+    fn train_batch(&self) -> (ThoTensor<Batch<AnyDims>, thoosa_shared::applicables_runner::CachableId>, Tensor) {
         let (x, y):(Vec<Tensor>, Vec<Tensor>) = (0..self.batch_size).fold((vec![], vec![]), |mut x_y, i| {
 
             if i % 2 == 0 {
@@ -54,8 +54,7 @@ impl DataBatch<AnyDims> for DummyDs {
         )
     }
 
-    fn valid_batch(&self) -> (ThoTensor<Batch<AnyDims>>, Tensor) {
+    fn valid_batch(&self) -> (ThoTensor<Batch<AnyDims>, thoosa_shared::applicables_runner::CachableId>, Tensor) {
         self.train_batch()
     }
 }
-
