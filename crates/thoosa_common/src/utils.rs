@@ -1493,10 +1493,13 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
+use thoosa_shared::applicables_runner::CachableId;
+use crate::dims::ThoBatch;
+
 pub trait DataBatch<D:Dims>  {
     /// returns (inputs, labels)
-    fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
-    fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
+    fn train_batch(&self) -> (ThoBatch<D>, Tensor);
+    fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
 }
 
 pub trait SplittableDataBatch<D:Dims>: DataBatch<D> + Splittable<1> + Debug {
@@ -1527,7 +1530,7 @@ pub async fn train_2<F, DI:Dims, DO:Dims>(
     x_f:F,
     mut listener: Option<&mut dyn TrainListener>
 ) -> Result<f32, ThoosaError>
-where F:Fn(ThoTensor<Batch<DI>>)->ThoTensor<Batch<DI>> {
+where F:Fn(ThoBatch<DI>)->ThoBatch<DI> {
 
     debug!("train: device={:?} cycles={}", device, cycles);
     debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
@@ -1618,7 +1621,7 @@ pub fn train<F, DI:Dims, DO:Dims>(
     x_f:F,
     mut listener: Option<&mut dyn TrainListener>
 ) -> Result<f32, ThoosaError>
-    where F:Fn(ThoTensor<Batch<DI>>)->ThoTensor<Batch<DI>> {
+    where F:Fn(ThoBatch<DI>)->ThoBatch<DI> {
 
     debug!("train: device={:?} cycles={}", device, cycles);
     debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
