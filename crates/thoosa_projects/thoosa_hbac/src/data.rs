@@ -612,7 +612,7 @@ impl EEGs {
         )
     }
 
-    fn random_subset(batch_size: usize, data: &Vec<EEG>) -> (ThoTensor<Batch<ChannelsData>>, Tensor) {
+    fn random_subset(batch_size: usize, data: &Vec<EEG>) -> (ThoTensor<Batch<ChannelsData>, thoosa_shared::applicables_runner::CachableId>, Tensor) {
         let mut rng = rand::rng();
 
         use std::collections::HashSet;
@@ -644,11 +644,11 @@ impl EEGs {
 }
 
 impl DataBatch<ChannelsData> for EEGs {
-    fn train_batch(&self) -> (ThoTensor<Batch<ChannelsData>>, Tensor) {
+    fn train_batch(&self) -> (ThoTensor<Batch<ChannelsData>, thoosa_shared::applicables_runner::CachableId>, Tensor) {
         Self::random_subset(self.batch_size, &self.train_set)
     }
 
-    fn valid_batch(&self) -> (ThoTensor<Batch<ChannelsData>>, Tensor) {
+    fn valid_batch(&self) -> (ThoTensor<Batch<ChannelsData>, thoosa_shared::applicables_runner::CachableId>, Tensor) {
         Self::random_subset(self.batch_size, &self.valid_set)
     }
 }

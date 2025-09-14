@@ -20,6 +20,7 @@ use crate::builder::Node;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
 use crate::dims::{Dims, AnyDims, ThoTensor};
+use thoosa_shared::applicables_runner::CachableId;
 use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
 use crate::utils::*;
 
@@ -45,7 +46,7 @@ impl <DI:Dims, DO:Dims> MySequential<DI, DO> {
         }
     }
 
-    fn run_layers(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn run_layers(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         debug!("MySequential::forward: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.device(), self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().shallow_clone().into(), train);
@@ -65,7 +66,7 @@ impl <DI:Dims+Send+Sync, DO:Dims+Send+Sync> ThoModule<DI, DO> for MySequential<D
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         if self.layers.is_empty() {
             t.shallow_clone()
         } else {
@@ -140,7 +141,7 @@ impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyParallel<DI, DO>{
         }
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         debug!("MyParallel::forward: xs={:?}", t.size());
         let t = (self.join)(
             (self.split)(t.as_ref()).into_iter().zip(self.layers.iter()).map(|(t, net)| {
@@ -188,7 +189,7 @@ impl MyMaxPool1d {
 
 
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyMaxPool1d {
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         t.as_ref().max_pool1d(self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode).into()
     }
 }
@@ -207,7 +208,7 @@ impl MyBatchNorm1d {
 }
 
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyBatchNorm1d{
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         self.batch_norm.forward_t(t.as_ref(), train).into()
     }
 }
@@ -228,13 +229,13 @@ impl <ND> MyConv<ND>  {
 
 
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyConv<[i64; 1]>{
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         self.conv.forward_t(t.as_ref(), train).into()
     }
 }
 
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyConv<[i64; 2]>{
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         self.conv.forward_t(t.as_ref(), train).into()
     }
 }
@@ -265,7 +266,7 @@ impl MyAvgPool1d {
 
 
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyAvgPool1d{
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         t.as_ref().avg_pool1d(self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad).into()
     }
 }
@@ -276,7 +277,7 @@ pub trait ThoModule<DI:Dims, DO:Dims>:Debug  + Send  + Sync {
         0
     }
 
-    fn tho_forward(&self, t:&ThoTensor<DI>, train: bool) -> ThoTensor<DO>;
+    fn tho_forward(&self, t:&ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId>;
 
 }
 
@@ -309,7 +310,7 @@ impl  MyFuncModule {
 
 
 impl <DI:Dims, DO:Dims> ThoModule<DI, DO> for MyFuncModule{
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         (self.func)(t.as_ref()).into()
     }
 }
@@ -337,7 +338,7 @@ impl Debug for MyClosureModule {
 
 
 impl <DI:Dims+Send+Sync, DO:Dims+Send+Sync> ThoModule<DI, DO> for MyClosureModule{
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
         (self.func)(t.as_ref()).into()
     }
 }
@@ -364,7 +365,7 @@ impl <DI:Dims+Send+Sync, DO:Dims+Send+Sync> ThoModule<DI, DO> for MyLinear<DI, D
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}", self.ws.device(), self.bs.as_ref().map(|bs|bs.device()));
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI>, train: bool) -> ThoTensor<DO> {
+    fn tho_forward(&self, t: &ThoTensor<DI, CachableId>, train: bool) -> ThoTensor<DO, CachableId> {
 
         #[cfg(debug_assertions)] {
             debug!("Module for MyLinear::forward: descr={}", self.descr);
@@ -810,4 +811,3 @@ mod tch_tests {
     }
 
 }
-

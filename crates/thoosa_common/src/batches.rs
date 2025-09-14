@@ -1,5 +1,6 @@
 use crate::applicables::{ThoRunCtx, ThoRunner};
-use crate::dims::{AnyDims, Batch, Dims, ThoTensor};
+use crate::dims::{AnyDims, Batch, Dims, ThoTensor, ThoBatch};
+use thoosa_shared::applicables_runner::CachableId;
 use crate::loader::{LoadRunner, Loader};
 use crate::utils::{tensor_mem_size, DataBatch, Splittable, SplittableDataBatch};
 use async_trait::async_trait;
@@ -22,8 +23,8 @@ use thoosa_shared::resource::Resource;
 #[async_trait]
 pub trait AsyncDataBatch<D: Dims>: Send + Sync {
     /// returns (inputs, labels)
-    async fn train_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
-    async fn valid_batch(&self) -> (ThoTensor<Batch<D>>, Tensor);
+    async fn train_batch(&self) -> (ThoBatch<D>, Tensor);
+    async fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
 }
 
 /**
@@ -34,7 +35,7 @@ pub trait AsyncDataBatch<D: Dims>: Send + Sync {
 pub struct AsyncLoadingTensorsDataBatch<
     DI: Dims,
     DO: Dims + Send,
-    F: (Fn(ThoTensor<DI>) -> ThoTensor<DO>) + Send + Sync,
+    F: (Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId>) + Send + Sync,
 > {
     train_resources: Arc<Vec<(i64, Vec<Resource>)>>,
     valid_resources: Arc<Vec<(i64, Vec<Resource>)>>,
@@ -49,7 +50,7 @@ pub struct AsyncLoadingTensorsDataBatch<
     last_cache_area: Vec<ThoRunCtx>,
 }
 
-impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + Sync> Debug
+impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync> Debug
     for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -62,7 +63,7 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + S
     }
 }
 
-impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + Sync>
+impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync>
     AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     pub fn new(
@@ -94,11 +95,11 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + S
         device: &Device,
         transform_fn: Option<Arc<RwLock<Box<F>>>>,
         area: Option<Arc<RwLock<ThoRunCtx>>>,
-    ) -> (ThoTensor<Batch<DO>>, Tensor) {
+    ) -> (ThoBatch<DO>, Tensor) {
         debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
 
         // let wg = WaitGroup::new();
-        let mut x_y_acc: Vec<(ThoTensor<DO>, i64)> = vec![];
+        let mut x_y_acc: Vec<(ThoTensor<DO, CachableId>, i64)> = vec![];
 
         if batch_size < class_resources.len() {
             debug!(
@@ -180,8 +181,8 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + S
 
     fn vec_to_tensors(
         device: &Device,
-        mut x_y_vecs: Vec<(ThoTensor<DO>, i64)>,
-    ) -> (ThoTensor<Batch<DO>>, Tensor) {
+        mut x_y_vecs: Vec<(ThoTensor<DO, CachableId>, i64)>,
+    ) -> (ThoBatch<DO>, Tensor) {
         let classes =
             Tensor::from_slice(x_y_vecs.iter().map(|e| e.1).collect::<Vec<_>>().as_slice())
                 .to_device(*device);
@@ -211,7 +212,7 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + S
 pub async fn load_tensor<
     DI: Dims + Send + Sync,
     DO: Dims + Send + Sync,
-    F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + Sync,
+    F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
 >(
     loader: &Arc<ThoRunner>,
     area: &Arc<RwLock<ThoRunCtx>>,
@@ -251,10 +252,10 @@ pub async fn load_tensor<
 impl<
         DI: Dims + Sync,
         DO: Dims + Send + Sync,
-        F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + Sync,
+        F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
     > AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
-    async fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let next_ctx = self.runner.next_ctx();
         let batch = tch::no_grad(|| {
             Self::choose_for_batch(
@@ -276,7 +277,7 @@ impl<
         batch
     }
 
-    async fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    async fn valid_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let next_ctx = self.runner.next_ctx();
         let batch = tch::no_grad(|| {
             let batch = Self::choose_for_batch(
@@ -301,7 +302,7 @@ impl<
     }
 }
 
-impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI>) -> ThoTensor<DO> + Send + Sync> Splittable<1>
+impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync> Splittable<1>
     for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     //TODO change to spelt(self)?
@@ -399,7 +400,7 @@ impl<
         DO: Dims + Send + Sync, /*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/
     > AsyncDataBatch<DO> for AsyncClassTensorsLoaderData<DI, DO /*, F*/>
 {
-    async fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let next_ctx = self.runner.next_ctx();
         let batch = tch::no_grad(|| {
             Self::choose_for_batch(
@@ -420,7 +421,7 @@ impl<
         batch
     }
 
-    async fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    async fn valid_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let next_ctx = self.runner.next_ctx();
 
         let batch = tch::no_grad(|| {
@@ -452,7 +453,7 @@ impl<DI: Dims, DO: Dims /* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
         loader: Arc<ThoRunner>,
         device: &Device,
         area: Option<Arc<RwLock<ThoRunCtx>>>,
-    ) -> (ThoTensor<Batch<DO>>, Tensor) {
+    ) -> (ThoBatch<DO>, Tensor) {
         debug!("ClassTensorsLoaderData.batch: resources={resources:?} batch_size={batch_size}");
 
         let x_y_vecs_mx = Arc::new(Mutex::new((vec![], vec![])));
@@ -537,7 +538,7 @@ impl<DI: Dims, DO: Dims /* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
 pub struct AsyncBatchTransform<DI: Dims, DO: Dims, B, BF>
 where
     B: AsyncDataBatch<DI> + Debug,
-    BF: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    BF: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     inner: Arc<Box<B>>,
     transform_fn: Arc<RwLock<BF>>,
@@ -548,7 +549,7 @@ where
 impl<DI: Dims, DO: Dims, B, F> Debug for AsyncBatchTransform<DI, DO, B, F>
 where
     B: AsyncDataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("BatchTransform")
@@ -560,7 +561,7 @@ where
 impl<DI: Dims, DO: Dims, B, F> AsyncBatchTransform<DI, DO, B, F>
 where
     B: AsyncDataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     pub fn new(inner: Arc<Box<B>>, transform_fn: F) -> Self {
         Self {
@@ -584,14 +585,14 @@ where
 impl<DI: Dims, DO: Dims, B, F> AsyncDataBatch<DO> for AsyncBatchTransform<DI, DO, B, F>
 where
     B: AsyncDataBatch<DI> + Debug,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
-    async fn train_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let (inputs, labels) = self.inner.train_batch().await;
         (self.transform_fn.write()(inputs), labels)
     }
 
-    async fn valid_batch(&self) -> (ThoTensor<Batch<DO>>, Tensor) {
+    async fn valid_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let (inputs, labels) = self.inner.valid_batch().await;
         (self.transform_fn.write()(inputs), labels)
     }
@@ -600,7 +601,7 @@ where
 impl<DI: Dims, DO: Dims + Send, B, F> Splittable<1> for AsyncBatchTransform<DI, DO, B, F>
 where
     B: SplittableDataBatch<DI> + Debug + AsyncDataBatch<DI>,
-    F: FnMut(ThoTensor<Batch<DI>>) -> ThoTensor<Batch<DO>> + Sync + Send,
+    F: FnMut(ThoBatch<DI>) -> ThoBatch<DO> + Sync + Send,
 {
     fn split(&self) -> Option<[Self; 1]>
     where

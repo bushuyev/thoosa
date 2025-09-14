@@ -100,7 +100,7 @@ unsafe impl <D:Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
 unsafe impl <D:Dims, Id: Named + Clone> Send for ThoTensor<D, Id> {}
 
 
-impl <D: Dims, Id: Named + Clone> From<Tensor> for ThoTensor<D, Id> {
+impl <D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: Tensor) -> Self {
         Self {
             id: "1".to_string(),
@@ -110,7 +110,7 @@ impl <D: Dims, Id: Named + Clone> From<Tensor> for ThoTensor<D, Id> {
     }
 }
 
-impl <D: Dims, Id: Named + Clone> From<&Tensor> for ThoTensor<D, Id> {
+impl <D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
             id: "2".to_string(),
@@ -121,7 +121,7 @@ impl <D: Dims, Id: Named + Clone> From<&Tensor> for ThoTensor<D, Id> {
 }
 
 #[async_trait]
-impl <D:Dims, Id: Named + Clone + Debug> Output for ThoTensor<D, Id> {
+impl <D:Dims> Output for ThoTensor<D, CachableId> {
 
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
         if self.tensor.device().eq(&ThoDevice::from(device_ordinal).into()) {
@@ -139,14 +139,14 @@ impl <D:Dims, Id: Named + Clone + Debug> Output for ThoTensor<D, Id> {
     }
 }
 
-impl <D:Dims, Id: Named + Clone + Debug> Input for ThoTensor<D, Id> {
+impl <D:Dims> Input for ThoTensor<D, CachableId> {
     fn id(&self) -> &CachableId {
         &self.id
     }
 }
 
 
-impl <D:Dims, Id: Named + Clone + Debug> Input for &ThoTensor<D, Id> {
+impl <D:Dims> Input for &ThoTensor<D, CachableId> {
     fn id(&self) -> &CachableId {
         &self.id
     }
@@ -155,8 +155,9 @@ impl <D:Dims, Id: Named + Clone + Debug> Input for &ThoTensor<D, Id> {
 pub type TCD = ThoTensor<ChannelsData, CachableId>;
 pub type TCDF = ThoTensor<ChannelsDataFiltered, CachableId>;
 pub type TCSD = ThoTensor<ChannelsSlicesData, CachableId>;
+pub type ThoBatch<D> = ThoTensor<Batch<D>, CachableId>;
 
-impl <D:Dims, Id> AsRef<Tensor> for ThoTensor<D, CachableId>{
+impl <D:Dims> AsRef<Tensor> for ThoTensor<D, CachableId>{
     fn as_ref(&self) -> &Tensor{
         &self.tensor
     }
