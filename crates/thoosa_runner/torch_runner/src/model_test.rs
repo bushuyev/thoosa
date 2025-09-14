@@ -28,7 +28,7 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use rand::seq::SliceRandom;
     use thoosa_common::dims::Dims;
-    use thoosa_common::traits::{CachableIdTr, Named};
+    use thoosa_shared::traits::{CachableIdTr, Named};
     use crate::tests::TorchRunCtx;
     use crate::ThoDevice;
 

@@ -17,7 +17,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use tokio::task::JoinSet;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
 use caching_runner::common::runnable::Runnable;
-use thoosa_common::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named};
 
 #[derive(Debug)]
 pub enum FailUntil {
@@ -316,7 +316,7 @@ mod tests {
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
     use caching_runner::common::runnable::Runnable;
-    use thoosa_common::traits::Named;
+    use thoosa_shared::traits::Named;
 
     static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
         console_subscriber::ConsoleLayer::builder()

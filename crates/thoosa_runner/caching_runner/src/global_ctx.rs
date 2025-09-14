@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 #[allow(unused_imports)]
 use mockall::automock;
 use tokio::sync::RwLock as AsyncRwLock;
-use thoosa_common::traits::CachableIdTr;
+use thoosa_shared::traits::CachableIdTr;
 use crate::common::MyError;
 use crate::permits::NumPermits;
 use crate::permits::{PermitSource, RunnerPerm};

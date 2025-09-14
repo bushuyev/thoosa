@@ -547,6 +547,7 @@ dependencies = [
  "parking_lot",
  "rand 0.9.2",
  "thoosa_common",
+ "thoosa_shared",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4808,6 +4809,7 @@ dependencies = [
 name = "thoosa_shared"
 version = "0.1.0"
 dependencies = [
+ "ambassador",
  "async-trait",
  "bytemuck",
  "chrono",
