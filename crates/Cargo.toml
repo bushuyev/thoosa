@@ -13,6 +13,7 @@ members = [
     "thoosa_macros/thoosa_run_config_args_derive",
     "thoosa_macros/thoosa_properties_map",
     "thoosa_macros/thoosa_properties_map_derive",
+    "thoosa_macros/macros_tests",
 
     "thoosa_runner/cached_derive",
     "thoosa_runner/caching_runner",
@@ -20,7 +21,7 @@ members = [
     "thoosa_runner/torch_runner",
 
     "thoosa_projects/thoosa_hbac",
-    "thoosa_projects/thoosa_bird_clef",
+    "thoosa_projects/thoosa_bird_clef", "thoosa_macros/macros_tests",
 ]
 
 [workspace.package]

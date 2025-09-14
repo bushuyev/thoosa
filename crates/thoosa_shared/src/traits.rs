@@ -11,7 +11,7 @@ pub trait CachableIdTr: Any + Debug + Send + Sync  {
         false
     }
 
-    fn as_any<'a>(&'a self) ->  (&'a (dyn Any + Send + Sync));
+    fn as_any<'a>(&'a self) ->  &'a (dyn Any + Send + Sync);
     fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool;
     fn hash_dyn(&self, state: &mut dyn Hasher);
 }
@@ -30,6 +30,7 @@ pub mod mock_cachable_id{
 
         impl CachableIdTr for CachableId {
             fn eqq(&self, other:&dyn CachableIdTr) -> bool;
+            #[allow(unused_parens)]
             fn as_any<'a>(&'a self) ->  (&'a (dyn Any + Send + Sync));
             fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool;
             fn hash_dyn(&self, state: &mut dyn Hasher);
@@ -83,6 +84,7 @@ impl Hash for dyn CachableIdTr {
 
 impl<T: Send + Sync + Debug + Eq + Hash + Named + 'static> CachableIdTr for T {
 
+    #[allow(unused_parens)]
     fn as_any<'a>(&'a self) ->  (&'a (dyn Any + Send + Sync)) { self }
 
     fn eq_dyn(&self, other: &dyn CachableIdTr) -> bool {
