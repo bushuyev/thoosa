@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use ambassador::delegatable_trait;
 use mockall::automock;
@@ -111,5 +111,32 @@ impl dyn CachableIdTr {
 pub trait Named {
     fn name(&self) -> &'static str {
         "n/a"
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct SimpleId(pub &'static str);
+
+impl Named for SimpleId {
+    fn name(&self) -> &'static str {
+        "SimpleId"
+    }
+}
+
+impl From<&'static str> for SimpleId {
+    fn from(value: &'static str) -> Self {
+        SimpleId(value)
+    }
+}
+
+impl From<String> for SimpleId {
+    fn from(value: String) -> Self {
+        SimpleId(value.leak())
+    }
+}
+
+impl Display for SimpleId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }

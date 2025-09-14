@@ -154,11 +154,11 @@ pub trait Cachable<In, Out, P>:Runnable<In, Out, P> + Debug + Sync + Send
            Out: Output + Send + Sync {
 
     fn format_id(&self, input_id:&CachableId) -> CachableId {
-        format!("{}:{}_{}", input_id, self.name(), self.run_id())
+        format!("{}:{}_{}", input_id, self.name(), self.run_id()).into()
     }
 
     fn format_0(prev_id:&str) -> CachableId {
-        format!("{}", prev_id)
+        format!("{}", prev_id).into()
     }
 
 

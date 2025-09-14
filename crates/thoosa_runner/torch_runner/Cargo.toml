@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+thoosa_shared = { path = "../../thoosa_shared" }
 thoosa_common = { path = "../../thoosa_common" }
 caching_runner = { path = "../caching_runner" }
 cached_derive.workspace = true

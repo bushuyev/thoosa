@@ -245,7 +245,7 @@ mod tests {
     use crate::permits::MAX_PERMITS;
     use rand::random_range;
     use tokio::task::JoinSet;
-    use crate::common::SimpleId;
+    use thoosa_shared::traits::SimpleId;
 
     #[derive(Debug)]
     struct SomeTask {

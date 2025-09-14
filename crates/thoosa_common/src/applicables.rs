@@ -126,7 +126,7 @@ impl Runnable<Resource, TCD, ()> for TCDLoader {
 impl Cachable<Resource, TCD, ()> for TCDLoader {
 
     fn applied_id(&self, prev_id: &CachableId) -> CachableId {
-        Self::format_0(&prev_id)
+        Self::format_0(&prev_id.0)
     }
 
     fn name(&self) -> String {
