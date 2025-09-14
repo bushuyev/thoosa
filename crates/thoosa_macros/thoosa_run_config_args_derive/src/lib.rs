@@ -177,7 +177,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                             self.#field_ident = Some(val.try_into().expect(&format!("#field_ident field value {val:?} is not valid")));
                                         }
                                     });
-                    let expect_msg = format!("no {}", field_ident);
+                                    let expect_msg = format!("no {}", field_ident);
 
                                     a.builder_assignments.push(quote!{
                                         #field_ident: self.#field_ident.expect(#expect_msg),

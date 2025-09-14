@@ -1,5 +1,5 @@
 use tch::Tensor;
-use crate::dims::{AnyDims, Batch, ChannelsData, ThoTensor};
+use crate::dims::{AnyDims, Batch, ThoTensor};
 use crate::utils::DataBatch;
 
 #[derive(Debug)]

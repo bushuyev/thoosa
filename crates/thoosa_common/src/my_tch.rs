@@ -2,18 +2,16 @@ use core::fmt;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::sync::Arc;
-use parking_lot::{Mutex, RwLock};
 
-use log::{debug, error, trace, warn};
-use tch::{Device, IndexOp, Tensor};
-use tch::Device::Cpu;
-use tch::Kind::Float;
-use tch::kind::FLOAT_CPU;
-use tch::nn::{batch_norm1d, BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, Module, ModuleT, Optimizer, Path};
+
+
+use log::{debug, error};
+use tch::{ Tensor};
+
+use tch::nn::{batch_norm1d, BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Optimizer, Path};
 use tch::nn::ConvConfig;
 
-use thoosa_shared::*;
+
 use thoosa_shared::ThoosaError;
 
 use crate::builder::Node;
@@ -21,7 +19,7 @@ use crate::builder::Node;
 use crate::builder::SeqBuilder;
 use crate::dims::{Dims, AnyDims, ThoTensor};
 use thoosa_shared::applicables_runner::CachableId;
-use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
+
 use crate::utils::*;
 
 #[derive(Debug)]
@@ -50,6 +48,7 @@ impl <DI:Dims, DO:Dims> MySequential<DI, DO> {
         debug!("MySequential::forward: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.device(), self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().shallow_clone().into(), train);
+
 
         self.layers.iter().skip(1).enumerate().fold(output_t, |output_t, (i, layer)| {
             debug!("MySequential::layer={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.device(), layer);
@@ -475,31 +474,31 @@ fn add_node_output_batch(motif_batch_size: i64, net_batch: &mut Vec<Tensor>, mot
 #[cfg(test)]
 mod tch_tests {
 
-    use std::sync::Arc;
-    use parking_lot::Mutex;
 
-    use chrono::Utc;
+
+
+
     use log::{debug, set_max_level};
     use log::LevelFilter::Info;
-    use plotters::prelude::{BLACK, GREEN, RED};
-    use rayon::iter::{IntoParallelIterator, ParallelIterator};
+    
+
 
 
     use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-    use tch::Device::{Cpu, Cuda};
+    use tch::Device::{Cpu};
     use tch::Kind::Float;
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::{BatchNormConfig, ConvConfig, Init, Module, OptimizerConfig, VarStore};
+
+    use tch::nn::{BatchNormConfig, ConvConfig, OptimizerConfig, VarStore};
 
     use thoosa_shared::*;
     use thoosa_shared::ThoosaError;
 
     use crate::builder::{clc_conv1d_out, Node};
     use crate::builder::SeqBuilder;
-    use crate::dims::{Dims, AnyDims, Batch};
+    use crate::dims::{AnyDims, Batch};
     use crate::my_tch::ThoModule;
-    use crate::train_nets::{MotifNetParams, ThoModuleWithStore};
-    use crate::utils;
+    use crate::train_nets::{ThoModuleWithStore};
+
     use crate::utils::*;
 
     #[test]
@@ -550,7 +549,7 @@ mod tch_tests {
 
             ).end_seq();
 
-        let mut vs = nn::VarStore::new(Cpu);
+        let vs = nn::VarStore::new(Cpu);
 
         let net:Box<dyn ThoModule<AnyDims, AnyDims>> = main.build_tch_module(&vs.root())?;
 

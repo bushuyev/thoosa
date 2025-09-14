@@ -1,0 +1,18 @@
+[package]
+name = "macros_tests"
+version.workspace = true
+edition.workspace = true
+
+
+[dependencies]
+
+thoosa_run_config_args = {path = "../thoosa_run_config_args" }
+thoosa_run_config_args_derive = {path = "../thoosa_run_config_args_derive" }
+
+
+thoosa_properties_map = {path = "../thoosa_properties_map" }
+thoosa_properties_map_derive = {path = "../thoosa_properties_map_derive" }
+
+
+[dev-dependencies]
+macrotest = "1"
