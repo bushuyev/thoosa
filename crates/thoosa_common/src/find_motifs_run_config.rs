@@ -251,7 +251,7 @@ impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
 
             // debug!("Applicable<TCD, TCD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
-            Arc::new(ThoTensor::<ChannelsDataFiltered>::new(
+            Arc::new(ThoTensor::<ChannelsDataFiltered, CachableId>::new(
                 <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(&self, input.id()),
                 t
             ))

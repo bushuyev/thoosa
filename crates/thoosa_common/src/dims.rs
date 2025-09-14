@@ -103,7 +103,7 @@ unsafe impl <D:Dims, Id: Named + Clone> Send for ThoTensor<D, Id> {}
 impl <D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: Tensor) -> Self {
         Self {
-            id: "1".to_string(),
+            id: "1".into(),
             tensor,
             _pd: PhantomData,
         }
@@ -113,7 +113,7 @@ impl <D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
 impl <D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
-            id: "2".to_string(),
+            id: "2".into(),
             tensor: tensor.shallow_clone(),
             _pd: PhantomData,
         }

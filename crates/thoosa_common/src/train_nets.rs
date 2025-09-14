@@ -1479,7 +1479,7 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()> for MotifsNets
 impl Cachable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()> for MotifsNetsSelectionApplicable {
 
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
-        <MotifsNetsSelectionApplicable as Cachable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()>>::format_0(input_id)
+        <MotifsNetsSelectionApplicable as Cachable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()>>::format_0(input_id.0)
     }
 
     fn name(&self) -> String {
@@ -2441,7 +2441,7 @@ impl Runnable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachabl
 impl Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()> for LoadMotifNetCachable {
 
     fn applied_id(&self, input_id: &CachableId) -> CachableId {
-        <LoadMotifNetCachable as Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::format_0(input_id)
+        <LoadMotifNetCachable as Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::format_0(input_id.0)
     }
 
     fn name(&self) -> String {
