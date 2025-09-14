@@ -11,15 +11,15 @@ mod tests {
     use tch::IndexOp;
 
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-    use caching_runner::common::{DropIf, Input, MyError, OutId, RunCtx, SimpleId, WithId};
+    use caching_runner::common::{DropIf, Input, MyError, OutId, RunCtx, WithId};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::common::runnable::Runnable;
     use caching_runner::test_utils::parse_numeric_part;
-    use caching_runner::oom_handler::{OOMHandler, Adjusters, Contexts, NoopRunnableContext, Adjustable};
-    use caching_runner::adjusters::permits::{PermitsAdjuster, PermitsAdjustContextImpl};
+    use caching_runner::oom_handler::{Adjustable, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+    use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use caching_runner::permits::{MAX_PERMITS, PermitStep};
+    use caching_runner::permits::{PermitStep, MAX_PERMITS};
 
     use crate::data::ThoTensor;
     use std::sync::OnceLock;
@@ -28,7 +28,7 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use rand::seq::SliceRandom;
     use thoosa_common::dims::Dims;
-    use thoosa_shared::traits::{CachableIdTr, Named};
+    use thoosa_shared::traits::{CachableIdTr, Named, SimpleId};
     use crate::tests::TorchRunCtx;
     use crate::ThoDevice;
 

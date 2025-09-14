@@ -19,14 +19,14 @@ pub struct SingleDimTensorOutputBuilder<D>
 where
     D:Dims
 {
-    output:ThoTensor<D, caching_runner::common::SimpleId>,
+    output:ThoTensor<D, thoosa_shared::traits::SimpleId>,
     added_partial_output_len:i64,
     add: BuildAs
 }
 
 impl <D:Dims> SingleDimTensorOutputBuilder<D> {
     #[allow(dead_code)]
-    pub fn new(id:<ThoTensor<D, caching_runner::common::SimpleId> as WithId>::ID, size:&[i64], options: (Kind, Device), add: BuildAs) -> Self {
+    pub fn new(id:<ThoTensor<D, thoosa_shared::traits::SimpleId> as WithId>::ID, size:&[i64], options: (Kind, Device), add: BuildAs) -> Self {
         Self {
             output:ThoTensor::zeros(id, size, options),
             added_partial_output_len:0,
@@ -39,7 +39,7 @@ impl <D> OutputBuilder for SingleDimTensorOutputBuilder<D>
 where
     D:Dims
 {
-    type O = ThoTensor<D, caching_runner::common::SimpleId>;
+    type O = ThoTensor<D, thoosa_shared::traits::SimpleId>;
 
     fn add_partial_output(&mut self, partial: Self::O) {
         let partial_size = partial.size();

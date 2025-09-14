@@ -221,7 +221,7 @@ pub async fn load_tensor<
     transform_fn: Option<Arc<RwLock<Box<F>>>>,
     resource_id: Resource,
     // class: i64
-) -> ThoTensor<DO> {
+) -> ThoTensor<DO, CachableId> {
     debug!(
         "AsyncLoadingTensorsDataBatch::load_tensor: 0 resource_id={resource_id:?} area={area:?} "
     );

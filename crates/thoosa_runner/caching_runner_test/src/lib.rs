@@ -299,12 +299,12 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fmt::Debug;
 
-    use super::{run_mul_task_invocations, FailUntil, ClcOOMRunner, OOMRunnerConfig};
+    use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     use async_trait::async_trait;
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
-    use caching_runner::common::{CopyToDevice, Data, DropIf, Input, MyError, OutId, Output, RunCtx, SimpleId, WithId};
+    use caching_runner::common::{CopyToDevice, Data, DropIf, Input, MyError, OutId, Output, RunCtx, WithId};
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -316,7 +316,7 @@ mod tests {
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
     use caching_runner::common::runnable::Runnable;
-    use thoosa_shared::traits::Named;
+    use thoosa_shared::traits::{Named, SimpleId};
 
     static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
         console_subscriber::ConsoleLayer::builder()

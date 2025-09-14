@@ -18,8 +18,9 @@ use std::thread;
 use std::time::Instant;
 use log::debug;
 use crate::run_configs::{Cachable, Runnable};
+use crate::traits::SimpleId;
 
-pub type CachableId = String;
+pub type CachableId = SimpleId;
 
 pub trait Input:Send+Sync+Debug {
     fn id(&self) -> &CachableId;
@@ -367,12 +368,12 @@ where
     }
 
     pub fn keys(&self) -> Vec<String> {
-        self.map.iter().map(|v|v.key().clone()).collect::<Vec<String>>()
+        self.map.iter().map(|v|v.key().clone()).map(|id|id.to_string()).collect::<Vec<String>>()
     }
 
     #[cfg(test)]
     pub fn get_cache_areas(&self, key:&str) -> Box<[u64]> {
-        self.map.get::<CachableId>(&key.to_string()).expect(&format!("no {:?}", key)).device_cache_areas.clone()
+        self.map.get::<CachableId>(&key.to_string().into()).expect(&format!("no {:?}", key)).device_cache_areas.clone()
     }
 
 }
@@ -813,7 +814,7 @@ mod tests {
 
     impl DataResource {
         fn new(id:String, device: Devices, data: Vec<f32>) -> Self {
-            Self { id, device, data }
+            Self { id:id.into(), device, data }
         }
 
         fn copy_to_device(&self, device:Devices) -> Self {
@@ -889,7 +890,7 @@ mod tests {
 
     impl LoaderInputId {
         pub fn new(id: String, import_id: String) -> Self {
-            let applied_id = format!("{}{}", id, import_id);
+            let applied_id = format!("{}{}", id, import_id).into();
             Self { id, import_id,  applied_id}
         }
     }
@@ -931,7 +932,7 @@ mod tests {
                 dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
             }
 
-            Arc::new(LoaderOutput(DataResource::new(input.id().clone(), self.device, vec![0.1, 0.2, 0.3, 0.4])))
+            Arc::new(LoaderOutput(DataResource::new(input.id().0.to_string(), self.device, vec![0.1, 0.2, 0.3, 0.4])))
         }
 
         fn device(&self) -> impl ToOrdinal {
@@ -943,8 +944,8 @@ mod tests {
     impl Cachable<LoaderInputId, LoaderOutput, ()> for TestLoader {
 
 
-        fn applied_id(&self, prev_id: &CachableId) -> String {
-            Self::format_0(&prev_id)
+        fn applied_id(&self, prev_id: &CachableId) -> CachableId {
+            Self::format_0(&prev_id.0)
         }
 
         fn name(&self) -> String {
@@ -1003,7 +1004,7 @@ mod tests {
             dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
 
 
-            Arc::new(ApplicableAOutput(DataResource::new(self.applied_id(input.id()), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_0.0.data.clone()].concat())))
+            Arc::new(ApplicableAOutput(DataResource::new(self.applied_id(input.id()).to_string(), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_0.0.data.clone()].concat())))
         }
 
         fn device(&self) -> impl ToOrdinal {
@@ -1013,7 +1014,7 @@ mod tests {
 
     #[async_trait]
     impl Cachable<LoaderInputId, ApplicableAOutput, ()> for ApplicableA {
-        fn applied_id(&self, prev_id: &CachableId) -> String {
+        fn applied_id(&self, prev_id: &CachableId) -> CachableId {
             Cachable::format_id(self, &self.loader.applied_id(prev_id))
         }
 
@@ -1074,7 +1075,7 @@ mod tests {
             dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
 
 
-            Arc::new(ApplicableBOutput(DataResource::new(self.applied_id(input.id()), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_a.0.data.clone()].concat())))
+            Arc::new(ApplicableBOutput(DataResource::new(self.applied_id(input.id()).to_string(), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_a.0.data.clone()].concat())))
         }
 
         fn device(&self) -> impl ToOrdinal {
@@ -1084,7 +1085,7 @@ mod tests {
 
     #[async_trait]
     impl Cachable<LoaderInputId, ApplicableBOutput, ()> for ApplicableB {
-        fn applied_id(&self, input_id: &CachableId) -> String {
+        fn applied_id(&self, input_id: &CachableId) -> CachableId {
             Cachable::format_id(self, &self.applicable_a.applied_id(input_id))
         }
 
@@ -1430,21 +1431,22 @@ mod tests {
 
         let loader = TestLoader::new(Devices::Cpu, 1);
 
-        assert_eq!("aaa", loader.applied_id(&resource_id));
+        let resource_id = resource_id.into();
+        assert_eq!("aaa", loader.applied_id(&resource_id).to_string());
 
         let applicable_a = ApplicableA::new("0".to_string(), Devices::Cuda(0));
-        assert_eq!("aaa:ApplicableA_0", applicable_a.applied_id(&resource_id));
+        assert_eq!("aaa:ApplicableA_0", applicable_a.applied_id(&resource_id).to_string());
 
         let applicable_a = ApplicableA::new("1".to_string(), Devices::Cuda(0));
-        assert_eq!("aaa:ApplicableA_1", applicable_a.applied_id(&resource_id));
+        assert_eq!("aaa:ApplicableA_1", applicable_a.applied_id(&resource_id).to_string());
 
         let applicable_b = ApplicableB::new("0".to_string(), "0".to_string(), Devices::Cuda(0));
 
-        assert_eq!("aaa:ApplicableA_0:ApplicableB_0", applicable_b.applied_id(&resource_id));
+        assert_eq!("aaa:ApplicableA_0:ApplicableB_0", applicable_b.applied_id(&resource_id).to_string());
 
         let applicable_b = ApplicableB::new("0".to_string(), "1".to_string(), Devices::Cuda(0));
 
-        assert_eq!("aaa:ApplicableA_1:ApplicableB_0", applicable_b.applied_id(&resource_id));
+        assert_eq!("aaa:ApplicableA_1:ApplicableB_0", applicable_b.applied_id(&resource_id).to_string());
 
         debug!("applicable_b={:?}", applicable_b.applied_id(&resource_id));
     }

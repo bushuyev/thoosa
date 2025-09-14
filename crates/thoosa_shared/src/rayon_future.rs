@@ -217,7 +217,7 @@ mod tests {
             let _ = (0..10).into_par_iter().map(|_| {
                 let load_time = Arc::clone(&statistics);
                 block_on(async move {//done in 5567 load time=54473
-                    crate::applicables_runner::dummy_load(&load_time, &Arc::new("key".to_string())).await;
+                    crate::applicables_runner::dummy_load(&load_time, &Arc::new("key".into())).await;
                 });
             }).collect::<Vec<_>>();
         });
@@ -230,7 +230,7 @@ mod tests {
             let _ = block_on(join_all((0..10)./*into_par_iter().*/map(|_| {
                 let load_time = Arc::clone(&load_time_1);
                 scope.spawn_future(async move {
-                    crate::applicables_runner::dummy_load(&load_time, &Arc::new("key".to_string())).await;
+                    crate::applicables_runner::dummy_load(&load_time, &Arc::new("key".into())).await;
                 })
             }).collect::<Vec<_>>()));
         });
@@ -245,7 +245,7 @@ mod tests {
             let _ = block_on(join_all((0..10)./*into_par_iter().*/map(|_| {
                 let load_time = Arc::clone(&load_time_2);
                 RayonFuture::<()>::install_future(async move {
-                    crate::applicables_runner::dummy_load(&load_time, &Arc::new("key".to_string())).await;
+                    crate::applicables_runner::dummy_load(&load_time, &Arc::new("key".into())).await;
                 })
             }).collect::<Vec<_>>()));
         });
