@@ -1,23 +1,4 @@
-// #![allow(uncommon_codepoints)]
-// #![feature(trait_upcasting)]
-// #![feature(const_trait_impl)]
-// #![feature(effects)]
-// #![feature(iter_array_chunks)]
 #![feature(async_fn_traits, fn_traits, unboxed_closures)]
-#![allow(
-    unused_imports,
-    unused_variables,
-    unused_mut,
-    dead_code,
-    non_snake_case,
-    redundant_semicolons,
-    noop_method_call,
-    mismatched_lifetime_syntaxes,
-    suspicious_double_ref_op,
-    unpredictable_function_pointer_comparisons,
-    unused_parens,
-    unused_attributes
-)]
 extern crate core;
 
 use tch::Device;

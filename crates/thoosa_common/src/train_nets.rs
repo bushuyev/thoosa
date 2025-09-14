@@ -58,7 +58,6 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use crate::batches::{AsyncDataBatch, AsyncLoadingTensorsDataBatch};
 use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, ThoBatch, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
-use thoosa_shared::applicables_runner::CachableId;
 use crate::find_motifs_run_config::*;
 use crate::transforms::filters::*;
 
@@ -2933,11 +2932,11 @@ mod train_tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, pulse_in_rand, sin_v, slices_len, ThoosaError};
-    use thoosa_shared::applicables_runner::Input;
+    use thoosa_shared::applicables_runner::{CachableId, Input};
     use thoosa_shared::run_configs::{Cachable, OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
-    use crate::dims::{Batch, Dims, AnyDims, ThoTensor, SlicesData, MotifData, MotifsNetsSelectionDims, LabelProbability};
+    use crate::dims::{Batch, Dims, AnyDims, ThoTensor, SlicesData, MotifData, MotifsNetsSelectionDims, LabelProbability, ThoBatch};
     use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::ws::mock_ws_simp;

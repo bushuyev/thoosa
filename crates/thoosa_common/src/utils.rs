@@ -1531,83 +1531,83 @@ pub async fn train_2<F, DI:Dims, DO:Dims>(
     mut listener: Option<&mut dyn TrainListener>
 ) -> Result<f32, ThoosaError>
 where F:Fn(ThoBatch<DI>)->ThoBatch<DI> {
-
-    debug!("train: device={:?} cycles={}", device, cycles);
-    debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
-
-    let mut last_valid_loss = [0f32;3];
-
-    for idx in 1..cycles {
-        debug!("train:  cuda_mem={:?} before train_batch thread name={:?}", cuda_mem(), thread::current().name());
-        let (x_t_0, expected_y) = data.train_batch().await;
-        debug!("train: device={:?} x_t_0.size()={:?}", device, x_t_0.size());
-        debug!("train: 0. cuda_mem={:?} after train_batch thread name={:?}", cuda_mem(), thread::current().name());
-
-        let x_t = x_f(x_t_0);
-
-        debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
-
-        let predicted_y = net.tho_forward(&x_t, true);
-        debug!("train: 1. cuda_mem={:?}",  cuda_mem());
-        trace!("train: x_t=\n{x_t}");
-        x_t.drop();
-        // unsafe { at_autocast_clear_cache(); }
-
-        let loss = loss_fn(predicted_y.as_ref(), &expected_y);
-
-        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
-        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}", optimizer_mem_size(&opt));
-        predicted_y.drop();
-        drop(expected_y);
-        debug!("train: 2.1 cuda_mem={:?}",  cuda_mem());
-        let t1 = Instant::now();
-
-        opt.backward_step(&loss);
-
-        debug!("train: 3. cuda_mem={:?}  optimizer_size={}", cuda_mem(),  optimizer_mem_size(&opt));
-        debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
-
-
-        if idx % 10 == 0 {
-
-            debug!("train:  cuda_mem={:?} before valid_batch thread name={:?}", cuda_mem(), thread::current().name());
-            let (x_t_0, y_t) = data.valid_batch().await;
-            debug!("train:  cuda_mem={:?} after valid_batch thread name={:?}", cuda_mem(), thread::current().name());
-            // debug!("train: x_t_0.size={:?}", x_t_0.size());
-
-            let rs = tch::no_grad(|| {
-                let x_t = x_f(x_t_0);
-
-
-                let pred_y = net.tho_forward(&x_t, true);
-
-                let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
-                let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
-
-                last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
-                debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-
-                listener.as_mut().map(|l| l.on_valid_cycle(idx, valid_loss_f32))
-            });
-
-            if let Some(rs) = rs {
-                match rs {
-                    ListenerResponse::Stop => {
-                        break;
-                    }
-                    ListenerResponse::UpdateLR(lr) => {
-                        opt.set_lr(lr);
-                    }
-                    ListenerResponse::Nope => {}
-                }
-            }
-        }
-
-        debug!("train: idx={} loss={:?}", idx, loss);
-        std::io::stdout().flush()?;
-    }
-    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",  last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
-    Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
+    todo!()
+    // debug!("train: device={:?} cycles={}", device, cycles);
+    // debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
+    //
+    // let mut last_valid_loss = [0f32;3];
+    //
+    // for idx in 1..cycles {
+    //     debug!("train:  cuda_mem={:?} before train_batch thread name={:?}", cuda_mem(), thread::current().name());
+    //     let (x_t_0, expected_y) = data.train_batch().await;
+    //     debug!("train: device={:?} x_t_0.size()={:?}", device, x_t_0.size());
+    //     debug!("train: 0. cuda_mem={:?} after train_batch thread name={:?}", cuda_mem(), thread::current().name());
+    //
+    //     let x_t = x_f(x_t_0);
+    //
+    //     debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
+    //
+    //     let predicted_y = net.tho_forward(&x_t, true);
+    //     debug!("train: 1. cuda_mem={:?}",  cuda_mem());
+    //     trace!("train: x_t=\n{x_t}");
+    //     x_t.drop();
+    //     // unsafe { at_autocast_clear_cache(); }
+    //
+    //     let loss = loss_fn(predicted_y.as_ref(), &expected_y);
+    //
+    //     debug!("train: 2. cuda_mem={:?}",  cuda_mem());
+    //     trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}", optimizer_mem_size(&opt));
+    //     predicted_y.drop();
+    //     drop(expected_y);
+    //     debug!("train: 2.1 cuda_mem={:?}",  cuda_mem());
+    //     let t1 = Instant::now();
+    //
+    //     opt.backward_step(&loss);
+    //
+    //     debug!("train: 3. cuda_mem={:?}  optimizer_size={}", cuda_mem(),  optimizer_mem_size(&opt));
+    //     debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
+    //
+    //
+    //     if idx % 10 == 0 {
+    //
+    //         debug!("train:  cuda_mem={:?} before valid_batch thread name={:?}", cuda_mem(), thread::current().name());
+    //         let (x_t_0, y_t) = data.valid_batch().await;
+    //         debug!("train:  cuda_mem={:?} after valid_batch thread name={:?}", cuda_mem(), thread::current().name());
+    //         // debug!("train: x_t_0.size={:?}", x_t_0.size());
+    //
+    //         let rs = tch::no_grad(|| {
+    //             let x_t = x_f(x_t_0);
+    //
+    //
+    //             let pred_y = net.tho_forward(&x_t, true);
+    //
+    //             let valid_loss = loss_fn(&pred_y.as_ref(), &y_t);
+    //             let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+    //
+    //             last_valid_loss[idx % last_valid_loss.len()] = valid_loss_f32;
+    //             debug!("train: last_valid_loss={last_valid_loss:?}  loss={loss:?}, valid loss={valid_loss:?} avg loss={}", last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+    //
+    //             listener.as_mut().map(|l| l.on_valid_cycle(idx, valid_loss_f32))
+    //         });
+    //
+    //         if let Some(rs) = rs {
+    //             match rs {
+    //                 ListenerResponse::Stop => {
+    //                     break;
+    //                 }
+    //                 ListenerResponse::UpdateLR(lr) => {
+    //                     opt.set_lr(lr);
+    //                 }
+    //                 ListenerResponse::Nope => {}
+    //             }
+    //         }
+    //     }
+    //
+    //     debug!("train: idx={} loss={:?}", idx, loss);
+    //     std::io::stdout().flush()?;
+    // }
+    // debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",  last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+    // Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
 
 
