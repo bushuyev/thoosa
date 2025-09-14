@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Runnable;
-use thoosa_common::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named};
 use crate::permits::{NumPermits, RunnerPerm};
 
 pub mod runnable;

@@ -14,7 +14,7 @@ use std::sync::Arc;
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use crate::permits::{NumPermits, RunnerPerm};
-use thoosa_common::traits::CachableIdTr;
+use thoosa_shared::traits::CachableIdTr;
 
 pub struct PermitsAdjuster<F, Fut, C>
 where
@@ -210,7 +210,7 @@ mod tests {
     use crate::permits::NumPermits;
     use std::sync::Arc;
     use parking_lot::RwLock;
-    use thoosa_common::traits::Named;
+    use thoosa_shared::traits::Named;
 
     #[derive(Debug)]
     struct TestRunCtx {
