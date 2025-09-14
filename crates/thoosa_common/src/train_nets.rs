@@ -1,54 +1,54 @@
 use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
-use crate::loader::{LoadRunner, Loader, SyncWrapper};
-use crate::my_tch::{MyClosureModule, ThoModule};
+use crate::loader::{LoadRunner, Loader};
+use crate::my_tch::{ ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, TPEOptimizer};
-use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
-use crate::{panic_to_err, panic_to_err_async, train_nets};
-use crate::utils::{cuda_mem, from, run_split_on_oom, run_split_on_oom_2, tensor_mem_size, train_2, DummyListener, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
+use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult,};
+use crate::{panic_to_err, panic_to_err_async};
+use crate::utils::{cuda_mem, run_split_on_oom, tensor_mem_size, train_2, DummyListener, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
 use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
-use crate::ws::{FsWorkspace, Workspace};
+use crate::ws::{ Workspace};
 use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
-use futures::StreamExt;
-use log::{debug, error, info, log_enabled, trace, warn, Log};
-use parking_lot::{Mutex, RawRwLock, RwLock, RwLockReadGuard};
+
+use log::{debug, info, trace, warn, Log};
+use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use rand::seq::{SliceRandom, IndexedRandom};
-use rand::Rng;
-use rayon::iter::ParallelBridge;
-use rayon::iter::ParallelIterator;
-use regex::Regex;
+
+
+
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display, Formatter};
-use std::{fmt, fs, thread};
-use std::hash::Hash;
-use std::iter::Map;
+use std::fmt::{Debug, Formatter};
+use std::{fmt, fs};
+
+
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::{ PathBuf};
 use std::rc::Rc;
-use std::time::Instant;
-use tch::nn::{AdamW, ConvConfig, Module, OptimizerConfig, VarStore};
-use tch::Device::{Cpu, Cuda};
+
+use tch::nn::{AdamW, OptimizerConfig, VarStore};
+use tch::Device::{Cpu};
 use tch::Kind::Float;
-use tch::{nn, Device, IndexOp, Kind, Reduction, Tensor};
-use clap::Subcommand;
-use thoosa_shared::{clc_step, parse_key_val, slices_len};
-use thoosa_shared::parse_range_or_value;
-use thoosa_shared::resource::{Resource, ResourceId};
+use tch::{nn, Device, IndexOp, Reduction, Tensor};
+
+use thoosa_shared::{clc_step, slices_len};
+
+use thoosa_shared::resource::{Resource};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{batch_windows, clc_num_batches, make_combos, RangeOrValue, ThoosaError};
-use thoosa_shared::val::Val::UInt;
+use thoosa_shared::{  make_combos, RangeOrValue, ThoosaError};
+
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::future::join_all;
-use log::Level::Debug as DebugLevel;
-use thoosa_properties_map::{FromHashmap, ToHashmap};
+
+use thoosa_properties_map::{ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_shared::run_configs::{Cachable, RunConfig, Runnable};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -56,10 +56,10 @@ use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrd
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
-use crate::batches::{AsyncDataBatch, AsyncLoadingTensorsDataBatch};
+use crate::batches::{AsyncDataBatch};
 use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, ThoBatch, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
 use crate::find_motifs_run_config::*;
-use crate::transforms::filters::*;
+
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -776,7 +776,7 @@ pub fn run_opt_train_label_nets(
 pub async fn train_label_net_2<DI:Dims+Send+'static, DO:Dims+Send+'static, B:AsyncDataBatch<DI>> (
     net:&Box<dyn ThoModule<Batch<DI>, DO>>,
     run_config:&TrainLabelNetsRunConfig,
-    mut batch:&mut B,
+    batch:&mut B,
     var_store: &VarStore,
     device: &Device,
 ) ->  Result<f32, ThoosaError> {
@@ -784,7 +784,7 @@ pub async fn train_label_net_2<DI:Dims+Send+'static, DO:Dims+Send+'static, B:Asy
 
     let device = device.clone();
 
-    let mut optimizer = AdamW::default().amsgrad(true);
+    let optimizer = AdamW::default().amsgrad(true);
 
     //TODO
     // if let Some(adam_w) = run_config.common_training_args.adam_w {
@@ -973,7 +973,7 @@ pub async fn train_final_net_2<B:AsyncDataBatch<LabelNetsProbabilities>>(
     let final_node_params= FinalNetParams::new(label_nets_num, labels_num, run_config_values.net.num_layers);
     debug!("train_final_node: final_node_params={final_node_params:?}");
 
-    let mut optimizer = nn::Adam::default();
+    let optimizer = nn::Adam::default();
     /* if let Some(adam_w) = run_config_values.adam_w {
          debug!("train_final_nodes: setting adam_w={adam_w:?}");
          optimizer = optimizer.beta1(adam_w.beta1).beta2(adam_w.beta2);
@@ -2030,7 +2030,7 @@ impl SavableResult for TrainMotifsNetsRunConfigResult {
 
 pub async fn opt_train_2<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
-    mut train: F,
+    train: F,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>,
     device: Device,
     descr: &str,
@@ -2042,7 +2042,7 @@ where
 {
     let const_vals = run_config_source.grid_run_config_source().const_params().clone();
     let mut min_loss = f32::MAX;
-    let mut min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
+    let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
     info!("opt_train_2: running opt train {descr} ");
 
@@ -2053,7 +2053,7 @@ where
         let grid_vals = grid_vals.clone();
         let mut train_clone = train.clone();
 
-        let mut min_var_store_clone = Arc::clone(&min_var_store);
+        let min_var_store_clone = Arc::clone(&min_var_store);
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {

@@ -1,16 +1,16 @@
-use std::cell::{RefCell, RefMut};
+use std::cell::{RefMut};
 use std::collections::VecDeque;
-use std::ffi::c_void;
-use std::fmt::{Debug, Display};
+
+use std::fmt::{Debug};
 use std::io::Write;
 use std::iter::Map;
-use std::ops::ControlFlow::Continue;
-use std::ops::{Add, Div, Mul, Range};
-use std::time::Instant;
-use std::{fs, mem, ptr, thread};
 
-use chrono::SecondsFormat;
-use log::{debug, error, info, trace, warn};
+use std::ops::{ Range};
+use std::time::Instant;
+use std::{fs, ptr};
+
+
+use log::{debug, error, trace, warn};
 use plotters::backend::BitMapBackend;
 use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
@@ -19,24 +19,24 @@ use plotters::prelude::*;
 use rand::prelude::ThreadRng;
 use rand::Rng;
 use std::panic::AssertUnwindSafe;
-use std::rc::Rc;
+
 use std::sync::Arc;
 use parking_lot::lock_api::{RawRwLock, RwLock};
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::Optimizer;
-use tch::nn::{Module, VarStore};
-use tch::Device::{Cpu, Cuda};
+use tch::nn::{VarStore};
+use tch::Device::{Cuda};
 use tch::Kind::Float;
-use tch::{Device, IndexOp, Kind, TchError, Tensor};
-use thoosa_shared::{cdt, gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
+use tch::{Device, Kind, TchError, Tensor};
+use thoosa_shared::{gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
-use torch_sys::*;
+
 
 use crate::my_tch::{LossFp, ThoModule};
-use thoosa_shared::opt_rng::opt_rnd;
+
 use crate::batches::AsyncDataBatch;
-use crate::dims::{Batch, Dims, ThoTensor};
+use crate::dims::{Batch, Dims};
 
 pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
@@ -520,7 +520,7 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
 
 
 pub async fn run_split_on_oom_2<'s, 'v, 'fr, const SIZE: usize, S: 's, SV: 'v, F, FR: 'fr, OkF, OkR>(
-    mut splitter: S, mut f: F, mut on_ok: OkF, max_attempts: i32
+    mut splitter: S, mut f: F, on_ok: OkF, max_attempts: i32
 ) -> Result<(), ThoosaError>
 where
     SV:Splittable<SIZE>,
@@ -531,7 +531,7 @@ where
     OkF:AsyncFn(FR, Arc<SV>) -> OkR,
 {
 
-    'out: while let Some(mut split_0) = splitter.next() {
+    'out: while let Some(split_0) = splitter.next() {
         let split_0_arc = Arc::new(split_0);
         for attempt in 0..max_attempts {
             match panic_to_err_async!(f(Arc::clone(&split_0_arc)).await) {
@@ -615,12 +615,12 @@ impl <const S:usize, const D:i64> Splittable<S> for SplittableTensor<D> {
 
 //TODO for batch + degrade Kind: Double->Float->BFloat16
 pub struct CompositeReducer {
-    reducers:Vec<Box<dyn Splittable<1>>>
+    _reducers:Vec<Box<dyn Splittable<1>>>
 }
 
 impl CompositeReducer {
-    pub fn new(reducers:Vec<Box<dyn Splittable<1>>>) -> Self {
-        Self { reducers }
+    pub fn new(_reducers:Vec<Box<dyn Splittable<1>>>) -> Self {
+        Self { _reducers }
     }
 }
 
@@ -641,7 +641,7 @@ pub fn kick_register_cuda_hooks(){
         // Ok(func())
         println!("lib={lib:?}"); //logging is not set up yet
         let t = Tensor::rand(1_000_000, FLOAT_CUDA);
-        let buf = Vec::<f32>::try_from(&t).unwrap();
+        let _buf = Vec::<f32>::try_from(&t).unwrap();
     };
 }
 
@@ -649,38 +649,38 @@ pub fn kick_register_cuda_hooks(){
 pub struct DummyListener;
 
 impl TrainListener for DummyListener {
-    fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse {
+    fn on_valid_cycle(&mut self, _cycle: usize, _loss: f32) -> ListenerResponse {
         ListenerResponse::Nope
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command};
+
     use crate::bool_iter::BoolTensorIterator;
-    use crate::parzen::optimizer::{ConfigurationSpace, TPEOptimizer};
-    use crate::runs::Simple;
-    use crate::train_nets::{motif_node, opt_train, LabelNetParams, MotifNetParams, ThoModuleWithStore};
-    use crate::utils::{hist_1_dim, CompositeReducer, ListenerResponse, Splittable, SplittableTensor, TrainListener};
+
+
+
+    use crate::utils::{hist_1_dim, CompositeReducer,Splittable, SplittableTensor, TrainListener};
     use clap::{arg, command, Args, Parser, Subcommand};
-    use log::LevelFilter::{Info, Trace};
-    use log::{debug, error, info, set_max_level};
+
+    use log::{debug};
     use std::collections::{HashMap, HashSet};
-    use std::path::PathBuf;
-    use std::time::Instant;
-    use std::{fs, mem};
-    use std::fmt::{Debug, Display, Formatter};
-    use std::marker::PhantomData;
-    use std::str::FromStr;
-    use chrono::format::Item;
-    use clap::builder::Str;
-    use futures::executor::block_on;
-    use futures_util::FutureExt;
-    use serde::{Deserialize, Serialize};
+
+
+    use std::{fs};
+    use std::fmt::{Debug};
+
+
+
+
+
+
+    use serde::{Deserialize};
     use tch::kind::FLOAT_CPU;
-    use tch::Device::{Cpu, Cuda};
+    use tch::Device::{Cpu};
     use tch::Kind::Float;
-    use tch::{IndexOp, Tensor};
+    use tch::{Tensor};
     use tch::nn::VarStore;
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -688,14 +688,14 @@ pub mod tests {
     use thoosa_run_config_args_derive::ThoosaRunConfig;
 
     use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
-    use thoosa_shared::resource::ResourcesConfig;
+
     use thoosa_shared::val::Val::{Int, UInt};
-    use thoosa_shared::val::{NamedRange, NamedVal, Val};
-    use thoosa_shared::{add_prefix, add_range_or_value, cdt_for_dir, clc_step, RangeOrValue, ResourceType, ThoosaError};
-    use thoosa_shared::rayon_future::ScopeFutureExt;
-    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunConfig, RunId};
-    use crate::dims::{Dims, AnyDims};
-    use crate::find_motifs_run_config::InputFilter;
+    use thoosa_shared::val::{NamedVal, Val};
+    use thoosa_shared::{ cdt_for_dir, clc_step, RangeOrValue, ThoosaError};
+
+    use thoosa_shared::run_configs::{   RunId};
+
+
 
     #[ctor::ctor]
     fn init() {
@@ -724,7 +724,7 @@ pub mod tests {
 
     #[test]
     fn test_composite_reducer(){
-        let reducer = CompositeReducer::new(vec![
+        let _reducer = CompositeReducer::new(vec![
 
         ]);
         //TODO
@@ -1493,7 +1493,7 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
-use thoosa_shared::applicables_runner::CachableId;
+
 use crate::dims::ThoBatch;
 
 pub trait DataBatch<D:Dims>  {
@@ -1508,7 +1508,7 @@ pub trait SplittableDataBatch<D:Dims>: DataBatch<D> + Splittable<1> + Debug {
 
 
 pub trait TrainListener:Send + Sync {
-    fn on_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse {
+    fn on_cycle(&mut self, _cycle:usize, _loss:f32) -> ListenerResponse {
         ListenerResponse::Nope
     }
     fn on_valid_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse;
@@ -1521,14 +1521,14 @@ pub enum ListenerResponse {
 }
 
 pub async fn train_2<F, DI:Dims, DO:Dims>(
-    device:&Device,
-    data:&mut dyn AsyncDataBatch<DI>,
-    net:&Box<dyn ThoModule<Batch<DI>, DO>>,
-    loss_fn:LossFp,
-    cycles: usize,
-    mut opt: Optimizer,
-    x_f:F,
-    mut listener: Option<&mut dyn TrainListener>
+    _device:&Device,
+    _data:&mut dyn AsyncDataBatch<DI>,
+    _net:&Box<dyn ThoModule<Batch<DI>, DO>>,
+    _loss_fn:LossFp,
+    _cycles: usize,
+    _opt: Optimizer,
+    _x_f:F,
+    _listener: Option<&mut dyn TrainListener>
 ) -> Result<f32, ThoosaError>
 where F:Fn(ThoBatch<DI>)->ThoBatch<DI> {
     todo!()
@@ -1832,7 +1832,7 @@ pub fn optimizer_mem_size(opt:&Optimizer) -> usize {
 
 pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad: bool) {
 
-    for (name, mut tensor) in vsd.variables() {
+    for (name, tensor) in vsd.variables() {
         if name.contains("batch_norm") {
             continue
         }
