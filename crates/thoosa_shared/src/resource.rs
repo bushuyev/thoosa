@@ -6,6 +6,7 @@ use mockall::automock;
 use parking_lot::RwLock;
 use crate::applicables_runner::{CachableId, Input};
 use crate::ThoosaError;
+use crate::traits::WithId;
 
 #[automock]
 pub trait ResourceStore {
@@ -50,6 +51,15 @@ impl Resource {
         self.length
     }
 }
+
+impl WithId for Resource {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
 
 impl Input for Resource {
     fn id(&self) -> &CachableId {

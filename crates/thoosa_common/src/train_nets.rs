@@ -55,6 +55,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use thoosa_shared::traits::WithId;
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use crate::batches::{AsyncDataBatch};
 use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, ThoBatch, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
@@ -2369,6 +2370,16 @@ impl LoadMotifNetInput {
         }
     }
 }
+
+
+impl WithId for LoadMotifNetInput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
 
 impl Input for LoadMotifNetInput {
     fn id(&self) -> &CachableId {
