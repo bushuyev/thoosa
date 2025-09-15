@@ -288,6 +288,15 @@ impl MotifsDistRunnableOutput {
     }
 }
 
+impl WithId for MotifsDistRunnableOutput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
+
 #[async_trait]
 impl Output for MotifsDistRunnableOutput {
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
@@ -419,6 +428,15 @@ impl Input for TrackDistInput {
 
 #[derive(Debug)]
 struct TrackDistOutput;
+
+impl WithId for TrackDistOutput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
 
 #[async_trait]
 impl Output for TrackDistOutput {

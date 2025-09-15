@@ -12,7 +12,7 @@ mod model_test;
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
 #[allow(unused_imports)]
-use caching_runner::common::{CopyToDevice, Data, MyError, Output};
+use caching_runner::common::{CopyToDevice, Data, MyError};
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::{Device, Kind, TchError, Tensor};

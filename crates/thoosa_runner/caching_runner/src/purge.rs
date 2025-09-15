@@ -1,6 +1,6 @@
 use crate::common::cachable::DataCacheWrapper;
 use crate::common::{CopyToDevice, MyError};
-use crate::common::{Data, Output};
+use crate::common::{Data};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::CachableIdTr;
 
 pub(crate) const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
@@ -110,6 +111,7 @@ mod tests {
     use futures_util::future::{BoxFuture, FutureExt};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+    use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{DummyCachableId, WithId};
     use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
 

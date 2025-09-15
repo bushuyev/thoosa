@@ -657,6 +657,13 @@ pub struct TrainLabelNetsRunConfigResult {
     var_store: VarStore
 }
 
+impl WithId for Box<TrainLabelNetsRunConfigResult> {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
 
 #[async_trait]
 impl Output for Box<TrainLabelNetsRunConfigResult> {
@@ -1995,6 +2002,14 @@ impl TrainMotifsNetsRunConfigResult {
     }
 }
 
+impl WithId for Box<TrainMotifsNetsRunConfigResult> {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
 #[async_trait]
 impl Output for Box<TrainMotifsNetsRunConfigResult> {
 
@@ -2399,6 +2414,15 @@ impl LoadMotifNetOutput {
         Self { channel, nets }
     }
 }
+
+impl WithId for LoadMotifNetOutput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
 
 #[async_trait]
 impl Output for LoadMotifNetOutput {

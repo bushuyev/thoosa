@@ -119,7 +119,7 @@ pub(crate) mod mock_run_ctx {
 
 
 // pub trait Input: WithId + Debug {}
-pub trait Output: WithId + Debug {}
+// pub trait Output: WithId + Debug {}
 
 
 
