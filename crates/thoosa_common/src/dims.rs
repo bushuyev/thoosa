@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use tch::{Device, Tensor};
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use crate::applicables::ThoDevice;
-use thoosa_shared::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 
 pub trait Dims:Send +Sync+ Clone + Debug {}
 
@@ -139,9 +139,27 @@ impl <D:Dims> Output for ThoTensor<D, CachableId> {
     }
 }
 
+impl <D:Dims> WithId for ThoTensor<D, CachableId> {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
+
 impl <D:Dims> Input for ThoTensor<D, CachableId> {
     fn id(&self) -> &CachableId {
         &self.id
+    }
+}
+
+
+impl <D:Dims> WithId for &ThoTensor<D, CachableId> {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
     }
 }
 

@@ -15,9 +15,10 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, RunCtx, Runner, ToOrdinal};
 use thoosa_shared::run_configs::{Cachable, RunConfig, RunId, Runnable};
 use thoosa_shared::ThoosaError;
+use thoosa_shared::traits::WithId;
 use thoosa_shared::val::Val;
 use crate::applicables::{ThoDevice, ThoRunner};
-use crate::dims::{ChannelsData, ChannelsDataFiltered, ChannelsSlicesData, ThoTensor, TCD, TCDF, TCSD};
+use crate::dims::{ChannelsData, ChannelsDataFiltered, ChannelsSlicesData, Dims, ThoTensor, TCD, TCDF, TCSD};
 use crate::loader::SyncWrapper;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
@@ -252,7 +253,7 @@ impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
             // debug!("Applicable<TCD, TCD, ()> for FindMotifsRunConfigApplicable::apply filter applied.size={:?} unfolded.size={:?}", t.size(), unfolded.size());
 
             Arc::new(ThoTensor::<ChannelsDataFiltered, CachableId>::new(
-                <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(&self, input.id()),
+                <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(&self, Input::id(input.as_ref())),
                 t
             ))
         } else {
@@ -298,6 +299,14 @@ impl From<Vec<SyncWrapper<Tensor>>> for FindMotifsApplicableInput {
 impl From<&[SyncWrapper<Tensor>]> for FindMotifsApplicableInput {
     fn from(value: &[SyncWrapper<Tensor>]) -> Self {
         FindMotifsApplicableInput(value.iter().map(|t| SyncWrapper::wrap_tensor(t.shallow_clone())).collect::<Vec<_>>())
+    }
+}
+
+impl WithId for FindMotifsApplicableInput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
     }
 }
 

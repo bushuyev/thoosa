@@ -11,7 +11,7 @@ mod tests {
     use tch::IndexOp;
 
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-    use caching_runner::common::{DropIf, Input, MyError, OutId, RunCtx};
+    use caching_runner::common::{DropIf, MyError, OutId, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::common::runnable::Stage;
     use caching_runner::test_utils::parse_numeric_part;
@@ -28,6 +28,7 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use rand::seq::SliceRandom;
     use thoosa_common::dims::Dims;
+    use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
     use crate::tests::TorchRunCtx;
     use crate::ThoDevice;

@@ -57,7 +57,7 @@ use tch::Kind::{Bool, Float};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::{loader, panic_to_err};
 use thoosa_common::applicables::{ThoDevice, ThoRunner};
-use thoosa_common::dims::{TCD, TCSD};
+use thoosa_common::dims::{Dims, ThoTensor, TCD, TCSD};
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -81,6 +81,7 @@ use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_shared::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
 use thoosa_shared::rayon_future::{RayonFuture, ScopeFutureExt};
+use thoosa_shared::traits::WithId;
 
 #[derive(Debug, Args, Clone)]
 pub struct FindMotifsArgs {
@@ -259,6 +260,16 @@ impl MotifsDistRunnableInput {
     }
 }
 
+
+impl WithId for MotifsDistRunnableInput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
+
 impl Input for MotifsDistRunnableInput {
     fn id(&self) -> &CachableId {
         todo!()
@@ -389,6 +400,14 @@ struct TrackDistInput {
 impl TrackDistInput {
     pub fn new(motifs_dist_runnable_output: MotifsDistRunnableOutput, chunk_0: Vec<TensorIdSliceIdx>, chunk_1: Vec<TensorIdSliceIdx>) -> Self {
         Self { motifs_dist_runnable_output, chunk_0, chunk_1 }
+    }
+}
+
+impl WithId for TrackDistInput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
     }
 }
 
