@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use tokio::task::JoinSet;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
-use caching_runner::common::runnable::Runnable;
+use caching_runner::common::runnable::Stage;
 use thoosa_shared::traits::{CachableIdTr, Named};
 
 #[derive(Debug)]
@@ -28,13 +28,13 @@ pub enum FailUntil {
 }
 
 //for tests in torch_runner
-pub struct ClcOOMRunner<R: Runnable> {
+pub struct ClcOOMRunner<R: Stage> {
     pd: PhantomData<R>,
     config: OOMRunnerConfig,
-    output_builder: Box<dyn Fn(<<R as Runnable>::Out as WithId>::ID)->Box<dyn OutputBuilder<O=<R as Runnable>::Out>> + Send + Sync>
+    output_builder: Box<dyn Fn(<<R as Stage>::Out as WithId>::ID)->Box<dyn OutputBuilder<O=<R as Stage>::Out>> + Send + Sync>
 }
 
-impl <R: Runnable + Runnable> Debug for ClcOOMRunner<R> {
+impl <R: Stage + Stage> Debug for ClcOOMRunner<R> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MulOOMRunner")
             .field("config", &self.config)
@@ -44,11 +44,11 @@ impl <R: Runnable + Runnable> Debug for ClcOOMRunner<R> {
 
 impl<R> ClcOOMRunner<R>
 where
-    R: Runnable + Adjustable,
+    R: Stage + Adjustable,
     R::In: Adjustable,
     R::Ctx: Adjustable,
 {
-    pub fn new(config: OOMRunnerConfig, output_builder: Box<dyn Fn(<<R as Runnable>::Out as WithId>::ID)->Box<dyn OutputBuilder<O=<R as Runnable>::Out>> + Send + Sync>) -> Self {
+    pub fn new(config: OOMRunnerConfig, output_builder: Box<dyn Fn(<<R as Stage>::Out as WithId>::ID)->Box<dyn OutputBuilder<O=<R as Stage>::Out>> + Send + Sync>) -> Self {
         Self {
             pd: PhantomData,
             config,
@@ -59,18 +59,18 @@ where
 
 impl<R> Runner for ClcOOMRunner<R>
 where
-    R: Runnable + Adjustable,
-    R::In: Debug + Adjustable + Data<Sub=R::In, SubSelect=std::ops::Range<<<R as Runnable>::In as Data>::Metrics>>,
+    R: Stage + Adjustable,
+    R::In: Debug + Adjustable + Data<Sub=R::In, SubSelect=std::ops::Range<<<R as Stage>::In as Data>::Metrics>>,
     R::Ctx: Adjustable,
     // R::Out: From<Vec<R::Out>>,
     R: OutId,
-    <<R as Runnable>::In as Data>::Metrics: for<'a> AddAssign<&'a <<R as Runnable>::In as Data>::Metrics>,
-    <<R as Runnable>::In as Data>::Metrics: DivAssign<i64>,
-    <<R as Runnable>::In as Data>::Metrics: PartialOrd<i64>,
-    for <'a, 'b> &'a <<R as Runnable>::In as Data>::Metrics: Add<&'b <<R as Runnable>::In as Data>::Metrics,
-    Output=<<R as Runnable>::In as Data>::Metrics>,
-    <<R as Runnable>::In as Data>::Metrics: PartialOrd,
-    <<R as Runnable>::In as Data>::SubSelect:Adjustable
+    <<R as Stage>::In as Data>::Metrics: for<'a> AddAssign<&'a <<R as Stage>::In as Data>::Metrics>,
+    <<R as Stage>::In as Data>::Metrics: DivAssign<i64>,
+    <<R as Stage>::In as Data>::Metrics: PartialOrd<i64>,
+    for <'a, 'b> &'a <<R as Stage>::In as Data>::Metrics: Add<&'b <<R as Stage>::In as Data>::Metrics,
+    Output=<<R as Stage>::In as Data>::Metrics>,
+    <<R as Stage>::In as Data>::Metrics: PartialOrd,
+    <<R as Stage>::In as Data>::SubSelect:Adjustable
 {
     type R = R;
 
@@ -78,10 +78,10 @@ where
     async fn run(
         &self,
         runnable: &Arc<Self::R>,
-        input: Arc<DataCacheWrapper<<Self::R as Runnable>::In>>,
-        ctx: Arc<RwLock<<Self::R as Runnable>::Ctx>>,
+        input: Arc<DataCacheWrapper<<Self::R as Stage>::In>>,
+        ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
-    ) -> Result<<Self::R as Runnable>::Out, MyError>
+    ) -> Result<<Self::R as Stage>::Out, MyError>
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();
@@ -127,7 +127,7 @@ where
             OOMRunnerConfig::Splits => {
                 OOMHandler::new(
                     vec![
-                        Adjusters::Input(Box::new(SplitsAdjuster::<<Self::R as Runnable>::In>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<<Self::R as Stage>::In>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -150,7 +150,7 @@ where
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, |n| {
                             GlobalCtx::global().acquire_many(device_idx, n, out_key.clone())
                         }))),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<<R as Runnable>::In>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<<R as Stage>::In>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -173,7 +173,7 @@ where
                             GlobalCtx::global().acquire_many(device_idx, n, out_key.clone())
                         }))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<<R as Runnable>::In>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<<R as Stage>::In>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -218,10 +218,10 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 where
     R: Cached + OutId,
     // <C as Runnable>::In: Clone, //for ID
-    F:Fn(usize, u64, &'static str) -> <R as Runnable>::Ctx + Send + Sync + 'static,
-    CF:Fn(&'static str, &<R as Runnable>::Out) + Send + Sync + Clone + 'static,
-    <R as Runnable>::Out:Data,
-    <R as Runnable>::In:From<&'static str>
+    F:Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
+    CF:Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
+    <R as Stage>::Out:Data,
+    <R as Stage>::In:From<&'static str>
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -257,7 +257,7 @@ where
                 device_idx,
                 None,
                 None,
-                 |guard:&<R as Runnable>::Out|{
+                 |guard:&<R as Stage>::Out|{
                 // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
                 check_arc(res, &guard);
@@ -315,7 +315,7 @@ mod tests {
     use caching_runner::test_utils::DummyTensor;
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
-    use caching_runner::common::runnable::Runnable;
+    use caching_runner::common::runnable::Stage;
     use thoosa_shared::traits::{Named, SimpleId};
 
     static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
@@ -440,7 +440,7 @@ mod tests {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Runnable>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().loaded_tensors_cached.push(self.out_id(input.id()));
         }
     }
@@ -556,7 +556,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for DummyLoader {
+    impl Stage for DummyLoader {
         type In = DLoaderInput;
         type Out = DLoadedTensor;
         type Ctx = DummyRunCtx;
@@ -564,7 +564,7 @@ mod tests {
 
         async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
         where
-            I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static
+            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
             self.run_count.fetch_add(1, Relaxed);
 
@@ -612,14 +612,14 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for DMulTask {
+    impl Stage for DMulTask {
         type In = DLoadedTensor;
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
         async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
         where
-            I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static
+            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
             unimplemented!()
         }
@@ -680,7 +680,7 @@ mod tests {
             DMulTaskOutputId(format!("multiplied_{}", input_id).leak())
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Runnable>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().multed_tensors_cached.push(self.out_id(input.id()));
         }
 
@@ -806,7 +806,7 @@ mod tests {
     #[async_trait]
     impl Cached for DLoadAndMulTask {
         async fn cache() -> &'static DashMap<
-            <<Self as Runnable>::Out as WithId>::ID,
+            <<Self as Stage>::Out as WithId>::ID,
             Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, MyError>>>,
         >
         where
@@ -841,14 +841,14 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for DLoadAndMulTask {
+    impl Stage for DLoadAndMulTask {
         type In = DLoaderInput;
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
         async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
         where
-            I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static
+            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))

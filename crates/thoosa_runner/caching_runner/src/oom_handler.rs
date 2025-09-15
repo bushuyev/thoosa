@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::common::cachable::DataCacheWrapper;
-use crate::common::runnable::Runnable;
+use crate::common::runnable::Stage;
 use crate::common::{CopyToDevice, Data, DropIf, OutId};
 use crate::common::{MyError, RunCtx};
 #[double]
@@ -42,12 +42,12 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
 
 pub trait InputContext<R>: Debug + Send + Sync
 where
-    R:Runnable,
+    R: Stage,
     R::In: Data
 {
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
-    fn input_len(&self) -> &<<R as Runnable>::In as Data>::Metrics;
+    fn input_len(&self) -> &<<R as Stage>::In as Data>::Metrics;
     fn build_final_output(self) -> R::Out;
 }
 
@@ -118,7 +118,7 @@ pub trait RunCtxContext: Debug {}
 #[derive(Debug)]
 pub struct Contexts<R, IC, RC, RCC>
 where
-    R: Runnable,
+    R: Stage,
     R::In: Data,
     IC: InputContext<R>,
     RC: RunnableContext,
@@ -132,7 +132,7 @@ where
 
 impl<R, IC, RC, RCC> Contexts<R, IC, RC, RCC>
 where
-    R: Runnable,
+    R: Stage,
     R::In: Data,
     IC: InputContext<R>,
     RC: RunnableContext,
@@ -151,7 +151,7 @@ where
 #[derive(Debug)]
 pub enum Adjusters<'a, R, IC, RC, RCC>
 where
-    R: Runnable,
+    R: Stage,
     R::In: Data + Debug,
     IC: InputContext<R>,
     RC: RunnableContext,
@@ -164,14 +164,14 @@ where
 
 impl<'a, R, IC, RC, RCC> Adjusters<'a, R, IC, RC, RCC>
 where
-    R: Runnable,
+    R: Stage,
     IC: InputContext<R>,
     R:Adjustable,
     R::In: Data + Debug,
     <R::In as Data>::SubSelect:Adjustable,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    <R as Runnable>::Ctx: Adjustable,
+    <R as Stage>::Ctx: Adjustable,
 {
     fn degrade(&self, adjust_context: &mut Contexts<R, IC, RC, RCC>) -> bool {
         match self {
@@ -183,12 +183,12 @@ where
 }
 
 #[derive(Debug)]
-pub struct NoopInputContext<R: Runnable>(pub Option<R::Out>);
+pub struct NoopInputContext<R: Stage>(pub Option<R::Out>);
 
 impl<R> InputContext<R> for NoopInputContext<R>
 where
     R::In: Data,
-    R: Runnable,
+    R: Stage,
 {
     fn add_partial_output(&mut self, o: R::Out) {
         self.0.replace(o);
@@ -198,7 +198,7 @@ where
         self.0.is_some()
     }
 
-    fn input_len(&self) -> &<<R as Runnable>::In as Data>::Metrics {
+    fn input_len(&self) -> &<<R as Stage>::In as Data>::Metrics {
        unimplemented!()
     }
 
@@ -220,7 +220,7 @@ impl RunCtxContext for NoopRunCtxContext {}
 #[derive(Debug)]
 pub struct OOMHandler<'a, R, IC, RC, RCC>
 where
-    R: Runnable + Adjustable + OutId,
+    R: Stage + Adjustable + OutId,
     <R::In as Data>::SubSelect: Default + Debug + Adjustable,
     R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>>,
     R::Ctx: Adjustable,
@@ -237,7 +237,7 @@ where
 
 impl<'a, R, IC, RC, RCC> OOMHandler<'a, R, IC, RC, RCC>
 where
-    R: Runnable + Adjustable + OutId,
+    R: Stage + Adjustable + OutId,
     <R::In as Data>::SubSelect: Debug + Adjustable,
     R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>>,
     R::In: Debug + Data<Sub=R::In> + CopyToDevice,
@@ -262,7 +262,7 @@ where
     pub async fn run(
         &self,
         task: &Arc<R>,
-        input: Arc<DataCacheWrapper<<R as Runnable>::In>>,
+        input: Arc<DataCacheWrapper<<R as Stage>::In>>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<R, IC, RC, RCC>,
     ) -> Result<R::Out, MyError> {
@@ -597,12 +597,12 @@ pub(crate) mod mock_runnable {
         #[derive(Clone, Debug)]
         pub Runnable {}
         #[async_trait]
-        impl Runnable for Runnable {
+        impl Stage for Runnable {
             type In = TestInput;
             type Out = TestOutput;
             type Ctx = MockRunCtx;
 
-            fn do_run(self: Arc<Self>, input:&<MockRunnable as Runnable>::In, tx: Arc<RwLock<<MockRunnable as Runnable>::Ctx>>) -> Result<<MockRunnable as Runnable>::Out, MyError> where Self:Sized;
+            fn do_run(self: Arc<Self>, input:&<MockRunnable as Stage>::In, tx: Arc<RwLock<<MockRunnable as Stage>::Ctx>>) -> Result<<MockRunnable as Stage>::Out, MyError> where Self:Sized;
         }
     }
 
