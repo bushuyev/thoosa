@@ -116,7 +116,7 @@ mod tests {
     use caching_runner::test_utils::parse_numeric_part;
     use tracing_subscriber::{fmt, EnvFilter};
     use tracing_subscriber::fmt::format::FmtSpan;
-    use caching_runner::common::runnable::Runnable;
+    use caching_runner::common::runnable::Stage;
     use caching_runner::panic_to_err;
     use thoosa_common::dims::Dims;
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId};
@@ -211,7 +211,7 @@ mod tests {
             println!("purge_gpu_caches: 1 ctx_name={ctx_name}device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
 
             tokio::try_join!(
-                TensorLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
+                TestTensorLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
                 ClcTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
             )?;
 
@@ -422,25 +422,25 @@ mod tests {
 
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
-    struct TensorLoader {
+    struct TestTensorLoader {
         size:LoadedTensorMetrics,
         kind:Kind,
     }
 
 
 
-    impl TensorLoader {
+    impl TestTensorLoader {
         pub fn new(size: LoadedTensorMetrics, kind: Kind) -> Self {
             Self { size, kind }
         }
     }
 
-    impl OutId for TensorLoader {
+    impl OutId for TestTensorLoader {
         fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Runnable>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().loaded_tensors_cached.push(self.out_id(input.id()));
         }
     }
@@ -471,14 +471,14 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for TensorLoader {
+    impl Stage for TestTensorLoader {
         type In = LoaderInput;
         type Out = ThoTensor<LoadedTensor, SimpleId>;
         type Ctx = TorchRunCtx;
 
         async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
         where
-            I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static
+            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
             let k = parse_numeric_part(input.id().0).unwrap_or(1.0);
 
@@ -543,7 +543,7 @@ mod tests {
             SimpleId::from(format!("mult_{}_inp_{}", self.id, input_id))
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Runnable>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().multed_tensors_cached.push(self.out_id(input.id()));
         }
 
@@ -584,7 +584,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for ClcTask {
+    impl Stage for ClcTask {
         type In = ThoTensor<LoadedTensor, SimpleId>;
         type Out = ThoTensor<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
@@ -659,20 +659,20 @@ mod tests {
         #[allow(dead_code)]
         id: LoadAndClcTaskId,
 
-        loader: Arc<TensorLoader>,
+        loader: Arc<TestTensorLoader>,
         mul: Arc<ClcTask>,
         mul_oom_runner: ClcOOMRunner<ClcTask>,
     }
 
     #[async_trait]
-    impl Runnable for LoadAndClcTask {
+    impl Stage for LoadAndClcTask {
         type In = LoaderInput;
         type Out = ThoTensor<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
 
         async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
         where
-            I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static,
+            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static,
 
         {
             let loaded = Arc::clone(&self.loader)
@@ -709,7 +709,7 @@ mod tests {
     impl Cached for LoadAndClcTask {
 
         async fn cache() -> &'static DashMap<
-            <<Self as Runnable>::Out as WithId>::ID,
+            <<Self as Stage>::Out as WithId>::ID,
             Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, MyError>>>,
         >
         where
@@ -740,7 +740,7 @@ mod tests {
             let dim_1 = dim.dim_1;
             Self {
                 id,
-                loader: Arc::new(TensorLoader::new(dim, kind)),
+                loader: Arc::new(TestTensorLoader::new(dim, kind)),
                 mul: Arc::new(ClcTask::new(SimpleId::from("mul_task_0"), k, fail_until, dim_1, kind, device, use_matmul)),
                 mul_oom_runner: oom_runner,
             }
@@ -753,7 +753,7 @@ mod tests {
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
 
         let _ = GlobalCtx::init_devices(2);
-        let loader = Arc::new(TensorLoader::new([10, 3].into(), Float));
+        let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
 
 
         do_test_loaded(1, 1, &loader).await
@@ -764,14 +764,14 @@ mod tests {
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
 
         let _ = GlobalCtx::init_devices(2);
-        let loader = Arc::new(TensorLoader::new([10, 3].into(), Float));
+        let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
 
 
         do_test_loaded(0, 1, &loader).await
     }
 
 
-    async fn do_test_loaded(loader_ctx_device: usize, load_to_device: usize, loader: &Arc<TensorLoader>) -> Result<(), MyError> {
+    async fn do_test_loaded(loader_ctx_device: usize, load_to_device: usize, loader: &Arc<TestTensorLoader>) -> Result<(), MyError> {
         let ctx_device_0 = Arc::new(RwLock::new(TorchRunCtx::new(loader_ctx_device, 0, "device_1_ctx")));
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
@@ -1133,7 +1133,7 @@ mod tests {
         }
 
         for i in 0..10 {
-            let cached_loaded = <TensorLoader as Cached>::cache().await.get(&SimpleId::from(format!("loaded_resource_{i}")));
+            let cached_loaded = <TestTensorLoader as Cached>::cache().await.get(&SimpleId::from(format!("loaded_resource_{i}")));
             let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
             println!("i={i} 0 cached_loaded: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
 
@@ -1164,7 +1164,7 @@ mod tests {
         _global_ctx.dump_all_to_cpu(&required_ids, 1).await?;
 
         for i in 0..10 {
-            let cached_loaded = <TensorLoader as Cached>::cache().await.get(&SimpleId::from(format!("loaded_resource_{i}")));
+            let cached_loaded = <TestTensorLoader as Cached>::cache().await.get(&SimpleId::from(format!("loaded_resource_{i}")));
             let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
             println!("i={i} 1 cached_loaded: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
 

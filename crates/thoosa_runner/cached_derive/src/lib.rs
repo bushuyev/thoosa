@@ -31,25 +31,25 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
     let reg_name_tokens = if let Some(lit) = reg_name {
         quote! { #lit }
     } else {
-        quote! { stringify!(<<#name as caching_runner::common::runnable::Runnable>::Out as caching_runner::common::WithId>::ID) }
+        quote! { stringify!(<<#name as caching_runner::common::runnable::Stage>::Out as caching_runner::common::WithId>::ID) }
     };
 
     // Generate impl that matches the signature used across the workspace.
     // It creates a OnceLock-held DashMap and registers it with GlobalCtx once.
     let expanded = quote! {
-        #[async_trait]
+        #[async_trait::async_trait]
         impl caching_runner::common::cachable::Cached for #name {
             async fn cache() -> &'static dashmap::DashMap<
-                <<Self as caching_runner::common::runnable::Runnable>::Out as caching_runner::common::WithId>::ID,
-                futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<Self as caching_runner::common::runnable::Runnable>::Out>>, caching_runner::common::MyError>>>,
+                <<Self as caching_runner::common::runnable::Stage>::Out as caching_runner::common::WithId>::ID,
+                futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<Self as caching_runner::common::runnable::Stage>::Out>>, caching_runner::common::MyError>>>,
             >
             where
                 Self: Sized,
             {
                 // Static cache map for this Runnable's output type
                 static CACHE: std::sync::OnceLock<dashmap::DashMap<
-                    <<#name as caching_runner::common::runnable::Runnable>::Out as caching_runner::common::WithId>::ID,
-                    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<#name as caching_runner::common::runnable::Runnable>::Out>>, caching_runner::common::MyError>>>,
+                    <<#name as caching_runner::common::runnable::Stage>::Out as caching_runner::common::WithId>::ID,
+                    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<#name as caching_runner::common::runnable::Stage>::Out>>, caching_runner::common::MyError>>>,
                 >> = std::sync::OnceLock::new();
 
                 let map = CACHE.get_or_init(|| dashmap::DashMap::new());
