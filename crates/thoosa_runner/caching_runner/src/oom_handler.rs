@@ -2,11 +2,10 @@ use std::collections::HashMap;
 use crate::common::cachable::DataCacheWrapper;
 use crate::common::runnable::Stage;
 use crate::common::{CopyToDevice, Data, DropIf, OutId};
-use crate::common::{MyError, RunCtx};
+use crate::common::{ RunCtx};
 #[double]
 use crate::global_ctx::GlobalCtx;
 use crate::statistics::Statistics;
-use crate::panic_to_err_async;
 use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
@@ -16,6 +15,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use mockall_double::double;
 use tracing::instrument;
+use thoosa_common::panic_to_err_async;
+use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{CachableIdTr, Named};
 use crate::permits::MAX_PERMITS;
 
@@ -32,7 +33,7 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
         &self,
         adjustable: &Self::A,
         adjust_context: &mut AC,
-    ) -> Result<Self::A, MyError>;
+    ) -> Result<Self::A, ThoosaError>;
 
     fn degrade(&self, _adjust_context: &mut AC) -> bool {
         false
@@ -265,7 +266,7 @@ where
         input: Arc<DataCacheWrapper<<R as Stage>::In>>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<R, IC, RC, RCC>,
-    ) -> Result<R::Out, MyError> {
+    ) -> Result<R::Out, ThoosaError> {
 
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
@@ -302,9 +303,9 @@ where
             Arc::clone(task).do_run(data, Arc::clone(&run_context))
         }).await) {
             Ok(o) => Ok(o),
-            Err(e) => {
+            Err(te) => {
 
-                match e {
+                match te.what() {
                     MyError::OutOfMemory => {
                         let mut task_adjusted = None::<Arc<R>>;
 
@@ -381,7 +382,7 @@ where
                                             return Ok(contexts.input.build_final_output());
                                         }
                                     }
-                                    Err(e) => {
+                                    Err(te) => {
                                         if run_context.read().acquired_permits() == MAX_PERMITS {
                                             GlobalCtx::global()
                                                 .dump_all_to_cpu(&HashMap::new(), device_idx)
@@ -390,7 +391,7 @@ where
 
                                         run_context.write().drop_permits(DropIf::IfNotMax); //TODO config? - not needed for runner_semaphore
 
-                                        match e {
+                                        match te.what(){
                                             MyError::OutOfMemory => {
                                                 println!(
                                                     "OOMHandler::run: err ctx_name={ctx_name}  adjust_context={contexts:?}"
@@ -413,7 +414,7 @@ where
                                             }
                                             e => {
                                                 println!("ctx_name={ctx_name} other error 1");
-                                                return Err(e);
+                                                return Err(te);
                                             }
                                         }
                                     }
@@ -424,11 +425,11 @@ where
                     }
                     _ => {
                         println!("ctx_name={ctx_name} other error 2");
-                        return Err(e);
+                        return Err(te);
                     }
                 }
 
-                Err(MyError::SomethingElse("all failed".to_string()))
+                Err(MyError::SomethingElse("all failed".to_string()).into())
             }
         }
 
@@ -613,7 +614,7 @@ pub(crate) mod mock_runnable {
             type Out = TestOutput;
             type Ctx = MockRunCtx;
 
-            fn do_run(self: Arc<Self>, input:&<MockRunnable as Stage>::In, tx: Arc<RwLock<<MockRunnable as Stage>::Ctx>>) -> Result<<MockRunnable as Stage>::Out, MyError> where Self:Sized;
+            fn do_run(self: Arc<Self>, input:&<MockRunnable as Stage>::In, tx: Arc<RwLock<<MockRunnable as Stage>::Ctx>>) -> Result<<MockRunnable as Stage>::Out, ThoosaError> where Self:Sized;
         }
     }
 
@@ -627,7 +628,7 @@ pub(crate) mod mock_runnable {
 
     pub fn build<I>(results: I) -> (MockRunnable, Arc<AtomicUsize>)
     where
-        I: IntoIterator<Item = Result<TestOutput, MyError>>,
+        I: IntoIterator<Item = Result<TestOutput, ThoosaError>>,
     {
         let mut task = MockRunnable::new();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -671,7 +672,7 @@ pub(crate) mod mock_input_adjuster {
         #[async_trait]
         impl Adjuster<super::mock_input_context::MockInputContext> for InputAdjuster {
             type A = std::ops::Range<<TestInput as Data>::Metrics>;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, MyError>;
+            async fn adjust(&self, adjustable: &<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, ThoosaError>;
             fn degrade(&self, adjust_context: &mut super::mock_input_context::MockInputContext) -> bool;
         }
     }
@@ -709,7 +710,7 @@ pub(crate) mod mock_task_adjuster {
         #[async_trait]
         impl Adjuster<MockRunnableContext> for TaskAdjuster {
             type A = MockRunnable;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunnableContext>>::A, adjust_context: &mut MockRunnableContext) -> Result<<Self as Adjuster<MockRunnableContext>>::A, MyError>;
+            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunnableContext>>::A, adjust_context: &mut MockRunnableContext) -> Result<<Self as Adjuster<MockRunnableContext>>::A, ThoosaError>;
             fn degrade(&self, adjust_context: &mut MockRunnableContext) -> bool;
         }
     }
@@ -747,7 +748,7 @@ pub(crate) mod mock_context_adjuster {
         #[async_trait]
         impl Adjuster<MockRunCtxContext> for ContextAdjuster {
             type A = Arc<RwLock<MockRunCtx>>;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, MyError>;
+            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, ThoosaError>;
             fn degrade(&self, adjust_context: &mut MockRunCtxContext) -> bool;
         }
     }
@@ -780,11 +781,12 @@ mod tests {
     };
     use crate::common::cachable::DataCacheWrapper;
     // use crate::common::runnable::Runnable;
-    use crate::common::{DropIf, MockRunCtx, MyError};
+    use crate::common::{DropIf, MockRunCtx};
     use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use parking_lot::RwLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use thoosa_shared::{MyError, ThoosaError};
     use crate::global_ctx;
 
     impl Adjustable for MockRunCtx {}
@@ -817,12 +819,12 @@ mod tests {
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
         let (init_task, init_calls) = mock_runnable([
-            Err(MyError::OutOfMemory),//no adjusters
-            Err(MyError::OutOfMemory) //input adjuster
+            Err(ThoosaError::from(MyError::OutOfMemory)),//no adjusters
+            Err(ThoosaError::from(MyError::OutOfMemory)) //input adjuster
         ]);
 
         let (adjusted_task, adjusted_calls) = mock_runnable([
-            Err(MyError::OutOfMemory), //task adjuster
+            Err(ThoosaError::from(MyError::OutOfMemory)), //task adjuster
             Ok(TestOutput::new(111.)) //ctx adjuster
         ]);
 
@@ -884,7 +886,7 @@ mod tests {
         )) as &'static global_ctx::MockGlobalCtx);
 
 
-        let (init_task, init_calls) = mock_runnable([Err(MyError::OutOfMemory)]);
+        let (init_task, init_calls) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
         let oom_handler = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
@@ -930,7 +932,7 @@ mod tests {
         )) as &'static global_ctx::MockGlobalCtx);
 
         let (task, task_calls) =
-            mock_runnable([Err(MyError::OutOfMemory), Ok(TestOutput::new(10.))]);
+            mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory)), Ok(TestOutput::new(10.))]);
         let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
         let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
         let ctx_mock = crate::common::mock_run_ctx::build()
@@ -973,7 +975,7 @@ mod tests {
         )) as &'static global_ctx::MockGlobalCtx);
 
 
-        let (task, task_calls) = mock_runnable([Err(MyError::OutOfMemory), Ok(TestOutput::new(10.))]);
+        let (task, task_calls) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory)), Ok(TestOutput::new(10.))]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
         let oom_handler = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
@@ -1017,12 +1019,12 @@ mod tests {
                 .finish()
         )) as &'static global_ctx::MockGlobalCtx);
 
-        let (init_task1, init_calls1) = mock_runnable([Err(MyError::OutOfMemory)]);
+        let (init_task1, init_calls1) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
         let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
 
         let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
 
-        let (init_task2, init_calls2) = mock_runnable([Err(MyError::OutOfMemory)]);
+        let (init_task2, init_calls2) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
         let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
 
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);

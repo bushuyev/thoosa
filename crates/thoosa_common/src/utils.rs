@@ -334,7 +334,7 @@ pub fn cuda_mem() -> (usize, usize){
 macro_rules! panic_to_err_async {
 
     ($expr:expr) => {{
-         let x = std::panic::catch_unwind(AssertUnwindSafe(async || {
+         let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || {
             $expr
         }));
          
@@ -342,23 +342,23 @@ macro_rules! panic_to_err_async {
             //no panic
             Ok(inner_result) => match inner_result.await {
                 Ok(val) => Ok(val),
-                Err(err) => Err(ThoosaError::from(err))
+                Err(err) => Err(thoosa_shared::ThoosaError::from(err))
             },
             //panic
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
-                    debug!("thoosa_err String: {msg}");
-                    Err(ThoosaError::from(msg))
+                    log::debug!("thoosa_err String: {msg}");
+                    Err(thoosa_shared::ThoosaError::from(msg))
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
 
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
-                    debug!("thoosa_err str: {msg}");
-                    Err(ThoosaError::from(*msg))
+                    log::debug!("thoosa_err str: {msg}");
+                    Err(thoosa_shared::ThoosaError::from(*msg))
                 } else {
-                    debug!("thoosa_err unknown: {e:?}");
-                    Err(ThoosaError::from(format!("{e:?}")))
+                    log::debug!("thoosa_err unknown: {e:?}");
+                    Err(thoosa_shared::ThoosaError::from(format!("{e:?}")))
                 }
             }
         }
@@ -370,7 +370,7 @@ macro_rules! panic_to_err_async {
 macro_rules! panic_to_err {
 
     ($expr:expr) => {{
-        match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
             $expr
         })) {
             //no panic
@@ -381,17 +381,17 @@ macro_rules! panic_to_err {
             //panic
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
-                    debug!("thoosa_err String: {msg}");
+                    log::debug!("thoosa_err String: {msg}");
                     Err(ThoosaError::from(msg))
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
 
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
-                    debug!("thoosa_err str: {msg}");
+                    log::debug!("thoosa_err str: {msg}");
                     Err(ThoosaError::from(*msg))
                 } else {
-                    debug!("thoosa_err unknown: {e:?}");
+                    log::debug!("thoosa_err unknown: {e:?}");
                     Err(ThoosaError::from(format!("{e:?}")))
                 }
             }

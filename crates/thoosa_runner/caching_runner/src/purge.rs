@@ -1,5 +1,5 @@
 use crate::common::cachable::DataCacheWrapper;
-use crate::common::{CopyToDevice, MyError};
+use crate::common::{CopyToDevice};
 use crate::common::{Data};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -11,13 +11,14 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
 
 pub(crate) const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
 #[async_trait]
 pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), MyError>;
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError>;
     // async fn purge(&self, device_idx: usize);
 
     async fn purge_cpu(&self, i: u64);
@@ -26,7 +27,7 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
 
 #[async_trait]
 impl<K, O> FuturesRunnerMapPurger
-for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, MyError>>>>
+for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, ThoosaError>>>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
     O: Data<Sub=O> + CopyToDevice + Output + Send + Sync + 'static,
@@ -59,13 +60,13 @@ where
         &self,
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
-    ) -> Result<(), MyError> {
+    ) -> Result<(), ThoosaError> {
 
         println!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
 
         let items: Vec<(
             K,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, MyError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, ThoosaError>>>,
         )> = self
             .iter()
             .filter(|entry| {
@@ -170,7 +171,7 @@ mod tests {
     impl Output for DummyOutput {}
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn tasks_are_throttled_and_complete() -> Result<(), MyError> {
+    async fn tasks_are_throttled_and_complete() -> Result<(), ThoosaError> {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(||{
             Box::leak(Box::new(
@@ -182,7 +183,7 @@ mod tests {
 
         let map: DashMap<
             DummyCachableId,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<DummyOutput>>, MyError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<DummyOutput>>, ThoosaError>>>,
         > = DashMap::new();
 
         let futures_active = Arc::new(AtomicUsize::new(0));

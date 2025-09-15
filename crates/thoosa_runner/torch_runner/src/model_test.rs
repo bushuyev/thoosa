@@ -11,7 +11,7 @@ mod tests {
     use tch::IndexOp;
 
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-    use caching_runner::common::{DropIf, MyError, OutId, RunCtx};
+    use caching_runner::common::{DropIf, OutId, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::common::runnable::Stage;
     use caching_runner::test_utils::parse_numeric_part;
@@ -29,6 +29,7 @@ mod tests {
     use rand::seq::SliceRandom;
     use thoosa_common::dims::Dims;
     use thoosa_shared::applicables_runner::Input;
+    use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
     use crate::tests::TorchRunCtx;
     use crate::ThoDevice;
@@ -72,7 +73,7 @@ mod tests {
         }
         fn device_idx(&self) -> usize { self.device_idx }
         fn acquired_permits(&self) -> caching_runner::permits::NumPermits { self.acquired as u8 }
-        async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), MyError> where Self: Sized { Ok(()) }
+        async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError> where Self: Sized { Ok(()) }
         fn cache_area(&self) -> u64 { self.cache_area }
     }
 
@@ -143,7 +144,7 @@ mod tests {
         type Out = ThoTensor<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
             let idx = parse_numeric_part(input.id().0).unwrap_or(0.0) as i64;
@@ -173,7 +174,7 @@ mod tests {
         type Out = ThoTensor<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static {
             // Look up the files and labels by input id
             let id_key = format!("{}", input.id());
@@ -181,14 +182,14 @@ mod tests {
 
             // Ensure at least 2 files are present
             if files.is_empty() {
-                return Err(MyError::SomethingElse("empty file list".into()));
+                return Err(MyError::SomethingElse("empty file list".into()).into());
             }
             if files.len() < 2 {
-                return Err(MyError::SomethingElse("need at least 2 files".into()));
+                return Err(MyError::SomethingElse("need at least 2 files".into()).into());
             }
 
             if self.batch_size == 0 {
-                return Err(MyError::SomethingElse("batch_size must be >= 1".into()));
+                return Err(MyError::SomethingElse("batch_size must be >= 1".into()).into());
             }
 
             // Deterministic RNG seeded by input id for stable caching
@@ -320,7 +321,7 @@ mod tests {
         type Out = ThoTensor<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        fn do_run(self: Arc<Self>, input: &Self::In, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        fn do_run(self: Arc<Self>, input: &Self::In, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where Self: Sized {
             // Split input into features and labels using scoped tensor access
             let feat = self.in_dim;
@@ -337,21 +338,21 @@ mod tests {
                         MemLimit(m) => {
                             if t.size()[0] > *m as i64 {
                                 println!("Err(MyError::OutOfMemory) MemLimit");
-                                return Err(MyError::OutOfMemory);
+                                return Err(MyError::OutOfMemory.into());
                             }
                         }
                         MinPermits(min_permits) => {
                             let acquired_permits = ctx_clone.read().acquired_permits();
                             if acquired_permits < *min_permits {
                                 println!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits}");
-                                return Err(MyError::OutOfMemory);
+                                return Err(MyError::OutOfMemory.into());
                             }
                         }
                         DumpedToCpu => {
                             let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx_clone.read().device_idx());
                             if !is_all_on_cpu {
                                 println!("Err(MyError::OutOfMemory) DumpedToCpu");
-                                return Err(MyError::OutOfMemory);
+                                return Err(MyError::OutOfMemory.into());
                             }
                         }
                         Never => {}
@@ -365,7 +366,7 @@ mod tests {
                 let vs = nn::VarStore::new(t.device());
                 let root = &vs.root();
                 let linear = nn::linear(root, feat, 1, Default::default());
-                let mut opt = nn::Sgd::default().build(&vs, self.lr).map_err(MyError::from)?;
+                let mut opt = nn::Sgd::default().build(&vs, self.lr)?;
 
                 for _epoch in 0..self.epochs {
                     let logits = xs.apply(&linear);                 // [batch, 1]
@@ -412,7 +413,7 @@ mod tests {
         type Out = ThoTensor<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
@@ -461,7 +462,7 @@ mod tests {
 
     // ---------------- Test ----------------
     #[tokio::test]
-    async fn test_ab_loader_and_classifier_cpu() -> Result<(), MyError> {
+    async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -497,7 +498,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), MyError> {
+    async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -534,7 +535,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_classifier_oom_permits_escalates() -> Result<(), MyError> {
+    async fn test_classifier_oom_permits_escalates() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }

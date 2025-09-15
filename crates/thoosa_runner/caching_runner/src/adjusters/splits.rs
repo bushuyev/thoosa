@@ -1,10 +1,11 @@
 use crate::oom_handler::{Adjustable, Adjuster, InputContext};
 use async_trait::async_trait;
-use crate::common::{Data, MyError};
+use crate::common::{Data};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use ambassador::delegatable_trait;
+use thoosa_shared::ThoosaError;
 use crate::common::runnable::Stage;
 
 #[derive(Debug)]
@@ -48,7 +49,7 @@ where
         &self,
         _adjustable: &Self::A,
         adjust_context: &mut AC,
-    ) -> Result<Self::A, MyError> {
+    ) -> Result<Self::A, ThoosaError> {
 
         let size_0 = adjust_context.done_to();
         let size_1 = size_0 + adjust_context.split_len(); //TODO cap on adjustable.size()

@@ -4,13 +4,14 @@ use crate::oom_handler::{Adjustable, Adjuster, RunCtxContext};
 use ambassador::{delegatable_trait, Delegate};
 use async_trait::async_trait;
 use crate::common::RunCtx;
-use crate::common::{DropIf, MyError};
+use crate::common::{DropIf};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use thoosa_shared::{MyError, ThoosaError};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use crate::permits::{NumPermits, RunnerPerm};
@@ -19,7 +20,7 @@ use thoosa_shared::traits::CachableIdTr;
 pub struct PermitsAdjuster<F, Fut, C>
 where
     F: Fn(NumPermits) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, MyError>> + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoosaError>> + Send,
     C: Adjustable + RunCtx,
 {
     pub(crate) max: NumPermits,
@@ -31,7 +32,7 @@ where
 impl <F, Fut, C> Debug for PermitsAdjuster<F, Fut, C>
 where
     F: Fn(NumPermits) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, MyError>> + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoosaError>> + Send,
     C: Adjustable + RunCtx,
 
 {
@@ -46,7 +47,7 @@ where
 impl<F, Fut, C> PermitsAdjuster<F, Fut, C>
 where
     F: Fn(NumPermits) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, MyError>> + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoosaError>> + Send,
     C: Adjustable + RunCtx,
 {
     pub fn new(max: NumPermits, step: NumPermits/*TODO replace with PermitStep*/, acquire_fn: F) -> Self {
@@ -103,7 +104,7 @@ impl RunCtxContext for PermitsAdjustContextImpl {}
 impl<F, Fut, A, C> Adjuster<C> for PermitsAdjuster<F, Fut, A>
 where
     F: Fn(NumPermits) -> Fut  + Send + Sync,
-    Fut: Future<Output = Result<RunnerPerm, MyError>>  + Send,
+    Fut: Future<Output = Result<RunnerPerm, ThoosaError>>  + Send,
     A: Adjustable + RunCtx,
     C:PermitsAdjustContext
 {
@@ -113,7 +114,7 @@ where
         &self,
         adjustable: &Self::A,
         adjust_context: &mut C,
-    ) -> Result<Self::A, MyError> {
+    ) -> Result<Self::A, ThoosaError> {
 
         let acquired_permits = adjustable.read().acquired_permits();
         if adjust_context.to_acquire() <= acquired_permits {
@@ -141,11 +142,11 @@ where
                 }
 
                 //can't acquire permits,
-                Err(e) => {
+                Err(te) => {
 
-                    match e  {
+                    match te.what()  {
                         MyError::OutOfPermits => {
-                            println!("PermitsAdjuster::adjust: acquire_fn name={} acquired_permits={acquired_permits} Error: {:?}", adjustable_name, e);
+                            println!("PermitsAdjuster::adjust: acquire_fn name={} acquired_permits={acquired_permits} Error: {:?}", adjustable_name, te);
 
                             if adjustable.read().device_idx() != 0 {//not on CPU, TODO
                                 if let Err(e)  = A::purge_gpu_caches(Arc::clone(adjustable)).await {
@@ -160,7 +161,7 @@ where
                         }
                          e  => {
                             // Propagate unexpected errors to let caller decide.
-                            return Err(e);
+                            return Err(te);
                         }
                     }
 
@@ -210,6 +211,7 @@ mod tests {
     use crate::permits::NumPermits;
     use std::sync::Arc;
     use parking_lot::RwLock;
+    use thoosa_shared::MyError;
     use thoosa_shared::traits::Named;
 
     #[derive(Debug)]
@@ -234,7 +236,7 @@ mod tests {
 
         fn acquired_permits(&self) -> NumPermits { self.acquired }
 
-        async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), MyError>
+        async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
         where Self: Sized { Ok(()) }
 
         fn cache_area(&self) -> u64 { 0 }
@@ -252,7 +254,7 @@ mod tests {
     async fn adjust_handles_out_of_permits() {
         let adjustable = Arc::new(RwLock::new(TestRunCtx { device_idx: 0, acquired: 0 }));
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
-            Err(MyError::OutOfPermits)
+            Err(MyError::OutOfPermits.into())
         });
         let mut ac = ctx("test", 10);
 
@@ -266,11 +268,11 @@ mod tests {
     async fn adjust_propagates_other_errors() {
         let adjustable = Arc::new(RwLock::new(TestRunCtx { device_idx: 0, acquired: 0 }));
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
-            Err(MyError::SomethingElse("boom".into()))
+            Err(MyError::SomethingElse("boom".into()).into())
         });
         let mut ac = ctx("test", 10);
 
         let res = adjuster.adjust(&adjustable, &mut ac).await;
-        assert!(matches!(res, Err(MyError::SomethingElse(_))));
+        assert!(matches!(res, Err(ThoosaError{what: MyError::SomethingElse(_), ..})));
     }
 }

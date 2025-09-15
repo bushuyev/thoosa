@@ -4,7 +4,7 @@ use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdj
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use caching_runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
-use caching_runner::common::{Data, MyError, OutId, RunCtx};
+use caching_runner::common::{Data, OutId, RunCtx};
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use tokio::task::JoinSet;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
 use caching_runner::common::runnable::Stage;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 
 #[derive(Debug)]
@@ -81,7 +82,7 @@ where
         input: Arc<DataCacheWrapper<<Self::R as Stage>::In>>,
         ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
-    ) -> Result<<Self::R as Stage>::Out, MyError>
+    ) -> Result<<Self::R as Stage>::Out, ThoosaError>
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();
@@ -214,7 +215,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     device_idx: usize,
     ctx_fac:F,
     check:CF
-) -> Result<(), MyError>
+) -> Result<(), ThoosaError>
 where
     R: Cached + OutId,
     // <C as Runnable>::In: Clone, //for ID
@@ -273,13 +274,13 @@ where
 
 
 
-            Ok::<_, MyError>(())
+            Ok::<_, ThoosaError>(())
         }
     })
         .collect::<JoinSet<_>>()
         .join_all().await
         .into_iter()
-        .collect::<Result<(), MyError>>();
+        .collect::<Result<(), ThoosaError>>();
 
     println!("r={r:?} res_cnt={res_cnt:?}");
     assert!(r.is_ok());
@@ -304,7 +305,7 @@ mod tests {
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
-    use caching_runner::common::{CopyToDevice, Data, DropIf, MyError, OutId, RunCtx};
+    use caching_runner::common::{CopyToDevice, Data, DropIf, OutId, RunCtx};
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -317,6 +318,7 @@ mod tests {
     use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
     use caching_runner::common::runnable::Stage;
     use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{Named, SimpleId, WithId};
 
     static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
@@ -384,7 +386,7 @@ mod tests {
             self.permits.iter().map(|p| p.num_permits()).sum()
         }
 
-        async fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> Result<(), MyError>
+        async fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
         where
             Self: Sized
         {
@@ -563,7 +565,7 @@ mod tests {
         type Ctx = DummyRunCtx;
 
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
@@ -584,7 +586,7 @@ mod tests {
         }
 
 
-        fn do_run(self: Arc<Self>, _input: &Self::In, _tx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        fn do_run(self: Arc<Self>, _input: &Self::In, _tx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             Self: Sized
         {
@@ -618,7 +620,7 @@ mod tests {
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
@@ -627,7 +629,7 @@ mod tests {
 
 
 
-        fn do_run(self: Arc<Self>, input: &Self::In, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        fn do_run(self: Arc<Self>, input: &Self::In, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             Self: Sized
         {
@@ -639,7 +641,7 @@ mod tests {
                 FailUntil::MemLimit(mem_limit) => {
                     let _device_idx = deive_idx;
                     if input.data.0.len() > mem_limit as usize {
-                        return Err(MyError::OutOfMemory);
+                        return Err(MyError::OutOfMemory.into());
                     }
                 }
                 FailUntil::MinPermits(min_permits) => {
@@ -647,7 +649,7 @@ mod tests {
                     println!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
 
                     if acquired_permits < min_permits {
-                        return Err(MyError::OutOfMemory);
+                        return Err(MyError::OutOfMemory.into());
                     }
                 }
 
@@ -656,7 +658,7 @@ mod tests {
                     println!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}", ctx.read().name(), ctx.read().device_idx());
 
                     if !is_all_on_cpu {
-                        return Err(MyError::OutOfMemory);
+                        return Err(MyError::OutOfMemory.into());
                     }
                 }
                 FailUntil::Never => {}
@@ -808,7 +810,7 @@ mod tests {
     impl Cached for DLoadAndMulTask {
         async fn cache() -> &'static DashMap<
             <<Self as Stage>::Out as WithId>::ID,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, MyError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
         >
         where
             Self: Sized
@@ -847,7 +849,7 @@ mod tests {
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
@@ -868,7 +870,7 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_dummy() -> Result<(), MyError> {
+    async fn test_load_dummy() -> Result<(), ThoosaError> {
         let _global_ctx = GlobalCtx::init_devices(2);
 
         let device_idx = 0;
@@ -938,7 +940,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_no_oom_dummy() -> Result<(), MyError> {
+    async fn test_load_and_mul_no_oom_dummy() -> Result<(), ThoosaError> {
         let _global_ctx = GlobalCtx::init_devices(2);
 
         let _device_idx = 0;
@@ -992,7 +994,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_min_permits_dummy() -> Result<(), MyError> {
+    async fn test_load_and_mul_oom_till_min_permits_dummy() -> Result<(), ThoosaError> {
         let _global_ctx = GlobalCtx::init_devices(3);
 
         let device_idx = 1;
@@ -1021,7 +1023,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), MyError> {
+    async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), ThoosaError> {
         let _global_ctx = GlobalCtx::init_devices(2);
 
         let device_idx = 1;
@@ -1046,11 +1048,11 @@ mod tests {
         )
         .await?;
 
-        Ok::<_, MyError>(())
+        Ok::<_, ThoosaError>(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_splits_dummy() -> Result<(), MyError> {
+    async fn test_load_and_mul_oom_splits_dummy() -> Result<(), ThoosaError> {
 
 
         let _global_ctx = GlobalCtx::init_devices(2);
@@ -1076,11 +1078,11 @@ mod tests {
             }
         ).await?;
 
-        Ok::<_, MyError>(())
+        Ok::<_, ThoosaError>(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), MyError>
+    async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoosaError>
     {
         let _ = *TELEMETRY;
 
@@ -1112,7 +1114,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_cache_areas() -> Result<(), MyError>
+    async fn test_cache_areas() -> Result<(), ThoosaError>
     {
         let global_ctx = GlobalCtx::init_devices(2);
 
