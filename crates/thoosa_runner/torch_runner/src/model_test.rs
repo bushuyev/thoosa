@@ -13,7 +13,7 @@ mod tests {
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::{DropIf, Input, MyError, OutId, RunCtx, WithId};
     use caching_runner::global_ctx::GlobalCtx;
-    use caching_runner::common::runnable::Runnable;
+    use caching_runner::common::runnable::Stage;
     use caching_runner::test_utils::parse_numeric_part;
     use caching_runner::oom_handler::{Adjustable, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
     use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
@@ -137,13 +137,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for ABLoader {
+    impl Stage for ABLoader {
         type In = FileInput;
         type Out = ThoTensor<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
         async fn run<I>(self: Arc<Self>, input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
-        where I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static {
+        where I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
             let idx = parse_numeric_part(input.id().0).unwrap_or(0.0) as i64;
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
@@ -167,13 +167,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for BatchBuilder {
+    impl Stage for BatchBuilder {
         type In = FileListInput;
         type Out = ThoTensor<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
         async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
-        where I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static {
+        where I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static {
             // Look up the files and labels by input id
             let id_key = format!("{}", input.id());
             let files = registry().get(&id_key).ok_or_else(|| MyError::SomethingElse("file list not found".into()))?;
@@ -314,7 +314,7 @@ mod tests {
 
 
     #[async_trait]
-    impl Runnable for Classifier {
+    impl Stage for Classifier {
         type In = ThoTensor<ABData, SimpleId>;
         type Out = ThoTensor<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
@@ -406,13 +406,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl Runnable for JoinAndClassifyTask {
+    impl Stage for JoinAndClassifyTask {
         type In = FileListInput;
         type Out = ThoTensor<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
 
         async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
-        where I: WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static {
+        where I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
                 .run_cached(Arc::clone(&input), Arc::clone(&ctx))

@@ -4740,6 +4740,8 @@ dependencies = [
  "anyhow",
  "approx",
  "async-trait",
+ "cached_derive",
+ "caching_runner",
  "chrono",
  "clap",
  "crossbeam-channel",
@@ -4770,6 +4772,7 @@ dependencies = [
  "thoosa_run_config_args_derive",
  "thoosa_shared",
  "thoosa_store",
+ "tokio",
  "torch-sys",
 ]
 

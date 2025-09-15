@@ -5,7 +5,7 @@ use crate::common::{Data, Input, MyError, Output, RunCtx, WithId};
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 #[async_trait]
-pub trait Runnable: Debug  + Send + Sync + 'static {
+pub trait Stage: Debug  + Send + Sync + 'static {
     type In: Input + Sync + Send  + 'static;
     type Out: Output + Data<Sub=Self::Out> + Sync + Send + 'static;
     type Ctx: RunCtx;
@@ -15,7 +15,7 @@ pub trait Runnable: Debug  + Send + Sync + 'static {
 
     async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
     where
-        I:WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static
+        I:WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
     {
         unimplemented!()
     }

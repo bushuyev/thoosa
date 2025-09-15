@@ -8,7 +8,7 @@ use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
-use runnable::Runnable;
+use runnable::Stage;
 use thoosa_shared::traits::{CachableIdTr, Named};
 use crate::permits::{NumPermits, RunnerPerm};
 
@@ -204,10 +204,10 @@ impl From<&'static str> for DummyCachableId {
 
 /////////////////////////////////
 
-pub trait OutId:Runnable {
+pub trait OutId: Stage {
     fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID;
 
-    fn on_cached(&self, _input: &impl WithId<ID=<<Self as Runnable>::In as WithId>::ID>, _ctx: &Arc<RwLock<Self::Ctx>>){
+    fn on_cached(&self, _input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, _ctx: &Arc<RwLock<Self::Ctx>>){
 
     }
 }

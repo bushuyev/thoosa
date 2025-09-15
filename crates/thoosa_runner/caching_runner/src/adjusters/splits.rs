@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use ambassador::delegatable_trait;
-use crate::common::runnable::Runnable;
+use crate::common::runnable::Stage;
 
 #[derive(Debug)]
 pub struct SplitsAdjuster<A>
@@ -82,21 +82,21 @@ pub trait SplitsAdjusterContext: Debug + Send + Sync
 #[derive(Debug)]
 pub struct SplitsAdjusterContextImpl<R>
 where
-    R: Runnable + Adjustable,
+    R: Stage + Adjustable,
     R::In: Data,
 {
-    done_to: <<R as Runnable>::In as Data>::Metrics,
-    split_len: <<R as Runnable>::In as Data>::Metrics,
-    input_len: <<R as Runnable>::In as Data>::Metrics,
+    done_to: <<R as Stage>::In as Data>::Metrics,
+    split_len: <<R as Stage>::In as Data>::Metrics,
+    input_len: <<R as Stage>::In as Data>::Metrics,
 
-    output_builder: Box<dyn OutputBuilder<O=<R as Runnable>::Out>>
+    output_builder: Box<dyn OutputBuilder<O=<R as Stage>::Out>>
 }
 
-impl <R: Runnable + Adjustable> InputContext<R> for SplitsAdjusterContextImpl<R>
+impl <R: Stage + Adjustable> InputContext<R> for SplitsAdjusterContextImpl<R>
 where
     R::In: Data,
-    <<R as Runnable>::In as Data>::Metrics: for <'a> AddAssign<&'a <<R as Runnable>::In as Data>::Metrics>,
-    <<R as Runnable>::In as Data>::Metrics: PartialOrd
+    <<R as Stage>::In as Data>::Metrics: for <'a> AddAssign<&'a <<R as Stage>::In as Data>::Metrics>,
+    <<R as Stage>::In as Data>::Metrics: PartialOrd
 {
     fn add_partial_output(&mut self, o: R::Out) {
 
@@ -111,7 +111,7 @@ where
         self.done_to >= self.input_len
     }
 
-    fn input_len(&self) -> &<<R as Runnable>::In as Data>::Metrics {
+    fn input_len(&self) -> &<<R as Stage>::In as Data>::Metrics {
         &self.input_len
     }
 
@@ -121,13 +121,13 @@ where
 
 }
 
-impl <R: Runnable + Adjustable>  SplitsAdjusterContextImpl<R>
+impl <R: Stage + Adjustable>  SplitsAdjusterContextImpl<R>
 where
     R::In: Data,
 {
     pub fn new(
-        input_len: <<R as Runnable>::In as Data>::Metrics,
-        output_builder: Box<dyn OutputBuilder<O=<R as Runnable>::Out>>
+        input_len: <<R as Stage>::In as Data>::Metrics,
+        output_builder: Box<dyn OutputBuilder<O=<R as Stage>::Out>>
     ) -> Self {
         Self {
             done_to: Default::default(),
@@ -140,12 +140,12 @@ where
 
 }
 
-impl <R: Runnable + Adjustable> SplitsAdjusterContext for SplitsAdjusterContextImpl<R>
+impl <R: Stage + Adjustable> SplitsAdjusterContext for SplitsAdjusterContextImpl<R>
 where
-    R:Runnable + Adjustable,
+    R: Stage + Adjustable,
     R::In: Data,
 {
-    type Metrics = <<R as Runnable>::In as Data>::Metrics;
+    type Metrics = <<R as Stage>::In as Data>::Metrics;
 
     fn split_len(&self) -> &Self::Metrics {
         &self.split_len
