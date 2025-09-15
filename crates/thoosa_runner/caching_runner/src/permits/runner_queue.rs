@@ -1,11 +1,11 @@
 use crate::permits::{NumPermits, PermitSource, RunnerPerm};
 use async_trait::async_trait;
-use crate::common::MyError;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Notify, Semaphore, TryAcquireError};
 use tokio::task::JoinHandle;
+use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::CachableIdTr;
 
 /// ---------- FIFO Arbiter built on tokio::Semaphore ----------
@@ -23,7 +23,7 @@ pub struct Arbiter {
 
 struct Req {
     needed: NumPermits,
-    reply: oneshot::Sender<Result<RunnerPerm, MyError>>,
+    reply: oneshot::Sender<Result<RunnerPerm, ThoosaError>>,
     out_id: Arc<dyn CachableIdTr>,
 }
 
@@ -53,7 +53,7 @@ impl Arbiter {
         &self,
         mut needed: NumPermits,
         out_id: Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, MyError> {
+    ) -> Result<RunnerPerm, ThoosaError> {
         // Clamp to capacity to avoid unfulfillable requests.
         if needed as usize > self.capacity as usize {
             needed = self.capacity;
@@ -98,7 +98,7 @@ impl Arbiter {
             loop {
                 if shutdown.load(Ordering::Acquire) {
                     while let Some(Req { reply, .. }) = q.pop_front() {
-                        let _ = reply.send(Err(MyError::SomethingElse("arbiter closed".into())));
+                        let _ = reply.send(Err(MyError::SomethingElse("arbiter closed".into()).into()));
                     }
                     break;
                 }
@@ -114,7 +114,7 @@ impl Arbiter {
                     while i < q.len() {
                         if !q[i].out_id.as_ref().eq(sc.as_ref()) {
                             let Req { reply, .. } = q.remove(i).unwrap();
-                            let _ = reply.send(Err(MyError::OutOfPermits));
+                            let _ = reply.send(Err(MyError::OutOfPermits.into()));
                         } else {
                             i += 1;
                         }
@@ -156,7 +156,7 @@ impl Arbiter {
                             if q.len() >= 2 && front.needed > 1 {
                                 // Pop and fail the head to trigger drop/degradation.
                                 let Req { reply, out_id, .. } = q.pop_front().unwrap();
-                                let _ = reply.send(Err(MyError::OutOfPermits));
+                                let _ = reply.send(Err(MyError::OutOfPermits.into()));
                                 let c = fail_counts.entry(out_id.clone()).or_insert(0);
                                 *c += 1;
                                 if *c >= SUPERTASK_FAIL_THRESHOLD {
@@ -168,7 +168,7 @@ impl Arbiter {
                         }
                         Err(_) => {
                             let Req { reply, .. } = q.pop_front().unwrap();
-                            let _ = reply.send(Err(MyError::SomethingElse("semaphore closed".into())));
+                            let _ = reply.send(Err(MyError::SomethingElse("semaphore closed".into()).into()));
                         }
                     }
                 }
@@ -234,7 +234,7 @@ impl Drop for Arbiter {
 
 #[async_trait]
 impl PermitSource for Arbiter {
-    async fn acquire(&self, n: NumPermits, out_id: Arc<dyn CachableIdTr>) -> Result<RunnerPerm, MyError> {
+    async fn acquire(&self, n: NumPermits, out_id: Arc<dyn CachableIdTr>) -> Result<RunnerPerm, ThoosaError> {
         self.send_acquire_rq(n, out_id).await
     }
 }
@@ -301,7 +301,7 @@ mod tests {
                     // Acquire exactly what we plan to use for THIS attempt.
                     let permit = match arb.send_acquire_rq(need, id.clone()).await {
                         Ok(v) => v,
-                        Err(e) => match e {
+                        Err(e) => match e.what() {
                             MyError::OutOfPermits => {
                                 task.current_perms = 0;
                                 continue;
@@ -377,6 +377,6 @@ mod tests {
         let mut arb = Arbiter::new(1);
         drop(arb.tx.take());
         let res = arb.send_acquire_rq(1, Arc::new(SimpleId::from("c")) as Arc<dyn CachableIdTr>).await;
-        assert!(matches!(res, Err(MyError::SomethingElse(_))));
+        assert!(matches!(res, Err(ThoosaError{what: MyError::SomethingElse(_), ..})));
     }
 }

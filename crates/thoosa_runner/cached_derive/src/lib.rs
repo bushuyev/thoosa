@@ -1,7 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Meta, Lit, Expr};
-
 // Legacy macro kept for compatibility in this workspace (unused here)
 #[proc_macro_derive(ACachable)]
 pub fn derive_acachable(_input: TokenStream) -> TokenStream {
@@ -41,7 +40,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
         impl caching_runner::common::cachable::Cached for #name {
             async fn cache() -> &'static dashmap::DashMap<
                 <<Self as caching_runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
-                futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<Self as caching_runner::common::runnable::Stage>::Out>>, caching_runner::common::MyError>>>,
+                futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<Self as caching_runner::common::runnable::Stage>::Out>>, thoosa_shared::ThoosaError>>>,
             >
             where
                 Self: Sized,
@@ -49,7 +48,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
                 // Static cache map for this Runnable's output type
                 static CACHE: std::sync::OnceLock<dashmap::DashMap<
                     <<#name as caching_runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
-                    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<#name as caching_runner::common::runnable::Stage>::Out>>, caching_runner::common::MyError>>>,
+                    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<#name as caching_runner::common::runnable::Stage>::Out>>, thoosa_shared::ThoosaError>>>,
                 >> = std::sync::OnceLock::new();
 
                 let map = CACHE.get_or_init(|| dashmap::DashMap::new());

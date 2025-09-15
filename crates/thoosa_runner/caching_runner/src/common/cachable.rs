@@ -16,12 +16,13 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Notify, RwLockReadGuard};
+use thoosa_shared::MyError;
 
 #[async_trait]
 pub trait Cached: Stage {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, MyError>>>,
+        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
     >
     where
         Self: Sized;
@@ -31,7 +32,7 @@ pub trait Cached: Stage {
         self: Arc<Self>,
         input: Arc<I>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, MyError>
+    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
         Self: Sized + OutId,
         <<Self as Stage>::Out as WithId>::ID: 'static,
@@ -90,7 +91,7 @@ pub trait Cached: Stage {
         keys: Vec<<Self::Out as WithId>::ID>,
         cache_area: u64,
         device_idx: usize,
-    ) -> Result<(), MyError>
+    ) -> Result<(), ThoosaError>
     where
         Self: Sized + OutId,
     {
@@ -255,13 +256,13 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
         other: &[&DataCacheWrapper<O>],
         to_device_idx: usize,
         _trace_ctx: Option<&'static str>,
-        do_run: impl FnOnce(&[&O]) -> Result<R, MyError>,
-    ) -> Result<R, MyError> {
+        do_run: impl FnOnce(&[&O]) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError> {
 
         let results = join_all(other.into_iter().map(|w| w.load_from_any_device_(to_device_idx))).await;
 
         let mut owners: Vec<_> = Vec::new();
-        let mut errs: Vec<MyError> = Vec::new();
+        let mut errs: Vec<ThoosaError> = Vec::new();
 
         for r in results {
             match r {
@@ -273,7 +274,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
         }
 
         if owners.is_empty() {
-            return Err(MyError::SomethingElse("all failed".into()));
+            return Err(MyError::SomethingElse("all failed".into()).into());
         }
 
         let refs: Vec<&O> = owners.iter().map(|o| &**o).collect();
@@ -290,7 +291,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
         to_device_idx:usize,
         select: Option<&<O as Data>::SubSelect>,
         trace_ctx: Option<&'static str>,
-        do_run:impl FnOnce(&O)->Result<R, MyError>) -> Result<R, MyError>
+        do_run:impl FnOnce(&O)->Result<R, ThoosaError>) -> Result<R, ThoosaError>
     {
 
         match select {
@@ -336,13 +337,13 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
                         }
 
                     }
-                    Err(MyError::NotFound)
+                    Err(MyError::NotFound.into())
                 }
             }
         }
     }
 
-    fn do_run_trace<R>(trace_ctx: Option<&'static str>, do_run: impl FnOnce(&O)->Result<R, MyError>, data: &O) -> Result<R, MyError> {
+    fn do_run_trace<R>(trace_ctx: Option<&'static str>, do_run: impl FnOnce(&O)->Result<R, ThoosaError>, data: &O) -> Result<R, ThoosaError> {
         if trace_ctx.is_none() {
             do_run(data)
         } else {
@@ -351,7 +352,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
     }
 
 
-    async fn load_from_any_device_(&self, to_device_idx: usize) -> Result<impl Deref<Target = O> +Debug+ Send, MyError> {
+    async fn load_from_any_device_(&self, to_device_idx: usize) -> Result<impl Deref<Target = O> +Debug+ Send, ThoosaError> {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
         println!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}", self.id, self.cached_data);
@@ -379,12 +380,12 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
                 }
 
             }
-            Err(MyError::NotFound)
+            Err(MyError::NotFound.into())
         }
 
     }
 
-    pub async fn dump_to_cpu(&self, device_idx:usize) -> Result<(), MyError>{
+    pub async fn dump_to_cpu(&self, device_idx:usize) -> Result<(), ThoosaError>{
 
         assert_ne!(device_idx, 0);
 
@@ -422,7 +423,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
     }
 
     //to avoid write lock on dst device while copy is in progress use inflights
-    async fn ensure_copied<'a>(&self, src_idx: usize, dst_idx: usize, src:Option<&O>, do_return: bool) -> Result<Option<RwLockReadGuard<'_, O>>, MyError> {
+    async fn ensure_copied<'a>(&self, src_idx: usize, dst_idx: usize, src:Option<&O>, do_return: bool) -> Result<Option<RwLockReadGuard<'_, O>>, ThoosaError> {
         loop {
             let dst_read = self.cached_data[dst_idx].read().await;
             // ---- Fast path
@@ -509,7 +510,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
         &self,
         src_idx: usize,
         dst_idx: usize,
-    ) -> Result<RwLockReadGuard<'_, O>, MyError> {
+    ) -> Result<RwLockReadGuard<'_, O>, ThoosaError> {
 
         self.ensure_copied(src_idx, dst_idx, None, true).await.map(|v|v.expect("no value returned"))
 
@@ -570,20 +571,20 @@ pub trait Runner {
         input: Arc<DataCacheWrapper<<Self::R as Stage>::In>>,
         ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>
-    ) -> Result<<Self::R as Stage>::Out, MyError>;
+    ) -> Result<<Self::R as Stage>::Out, ThoosaError>;
 
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::common::MyError;
+    use crate::common::ThoosaError;
     use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use crate::*;
     
     use crate::test_utils::MockDataWithId;
 
     #[tokio::test]
-    async fn test_cache_area() -> Result<(), MyError>{
+    async fn test_cache_area() -> Result<(), ThoosaError>{
 
         let tested = super::DataCacheWrapper::new(
             MockDataWithId::whatever(), 1, 2, 0
@@ -626,7 +627,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_with_data() -> Result<(), MyError> {
+    async fn test_with_data() -> Result<(), ThoosaError> {
         let tested = super::DataCacheWrapper::new(
             MockDataWithId::whatever(), 1, 2, 0
         );
@@ -640,7 +641,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dump_to_cpu() -> Result<(), MyError> {
+    async fn test_dump_to_cpu() -> Result<(), ThoosaError> {
         let ctx = MockGlobalCtx::global_context();
         ctx.expect().returning(|| Box::leak(Box::new(
             mock_global_ctx::build()
