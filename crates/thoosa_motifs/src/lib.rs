@@ -8,3 +8,4 @@ pub mod fragments;
 pub mod find;
 pub mod distance;
 pub mod chunks;
+mod tasks;

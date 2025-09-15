@@ -1,6 +1,6 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
-use crate::common::runnable::Runnable;
+use crate::common::runnable::Stage;
 use crate::common::*;
 #[double]
 use crate::global_ctx::GlobalCtx;
@@ -18,9 +18,9 @@ use std::sync::Arc;
 use tokio::sync::{Notify, RwLockReadGuard};
 
 #[async_trait]
-pub trait Cached: Runnable {
+pub trait Cached: Stage {
     async fn cache() -> &'static DashMap<
-        <<Self as Runnable>::Out as WithId>::ID,
+        <<Self as Stage>::Out as WithId>::ID,
         Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, MyError>>>,
     >
     where
@@ -34,10 +34,10 @@ pub trait Cached: Runnable {
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, MyError>
     where
         Self: Sized + OutId,
-        <<Self as Runnable>::Out as WithId>::ID: 'static,
-        <Self as Runnable>::Out: 'static,
+        <<Self as Stage>::Out as WithId>::ID: 'static,
+        <Self as Stage>::Out: 'static,
         // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
-        I:WithId<ID=<<Self as Runnable>::In as WithId>::ID> + Send + Sync + 'static
+        I:WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
     {
         let key = self.out_id(input.id());
         let (cache_area, device_idx) = {
@@ -562,15 +562,15 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
 }
 
 pub trait Runner {
-    type R: Runnable<In:Data<Sub=<Self::R as Runnable>::In>>;
+    type R: Stage<In:Data<Sub=<Self::R as Stage>::In>>;
 
     async fn run(
         &self,
         runnable: &Arc<Self::R>,
-        input: Arc<DataCacheWrapper<<Self::R as Runnable>::In>>,
-        ctx: Arc<RwLock<<Self::R as Runnable>::Ctx>>,
+        input: Arc<DataCacheWrapper<<Self::R as Stage>::In>>,
+        ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>
-    ) -> Result<<Self::R as Runnable>::Out, MyError>;
+    ) -> Result<<Self::R as Stage>::Out, MyError>;
 
 }
 
