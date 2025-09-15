@@ -1,7 +1,8 @@
+use crate::common::{Data, MyError, Output, RunCtx, WithId};
+use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
-use async_trait::async_trait;
-use crate::common::{Data, Input, MyError, Output, RunCtx, WithId};
+use thoosa_shared::applicables_runner::Input;
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 #[async_trait]

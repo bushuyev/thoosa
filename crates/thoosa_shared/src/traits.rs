@@ -119,6 +119,9 @@ pub trait Named {
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct SimpleId(pub &'static str);
 
+pub trait TestId {}
+impl TestId for SimpleId {}
+
 impl Named for SimpleId {
     fn name(&self) -> &'static str {
         "SimpleId"

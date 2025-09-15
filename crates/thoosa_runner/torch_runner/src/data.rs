@@ -1,12 +1,13 @@
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use caching_runner::common::{CopyToDevice, Input, MyError, Output};
+use caching_runner::common::{CopyToDevice, MyError, Output};
 use tch::{Device, Kind, Tensor};
 use async_trait::async_trait;
 use torch_sys::IntList;
 use caching_runner::panic_to_err;
 use thoosa_common::dims::Dims;
+use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 use crate::{ThoDevice, ThoTensorView};
 use crate::copy_ctx::CopyCtx;
