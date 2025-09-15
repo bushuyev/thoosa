@@ -4,8 +4,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::Semaphore;
 use tokio::time;
+use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::CachableIdTr;
-use crate::common::MyError;
 use crate::permits::{NumPermits, PermitSource, RunnerPerm};
 
 impl RunnerSemaphore {
@@ -26,7 +26,7 @@ impl RunnerSemaphore {
         }
     }
 
-    async fn acquire_many_owned(&self, n: NumPermits) -> Result<RunnerPerm, MyError> {
+    async fn acquire_many_owned(&self, n: NumPermits) -> Result<RunnerPerm, ThoosaError> {
         {
             let mut waited = self.permits_waited_for.lock();
             *waited += n;
@@ -49,13 +49,13 @@ impl RunnerSemaphore {
                 let mut waited = self.permits_waited_for.lock();
                 *waited -= n;
                 println!("RunnerSemaphore::acquire_many_owned semaphore closed");
-                Err(MyError::OutOfPermits)
+                Err(MyError::OutOfPermits.into())
             }
             Err(_) => {
                 let mut waited = self.permits_waited_for.lock();
                 *waited -= n;
                 println!("RunnerSemaphore::acquire_many_owned timeout");
-                Err(MyError::OutOfPermits)
+                Err(MyError::OutOfPermits.into())
             }
         }
     }
@@ -63,7 +63,7 @@ impl RunnerSemaphore {
 
 #[async_trait]
 impl PermitSource for RunnerSemaphore {
-    async fn acquire(&self, n: NumPermits, _out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, MyError> {
+    async fn acquire(&self, n: NumPermits, _out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, ThoosaError> {
         self.acquire_many_owned(n).await
     }
 }
@@ -85,7 +85,7 @@ mod tests {
         let sem = RunnerSemaphore::new_with_timeout(1, Duration::from_millis(100));
         sem.sem.close();
         let res = sem.acquire_many_owned(1).await;
-        assert!(matches!(res, Err(MyError::OutOfPermits)));
+        assert!(matches!(res, Err(ThoosaError{what: MyError::OutOfPermits, ..})));
     }
 
     #[tokio::test]

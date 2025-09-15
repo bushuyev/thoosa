@@ -116,12 +116,24 @@ impl Display for TensorIdSliceIdx {
         write!(f, "{},{}", self.0, self.1)
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum MyError {
+    OutOfMemory,
+    OutOfPermits,
+    UnsupportedDegadeLevel,
+    SomethingElse(String),
+    NotFound
+}
+
+
 // #[derive(Error, Debug)]
 pub struct ThoosaError {//TODO enum
     msg:String,
     #[allow(dead_code)]
     backtrace:Backtrace,
-    is_oom:bool
+    is_oom:bool,
+    pub what:MyError
 }
 
 impl Clone for ThoosaError {
@@ -129,7 +141,8 @@ impl Clone for ThoosaError {
         ThoosaError {
             msg: self.msg.clone(),
             is_oom: self.is_oom,
-            backtrace: Backtrace::capture()
+            backtrace: Backtrace::capture(),
+            what: self.what.clone()
         }
     }
 }
@@ -139,6 +152,10 @@ unsafe impl Send for ThoosaError {}
 impl ThoosaError {
 
     pub fn new(msg:impl Into<String> + Display) -> Self {
+        Self::new_with_error(msg, MyError::SomethingElse("TOOD".to_string()))
+    }
+
+    pub fn new_with_error(msg:impl Into<String> + Display, what: MyError) -> Self {
         error!("ThoosaError::new: msg={}", msg);
         let backtrace = Backtrace::capture();
 
@@ -146,9 +163,11 @@ impl ThoosaError {
         Self {
             msg: msg.into(),
             backtrace,
-            is_oom: false
+            is_oom: false,
+            what,
         }
     }
+
 
     pub fn oom() -> Self {
         debug!("ThoosaError::new: oom");
@@ -158,30 +177,49 @@ impl ThoosaError {
         Self {
             msg: "oom".into(),
             backtrace,
-            is_oom: true
+            is_oom: true,
+            what: MyError::OutOfMemory
         }
     }
 
     pub fn is_oom(&self) -> bool {
         self.is_oom
     }
+
+    pub fn what(&self) -> &MyError {
+        &self.what
+    }
 }
+
+
 
 
 //TODO https://github.com/rust-lang/rust/issues/65280
 impl Debug for ThoosaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_struct = f.debug_struct("ThoosaError");
-        let x=  debug_struct
-            .field("msg", &self.msg);
+        let mut x=  debug_struct.field("msg", &self.msg);
 
         // #![feature(backtrace_frames)]
-        // for (i, frame) in self.backtrace.frames().iter().enumerate() {
-        //     x = x.field(format!("frame_{}\n", i).as_str(), frame);
-        // }
+        for (i, frame) in self.backtrace.frames().iter().enumerate() {
+            x = x.field(format!("frame_{}\n", i).as_str(), frame);
+        }
 
         x.finish()
 
+    }
+}
+
+impl From<MyError> for ThoosaError {
+    fn from(value: MyError) -> Self {
+        match value {
+            MyError::OutOfMemory => {
+                Self::oom()
+            }
+            e=> {
+                Self::new_with_error("from new".to_string(), e)
+            }
+        }
     }
 }
 

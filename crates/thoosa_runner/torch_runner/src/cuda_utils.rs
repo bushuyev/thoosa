@@ -6,8 +6,8 @@ use tch::Device::Cpu;
 use std::{iter, usize};
 use tokio::task::JoinSet;
 use std::ops::Add;
+use thoosa_shared::{MyError, ThoosaError};
 // test-only imports moved into test modules
-use caching_runner::common::MyError;
 
 //free_mem, total_mem
 pub fn cuda_mem() -> (usize, usize) {
@@ -77,7 +77,7 @@ pub async fn copy_d2h_from_ptr_result(
     bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
     src_ptr: usize,
     src_size: &[i64],
-) -> Result<Tensor, MyError> {
+) -> Result<Tensor, ThoosaError> {
     let tensor_mem_size = tensor_mem_size(init_type, &src_size);
 
     // println!(
@@ -128,7 +128,7 @@ pub async fn copy_d2h_from_ptr_result(
                 if r != sys::CUresult::CUDA_SUCCESS {
                     return Err(MyError::SomethingElse(format!(
                         "cuMemcpyDtoHAsync_v2 failed at chunk {i} with {r:?}"
-                    )));
+                    )).into());
                 }
 
                 buf_stream.1.synchronize().unwrap();

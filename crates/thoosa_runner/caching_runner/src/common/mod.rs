@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Stage;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 use crate::permits::{NumPermits, RunnerPerm};
 
@@ -64,7 +65,7 @@ pub trait RunCtx: Named + Debug + Send + Sync {
 
     fn acquired_permits(&self) -> NumPermits;
 
-    async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), MyError>
+    async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
     where
         Self: Sized,
     {
@@ -154,34 +155,6 @@ pub(crate) mod mock_run_ctx {
 //
 // }
 
-#[derive(Debug, Clone)]
-pub enum MyError {
-    OutOfMemory,
-    OutOfPermits,
-    UnsupportedDegadeLevel,
-    SomethingElse(String),
-    NotFound
-}
-
-impl From<&MyError> for MyError {
-    fn from(e: &MyError) -> Self {
-        e.clone()
-    }
-}
-
-impl <T:ToString> From<T> for MyError {
-    fn from(msg: T) -> Self {
-        let msg = msg.to_string();
-        if msg.contains("out of memory") || msg.contains("can't allocate memory") {
-            println!("MyError: out of memory: msg={msg}");
-            MyError::OutOfMemory
-        } else {
-            MyError::SomethingElse(msg)
-        }
-
-    }
-}
-
 
 /////////////////////////////////
 
@@ -199,78 +172,78 @@ pub trait OutId: Stage {
 pub trait CopyToDevice {
     async fn copy_to_device(&self, dst_device: usize) ->Self;
 }
-
-
-#[macro_export]
-macro_rules! panic_to_err {
-    ($expr:expr) => {{
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            println!("in panic_to_err");
-            $expr
-        })) {
-            //no panic
-            Ok(inner_result) => match inner_result {
-                Ok(val) => Ok(val),
-                Err(err) => Err(MyError::from(err)),
-            },
-            //panic
-            Err(e) => {
-                let msg = if let Some(msg) = e.downcast_ref::<String>() {
-                    println!("panic_to_err: String msg={msg}");
-                    msg.clone()
-                //TODO
-                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
-                //     Err(*thoosa_error)
-                } else if let Some(msg) = e.downcast_ref::<&str>() {
-                    println!("panic_to_err: &str msg={msg}");
-                    msg.to_string()
-                } else {
-                    println!("panic_to_err: unknown msg={e:?}");
-                    format!("{e:?}")
-                };
-
-                if msg.contains("out of memory") {
-                    Err(MyError::OutOfMemory)
-                } else {
-                    Err(MyError::SomethingElse(msg))
-                }
-            }
-        }
-    }};
-}
-
-
-#[macro_export]
-macro_rules! panic_to_err_async {
-
-    ($expr:expr) => {{
-         let x = std::panic::catch_unwind(std::panic::AssertUnwindSafe(async || {
-            $expr
-        }));
-
-         match x {
-            //no panic
-            Ok(inner_result) => match inner_result.await {
-                Ok(val) => Ok(val),
-                Err(err) => Err(MyError::from(err))
-            },
-            //panic
-            Err(e) => {
-                if let Some(msg) = e.downcast_ref::<String>() {
-                    println!("thoosa_err String: {msg}");
-                    Err(MyError::from(msg))
-                //TODO
-                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
-                //     Err(*thoosa_error)
-
-                } else if let Some(msg) = e.downcast_ref::<&str>() {
-                    println!("thoosa_err str: {msg}");
-                    Err(MyError::from(*msg))
-                } else {
-                    println!("thoosa_err unknown: {e:?}");
-                    Err(MyError::from(format!("{e:?}")))
-                }
-            }
-        }
-    }};
-}
+//
+//
+// #[macro_export]
+// macro_rules! panic_to_err {
+//     ($expr:expr) => {{
+//         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+//             println!("in panic_to_err");
+//             $expr
+//         })) {
+//             //no panic
+//             Ok(inner_result) => match inner_result {
+//                 Ok(val) => Ok(val),
+//                 Err(err) => Err(MyError::from(err)),
+//             },
+//             //panic
+//             Err(e) => {
+//                 let msg = if let Some(msg) = e.downcast_ref::<String>() {
+//                     println!("panic_to_err: String msg={msg}");
+//                     msg.clone()
+//                 //TODO
+//                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
+//                 //     Err(*thoosa_error)
+//                 } else if let Some(msg) = e.downcast_ref::<&str>() {
+//                     println!("panic_to_err: &str msg={msg}");
+//                     msg.to_string()
+//                 } else {
+//                     println!("panic_to_err: unknown msg={e:?}");
+//                     format!("{e:?}")
+//                 };
+//
+//                 if msg.contains("out of memory") {
+//                     Err(MyError::OutOfMemory)
+//                 } else {
+//                     Err(MyError::SomethingElse(msg))
+//                 }
+//             }
+//         }
+//     }};
+// }
+//
+//
+// #[macro_export]
+// macro_rules! panic_to_err_async {
+//
+//     ($expr:expr) => {{
+//          let x = std::panic::catch_unwind(std::panic::AssertUnwindSafe(async || {
+//             $expr
+//         }));
+//
+//          match x {
+//             //no panic
+//             Ok(inner_result) => match inner_result.await {
+//                 Ok(val) => Ok(val),
+//                 Err(err) => Err(MyError::from(err))
+//             },
+//             //panic
+//             Err(e) => {
+//                 if let Some(msg) = e.downcast_ref::<String>() {
+//                     println!("thoosa_err String: {msg}");
+//                     Err(MyError::from(msg))
+//                 //TODO
+//                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
+//                 //     Err(*thoosa_error)
+//
+//                 } else if let Some(msg) = e.downcast_ref::<&str>() {
+//                     println!("thoosa_err str: {msg}");
+//                     Err(MyError::from(*msg))
+//                 } else {
+//                     println!("thoosa_err unknown: {e:?}");
+//                     Err(MyError::from(format!("{e:?}")))
+//                 }
+//             }
+//         }
+//     }};
+// }

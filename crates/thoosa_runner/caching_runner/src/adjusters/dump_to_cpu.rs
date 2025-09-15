@@ -1,4 +1,4 @@
-use crate::common::{MyError, RunCtx};
+use crate::common::{RunCtx};
 use crate::global_ctx::GlobalCtx;
 use crate::oom_handler::{Adjustable, Adjuster, RunCtxContext};
 use crate::permits::MAX_PERMITS;
@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
 
 #[derive(Debug)]
@@ -67,7 +68,7 @@ where
         &self,
         adjustable: &Self::A,
         adjust_context: &mut C,
-    ) -> Result<Self::A, MyError> {
+    ) -> Result<Self::A, ThoosaError> {
         println!("DumpToCpu::adjust: adjustable={adjustable:?}");
 
         assert_eq!(adjustable.read().acquired_permits(), MAX_PERMITS);
