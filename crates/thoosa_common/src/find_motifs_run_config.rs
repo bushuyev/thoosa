@@ -324,6 +324,16 @@ pub struct FindMotifsApplicableOutput {
 unsafe impl Send for FindMotifsApplicableOutput {}
 unsafe impl Sync for FindMotifsApplicableOutput {}
 
+
+impl WithId for FindMotifsApplicableOutput {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
+
+
 #[async_trait]
 impl Output for FindMotifsApplicableOutput {
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {

@@ -437,10 +437,10 @@ where
 
 #[cfg(test)]
 pub(crate) mod test_types {
-    use thoosa_shared::applicables_runner::Input;
+    use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::WithId;
     use super::*;
-    use crate::common::{CopyToDevice, Data, Output};
+    use crate::common::{CopyToDevice, Data};
     use crate::test_utils::DummyTensor;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]

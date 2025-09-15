@@ -28,19 +28,12 @@ pub trait Input:WithId + Send+Sync+Debug {
     }
 }
 
-// impl <I:Input> WithId for I {
-//     type ID = CachableId;
-//
-//     fn id(&self) -> &Self::ID {
-//         todo!()
-//     }
-// }
-
-
 
 #[async_trait]
-pub trait Output:Send+Sync+Debug {
-    async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self>;
+pub trait Output:WithId + Send+Sync+Debug {
+    async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self> {
+        todo!()
+    }
 }
 
 impl WithId for CachableId {
@@ -1107,6 +1100,15 @@ mod tests {
 
     #[derive(Debug)]
     struct ApplicableBOutput(DataResource);
+
+    impl WithId for ApplicableBOutput {
+        type ID = CachableId;
+
+        fn id(&self) -> &Self::ID {
+            todo!()
+        }
+    }
+
     #[async_trait]
     impl Output for ApplicableBOutput {
         async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self> {
