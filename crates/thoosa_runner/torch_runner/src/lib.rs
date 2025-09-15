@@ -12,7 +12,7 @@ mod model_test;
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
 #[allow(unused_imports)]
-use caching_runner::common::{CopyToDevice, Data, MyError};
+use caching_runner::common::{CopyToDevice, Data};
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::{Device, Kind, TchError, Tensor};
@@ -21,23 +21,8 @@ use data::ThoTensor;
 use thoosa_common::dims::Dims;
 use thoosa_shared::traits::{Named, SimpleId};
 
-#[derive(Debug)]
-pub enum MyTchError {
-    MyError(MyError),
-    TchError(TchError)
-}
 
-impl From<TchError> for MyTchError {
-    fn from(value: TchError) -> Self {
-        MyTchError::TchError(value)
-    }
-}
 
-impl Into<MyError> for MyTchError{
-    fn into(self) -> MyError {
-        MyError::SomethingElse(format!("error: {self:?}"))
-    }
-}
 
 struct ThoDevice(Device);
 
@@ -102,7 +87,7 @@ mod tests {
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use caching_runner_test::FailUntil::MinPermits;
     use caching_runner_test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-    use caching_runner::common::{Data, DropIf, MyError, OutId, RunCtx};
+    use caching_runner::common::{Data, DropIf, OutId, RunCtx};
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -117,9 +102,10 @@ mod tests {
     use tracing_subscriber::{fmt, EnvFilter};
     use tracing_subscriber::fmt::format::FmtSpan;
     use caching_runner::common::runnable::Stage;
-    use caching_runner::panic_to_err;
     use thoosa_common::dims::Dims;
+    use thoosa_common::panic_to_err;
     use thoosa_shared::applicables_runner::Input;
+    use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
     use crate::cuda_utils::cuda_mem;
     use crate::data::ThoTensor;
@@ -186,7 +172,7 @@ mod tests {
             self.permits.iter().map(|p| p.num_permits()).sum()
         }
 
-        async fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> Result<(), MyError>
+        async fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
         where
             Self: Sized
         {
@@ -347,11 +333,11 @@ mod tests {
     }
 
     impl TryFrom<Vec<i64>> for LoadedTensorMetrics {
-        type Error = MyError;
+        type Error = ThoosaError;
 
         fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
             let &[dim_0, dim_1, ..] = value.as_slice() else {
-                return Err(MyError::SomethingElse(format!("can't make LoadedTensorMetrics from {value:?}")));
+                return Err(MyError::SomethingElse(format!("can't make LoadedTensorMetrics from {value:?}")).into());
             };
 
             Ok(Self {
@@ -452,7 +438,7 @@ mod tests {
 
         println!("lin_t: end={end}");
 
-        let mut t = panic_to_err!(Tensor::f_arange(end, (kind, device))).map_err(|e| Into::<MyError>::into(e)).expect("f_arange failed").view(&size[..]);
+        let mut t = panic_to_err!(Tensor::f_arange(end, (kind, device))).expect("f_arange failed").view(&size[..]);
 
         t = t.set_requires_grad(false);
         match kind {
@@ -477,7 +463,7 @@ mod tests {
         type Out = ThoTensor<LoadedTensor, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
         {
@@ -555,7 +541,7 @@ mod tests {
     impl Dims for ClcTaskOutput {}
 
     impl LoadedTensor {
-        fn clc_hadamard(id: SimpleId, loaded: &ThoTensor<LoadedTensor, SimpleId>, k: &ThoTensor<MulK, SimpleId>) -> Result<ThoTensor<ClcTaskOutput, SimpleId>, MyError> {
+        fn clc_hadamard(id: SimpleId, loaded: &ThoTensor<LoadedTensor, SimpleId>, k: &ThoTensor<MulK, SimpleId>) -> Result<ThoTensor<ClcTaskOutput, SimpleId>, ThoosaError> {
 
             loaded.run_inner_with_params(
                 id,
@@ -566,7 +552,7 @@ mod tests {
             )
         }
 
-        fn clc_sum(id: SimpleId, loaded: &ThoTensor<LoadedTensor, SimpleId>, k: &ThoTensor<MulK, SimpleId>) -> Result<ThoTensor<ClcTaskOutput, SimpleId>, MyError> {
+        fn clc_sum(id: SimpleId, loaded: &ThoTensor<LoadedTensor, SimpleId>, k: &ThoTensor<MulK, SimpleId>) -> Result<ThoTensor<ClcTaskOutput, SimpleId>, ThoosaError> {
             println!("LoadedTensor::clc_sum: loaded.t.size={:?} loaded=\n{}", loaded.size(), loaded);
 
             loaded.run_inner_with_params(
@@ -591,7 +577,7 @@ mod tests {
         type Ctx = TorchRunCtx;
 
 
-        fn do_run(self: Arc<Self>, input: &Self::In, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        fn do_run(self: Arc<Self>, input: &Self::In, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             Self: Sized
         {
@@ -608,7 +594,7 @@ mod tests {
 
                         if input.size()[0] > *mem_limit as i64 {
                             println!("MulTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
-                            return Err(MyError::OutOfMemory);
+                            return Err(MyError::OutOfMemory.into());
                         }
                     }
                     FailUntil::MinPermits(min_permits) => {
@@ -617,7 +603,7 @@ mod tests {
 
                         if acquired_permits < *min_permits {
                             println!("MulTask::do_run: MyError::OutOfMemory on MinPermits min_permits={min_permits}");
-                            return Err(MyError::OutOfMemory);
+                            return Err(MyError::OutOfMemory.into());
                         }
                     }
 
@@ -627,7 +613,7 @@ mod tests {
 
                         if !is_all_on_cpu {
                             println!("MulTask::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
-                            return Err(MyError::OutOfMemory);
+                            return Err(MyError::OutOfMemory.into());
                         }
                     }
                     FailUntil::Never => {}
@@ -671,7 +657,7 @@ mod tests {
         type Out = ThoTensor<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, MyError>
+        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static,
 
@@ -711,7 +697,7 @@ mod tests {
 
         async fn cache() -> &'static DashMap<
             <<Self as Stage>::Out as WithId>::ID,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, MyError>>>,
+            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
         >
         where
             Self: Sized
@@ -750,7 +736,7 @@ mod tests {
     // //////////////////////////////
 
     #[tokio::test]
-    async fn test_load_tensor_cuda_to_cuda() ->Result<(), MyError>{
+    async fn test_load_tensor_cuda_to_cuda() ->Result<(), ThoosaError>{
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
 
         let _ = GlobalCtx::init_devices(2);
@@ -761,7 +747,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn heavy_test_load_tensor_cpu_to_cuda() ->Result<(), MyError>{
+    async fn heavy_test_load_tensor_cpu_to_cuda() ->Result<(), ThoosaError>{
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
 
         let _ = GlobalCtx::init_devices(2);
@@ -772,7 +758,7 @@ mod tests {
     }
 
 
-    async fn do_test_loaded(loader_ctx_device: usize, load_to_device: usize, loader: &Arc<TestTensorLoader>) -> Result<(), MyError> {
+    async fn do_test_loaded(loader_ctx_device: usize, load_to_device: usize, loader: &Arc<TestTensorLoader>) -> Result<(), ThoosaError> {
         let ctx_device_0 = Arc::new(RwLock::new(TorchRunCtx::new(loader_ctx_device, 0, "device_1_ctx")));
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
@@ -841,7 +827,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_no_oom_tensor() -> Result<(), MyError> {
+    async fn test_load_and_mul_no_oom_tensor() -> Result<(), ThoosaError> {
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
 
         let _global_ctx = GlobalCtx::init_devices(2);
@@ -929,7 +915,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_min_permits_tensor() -> Result<(), MyError> {
+    async fn test_load_and_mul_oom_till_min_permits_tensor() -> Result<(), ThoosaError> {
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
         let _global_ctx = GlobalCtx::init_devices(2);
 
@@ -961,7 +947,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_load_and_mul_oom_compete_for_permits_tensor() -> Result<(), MyError> {
+    async fn heavy_test_load_and_mul_oom_compete_for_permits_tensor() -> Result<(), ThoosaError> {
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
 
         let _global_ctx = GlobalCtx::init_devices(2);
@@ -989,12 +975,12 @@ mod tests {
             }
         ).await?;
 
-        Ok::<_, MyError>(())
+        Ok::<_, ThoosaError>(())
     }
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_splits_tensor() -> Result<(), MyError> {
+    async fn test_load_and_mul_oom_splits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1025,12 +1011,12 @@ mod tests {
             }
         ).await?;
 
-        Ok::<_, MyError>(())
+        Ok::<_, ThoosaError>(())
     }
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_load_and_mul_oom_permits_and_splits_tensor() -> Result<(), MyError>
+    async fn heavy_test_load_and_mul_oom_permits_and_splits_tensor() -> Result<(), ThoosaError>
     {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -1065,7 +1051,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_load_and_mul_oom_dump_to_cpu() -> Result<(), MyError> {
+    async fn heavy_test_load_and_mul_oom_dump_to_cpu() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1096,11 +1082,11 @@ mod tests {
             }
         ).await?;
 
-        Ok::<_, MyError>(())
+        Ok::<_, ThoosaError>(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_purge_gpu_with_lock() -> Result<(), MyError> {
+    async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1191,7 +1177,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn heavy_test_real_oom_dump_and_split() -> Result<(), MyError> {
+    async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoosaError> {
         println!("test_real_oom_dump_and_split");
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");

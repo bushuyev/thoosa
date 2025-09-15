@@ -3,8 +3,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::{Notify, OwnedSemaphorePermit};
+use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
-use crate::common::MyError;
 
 pub mod runner_queue;
 pub mod runner_semaphore;
@@ -37,7 +37,7 @@ pub trait PermitSource:Debug + Send + Sync {
         &self,
         n: NumPermits,
         out_id: std::sync::Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, MyError>;
+    ) -> Result<RunnerPerm, ThoosaError>;
 }
 
 pub type NumPermits = u8;

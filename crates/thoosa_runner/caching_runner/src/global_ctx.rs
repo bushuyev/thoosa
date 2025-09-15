@@ -6,8 +6,8 @@ use std::sync::{Arc, OnceLock};
 #[allow(unused_imports)]
 use mockall::automock;
 use tokio::sync::RwLock as AsyncRwLock;
+use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::CachableIdTr;
-use crate::common::MyError;
 use crate::permits::NumPermits;
 use crate::permits::{PermitSource, RunnerPerm};
 use crate::permits::runner_queue::Arbiter;
@@ -19,10 +19,10 @@ pub struct CacheAreasKeeper {
 }
 
 impl CacheAreasKeeper {
-    pub fn next_available_cache_area(&mut self) -> Result<u64, MyError> {
+    pub fn next_available_cache_area(&mut self) -> Result<u64, ThoosaError> {
         let next = first_free_bit(self.cache_areas);
         if next == 0 {
-            return Err(MyError::SomethingElse("no cache areas available".into()));
+            return Err(MyError::SomethingElse("no cache areas available".into()).into());
         }
         self.cache_areas |= next;
 
@@ -127,7 +127,7 @@ impl GlobalCtx {
         self.is_all_on_cpu[device_idx].store(false, Relaxed);
     }
 
-    pub async fn acquire_many(&self, ordinal: usize, n: NumPermits, out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, MyError> {
+    pub async fn acquire_many(&self, ordinal: usize, n: NumPermits, out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, ThoosaError> {
         self.semaphores[ordinal].acquire(n, out_id).await
     }
 
@@ -136,7 +136,7 @@ impl GlobalCtx {
         &'a self,
         required_ids: &HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
         device_idx: usize,
-    ) -> Result<(), MyError> {
+    ) -> Result<(), ThoosaError> {
         assert_ne!(device_idx, 0);
         println!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
 
@@ -171,7 +171,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn next_cache_area(&self) -> Result<u64, MyError> {
+    pub fn next_cache_area(&self) -> Result<u64, ThoosaError> {
         self.caches_areas.write().next_available_cache_area()
     }
 
