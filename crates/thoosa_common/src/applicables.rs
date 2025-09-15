@@ -237,7 +237,7 @@ impl ThoRunner {
     ) -> Shared<BoxFuture<'static, Arc<TCDF>>> {
 
         if let Some(ctx) = ctx.as_ref() {
-            ctx.write().loaded.push(<FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(applicable, input.id()));
+            ctx.write().loaded.push(<FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(applicable, Input::id(input.as_ref())));
         }
 
         self.futures_runner.run_cached_task(
@@ -257,7 +257,7 @@ impl ThoRunner {
     ) -> Shared<BoxFuture<'static, Arc<LoadMotifNetOutput>>> {
 
         if let Some(ctx) = ctx.as_ref() {
-            ctx.write().motif_nets.push(<LoadMotifNetCachable as Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::applied_id(applicable, input.id()));
+            ctx.write().motif_nets.push(<LoadMotifNetCachable as Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::applied_id(applicable, Input::id(input.as_ref())));
         }
         
         self.futures_runner.run_cached_task(

@@ -18,15 +18,23 @@ use std::thread;
 use std::time::Instant;
 use log::debug;
 use crate::run_configs::{Cachable, Runnable};
-use crate::traits::SimpleId;
+use crate::traits::{SimpleId, TestId, WithId};
 
 pub type CachableId = SimpleId;
 
-pub trait Input:Send+Sync+Debug {
+pub trait Input:WithId + Send+Sync+Debug {
     fn id(&self) -> &CachableId {
         todo!()
     }
 }
+
+// impl <I:Input> WithId for I {
+//     type ID = CachableId;
+//
+//     fn id(&self) -> &Self::ID {
+//         todo!()
+//     }
+// }
 
 
 
@@ -35,6 +43,13 @@ pub trait Output:Send+Sync+Debug {
     async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self>;
 }
 
+impl WithId for CachableId {
+    type ID = CachableId;
+
+    fn id(&self) -> &Self::ID {
+        todo!()
+    }
+}
 
 impl Input for CachableId {
     fn id(&self) -> &CachableId {
@@ -585,7 +600,7 @@ impl FuturesRunner {
         // let map_name = map_with_thread.name();
         map_with_thread.pool.install(move || {
             let device = applicable.device();
-            let id = applicable.applied_id(input.id());
+            let id = applicable.applied_id(Input::id(input.as_ref()));
 
             debug!("run_cached_task: id={id:?} installed ");
             let debug_id = id.clone();
@@ -618,7 +633,7 @@ impl FuturesRunner {
 
             let fut = match map_with_thread.map.entry(id.clone()) {
                 Entry::Occupied(mut e) => {
-                    self.statistics.on_copy(input.id());
+                    self.statistics.on_copy(Input::id(input.as_ref()));
                     debug!("run_cached_task: id={debug_id:?} Occupied ");
 
                     let f = e.get_mut().get_from_any_device(
@@ -631,7 +646,7 @@ impl FuturesRunner {
                     f
                 },
                 Entry::Vacant(v) => {
-                    self.statistics.on_new_load(input.id());
+                    self.statistics.on_new_load(Input::id(input.as_ref()));
                     debug!("run_cached_task: id={debug_id:?} Vacant ");
 
                     let (data_in_devices_future, fut) = DataInDevices::new_with_future(
@@ -781,6 +796,7 @@ mod tests {
     use crate::applicables_runner::tests::Devices::Cpu;
     use crate::run_configs::Runnable;
     use crate::test_utils::set_panic_hook;
+    use crate::traits::WithId;
 
     #[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
     pub enum Devices {
@@ -825,6 +841,14 @@ mod tests {
                 device,
                 data: self.data.clone()
             }
+        }
+    }
+
+    impl WithId for DataResource {
+        type ID = CachableId;
+
+        fn id(&self) -> &Self::ID {
+            todo!()
         }
     }
 
@@ -896,6 +920,14 @@ mod tests {
             Self { id, import_id,  applied_id}
         }
     }
+    impl WithId for LoaderInputId {
+        type ID = CachableId;
+
+        fn id(&self) -> &Self::ID {
+            todo!()
+        }
+    }
+
 
     impl Input for LoaderInputId {
         fn id(&self) -> &CachableId {
@@ -927,14 +959,14 @@ mod tests {
         async fn async_run(self: Arc<Self>, input: Arc<LoaderInputId>, runner: Arc<MyRunner>, ctx: Option<Arc<RwLock<MyRunCtx>>>) -> Arc<LoaderOutput> {
             debug!("Loader::async_apply: input={input:?} ");
             // thread::sleep(Duration::new(0, 1000));
-            dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
+            dummy_load(&runner.futures_runner.statistics, &Arc::new(Input::id(input.as_ref()).clone())).await;
 
             for step in 0..self.steps {
                 // yield_n(1).await;
-                dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
+                dummy_load(&runner.futures_runner.statistics, &Arc::new(Input::id(input.as_ref()).clone())).await;
             }
 
-            Arc::new(LoaderOutput(DataResource::new(input.id().0.to_string(), self.device, vec![0.1, 0.2, 0.3, 0.4])))
+            Arc::new(LoaderOutput(DataResource::new(Input::id(input.as_ref()).0.to_string(), self.device, vec![0.1, 0.2, 0.3, 0.4])))
         }
 
         fn device(&self) -> impl ToOrdinal {
@@ -978,10 +1010,18 @@ mod tests {
         }
     }
 
+    impl WithId for LoaderOutput {
+        type ID = CachableId;
+
+        fn id(&self) -> &Self::ID {
+            todo!()
+        }
+    }
+
 
     impl Input for LoaderOutput {
         fn id(&self) -> &CachableId {
-            self.0.id()
+            WithId::id(&self.0)
         }
     }
 
@@ -1003,10 +1043,10 @@ mod tests {
             let resource_0 = runner.clone().run_loader(&input, &self.loader, ctx).await;
             // debug!("ApplicableA::apply: input={input:?}");
 
-            dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
+            dummy_load(&runner.futures_runner.statistics, &Arc::new(Input::id(input.as_ref()).clone())).await;
 
 
-            Arc::new(ApplicableAOutput(DataResource::new(self.applied_id(input.id()).to_string(), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_0.0.data.clone()].concat())))
+            Arc::new(ApplicableAOutput(DataResource::new(self.applied_id(Input::id(input.as_ref())).to_string(), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_0.0.data.clone()].concat())))
         }
 
         fn device(&self) -> impl ToOrdinal {
@@ -1050,10 +1090,18 @@ mod tests {
 
     }
 
+    impl WithId for ApplicableAOutput {
+        type ID = CachableId;
+
+        fn id(&self) -> &Self::ID {
+            todo!()
+        }
+    }
+
 
     impl Input for ApplicableAOutput {
         fn id(&self) -> &CachableId {
-            self.0.id()
+            Input::id(&self.0)
         }
     }
 
@@ -1074,10 +1122,10 @@ mod tests {
             let resource_a = runner.clone().run_applicable_a(&input, &self.applicable_a, ctx).await;
             debug!("ApplicableB::apply: input={input:?}");
 
-            dummy_load(&runner.futures_runner.statistics, &Arc::new(input.id().clone())).await;
+            dummy_load(&runner.futures_runner.statistics, &Arc::new(Input::id(input.as_ref()).clone())).await;
 
 
-            Arc::new(ApplicableBOutput(DataResource::new(self.applied_id(input.id()).to_string(), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_a.0.data.clone()].concat())))
+            Arc::new(ApplicableBOutput(DataResource::new(self.applied_id(Input::id(input.as_ref())).to_string(), self.device, [vec![0.1, 0.2, 0.3, 0.4], resource_a.0.data.clone()].concat())))
         }
 
         fn device(&self) -> impl ToOrdinal {
@@ -1140,7 +1188,7 @@ mod tests {
         ) -> Shared<BoxFuture<'static, Arc<LoaderOutput>>> {
 
             if let Some(ctx) = ctx.as_ref() {
-                ctx.write().loaded_cached.push(applicable.applied_id(input.id()));
+                ctx.write().loaded_cached.push(applicable.applied_id(Input::id(input)));
             }
 
             self.futures_runner.run_cached_task(
@@ -1160,7 +1208,7 @@ mod tests {
         ) -> Shared<BoxFuture<'static, Arc<ApplicableAOutput>>> {
 
             if let Some(ctx) = ctx.as_ref() {
-                ctx.write().applicable_a_cached.push(applicable.applied_id(input.id()));
+                ctx.write().applicable_a_cached.push(applicable.applied_id(Input::id(input)));
             }
 
             self.futures_runner.run_cached_task(
@@ -1180,7 +1228,7 @@ mod tests {
         ) -> Shared<BoxFuture<'static, Arc<ApplicableBOutput>>> {
 
             if let Some(ctx) = ctx.as_ref() {
-                ctx.write().applicable_b_cached.push(applicable.applied_id(input.id()));
+                ctx.write().applicable_b_cached.push(applicable.applied_id(Input::id(input)));
             }
 
             self.futures_runner.run_cached_task(

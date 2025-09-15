@@ -437,9 +437,10 @@ where
 
 #[cfg(test)]
 pub(crate) mod test_types {
+    use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::WithId;
     use super::*;
-    use crate::common::{CopyToDevice, Data, Input, Output};
+    use crate::common::{CopyToDevice, Data, Output};
     use crate::test_utils::DummyTensor;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -462,6 +463,15 @@ pub(crate) mod test_types {
         pub id: TestId,
         pub data: DummyTensor,
     }
+
+    // impl WithId for TestInput{
+    //     type ID = TestId;
+    //
+    //     fn id(&self) -> &Self::ID {
+    //         todo!()
+    //     }
+    // }
+    impl Input for TestInput{}
 
     impl Adjustable for TestInput {}
 
@@ -507,7 +517,7 @@ pub(crate) mod test_types {
         }
     }
 
-    impl Input for TestInput {}
+    // impl Input for TestInput {}
 
     impl TestInput {
         pub fn new(n: u32) -> Self {
