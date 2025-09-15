@@ -1,8 +1,8 @@
 use caching_runner::adjusters::splits::OutputBuilder;
-use caching_runner::common::{WithId};
 use tch::Device;
 use tch::Kind;
 use thoosa_common::dims::Dims;
+use thoosa_shared::traits::WithId;
 use crate::data::ThoTensor;
 
 

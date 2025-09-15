@@ -31,7 +31,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
     let reg_name_tokens = if let Some(lit) = reg_name {
         quote! { #lit }
     } else {
-        quote! { stringify!(<<#name as caching_runner::common::runnable::Stage>::Out as caching_runner::common::WithId>::ID) }
+        quote! { stringify!(<<#name as caching_runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID) }
     };
 
     // Generate impl that matches the signature used across the workspace.
@@ -40,7 +40,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
         #[async_trait::async_trait]
         impl caching_runner::common::cachable::Cached for #name {
             async fn cache() -> &'static dashmap::DashMap<
-                <<Self as caching_runner::common::runnable::Stage>::Out as caching_runner::common::WithId>::ID,
+                <<Self as caching_runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
                 futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<Self as caching_runner::common::runnable::Stage>::Out>>, caching_runner::common::MyError>>>,
             >
             where
@@ -48,7 +48,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
             {
                 // Static cache map for this Runnable's output type
                 static CACHE: std::sync::OnceLock<dashmap::DashMap<
-                    <<#name as caching_runner::common::runnable::Stage>::Out as caching_runner::common::WithId>::ID,
+                    <<#name as caching_runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
                     futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<std::sync::Arc<caching_runner::common::cachable::DataCacheWrapper<<#name as caching_runner::common::runnable::Stage>::Out>>, caching_runner::common::MyError>>>,
                 >> = std::sync::OnceLock::new();
 
