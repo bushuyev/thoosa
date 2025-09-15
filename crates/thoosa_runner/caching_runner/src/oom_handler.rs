@@ -437,8 +437,9 @@ where
 
 #[cfg(test)]
 pub(crate) mod test_types {
+    use thoosa_shared::traits::WithId;
     use super::*;
-    use crate::common::{CopyToDevice, Data, Input, Output, WithId};
+    use crate::common::{CopyToDevice, Data, Input, Output};
     use crate::test_utils::DummyTensor;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -591,7 +592,7 @@ pub(crate) mod mock_runnable {
     use mockall::mock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use crate::common::WithId;
+    use thoosa_shared::traits::WithId;
 
     mock! {
         #[derive(Clone, Debug)]

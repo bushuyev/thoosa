@@ -3,6 +3,8 @@ use crate::common::*;
 #[cfg(test)]
 use ambassador::Delegate;
 use async_trait::async_trait;
+use thoosa_shared::traits::{DummyCachableId, MockWithId};
+use thoosa_shared::traits::*;
 
 #[derive(Debug, Clone)]
 pub struct  DummyTensor(pub Vec<f32>);
@@ -37,14 +39,6 @@ pub fn parse_numeric_part(name: &str) -> Option<f64> {
     }
 }
 
-#[cfg(test)]
-#[async_trait]
-impl CopyToDevice for MockDataWithId {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        MockDataWithId::for_device(dst_device)
-    }
-
-}
 
 #[derive(Debug,Delegate)]
 // #[delegate(Data, target = "data")]
@@ -99,4 +93,14 @@ impl Data for MockDataWithId {
     fn device(&self) -> usize {
         self.device.unwrap_or(0)
     }
+}
+
+
+#[cfg(test)]
+#[async_trait]
+impl CopyToDevice for MockDataWithId {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        MockDataWithId::for_device(dst_device)
+    }
+
 }
