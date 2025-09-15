@@ -1,4 +1,4 @@
-use crate::common::cachable::{DataCacheWrapper};
+use crate::common::cachable::DataCacheWrapper;
 use crate::common::{CopyToDevice, MyError};
 use crate::common::{Data, Output};
 use async_trait::async_trait;
@@ -107,10 +107,10 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use dashmap::DashMap;
-    use futures_util::future::{FutureExt, BoxFuture};
+    use futures_util::future::{BoxFuture, FutureExt};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use crate::common::{DummyCachableId, WithId};
+    use thoosa_shared::traits::{DummyCachableId, WithId};
     use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
 
     #[derive(Debug, Clone)]

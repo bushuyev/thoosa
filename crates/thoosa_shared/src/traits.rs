@@ -142,3 +142,22 @@ impl Display for SimpleId {
         write!(f, "{}", self.0)
     }
 }
+
+#[delegatable_trait]
+#[automock(type ID=DummyCachableId;)]
+pub trait WithId {
+    type ID: CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug;
+
+    fn id(&self) -> &Self::ID;
+}
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct DummyCachableId(&'static str);
+
+impl Named for DummyCachableId {}
+
+impl From<&'static str> for DummyCachableId {
+    fn from(value: &'static str) -> Self {
+        DummyCachableId(value)
+    }
+}

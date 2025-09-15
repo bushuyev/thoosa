@@ -12,7 +12,7 @@ mod model_test;
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
 #[allow(unused_imports)]
-use caching_runner::common::{CopyToDevice, Data, Input, MyError, Output, WithId};
+use caching_runner::common::{CopyToDevice, Data, Input, MyError, Output};
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::{Device, Kind, TchError, Tensor};
@@ -102,7 +102,7 @@ mod tests {
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use caching_runner_test::FailUntil::MinPermits;
     use caching_runner_test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-    use caching_runner::common::{Data, DropIf, Input, MyError, OutId, RunCtx, WithId};
+    use caching_runner::common::{Data, DropIf, Input, MyError, OutId, RunCtx};
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -119,7 +119,7 @@ mod tests {
     use caching_runner::common::runnable::Stage;
     use caching_runner::panic_to_err;
     use thoosa_common::dims::Dims;
-    use thoosa_shared::traits::{CachableIdTr, Named, SimpleId};
+    use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
     use crate::cuda_utils::cuda_mem;
     use crate::data::ThoTensor;
     use crate::output_builders::BuildAs;
