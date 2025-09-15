@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Stage;
-use thoosa_shared::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 use crate::permits::{NumPermits, RunnerPerm};
 
 pub mod runnable;
@@ -179,25 +179,6 @@ impl <T:ToString> From<T> for MyError {
             MyError::SomethingElse(msg)
         }
 
-    }
-}
-
-#[delegatable_trait]
-#[automock(type ID=DummyCachableId;)]
-pub trait WithId {
-    type ID: CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug;
-
-    fn id(&self) -> &Self::ID;
-}
-
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct DummyCachableId(&'static str);
-
-impl Named for DummyCachableId {}
-
-impl From<&'static str> for DummyCachableId {
-    fn from(value: &'static str) -> Self {
-        DummyCachableId(value)
     }
 }
 

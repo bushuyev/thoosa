@@ -1,5 +1,6 @@
 // use std::sync::Arc;
 // use parking_lot::RwLock;
+// use caching_runner::common::runnable::Stage;
 // use thoosa_shared::applicables_runner::{Runner, ToOrdinal};
 // use thoosa_shared::ThoosaError;
 //
@@ -9,8 +10,10 @@
 //
 // }
 //
-// impl caching_runner::common::Runnable for TensorLoader {
-//
+// impl Stage for TensorLoader {
+//     type In = ();
+//     type Out = ();
+//     type Ctx = ();
 // }
 //
 // impl TensorLoader {
