@@ -102,7 +102,7 @@ impl  ChunkOfSlicedTensors {
 
             let unfolded = applicable.unfold(t);
             slice_sizes.push(unfolded.size()[1]);
-            slices.push(unfolded.tensor);
+            slices.push(unfolded.t);
         }
 
         let tensor= if slices.is_empty() {

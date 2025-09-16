@@ -124,7 +124,7 @@ pub async fn motifs_to_tensor_2(
                 debug!("motifs_to_tensor: applied t.size={:?}", applied.size());
     //
                 for motif_slice in motif_slices {
-                    debug!("motifs_to_tensor: motif_slice={motif_slice:?} applied.as_ref().tensor.size={:?}", applied.as_ref().tensor.size());
+                    debug!("motifs_to_tensor: motif_slice={motif_slice:?} applied.as_ref().tensor.size={:?}", applied.as_ref().t.size());
 
                     // let motif_slice_t_x = find_motifs_run_config_applicable.unfold(&applied).tensor.i((
                     //     motif_slice.channel as i64,
@@ -132,7 +132,7 @@ pub async fn motifs_to_tensor_2(
                     //     ..
                     // ));
 
-                    let motif_slice_t = applied.tensor.i((
+                    let motif_slice_t = applied.t.i((
                         motif_slice.channel as i64,
                         motif_slice.slice_idx..motif_slice.slice_idx + find_motifs_run_config_applicable.run_config().window() as i64,
                     ));
@@ -509,7 +509,7 @@ pub async fn load_motif_slices_2 (channel: i64, find_motifs_run_config_applicabl
 
                             slice_ok
                         }).map(|slice_idx|
-                            t.tensor.i((channel, slice_idx as i64..(slice_idx + window) as i64))
+                            t.t.i((channel, slice_idx as i64..(slice_idx + window) as i64))
                         ).collect::<Vec<Tensor>>()
                     )
                 }

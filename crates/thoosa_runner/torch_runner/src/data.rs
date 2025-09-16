@@ -42,7 +42,6 @@ impl <D:Dims, Id: Named + Clone> ThoTensor<D, Id> {
         Self { id, t:Tensor::zeros(size, options), tracking: Default::default(), _pd: PhantomData::default() }
     }
 
-
     pub fn requires_grad(&self) -> bool {
         self.t.requires_grad()
     }
@@ -227,23 +226,24 @@ where Id: Named + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash +
 
 #[async_trait]
 impl <D:Dims, Id> CopyToDevice for ThoTensor<D, Id>
-where Id: Named + Clone + Send + Sync + Eq + std::hash::Hash + std::fmt::Debug + 'static
+where Id: Named + Clone //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
 {
     async fn copy_to_device(&self, dst_device: usize) ->Self {
 
-        let copy = if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
-             self.t.to_device(ThoDevice::from(dst_device).deref().clone())
-        }  else {
-            assert!(self.t.is_contiguous());
-            CopyCtx::instance().copy_from_ptr(self.t.data_ptr() as usize, &self.t.size(), dst_device, self.t.kind()).await
-        };
-
-        // println!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
-
-        ThoTensor::new(
-            self.id.clone(),
-            copy
-        )
+        // let copy = if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
+        //      self.t.to_device(ThoDevice::from(dst_device).deref().clone())
+        // }  else {
+        //     assert!(self.t.is_contiguous());
+        //     CopyCtx::instance().copy_from_ptr(self.t.data_ptr() as usize, &self.t.size(), dst_device, self.t.kind()).await
+        // };
+        //
+        // // println!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
+        //
+        // ThoTensor::new(
+        //     self.id.clone(),
+        //     copy
+        // )
+        todo!()
     }
 }
 
