@@ -143,13 +143,13 @@ impl Dims for LabelNetInputTensors{}
 
 impl From<ThoTensor<ChannelsMotifsData, CachableId>> for ThoTensor<LabelNetInputTensors, CachableId> {
     fn from(value: ThoTensor<ChannelsMotifsData, CachableId>) -> Self {
-        ThoTensor::from(value.tensor)
+        ThoTensor::from(value.t)
     }
 }
 
 impl From<ThoTensor<ChannelsMotifsFlattenedData, CachableId>> for ThoTensor<LabelNetInputTensors, CachableId> {
     fn from(value: ThoTensor<ChannelsMotifsFlattenedData, CachableId>) -> Self {
-        ThoTensor::from(value.tensor)
+        ThoTensor::from(value.t)
     }
 }
 
@@ -1405,7 +1405,7 @@ impl Runnable<TCD, ThoTensor<ChannelsMotifsData, CachableId>, ()> for MotifsNets
                         // let unfolded_ref = unfolded.as_ref();
                         // debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max: unfolded_ref: {unfolded:?} device={:?}", unfolded.device());
 
-                        let unfolded_channel = match unfolded.tensor.f_i((channel as i64, .., ..)) {
+                        let unfolded_channel = match unfolded.t.f_i((channel as i64, .., ..)) {
                             Ok(v) => v,
                             Err(e) => {
                                 debug!("Applicable for MotifsNetsSelectionApplicable::apply:Max:  f_i failed: {:?}", e);
@@ -2743,7 +2743,7 @@ impl Runnable<TCD, ThoTensor<Final, CachableId>, ()> for FinalNetApplicable {
     type R = ThoRunner;
 
     fn run(&self, input: TCD, options: ()) -> Result<ThoTensor<Final, CachableId>, ThoosaError> {
-        assert_eq!(input.tensor.size().len(), 2); //single tensor - channels x data
+        assert_eq!(input.t.size().len(), 2); //single tensor - channels x data
 
         Ok(self.final_net_module.infer(
             &self.label_nets_applicable.run(

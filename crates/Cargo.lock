@@ -4775,6 +4775,7 @@ dependencies = [
  "thoosa_store",
  "tokio",
  "torch-sys",
+ "torch_runner",
 ]
 
 [[package]]

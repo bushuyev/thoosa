@@ -15,6 +15,7 @@ use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
+use torch_runner::metrics::TwoDimsMetrics;
 use crate::tasks::run_ctx_2::RunCtx2;
 
 #[derive(Debug)]
@@ -72,20 +73,17 @@ impl  Stage for TensorLoader {
     }
 }
 
-
-
-
 impl Data for RawChannels {
-    type Metrics = ();
+    type Metrics = TwoDimsMetrics;
     type Sub = RawChannels;
     type SubSelect = ();
 
     fn size(&self) -> Self::Metrics {
-        todo!()
+        self.t.size().try_into().expect("can't get size")
     }
 
     fn device(&self) -> usize {
-        todo!()
+        ThoDevice::from(self.t.device()).ordinal()
     }
 }
 
@@ -94,9 +92,11 @@ impl OutId for TensorLoader {
         SimpleId::from(format!("loaded_{}", input_id.id()))
     }
 }
+
 #[async_trait]
 impl CopyToDevice for RawChannels {
     async fn copy_to_device(&self, dst_device: usize) ->Self {
+        // RawChannels::new(self.t.copy_to_device(dst_device))
         todo!()
     }
 }
