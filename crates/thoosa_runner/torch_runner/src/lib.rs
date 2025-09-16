@@ -8,6 +8,7 @@ mod output_builders;
 pub mod data;
 #[cfg(test)]
 mod model_test;
+pub mod metrics;
 
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
@@ -15,11 +16,11 @@ use caching_runner::adjusters::splits::OutputBuilder;
 use caching_runner::common::{CopyToDevice, Data};
 use std::fmt::Debug;
 use std::ops::Deref;
-use tch::{Device, Kind, TchError, Tensor};
+use tch::{Device, Kind, Tensor};
 // test-only imports live under cfg(test)
 use data::ThoTensor;
 use thoosa_common::dims::Dims;
-use thoosa_shared::traits::{Named, SimpleId};
+use thoosa_shared::traits::Named;
 
 
 
@@ -109,6 +110,7 @@ mod tests {
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
     use crate::cuda_utils::cuda_mem;
     use crate::data::ThoTensor;
+    use crate::metrics::TwoDimsMetrics;
     use crate::output_builders::BuildAs;
 
     #[derive(Debug)]
@@ -277,96 +279,10 @@ mod tests {
 
     }
 
-    #[derive(Debug, Clone, Default)]
-    struct LoadedTensorMetrics{
-        dim_0:i64,
-        dim_1:i64
-    }
-
-    impl Add<& LoadedTensorMetrics> for &LoadedTensorMetrics {
-        type Output = LoadedTensorMetrics;
-
-        fn add(self, rhs: &LoadedTensorMetrics) -> Self::Output {
-            LoadedTensorMetrics {
-                dim_0: self.dim_0 + rhs.dim_0,
-                dim_1: self.dim_1,
-            }
-        }
-    }
-
-    impl DivAssign<i64> for LoadedTensorMetrics {
-        fn div_assign(&mut self, rhs: i64) {
-            self.dim_0 /= rhs;
-        }
-    }
-
-    impl PartialEq<i64> for LoadedTensorMetrics {
-        fn eq(&self, other: &i64) -> bool {
-            self.dim_0.eq(other)
-        }
-    }
-
-    impl PartialOrd<i64> for LoadedTensorMetrics {
-        fn partial_cmp(&self, other: &i64) -> Option<Ordering> {
-            self.dim_0.partial_cmp( other)
-        }
-    }
-
-    impl PartialEq<LoadedTensorMetrics> for LoadedTensorMetrics {
-        fn eq(&self, other: &LoadedTensorMetrics) -> bool {
-            self.dim_0.eq(&other.dim_0)
-        }
-    }
-
-    impl PartialOrd<LoadedTensorMetrics> for LoadedTensorMetrics {
-        fn partial_cmp(&self, other: &LoadedTensorMetrics) -> Option<Ordering> {
-            self.dim_0.partial_cmp(&other.dim_0)
-        }
-    }
-
-    impl <'a> AddAssign<&'a LoadedTensorMetrics> for LoadedTensorMetrics {
-        fn add_assign(&mut self, rhs: &'a LoadedTensorMetrics) {
-            self.dim_0+=rhs.dim_0;
-            println!("AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}", rhs.dim_0, self.dim_0);
-            // self.dim_1+=rhs.dim_1;TODO dimension
-        }
-    }
-
-    impl TryFrom<Vec<i64>> for LoadedTensorMetrics {
-        type Error = ThoosaError;
-
-        fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
-            let &[dim_0, dim_1, ..] = value.as_slice() else {
-                return Err(MyError::SomethingElse(format!("can't make LoadedTensorMetrics from {value:?}")).into());
-            };
-
-            Ok(Self {
-                dim_0,
-                dim_1
-            })
-        }
-    }
-
-    impl From<&LoadedTensorMetrics> for [i64;2] {
-        fn from(value: &LoadedTensorMetrics) -> Self {
-            [value.dim_0, value.dim_1]
-        }
-    }
-
-
-    impl From<[i64;2]> for LoadedTensorMetrics {
-        fn from([dim_0, dim_1]: [i64; 2]) -> Self {
-            Self {
-                dim_0,
-                dim_1
-            }
-        }
-    }
-
 
     #[async_trait]
     impl Data for ThoTensor<LoadedTensor, SimpleId> {
-        type Metrics = LoadedTensorMetrics;
+        type Metrics = TwoDimsMetrics;
 
         type Sub = Self;
 
@@ -380,7 +296,7 @@ mod tests {
         where
             Self: Sized
         {
-            let size:LoadedTensorMetrics = self.t().size().try_into().unwrap();
+            let size: TwoDimsMetrics = self.t().size().try_into().unwrap();
 
 
             let dim_0_range = range.start.dim_0..min(size.dim_0, range.end.dim_0);
@@ -410,14 +326,14 @@ mod tests {
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
-        size:LoadedTensorMetrics,
+        size: TwoDimsMetrics,
         kind:Kind,
     }
 
 
 
     impl TestTensorLoader {
-        pub fn new(size: LoadedTensorMetrics, kind: Kind) -> Self {
+        pub fn new(size: TwoDimsMetrics, kind: Kind) -> Self {
             Self { size, kind }
         }
     }
@@ -508,7 +424,7 @@ mod tests {
 
     #[async_trait]
     impl Data for ThoTensor<ClcTaskOutput, SimpleId> {
-        type Metrics = LoadedTensorMetrics;
+        type Metrics = TwoDimsMetrics;
 
         type Sub = Self;
         type SubSelect = std::ops::Range<Self::Metrics>;
@@ -718,7 +634,7 @@ mod tests {
             id: LoadAndClcTaskId,
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
-            dim: LoadedTensorMetrics,
+            dim: TwoDimsMetrics,
             oom_runner: ClcOOMRunner<ClcTask>,
             kind:Kind,
             device:Device,
@@ -889,7 +805,7 @@ mod tests {
         Ok(())
     }
 
-    fn mul_check(mul_k:f64, size:LoadedTensorMetrics, res: &str, result: &ThoTensor<ClcTaskOutput, SimpleId>, rtol: f64, atol: f64) {
+    fn mul_check(mul_k:f64, size: TwoDimsMetrics, res: &str, result: &ThoTensor<ClcTaskOutput, SimpleId>, rtol: f64, atol: f64) {
 
         mul_check_with_exp_f(mul_k, res, result, rtol, atol, |k, t|{
             lin_t(k, (&size).into(), t.kind(), t.device())

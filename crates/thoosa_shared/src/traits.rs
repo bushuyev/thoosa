@@ -119,6 +119,9 @@ pub trait Named {
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct SimpleId(pub &'static str);
 
+unsafe impl Send for SimpleId {}
+unsafe impl Sync for SimpleId {}
+
 pub trait TestId {}
 impl TestId for SimpleId {}
 

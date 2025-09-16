@@ -824,7 +824,7 @@ where
 
                     let sync_wrapper = SyncWrapper::wrap_tensor(
                         // Loader::<Tensor>::load_future(Arc::clone(&loader), key.clone(), area_0, future_id, done_sender.clone()).await
-                        runner.run_loader(key,  &Cpu, Some(Arc::clone(&area_0))).await.tensor.shallow_clone()
+                        runner.run_loader(key,  &Cpu, Some(Arc::clone(&area_0))).await.t.shallow_clone()
                     );
                     window_0_tensors_arc.write().push(sync_wrapper);
                 }
