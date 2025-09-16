@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 
 use log::{debug, error};
-use tch::{ Tensor};
+use tch::Tensor;
 
 use tch::nn::{batch_norm1d, BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Optimizer, Path};
 use tch::nn::ConvConfig;
@@ -17,9 +17,9 @@ use thoosa_shared::ThoosaError;
 use crate::builder::Node;
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
-use crate::dims::{Dims, AnyDims, ThoTensor};
+use crate::dims::{AnyDims, Dims};
 use thoosa_shared::applicables_runner::CachableId;
-
+use crate::tho_tensor::ThoTensor;
 use crate::utils::*;
 
 #[derive(Debug)]
@@ -484,8 +484,8 @@ mod tch_tests {
 
 
 
-    use tch::{Device, IndexOp, Kind, nn, Reduction, Tensor};
-    use tch::Device::{Cpu};
+    use tch::{nn, Device, IndexOp, Kind, Reduction, Tensor};
+    use tch::Device::Cpu;
     use tch::Kind::Float;
 
     use tch::nn::{BatchNormConfig, ConvConfig, OptimizerConfig, VarStore};
@@ -497,7 +497,7 @@ mod tch_tests {
     use crate::builder::SeqBuilder;
     use crate::dims::{AnyDims, Batch};
     use crate::my_tch::ThoModule;
-    use crate::train_nets::{ThoModuleWithStore};
+    use crate::train_nets::ThoModuleWithStore;
 
     use crate::utils::*;
 
