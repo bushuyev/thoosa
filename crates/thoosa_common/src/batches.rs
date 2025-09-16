@@ -507,7 +507,7 @@ impl<DI: Dims, DO: Dims /* F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
         let mut inputs = guard
             .0
             .drain(..)
-            .map(|tt| tt.tensor.shallow_clone())
+            .map(|tt| tt.t.shallow_clone())
             .collect::<Vec<Tensor>>(); //TODO remove shallow clone
 
         drop(guard);

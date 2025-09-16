@@ -78,7 +78,7 @@ pub trait Dimensional {
 #[derive(Debug)]
 pub struct ThoTensor<D: Dims, Id: Named + Clone> {
     id: Id,//TODO move to wrappers (RawChannels etc)?
-    pub tensor: Tensor, // attach the actual tensor
+    pub t: Tensor, // attach the actual tensor
     pub _pd: PhantomData<D>,
 }
 
@@ -90,7 +90,7 @@ impl <D:Dims, Id: Named + Clone> Clone for ThoTensor<D, Id> {
     fn clone(&self) -> Self {
         ThoTensor {
             id: self.id.clone(),
-            tensor: self.tensor.shallow_clone(),
+            t: self.t.shallow_clone(),
             _pd: PhantomData,
         }
     }
@@ -104,7 +104,7 @@ impl <D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: Tensor) -> Self {
         Self {
             id: "1".into(),
-            tensor,
+            t: tensor,
             _pd: PhantomData,
         }
     }
@@ -114,7 +114,7 @@ impl <D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
             id: "2".into(),
-            tensor: tensor.shallow_clone(),
+            t: tensor.shallow_clone(),
             _pd: PhantomData,
         }
     }
@@ -124,15 +124,15 @@ impl <D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
 impl <D:Dims> Output for ThoTensor<D, CachableId> {
 
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
-        if self.tensor.device().eq(&ThoDevice::from(device_ordinal).into()) {
+        if self.t.device().eq(&ThoDevice::from(device_ordinal).into()) {
             Arc::new(ThoTensor::new(
                 self.id.clone(),
-                self.tensor.shallow_clone()
+                self.t.shallow_clone()
             ))
         } else {
             Arc::new(ThoTensor::new(
                 self.id.clone(),
-                self.tensor.to_device(ThoDevice::from(device_ordinal).into())
+                self.t.to_device(ThoDevice::from(device_ordinal).into())
             ))
         }
 
@@ -177,7 +177,7 @@ pub type ThoBatch<D> = ThoTensor<Batch<D>, CachableId>;
 
 impl <D:Dims> AsRef<Tensor> for ThoTensor<D, CachableId>{
     fn as_ref(&self) -> &Tensor{
-        &self.tensor
+        &self.t
     }
 }
 
@@ -185,43 +185,44 @@ impl <D:Dims> ThoTensor<D, CachableId> {
 
 
     pub fn size(&self) -> Vec<i64> {
-        self.tensor.size()
+        self.t.size()
     }
 
     pub fn device(&self)->Device{
-        self.tensor.device()
+        self.t.device()
     }
 
     pub fn shallow_clone<DO:Dims>(&self) -> ThoTensor<DO, CachableId> {
         ThoTensor {
             id: self.id.clone(),
-            tensor: self.tensor.shallow_clone(),
+            t: self.t.shallow_clone(),
             _pd: Default::default(),
         }
     }
 
     pub fn drop(self) {
-        drop(self.tensor);
+        drop(self.t);
     }
 
     pub fn to_device(&self, device: Device) -> Self {
         Self{
             id: self.id.clone(),
-            tensor:self.tensor.to_device(device),
+            t:self.t.to_device(device),
             _pd: self._pd
         }
     }
 
     pub fn new(id: CachableId, tensor: Tensor) -> Self {
         Self { 
-            id, tensor, _pd: PhantomData 
+            id,
+            t: tensor, _pd: PhantomData
         }
     }
 }
 
 impl <D:Dims> Display for ThoTensor<D, CachableId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.tensor, f)
+        std::fmt::Display::fmt(&self.t, f)
     }
 }
 

@@ -148,7 +148,7 @@ impl FindMotifsApplicable {
 
     pub fn unfold(&self, input: &TCDF) -> TCSD {
         let input_length = input.size()[1];
-        input.tensor.unfold(1, self.run_config.window as i64, self.run_config.step as i64).into()
+        input.t.unfold(1, self.run_config.window as i64, self.run_config.step as i64).into()
     }
 }
 
@@ -232,10 +232,10 @@ impl Runnable<TCD, TCDF, ()> for FindMotifsApplicable {
 
         let t = match self.kernel.as_ref() {
             None => {
-                input.tensor.to_device(self.device).shallow_clone()
+                input.t.to_device(self.device).shallow_clone()
             }
             Some(kernel) => {
-                input.tensor.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
+                input.t.to_device(self.device).conv1d(&kernel, None::<Tensor>, 1, 0, 1, self.groups)
             }
         };
 
