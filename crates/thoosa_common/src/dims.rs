@@ -77,7 +77,7 @@ pub trait Dimensional {
 
 #[derive(Debug)]
 pub struct ThoTensor<D: Dims, Id: Named + Clone> {
-    id: Id,
+    id: Id,//TODO move to wrappers (RawChannels etc)?
     pub tensor: Tensor, // attach the actual tensor
     pub _pd: PhantomData<D>,
 }
@@ -143,7 +143,7 @@ impl <D:Dims> WithId for ThoTensor<D, CachableId> {
     type ID = CachableId;
 
     fn id(&self) -> &Self::ID {
-        todo!()
+        &self.id
     }
 }
 
