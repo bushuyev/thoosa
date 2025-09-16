@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::common::cachable::DataCacheWrapper;
 use crate::common::runnable::Stage;
-use crate::common::{CopyToDevice, Data, DropIf, OutId};
+use crate::common::{Data, DropIf, OutId};
 use crate::common::{ RunCtx};
 #[double]
 use crate::global_ctx::GlobalCtx;
@@ -16,6 +16,7 @@ use std::sync::Arc;
 use mockall_double::double;
 use tracing::instrument;
 use thoosa_common::panic_to_err_async;
+use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{CachableIdTr, Named};
 use crate::permits::MAX_PERMITS;
@@ -441,7 +442,7 @@ pub(crate) mod test_types {
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::WithId;
     use super::*;
-    use crate::common::{CopyToDevice, Data};
+    use crate::common::{Data};
     use crate::test_utils::DummyTensor;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]

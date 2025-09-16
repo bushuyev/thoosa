@@ -3,6 +3,7 @@ use crate::common::*;
 #[cfg(test)]
 use ambassador::Delegate;
 use async_trait::async_trait;
+use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::traits::{DummyCachableId, MockWithId};
 use thoosa_shared::traits::*;
 
@@ -16,7 +17,7 @@ impl From<Vec<f32>> for DummyTensor{
 }
 
 #[async_trait]
-impl crate::common::CopyToDevice for DummyTensor {
+impl CopyToDevice for DummyTensor {
     async fn copy_to_device(&self, _dst_device: usize) -> Self {
         self.clone()
     }

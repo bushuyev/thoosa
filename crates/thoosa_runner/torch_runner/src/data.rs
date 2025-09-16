@@ -1,7 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use caching_runner::common::{CopyToDevice};
 use tch::{Device, Kind, Tensor};
 use async_trait::async_trait;
 use torch_sys::IntList;
@@ -11,8 +10,9 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 use crate::{ThoDevice, ThoTensorView};
-use crate::copy_ctx::CopyCtx;
-use crate::cuda_utils::tensor_mem_size;
+use thoosa_common::copy_ctx::CopyCtx;
+use thoosa_common::cuda_utils::tensor_mem_size;
+use thoosa_common::tho_tensor::CopyToDevice;
 
 #[derive(Debug)]
 pub struct ThoTensor<D: Dims, Id: Named + Clone> {

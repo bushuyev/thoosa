@@ -305,7 +305,7 @@ mod tests {
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
-    use caching_runner::common::{CopyToDevice, Data, DropIf, OutId, RunCtx};
+    use caching_runner::common::{ Data, DropIf, OutId, RunCtx};
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use parking_lot::RwLock;
@@ -317,6 +317,7 @@ mod tests {
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
     use caching_runner::common::runnable::Stage;
+    use thoosa_common::tho_tensor::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{Named, SimpleId, WithId};
