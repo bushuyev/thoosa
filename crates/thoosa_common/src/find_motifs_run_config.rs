@@ -18,8 +18,9 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::val::Val;
 use crate::applicables::{ThoDevice, ThoRunner};
-use crate::dims::{ChannelsData, ChannelsDataFiltered, ChannelsSlicesData, Dims, ThoTensor, TCD, TCDF, TCSD};
+use crate::dims::{ChannelsData, ChannelsDataFiltered, ChannelsSlicesData, Dims, TCD, TCDF, TCSD};
 use crate::loader::SyncWrapper;
+use crate::tho_tensor::ThoTensor;
 use crate::transforms::filters::*;
 use crate::ws::Workspace;
 

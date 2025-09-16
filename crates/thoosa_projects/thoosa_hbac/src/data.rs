@@ -9,7 +9,8 @@ use tch::{Device, Kind, Tensor};
 use rand::Rng;
 use std::io::Write;
 
-use thoosa_common::dims::{Batch, ChannelsData, ThoTensor};
+use thoosa_common::dims::{Batch, ChannelsData};
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::DataBatch;
 use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
 use thoosa_shared::ThoosaError;

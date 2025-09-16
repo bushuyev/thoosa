@@ -1,16 +1,14 @@
 use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
 use std::ops::Deref;
-use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
-use futures_util::sink::With;
 use parking_lot::RwLock;
 use tch::Device;
 use caching_runner::common::{CopyToDevice, Data, OutId};
 use caching_runner::common::runnable::Stage;
-use thoosa_common::applicables::{TCDLoader, ThoDevice};
-use thoosa_common::dims::{ChannelsData, Dims, ThoTensor, TCD};
+use thoosa_common::applicables::ThoDevice;
+use thoosa_common::dims::{ChannelsData, Dims};
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
@@ -121,7 +119,7 @@ mod tests {
     use caching_runner::common::cachable::Cached;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::applicables::ThoDevice;
-    use thoosa_common::dims::ThoTensor;
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::ThoosaError;
