@@ -646,7 +646,7 @@ mod motifs_tests {
     use tch::kind::FLOAT_CPU;
     use tch::Kind::Float;
     use thoosa_common::applicables::ThoRunner;
-    use thoosa_common::dims::ThoTensor;
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig};
     use thoosa_common::utils::*;

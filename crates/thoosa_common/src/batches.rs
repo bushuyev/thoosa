@@ -1,5 +1,5 @@
 use crate::applicables::{ThoRunCtx, ThoRunner};
-use crate::dims::{AnyDims, Batch, Dims, ThoTensor, ThoBatch};
+use crate::dims::{AnyDims, Batch, Dims, ThoBatch};
 use thoosa_shared::applicables_runner::CachableId;
 use crate::loader::{LoadRunner, Loader};
 use crate::utils::{tensor_mem_size, DataBatch, Splittable, SplittableDataBatch};
@@ -8,7 +8,7 @@ use crossbeam_utils::sync::WaitGroup;
 use futures_util::FutureExt;
 use log::debug;
 use parking_lot::{Mutex, RwLock};
-use rand::seq::{SliceRandom, IndexedRandom};
+use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
@@ -19,6 +19,7 @@ use std::{fmt, thread};
 use tch::Kind::Float;
 use tch::{Device, Tensor};
 use thoosa_shared::resource::Resource;
+use crate::tho_tensor::ThoTensor;
 
 #[async_trait]
 pub trait AsyncDataBatch<D: Dims>: Send + Sync {

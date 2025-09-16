@@ -43,8 +43,9 @@ use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use thoosa_common::batches::{AsyncBatchTransform, AsyncClassTensorsLoaderData, AsyncLoadingTensorsDataBatch};
-use thoosa_common::dims::{Batch, ChannelsData, ThoTensor, ThoBatch, TCD};
+use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
 use thoosa_common::find_motifs_run_config::{FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
+use thoosa_common::tho_tensor::ThoTensor;
 use crate::version::VERSION;
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_properties_map::ToHashmap;
@@ -1913,7 +1914,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, resource_path, run_all_grid_step, run_all_grid_step_2, run_infer, run_opt_step, run_opt_step_2, run_plot_motif_slices,  run_train_final_nets_2, run_train_label_nets, run_train_label_nets_2, run_train_motif_nodes_on_motif_selection, run_train_motif_nodes_on_motif_selection_2, Cli};
+    use crate::cli::{import_resources, resource_path, run_all_grid_step, run_all_grid_step_2, run_infer, run_opt_step, run_opt_step_2, run_plot_motif_slices, run_train_final_nets_2, run_train_label_nets, run_train_label_nets_2, run_train_motif_nodes_on_motif_selection, run_train_motif_nodes_on_motif_selection_2, Cli};
     use crate::data::ParquetLoader;
     use log::LevelFilter::{Debug, Error, Trace, Warn};
     use log::{debug, error, info, set_max_level, trace, LevelFilter};
@@ -1938,7 +1939,7 @@ mod cli_tests {
     use tch::Device::{Cpu, Cuda};
     use tch::{nn, Device, IndexOp, Tensor};
     use thoosa_common::applicables::ThoRunner;
-    use thoosa_common::dims::ThoTensor;
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};

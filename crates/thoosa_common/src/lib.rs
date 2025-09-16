@@ -25,6 +25,7 @@ pub mod find_motifs_run_config;
 pub mod dims;
 pub mod applicables;
 pub mod batches;
+pub mod tho_tensor;
 
 pub trait ResourceLoader:Send+Sync {
     type K;

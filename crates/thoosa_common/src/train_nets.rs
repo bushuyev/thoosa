@@ -1,13 +1,13 @@
 use std::cell::RefCell;
 use crate::builder::{Node, SeqBuilder};
 use crate::loader::{LoadRunner, Loader};
-use crate::my_tch::{ ThoModule};
+use crate::my_tch::ThoModule;
 use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace, TPEOptimizer};
-use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult,};
+use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult, };
 use crate::{panic_to_err, panic_to_err_async};
 use crate::utils::{cuda_mem, run_split_on_oom, tensor_mem_size, train_2, DummyListener, Reducer, SplitQueue, Splittable, SplittableDataBatch, SplittableTensor};
 use crate::utils::{pad_to, plot_series, train, DataBatch, ListenerResponse, TrainListener};
-use crate::ws::{ Workspace};
+use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
@@ -15,7 +15,7 @@ use futures::FutureExt;
 use log::{debug, info, trace, warn, Log};
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
-use rand::seq::{SliceRandom, IndexedRandom};
+use rand::seq::{IndexedRandom, SliceRandom};
 
 
 
@@ -28,19 +28,19 @@ use std::{fmt, fs};
 
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::path::{ PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
-use tch::Device::{Cpu};
+use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Reduction, Tensor};
 
 use thoosa_shared::{clc_step, slices_len};
 
-use thoosa_shared::resource::{Resource};
+use thoosa_shared::resource::Resource;
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{  make_combos, RangeOrValue, ThoosaError};
+use thoosa_shared::{make_combos, RangeOrValue, ThoosaError};
 
 use thoosa_store::Store;
 use std::panic::AssertUnwindSafe;
@@ -48,7 +48,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::future::join_all;
 
-use thoosa_properties_map::{ToHashmap};
+use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_shared::run_configs::{Cachable, RunConfig, Runnable};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -57,10 +57,10 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::traits::WithId;
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
-use crate::batches::{AsyncDataBatch};
-use crate::dims::{Batch, LabelProbability, LabelsProbabilities, SlicesData, ChannelsData, ChannelsMotifsData, Dims, MotifsNetsSelectionDims, ThoTensor, ThoBatch, TCD, TCSD, ChannelsMotifsFlattenedData, MotifData, LabelNetsProbabilities, LabelNetInputTensorDims, AnyDims, Final};
+use crate::batches::AsyncDataBatch;
+use crate::dims::{AnyDims, Batch, ChannelsData, ChannelsMotifsData, ChannelsMotifsFlattenedData, Dims, Final, LabelNetInputTensorDims, LabelNetsProbabilities, LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, SlicesData, ThoBatch, TCD, TCSD};
 use crate::find_motifs_run_config::*;
-
+use crate::tho_tensor::ThoTensor;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -2934,8 +2934,8 @@ mod train_tests {
     use crate::my_tch::ThoModule;
     use crate::simp::DummyDs;
     use crate::train_nets;
-    use crate::train_nets::{opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, InputFilterRangeOrValue, LabelNetTypeArgs, RangeOrValue, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MotifsNetsSelectionApplicable, OptConfig, PlotVecf32, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, NetsPadding, LabelNetTypeArgsRangeOrValue, MaxPaddingNetParams, FixedNumSlicesNetParams, LabelNetApplicable, LabelNetsApplicable, FinalNetArgs, LabelNetTypeParams, LabelNetApplicableAndNetE, LabelNetInputTensors, load_channels_motifs, LoadMotifNetOutput};
-    use crate::train_nets::{ InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
+    use crate::train_nets::{load_channels_motifs, opt_train, BatchTransform, ClassTensorsLoaderData, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, FixedNumSlicesNetArgs, FixedNumSlicesNetParams, InputFilterRangeOrValue, LabelNetApplicable, LabelNetApplicableAndNetE, LabelNetInputTensors, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LabelNetsApplicable, LoadMotifNetOutput, LoadingTensorsDataBatch, MaxPaddingNetArgs, MaxPaddingNetArgsRangeOrValue, MaxPaddingNetParams, MotifsNetsSelectionApplicable, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue};
+    use crate::train_nets::{InferArgs, LabelNetParams, MotifNetParams, TensorsDataBatch, ThoModuleWithStore};
     use crate::utils::{cuda_mem, from, optimizer_mem_size, set_requires_grad_in_subpath, train, vs_mem_size, SplittableDataBatch, TrainListener};
     use crate::utils::{lin_t, pad_to, reset_print_options, run_split_on_oom, t_0_0, tensor_mem_size, DataBatch, Reducer, SplitQueue, Splittable, SplittableTensor};
     use crate::ws::{FsWorkspace, Workspace, WsMockBuilder};
@@ -2971,13 +2971,14 @@ mod train_tests {
     use thoosa_shared::run_configs::{Cachable, OptRunConfigs, RunId};
     use thoosa_shared::val::Val;
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
-    use crate::dims::{Batch, Dims, AnyDims, ThoTensor, SlicesData, MotifData, MotifsNetsSelectionDims, LabelProbability, ThoBatch};
+    use crate::dims::{AnyDims, Batch, Dims, LabelProbability, MotifData, MotifsNetsSelectionDims, SlicesData, ThoBatch};
     use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
     use crate::ws::mock_ws_simp;
     use thoosa_shared::run_configs::Runnable;
     use thoosa_shared::test_utils::set_panic_hook;
     use crate::applicables::ThoRunner;
+    use crate::tho_tensor::ThoTensor;
 
     #[ctor::ctor]
     fn test_init() {
