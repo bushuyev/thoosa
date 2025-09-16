@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Stage;
+use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 use crate::permits::{NumPermits, RunnerPerm};
@@ -166,9 +167,3 @@ pub trait OutId: Stage {
     }
 }
 
-#[async_trait]
-#[delegatable_trait]
-#[automock]
-pub trait CopyToDevice {
-    async fn copy_to_device(&self, dst_device: usize) ->Self;
-}

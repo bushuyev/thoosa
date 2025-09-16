@@ -1489,6 +1489,32 @@ pub fn lin_t(n: u32) -> Tensor {
     Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
 }
 
+pub fn lin_for_size(k:f64, size:[i64;2], kind:Kind, device:Device)->Tensor {
+
+    let end = size.iter().fold(1, |a, v| a * *v);
+
+    println!("lin_t: end={end}");
+
+    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, device))).expect("f_arange failed").view(&size[..]);
+
+    t = t.set_requires_grad(false);
+    match kind {
+        Kind::Uint8 | Kind::Int8 | Kind::Int16 | Kind::Int | Kind::Int64 => {
+            t *= k as i32;
+        }
+        _=> {
+            t *= k;
+        }
+    }
+
+
+    println!("lin_t: t.size()={:?} t=\n{t}", t.size());
+
+    t
+
+}
+
+
 pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }

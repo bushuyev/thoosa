@@ -26,6 +26,8 @@ pub mod dims;
 pub mod applicables;
 pub mod batches;
 pub mod tho_tensor;
+pub mod cuda_utils;
+pub mod copy_ctx;
 
 pub trait ResourceLoader:Send+Sync {
     type K;
