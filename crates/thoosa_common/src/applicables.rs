@@ -48,6 +48,19 @@ impl From<usize> for ThoDevice {
     }
 }
 
+impl ThoDevice {
+    pub fn ordinal(&self)-> usize {
+        match &self.0 {
+            Device::Cpu => 0,
+            Device::Cuda(v) => v+1,
+            _=> {
+                unimplemented!()
+            }
+        }
+    }
+}
+
+
 
 #[derive(Debug)]
 pub struct ThoRunCtx {
