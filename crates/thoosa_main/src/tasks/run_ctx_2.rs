@@ -42,7 +42,7 @@ impl RunCtx for RunCtx2 {
     }
 
     fn device_idx(&self) -> usize {
-        todo!()
+        self.device_idx
     }
 
     fn acquired_permits(&self) -> NumPermits {
@@ -50,6 +50,6 @@ impl RunCtx for RunCtx2 {
     }
 
     fn cache_area(&self) -> u64 {
-        todo!()
+        self.cache_area
     }
 }
