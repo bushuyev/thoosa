@@ -507,7 +507,7 @@ mod tests {
         for tensor_kind in [Kind::Uint8, Kind::Int16, Kind::Int, Kind::Int64,  Kind::Double] {
 
 
-            let src_t = lin_for_size(1., [input_n, dim_1], tensor_kind, Cuda(0));
+            let src_t = lin_for_size(1., [input_n, dim_1], tensor_kind, &Cuda(0));
 
             println!("src_t=\t{src_t}");
 
