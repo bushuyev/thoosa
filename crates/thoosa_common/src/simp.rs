@@ -1,5 +1,6 @@
 use tch::Tensor;
-use crate::dims::{AnyDims, Batch, ThoTensor};
+use crate::dims::{AnyDims, Batch};
+use crate::tho_tensor::ThoTensor;
 use crate::utils::DataBatch;
 
 #[derive(Debug)]
