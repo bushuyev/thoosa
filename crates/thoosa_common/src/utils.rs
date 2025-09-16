@@ -1489,13 +1489,13 @@ pub fn lin_t(n: u32) -> Tensor {
     Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
 }
 
-pub fn lin_for_size(k:f64, size:[i64;2], kind:Kind, device:Device)->Tensor {
+pub fn lin_for_size(k:f64, size:[i64;2], kind:Kind, device:&Device)->Tensor {
 
     let end = size.iter().fold(1, |a, v| a * *v);
 
     println!("lin_t: end={end}");
 
-    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, device))).expect("f_arange failed").view(&size[..]);
+    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device))).expect("f_arange failed").view(&size[..]);
 
     t = t.set_requires_grad(false);
     match kind {
