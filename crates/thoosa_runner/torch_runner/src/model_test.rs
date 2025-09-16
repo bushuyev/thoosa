@@ -27,12 +27,12 @@ mod tests {
 
     use rand::{rngs::StdRng, SeedableRng};
     use rand::seq::SliceRandom;
+    use thoosa_common::applicables::ThoDevice;
     use thoosa_common::dims::Dims;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
     use crate::tests::TorchRunCtx;
-    use crate::ThoDevice;
 
     // Shared registry for mapping FileListInput IDs -> (file, label) entries
     static FILE_LISTS: OnceLock<DMap<String, Vec<(&'static str, f64)>>> = OnceLock::new();
