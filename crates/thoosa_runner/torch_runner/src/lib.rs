@@ -2,8 +2,6 @@
 
 extern crate core;
 
-mod cuda_utils;
-mod copy_ctx;
 mod output_builders;
 pub mod data;
 #[cfg(test)]
@@ -13,16 +11,14 @@ pub mod metrics;
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
 #[allow(unused_imports)]
-use caching_runner::common::{CopyToDevice, Data};
+use caching_runner::common::Data;
+// test-only imports live under cfg(test)
+use data::ThoTensor;
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::{Device, Kind, Tensor};
-// test-only imports live under cfg(test)
-use data::ThoTensor;
 use thoosa_common::dims::Dims;
 use thoosa_shared::traits::Named;
-
-
 
 
 struct ThoDevice(Device);
@@ -81,37 +77,36 @@ impl<'a, D:Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
 #[cfg(test)]
 mod tests {
     use super::{output_builders::SingleDimTensorOutputBuilder, ThoDevice};
-    use async_trait::async_trait;
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
-    use caching_runner::global_ctx::GlobalCtx;
-    use caching_runner::oom_handler::Adjustable;
-    use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
-    use caching_runner_test::FailUntil::MinPermits;
-    use caching_runner_test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-    use caching_runner::common::{Data, DropIf, OutId, RunCtx};
-    use dashmap::DashMap;
-    use futures_util::future::{BoxFuture, Shared};
-    use parking_lot::RwLock;
-    use std::cmp::{min, Ordering};
-    use std::collections::{HashMap, HashSet};
-    use std::mem;
-    use std::ops::{Add, AddAssign, DivAssign};
-    use std::sync::Arc;
-    use tch::Kind::Float;
-    use tch::{Device, IndexOp, Kind, Scalar, Tensor};
-    use caching_runner::test_utils::parse_numeric_part;
-    use tracing_subscriber::{fmt, EnvFilter};
-    use tracing_subscriber::fmt::format::FmtSpan;
-    use caching_runner::common::runnable::Stage;
-    use thoosa_common::dims::Dims;
-    use thoosa_common::panic_to_err;
-    use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::{MyError, ThoosaError};
-    use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
-    use crate::cuda_utils::cuda_mem;
     use crate::data::ThoTensor;
     use crate::metrics::TwoDimsMetrics;
     use crate::output_builders::BuildAs;
+    use async_trait::async_trait;
+    use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
+    use caching_runner::common::runnable::Stage;
+    use caching_runner::common::{Data, DropIf, OutId, RunCtx};
+    use caching_runner::global_ctx::GlobalCtx;
+    use caching_runner::oom_handler::Adjustable;
+    use caching_runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
+    use caching_runner::test_utils::parse_numeric_part;
+    use caching_runner_test::FailUntil::MinPermits;
+    use caching_runner_test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
+    use dashmap::DashMap;
+    use futures_util::future::{BoxFuture, Shared};
+    use parking_lot::RwLock;
+    use std::cmp::min;
+    use std::collections::{HashMap, HashSet};
+    use std::mem;
+    use std::sync::Arc;
+    use tch::Kind::Float;
+    use tch::{Device, IndexOp, Kind, Scalar, Tensor};
+    use thoosa_common::cuda_utils::cuda_mem;
+    use thoosa_common::dims::Dims;
+    use thoosa_common::utils::{lin_for_size, lin_t};
+    use thoosa_shared::applicables_runner::Input;
+    use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
+    use thoosa_shared::{MyError, ThoosaError};
+    use tracing_subscriber::fmt::format::FmtSpan;
+    use tracing_subscriber::{fmt, EnvFilter};
 
     #[derive(Debug)]
     pub struct TorchRunCtx {
@@ -348,30 +343,6 @@ mod tests {
         }
     }
 
-    pub fn lin_t(k:f64, size:[i64;2], kind:Kind, device:Device)->Tensor {
-
-        let end = size.iter().fold(1, |a, v| a * *v);
-
-        println!("lin_t: end={end}");
-
-        let mut t = panic_to_err!(Tensor::f_arange(end, (kind, device))).expect("f_arange failed").view(&size[..]);
-
-        t = t.set_requires_grad(false);
-        match kind {
-            Kind::Uint8 | Kind::Int8 | Kind::Int16 | Kind::Int | Kind::Int64 => {
-                t *= k as i32;
-            }
-            _=> {
-                t *= k;
-            }
-        }
-
-
-        println!("lin_t: t.size()={:?} t=\n{t}", t.size());
-
-        t
-
-    }
 
     #[async_trait]
     impl Stage for TestTensorLoader {
@@ -385,7 +356,7 @@ mod tests {
         {
             let k = parse_numeric_part(input.id().0).unwrap_or(1.0);
 
-            Ok(ThoTensor::new(self.out_id(input.id()), lin_t(k, (&self.size).into(), self.kind, ThoDevice::from(ctx.read().device_idx).0)))
+            Ok(ThoTensor::new(self.out_id(input.id()), lin_for_size(k, (&self.size).into(), self.kind, ThoDevice::from(ctx.read().device_idx).0)))
         }
 
     }
@@ -808,7 +779,7 @@ mod tests {
     fn mul_check(mul_k:f64, size: TwoDimsMetrics, res: &str, result: &ThoTensor<ClcTaskOutput, SimpleId>, rtol: f64, atol: f64) {
 
         mul_check_with_exp_f(mul_k, res, result, rtol, atol, |k, t|{
-            lin_t(k, (&size).into(), t.kind(), t.device())
+            lin_for_size(k, (&size).into(), t.kind(), t.device())
         })
     }
 
@@ -1140,7 +1111,7 @@ mod tests {
             |r:&ThoTensor<ClcTaskOutput, SimpleId>| {
 
                 mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t|{
-                    lin_t(k, size, t.kind(), t.device()).sum_dim_intlist(0, false, t.kind()).view((-1, 1))
+                    lin_for_size(k, size, t.kind(), t.device()).sum_dim_intlist(0, false, t.kind()).view((-1, 1))
                 });
 
                 println!("Ok");

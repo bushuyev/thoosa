@@ -1,5 +1,4 @@
 use crate::common::cachable::DataCacheWrapper;
-use crate::common::{CopyToDevice};
 use crate::common::{Data};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -10,6 +9,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;

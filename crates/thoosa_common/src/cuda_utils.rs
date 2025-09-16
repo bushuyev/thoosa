@@ -309,10 +309,9 @@ mod tests {
     use tokio::task::JoinSet;
     use tokio::time::Instant;
     use tokio_utils::Pool;
-    use crate::copy_ctx::CopyCtx;
     use crate::cuda_utils::{copy_d2h_from_ptr, copy_h2d_from_ptr, cuda_mem, equal_bytes, speed_gb_per_s};
-    use crate::tests::lin_t;
-
+    use crate::copy_ctx::CopyCtx;
+    use crate::utils::lin_for_size;
 
     // #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     #[cfg_attr(miri, ignore)]
@@ -322,7 +321,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
 
 
-            let mut ctx : Option<UnsafeCell< crate::copy_ctx::CopyCtx >> = None;
+            let mut ctx : Option<UnsafeCell<crate::copy_ctx::CopyCtx>> = None;
 
             for mem_k in [0.1, 0.5, 1.0, 2.]{
                 for buffs in [8, 16, 32, 64] {
@@ -508,7 +507,7 @@ mod tests {
         for tensor_kind in [Kind::Uint8, Kind::Int16, Kind::Int, Kind::Int64,  Kind::Double] {
 
 
-            let src_t = lin_t(1., [input_n, dim_1], tensor_kind, Cuda(0));
+            let src_t = lin_for_size(1., [input_n, dim_1], tensor_kind, Cuda(0));
 
             println!("src_t=\t{src_t}");
 
