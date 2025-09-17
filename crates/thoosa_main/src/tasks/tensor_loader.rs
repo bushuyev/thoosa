@@ -3,7 +3,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
-use tch::Device;
+use tch::{Device, Tensor};
+use tch::kind::FLOAT_CPU;
 use caching_runner::common::{Data, OutId};
 use caching_runner::common::runnable::Stage;
 use thoosa_common::applicables::ThoDevice;
@@ -13,16 +14,17 @@ use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
+use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 use crate::tasks::run_ctx_2::RunCtx2;
 
 #[derive(Debug)]
 pub struct RawChannels {
-    t:ThoTensor<ChannelsData, SimpleId>
+    t:ThoTensor2<ChannelsData, SimpleId>
 }
 
 impl RawChannels {
-    pub fn new(t: ThoTensor<ChannelsData, SimpleId>) -> Self {
+    pub fn new(t: ThoTensor2<ChannelsData, SimpleId>) -> Self {
         Self { t }
     }
 }
@@ -40,6 +42,8 @@ impl Input for RawChannels {
 }
 
 impl Output for RawChannels {}
+
+
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
@@ -94,8 +98,7 @@ impl OutId for TensorLoader {
 #[async_trait]
 impl CopyToDevice for RawChannels {
     async fn copy_to_device(&self, dst_device: usize) ->Self {
-        // RawChannels::new(self.t.copy_to_device(dst_device))
-        todo!()
+        RawChannels::new(self.t.copy_to_device(dst_device).await)
     }
 }
 
@@ -123,6 +126,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::ThoosaError;
+    use torch_runner::data::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{RawChannels, TensorLoader};
 
@@ -131,7 +135,7 @@ mod tests {
         GlobalCtx::init_devices(2);
         let loader = Arc::new(TensorLoader::new(
             move |key, _| {
-                RawChannels::new(ThoTensor::new(Input::id(key).clone(), Tensor::rand([100, 3], FLOAT_CPU)))
+                RawChannels::new(ThoTensor2::new(Input::id(key).clone(), Tensor::rand([100, 3], FLOAT_CPU)))
             },
             ThoDevice::from(Device::Cpu)
         ));

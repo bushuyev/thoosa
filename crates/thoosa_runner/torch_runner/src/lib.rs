@@ -66,6 +66,7 @@ mod tests {
     use std::sync::Arc;
     use tch::Kind::Float;
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
+    use tch::kind::FLOAT_CPU;
     use thoosa_common::cuda_utils::cuda_mem;
     use thoosa_common::dims::Dims;
     use thoosa_common::utils::{lin_for_size, lin_t};
@@ -243,7 +244,7 @@ mod tests {
     }
 
 
-/*    #[async_trait]
+    #[async_trait]
     impl Data for ThoTensor2<LoadedTensor, SimpleId> {
         type Metrics = TwoDimsMetrics;
 
@@ -285,7 +286,7 @@ mod tests {
             self.device()
         }
     }
-*/
+
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
@@ -324,7 +325,10 @@ mod tests {
         {
             let k = parse_numeric_part(input.id().0).unwrap_or(1.0);
 
-            Ok(ThoTensor2::new(self.out_id(input.id()), lin_for_size(k, (&self.size).into(), self.kind, &ThoDevice::from(ctx.read().device_idx))))
+            Ok(ThoTensor2::new(
+                self.out_id(input.id()),
+                lin_for_size(k, (&self.size).into(), self.kind, &ThoDevice::from(ctx.read().device_idx))
+            ))
         }
 
     }
@@ -346,7 +350,6 @@ mod tests {
         use_matmul: bool
     }
 
-
     impl ClcTask {
         pub fn new(id: SimpleId, k: impl Into<Scalar>, fail_until: Vec<FailUntil>, dim:i64, kind:Kind, device:Device, use_matmul: bool) -> Self {
             Self {
@@ -358,10 +361,15 @@ mod tests {
         }
     }
 
-
     impl Adjustable for ClcTask {}
 
-/*    #[async_trait]
+    impl ThoTensor2<ClcTaskOutput, SimpleId>{
+        pub fn newc_clc_output()->ThoTensor2<ClcTaskOutput, SimpleId>{
+            ThoTensor2::new("asdf".into(), Tensor::empty(&[0], FLOAT_CPU))
+        }
+    }
+
+    #[async_trait]
     impl Data for ThoTensor2<ClcTaskOutput, SimpleId> {
         type Metrics = TwoDimsMetrics;
 
@@ -379,7 +387,7 @@ mod tests {
             self.device()
         }
     }
-*/
+
     impl OutId for ClcTask {
         fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("mult_{}_inp_{}", self.id, input_id))
@@ -768,7 +776,7 @@ mod tests {
         // }
         assert!(ok);
     }
-/*
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_till_min_permits_tensor() -> Result<(), ThoosaError> {
         unsafe { let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so"); }
@@ -1092,7 +1100,7 @@ mod tests {
 
         Ok(())
     }
-*/
+
     #[allow(dead_code)]
     fn init_tracing() {
         /*let filter = EnvFilter::from_default_env()

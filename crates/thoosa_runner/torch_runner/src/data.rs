@@ -27,21 +27,6 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone > {
     subview_fn:Option<fn(Self)->Self>
 }
 
-#[async_trait]
-impl <D: Dims, Id: Named + Clone + Send > Data for ThoTensor2<D, Id> {
-    type Metrics = TwoDimsMetrics;
-    type Sub = Self;
-    type SubSelect = std::ops::Range<TwoDimsMetrics>;
-
-    fn size(&self) -> Self::Metrics {
-        self.size().try_into().expect("can't get size")
-    }
-
-    fn device(&self) -> usize {
-        self.device()
-    }
-}
-
 impl <D: Dims, Id: Named + Clone > Debug for ThoTensor2<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("")
