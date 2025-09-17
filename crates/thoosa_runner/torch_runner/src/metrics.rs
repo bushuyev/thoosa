@@ -87,3 +87,13 @@ impl From<[i64;2]> for TwoDimsMetrics {
         }
     }
 }
+
+impl From<&[i64;2]> for TwoDimsMetrics {
+    fn from([dim_0, dim_1]: &[i64; 2]) -> Self {
+        Self {
+            dim_0: *dim_0,
+            dim_1: *dim_1
+        }
+    }
+}
+
