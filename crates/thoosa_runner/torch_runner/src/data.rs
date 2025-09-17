@@ -27,21 +27,6 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone > {
     subview_fn:Option<fn(Self)->Self>
 }
 
-#[async_trait]
-impl <D: Dims, Id: Named + Clone + Send > Data for ThoTensor2<D, Id> {
-    type Metrics = TwoDimsMetrics;
-    type Sub = Self;
-    type SubSelect = std::ops::Range<TwoDimsMetrics>;
-
-    fn size(&self) -> Self::Metrics {
-        self.size().try_into().expect("can't get size")
-    }
-
-    fn device(&self) -> usize {
-        self.device()
-    }
-}
-
 impl <D: Dims, Id: Named + Clone > Debug for ThoTensor2<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("")
@@ -184,15 +169,14 @@ impl <D:Dims, Id: Named + Clone> ThoTensor2<D, Id> {
     }
 
     // No-params variant: transform tensor with a function that only needs &Tensor
-    pub fn run_inner<OutDim: Dims, F>(
+    pub fn run_inner<R, F>(
         &self,
-        id: Id,
         func: F,
-    ) -> Result<ThoTensor2<OutDim, Id>, ThoosaError>
+    ) -> Result<R, ThoosaError>
     where
-        F: Fn(&Tensor) -> Result<Tensor, ThoosaError>,
+        F: Fn(&Tensor) -> Result<R, ThoosaError>,
     {
-        Ok(ThoTensor2::new(id, func(&self.t)?))
+        func(&self.t)
     }
 
     pub(crate) fn _track_used_in(&self, token: &'static str) {

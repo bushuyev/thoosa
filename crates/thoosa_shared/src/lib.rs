@@ -217,7 +217,7 @@ impl From<MyError> for ThoosaError {
                 Self::oom()
             }
             e=> {
-                Self::new_with_error("from new".to_string(), e)
+                Self::new_with_error(format!("e={e:?}"), e)
             }
         }
     }
