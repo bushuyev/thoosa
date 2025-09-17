@@ -169,15 +169,14 @@ impl <D:Dims, Id: Named + Clone> ThoTensor2<D, Id> {
     }
 
     // No-params variant: transform tensor with a function that only needs &Tensor
-    pub fn run_inner<OutDim: Dims, F>(
+    pub fn run_inner<R, F>(
         &self,
-        id: Id,
         func: F,
-    ) -> Result<ThoTensor2<OutDim, Id>, ThoosaError>
+    ) -> Result<R, ThoosaError>
     where
-        F: Fn(&Tensor) -> Result<Tensor, ThoosaError>,
+        F: Fn(&Tensor) -> Result<R, ThoosaError>,
     {
-        Ok(ThoTensor2::new(id, func(&self.t)?))
+        func(&self.t)
     }
 
     pub(crate) fn _track_used_in(&self, token: &'static str) {
