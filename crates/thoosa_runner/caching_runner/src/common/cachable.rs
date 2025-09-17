@@ -12,6 +12,7 @@ use mockall_double::double;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -134,7 +135,7 @@ pub trait Cached: Stage {
 #[derive(Debug)]
 pub struct DataCacheWrapper<O>
 where
-O: WithId + Data<Sub=O> + CopyToDevice + Send + Sync,
+    O: WithId + Data<Sub=O> + CopyToDevice + Send + Sync,
 
 {
     id: <O as WithId>::ID,
@@ -145,6 +146,7 @@ O: WithId + Data<Sub=O> + CopyToDevice + Send + Sync,
 
     //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was in the cpu
     on_cpu_since: parking_lot::RwLock<Option<u64>>,
+    pd:PhantomData<O>
 
 }
 
@@ -249,6 +251,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
             cache_area: AtomicU64::new(cache_area),
             size,
             on_cpu_since: Default::default(),
+            pd:PhantomData
         }
     }
 

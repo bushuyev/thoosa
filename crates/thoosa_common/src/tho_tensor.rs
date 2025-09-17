@@ -32,7 +32,6 @@ impl <D:Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
 
 unsafe impl <D:Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
 
-unsafe impl <D:Dims, Id: Named + Clone> Send for ThoTensor<D, Id> {}
 
 impl <D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: Tensor) -> Self {
