@@ -2,7 +2,7 @@
 
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::sync::Arc;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
