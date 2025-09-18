@@ -6,6 +6,7 @@ use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use ambassador::delegatable_trait;
 use log::debug;
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::ThoosaError;
 use crate::common::runnable::Stage;
 
