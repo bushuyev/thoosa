@@ -566,14 +566,11 @@ mod tests {
         type Ctx = DummyRunCtx;
 
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-        where
-            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
-        {
+        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             self.run_count.fetch_add(1, Relaxed);
 
-            let k = caching_runner::test_utils::parse_numeric_part(input.id().0).unwrap_or(1.0) as f32;
-            let out_id = self.out_id(input.id());
+            let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0) as f32;
+            let out_id = self.out_id(WithId::id(input.as_ref()));
 
             let _self_for_reload = Arc::clone(&self);
             let _ctx_for_reload = Arc::clone(&ctx);
@@ -621,9 +618,7 @@ mod tests {
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-        where
-            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
+        async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         {
             unimplemented!()
         }
@@ -850,9 +845,7 @@ mod tests {
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-        where
-            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
+        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))

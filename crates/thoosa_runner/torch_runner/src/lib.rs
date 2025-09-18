@@ -64,6 +64,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::mem;
     use std::sync::Arc;
+    use futures_util::sink::With;
     use tch::Kind::Float;
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
     use tch::kind::FLOAT_CPU;
@@ -319,14 +320,12 @@ mod tests {
         type Out = ThoTensor2<LoadedTensor, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-        where
-            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
+        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         {
-            let k = parse_numeric_part(input.id().0).unwrap_or(1.0);
+            let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
             Ok(ThoTensor2::new(
-                self.out_id(input.id()),
+                self.out_id(WithId::id(input.as_ref())),
                 lin_for_size(k, (&self.size).into(), self.kind, &ThoDevice::from(ctx.read().device_idx))
             ))
         }
@@ -520,11 +519,7 @@ mod tests {
         type Out = ThoTensor2<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run<I>(self: Arc<Self>, input: Arc<I>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-        where
-            I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static,
-
-        {
+        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
