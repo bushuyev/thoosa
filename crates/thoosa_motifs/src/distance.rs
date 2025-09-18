@@ -344,26 +344,22 @@ fn mean_mask(k: f64, distances: &Tensor, pre_mask: Option<&Tensor>, means_acc:&M
 
 
 pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
-    debug!("clc_dist_d2: t_0.device={:?}, t_1.device{:?}", t_0.device(), t_1.device());
 
-    let t_0 = t_0.unsqueeze(dim+1); // channels x motifs x 1 x motif_len
-    let t_1 = t_1.unsqueeze(dim); // channels x 1 x num_slices x motif_len
+    let t_0 = t_0.unsqueeze(dim+1); // channels x num_slices x 1 x slice_len
+    let t_1 = t_1.unsqueeze(dim); // channels x 1 x num_slices x slice_len
 
-    debug!("clc_dist_d2: t_0 size={:?}", t_0.size());
-    debug!("clc_dist_d2: t_1 size={:?}", t_1.size());
 
     let mut diff = t_0.f_subtract(&t_1)?;
     drop(t_0);
     drop(t_1);
 
-    let squared_diff = diff.f_pow_(2)?;
+    let d = diff.f_pow_(2)?;
     drop(diff);
-    debug!("clc_dist_d2: squared_diff size={:?}", squared_diff.size());
 
-    let squared_distances = squared_diff.f_sum_dim_intlist(dim+2, false, Kind::Float)?;
-    drop(squared_diff);
+    let s = d.f_sum_dim_intlist(dim+2, false, Kind::Float)?;
+    drop(d);
 
-    Ok(squared_distances.sqrt())
+    Ok(s.sqrt())
 }
 
 pub fn slice_t(t_0: &Tensor, step: u32, window: u32) -> Tensor {
@@ -405,14 +401,14 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
     drop(j);
 
     // Step 5: Compute square roots to get Euclidean distances
-    let pairwise_dists = pairwise_squared_dists.sqrt();
+    let clc_dist_d2s = pairwise_squared_dists.sqrt();
     trace!("average_euclidean_distance: pairwise_squared_dists=\n{pairwise_squared_dists}");
     drop(pairwise_squared_dists);
 
     // Step 6: Compute the mean of the distances
-    let mean_distance = pairwise_dists.mean(Kind::Float);
+    let mean_distance = clc_dist_d2s.mean(Kind::Float);
 
-    trace!("average_euclidean_distance: pairwise_dists=\n{pairwise_dists} mean_distance=\n{mean_distance}");
+    trace!("average_euclidean_distance: clc_dist_d2s=\n{clc_dist_d2s} mean_distance=\n{mean_distance}");
 
     Ok(mean_distance.double_value(&[]) as f32)
 }
@@ -791,6 +787,131 @@ mod distance_tests {
         Ok(())
     }
 
+    #[test]
+    fn test_single_channel() {
+        // 1 channel, 2 slices, length 2
+        // t0 slices: [0,0], [1,1]
+        let t0 = Tensor::from_slice(&[0.0f32, 0.0, 1.0, 1.0])
+            .totype(Float)
+            .view([1, 2, 2]); // [channels=1, num_slices=2, slice_len=2]
+        let t1 = t0.shallow_clone();
+
+        let dist = clc_dist_d2(t0, t1, 1).unwrap();
+        let expected = Tensor::from_slice(&[0.0f32, (2.0f32).sqrt(), (2.0f32).sqrt(), 0.0])
+            .totype(Float)
+            .view([1, 2, 2]);
+
+        assert!(dist.allclose(&expected, 1e-6, 1e-6, false));
+    }
+
+    #[test]
+    fn test_two_channels() {
+        // channel 0 slices: [0,0], [1,0]
+        // channel 1 slices: [0,1], [0,2]
+        let t0 = Tensor::from_slice(&[
+            0.0, 0.0, 1.0, 0.0, // ch0
+            0.0, 1.0, 0.0, 2.0, // ch1
+        ])
+            .totype(Float)
+            .view([2, 2, 2]); // [channels=2, num_slices=2, slice_len=2]
+
+        let t1 = t0.shallow_clone();
+        let dist = clc_dist_d2(t0, t1, 1).unwrap();
+
+        // both channels: pairwise distances of two 2D points
+        let expected = Tensor::from_slice(&[
+            0.0, 1.0, 1.0, 0.0, // ch0
+            0.0, 1.0, 1.0, 0.0, // ch1
+        ])
+            .totype(Float)
+            .view([2, 2, 2]);
+
+        assert!(dist.allclose(&expected, 1e-6, 1e-6, false));
+    }
+
+    #[test]
+    fn test_three_channels() {
+        // channel 0: [0], [1]
+        // channel 1: [2], [5]
+        // channel 2: [10], [13]
+        let t0 = Tensor::from_slice(&[0.0, 1.0, 2.0, 5.0, 10.0, 13.0])
+            .totype(Float)
+            .view([3, 2, 1]); // [channels=3, num_slices=2, slice_len=1]
+        let t1 = t0.shallow_clone();
+        let dist = clc_dist_d2(t0, t1, 1).unwrap();
+
+        let expected = Tensor::from_slice(&[
+            0.0, 1.0, 1.0, 0.0,   // ch0
+            0.0, 3.0, 3.0, 0.0,   // ch1
+            0.0, 3.0, 3.0, 0.0,   // ch2
+        ])
+            .totype(Float)
+            .view([3, 2, 2]);
+
+        assert!(dist.allclose(&expected, 1e-6, 1e-6, false));
+    }
+
+    #[test]
+    fn test_cross_distances() {
+        let t0 = Tensor::from_slice(&[
+            0.0, 0.0,
+            1.0, 0.0,
+        ])
+            .view([1, 2, 2]);
+
+        let t1 = Tensor::from_slice(&[
+            0.0, 1.0,
+            2.0, 0.0,
+        ])
+            .view([1, 2, 2]);
+
+        let dist = clc_dist_d2(t0, t1, 1).unwrap();
+
+        let expected = Tensor::from_slice(&[
+            1.0, 2.0,
+            (2.0f32).sqrt(), 1.0,
+        ])
+            .view([1, 2, 2]);
+
+        assert!(dist.allclose(&expected, 1e-6, 1e-6, false));
+    }
+
+    #[test]
+    fn test_different_num_slices() {
+        // t0: 2 slices, each of length 2
+        let t0 = Tensor::from_slice(&[
+            0.0, 0.0, // slice0
+            1.0, 0.0, // slice1
+        ])
+            .view([1, 2, 2]);
+
+        // t1: 3 slices, each of length 2
+        let t1 = Tensor::from_slice(&[
+            0.0, 1.0, // slice0
+            1.0, 1.0, // slice1
+            2.0, 3.0, // slice2
+        ])
+            .view([1, 3, 2]);
+
+        let dist = clc_dist_d2(t0, t1, 1).unwrap();
+
+        // Expected distances:
+        // [0,0] vs [0,1] => sqrt((0-0)^2 + (0-1)^2) = 1
+        // [0,0] vs [1,1] => sqrt((0-1)^2 + (0-1)^2) = sqrt(2)
+        // [0,0] vs [2,3] => sqrt((0-2)^2 + (0-3)^2) = sqrt(13)
+        //
+        // [1,0] vs [0,1] => sqrt((1-0)^2 + (0-1)^2) = sqrt(2)
+        // [1,0] vs [1,1] => sqrt((1-1)^2 + (0-1)^2) = 1
+        // [1,0] vs [2,3] => sqrt((1-2)^2 + (0-3)^2) = sqrt(10)
+        let expected = Tensor::from_slice(&[
+            1.0, (2.0f32).sqrt(), (13.0f32).sqrt(),
+            (2.0f32).sqrt(), 1.0, (10.0f32).sqrt(),
+        ])
+            .view([1, 2, 3]);
+
+        assert!(dist.allclose(&expected, 1e-6, 1e-6, false));
+    }
+
 
     #[test]
     fn test_dist_d2_with_mask_q_05(){
@@ -799,12 +920,16 @@ mod distance_tests {
             30., 30.,
             0., 0.,
             40., 40.,
-        ]).view((1, 3, 2));
+        ])
+            .totype(Float)
+            .view((1, 3, 2));
         let slice_1 = Tensor::from_slice(&[
             7., 8.,
             8., 9.,
             9., 10.,
-        ]).view((1, 3, 2));
+        ])
+            .totype(Float)
+            .view((1, 3, 2));
         debug!("slice_0={slice_0}");
         debug!("slice_1={slice_1}");
 
