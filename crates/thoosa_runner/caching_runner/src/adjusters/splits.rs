@@ -5,6 +5,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use ambassador::delegatable_trait;
+use log::debug;
 use thoosa_shared::ThoosaError;
 use crate::common::runnable::Stage;
 
@@ -60,10 +61,10 @@ where
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {
-        println!("Adjuster::degrade: 0. adjust_context={adjust_context:?}");
+        debug!("Adjuster::degrade: 0. adjust_context={adjust_context:?}");
 
         (*adjust_context.split_len_mut())/=2;
-        println!("Adjuster::degrade: 1. adjust_context={adjust_context:?}");
+        debug!("Adjuster::degrade: 1. adjust_context={adjust_context:?}");
 
         adjust_context.split_len() > &self.min_split_len
     }
@@ -105,7 +106,7 @@ where
 
         self.done_to += &self.split_len;
 
-        println!("SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}", self.done_to, self.split_len);
+        debug!("SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}", self.done_to, self.split_len);
     }
 
     fn all_done(&self) -> bool {

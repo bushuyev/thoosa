@@ -330,28 +330,28 @@
 //             input.run_inner(
 //                 self.out_id(input.id()),
 //                 |t: &Tensor| {
-//                     println!("t.size()={:?}", t.size());
+//                     debug!("t.size()={:?}", t.size());
 //                 // Simulate OOM conditions based on batch size t.size()[0]
 //                 for fail_until in fails {
 //                     use caching_runner_test::FailUntil::{DumpedToCpu, MemLimit, MinPermits, Never};
 //                     match fail_until {
 //                         MemLimit(m) => {
 //                             if t.size()[0] > *m as i64 {
-//                                 println!("Err(MyError::OutOfMemory) MemLimit");
+//                                 debug!("Err(MyError::OutOfMemory) MemLimit");
 //                                 return Err(MyError::OutOfMemory.into());
 //                             }
 //                         }
 //                         MinPermits(min_permits) => {
 //                             let acquired_permits = ctx_clone.read().acquired_permits();
 //                             if acquired_permits < *min_permits {
-//                                 println!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits}");
+//                                 debug!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits}");
 //                                 return Err(MyError::OutOfMemory.into());
 //                             }
 //                         }
 //                         DumpedToCpu => {
 //                             let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx_clone.read().device_idx());
 //                             if !is_all_on_cpu {
-//                                 println!("Err(MyError::OutOfMemory) DumpedToCpu");
+//                                 debug!("Err(MyError::OutOfMemory) DumpedToCpu");
 //                                 return Err(MyError::OutOfMemory.into());
 //                             }
 //                         }
@@ -483,10 +483,10 @@
 //             .run_cached(Arc::new(input), Arc::clone(&ctx))
 //             .await?;
 //
-//         println!("acc={acc:?}");
+//         debug!("acc={acc:?}");
 //
 //         acc.with_data(0, None, None, |acc_t| {
-//             println!("acc_t={acc_t:?} t=\n{}", acc_t.t());
+//             debug!("acc_t={acc_t:?} t=\n{}", acc_t.t());
 //
 //             // Dim impls are to define domain-specific operations on tensors
 //             let v = ClsOut::accuracy(acc_t);

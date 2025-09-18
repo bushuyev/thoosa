@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use log::debug;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
 
@@ -69,7 +70,7 @@ where
         adjustable: &Self::A,
         adjust_context: &mut C,
     ) -> Result<Self::A, ThoosaError> {
-        println!("DumpToCpu::adjust: adjustable={adjustable:?}");
+        debug!("DumpToCpu::adjust: adjustable={adjustable:?}");
 
         assert_eq!(adjustable.read().acquired_permits(), MAX_PERMITS);
 
@@ -80,7 +81,7 @@ where
             .await?;
 
 
-        println!("DumpToCpu::adjust done: is_all_on_cpu={}", GlobalCtx::global().is_all_on_cpu(device_idx));
+        debug!("DumpToCpu::adjust done: is_all_on_cpu={}", GlobalCtx::global().is_all_on_cpu(device_idx));
 
         Ok(Arc::clone(adjustable))
     }

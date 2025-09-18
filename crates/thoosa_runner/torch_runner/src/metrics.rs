@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, DivAssign};
+use log::debug;
 use thoosa_shared::{MyError, ThoosaError};
 
 #[derive(Debug, Clone, Default)]
@@ -52,7 +53,7 @@ impl PartialOrd<TwoDimsMetrics> for TwoDimsMetrics {
 impl <'a> AddAssign<&'a TwoDimsMetrics> for TwoDimsMetrics {
     fn add_assign(&mut self, rhs: &'a TwoDimsMetrics) {
         self.dim_0+=rhs.dim_0;
-        println!("AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}", rhs.dim_0, self.dim_0);
+        debug!("AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}", rhs.dim_0, self.dim_0);
         // self.dim_1+=rhs.dim_1;TODO dimension
     }
 }

@@ -14,6 +14,7 @@ use std::ops::{Add, AddAssign, DivAssign};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
+use log::debug;
 use tokio::task::JoinSet;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
 use caching_runner::common::runnable::Stage;
@@ -240,7 +241,7 @@ where
         let ctx_fac_arc = Arc::clone(&ctx_fac_arc);
         let res_cnt_arc = Arc::clone(&res_cnt_arc);
         async move {
-            println!("task {idx}: device_idx={device_idx} thread id={:?}", std::thread::current().id());
+            debug!("task {idx}: device_idx={device_idx} thread id={:?}", std::thread::current().id());
             thread_ids.write().push(std::thread::current().id());
 
             let name: &'static str = Box::leak(format!("task_{idx}({res})").into_boxed_str());
@@ -263,8 +264,8 @@ where
 
                 check_arc(res, &guard);
 
-                println!("task {idx}: device_idx={device_idx} thread id={:?} done", std::thread::current().id());
-                println!("task {idx}: multed=\n{:?}", guard);
+                debug!("task {idx}: device_idx={device_idx} thread id={:?} done", std::thread::current().id());
+                debug!("task {idx}: multed=\n{:?}", guard);
 
                 res_cnt_arc.fetch_add(1, Relaxed);
 
@@ -282,7 +283,7 @@ where
         .into_iter()
         .collect::<Result<(), ThoosaError>>();
 
-    println!("r={r:?} res_cnt={res_cnt:?}");
+    debug!("r={r:?} res_cnt={res_cnt:?}");
     assert!(r.is_ok());
 
     assert_eq!(resources.len() as u32, res_cnt.load(Relaxed));
@@ -313,6 +314,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
+    use log::debug;
     use caching_runner::test_utils::DummyTensor;
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
@@ -364,18 +366,18 @@ mod tests {
         }
 
         fn drop_permits(&mut self, drop_if: DropIf) {
-            println!("MyRunCtx: {} drop_permits", self.name);
+            debug!("MyRunCtx: {} drop_permits", self.name);
             let acquired_permits = self.acquired_permits();
-            println!("TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}", self.name);
+            debug!("TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}", self.name);
 
             match drop_if{
                 DropIf::Always => {
-                    println!("TorchRunCtx: ctx.name={} dropping permits", self.name);
+                    debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
                     self.permits.clear();
                 }
                 DropIf::IfNotMax => {
                     if acquired_permits < MAX_PERMITS {//TODO param
-                        println!("TorchRunCtx: ctx.name={} dropping permits", self.name);
+                        debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
                         self.permits.clear();
                     }
 
@@ -405,7 +407,7 @@ mod tests {
                     mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
                 )
             };
-            println!("purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
+            debug!("purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
 
             tokio::try_join!(
                 DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
@@ -642,7 +644,7 @@ mod tests {
                 }
                 FailUntil::MinPermits(min_permits) => {
                     let acquired_permits = ctx.read().acquired_permits();
-                    println!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
+                    debug!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
 
                     if acquired_permits < min_permits {
                         return Err(MyError::OutOfMemory.into());
@@ -651,7 +653,7 @@ mod tests {
 
                 FailUntil::DumpedToCpu => {
                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.read().device_idx());
-                    println!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}", ctx.read().name(), ctx.read().device_idx());
+                    debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}", ctx.read().name(), ctx.read().device_idx());
 
                     if !is_all_on_cpu {
                         return Err(MyError::OutOfMemory.into());
@@ -851,7 +853,7 @@ mod tests {
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
 
-            println!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
+            debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
 
             let _device_idx = ctx.read().device_idx();
 
@@ -882,7 +884,7 @@ mod tests {
             )
             .await;
 
-        println!("{:?}", loaded_tensor_0_0);
+        debug!("{:?}", loaded_tensor_0_0);
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
@@ -914,7 +916,7 @@ mod tests {
             )
             .await?;
 
-        println!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
+        debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
         loaded_tensor_1_0.with_data(1, None, None, |data|{
             assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
 
@@ -928,7 +930,7 @@ mod tests {
             &loaded_tensor_0_1?
         ));
 
-        println!("{:?}", _global_ctx);
+        debug!("{:?}", _global_ctx);
 
         Ok(())
     }
@@ -969,7 +971,7 @@ mod tests {
 
 
 
-        println!("multed={multed:?}");
+        debug!("multed={multed:?}");
 
         Ok(())
     }
@@ -984,7 +986,7 @@ mod tests {
                         .collect::<Vec<_>>(),
                 );
 
-        println!("mul_check: multed_{res}={out:?}");
+        debug!("mul_check: multed_{res}={out:?}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -1120,36 +1122,36 @@ mod tests {
 
 
         let cache_area_0 = global_ctx.next_cache_area()?;
-        println!("cache_area_0={:064b}", cache_area_0);
+        debug!("cache_area_0={:064b}", cache_area_0);
 
         let ctx_0 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(device_idx, cache_area_0, "ctx_0")));
         let resource_0_for_ctx_0 = Arc::clone(&loader).run_cached(resource_1_arc.clone(), ctx_0.clone()).await?;
 
 
         let cache_area_1 = global_ctx.next_cache_area()?;
-        println!("cache_area_1={:064b}", cache_area_1);
+        debug!("cache_area_1={:064b}", cache_area_1);
 
         let ctx_1 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(device_idx, cache_area_1, "ctx_1")));
         let resource_0_for_ctx_1 = Arc::clone(&loader).run_cached(resource_1_arc.clone(), ctx_1.clone()).await?;
 
-        println!("cache_areas 0+1={:064b}", resource_0_for_ctx_1.cache_areas());
+        debug!("cache_areas 0+1={:064b}", resource_0_for_ctx_1.cache_areas());
 
         assert!(Arc::ptr_eq(&resource_0_for_ctx_0, &resource_0_for_ctx_1));
         assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
 
         DummyRunCtx::purge_gpu_caches(ctx_0.clone()).await?;
-        println!("cache_areas   1={:064b}", resource_0_for_ctx_1.cache_areas());
+        debug!("cache_areas   1={:064b}", resource_0_for_ctx_1.cache_areas());
         assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
 
 
         DummyRunCtx::purge_gpu_caches(ctx_1.clone()).await?;
-        println!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
+        debug!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
         assert_eq!(resource_0_for_ctx_1.cache_areas(), 0);
 
         assert_eq!(loader_cache.len(), 1);
 
         global_ctx.purge_cpu(0).await;
-        println!("loader_cache={loader_cache:?} len={}", loader_cache.len());
+        debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
         assert_eq!(loader_cache.len(), 0);
 
         Ok(())

@@ -527,8 +527,10 @@ dependencies = [
 name = "cached_derive"
 version = "0.1.0"
 dependencies = [
+ "log",
  "proc-macro2",
  "quote",
+ "simplelog",
  "syn 2.0.106",
 ]
 
@@ -547,6 +549,7 @@ dependencies = [
  "mockall_double",
  "parking_lot",
  "rand 0.9.2",
+ "simplelog",
  "thoosa_common",
  "thoosa_shared",
  "tokio",
@@ -565,9 +568,11 @@ dependencies = [
  "console-subscriber",
  "dashmap 6.1.0",
  "futures-util",
+ "log",
  "mockall",
  "parking_lot",
  "rand 0.9.2",
+ "simplelog",
  "thoosa_common",
  "thoosa_shared",
  "tokio",
@@ -5154,6 +5159,7 @@ dependencies = [
  "log",
  "parking_lot",
  "rand 0.9.2",
+ "simplelog",
  "tch",
  "thoosa_common",
  "thoosa_shared",

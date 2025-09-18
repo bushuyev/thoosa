@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use tch::{Device, Kind, Tensor};
 use async_trait::async_trait;
+use log::debug;
 use torch_sys::IntList;
 use caching_runner::common::Data;
 use thoosa_common::applicables::ThoDevice;
@@ -107,7 +108,7 @@ impl <D:Dims, Id: Named + Clone> ThoTensor2<D, Id> {
 
     pub fn mm<RD:Dims>(&self, rhs: &ThoTensor2<RD, Id>) -> Result<ThoTensor2<D, Id>, ThoosaError> {
         let mm_r = panic_to_err!(self.t.f_matmul(&rhs.t))?;
-        println!("mm: self.t.size={:?}, rhs.t.size={:?} mm_r.size={:?}", self.t.size(), rhs.t.size(), mm_r.size());
+        debug!("mm: self.t.size={:?}, rhs.t.size={:?} mm_r.size={:?}", self.t.size(), rhs.t.size(), mm_r.size());
 
         Ok(ThoTensor2::new(
             self.id.clone(),
@@ -235,7 +236,7 @@ where Id: Named + Clone //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug
             CopyCtx::instance().copy_from_ptr(self.t.data_ptr() as usize, &self.t.size(), dst_device, self.t.kind()).await
         };
 
-        // println!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
+        // debug!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
 
         ThoTensor2::new(
             self.id.clone(),
