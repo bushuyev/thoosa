@@ -167,6 +167,7 @@ mod tests {
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_motifs::distance::clc_dist_d2;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::ThoosaError;
@@ -214,51 +215,80 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_unfold() {
+    fn test_batch_unfold() -> Result<(), ThoosaError>{
 
-        let t_0 = Tensor::from_slice(&[
-            0.00, 0.01, 0.02, 0.03, 0.04,   //channel 0
-            0.10, 0.11, 0.12, 0.13, 0.14,   //channel 1
-            0.20, 0.21, 0.22, 0.23, 0.24,   //channel 2
-        ]).view((3,-1));
+        let t_0_inp = dummy_t(0, 3, 5);
 
-        let t_1 = Tensor::from_slice(&[
-            1.00, 1.01, 1.02, 1.03,   //channel 0
-            1.10, 1.11, 1.12, 1.13,   //channel 1
-            1.20, 1.21, 1.22, 1.23,   //channel 2
-        ]).view((3,-1));
+        let t_1_inp = dummy_t(1, 3, 4);
 
-        let t_2 = Tensor::from_slice(&[
-            2.00, 2.01, 2.02, 2.03, 2.04, 2.05,    //channel 0
-            2.10, 2.11, 2.12, 2.13, 2.14, 2.15,    //channel 1
-            2.20, 2.21, 2.22, 2.23, 2.24, 2.25,    //channel 2
-        ]).view((3,-1));
+        let t_2_inp = dummy_t(2, 3, 6);
 
-        println!("t_0=\n{t_0}");
-        let t_0_u = t_0.unfold(1, 2, 1);
-        println!("t_0.unfold=\n{}", t_0_u);
-        let t_1_u = t_1.unfold(1, 2, 1);
-        println!("t_1.unfold=\n{}", t_1_u);
-        let t_2_u = t_2.unfold(1, 2, 1);
-        println!("t_2.unfold=\n{}", t_2_u);
+        println!("t_0=\n{t_0_inp}");
 
-        let batch = Tensor::concat(&[t_0_u, t_1_u, t_2_u], 1);
 
-        println!("batch=\n{batch}");
 
-        // let tensors = vec![t_0, t_1, t_2];
-        // let window = 2;
-        // let stride = 1;
-        //
-        // let batch_size = 3;
-        //
-        // for (i_0, t) in tensors.iter().enumerate(){
-        //     for (i_1, t) in tensors.iter().enumerate(){
-        //         if i_1 >= i_0 {
-        //
-        //         }
-        //     }
-        // }
+        let tensors = vec![t_0_inp, t_1_inp, t_2_inp];
+        let window = 2;
+        let stride = 1;
 
+        let batch_size = 3;
+        let  max_batch = 20;//5+4+6=15 < 20
+
+        let mut t_0_batch:Vec<&Tensor> = vec![];
+        let mut t_0_batch_len = 0;
+
+        let mut skip_0_i =0;
+
+        for (i_0, t_0) in tensors.iter().enumerate(){
+            t_0_batch.push(t_0);
+            t_0_batch_len+=t_0.size()[1];
+
+            if t_0_batch_len < max_batch && i_0 < tensors.len()-1 {
+                continue
+            }
+
+            let batch_0_t = Tensor::concat(t_0_batch.iter().map(|t|t.unfold(1, 2, 1)).collect::<Vec<_>>().as_slice(), 1);
+
+
+            let mut t_1_batch:Vec<&Tensor> = vec![];
+            let mut t_1_batch_len = 0;
+
+            for (i_1, t_1) in tensors.iter().enumerate().skip(skip_0_i){
+                t_1_batch.push(t_1);
+
+                t_1_batch_len+=t_1.size()[1];
+
+                if t_1_batch_len < max_batch && i_1 < tensors.len()-1 {
+                    continue
+                }
+
+                let batch_1_t = Tensor::concat(t_1_batch.iter().map(|t|t.unfold(1, 2, 1)).collect::<Vec<_>>().as_slice(), 1);
+
+                println!("t_1_batch.len={} batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?}", t_1_batch.len());
+
+                let dists = clc_dist_d2(batch_0_t.shallow_clone(), batch_1_t, 1)?;
+
+               println!("i_0={i_0} i_1={i_1} dists=\n{dists}");
+                t_1_batch.clear();
+                t_1_batch_len = 0;
+            }
+            skip_0_i = i_0;
+            t_0_batch.clear();
+            t_0_batch_len = 0;
+        }
+
+        Ok(())
+
+    }
+
+    fn dummy_t(n: usize, channels: usize, seq_len: usize) -> Tensor {
+        let mut data = Vec::with_capacity(channels * seq_len);
+        for ch in 0..channels {
+            for pos in 0..seq_len {
+                let val = n as f32 + (ch as f32) / 10.0 + (pos as f32) / 100.0;
+                data.push(val);
+            }
+        }
+        Tensor::from_slice(&data).view([channels as i64, seq_len as i64])
     }
 }
