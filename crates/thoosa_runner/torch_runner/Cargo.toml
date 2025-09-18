@@ -22,6 +22,7 @@ dashmap.workspace = true
 futures-util.workspace = true
 tokio-utils.workspace = true
 log.workspace = true
+simplelog.workspace = true
 [dev-dependencies]
 caching_runner_test = {path = "../caching_runner_test"}
 rand.workspace = true

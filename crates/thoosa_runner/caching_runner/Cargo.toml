@@ -21,6 +21,7 @@ mockall_double.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 log.workspace = true
+simplelog.workspace = true
 [dev-dependencies]
 
 console-subscriber.workspace = true

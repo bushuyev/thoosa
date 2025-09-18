@@ -13,6 +13,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
+use log::debug;
 use mockall_double::double;
 use tracing::instrument;
 use thoosa_common::panic_to_err_async;
@@ -276,7 +277,7 @@ where
                 guard.name()
             )
         };
-        println!("OOMHandler::run: ctx_name={ctx_name} input.id={:?}", input.id());
+        debug!("OOMHandler::run: ctx_name={ctx_name} input.id={:?}", input.id());
 
         // Identify this task by its output id for Arbiter fairness.
         let out_key = {
@@ -289,7 +290,7 @@ where
             run_context.write().add_permit(result);
         }
 
-        println!("OOMHandler::run: ctx_name={ctx_name}  acquired_permits={:?}", run_context.read().acquired_permits());
+        debug!("OOMHandler::run: ctx_name={ctx_name}  acquired_permits={:?}", run_context.read().acquired_permits());
 
         let mut i = 0;
 
@@ -362,7 +363,7 @@ where
                                 }
 
 
-                                println!("OOMHandler::run: ctx_name={ctx_name} 1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}", run_context.read().acquired_permits());
+                                debug!("OOMHandler::run: ctx_name={ctx_name} 1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}", run_context.read().acquired_permits());
 
                                 match input.with_data(device_idx, input_select_adjusted.as_ref(), None,  |data| {
                                     Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
@@ -373,13 +374,13 @@ where
 
                                         let all_done = contexts.input.all_done();
 
-                                        println!("OOMHandler::run: ctx_name={ctx_name}  ok adjust_context={contexts:?} all_done={all_done}" );
+                                        debug!("OOMHandler::run: ctx_name={ctx_name}  ok adjust_context={contexts:?} all_done={all_done}" );
 
                                         if all_done {
 
                                             run_context.write().drop_permits(DropIf::Always);
 
-                                            println!("done in {i} steps");
+                                            debug!("done in {i} steps");
                                             return Ok(contexts.input.build_final_output());
                                         }
                                     }
@@ -394,7 +395,7 @@ where
 
                                         match te.what(){
                                             MyError::OutOfMemory => {
-                                                println!(
+                                                debug!(
                                                     "OOMHandler::run: err ctx_name={ctx_name}  adjust_context={contexts:?}"
                                                 );
                                                 if !adjuster.degrade(&mut contexts) {
@@ -414,7 +415,7 @@ where
                                                 }
                                             }
                                             e => {
-                                                println!("ctx_name={ctx_name} other error 1");
+                                                debug!("ctx_name={ctx_name} other error 1");
                                                 return Err(te);
                                             }
                                         }
@@ -425,7 +426,7 @@ where
 
                     }
                     _ => {
-                        println!("ctx_name={ctx_name} other error 2");
+                        debug!("ctx_name={ctx_name} other error 2");
                         return Err(te);
                     }
                 }

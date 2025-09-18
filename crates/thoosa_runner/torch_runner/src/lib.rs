@@ -65,6 +65,7 @@ mod tests {
     use std::mem;
     use std::sync::Arc;
     use futures_util::sink::With;
+    use log::debug;
     use tch::Kind::Float;
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
     use tch::kind::FLOAT_CPU;
@@ -118,16 +119,16 @@ mod tests {
         fn drop_permits(&mut self, drop_if: DropIf) {
             //once we've got all permits try all adjusters - others weill wait - no danger of blocking.
             let acquired_permits = self.acquired_permits();
-            println!("TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}", self.name);
+            debug!("TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}", self.name);
 
             match drop_if{
                 DropIf::Always => {
-                    println!("TorchRunCtx: ctx.name={} dropping permits", self.name);
+                    debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
                     self.permits.clear();
                 }
                 DropIf::IfNotMax => {
                     if acquired_permits < MAX_PERMITS {//TODO param
-                        println!("TorchRunCtx: ctx.name={} dropping permits", self.name);
+                        debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
                         self.permits.clear();
                     }
 
@@ -151,7 +152,7 @@ mod tests {
             };
             assert_ne!(device_idx, 0);//shouldn't purge CPU
 
-            println!("TorchRunCtx::purge_gpu_caches: 0 ctx_name={ctx_name} device_idx={device_idx} ");
+            debug!("TorchRunCtx::purge_gpu_caches: 0 ctx_name={ctx_name} device_idx={device_idx} ");
 
             let (cache_area, loaded_tensors_cached, mul_output_cached) = {
                 let mut guard = ctx.write();
@@ -162,14 +163,14 @@ mod tests {
                     mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
                 )
             };
-            println!("purge_gpu_caches: 1 ctx_name={ctx_name}device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
+            debug!("purge_gpu_caches: 1 ctx_name={ctx_name}device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
 
             tokio::try_join!(
                 TestTensorLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
                 ClcTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
             )?;
 
-            println!("purge_gpu_caches: 2 ctx_name={ctx_name} device_idx={device_idx}");
+            debug!("purge_gpu_caches: 2 ctx_name={ctx_name} device_idx={device_idx}");
 
             Ok(())
         }
@@ -268,13 +269,13 @@ mod tests {
 
 
 
-            println!("Data for LoadedTensor::subview: dim_0_range={dim_0_range:?} size={size:?} range={range:?}");
-            println!("Data for LoadedTensor::subview: t=\n{}", self.t());
+            debug!("Data for LoadedTensor::subview: dim_0_range={dim_0_range:?} size={size:?} range={range:?}");
+            debug!("Data for LoadedTensor::subview: t=\n{}", self.t());
 
             let sub = ThoTensor2::new(self.id().clone(), self.t().i((dim_0_range.clone(), ..)));
 
 
-            println!("Data for LoadedTensor::subview: sub.t=\n{}", self.t().i((dim_0_range, ..)));
+            debug!("Data for LoadedTensor::subview: sub.t=\n{}", self.t().i((dim_0_range, ..)));
 
             sub
         }
@@ -415,7 +416,7 @@ mod tests {
         }
 
         fn clc_sum(id: SimpleId, loaded: &ThoTensor2<LoadedTensor, SimpleId>, k: &ThoTensor2<MulK, SimpleId>) -> Result<ThoTensor2<ClcTaskOutput, SimpleId>, ThoosaError> {
-            println!("LoadedTensor::clc_sum: loaded.t.size={:?} loaded=\n{}", loaded.size(), loaded);
+            debug!("LoadedTensor::clc_sum: loaded.t.size={:?} loaded=\n{}", loaded.size(), loaded);
 
             loaded.run_inner_with_params(
                 id,
@@ -444,7 +445,7 @@ mod tests {
             Self: Sized
         {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
-            println!("MulTask::run: loaded.id={:?}", input.id());
+            debug!("MulTask::run: loaded.id={:?}", input.id());
 
             let deive_idx = ctx.read().device_idx;
 
@@ -452,29 +453,29 @@ mod tests {
                 match fail_until {
                     FailUntil::MemLimit(mem_limit) => {
                         let _device_idx = deive_idx;
-                        // println!("MulTask::do_run: ctx={ctx:?} input.len={}", input.data.0.as_ref().unwrap().size()[0]);
+                        // debug!("MulTask::do_run: ctx={ctx:?} input.len={}", input.data.0.as_ref().unwrap().size()[0]);
 
                         if input.size()[0] > *mem_limit as i64 {
-                            println!("MulTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
+                            debug!("MulTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
                             return Err(MyError::OutOfMemory.into());
                         }
                     }
                     FailUntil::MinPermits(min_permits) => {
                         let acquired_permits = ctx.read().acquired_permits();
-                        println!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
+                        debug!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
 
                         if acquired_permits < *min_permits {
-                            println!("MulTask::do_run: MyError::OutOfMemory on MinPermits min_permits={min_permits}");
+                            debug!("MulTask::do_run: MyError::OutOfMemory on MinPermits min_permits={min_permits}");
                             return Err(MyError::OutOfMemory.into());
                         }
                     }
 
                     FailUntil::DumpedToCpu => {
                         let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.read().device_idx());
-                        println!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}", ctx.read().name(), ctx.read().device_idx());
+                        debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}", ctx.read().name(), ctx.read().device_idx());
 
                         if !is_all_on_cpu {
-                            println!("MulTask::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
+                            debug!("MulTask::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
                             return Err(MyError::OutOfMemory.into());
                         }
                     }
@@ -527,13 +528,13 @@ mod tests {
             let loaded_id = loaded.id().clone();
             let output_id = self.mul.out_id(&loaded_id.clone());
 
-            println!("LoadAndMulTask::run: loaded_id={loaded_id:?} output_id={output_id:?}");
+            debug!("LoadAndMulTask::run: loaded_id={loaded_id:?} output_id={output_id:?}");
 
 
             let loaded_id_name = "LoadedTensorId"; //loaded.id().id_name().clone();
             let _output_id_name = "MulTaskOutputId"; //loaded.id().id_name().clone();
 
-            println!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id.name()={:?}", output_id.name());
+            debug!("LoadAndMulTask::run: loaded_id_name={loaded_id_name:?} output_id.name()={:?}", output_id.name());
 
             let _set_loaded = [&loaded_id as &dyn CachableIdTr].into_iter().collect::<HashSet<&dyn CachableIdTr>>();
             let _set_mul = [&output_id as &dyn CachableIdTr].into_iter().collect::<HashSet<&dyn CachableIdTr>>();
@@ -629,10 +630,10 @@ mod tests {
             .await?;
 
 
-        println!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
+        debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
         let tensor_data_0_0 = loaded_tensor_0_0.with_data(load_to_device, None, None,  |tensor_data_0_0|{
-            println!("tensor_data={}", (*tensor_data_0_0).t());
+            debug!("tensor_data={}", (*tensor_data_0_0).t());
 
             assert!(
                 Tensor::from_slice(
@@ -742,7 +743,7 @@ mod tests {
 
 
 
-        // println!("multed={multed_tensor:?}");
+        // debug!("multed={multed_tensor:?}");
 
         Ok(())
     }
@@ -762,12 +763,12 @@ mod tests {
         let expected = exp_f(self_k*mul_k, &result.t());
 
 
-        println!("mul_check: res={res}  result_t.size()={:?} \n\n", result.size());
+        debug!("mul_check: res={res}  result_t.size()={:?} \n\n", result.size());
 
 
         let ok = expected.allclose(&result.t(), rtol, atol, false);
         // if !ok {
-            println!("mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n", result.t());
+            debug!("mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n", result.t());
         // }
         assert!(ok);
     }
@@ -980,14 +981,14 @@ mod tests {
         for i in 0..10 {
             let cached_loaded = <TestTensorLoader as Cached>::cache().await.get(&SimpleId::from(format!("loaded_resource_{i}")));
             let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
-            println!("i={i} 0 cached_loaded: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
+            debug!("i={i} 0 cached_loaded: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
 
             assert!(!reff.value().clone().await?.is_all_on_cpu().await);
 
 
             let cached_multed = <ClcTask as Cached>::cache().await.get(&SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}")));
             let reff = cached_multed.expect(&format!("no entry for loaded_resource_{i}"));
-            println!("i={i} 0 cached_multed: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
+            debug!("i={i} 0 cached_multed: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
 
             assert!(!reff.value().clone().await?.is_all_on_cpu().await);
 
@@ -1011,7 +1012,7 @@ mod tests {
         for i in 0..10 {
             let cached_loaded = <TestTensorLoader as Cached>::cache().await.get(&SimpleId::from(format!("loaded_resource_{i}")));
             let reff = cached_loaded.expect(&format!("no entry for loaded_resource_{i}"));
-            println!("i={i} 1 cached_loaded: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
+            debug!("i={i} 1 cached_loaded: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
 
             if i == 3 {
                 assert!(!reff.value().clone().await?.is_all_on_cpu().await);
@@ -1021,7 +1022,7 @@ mod tests {
 
             let cached_multed = <ClcTask as Cached>::cache().await.get(&SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}")));
             let reff = cached_multed.expect(&format!("no entry for loaded_resource_{i}"));
-            println!("i={i} 1 cached_multed: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
+            debug!("i={i} 1 cached_multed: key={:?} val={:?}", reff.key(), reff.value().clone().await?);
 
             if i == 3 {
                 assert!(!reff.value().clone().await?.is_all_on_cpu().await);
@@ -1036,7 +1037,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoosaError> {
-        println!("test_real_oom_dump_and_split");
+        debug!("test_real_oom_dump_and_split");
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1050,7 +1051,7 @@ mod tests {
         let dim_1 = 4i64;
         let input_n = total_size / dim_1;
 
-        println!("test_real_oom_dump_and_split: input_n={input_n} dim_1={dim_1}");
+        debug!("test_real_oom_dump_and_split: input_n={input_n} dim_1={dim_1}");
 
         const MUL_K:i64 = 1;
         let size = [input_n, dim_1];
@@ -1073,7 +1074,7 @@ mod tests {
             Arc::clone(&ctx_device),
         ).await?;
 
-        println!("multed={multed:?}");
+        debug!("multed={multed:?}");
 
         multed.with_data(
             1,
@@ -1085,7 +1086,7 @@ mod tests {
                     lin_for_size(k, size, t.kind(), &t.device()).sum_dim_intlist(0, false, t.kind()).view((-1, 1))
                 });
 
-                println!("Ok");
+                debug!("Ok");
 
                 Ok(())
             }

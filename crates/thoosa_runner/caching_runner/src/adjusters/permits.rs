@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use log::debug;
 use thoosa_shared::{MyError, ThoosaError};
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
@@ -125,7 +126,7 @@ where
         let permits_to_acquire = adjust_context.to_acquire() - acquired_permits;
 
         let adjustable_name = adjustable.read().name();
-        println!(
+        debug!(
             "PermitsAdjuster::adjust: name={} thread={:?} self.max={} permits_to_acquire/{}/ = adjust_context.to_acquire()/{}/ - acquired_permits/{}/",
             adjustable_name,
             std::thread::current().id(),
@@ -137,7 +138,7 @@ where
 
             match (self.acquire_fn)(permits_to_acquire).await {
                 Ok(permit) => {
-                    println!("PermitsAdjuster::adjust: acquire_fn name={} acquired_permits={acquired_permits} permits_to_acquire={permits_to_acquire} acquired ok ", adjustable_name);
+                    debug!("PermitsAdjuster::adjust: acquire_fn name={} acquired_permits={acquired_permits} permits_to_acquire={permits_to_acquire} acquired ok ", adjustable_name);
                     adjustable.write().add_permit(permit);
                 }
 
@@ -146,11 +147,11 @@ where
 
                     match te.what()  {
                         MyError::OutOfPermits => {
-                            println!("PermitsAdjuster::adjust: acquire_fn name={} acquired_permits={acquired_permits} Error: {:?}", adjustable_name, te);
+                            debug!("PermitsAdjuster::adjust: acquire_fn name={} acquired_permits={acquired_permits} Error: {:?}", adjustable_name, te);
 
                             if adjustable.read().device_idx() != 0 {//not on CPU, TODO
                                 if let Err(e)  = A::purge_gpu_caches(Arc::clone(adjustable)).await {
-                                    println!("adjust failed: {e:?}");
+                                    debug!("adjust failed: {e:?}");
                                 };
                             }
                             adjustable.write().drop_permits(DropIf::Always);
@@ -173,7 +174,7 @@ where
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
-        println!("PermitsAdjuster::degrade: adjust_context={adjust_context:?}");
+        debug!("PermitsAdjuster::degrade: adjust_context={adjust_context:?}");
 
         if adjust_context.to_acquire() < self.max {
             *adjust_context.to_acquire_mut() += self.step;

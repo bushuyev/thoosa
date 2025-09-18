@@ -267,16 +267,17 @@ mod tests {
         async fn run(&self) -> Result<(), ()> {
             tokio::time::sleep(tokio::time::Duration::from_millis(random_range(10..100))).await;
             if self.current_perms < self.min_perms {
-                println!("task {self:?} failed");
+                debug!("task {self:?} failed");
                 Err(())
             } else {
-                println!("task {self:?} ok");
+                debug!("task {self:?} ok");
                 Ok(())
             }
         }
     }
 
     use std::sync::Arc;
+    use log::debug;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_fifo_arbiter() -> Result<(), ()> {
@@ -311,7 +312,7 @@ mod tests {
                             }
                         },
                     };
-                    println!("task {} acquired {} permits", task.i, permit.num_permits());
+                    debug!("task {} acquired {} permits", task.i, permit.num_permits());
 
                     // Run while holding the permit.
                     let ok = task.run().await.is_ok();
@@ -320,7 +321,7 @@ mod tests {
                     drop(permit);
 
                     if ok {
-                        println!("task {} done", task.i);
+                        debug!("task {} done", task.i);
                         break Ok(());
                     } else {
                         task.current_perms = (task.current_perms + task.step).min(MAX_PERMITS);
