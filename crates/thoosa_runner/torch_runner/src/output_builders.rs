@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+use std::marker::PhantomData;
 use caching_runner::adjusters::splits::OutputBuilder;
 use tch::Device;
 use tch::Kind;
@@ -12,6 +14,8 @@ pub enum BuildAs {
     Append,
     Sum
 }
+
+
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -54,7 +58,7 @@ where
             BuildAs::Sum => {
                 let mut t = self.output.to_mut();
 
-                t.add_(&partial).unwrap();
+                // t.add_(&partial).unwrap();
 
             }
         }
@@ -64,9 +68,11 @@ where
     }
 
     fn build(self: Box<Self>) -> Self::O {
-        self.output
+        // self.output
+        todo!()
     }
 }
+
 
 #[cfg(test)]
 mod tests {
