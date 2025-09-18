@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
+use log::debug;
 use parking_lot::RwLock;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
@@ -106,14 +107,16 @@ impl  Stage for CrossLoader {
     type Out = Slice;
     type Ctx = RunCtx2;
 
-    async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-    where
-        I:WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
+    async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     {
         // unimplemented!()
-        // for resource_0 in _input.as.resources {
-        //
-        // }
+        for resource_0 in &_input.resources {
+
+            for resource_1 in &_input.resources {
+                debug!("resource_0={resource_0:?} resource_1={resource_1:?}");
+            }
+
+        }
 
         Ok(Slice::new("".into(), ThoTensor2::new("id".into(), Tensor::zeros(&[10,0], FLOAT_CPU))))
     }
@@ -136,6 +139,11 @@ mod tests {
     use thoosa_shared::ThoosaError;
     use crate::tasks::cross_loader::{CrossLoader, ResourcesVec};
     use crate::tasks::run_ctx_2::RunCtx2;
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
 
     #[tokio::test]
     async fn test_0() -> Result<(), ThoosaError> {

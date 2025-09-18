@@ -66,11 +66,9 @@ impl  Stage for TensorLoader {
     type Out = RawChannelsData;
     type Ctx = RunCtx2;
 
-    async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-    where
-        I: WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
+    async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     {
-        Ok((self.loader_fn)(_input.deref().id(), &self.device))
+        Ok((self.loader_fn)(&_input, &self.device))
     }
 }
 
