@@ -3591,11 +3591,6 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_select_motifs_for_label_2(){
-
-    }
-
-    #[test]
     fn test_chunk_and_slice_2() -> Result<(), ThoosaError> {
         let (free_mem, total_mem)  = cuda_mem();
 
