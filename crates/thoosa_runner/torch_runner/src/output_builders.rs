@@ -70,6 +70,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
@@ -95,7 +96,7 @@ mod tests {
 
         let out = builder.build();
 
-        println!("out=\n{}", out.t());
+        debug!("out=\n{}", out.t());
 
         assert!(out.t().allclose(&Tensor::from_slice(&[0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]).totype(Float), 0.01, 0.01, false));
     }
@@ -111,7 +112,7 @@ mod tests {
 
         let out = builder.build();
 
-        println!("out=\n{}", out.t());
+        debug!("out=\n{}", out.t());
 
         assert!(out.t().allclose(&Tensor::from_slice(&[9., 12., 15.]).totype(Float), 0.01, 0.01, false));
     }

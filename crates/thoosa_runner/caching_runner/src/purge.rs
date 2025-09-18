@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use log::debug;
 use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
@@ -37,7 +38,7 @@ where
 
 
         self.retain(|k, v|{
-            println!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
+            debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
             if v
                 .peek()
                 .and_then(
@@ -47,7 +48,7 @@ where
                         .ok()
                 )
                 .unwrap_or(false){
-                println!("FuturesRunnerMapPurger::purge_cpu: key={k:?} removed");
+                debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?} removed");
                 false
             } else {
                 true
@@ -62,7 +63,7 @@ where
         device_idx: usize,
     ) -> Result<(), ThoosaError> {
 
-        println!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
+        debug!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
 
         let items: Vec<(
             K,
@@ -88,12 +89,12 @@ where
                 match fut.await {
                     Ok(v) => {
                         if let Err(e) = v.dump_to_cpu(device_idx).await {
-                            println!("purge_gpu failed: key={key:?} err={e:?}");
+                            debug!("purge_gpu failed: key={key:?} err={e:?}");
                         } else {
-                            println!("purge_gpu ok: key={key:?}");
+                            debug!("purge_gpu ok: key={key:?}");
                         }
                     }
-                    Err(e) => println!("purge_gpu: Err key={key:?} err={e:?}"),
+                    Err(e) => debug!("purge_gpu: Err key={key:?} err={e:?}"),
                 }
             })
             .await;
@@ -240,7 +241,7 @@ mod tests {
         map.purge_gpu(None, 1).await?;
 
         assert_eq!(processed.load(Ordering::SeqCst), total);
-        // println!("max_purge={} max_futures={}", max_purge.load(Ordering::SeqCst), max_futures.load(Ordering::SeqCst));
+        // debug!("max_purge={} max_futures={}", max_purge.load(Ordering::SeqCst), max_futures.load(Ordering::SeqCst));
         assert!(max_purge.load(Ordering::SeqCst) > 0);
         assert!(max_futures.load(Ordering::SeqCst) > 0);
         assert!(max_purge.load(Ordering::SeqCst) <= PURGE_GPU_CONCURRENCY_LIMIT);

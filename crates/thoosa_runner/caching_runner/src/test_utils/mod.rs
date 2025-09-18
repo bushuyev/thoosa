@@ -3,6 +3,7 @@ use crate::common::*;
 #[cfg(test)]
 use ambassador::Delegate;
 use async_trait::async_trait;
+use log::debug;
 use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::traits::{DummyCachableId, MockWithId};
 use thoosa_shared::traits::*;
@@ -24,7 +25,7 @@ impl CopyToDevice for DummyTensor {
 }
 
 pub fn parse_numeric_part(name: &str) -> Option<f64> {
-    println!("parse_numeric_part={name:?}");
+    debug!("parse_numeric_part={name:?}");
     let digits = name.rsplit_once('_')?.1;
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
