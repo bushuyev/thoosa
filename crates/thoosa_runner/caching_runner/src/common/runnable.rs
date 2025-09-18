@@ -15,10 +15,7 @@ pub trait Stage: Debug  + Send + Sync + 'static {
 
     //should implement either run for multistep or do_run for single step (can be oom-handled)
 
-    async fn run<I>(self: Arc<Self>, _input: Arc<I>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-    where
-        I:WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
-    {
+    async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
         unimplemented!()
     }
 

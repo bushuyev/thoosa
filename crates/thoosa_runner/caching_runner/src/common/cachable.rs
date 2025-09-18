@@ -29,9 +29,9 @@ pub trait Cached: Stage {
         Self: Sized;
 
 
-    async fn run_cached<I>(
+    async fn run_cached(
         self: Arc<Self>,
-        input: Arc<I>,
+        input: Arc<Self::In>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
@@ -39,7 +39,6 @@ pub trait Cached: Stage {
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
         // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
-        I:WithId<ID=<<Self as Stage>::In as WithId>::ID> + Send + Sync + 'static
     {
         let key = self.out_id(input.id());
         let (cache_area, device_idx) = {
