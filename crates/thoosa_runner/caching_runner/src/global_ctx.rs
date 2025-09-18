@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, OnceLock};
+use log::debug;
 #[allow(unused_imports)]
 use mockall::automock;
 use tokio::sync::RwLock as AsyncRwLock;
@@ -138,13 +139,13 @@ impl GlobalCtx {
         device_idx: usize,
     ) -> Result<(), ThoosaError> {
         assert_ne!(device_idx, 0);
-        println!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
+        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
 
         //should be ok to read lock -  caches are expected to be updated (GlobalCtx::register_cache) rarely, perhaps on app startup only or before running set of runs
         let maps = self.caches.read().await;
 
         for (type_name,  map) in maps.iter() {
-            println!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
+            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
 
             map.purge_gpu(
                 required_ids.get(type_name).map(|v|*v),
@@ -152,7 +153,7 @@ impl GlobalCtx {
                 device_idx
             ).await?;
 
-            println!("GlobalCtx::dump_all_to_cpu: type_name={type_name} done");
+            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} done");
         }
 
         self.is_all_on_cpu[device_idx].store( true, Relaxed);
@@ -164,7 +165,7 @@ impl GlobalCtx {
         //should be ok to read lock - see dump_all_to_cpu
         let maps = self.caches.read().await;
 
-        println!("GlobalCtx::purge_cpu: maps.len={}", maps.len());
+        debug!("GlobalCtx::purge_cpu: maps.len={}", maps.len());
 
         for e in maps.iter() {
             e.1.purge_cpu(purge_since).await;

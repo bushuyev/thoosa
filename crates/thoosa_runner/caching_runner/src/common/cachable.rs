@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use log::debug;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::MyError;
 
@@ -46,7 +47,7 @@ pub trait Cached: Stage {
             (guard.cache_area(), guard.device_idx())
         };
 
-        println!("run_cached: key={key:?} device_idx={device_idx}");
+        debug!("run_cached: key={key:?} device_idx={device_idx}");
 
         let cache = Self::cache().await;
 
@@ -97,32 +98,32 @@ pub trait Cached: Stage {
     {
         assert_ne!(device_idx, 0); //don't purge cpu
 
-        println!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx}");
+        debug!("Cachable::purge_gpu_cache_area: 0  cache_area={cache_area} device_idx={device_idx}");
 
         let map = Self::cache().await;
 
         for key in keys {
             // let key_device_mutex = Self::key_in_device_lock(&key, device_idx);
             // let key_guard = key_device_mutex.lock().await;
-            println!("Cachable::purge_gpu_cache_area: 1 key={key:?} cache_area={cache_area} device_idx={device_idx}");
+            debug!("Cachable::purge_gpu_cache_area: 1 key={key:?} cache_area={cache_area} device_idx={device_idx}");
 
             if let Some(value) = map.get(&key) {
                 let data:Arc<DataCacheWrapper<Self::Out>> = value.value().clone().await?;
                 let new_mask = data.remove_cache_area(cache_area);
 
-                println!("Cachable::purge_gpu_cache_area: 2 key={key:?} new_mask={new_mask} ");
+                debug!("Cachable::purge_gpu_cache_area: 2 key={key:?} new_mask={new_mask} ");
                 if new_mask == 0 {
                     data.dump_to_cpu(device_idx).await?;
                     // drop(key_guard);
-                    println!("Cachable::purge_gpu_cache_area: 3  key={key:?} done");
+                    debug!("Cachable::purge_gpu_cache_area: 3  key={key:?} done");
                 }
 
             } else {
-                println!("Cachable::purge_gpu_cache_area: 4 key={key:?} {cache_area} device_idx={device_idx} not found"); //warning
+                debug!("Cachable::purge_gpu_cache_area: 4 key={key:?} {cache_area} device_idx={device_idx} not found"); //warning
             }
         }
 
-        println!("Cachable::purge_gpu_cache_area: 5 cache_area={cache_area} device_idx={device_idx}");
+        debug!("Cachable::purge_gpu_cache_area: 5 cache_area={cache_area} device_idx={device_idx}");
 
         Ok(())
     }
@@ -330,7 +331,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
                         if source_device_idx != to_device_idx{
                             if let Some(src) = source_read_guard.as_ref() {
                                 let sub_t = src.subview(sub_select);
-                                println!("DataCacheWrapper::with_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}", sub_t.size());
+                                debug!("DataCacheWrapper::with_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}", sub_t.size());
                                 let data = sub_t.copy_to_device(to_device_idx);
 
                                 return Self::do_run_trace(trace_ctx, do_run, &data.await);
@@ -357,7 +358,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
     async fn load_from_any_device_(&self, to_device_idx: usize) -> Result<impl Deref<Target = O> +Debug+ Send, ThoosaError> {
         //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
         //TODO add GlobalCtx::purge_lock just in case?
-        println!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}", self.id, self.cached_data);
+        debug!("DataCacheWrapper::from_any_device id={:?} device_idx={to_device_idx} self.cached_data={:?}", self.id, self.cached_data);
         if to_device_idx != 0 {
             *self.on_cpu_since.write() = None;
         }
@@ -391,7 +392,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
 
         assert_ne!(device_idx, 0);
 
-        println!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}", self.id);
+        debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}", self.id);
 
 
         if let Ok(mut lock) = self.cached_data[device_idx].try_write() {
@@ -401,7 +402,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
 
                 self.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
 
-                println!("DataCacheWrapper::dump_to_cpu: 1. id={:?} copied to cpu done", self.id);
+                debug!("DataCacheWrapper::dump_to_cpu: 1. id={:?} copied to cpu done", self.id);
 
             } else {
                 drop(lock.take());
@@ -410,7 +411,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
         } else {
             //if it's locked then it should be one of the parent futures being built, waiting on it will deadlock
             //TODO log warning?
-            println!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}", self.id, self.cached_data[device_idx])
+            debug!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}", self.id, self.cached_data[device_idx])
         }
 
         let is_all_on_cpu = self.is_all_on_cpu().await;
@@ -419,7 +420,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
             *self.on_cpu_since.write() = Some(GlobalCtx::global().cache_age());
         }
 
-        println!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}", self.id);
+        debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}", self.id);
 
         Ok(())
     }
@@ -538,11 +539,11 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
     }
 
     pub async fn is_all_on_cpu(&self) -> bool {
-        println!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", self.id);
+        debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", self.id);
 
         for (device_idx, data) in self.cached_data.iter().skip(1).enumerate() {
             if data.read().await.is_some() {
-                println!("DataCacheWrapper::is_all_on_cpu: device_idx={device_idx}");
+                debug!("DataCacheWrapper::is_all_on_cpu: device_idx={device_idx}");
                 return false
             }
         }
@@ -553,7 +554,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
     pub fn is_on_cpu_since(&self, threshold_age:u64) -> bool {
         let r = self.on_cpu_since.read().map(|v| threshold_age < v ).unwrap_or(false);
 
-        println!("DataCacheWrapper::is_on_cpu_since: self.id={:?} self.on_cpu_since={:?} r={r} cache_age={threshold_age}", self.id, self.on_cpu_since);
+        debug!("DataCacheWrapper::is_on_cpu_since: self.id={:?} self.on_cpu_since={:?} r={r} cache_age={threshold_age}", self.id, self.on_cpu_since);
 
         r
     }
@@ -579,6 +580,7 @@ pub trait Runner {
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use crate::common::ThoosaError;
     use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
     use crate::*;
@@ -635,7 +637,7 @@ mod tests {
         );
 
         tested.with_data(0, None, None, |t|{
-            println!("t={t:?}");
+            debug!("t={t:?}");
             Ok(())
         }).await?;
 

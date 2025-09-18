@@ -2,6 +2,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use std::time::Duration;
 use async_trait::async_trait;
+use log::debug;
 use tokio::sync::Semaphore;
 use tokio::time;
 use thoosa_shared::{MyError, ThoosaError};
@@ -30,7 +31,7 @@ impl RunnerSemaphore {
         {
             let mut waited = self.permits_waited_for.lock();
             *waited += n;
-            println!(
+            debug!(
                 "RunnerSemaphore::acquire_many_owned: n={n} permits_waited_for={} available_permits={}",
                 *waited,
                 self.sem.available_permits()
@@ -42,19 +43,19 @@ impl RunnerSemaphore {
             Ok(Ok(v)) => {
                 let mut waited = self.permits_waited_for.lock();
                 *waited -= n;
-                println!("RunnerSemaphore::acquire_many_owned returning {n} permits");
+                debug!("RunnerSemaphore::acquire_many_owned returning {n} permits");
                 Ok(RunnerPerm::new(v))
             }
             Ok(Err(_)) => {
                 let mut waited = self.permits_waited_for.lock();
                 *waited -= n;
-                println!("RunnerSemaphore::acquire_many_owned semaphore closed");
+                debug!("RunnerSemaphore::acquire_many_owned semaphore closed");
                 Err(MyError::OutOfPermits.into())
             }
             Err(_) => {
                 let mut waited = self.permits_waited_for.lock();
                 *waited -= n;
-                println!("RunnerSemaphore::acquire_many_owned timeout");
+                debug!("RunnerSemaphore::acquire_many_owned timeout");
                 Err(MyError::OutOfPermits.into())
             }
         }
