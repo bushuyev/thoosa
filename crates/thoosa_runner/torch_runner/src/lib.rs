@@ -510,8 +510,8 @@ mod tests {
         id: LoadAndClcTaskId,
 
         loader: Arc<TestTensorLoader>,
-        mul: Arc<ClcTask>,
-        mul_oom_runner: ClcOOMRunner<ClcTask>,
+        clc_task: Arc<ClcTask>,
+        clc_oom_runner: ClcOOMRunner<ClcTask>,
     }
 
     #[async_trait]
@@ -526,7 +526,7 @@ mod tests {
                 .await?;
 
             let loaded_id = loaded.id().clone();
-            let output_id = self.mul.out_id(&loaded_id.clone());
+            let output_id = self.clc_task.out_id(&loaded_id.clone());
 
             debug!("LoadAndMulTask::run: loaded_id={loaded_id:?} output_id={output_id:?}");
 
@@ -545,7 +545,7 @@ mod tests {
             ]);
 
             async move {
-                self.mul_oom_runner.run(&self.mul, loaded, ctx, &required_ids).await
+                self.clc_oom_runner.run(&self.clc_task, loaded, ctx, &required_ids).await
             }.await
         }
 
@@ -568,7 +568,7 @@ mod tests {
 
     impl OutId for LoadAndClcTask {
         fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
-            self.mul.out_id(&self.loader.out_id(input_id))
+            self.clc_task.out_id(&self.loader.out_id(input_id))
         }
     }
 
@@ -587,8 +587,8 @@ mod tests {
             Self {
                 id,
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
-                mul: Arc::new(ClcTask::new(SimpleId::from("mul_task_0"), k, fail_until, dim_1, kind, device, use_matmul)),
-                mul_oom_runner: oom_runner,
+                clc_task: Arc::new(ClcTask::new(SimpleId::from("mul_task_0"), k, fail_until, dim_1, kind, device, use_matmul)),
+                clc_oom_runner: oom_runner,
             }
         }
     }
