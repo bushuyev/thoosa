@@ -24,8 +24,22 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone > {
     //TODO move to a wrapper
     #[allow(dead_code)]
     tracking:parking_lot::RwLock<Vec<&'static str>>,
-    _pd: PhantomData<D>,
+    dims: Option<D>,
     subview_fn:Option<fn(Self)->Self>
+}
+
+impl <D: Dims, Id: Named + Clone > Data for ThoTensor2<D, Id> {
+    type Metrics = D::Metrics;
+    type Sub = D::Sub;
+    type SubSelect = D::SubSelect;
+
+    fn size(&self) -> Self::Metrics {
+        self.t.size().try_into().map_err(|e|ThoosaError::new("".to_string())).unwrap()//TODO
+    }
+
+    fn device(&self) -> usize {
+       ThoDevice::from(self.t.device()).ordinal()
+    }
 }
 
 impl <D: Dims, Id: Named + Clone > Debug for ThoTensor2<D, Id> {
@@ -38,6 +52,22 @@ impl <D: Dims, Id: Named + Clone > Debug for ThoTensor2<D, Id> {
 }
 
 impl <D:Dims, Id: Named + Clone> ThoTensor2<D, Id> {
+
+    pub fn new_with_dims(id: Id, tensor: Tensor, dims:D) -> Self {
+        Self {
+            id,
+            t: if tensor.is_contiguous() {
+                tensor
+            } else {
+                tensor.contiguous()
+            },
+            tracking: Default::default(),
+            dims: Some(dims),
+            subview_fn: None
+        }
+    }
+
+
     pub fn new(id: Id, tensor: Tensor) -> Self {
         Self {
             id,
@@ -47,7 +77,7 @@ impl <D:Dims, Id: Named + Clone> ThoTensor2<D, Id> {
                 tensor.contiguous()
             },
             tracking: Default::default(),
-            _pd: PhantomData::default(),
+            dims: None,
             subview_fn: None
         }
     }
@@ -57,7 +87,7 @@ impl <D:Dims, Id: Named + Clone> ThoTensor2<D, Id> {
             id,
             t: Tensor::zeros(size, options),
             tracking: Default::default(),
-            _pd: PhantomData::default(),
+            dims: None,
             subview_fn: None,
         }
     }
@@ -157,15 +187,17 @@ impl <D:Dims, Id: Named + Clone> ThoTensor2<D, Id> {
 
     pub fn run_inner_with_params<F, OutDim:Dims, P:Dims>(
         &self, id:Id,
+        dims:OutDim,
         func:&F,
         params:&[&ThoTensor2<P, Id>]
     ) -> Result<ThoTensor2<OutDim, Id>, ThoosaError>
     where F:Fn(&Tensor, &[&Tensor])->Result<Tensor, ThoosaError> + ?Sized{
 
 
-        Ok(ThoTensor2::new(
+        Ok(ThoTensor2::new_with_dims(
             id,
-            func(&self.t,  params.into_iter().map(|p|&p.t).collect::<Vec<&Tensor>>().as_slice())?
+            func(&self.t,  params.into_iter().map(|p|&p.t).collect::<Vec<&Tensor>>().as_slice())?,
+            dims
         ))
     }
 

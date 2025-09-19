@@ -28,7 +28,7 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use rand::seq::SliceRandom;
     use thoosa_common::applicables::ThoDevice;
-    use thoosa_common::dims::Dims;
+    use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
     use thoosa_common::tho_tensor::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::{MyError, ThoosaError};
@@ -98,7 +98,11 @@ mod tests {
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ABData;
-    impl Dims for ABData {}
+    impl Dims for ABData {
+        type Metrics = AnyMetrics;
+        type Sub = AnySub;
+        type SubSelect = ();
+    }
     impl Adjustable for ThoTensor2<ABData, SimpleId> {}
 
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -327,7 +331,9 @@ mod tests {
                 let first = data.first().ok_or_else(|| MyError::SomethingElse("no tensors".into()))?;
 
                 // Use first tensor as the callable host; pass the rest as params
-                first.t.run_inner_with_params(ax_id.clone(), &|first_t: &Tensor, params: &[&Tensor]| {
+                first.t.run_inner_with_params(ax_id.clone(),
+                                              ABData,
+                                              &|first_t: &Tensor, params: &[&Tensor]| {
                     let batch_size = first_t.size()[0];
                     let kind = first_t.kind();
                     let dev = first_t.device();
@@ -406,7 +412,11 @@ mod tests {
 
         #[derive(Debug, Clone, Hash, Eq, PartialEq)]
         struct ClsOut;
-        impl Dims for ClsOut {}
+        impl Dims for ClsOut {
+            type Metrics = AnyMetrics;
+            type Sub = AnySub;
+            type SubSelect = ();
+        }
 
         impl ClsOut {
 

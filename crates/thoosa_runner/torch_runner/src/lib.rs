@@ -70,7 +70,7 @@ mod tests {
     use tch::{Device, IndexOp, Kind, Scalar, Tensor};
     use tch::kind::FLOAT_CPU;
     use thoosa_common::cuda_utils::cuda_mem;
-    use thoosa_common::dims::Dims;
+    use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
     use thoosa_common::utils::{lin_for_size, lin_t};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
@@ -236,7 +236,33 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct LoadedTensor;
-    impl Dims for LoadedTensor {}
+    impl Dims for LoadedTensor {
+        type Metrics = TwoDimsMetrics;
+        type Sub = ThoTensor2<LoadedTensor, SimpleId>;
+        type SubSelect = std::ops::Range<Self::Metrics>;
+
+        fn subview(&self, t:Self::Sub, range: &Self::SubSelect) -> Self::Sub
+        where
+            Self: Sized
+        {
+            let size: TwoDimsMetrics = t.size().try_into().unwrap();
+
+
+            let dim_0_range = range.start.dim_0..min(size.dim_0, range.end.dim_0);
+
+
+
+            debug!("Data for LoadedTensor::subview: dim_0_range={dim_0_range:?} size={size:?} range={range:?}");
+            debug!("Data for LoadedTensor::subview: t=\n{}", t);
+
+            let sub = ThoTensor2::new(t.id().clone(), t.t().i((dim_0_range.clone(), ..)));
+
+
+            debug!("Data for LoadedTensor::subview: sub.t=\n{}", t.t().i((dim_0_range, ..)));
+
+            sub
+        }
+    }
     impl LoadedTensor{
 
     }
@@ -246,48 +272,48 @@ mod tests {
     }
 
 
-    #[async_trait]
-    impl Data for ThoTensor2<LoadedTensor, SimpleId> {
-        type Metrics = TwoDimsMetrics;
-
-        type Sub = Self;
-
-        type SubSelect = std::ops::Range<Self::Metrics>;
-
-        fn size(&self) -> Self::Metrics {
-            self.size().try_into().expect("can't get size")
-        }
-
-        fn subview(&self, range: &Self::SubSelect) -> Self
-        where
-            Self: Sized
-        {
-            let size: TwoDimsMetrics = self.t().size().try_into().unwrap();
-
-
-            let dim_0_range = range.start.dim_0..min(size.dim_0, range.end.dim_0);
-
-
-
-            debug!("Data for LoadedTensor::subview: dim_0_range={dim_0_range:?} size={size:?} range={range:?}");
-            debug!("Data for LoadedTensor::subview: t=\n{}", self.t());
-
-            let sub = ThoTensor2::new(self.id().clone(), self.t().i((dim_0_range.clone(), ..)));
-
-
-            debug!("Data for LoadedTensor::subview: sub.t=\n{}", self.t().i((dim_0_range, ..)));
-
-            sub
-        }
-
-        fn track_used_in(&self, token: &'static str) {
-            self._track_used_in(token);
-        }
-
-        fn device(&self) -> usize {
-            self.device()
-        }
-    }
+    // #[async_trait]
+    // impl Data for ThoTensor2<LoadedTensor, SimpleId> {
+    //     type Metrics = TwoDimsMetrics;
+    //
+    //     type Sub = Self;
+    //
+    //     type SubSelect = std::ops::Range<Self::Metrics>;
+    //
+    //     fn size(&self) -> Self::Metrics {
+    //         self.size().try_into().expect("can't get size")
+    //     }
+    //
+    //     fn subview(&self, range: &Self::SubSelect) -> Self
+    //     where
+    //         Self: Sized
+    //     {
+    //         let size: TwoDimsMetrics = self.t().size().try_into().unwrap();
+    //
+    //
+    //         let dim_0_range = range.start.dim_0..min(size.dim_0, range.end.dim_0);
+    //
+    //
+    //
+    //         debug!("Data for LoadedTensor::subview: dim_0_range={dim_0_range:?} size={size:?} range={range:?}");
+    //         debug!("Data for LoadedTensor::subview: t=\n{}", self.t());
+    //
+    //         let sub = ThoTensor2::new(self.id().clone(), self.t().i((dim_0_range.clone(), ..)));
+    //
+    //
+    //         debug!("Data for LoadedTensor::subview: sub.t=\n{}", self.t().i((dim_0_range, ..)));
+    //
+    //         sub
+    //     }
+    //
+    //     fn track_used_in(&self, token: &'static str) {
+    //         self._track_used_in(token);
+    //     }
+    //
+    //     fn device(&self) -> usize {
+    //         self.device()
+    //     }
+    // }
 
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
@@ -325,9 +351,10 @@ mod tests {
         {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
-            Ok(ThoTensor2::new(
+            Ok(ThoTensor2::new_with_dims(
                 self.out_id(WithId::id(input.as_ref())),
-                lin_for_size(k, (&self.size).into(), self.kind, &ThoDevice::from(ctx.read().device_idx))
+                lin_for_size(k, (&self.size).into(), self.kind, &ThoDevice::from(ctx.read().device_idx)),
+                LoadedTensor
             ))
         }
 
@@ -339,7 +366,11 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct MulK;
 
-    impl Dims for MulK {}
+    impl Dims for MulK {
+        type Metrics = TwoDimsMetrics;
+        type Sub = ThoTensor2<MulK, SimpleId>;
+        type SubSelect = std::ops::Range<Self::Metrics>;
+    }
 
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "MulTaskOutputId"]
@@ -369,24 +400,24 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl Data for ThoTensor2<ClcTaskOutput, SimpleId> {
-        type Metrics = TwoDimsMetrics;
-
-        type Sub = Self;
-        type SubSelect = std::ops::Range<Self::Metrics>;
-
-        fn size(&self) -> Self::Metrics {
-            self.size().try_into().expect("can't get size")
-        }
-        fn track_used_in(&self, _token: &'static str) {
-            // no-op for tests
-        }
-
-        fn device(&self) -> usize {
-            self.device()
-        }
-    }
+    // #[async_trait]
+    // impl Data for ThoTensor2<ClcTaskOutput, SimpleId> {
+    //     type Metrics = TwoDimsMetrics;
+    //
+    //     type Sub = Self;
+    //     type SubSelect = std::ops::Range<Self::Metrics>;
+    //
+    //     fn size(&self) -> Self::Metrics {
+    //         self.size().try_into().expect("can't get size")
+    //     }
+    //     fn track_used_in(&self, _token: &'static str) {
+    //         // no-op for tests
+    //     }
+    //
+    //     fn device(&self) -> usize {
+    //         self.device()
+    //     }
+    // }
 
     impl OutId for ClcTask {
         fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -401,13 +432,18 @@ mod tests {
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClcTaskOutput;
-    impl Dims for ClcTaskOutput {}
+    impl Dims for ClcTaskOutput {
+        type Metrics = TwoDimsMetrics;
+        type Sub = ThoTensor2<ClcTaskOutput, SimpleId>;
+        type SubSelect =  std::ops::Range<Self::Metrics>;
+    }
 
     impl LoadedTensor {
         fn clc_hadamard(id: SimpleId, loaded: &ThoTensor2<LoadedTensor, SimpleId>, k: &ThoTensor2<MulK, SimpleId>) -> Result<ThoTensor2<ClcTaskOutput, SimpleId>, ThoosaError> {
 
             loaded.run_inner_with_params(
                 id,
+                ClcTaskOutput,
                 &|t:&Tensor, params:&[&Tensor]|{
                         Ok(t.multiply(&params[0]))
                 },
@@ -420,6 +456,7 @@ mod tests {
 
             loaded.run_inner_with_params(
                 id,
+                ClcTaskOutput,
                 &|t:&Tensor, params:&[&Tensor]|{
                     Ok(t
                         .f_multiply(&params[0])?
