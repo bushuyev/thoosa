@@ -35,20 +35,23 @@ impl Debug for TensorLoader {
 
 
 #[async_trait]
-impl  Stage for TensorLoader {
-    type In = Resource;
+impl Stage for TensorLoader {
+    type In<'a> = Resource;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
     type Ctx = RunCtx2;
 
-    async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-    {
+    async fn run(
+        self: Arc<Self>,
+        _input: Arc<Self::In<'static>>,
+        _ctx: Arc<RwLock<Self::Ctx>>,
+    ) -> Result<Self::Out, ThoosaError> {
         Ok((self.loader_fn)(&_input, &self.device))
     }
 }
 
 
 impl OutId for TensorLoader {
-    fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("loaded_{}", input_id.id()))
     }
 }
