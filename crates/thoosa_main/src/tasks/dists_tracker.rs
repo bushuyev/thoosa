@@ -16,40 +16,62 @@ use crate::tasks::cross_dims::ChannelsSlicesData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 
 #[derive(Debug)]
-pub struct TensorsPair {
-    id: SimpleId,
-    t_0:Arc<DataCacheWrapper<ThoTensor2<ChannelsSlicesData2, SimpleId>>>,
-    t_1:Arc<DataCacheWrapper<ThoTensor2<ChannelsSlicesData2, SimpleId>>>
+pub struct DistWithMask {
 }
-impl Input for TensorsPair {}
 
-impl WithId for TensorsPair {
-    type ID = SimpleId;
 
-    fn id(&self) -> &Self::ID {
-        &self.id
+#[async_trait]
+impl CopyToDevice for DistWithMask {
+    async fn copy_to_device(&self, dst_device: usize) ->Self {
+        todo!()
+    }
+}
+impl Data for DistWithMask{
+    type Metrics = ();
+    type Sub = DistWithMask;
+    type SubSelect = ();
+
+    fn size(&self) -> Self::Metrics {
+        todo!()
+    }
+
+    fn device(&self) -> usize {
+        todo!()
     }
 }
 
-impl TensorsPair {
-    pub fn new(id: SimpleId, t_0: Arc<DataCacheWrapper<ThoTensor2<ChannelsSlicesData2, SimpleId>>>, t_1: Arc<DataCacheWrapper<ThoTensor2<ChannelsSlicesData2, SimpleId>>>) -> Self {
-        Self { id, t_0, t_1 }
+impl Output for DistWithMask {
+
+}
+impl Input for DistWithMask {}
+
+impl WithId for DistWithMask {
+    type ID = SimpleId;
+
+    fn id(&self) -> &Self::ID {
+       todo!()
+    }
+}
+
+impl DistWithMask {
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
 #[derive(Debug)]
-pub struct CrossUnfold {
+pub struct DistsTracker {
 
 }
 
-impl CrossUnfold {
+impl DistsTracker {
     pub fn new() -> Self {
         Self {}
     }
 }
 #[async_trait]
-impl Stage for CrossUnfold {
-    type In<'a> = TensorsPair;
+impl Stage for DistsTracker {
+    type In<'a> = DistWithMask;
     type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
     type Ctx = RunCtx2;
 

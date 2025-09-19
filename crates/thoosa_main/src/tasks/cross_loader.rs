@@ -1,4 +1,5 @@
-use crate::tasks::cross_batch_clc::BatchUnfoldedInput;
+use std::fmt::Debug;
+use crate::tasks::cross_batch_clc::BatchInput;
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::CrossBatchClc;
 use crate::tasks::cross_dims::ChannelsSlicesData2;
@@ -23,11 +24,14 @@ use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 
 pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
+
+    type Out;
+
     fn run_batch<'s>(
         self: Arc<Self>,
-        input: &BatchUnfoldedInput<'s, &'s Arc<Resource>>,
+        input: &BatchInput<'s, &'s Arc<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<ThoTensor2<ChannelsSlicesData2, SimpleId>, ThoosaError>
+    ) -> Result<Self::Out, ThoosaError>
     where
         Self: 's;
 }
@@ -35,16 +39,17 @@ pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
 impl<T> CrossLoaderClc for T
 where
     T: for<'s> Stage<
-            In<'s> = BatchUnfoldedInput<'s, &'s Arc<Resource>>,
-            Out = ThoTensor2<ChannelsSlicesData2, SimpleId>,
+            In<'s> = BatchInput<'s, &'s Arc<Resource>>,
             Ctx = RunCtx2,
         > + 'static,
 {
+    type Out = T::Out;
+
     fn run_batch<'s>(
         self: Arc<Self>,
-        input: &BatchUnfoldedInput<'s, &'s Arc<Resource>>,
+        input: &BatchInput<'s, &'s Arc<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<ThoTensor2<ChannelsSlicesData2, SimpleId>, ThoosaError>
+    ) -> Result<Self::Out, ThoosaError>
     where
         Self: 's,
     {
@@ -55,26 +60,29 @@ where
 // #[derive(Debug, cached_derive::Cached)]
 #[derive(Debug)]
 // #[cache_name = "LoadedTensorId"]
-pub struct CrossLoader<CLC> {
+pub struct CrossLoader<CLC, RSV> {
     loader: Arc<TensorLoader>,
     batch_clc: Arc<CLC>,
+    receiver: Arc<RSV>,
 }
 
-impl<CLC> CrossLoader<CLC>
+impl<CLC, RSV> CrossLoader<CLC, RSV>
 where
     CLC: CrossLoaderClc + 'static,
 {
-    pub fn new(loader: Arc<TensorLoader>, cross_unfold: Arc<CLC>) -> Self {
+    pub fn new(loader: Arc<TensorLoader>, cross_unfold: Arc<CLC>, receiver:Arc<RSV>) -> Self {
         Self {
             loader,
             batch_clc: cross_unfold,
+            receiver
         }
     }
 }
 
-impl<CLC> OutId for CrossLoader<CLC>
+impl<CLC, RSV> OutId for CrossLoader<CLC, RSV>
 where
     CLC: CrossLoaderClc + 'static,
+    RSV: for<'a> Stage<In<'a>=CLC::Out, Ctx=RunCtx2> + Debug + Send + Sync + 'static
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("cross_{}", input_id))
@@ -107,9 +115,10 @@ impl WithId for ResourcesVec {
 impl Input for ResourcesVec {}
 
 #[async_trait]
-impl<CLC> Stage for CrossLoader<CLC>
+impl<CLC, RSV> Stage for CrossLoader<CLC, RSV>
 where
     CLC: CrossLoaderClc + 'static,
+    RSV: for<'a> Stage<In<'a>=CLC::Out,Ctx=RunCtx2> + Debug + Send + Sync + 'static,
 {
     type In<'a> = ResourcesVec where Self: 'a;
     type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
@@ -117,12 +126,12 @@ where
 
     async fn run(
         self: Arc<Self>,
-        _input: Arc<Self::In<'static>>,
-        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+        input: Arc<Self::In<'static>>,
+        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         let window = 2;
         let stride = 1;
-        let device_idx = _ctx.read().device_idx();
+        let device_idx = ctx.read().device_idx();
         let max_batch = 20;
 
         let mut t_0_batch: Vec<_> = vec![];
@@ -132,16 +141,16 @@ where
         let mut skip_0_i = 0;
 
 
-        for (i_0, resource_0) in _input.resources.iter().enumerate() {
+        for (i_0, resource_0) in input.resources.iter().enumerate() {
             let t_0 = Arc::clone(&self.loader)
-                .run_cached(Arc::clone(resource_0), Arc::clone(&_ctx))
+                .run_cached(Arc::clone(resource_0), Arc::clone(&ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().seq_len();
             t_0_batch.push(t_0);
             t_0_batch_resources.push(resource_0);
 
-            if t_0_batch_len < max_batch && i_0 < _input.resources.len() - 1 {
+            if t_0_batch_len < max_batch && i_0 < input.resources.len() - 1 {
                 continue;
             }
 
@@ -149,13 +158,13 @@ where
             let mut t_1_batch_resources: Vec<_> = vec![];
             let mut t_1_batch_len = 0;
 
-            for (i_1, resource_1) in _input.resources
+            for (i_1, resource_1) in input.resources
                 .iter()
                 .enumerate()
                 .skip(skip_0_i) {//skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
-                    .run_cached(Arc::clone(resource_1), Arc::clone(&_ctx))
+                    .run_cached(Arc::clone(resource_1), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().seq_len();
@@ -163,7 +172,7 @@ where
                 t_1_batch.push(t_1);
                 t_1_batch_resources.push(resource_1);
 
-                if t_1_batch_len < max_batch && i_1 < _input.resources.len() - 1 {
+                if t_1_batch_len < max_batch && i_1 < input.resources.len() - 1 {
                     continue;
                 }
 
@@ -173,7 +182,7 @@ where
                     None,
                     |data| {
 
-                        let input = BatchUnfoldedInput::new(
+                        let input = BatchInput::new(
                             data,
                             t_0_batch_resources.as_slice(),
                             t_1_batch_resources.as_slice(),
@@ -181,7 +190,9 @@ where
 
                         debug!("input={input:?}");
 
-                        Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&_ctx))?;
+                        let out = Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&ctx))?;
+
+                        Arc::clone(&self.receiver).do_run(&out, Arc::clone(&ctx))?;
 
                         Ok(())
                     },
@@ -210,7 +221,6 @@ where
 mod tests {
     use crate::tasks::cross_batch_clc::CrossBatchClc;
     use crate::tasks::cross_loader::{CrossLoader, ResourcesVec};
-    use crate::tasks::cross_unfold::CrossUnfold;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::TensorLoader;
     use caching_runner::common::cachable::Cached;
@@ -227,6 +237,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use torch_runner::data::ThoTensor2;
+    use crate::tasks::dists_tracker::DistsTracker;
 
     #[ctor::ctor]
     pub fn init() {
@@ -266,6 +277,7 @@ mod tests {
                 ThoDevice::from(Device::Cpu),
             )),
             Arc::new(CrossBatchClc::new()),
+            Arc::new(DistsTracker::new())
         ));
 
         let r = cl
