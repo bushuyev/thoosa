@@ -28,6 +28,7 @@ impl RunCtx2 {
     pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
         Self { device_idx, permits:vec![], cache_area, name }
     }
+
 }
 
 
