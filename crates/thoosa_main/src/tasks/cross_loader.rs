@@ -8,7 +8,7 @@ use tch::Tensor;
 use caching_runner::common::{Data, OutId};
 use caching_runner::common::cachable::Cached;
 use caching_runner::common::runnable::Stage;
-use thoosa_common::dims::{ChannelsData, ChannelsSlicesData, Dims};
+use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
@@ -18,49 +18,7 @@ use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 use crate::tasks::cross_unfold::{CrossUnfold, TensorsPair};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawChannelsData, TensorLoader};
-
-#[derive(Debug)]
-pub struct Slice {
-    id:SimpleId,
-    t:ThoTensor2<ChannelsSlicesData, SimpleId>,
-}
-
-impl Slice {
-    pub fn new(id: SimpleId, t: ThoTensor2<ChannelsSlicesData, SimpleId>) -> Self {
-        Self { id, t }
-    }
-}
-impl WithId for Slice {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-impl Output for Slice {}
-
-#[async_trait]
-impl CopyToDevice for Slice {
-    async fn copy_to_device(&self, dst_device: usize) ->Self {
-        Slice::new(self.id.clone(), self.t.copy_to_device(dst_device).await)
-    }
-}
-
-impl  Data for Slice {
-    type Metrics = TwoDimsMetrics;
-    type Sub = Self;
-    type SubSelect = std::ops::Range<Self::Metrics>;
-
-    fn size(&self) -> Self::Metrics {
-        self.t.size().try_into().expect("Data for CrossSlices::size failed")
-    }
-
-    fn device(&self) -> usize {
-        self.t.device()
-    }
-}
+use crate::tasks::tensor_loader::{TensorLoader};
 
 // #[derive(Debug, cached_derive::Cached)]
 #[derive(Debug)]
@@ -109,10 +67,19 @@ impl WithId for ResourcesVec {
 
 impl Input for ResourcesVec{}
 
+
+#[derive(Clone, Debug)]
+pub struct ChannelsSlicesData2;
+impl Dims for ChannelsSlicesData2 {
+    type Metrics = TwoDimsMetrics;
+    type Sub = ThoTensor2<ChannelsSlicesData2, SimpleId>;
+    type SubSelect = std::ops::Range<Self::Metrics>;
+}
+
 #[async_trait]
 impl  Stage for CrossLoader {
     type In = ResourcesVec;
-    type Out = Slice;
+    type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
     type Ctx = RunCtx2;
 
     async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
@@ -150,7 +117,7 @@ impl  Stage for CrossLoader {
 
         }
 
-        Ok(Slice::new("".into(), ThoTensor2::new("id".into(), Tensor::zeros(&[10,0], FLOAT_CPU))))
+        Ok(ThoTensor2::new("id".into(), Tensor::zeros(&[10,0], FLOAT_CPU)))
     }
 
 
@@ -175,7 +142,7 @@ mod tests {
     use crate::tasks::cross_loader::{CrossLoader, ResourcesVec};
     use crate::tasks::cross_unfold::CrossUnfold;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{RawChannelsData, TensorLoader};
+    use crate::tasks::tensor_loader::{TensorLoader};
 
     #[ctor::ctor]
     pub fn init() {
@@ -199,7 +166,7 @@ mod tests {
                     debug!("executor: key={key:?} i={i} v={v:?}");
 
 
-                    RawChannelsData::new(ThoTensor2::new(Input::id(key).clone(), Tensor::from_slice(v.as_slice()).view((1, 10))))
+                    ThoTensor2::new(Input::id(key).clone(), Tensor::from_slice(v.as_slice()).view((1, 10)))
                 },
                 ThoDevice::from(Device::Cpu)
             )),
