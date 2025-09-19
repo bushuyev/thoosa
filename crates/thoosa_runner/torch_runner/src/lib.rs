@@ -331,11 +331,11 @@ mod tests {
     }
 
     impl OutId for TestTensorLoader {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In<'static> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().loaded_tensors_cached.push(self.out_id(input.id()));
         }
     }
@@ -343,11 +343,11 @@ mod tests {
 
     #[async_trait]
     impl Stage for TestTensorLoader {
-        type In = LoaderInput;
+        type In<'a> = LoaderInput;
         type Out = ThoTensor2<LoadedTensor, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+        async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
@@ -420,11 +420,11 @@ mod tests {
     // }
 
     impl OutId for ClcTask {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("mult_{}_inp_{}", self.id, input_id))
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In<'static> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().multed_tensors_cached.push(self.out_id(input.id()));
         }
 
@@ -470,12 +470,12 @@ mod tests {
 
     #[async_trait]
     impl Stage for ClcTask {
-        type In = ThoTensor2<LoadedTensor, SimpleId>;
+        type In<'a> = ThoTensor2<LoadedTensor, SimpleId>;
         type Out = ThoTensor2<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
 
 
-        fn do_run(self: Arc<Self>, input: &Self::In, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+        fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             Self: Sized
         {
@@ -546,11 +546,11 @@ mod tests {
 
     #[async_trait]
     impl Stage for LoadAndClcTask {
-        type In = LoaderInput;
+        type In<'a> = LoaderInput;
         type Out = ThoTensor2<ClcTaskOutput, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+        async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
@@ -597,7 +597,7 @@ mod tests {
     }
 
     impl OutId for LoadAndClcTask {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             self.clc_task.out_id(&self.loader.out_id(input_id))
         }
     }

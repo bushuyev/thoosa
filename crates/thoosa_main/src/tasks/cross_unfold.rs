@@ -49,11 +49,15 @@ impl CrossUnfold {
 }
 #[async_trait]
 impl Stage for CrossUnfold {
-    type In = TensorsPair;
+    type In<'a> = TensorsPair;
     type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
     type Ctx = RunCtx2;
 
-    fn do_run(self: Arc<Self>, _input: &Self::In, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    fn do_run<'a>(
+        self: Arc<Self>,
+        _input: &Self::In<'a>,
+        _ctx: Arc<RwLock<Self::Ctx>>,
+    ) -> Result<Self::Out, ThoosaError>
     where
         Self: Sized
     {
