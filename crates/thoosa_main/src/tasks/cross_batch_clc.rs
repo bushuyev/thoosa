@@ -13,23 +13,24 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsSlicesData2};
+use crate::tasks::dists_tracker::DistWithMask;
 use crate::tasks::run_ctx_2::RunCtx2;
 
 #[derive(Debug)]
-pub struct BatchUnfoldedInput<'a, R:AsRef<Resource>> {
+pub struct BatchInput<'a, R:AsRef<Resource>> {
     tensors:&'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
     b_0:&'a [R],
     b_1:&'a [R]
 }
 
 
-impl  <'a, R:AsRef<Resource>> BatchUnfoldedInput<'a, R> {
+impl  <'a, R:AsRef<Resource>> BatchInput<'a, R> {
     pub fn new(tensors: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>], b_0: &'a [R], b_1: &'a [R]) -> Self {
         Self { tensors, b_0, b_1 }
     }
 }
 
-impl <'a, R:AsRef<Resource> + Debug + Send + Sync> Input for BatchUnfoldedInput<'a, R> {}
+impl <'a, R:AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {}
 
 #[derive(Debug)]
 pub struct CrossBatchClc;
@@ -41,8 +42,8 @@ impl CrossBatchClc {
 }
 
 impl Stage for CrossBatchClc {
-    type In<'s> = BatchUnfoldedInput<'s, &'s Arc<Resource>>;
-    type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
+    type In<'s> = BatchInput<'s, &'s Arc<Resource>>;
+    type Out = DistWithMask;
     type Ctx = RunCtx2;
 
     fn do_run<'s>(
@@ -84,6 +85,6 @@ impl Stage for CrossBatchClc {
 
         debug!("CrossBatchClc::do_run:  dists={dists:?}");
 
-        Ok(ThoTensor2::new("".into(), Tensor::rand(&[0], FLOAT_CPU)))
+        Ok(DistWithMask::new())
     }
 }
