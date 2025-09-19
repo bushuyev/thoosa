@@ -115,7 +115,7 @@ mod tests {
             let size = ABMetrics::from(t.t().size());
             let d0 = range.start.dim_0..min(size.dim_0, range.end.dim_0);
 
-            ThoTensor2::new_with_dims(t.id().clone(), t.t().i((d0, ..)), ABData)
+            ThoTensor2::new(t.id().clone(), t.t().i((d0, ..)))
         }
 
     }
@@ -205,7 +205,7 @@ mod tests {
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
             let x = Tensor::ones([self.input_len, self.feat], (self.kind, Device::Cpu)) * base;
             let id = self.out_id(&input.id);
-            Ok(ThoTensor2::new_with_dims(id, x, ABData))
+            Ok(ThoTensor2::new(id, x))
         }
     }
 
@@ -480,7 +480,7 @@ mod tests {
 
                 let out_id = self.out_id(input.id());
                 Ok(
-                      ThoTensor2::new_with_dims(out_id, input.run_inner(//TODO id
+                      ThoTensor2::new(out_id, input.run_inner(//TODO id
                         |t: &Tensor| {
                             debug!("t.size()={:?}", t.size());
                         // Simulate OOM conditions based on batch size t.size()[0]
@@ -533,7 +533,7 @@ mod tests {
                         Ok(correct.view([1, 1]))
                     }
                     )?
-                , ClsOut))
+                ))
             }
         }
 

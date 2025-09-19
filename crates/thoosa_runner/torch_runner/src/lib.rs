@@ -351,10 +351,10 @@ mod tests {
         {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
-            Ok(ThoTensor2::new_with_dims(
+            Ok(ThoTensor2::new(
                 self.out_id(WithId::id(input.as_ref())),
                 lin_for_size(k, (&self.size).into(), self.kind, &ThoDevice::from(ctx.read().device_idx)),
-                LoadedTensor
+                // LoadedTensor
             ))
         }
 
