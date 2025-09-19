@@ -21,6 +21,11 @@ use caching_runner::common::runnable::Stage;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 
+type StageIn<'a, S> = <S as Stage>::In<'a>;
+type StageInStatic<S> = StageIn<'static, S>;
+type StageInMetrics<S> = <StageInStatic<S> as Data>::Metrics;
+type StageInSubSelect<S> = <StageInStatic<S> as Data>::SubSelect;
+
 #[derive(Debug)]
 pub enum FailUntil {
     MemLimit(u64),
@@ -30,7 +35,7 @@ pub enum FailUntil {
 }
 
 //for tests in torch_runner
-pub struct ClcOOMRunner<R: Stage> {
+pub struct ClcOOMRunner<R: Stage + 'static> {
     pd: PhantomData<R>,
     config: OOMRunnerConfig,
     output_builder: Box<dyn Fn(<<R as Stage>::Out as WithId>::ID)->Box<dyn OutputBuilder<O=<R as Stage>::Out>> + Send + Sync>
@@ -46,8 +51,8 @@ impl <R: Stage + Stage> Debug for ClcOOMRunner<R> {
 
 impl<R> ClcOOMRunner<R>
 where
-    R: Stage + Adjustable,
-    R::In: Adjustable,
+    R: Stage + Adjustable + 'static,
+    StageInStatic<R>: Adjustable,
     R::Ctx: Adjustable,
 {
     pub fn new(config: OOMRunnerConfig, output_builder: Box<dyn Fn(<<R as Stage>::Out as WithId>::ID)->Box<dyn OutputBuilder<O=<R as Stage>::Out>> + Send + Sync>) -> Self {
@@ -61,18 +66,20 @@ where
 
 impl<R> Runner for ClcOOMRunner<R>
 where
-    R: Stage + Adjustable,
-    R::In: WithId + Debug + Adjustable + Data<Sub=R::In, SubSelect=std::ops::Range<<<R as Stage>::In as Data>::Metrics>>,
+    R: Stage + Adjustable + 'static,
+    StageInStatic<R>: WithId + Debug + Adjustable + Data<
+        Sub = StageInStatic<R>,
+        SubSelect = std::ops::Range<StageInMetrics<R>>,
+    >,
     R::Ctx: Adjustable,
     // R::Out: From<Vec<R::Out>>,
     R: OutId,
-    <<R as Stage>::In as Data>::Metrics: for<'a> AddAssign<&'a <<R as Stage>::In as Data>::Metrics>,
-    <<R as Stage>::In as Data>::Metrics: DivAssign<i64>,
-    <<R as Stage>::In as Data>::Metrics: PartialOrd<i64>,
-    for <'a, 'b> &'a <<R as Stage>::In as Data>::Metrics: Add<&'b <<R as Stage>::In as Data>::Metrics,
-    Output=<<R as Stage>::In as Data>::Metrics>,
-    <<R as Stage>::In as Data>::Metrics: PartialOrd,
-    <<R as Stage>::In as Data>::SubSelect:Adjustable
+    StageInMetrics<R>: for<'a> AddAssign<&'a StageInMetrics<R>>,
+    StageInMetrics<R>: DivAssign<i64>,
+    StageInMetrics<R>: PartialOrd<i64>,
+    for<'a, 'b> &'a StageInMetrics<R>: Add<&'b StageInMetrics<R>, Output = StageInMetrics<R>>,
+    StageInMetrics<R>: PartialOrd,
+    StageInSubSelect<R>: Adjustable,
 {
     type R = R;
 
@@ -80,7 +87,7 @@ where
     async fn run(
         &self,
         runnable: &Arc<Self::R>,
-        input: Arc<DataCacheWrapper<<Self::R as Stage>::In>>,
+        input: Arc<DataCacheWrapper<StageInStatic<Self::R>>>,
         ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<Self::R as Stage>::Out, ThoosaError>
@@ -129,7 +136,7 @@ where
             OOMRunnerConfig::Splits => {
                 OOMHandler::new(
                     vec![
-                        Adjusters::Input(Box::new(SplitsAdjuster::<<Self::R as Stage>::In>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<Self::R>>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -152,7 +159,7 @@ where
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY, |n| {
                             GlobalCtx::global().acquire_many(device_idx, n, out_key.clone())
                         }))),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<<R as Stage>::In>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -175,7 +182,7 @@ where
                             GlobalCtx::global().acquire_many(device_idx, n, out_key.clone())
                         }))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<<R as Stage>::In>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -218,12 +225,11 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     check:CF
 ) -> Result<(), ThoosaError>
 where
-    R::In: WithId,
-    R: Cached + OutId,
+    R: Stage + Cached + OutId + 'static,
+    StageInStatic<R>: WithId + From<&'static str>,
     F:Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF:Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
     <R as Stage>::Out:Data,
-    <R as Stage>::In:From<&'static str>
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -249,7 +255,7 @@ where
             let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
             let multed = load_and_mul
                 .run_cached(
-                    Arc::new(<&str as Into<R::In>>::into(res)), //crate::tests::DLoaderInput { id: crate::tests::DLoaderInputId(res) },
+                    Arc::new(<&str as Into<StageInStatic<R>>>::into(res)),
                     ctx_device.clone(),
                 )
                 .await?;
@@ -442,11 +448,11 @@ mod tests {
     impl Adjustable for DLoadedTensor {}
 
     impl OutId for DummyLoader {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In<'static> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().loaded_tensors_cached.push(self.out_id(input.id()));
         }
     }
@@ -563,12 +569,12 @@ mod tests {
 
     #[async_trait]
     impl Stage for DummyLoader {
-        type In = DLoaderInput;
+        type In<'a> = DLoaderInput;
         type Out = DLoadedTensor;
         type Ctx = DummyRunCtx;
 
 
-        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+        async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             self.run_count.fetch_add(1, Relaxed);
 
             let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0) as f32;
@@ -586,7 +592,7 @@ mod tests {
         }
 
 
-        fn do_run(self: Arc<Self>, _input: &Self::In, _tx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+        fn do_run<'a>(self: Arc<Self>, _input: &Self::In<'a>, _tx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             Self: Sized
         {
@@ -616,18 +622,18 @@ mod tests {
 
     #[async_trait]
     impl Stage for DMulTask {
-        type In = DLoadedTensor;
+        type In<'a> = DLoadedTensor;
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+        async fn run(self: Arc<Self>, _input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         {
             unimplemented!()
         }
 
 
 
-        fn do_run(self: Arc<Self>, input: &Self::In, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+        fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         where
             Self: Sized
         {
@@ -672,16 +678,16 @@ mod tests {
     }
 
 
-    
+
 
     impl Adjustable for DMulTask {}
 
     impl OutId for DMulTask {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             DMulTaskOutputId(format!("multiplied_{}", input_id).leak())
         }
 
-        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
+        fn on_cached(&self, input: &impl WithId<ID=<<Self as Stage>::In<'static> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>) {
             ctx.write().multed_tensors_cached.push(self.out_id(input.id()));
         }
 
@@ -819,7 +825,7 @@ mod tests {
     }
 
     impl OutId for DLoadAndMulTask {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             self.mul.out_id(&self.loader.out_id(input_id))
         }
     }
@@ -843,11 +849,11 @@ mod tests {
 
     #[async_trait]
     impl Stage for DLoadAndMulTask {
-        type In = DLoaderInput;
+        type In<'a> = DLoaderInput;
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+        async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
         {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
