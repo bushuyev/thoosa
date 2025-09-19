@@ -81,13 +81,17 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use caching_runner::adjusters::splits::OutputBuilder;
-    use thoosa_common::dims::Dims;
+    use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::data::ThoTensor2;
 
     #[derive(Debug, Clone)]
     struct TestDims;
-    impl Dims for TestDims {}
+    impl Dims for TestDims {
+        type Metrics = AnyMetrics;
+        type Sub = AnySub;
+        type SubSelect = ();
+    }
 
 
     #[test]
