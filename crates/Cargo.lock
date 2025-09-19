@@ -5151,6 +5151,7 @@ dependencies = [
  "cached_derive",
  "caching_runner",
  "caching_runner_test",
+ "ctor 0.2.9",
  "cudarc",
  "cust",
  "dashmap 6.1.0",
