@@ -18,15 +18,16 @@ use thoosa_common::cuda_utils::tensor_mem_size;
 use thoosa_common::tho_tensor::CopyToDevice;
 use crate::metrics::TwoDimsMetrics;
 
-pub struct ThoTensor2<D: Dims<Sub=Self>, Id: Named + Clone > {
+pub struct ThoTensor2<D: Dims, Id: Named + Clone > {
     id: Id,
     t: Tensor,
-    //TODO move to a wrapper
+
     #[allow(dead_code)]
     tracking:parking_lot::RwLock<Vec<&'static str>>,
-    dims: Option<D>,
-    subview_fn:Option<fn(Self)->Self>
+
+    pd: PhantomData<D>,
 }
+
 
 impl <D: Dims<Sub=Self>, Id: Named + Clone > Data for ThoTensor2<D, Id> {
     type Metrics = D::Metrics;
@@ -48,7 +49,7 @@ impl <D: Dims<Sub=Self>, Id: Named + Clone > Data for ThoTensor2<D, Id> {
 
 }
 
-impl <D: Dims<Sub=Self>, Id: Named + Clone > Debug for ThoTensor2<D, Id> {
+impl <D: Dims, Id: Named + Clone > Debug for ThoTensor2<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("")
             .field("id.name", &self.id.name())
@@ -58,20 +59,6 @@ impl <D: Dims<Sub=Self>, Id: Named + Clone > Debug for ThoTensor2<D, Id> {
 }
 
 impl <D:Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
-
-    pub fn new_with_dims(id: Id, tensor: Tensor, dims:D) -> Self {
-        Self {
-            id,
-            t: if tensor.is_contiguous() {
-                tensor
-            } else {
-                tensor.contiguous()
-            },
-            tracking: Default::default(),
-            dims: Some(dims),
-            subview_fn: None
-        }
-    }
 
 
     pub fn new(id: Id, tensor: Tensor) -> Self {
@@ -83,8 +70,7 @@ impl <D:Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
                 tensor.contiguous()
             },
             tracking: Default::default(),
-            dims: None,
-            subview_fn: None
+            pd:PhantomData,
         }
     }
 
@@ -93,8 +79,7 @@ impl <D:Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
             id,
             t: Tensor::zeros(size, options),
             tracking: Default::default(),
-            dims: None,
-            subview_fn: None,
+            pd:PhantomData,
         }
     }
 
@@ -200,10 +185,10 @@ impl <D:Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
     where F:Fn(&Tensor, &[&Tensor])->Result<Tensor, ThoosaError> + ?Sized{
 
 
-        Ok(ThoTensor2::new_with_dims(
+        Ok(ThoTensor2::new(
             id,
             func(&self.t,  params.into_iter().map(|p|&p.t).collect::<Vec<&Tensor>>().as_slice())?,
-            dims
+            // dims
         ))
     }
 
