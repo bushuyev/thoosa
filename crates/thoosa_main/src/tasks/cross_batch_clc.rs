@@ -1,5 +1,4 @@
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use log::debug;
 use parking_lot::RwLock;
@@ -33,24 +32,26 @@ impl  <'a, R:AsRef<Resource>> BatchUnfoldedInput<'a, R> {
 impl <'a, R:AsRef<Resource> + Debug + Send + Sync> Input for BatchUnfoldedInput<'a, R> {}
 
 #[derive(Debug)]
-pub struct CrossBatchClc<'a> {
-    pd:PhantomData<&'a ()>
-}
+pub struct CrossBatchClc;
 
-impl <'a> CrossBatchClc<'a> {
+impl CrossBatchClc {
     pub fn new() -> Self {
-        Self { pd: Default::default() }
+        Self
     }
 }
 
-impl <'a> Stage for CrossBatchClc<'a> {
-    type In = BatchUnfoldedInput<'a, &'a Arc<Resource>>;
+impl Stage for CrossBatchClc {
+    type In<'s> = BatchUnfoldedInput<'s, &'s Arc<Resource>>;
     type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
     type Ctx = RunCtx2;
 
-    fn do_run(self: Arc<Self>, input: &Self::In, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    fn do_run<'s>(
+        self: Arc<Self>,
+        input: &Self::In<'s>,
+        _ctx: Arc<RwLock<Self::Ctx>>,
+    ) -> Result<Self::Out, ThoosaError>
     where
-        Self: Sized
+        Self: Sized,
     {
         let mut mask_makers = vec![];
 

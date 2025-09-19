@@ -188,18 +188,18 @@ mod tests {
     impl ABLoader { fn new(input_len: i64, feat: i64, kind: Kind) -> Self { Self { input_len, feat, kind } } }
 
     impl OutId for ABLoader {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("features_{}", input_id.0))
         }
     }
 
     #[async_trait]
     impl Stage for ABLoader {
-        type In = FileInput;
+        type In<'a> = FileInput;
         type Out = ThoTensor2<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run(self: Arc<Self>, input: Arc<Self::In>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+        async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
             let idx = parse_numeric_part(input.id.0).unwrap_or(0.0) as i64;
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
@@ -276,18 +276,18 @@ mod tests {
     impl BatchBuilder { fn new(loader: Arc<ABLoader>, batch_size: usize) -> Self { Self { loader, batch_size } } }
 
     impl OutId for BatchBuilder {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("batch_{}", input_id))
         }
     }
 
     #[async_trait]
     impl Stage for BatchBuilder {
-        type In = FileListInput;
+        type In<'a> = FileListInput;
         type Out = ThoTensor2<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
-        async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
+        async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             // Look up the files and labels by input id
             let id_key = format!("{}", input.id);
             let files = registry().get(&id_key).ok_or_else(|| MyError::SomethingElse("file list not found".into()))?;
@@ -458,7 +458,7 @@ mod tests {
         impl Adjustable for Classifier {}
 
         impl OutId for Classifier {
-            fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+            fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
                 SimpleId::from(format!("cls_{}_inp_{}", self.id, input_id))
             }
         }
@@ -466,11 +466,11 @@ mod tests {
 
         #[async_trait]
         impl Stage for Classifier {
-            type In = ThoTensor2<ABData, SimpleId>;
+            type In<'a> = ThoTensor2<ABData, SimpleId>;
             type Out = ThoTensor2<ClsOut, SimpleId>;
             type Ctx = TorchRunCtx;
 
-            fn do_run(self: Arc<Self>, input: &Self::In, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+            fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
             where Self: Sized {
                 // Split input into features and labels using scoped tensor access
                 let feat = self.in_dim;
@@ -555,18 +555,18 @@ mod tests {
         impl JoinAndClassifyTask { fn new(loader: Arc<ABLoader>, clf: Arc<Classifier>, batch_size: usize) -> Self { Self { batch_builder: Arc::new(BatchBuilder::new(loader, batch_size)), clf } } }
 
         impl OutId for JoinAndClassifyTask {
-            fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+            fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
                 SimpleId::from(format!("cls_{}_inp_{}", self.clf.id, input_id))
             }
         }
 
         #[async_trait]
         impl Stage for JoinAndClassifyTask {
-            type In = FileListInput;
+            type In<'a> = FileListInput;
             type Out = ThoTensor2<ClsOut, SimpleId>;
             type Ctx = TorchRunCtx;
 
-            async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>{
+            async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>{
                 // Orchestrate: build cached batch and run classifier on it.
                 let batched = Arc::clone(&self.batch_builder)
                     .run_cached(Arc::clone(&input), Arc::clone(&ctx))

@@ -24,7 +24,7 @@ use thoosa_shared::MyError;
 pub trait Cached: Stage
 where
     Self: 'static,
-    Self::In:WithId
+    Self::In<'static>: WithId,
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
@@ -36,7 +36,7 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<Self::In>,
+        input: Arc<Self::In<'static>>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
@@ -570,15 +570,18 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
 }
 
 pub trait Runner {
-    type R: Stage<In:Data<Sub=<Self::R as Stage>::In> + WithId>;
+    type R: Stage;
 
     async fn run(
         &self,
         runnable: &Arc<Self::R>,
-        input: Arc<DataCacheWrapper<<Self::R as Stage>::In>>,
+        input: Arc<DataCacheWrapper<<Self::R as Stage>::In<'static>>>,
         ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>
-    ) -> Result<<Self::R as Stage>::Out, ThoosaError>;
+    ) -> Result<<Self::R as Stage>::Out, ThoosaError>
+    where
+        Self::R: 'static,
+        <Self::R as Stage>::In<'static>: Data<Sub = <Self::R as Stage>::In<'static>> + WithId;
 
 }
 
@@ -689,4 +692,3 @@ mod tests {
     }
 
 }
-
