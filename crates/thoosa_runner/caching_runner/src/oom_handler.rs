@@ -19,7 +19,7 @@ use tracing::instrument;
 use thoosa_common::panic_to_err_async;
 use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::{MyError, ThoosaError};
-use thoosa_shared::traits::{CachableIdTr, Named};
+use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 use crate::permits::MAX_PERMITS;
 
 pub trait Adjustable: Send + Sync {}
@@ -223,9 +223,10 @@ impl RunCtxContext for NoopRunCtxContext {}
 #[derive(Debug)]
 pub struct OOMHandler<'a, R, IC, RC, RCC>
 where
+
     R: Stage + Adjustable + OutId,
     <R::In as Data>::SubSelect: Default + Debug + Adjustable,
-    R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>>,
+    R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>> + WithId,
     R::Ctx: Adjustable,
     IC: InputContext<R>,
     RC: RunnableContext,
@@ -242,7 +243,7 @@ impl<'a, R, IC, RC, RCC> OOMHandler<'a, R, IC, RC, RCC>
 where
     R: Stage + Adjustable + OutId,
     <R::In as Data>::SubSelect: Debug + Adjustable,
-    R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>>,
+    R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>> + WithId,
     R::In: Debug + Data<Sub=R::In> + CopyToDevice,
     R::Ctx: Adjustable,
     IC: InputContext<R> + Debug,
@@ -268,7 +269,9 @@ where
         input: Arc<DataCacheWrapper<<R as Stage>::In>>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<R, IC, RC, RCC>,
-    ) -> Result<R::Out, ThoosaError> {
+    ) -> Result<R::Out, ThoosaError>
+     where <R as Stage>::In:WithId
+    {
 
         let (device_idx, ctx_name) = {
             let guard = run_context.read();

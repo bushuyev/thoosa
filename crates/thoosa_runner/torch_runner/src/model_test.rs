@@ -340,8 +340,8 @@ mod tests {
             };
 
             // Materialize all features to the target device and build a single stacked batch
-            let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
-            DataCacheWrapper::with_data_array(&feat_refs, device_idx, None, |data|{
+            // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
+            DataCacheWrapper::with_data_array(&feats, device_idx, None, |data|{
                 // data: &[&ThoTensor<ABData>] aligned with label_vec
                 let ax_id = SimpleId::from(format!("ax_{}", input.id));
                 let first = data.first().ok_or_else(|| MyError::SomethingElse("no tensors".into()))?;

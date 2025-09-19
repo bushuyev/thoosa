@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
 use cudarc::driver::{CudaContext, CudaStream, PinnedHostSlice};
+use log::debug;
 use tch::{Kind, Tensor};
 use tch::Kind::Int64;
 use tokio_utils::Pool;
@@ -74,7 +75,7 @@ impl CopyCtx {
 
         INSTANCE.get_or_init(||{
             // Self::make_instance(2.0, 64)
-            Self::make_instance(0.5, 16)
+            Self::make_instance(0.1, 32)
         })
     }
 
@@ -95,7 +96,7 @@ impl CopyCtx {
 
         let elts_in_buff = elts_in_mem / buffs;
 
-        println!("CopyCtx::make_instance: buf_size={elts_in_buff} buffs={buffs}");
+        debug!("CopyCtx::clc_buff_size: buf_size={elts_in_buff} buffs={buffs}");
 
         let buf_size = elts_in_buff * max_elt_size;
         buf_size

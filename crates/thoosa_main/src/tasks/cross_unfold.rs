@@ -1,6 +1,4 @@
-use std::fmt::{Debug, Formatter};
-use std::ops::Range;
-use std::pin::Pin;
+use std::fmt::Debug;
 use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -9,14 +7,12 @@ use tch::Tensor;
 use caching_runner::common::cachable::DataCacheWrapper;
 use caching_runner::common::Data;
 use caching_runner::common::runnable::Stage;
-use thoosa_common::dims::{ChannelsData, ChannelsSlicesData};
 use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::TwoDimsMetrics;
-use crate::tasks::cross_loader::{ChannelsSlicesData2};
+use crate::tasks::cross_dims::ChannelsSlicesData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 
 #[derive(Debug)]
@@ -68,22 +64,7 @@ impl Stage for CrossUnfold {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use log::debug;
-    use tch::{Device, Tensor};
-    use caching_runner::common::cachable::Cached;
-    use caching_runner::common::runnable::Stage;
-    use caching_runner::global_ctx::GlobalCtx;
-    use thoosa_common::applicables::ThoDevice;
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::resource::Resource;
     use thoosa_shared::ThoosaError;
-    use torch_runner::data::ThoTensor2;
-    use crate::tasks::cross_loader::{CrossLoader, ResourcesVec};
-    use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{TensorLoader};
-
     #[ctor::ctor]
     pub fn init() {
         thoosa_shared::test_utils::init_test_logging();
