@@ -348,27 +348,26 @@ mod tests {
 
                 // Use first tensor as the callable host; pass the rest as params
                 first.run_inner_with_params(ax_id.clone(),
-                                              ABData,
-                                              &|first_t: &Tensor, params: &[&Tensor]| {
-                    let batch_size = first_t.size()[0];
-                    let kind = first_t.kind();
-                    let dev = first_t.device();
+                                            &|first_t: &Tensor, params: &[&Tensor]| {
+                  let batch_size = first_t.size()[0];
+                  let kind = first_t.kind();
+                  let dev = first_t.device();
 
-                    // Build [x | y] per file and then stack along batch (dim=0)
-                    let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
+                  // Build [x | y] per file and then stack along batch (dim=0)
+                  let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
 
-                    // First element
-                    let y0 = Tensor::full([batch_size, 1], label_vec[0], (kind, dev));
-                    rows.push(Tensor::cat(&[first_t.copy(), y0], 1));
+                  // First element
+                  let y0 = Tensor::full([batch_size, 1], label_vec[0], (kind, dev));
+                  rows.push(Tensor::cat(&[first_t.copy(), y0], 1));
 
-                    // Remaining elements from params with corresponding labels
-                    for (i, b_t) in params.iter().enumerate() {
-                        let y = Tensor::full([batch_size, 1], label_vec[i + 1], (b_t.kind(), b_t.device()));
-                        rows.push(Tensor::cat(&[(*b_t).copy(), y], 1));
-                    }
+                  // Remaining elements from params with corresponding labels
+                  for (i, b_t) in params.iter().enumerate() {
+                      let y = Tensor::full([batch_size, 1], label_vec[i + 1], (b_t.kind(), b_t.device()));
+                      rows.push(Tensor::cat(&[(*b_t).copy(), y], 1));
+                  }
 
-                    Ok(Tensor::cat(&rows, 0))
-                }, &data[1..])
+                  Ok(Tensor::cat(&rows, 0))
+              }, &data[1..])
             }).await
 
         }

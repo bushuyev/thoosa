@@ -443,7 +443,6 @@ mod tests {
 
             loaded.run_inner_with_params(
                 id,
-                ClcTaskOutput,
                 &|t:&Tensor, params:&[&Tensor]|{
                         Ok(t.multiply(&params[0]))
                 },
@@ -456,7 +455,6 @@ mod tests {
 
             loaded.run_inner_with_params(
                 id,
-                ClcTaskOutput,
                 &|t:&Tensor, params:&[&Tensor]|{
                     Ok(t
                         .f_multiply(&params[0])?
