@@ -7,7 +7,7 @@ use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 use caching_runner::common::cachable::DataCacheWrapper;
 use caching_runner::common::runnable::Stage;
-use thoosa_motifs::distance::clc_dist_d2;
+use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
@@ -52,6 +52,8 @@ impl <'a> Stage for CrossBatchClc<'a> {
     where
         Self: Sized
     {
+        let mut mask_makers = vec![];
+
         let batch_0_t = Tensor::concat(
             input.tensors[0..input.b_0.len()]
                 .iter()
@@ -72,7 +74,12 @@ impl <'a> Stage for CrossBatchClc<'a> {
 
         debug!("CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?}");
 
-        let dists = clc_dist_d2(batch_0_t.shallow_clone(), batch_1_t, 1)?;
+        let dists = clc_dist_d2_and_mask(
+            batch_0_t.shallow_clone(),
+            batch_1_t,
+            true,
+            &mut mask_makers
+        )?;
 
         debug!("CrossBatchClc::do_run:  dists={dists:?}");
 
