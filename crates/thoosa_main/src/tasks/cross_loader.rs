@@ -1,4 +1,6 @@
-use crate::tasks::cross_batch_clc::{BatchUnfoldedInput, CrossBatchClc};
+use crate::tasks::cross_batch_clc::BatchUnfoldedInput;
+#[cfg(test)]
+use crate::tasks::cross_batch_clc::CrossBatchClc;
 use crate::tasks::cross_dims::ChannelsSlicesData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::TensorLoader;
@@ -8,7 +10,6 @@ use caching_runner::common::runnable::Stage;
 use caching_runner::common::{Data, OutId, RunCtx};
 use log::debug;
 use parking_lot::RwLock;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Tensor;
 use tch::kind::FLOAT_CPU;
@@ -21,16 +22,49 @@ use thoosa_shared::traits::{Named, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 
+pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
+    fn run_batch<'s>(
+        self: Arc<Self>,
+        input: &BatchUnfoldedInput<'s, &'s Arc<Resource>>,
+        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
+    ) -> Result<ThoTensor2<ChannelsSlicesData2, SimpleId>, ThoosaError>
+    where
+        Self: 's;
+}
+
+impl<T> CrossLoaderClc for T
+where
+    T: for<'s> Stage<
+            In<'s> = BatchUnfoldedInput<'s, &'s Arc<Resource>>,
+            Out = ThoTensor2<ChannelsSlicesData2, SimpleId>,
+            Ctx = RunCtx2,
+        > + 'static,
+{
+    fn run_batch<'s>(
+        self: Arc<Self>,
+        input: &BatchUnfoldedInput<'s, &'s Arc<Resource>>,
+        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
+    ) -> Result<ThoTensor2<ChannelsSlicesData2, SimpleId>, ThoosaError>
+    where
+        Self: 's,
+    {
+        <Self as Stage>::do_run(self, input, ctx)
+    }
+}
+
 // #[derive(Debug, cached_derive::Cached)]
 #[derive(Debug)]
 // #[cache_name = "LoadedTensorId"]
-pub struct CrossLoader<'a> {
+pub struct CrossLoader<CLC> {
     loader: Arc<TensorLoader>,
-    batch_clc: Arc<CrossBatchClc<'a>>,
+    batch_clc: Arc<CLC>,
 }
 
-impl<'a> CrossLoader<'a> {
-    pub fn new(loader: Arc<TensorLoader>, cross_unfold: Arc<CrossBatchClc<'a>>) -> Self {
+impl<CLC> CrossLoader<CLC>
+where
+    CLC: CrossLoaderClc + 'static,
+{
+    pub fn new(loader: Arc<TensorLoader>, cross_unfold: Arc<CLC>) -> Self {
         Self {
             loader,
             batch_clc: cross_unfold,
@@ -38,8 +72,11 @@ impl<'a> CrossLoader<'a> {
     }
 }
 
-impl OutId for CrossLoader<'_> {
-    fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+impl<CLC> OutId for CrossLoader<CLC>
+where
+    CLC: CrossLoaderClc + 'static,
+{
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("cross_{}", input_id))
     }
 }
@@ -70,14 +107,17 @@ impl WithId for ResourcesVec {
 impl Input for ResourcesVec {}
 
 #[async_trait]
-impl<'a> Stage for CrossLoader<'a> {
-    type In = ResourcesVec;
+impl<CLC> Stage for CrossLoader<CLC>
+where
+    CLC: CrossLoaderClc + 'static,
+{
+    type In<'a> = ResourcesVec where Self: 'a;
     type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
     type Ctx = RunCtx2;
 
     async fn run(
         self: Arc<Self>,
-        _input: Arc<Self::In>,
+        _input: Arc<Self::In<'static>>,
         _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         let window = 2;
@@ -133,11 +173,15 @@ impl<'a> Stage for CrossLoader<'a> {
                     None,
                     |data| {
 
-                        let input = BatchUnfoldedInput::new(data, t_0_batch_resources.as_slice(), t_1_batch_resources.as_slice());
+                        let input = BatchUnfoldedInput::new(
+                            data,
+                            t_0_batch_resources.as_slice(),
+                            t_1_batch_resources.as_slice(),
+                        );
 
                         debug!("input={input:?}");
 
-                        Arc::clone(&self.batch_clc).do_run(&input, Arc::clone(&_ctx))?;
+                        Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&_ctx))?;
 
                         Ok(())
                     },
