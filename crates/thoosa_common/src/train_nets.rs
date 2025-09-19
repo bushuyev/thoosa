@@ -58,7 +58,7 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::traits::WithId;
 use crate::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use crate::batches::AsyncDataBatch;
-use crate::dims::{AnyDims, Batch, ChannelsData, ChannelsMotifsData, ChannelsMotifsFlattenedData, Dims, Final, LabelNetInputTensorDims, LabelNetsProbabilities, LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, SlicesData, ThoBatch, TCD, TCSD};
+use crate::dims::{AnyDims, AnyMetrics, AnySub, Batch, ChannelsData, ChannelsMotifsData, ChannelsMotifsFlattenedData, Dims, Final, LabelNetInputTensorDims, LabelNetsProbabilities, LabelProbability, LabelsProbabilities, MotifData, MotifsNetsSelectionDims, SlicesData, ThoBatch, TCD, TCSD};
 use crate::find_motifs_run_config::*;
 use crate::tho_tensor::ThoTensor;
 
@@ -138,7 +138,11 @@ pub enum LabelNetInputTensors {
     FixedNumSlices(ChannelsMotifsFlattenedData)
 }
 
-impl Dims for LabelNetInputTensors{}
+impl Dims for LabelNetInputTensors{
+    type Metrics = AnyMetrics;
+    type Sub = AnySub;
+    type SubSelect = ();
+}
 
 
 impl From<ThoTensor<ChannelsMotifsData, CachableId>> for ThoTensor<LabelNetInputTensors, CachableId> {
