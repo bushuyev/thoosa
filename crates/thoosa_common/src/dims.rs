@@ -11,11 +11,11 @@ pub trait Dims:Send +Sync+ Clone + Debug {
     type Sub:CopyToDevice;
     type SubSelect:Debug + Send + Sync;
 
-    fn subview(&self, t:Self::Sub, range: &Self::SubSelect) -> Self::Sub
-        where
-            Self: Sized {
+    fn subview(t: &Self::Sub, range: &Self::SubSelect) -> Self::Sub
+        {
         unimplemented!()
     }
+
 
 }
 
