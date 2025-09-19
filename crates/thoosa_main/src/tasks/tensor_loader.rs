@@ -1,31 +1,28 @@
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsSlicesData2};
+use crate::tasks::run_ctx_2::RunCtx2;
+use async_trait::async_trait;
+use caching_runner::common::runnable::Stage;
+use caching_runner::common::{Data, OutId};
+use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
-use async_trait::async_trait;
-use parking_lot::RwLock;
-use tch::{Device, Tensor};
-use tch::kind::FLOAT_CPU;
-use caching_runner::common::{Data, OutId};
-use caching_runner::common::runnable::Stage;
+use tch::Device;
 use thoosa_common::applicables::ThoDevice;
-use thoosa_common::dims::{ChannelsData, Dims};
-use thoosa_common::tho_tensor::{CopyToDevice, ThoTensor};
+use thoosa_common::dims::Dims;
+use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
+use thoosa_shared::ThoosaError;
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::TwoDimsMetrics;
-use crate::tasks::cross_loader::ChannelsSlicesData2;
-use crate::tasks::run_ctx_2::RunCtx2;
-
 
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
 pub struct TensorLoader{
     device: ThoDevice,
-    loader_fn: Box<dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsSlicesData2, SimpleId> + Sync + Send>,
+    loader_fn: Box<dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send>,
 }
 
 impl Debug for TensorLoader {
@@ -40,7 +37,7 @@ impl Debug for TensorLoader {
 #[async_trait]
 impl  Stage for TensorLoader {
     type In = Resource;
-    type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
+    type Out = ThoTensor2<ChannelsData2, SimpleId>;
     type Ctx = RunCtx2;
 
     async fn run(self: Arc<Self>, _input: Arc<Self::In>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
@@ -61,7 +58,7 @@ impl OutId for TensorLoader {
 impl  TensorLoader {
     pub fn new<F>(loader_fn:F, device: ThoDevice) -> Self
     where
-        F: Fn(&Resource, &Device) -> ThoTensor2<ChannelsSlicesData2, SimpleId> + Sync + Send + 'static
+        F: Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send + 'static
     {
         Self {
             device,
@@ -71,21 +68,18 @@ impl  TensorLoader {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use rand::Rng;
-    use tch::kind::FLOAT_CPU;
-    use tch::{Device, Tensor};
+    use crate::tasks::run_ctx_2::RunCtx2;
+    use crate::tasks::tensor_loader::TensorLoader;
     use caching_runner::common::cachable::Cached;
     use caching_runner::global_ctx::GlobalCtx;
+    use rand::Rng;
+    use std::sync::Arc;
+    use tch::{Device, Tensor};
     use thoosa_common::applicables::ThoDevice;
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::utils::lin_for_size;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::ThoosaError;
     use torch_runner::data::ThoTensor2;
-    use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{TensorLoader};
 
     #[tokio::test]
     async fn test_load() -> Result<(), ThoosaError>{

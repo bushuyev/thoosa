@@ -302,16 +302,26 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
+    use log::{debug, info};
     use rand::random_range;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Float, Int64};
     use tch::{Kind, Tensor};
+    use tch::kind::FLOAT_CPU;
     use tokio::task::JoinSet;
     use tokio::time::Instant;
     use tokio_utils::Pool;
+    use thoosa_shared::ThoosaError;
     use crate::cuda_utils::{copy_d2h_from_ptr, copy_h2d_from_ptr, cuda_mem, equal_bytes, speed_gb_per_s};
     use crate::copy_ctx::CopyCtx;
     use crate::utils::lin_for_size;
+
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
 
     // #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     #[cfg_attr(miri, ignore)]
@@ -547,5 +557,51 @@ mod tests {
         let res = super::copy_d2h_from_ptr_result(Kind::Int, buf_size, &bufs_pool, bogus_device_ptr, &bogus_cpu_tensor.size()).await;
         assert!(res.is_err(), "expected copy_d2h_from_ptr_result to error for invalid device ptr");
     }
+
+
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn compare_unfold() -> Result<(), ThoosaError> {
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
+
+        for mem_k in [0.1, 0.5, 1.] {
+            for buffs in [2,4,8,16,32] {
+                let copy_ctx = CopyCtx::make_instance(mem_k, buffs);
+
+                let mut copy_unfold_time = 0;
+                let mut unfold_copy_time = 0;
+
+                let runs = 100;
+                let size = [20, 1_000_000];
+                let t = Tensor::rand(&size, FLOAT_CPU);
+
+                for i in 0..runs * 2 {
+                    if i % 2 == 0 {
+                        let t_0 = Instant::now();
+
+                        let cuda_t = copy_ctx.copy_from_ptr(t.data_ptr() as usize, &t.size(), 1, t.kind()).await;
+                        let unfolded = cuda_t.unfold(1, 100, 10).contiguous();
+
+                        copy_unfold_time += t_0.elapsed().as_millis();
+                    } else {
+                        let t_0 = Instant::now();
+                        let t = t.unfold(1, 100, 10).contiguous();
+
+                        let cuda_t = copy_ctx.copy_from_ptr(t.data_ptr() as usize, &t.size(), 1, t.kind()).await;
+
+                        unfold_copy_time += t_0.elapsed().as_millis();
+                    }
+                }
+
+                debug!("mem_k={mem_k} buffs={buffs} copy_unfold_time={} unfold_copy_time={}", copy_unfold_time/runs, unfold_copy_time/runs);
+
+                assert!(copy_unfold_time < unfold_copy_time);
+            }
+        }
+
+        Ok(())
+    }
+
 
 }

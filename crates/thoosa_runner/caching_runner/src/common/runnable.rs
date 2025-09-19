@@ -7,8 +7,8 @@ use thoosa_shared::ThoosaError;
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 #[async_trait]
-pub trait Stage: Debug  + Send + Sync + 'static {
-    type In: Input + Sync + Send  + 'static;
+pub trait Stage: Debug  + Send + Sync {
+    type In: Input + Sync + Send;
     type Out: Output + Data<Sub=Self::Out> + Sync + Send + 'static;
     type Ctx: RunCtx;
 

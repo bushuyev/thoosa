@@ -161,34 +161,26 @@ impl <D:Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
         ThoTensor2::new(self.id.clone(), self.t.mean(k))
     }
 
-    // explicit deep copy (no aliasing)
-    pub fn deep_clone(&self) -> ThoTensor2<D, Id> {
-        ThoTensor2::new(self.id.clone(), self.t.copy())
-
-    }
 
     pub fn id(&self) -> &Id {
         &self.id
     }
 
-    #[cfg(test)]
+    // #[cfg(test)]
     pub fn t(&self) -> &Tensor {
         &self.t
     }
 
     pub fn run_inner_with_params<F, OutDim:Dims<Sub = ThoTensor2<OutDim, Id>>, P:Dims<Sub = ThoTensor2<P, Id>>>(
         &self, id:Id,
-        dims:OutDim,
         func:&F,
         params:&[&ThoTensor2<P, Id>]
     ) -> Result<ThoTensor2<OutDim, Id>, ThoosaError>
     where F:Fn(&Tensor, &[&Tensor])->Result<Tensor, ThoosaError> + ?Sized{
 
-
         Ok(ThoTensor2::new(
             id,
             func(&self.t,  params.into_iter().map(|p|&p.t).collect::<Vec<&Tensor>>().as_slice())?,
-            // dims
         ))
     }
 
