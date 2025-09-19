@@ -18,31 +18,7 @@ use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 use crate::tasks::cross_loader::ChannelsSlicesData2;
 use crate::tasks::run_ctx_2::RunCtx2;
-/*
-#[derive(Debug)]
-pub struct RawChannelsData {
-    t:ThoTensor2<ChannelsData, SimpleId>
-}
 
-impl RawChannelsData {
-    pub fn new(t: ThoTensor2<ChannelsData, SimpleId>) -> Self {
-        Self { t }
-    }
-}
-
-impl WithId for RawChannelsData {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        WithId::id(&self.t)
-    }
-}
-
-impl Input for RawChannelsData {
-
-}
-
-impl Output for RawChannelsData {}*/
 
 
 #[derive(cached_derive::Cached)]
@@ -72,33 +48,14 @@ impl  Stage for TensorLoader {
         Ok((self.loader_fn)(&_input, &self.device))
     }
 }
-/*
-impl Data for RawChannelsData {
-    type Metrics = TwoDimsMetrics;
-    type Sub = RawChannelsData;
-    type SubSelect = std::ops::Range<Self::Metrics>;
 
-    fn size(&self) -> Self::Metrics {
-        self.t.size().try_into().expect("can't get size")
-    }
-
-    fn device(&self) -> usize {
-        ThoDevice::from(self.t.device()).ordinal()
-    }
-}*/
 
 impl OutId for TensorLoader {
     fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("loaded_{}", input_id.id()))
     }
 }
-/*
-#[async_trait]
-impl CopyToDevice for RawChannelsData {
-    async fn copy_to_device(&self, dst_device: usize) ->Self {
-        RawChannelsData::new(self.t.copy_to_device(dst_device).await)
-    }
-}*/
+
 
 
 impl  TensorLoader {

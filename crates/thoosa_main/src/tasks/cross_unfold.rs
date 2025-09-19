@@ -40,53 +40,7 @@ impl TensorsPair {
         Self { id, t_0, t_1 }
     }
 }
-/*
-#[derive(Debug)]
-pub struct CrossUnfoldOutput {
-    id:SimpleId,
-    t:ThoTensor2<ChannelsSlicesData, SimpleId>,
-}
 
-impl WithId for CrossUnfoldOutput {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        todo!()
-    }
-}
-
-
-impl Output for CrossUnfoldOutput {
-
-}
-
-impl CrossUnfoldOutput {
-    pub fn new(id: SimpleId, t: ThoTensor2<ChannelsSlicesData, SimpleId>) -> Self {
-        Self { id, t }
-    }
-}
-
-impl Data for CrossUnfoldOutput {
-    type Metrics = TwoDimsMetrics;
-    type Sub = Self;
-    type SubSelect = Range<TwoDimsMetrics>;
-
-    fn size(&self) -> Self::Metrics {
-        self.t.size().try_into().expect("Data for CrossUnfoldOutput::size failed")
-    }
-
-    fn device(&self) -> usize {
-        self.t.device()
-    }
-}
-
-#[async_trait]
-impl CopyToDevice for CrossUnfoldOutput {
-    async fn copy_to_device(&self, dst_device: usize) ->Self {
-        CrossUnfoldOutput::new(self.id.clone(), self.t.copy_to_device(dst_device).await)
-    }
-}
-*/
 #[derive(Debug)]
 pub struct CrossUnfold {
 

@@ -19,49 +19,7 @@ use torch_runner::metrics::TwoDimsMetrics;
 use crate::tasks::cross_unfold::{CrossUnfold, TensorsPair};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{TensorLoader};
-/*
-#[derive(Debug)]
-pub struct Slice {
-    id:SimpleId,
-    t:ThoTensor2<ChannelsSlicesData, SimpleId>,
-}
 
-impl Slice {
-    pub fn new(id: SimpleId, t: ThoTensor2<ChannelsSlicesData, SimpleId>) -> Self {
-        Self { id, t }
-    }
-}
-impl WithId for Slice {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
-impl Output for Slice {}
-
-#[async_trait]
-impl CopyToDevice for Slice {
-    async fn copy_to_device(&self, dst_device: usize) ->Self {
-        Slice::new(self.id.clone(), self.t.copy_to_device(dst_device).await)
-    }
-}
-
-impl  Data for Slice {
-    type Metrics = TwoDimsMetrics;
-    type Sub = Self;
-    type SubSelect = std::ops::Range<Self::Metrics>;
-
-    fn size(&self) -> Self::Metrics {
-        self.t.size().try_into().expect("Data for CrossSlices::size failed")
-    }
-
-    fn device(&self) -> usize {
-        self.t.device()
-    }
-}
-*/
 // #[derive(Debug, cached_derive::Cached)]
 #[derive(Debug)]
 // #[cache_name = "LoadedTensorId"]
