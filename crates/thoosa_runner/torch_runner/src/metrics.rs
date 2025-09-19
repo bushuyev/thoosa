@@ -9,6 +9,16 @@ pub struct TwoDimsMetrics {
     pub(crate) dim_1:i64
 }
 
+impl TwoDimsMetrics {
+    pub fn channels(&self) -> i64 {
+        self.dim_0
+    }
+
+    pub fn seq_len(&self) -> i64 {
+        self.dim_1
+    }
+}
+
 impl Add<&TwoDimsMetrics> for &TwoDimsMetrics {
     type Output = TwoDimsMetrics;
 

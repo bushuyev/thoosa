@@ -159,7 +159,7 @@ pub(crate) mod mock_run_ctx {
 
 /////////////////////////////////
 
-pub trait OutId: Stage {
+pub trait OutId: Stage where Self::In:WithId {
     fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID;
 
     fn on_cached(&self, _input: &impl WithId<ID=<<Self as Stage>::In as WithId>::ID>, _ctx: &Arc<RwLock<Self::Ctx>>){

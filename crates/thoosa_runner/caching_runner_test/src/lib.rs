@@ -62,7 +62,7 @@ where
 impl<R> Runner for ClcOOMRunner<R>
 where
     R: Stage + Adjustable,
-    R::In: Debug + Adjustable + Data<Sub=R::In, SubSelect=std::ops::Range<<<R as Stage>::In as Data>::Metrics>>,
+    R::In: WithId + Debug + Adjustable + Data<Sub=R::In, SubSelect=std::ops::Range<<<R as Stage>::In as Data>::Metrics>>,
     R::Ctx: Adjustable,
     // R::Out: From<Vec<R::Out>>,
     R: OutId,
@@ -218,8 +218,8 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     check:CF
 ) -> Result<(), ThoosaError>
 where
+    R::In: WithId,
     R: Cached + OutId,
-    // <C as Runnable>::In: Clone, //for ID
     F:Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF:Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
     <R as Stage>::Out:Data,

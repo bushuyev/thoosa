@@ -21,7 +21,11 @@ use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::MyError;
 
 #[async_trait]
-pub trait Cached: Stage {
+pub trait Cached: Stage
+where
+    Self: 'static,
+    Self::In:WithId
+{
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
         Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
@@ -255,14 +259,14 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
         }
     }
 
-    pub async fn with_data_array<R>(
-        other: &[&DataCacheWrapper<O>],
+    pub async fn with_data_array<W:AsRef<DataCacheWrapper<O>>, R>(
+        other: &[W],
         to_device_idx: usize,
         _trace_ctx: Option<&'static str>,
         do_run: impl FnOnce(&[&O]) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError> {
 
-        let results = join_all(other.into_iter().map(|w| w.load_from_any_device_(to_device_idx))).await;
+        let results = join_all(other.into_iter().map(|w| w.as_ref().load_from_any_device_(to_device_idx))).await;
 
         let mut owners: Vec<_> = Vec::new();
         let mut errs: Vec<ThoosaError> = Vec::new();
@@ -566,7 +570,7 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
 }
 
 pub trait Runner {
-    type R: Stage<In:Data<Sub=<Self::R as Stage>::In>>;
+    type R: Stage<In:Data<Sub=<Self::R as Stage>::In> + WithId>;
 
     async fn run(
         &self,
