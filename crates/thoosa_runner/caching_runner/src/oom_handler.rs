@@ -45,12 +45,12 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
 
 pub trait InputContext<R>: Debug + Send + Sync
 where
-    R: Stage,
-    R::In: Data
+    R: Stage + 'static,
+    <R as Stage>::In<'static>: Data,
 {
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
-    fn input_len(&self) -> &<<R as Stage>::In as Data>::Metrics;
+    fn input_len(&self) -> &<<R as Stage>::In<'static> as Data>::Metrics;
     fn build_final_output(self) -> R::Out;
 }
 
@@ -121,8 +121,8 @@ pub trait RunCtxContext: Debug {}
 #[derive(Debug)]
 pub struct Contexts<R, IC, RC, RCC>
 where
-    R: Stage,
-    R::In: Data,
+    R: Stage + 'static,
+    <R as Stage>::In<'static>: Data,
     IC: InputContext<R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -135,8 +135,8 @@ where
 
 impl<R, IC, RC, RCC> Contexts<R, IC, RC, RCC>
 where
-    R: Stage,
-    R::In: Data,
+    R: Stage + 'static,
+    <R as Stage>::In<'static>: Data,
     IC: InputContext<R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -154,24 +154,24 @@ where
 #[derive(Debug)]
 pub enum Adjusters<'a, R, IC, RC, RCC>
 where
-    R: Stage,
-    R::In: Data + Debug,
+    R: Stage + 'static,
+    <R as Stage>::In<'static>: Data + Debug,
     IC: InputContext<R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
 {
-    Input(Box<dyn Adjuster<IC, A = <R::In as Data>::SubSelect> + 'a>),
+    Input(Box<dyn Adjuster<IC, A = <<R as Stage>::In<'static> as Data>::SubSelect> + 'a>),
     Task(Box<dyn Adjuster<RC, A = R> + 'a>),
     RunContext(Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>> + 'a>),
 }
 
 impl<'a, R, IC, RC, RCC> Adjusters<'a, R, IC, RC, RCC>
 where
-    R: Stage,
+    R: Stage + 'static,
     IC: InputContext<R>,
     R:Adjustable,
-    R::In: Data + Debug,
-    <R::In as Data>::SubSelect:Adjustable,
+    <R as Stage>::In<'static>: Data + Debug,
+    <<R as Stage>::In<'static> as Data>::SubSelect: Adjustable,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
@@ -186,12 +186,12 @@ where
 }
 
 #[derive(Debug)]
-pub struct NoopInputContext<R: Stage>(pub Option<R::Out>);
+pub struct NoopInputContext<R: Stage + 'static>(pub Option<R::Out>);
 
 impl<R> InputContext<R> for NoopInputContext<R>
 where
-    R::In: Data,
-    R: Stage,
+    <R as Stage>::In<'static>: Data,
+    R: Stage + 'static,
 {
     fn add_partial_output(&mut self, o: R::Out) {
         self.0.replace(o);
@@ -201,7 +201,7 @@ where
         self.0.is_some()
     }
 
-    fn input_len(&self) -> &<<R as Stage>::In as Data>::Metrics {
+    fn input_len(&self) -> &<<R as Stage>::In<'static> as Data>::Metrics {
        unimplemented!()
     }
 
@@ -224,9 +224,12 @@ impl RunCtxContext for NoopRunCtxContext {}
 pub struct OOMHandler<'a, R, IC, RC, RCC>
 where
 
-    R: Stage + Adjustable + OutId,
-    <R::In as Data>::SubSelect: Default + Debug + Adjustable,
-    R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>> + WithId,
+    R: Stage + Adjustable + OutId + 'static,
+    <<R as Stage>::In<'static> as Data>::SubSelect: Default + Debug + Adjustable,
+    <R as Stage>::In<'static>: Data<
+        Sub = <R as Stage>::In<'static>,
+        SubSelect = Range<<<R as Stage>::In<'static> as Data>::Metrics>,
+    > + WithId,
     R::Ctx: Adjustable,
     IC: InputContext<R>,
     RC: RunnableContext,
@@ -241,10 +244,13 @@ where
 
 impl<'a, R, IC, RC, RCC> OOMHandler<'a, R, IC, RC, RCC>
 where
-    R: Stage + Adjustable + OutId,
-    <R::In as Data>::SubSelect: Debug + Adjustable,
-    R::In: Data<Sub=R::In, SubSelect=Range<<R::In as Data>::Metrics>> + WithId,
-    R::In: Debug + Data<Sub=R::In> + CopyToDevice,
+    R: Stage + Adjustable + OutId + 'static,
+    <<R as Stage>::In<'static> as Data>::SubSelect: Debug + Adjustable,
+    <R as Stage>::In<'static>: Data<
+        Sub = <R as Stage>::In<'static>,
+        SubSelect = Range<<<R as Stage>::In<'static> as Data>::Metrics>,
+    > + WithId,
+    <R as Stage>::In<'static>: Debug + Data<Sub = <R as Stage>::In<'static>> + CopyToDevice,
     R::Ctx: Adjustable,
     IC: InputContext<R> + Debug,
     RC: RunnableContext + Debug,
@@ -266,11 +272,11 @@ where
     pub async fn run(
         &self,
         task: &Arc<R>,
-        input: Arc<DataCacheWrapper<<R as Stage>::In>>,
+        input: Arc<DataCacheWrapper<<R as Stage>::In<'static>>>,
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
-     where <R as Stage>::In:WithId
+     where <R as Stage>::In<'static>: WithId
     {
 
         let (device_idx, ctx_name) = {
@@ -297,7 +303,8 @@ where
 
         let mut i = 0;
 
-        let mut last_input_adjuster = None::<&Box<dyn Adjuster<IC, A = <R::In as Data>::SubSelect>>>;
+        let mut last_input_adjuster =
+            None::<&Box<dyn Adjuster<IC, A = <<R as Stage>::In<'static> as Data>::SubSelect>>>;
         let mut last_task_adjuster = None::<&Box<dyn Adjuster<RC, A = R>>>;
         let mut last_context_adjuster = None::<&Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>>>>;
 
@@ -332,7 +339,9 @@ where
                                         input_select_adjusted = Some(
                                             input_ad
                                                 .adjust(
-                                                    input_select_adjusted.as_ref().unwrap_or(&<R::In as Data>::SubSelect::default())/*.unwrap_or(input_guard_op.as_ref().unwrap())*/,
+                                                    input_select_adjusted
+                                                        .as_ref()
+                                                        .unwrap_or(&<<R as Stage>::In<'static> as Data>::SubSelect::default())/*.unwrap_or(input_guard_op.as_ref().unwrap())*/,
                                                     &mut contexts.input,
                                                 )
                                                 .await?,
@@ -615,18 +624,18 @@ pub(crate) mod mock_runnable {
         pub Runnable {}
         #[async_trait]
         impl Stage for Runnable {
-            type In = TestInput;
+            type In<'a> = TestInput;
             type Out = TestOutput;
             type Ctx = MockRunCtx;
 
-            fn do_run(self: Arc<Self>, input:&<MockRunnable as Stage>::In, tx: Arc<RwLock<<MockRunnable as Stage>::Ctx>>) -> Result<<MockRunnable as Stage>::Out, ThoosaError> where Self:Sized;
+            fn do_run<'a>(self: Arc<Self>, input:&<MockRunnable as Stage>::In<'a>, tx: Arc<RwLock<<MockRunnable as Stage>::Ctx>>) -> Result<<MockRunnable as Stage>::Out, ThoosaError> where Self:Sized;
         }
     }
 
     impl Adjustable for MockRunnable {}
 
     impl OutId for MockRunnable {
-        fn out_id(&self, input_id: &<Self::In as WithId>::ID) -> <Self::Out as WithId>::ID {
+        fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
             input_id.clone()
         }
     }
