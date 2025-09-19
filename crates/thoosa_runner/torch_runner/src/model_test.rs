@@ -33,7 +33,14 @@ mod tests {
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
+    use crate::metrics::TwoDimsMetrics;
     use crate::tests::TorchRunCtx;
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
 
     // Shared registry for mapping FileListInput IDs -> (file, label) entries
     static FILE_LISTS: OnceLock<DMap<String, Vec<(&'static str, f64)>>> = OnceLock::new();
@@ -99,9 +106,18 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ABData;
     impl Dims for ABData {
-        type Metrics = AnyMetrics;
-        type Sub = AnySub;
-        type SubSelect = ();
+        type Metrics = ABMetrics;
+        type Sub = ThoTensor2<ABData, SimpleId>;
+        type SubSelect = std::ops::Range<Self::Metrics>;
+
+        fn subview(t: &Self::Sub, range: &Self::SubSelect) -> Self::Sub {
+            use std::cmp::min;
+            let size = ABMetrics::from(t.t().size());
+            let d0 = range.start.dim_0..min(size.dim_0, range.end.dim_0);
+
+            ThoTensor2::new_with_dims(t.id().clone(), t.t().i((d0, ..)), ABData)
+        }
+
     }
     impl Adjustable for ThoTensor2<ABData, SimpleId> {}
 
@@ -113,7 +129,7 @@ mod tests {
     impl PartialOrd for ABMetrics { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { self.dim_0.partial_cmp(&other.dim_0) } }
     impl<'a, 'b> std::ops::Add<&'b ABMetrics> for &'a ABMetrics { type Output = ABMetrics; fn add(self, rhs: &'b ABMetrics) -> Self::Output { ABMetrics { dim_0: self.dim_0 + rhs.dim_0, dim_1: self.dim_1 } } }
 
-    #[derive(Debug)]
+   /* #[derive(Debug)]
     struct ABLoaderOutput {
         id:SimpleId,
         t:ThoTensor2<ABData, SimpleId>
@@ -161,7 +177,7 @@ mod tests {
         async fn copy_to_device(&self, dst_device: usize) ->Self {
             ABLoaderOutput::new(self.id.clone(), self.t.copy_to_device(dst_device).await)
         }
-    }
+    }*/
 
 
 
@@ -180,7 +196,7 @@ mod tests {
     #[async_trait]
     impl Stage for ABLoader {
         type In = FileInput;
-        type Out = ABLoaderOutput;
+        type Out = ThoTensor2<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
         async fn run(self: Arc<Self>, input: Arc<Self::In>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
@@ -189,7 +205,7 @@ mod tests {
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
             let x = Tensor::ones([self.input_len, self.feat], (self.kind, Device::Cpu)) * base;
             let id = self.out_id(&input.id);
-            Ok(ABLoaderOutput::new(id.clone(), ThoTensor2::new(id, x)))
+            Ok(ThoTensor2::new_with_dims(id, x, ABData))
         }
     }
 
@@ -197,7 +213,7 @@ mod tests {
 
     // ---------------- Batch Builder: builds (features + label) batch ----------------
 
-
+/*
     #[derive(Debug)]
     struct ABBatchBuilderOutput {
         id:SimpleId,
@@ -249,7 +265,7 @@ mod tests {
         async fn copy_to_device(&self, dst_device: usize) ->Self {
             ABBatchBuilderOutput::new(self.id.clone(), self.t.copy_to_device(dst_device).await)
         }
-    }
+    }*/
 
 
 
@@ -268,7 +284,7 @@ mod tests {
     #[async_trait]
     impl Stage for BatchBuilder {
         type In = FileListInput;
-        type Out = ABBatchBuilderOutput;
+        type Out = ThoTensor2<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
 
         async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
@@ -308,7 +324,7 @@ mod tests {
 
             // Load features for all files in the list via cached loader
             let mut label_vec: Vec<f64> = Vec::with_capacity(self.batch_size);
-            let mut feats: Vec<Arc<DataCacheWrapper<ABLoaderOutput>>> = Vec::with_capacity(self.batch_size);
+            let mut feats: Vec<Arc<DataCacheWrapper<ThoTensor2<ABData, SimpleId>>>> = Vec::with_capacity(self.batch_size);
             for &fi in &chosen {
                 let (f, lbl) = files[fi];
                 let feat = Arc::clone(&self.loader)
@@ -324,14 +340,14 @@ mod tests {
             };
 
             // Materialize all features to the target device and build a single stacked batch
-            let feat_refs: Vec<&DataCacheWrapper<ABLoaderOutput>> = feats.iter().map(|a| &**a).collect();
+            let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
             DataCacheWrapper::with_data_array(&feat_refs, device_idx, None, |data|{
                 // data: &[&ThoTensor<ABData>] aligned with label_vec
                 let ax_id = SimpleId::from(format!("ax_{}", input.id));
                 let first = data.first().ok_or_else(|| MyError::SomethingElse("no tensors".into()))?;
 
                 // Use first tensor as the callable host; pass the rest as params
-                first.t.run_inner_with_params(ax_id.clone(),
+                first.run_inner_with_params(ax_id.clone(),
                                               ABData,
                                               &|first_t: &Tensor, params: &[&Tensor]| {
                     let batch_size = first_t.size()[0];
@@ -352,7 +368,7 @@ mod tests {
                     }
 
                     Ok(Tensor::cat(&rows, 0))
-                }, data[1..].into_iter().map(|v|&v.t).collect::<Vec<_>>().as_slice()).map(|v|ABBatchBuilderOutput::new(ax_id, v))
+                }, &data[1..])
             }).await
 
         }
@@ -362,7 +378,7 @@ mod tests {
 
         // ---------------- Simple Classifier (1 linear layer) ---------------
 
-
+/*
 
 
         #[derive(Debug)]
@@ -407,15 +423,15 @@ mod tests {
             async fn copy_to_device(&self, dst_device: usize) ->Self {
                 ClassifierOutput::new(self.id.clone(), self.t.copy_to_device(dst_device).await)
             }
-        }
+        }*/
 
 
         #[derive(Debug, Clone, Hash, Eq, PartialEq)]
         struct ClsOut;
         impl Dims for ClsOut {
-            type Metrics = AnyMetrics;
-            type Sub = AnySub;
-            type SubSelect = ();
+            type Metrics = TwoDimsMetrics;
+            type Sub = ThoTensor2<ClsOut, SimpleId>;
+            type SubSelect = std::ops::Range<Self::Metrics>;
         }
 
         impl ClsOut {
@@ -451,8 +467,8 @@ mod tests {
 
         #[async_trait]
         impl Stage for Classifier {
-            type In = ABBatchBuilderOutput;
-            type Out = ClassifierOutput;
+            type In = ThoTensor2<ABData, SimpleId>;
+            type Out = ThoTensor2<ClsOut, SimpleId>;
             type Ctx = TorchRunCtx;
 
             fn do_run(self: Arc<Self>, input: &Self::In, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
@@ -461,9 +477,10 @@ mod tests {
                 let feat = self.in_dim;
                 let fails = &self.fail_until;
                 let ctx_clone = Arc::clone(&_ctx);
-                Ok(ClassifierOutput::new(
-                    self.out_id(&input.id),
-                      ThoTensor2::new("".into(), input.t.run_inner(
+
+                let out_id = self.out_id(input.id());
+                Ok(
+                      ThoTensor2::new_with_dims(out_id, input.run_inner(//TODO id
                         |t: &Tensor| {
                             debug!("t.size()={:?}", t.size());
                         // Simulate OOM conditions based on batch size t.size()[0]
@@ -512,10 +529,11 @@ mod tests {
                         // Evaluate training accuracy on the same batch
                         let preds = xs.apply(&linear).sigmoid().ge(0.5).to_kind(Kind::Float); // [batch,1]
                         let correct = preds.eq_tensor(&ys).to_kind(Kind::Float).mean(Kind::Float);
+                        debug!("Classifier::do_run: correct=\n{correct}");
                         Ok(correct.view([1, 1]))
                     }
                     )?
-                )))
+                , ClsOut))
             }
         }
 
@@ -546,7 +564,7 @@ mod tests {
         #[async_trait]
         impl Stage for JoinAndClassifyTask {
             type In = FileListInput;
-            type Out = ClassifierOutput;
+            type Out = ThoTensor2<ClsOut, SimpleId>;
             type Ctx = TorchRunCtx;
 
             async fn run(self: Arc<Self>, input: Arc<Self::In>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>{
@@ -575,7 +593,7 @@ mod tests {
                             *PermitStep::TEN,
                             move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
-                        // Adjusters::Input(Box::new(SplitsAdjuster::<ABBatchBuilderOutput>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<ThoTensor2<ABData, SimpleId>>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -584,11 +602,10 @@ mod tests {
                     batched,
                     Arc::clone(&ctx),
                     Contexts::new(
-                        // SplitsAdjusterContextImpl::new(
-                        //     size,
-                        //     Box::new(SingleDimTensorOutputBuilder::<ClsOut>::new(out_id, &[1, 1], (Kind::Float, ThoDevice::from(device_idx).deref().clone()), BuildAs::Sum))
-                        // ),
-                        NoopInputContext(None),
+                        SplitsAdjusterContextImpl::new(
+                            size,
+                            Box::new(SingleDimTensorOutputBuilder::<ClsOut>::new(out_id, &[1, 1], (Kind::Float, ThoDevice::from(device_idx).deref().clone()), BuildAs::Sum))
+                        ),
                         NoopRunnableContext {},
                         PermitsAdjustContextImpl::new(ctx_name),
                     ),
@@ -601,11 +618,8 @@ mod tests {
 
     // ---------------- Test ----------------
 
-    #[test]
-    fn test_0(){
 
-    }
-    /*#[tokio::test]
+    #[tokio::test]
     async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -641,85 +655,90 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoosaError> {
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        }
-        // CPU-only global ctx
-        init_ctx_once();
-        let ctx = Arc::new(RwLock::new(TorchRunCtx::new(0, 0, "test")));
+        #[tokio::test]
+        async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoosaError> {
+            unsafe {
+                let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+            }
+            // CPU-only global ctx
+            init_ctx_once();
+            let ctx = Arc::new(RwLock::new(TorchRunCtx::new(0, 0, "test")));
 
-        let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
-        let clf = Arc::new(Classifier::new(SimpleId::from("lin_cls_many"), 4, 100, 0.1, vec![caching_runner_test::FailUntil::Never]));
+            let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
+            let clf = Arc::new(Classifier::new(SimpleId::from("lin_cls_many"), 4, 100, 0.1, vec![caching_runner_test::FailUntil::Never]));
 
-        let join_and_cls = Arc::new(JoinAndClassifyTask::new(Arc::clone(&loader), Arc::clone(&clf), 4));
+            let join_and_cls = Arc::new(JoinAndClassifyTask::new(Arc::clone(&loader), Arc::clone(&clf), 4));
 
-        // 4 files: 2 positives (even ids) and 2 negatives (odd ids)
-        let files = vec![
-            ("file_0", 1.0),
-            ("file_1", 0.0),
-            ("file_2", 1.0),
-            ("file_3", 0.0),
-        ];
-        registry().insert("files_0_1_2_3".to_string(), files.clone());
-        let input = FileListInput::new(files, SimpleId::from("files_0_1_2_3"));
+            // 4 files: 2 positives (even ids) and 2 negatives (odd ids)
+            let files = vec![
+                ("file_0", 1.0),
+                ("file_1", 0.0),
+                ("file_2", 1.0),
+                ("file_3", 0.0),
+            ];
+            registry().insert("files_0_1_2_3".to_string(), files.clone());
+            let input = FileListInput::new(files, SimpleId::from("files_0_1_2_3"));
 
-        let acc = Arc::clone(&join_and_cls)
-            .run_cached(Arc::new(input), Arc::clone(&ctx))
-            .await?;
+            let acc = Arc::clone(&join_and_cls)
+                .run_cached(Arc::new(input), Arc::clone(&ctx))
+                .await?;
 
-        acc.with_data(1, None, None, |acc| {
-            let v = ClsOut::accuracy(acc);
-            assert!(v > 0.9, "training accuracy too low (4 files): {v}");
+            acc.with_data(1, None, None, |acc| {
+                let v = ClsOut::accuracy(acc);
+                assert!(v > 0.9, "training accuracy too low (4 files): {v}");
+                Ok(())
+            }).await?;
+
             Ok(())
-        }).await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_classifier_oom_permits_escalates() -> Result<(), ThoosaError> {
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
+        #[tokio::test]
+        async fn test_classifier_oom_permits_escalates() -> Result<(), ThoosaError> {
+            unsafe {
+                let _lib = libloading::Library::new("libtorch_cpu.so").expect("no libtorch_cpu.so");
+                let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+            }
 
-        init_ctx_once();
-        let ctx = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
 
-        let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
-        // Require MAX_PERMITS to proceed and also enforce MemLimit until splits reduce size
-        let clf = Arc::new(Classifier::new(
-            SimpleId::from("lin_cls_oom"),
-            4,
-            50,
-            0.1,
-            vec![
-                caching_runner_test::FailUntil::MinPermits(MAX_PERMITS),
-                caching_runner_test::FailUntil::MemLimit(128),
-            ],
-        ));
+            init_ctx_once();
+            let ctx = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "test")));
 
-        let join_and_cls = Arc::new(JoinAndClassifyTask::new(Arc::clone(&loader), Arc::clone(&clf), 16));
+            let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
+            // Require MAX_PERMITS to proceed and also enforce MemLimit until splits reduce size
+            let clf = Arc::new(Classifier::new(
+                SimpleId::from("lin_cls_oom"),
+                4,
+                50,
+                0.1,
+                vec![
+                    caching_runner_test::FailUntil::MinPermits(MAX_PERMITS),
+                    caching_runner_test::FailUntil::MemLimit(128),
+                ],
+            ));
 
-        // Build 16 files (even -> 1.0, odd -> 0.0)
-        let files: Vec<(&'static str, f64)> = (0..16)
-            .map(|i| (Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str, if i % 2 == 0 { 1.0 } else { 0.0 }))
-            .collect();
-        registry().insert("files_oom_permits".to_string(), files.clone());
-        let input = FileListInput::new(files, SimpleId::from("files_oom_permits"));
+            let join_and_cls = Arc::new(JoinAndClassifyTask::new(Arc::clone(&loader), Arc::clone(&clf), 16));
 
-        let acc = Arc::clone(&join_and_cls)
-            .run_cached(Arc::new(input), Arc::clone(&ctx))
-            .await?;
+            // Build 16 files (even -> 1.0, odd -> 0.0)
+            let files: Vec<(&'static str, f64)> = (0..16)
+                .map(|i| (Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str, if i % 2 == 0 { 1.0 } else { 0.0 }))
+                .collect();
+            registry().insert("files_oom_permits".to_string(), files.clone());
+            let input = FileListInput::new(files, SimpleId::from("files_oom_permits"));
 
-        acc.with_data(1, None, None, |acc| {
-            let v = ClsOut::accuracy(acc);
-            assert!(v >= 0.5, "should train after permits escalation: {v}");
+            let acc = Arc::clone(&join_and_cls)
+                .run_cached(Arc::new(input), Arc::clone(&ctx))
+                .await?;
+
+
+
+            acc.with_data(1, None, None, |acc| {
+                debug!("acc={}", acc.t());
+
+                let v = ClsOut::accuracy(acc);
+                assert!(v >= 0.5, "should train after permits escalation: {v}");
+                Ok(())
+            }).await?;
+
             Ok(())
-        }).await?;
-
-        Ok(())
-    }*/
+        }
 }
