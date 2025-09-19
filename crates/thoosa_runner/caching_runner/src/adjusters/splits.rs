@@ -85,21 +85,22 @@ pub trait SplitsAdjusterContext: Debug + Send + Sync
 #[derive(Debug)]
 pub struct SplitsAdjusterContextImpl<R>
 where
-    R: Stage + Adjustable,
-    R::In: Data,
+    R: Stage + Adjustable + 'static,
+    <R as Stage>::In<'static>: Data,
 {
-    done_to: <<R as Stage>::In as Data>::Metrics,
-    split_len: <<R as Stage>::In as Data>::Metrics,
-    input_len: <<R as Stage>::In as Data>::Metrics,
+    done_to: <<R as Stage>::In<'static> as Data>::Metrics,
+    split_len: <<R as Stage>::In<'static> as Data>::Metrics,
+    input_len: <<R as Stage>::In<'static> as Data>::Metrics,
 
     output_builder: Box<dyn OutputBuilder<O=<R as Stage>::Out>>
 }
 
-impl <R: Stage + Adjustable> InputContext<R> for SplitsAdjusterContextImpl<R>
+impl <R: Stage + Adjustable + 'static> InputContext<R> for SplitsAdjusterContextImpl<R>
 where
-    R::In: Data,
-    <<R as Stage>::In as Data>::Metrics: for <'a> AddAssign<&'a <<R as Stage>::In as Data>::Metrics>,
-    <<R as Stage>::In as Data>::Metrics: PartialOrd
+    <R as Stage>::In<'static>: Data,
+    <<R as Stage>::In<'static> as Data>::Metrics:
+        for<'a> AddAssign<&'a <<R as Stage>::In<'static> as Data>::Metrics>,
+    <<R as Stage>::In<'static> as Data>::Metrics: PartialOrd,
 {
     fn add_partial_output(&mut self, o: R::Out) {
 
@@ -114,7 +115,7 @@ where
         self.done_to >= self.input_len
     }
 
-    fn input_len(&self) -> &<<R as Stage>::In as Data>::Metrics {
+    fn input_len(&self) -> &<<R as Stage>::In<'static> as Data>::Metrics {
         &self.input_len
     }
 
@@ -124,12 +125,12 @@ where
 
 }
 
-impl <R: Stage + Adjustable>  SplitsAdjusterContextImpl<R>
+impl <R: Stage + Adjustable + 'static>  SplitsAdjusterContextImpl<R>
 where
-    R::In: Data,
+    <R as Stage>::In<'static>: Data,
 {
     pub fn new(
-        input_len: <<R as Stage>::In as Data>::Metrics,
+        input_len: <<R as Stage>::In<'static> as Data>::Metrics,
         output_builder: Box<dyn OutputBuilder<O=<R as Stage>::Out>>
     ) -> Self {
         Self {
@@ -143,12 +144,12 @@ where
 
 }
 
-impl <R: Stage + Adjustable> SplitsAdjusterContext for SplitsAdjusterContextImpl<R>
+impl <R: Stage + Adjustable + 'static> SplitsAdjusterContext for SplitsAdjusterContextImpl<R>
 where
     R: Stage + Adjustable,
-    R::In: Data,
+    <R as Stage>::In<'static>: Data,
 {
-    type Metrics = <<R as Stage>::In as Data>::Metrics;
+    type Metrics = <<R as Stage>::In<'static> as Data>::Metrics;
 
     fn split_len(&self) -> &Self::Metrics {
         &self.split_len
