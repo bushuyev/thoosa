@@ -46,6 +46,7 @@ where
             In<'s> = BatchInput<'s, &'s Arc<Resource>>,
             Ctx = RunCtx2,
         > + Send + Sync + 'static,
+    T::Out: Send
 {
     type Out = T::Out;
 

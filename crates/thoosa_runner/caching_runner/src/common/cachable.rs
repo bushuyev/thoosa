@@ -32,8 +32,8 @@ where
     >
     where
         Self: Sized,
-        Self::Out: Data<Sub = Self::Out>;
-    
+        Self::Out: Data<Sub = Self::Out> + Sync + Send;
+
 
     async fn run_cached(
         self: Arc<Self>,
@@ -43,6 +43,7 @@ where
     where
         Self: Sized + OutId,
         for <'a> <Self as Stage>::In<'a>:Send + Sync,
+        <Self as Stage>::Out:Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
         Self::Out: Data<Sub = Self::Out>
@@ -102,7 +103,7 @@ where
     ) -> Result<(), ThoosaError>
     where
         Self: Sized + OutId,
-        Self::Out: Data<Sub = Self::Out>
+        Self::Out: Data<Sub = Self::Out> + Sync + Send
     {
         assert_ne!(device_idx, 0); //don't purge cpu
 
