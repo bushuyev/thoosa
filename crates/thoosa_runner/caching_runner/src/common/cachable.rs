@@ -33,7 +33,7 @@ where
     where
         Self: Sized,
         Self::Out: Data<Sub = Self::Out>;
-
+    
 
     async fn run_cached(
         self: Arc<Self>,
@@ -42,6 +42,7 @@ where
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
         Self: Sized + OutId,
+        for <'a> <Self as Stage>::In<'a>:Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
         Self::Out: Data<Sub = Self::Out>
