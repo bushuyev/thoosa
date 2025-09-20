@@ -22,7 +22,7 @@ use crate::traits::{SimpleId, TestId, WithId};
 
 pub type CachableId = SimpleId;
 
-pub trait Input: Send+Sync+Debug {
+pub trait Input: Debug {
     fn id(&self) -> &CachableId {
         todo!()
     }
