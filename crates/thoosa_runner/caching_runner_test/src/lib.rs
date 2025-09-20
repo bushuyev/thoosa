@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use log::debug;
 use tokio::task::JoinSet;
-use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
+use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::Stage;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
@@ -62,35 +62,30 @@ where
             output_builder
         }
     }
-}
-
-impl<R> Runner for ClcOOMRunner<R>
-where
-    R: Stage + Adjustable + 'static,
-    StageInStatic<R>: WithId + Debug + Adjustable + Data<
-        Sub = StageInStatic<R>,
-        SubSelect = std::ops::Range<StageInMetrics<R>>,
-    >,
-    R::Ctx: Adjustable,
-    // R::Out: From<Vec<R::Out>>,
-    R: OutId,
-    StageInMetrics<R>: for<'a> AddAssign<&'a StageInMetrics<R>>,
-    StageInMetrics<R>: DivAssign<i64>,
-    StageInMetrics<R>: PartialOrd<i64>,
-    for<'a, 'b> &'a StageInMetrics<R>: Add<&'b StageInMetrics<R>, Output = StageInMetrics<R>>,
-    StageInMetrics<R>: PartialOrd,
-    StageInSubSelect<R>: Adjustable,
-{
-    type R = R;
 
 
-    async fn run(
+    pub async fn run(
         &self,
-        runnable: &Arc<Self::R>,
-        input: Arc<DataCacheWrapper<StageInStatic<Self::R>>>,
-        ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
+        runnable: &Arc<R>,
+        input: Arc<DataCacheWrapper<StageInStatic<R>>>,
+        ctx: Arc<RwLock<<R as Stage>::Ctx>>,
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
-    ) -> Result<<Self::R as Stage>::Out, ThoosaError>
+    ) -> Result<<R as Stage>::Out, ThoosaError>
+    where
+        R: Stage + Adjustable + 'static,
+        StageInStatic<R>: WithId + Debug + Adjustable + Data<
+            Sub = StageInStatic<R>,
+            SubSelect = std::ops::Range<StageInMetrics<R>>,
+        >,
+        R::Ctx: Adjustable,
+        R: OutId,
+        StageInMetrics<R>: for<'a> AddAssign<&'a StageInMetrics<R>>,
+        StageInMetrics<R>: DivAssign<i64>,
+        StageInMetrics<R>: PartialOrd<i64>,
+        for<'a, 'b> &'a StageInMetrics<R>: Add<&'b StageInMetrics<R>, Output = StageInMetrics<R>>,
+        StageInMetrics<R>: PartialOrd,
+        StageInSubSelect<R>: Adjustable,
+
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();
@@ -136,7 +131,7 @@ where
             OOMRunnerConfig::Splits => {
                 OOMHandler::new(
                     vec![
-                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<Self::R>>::new(min_split_len))),
+                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>>::new(min_split_len))),
                     ],
                     None,
                 )
@@ -204,7 +199,9 @@ where
 
         }
     }
+
 }
+
 
 
 //just for tests, normally task has single config
@@ -324,7 +321,7 @@ mod tests {
     use log::debug;
     use caching_runner::test_utils::DummyTensor;
     use caching_runner::adjusters::splits::OutputBuilder;
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
+    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
     use thoosa_common::tho_tensor::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};

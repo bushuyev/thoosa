@@ -572,21 +572,6 @@ impl <O:Data<Sub=O>+WithId + Send + Sync+CopyToDevice> DataCacheWrapper<O>{
     }
 }
 
-pub trait Runner {
-    type R: Stage;
-
-    async fn run(
-        &self,
-        runnable: &Arc<Self::R>,
-        input: Arc<DataCacheWrapper<<Self::R as Stage>::In<'static>>>,
-        ctx: Arc<RwLock<<Self::R as Stage>::Ctx>>,
-        required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>
-    ) -> Result<<Self::R as Stage>::Out, ThoosaError>
-    where
-        Self::R: 'static,
-        <Self::R as Stage>::In<'static>: Data<Sub = <Self::R as Stage>::In<'static>> + WithId;
-
-}
 
 #[cfg(test)]
 mod tests {
