@@ -45,7 +45,7 @@ where
     T: for<'s> Stage<
             In<'s> = BatchInput<'s, &'s Arc<Resource>>,
             Ctx = RunCtx2,
-        > + 'static,
+        > + Send + Sync + 'static,
 {
     type Out = T::Out;
 
