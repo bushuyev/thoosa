@@ -9,7 +9,7 @@ use thoosa_shared::ThoosaError;
 #[async_trait]
 pub trait Stage: Debug + Send + Sync {
     type Ctx: RunCtx;
-    type Out: Output + Data<Sub = Self::Out> + Sync + Send + 'static;
+    type Out: Output + Sync + Send + 'static;
     type In<'a>: Input + Sync + Send
     where
         Self: 'a;
