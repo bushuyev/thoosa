@@ -222,7 +222,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     check:CF
 ) -> Result<(), ThoosaError>
 where
-    R: Stage + Cached + OutId + 'static,
+    R: Stage + Cached + OutId + Send + Sync + 'static,
     for<'a> <R as Stage>::In<'a>: Send + Sync,
     R::Out: Data<Sub = R::Out>,
     StageInStatic<R>: WithId + From<&'static str>,
