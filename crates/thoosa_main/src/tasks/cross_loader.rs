@@ -75,10 +75,10 @@ impl<CLC, RSV> CrossLoader<CLC, RSV>
 where
     CLC: CrossLoaderClc + 'static,
 {
-    pub fn new(loader: Arc<TensorLoader>, cross_unfold: Arc<CLC>, receiver:Arc<RSV>) -> Self {
+    pub fn new(loader: Arc<TensorLoader>, batch_clc: Arc<CLC>, receiver:Arc<RSV>) -> Self {
         Self {
             loader,
-            batch_clc: cross_unfold,
+            batch_clc,
             receiver
         }
     }
@@ -259,12 +259,12 @@ mod tests {
     use tch::{Device, Tensor};
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_motifs::distance::clc_dist_d2;
+    use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
     use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
     use torch_runner::data::ThoTensor2;
-    use crate::tasks::dists_tracker::DistsTracker;
+    use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
 
     #[ctor::ctor]
     pub fn init() {
@@ -303,7 +303,18 @@ mod tests {
                 },
                 ThoDevice::from(Device::Cpu),
             )),
-            Arc::new(CrossBatchClc::new()),
+            Arc::new(CrossBatchClc::new(|t_0, t_1|{
+                let mut mask_makers = vec![];
+                let dists = clc_dist_d2_and_mask(
+                    t_0.shallow_clone(),
+                    t_1,
+                    true,
+                    &mut mask_makers
+                )?;
+
+                debug!("CrossBatchClc::do_run:  dists={dists:?}");
+                Ok(DistWithMask::new(dists.0, dists.1))
+            })),
             Arc::new(DistsTracker::new())
         ));
 
