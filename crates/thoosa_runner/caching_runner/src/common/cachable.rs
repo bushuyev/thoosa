@@ -31,7 +31,8 @@ where
         Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
     >
     where
-        Self: Sized;
+        Self: Sized,
+        Self::Out: Data<Sub = Self::Out>;
 
 
     async fn run_cached(
@@ -43,6 +44,7 @@ where
         Self: Sized + OutId,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
+        Self::Out: Data<Sub = Self::Out>
         // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
         let key = self.out_id(input.id());
@@ -99,6 +101,7 @@ where
     ) -> Result<(), ThoosaError>
     where
         Self: Sized + OutId,
+        Self::Out: Data<Sub = Self::Out>
     {
         assert_ne!(device_idx, 0); //don't purge cpu
 
