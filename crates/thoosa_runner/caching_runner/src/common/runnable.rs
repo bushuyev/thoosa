@@ -10,7 +10,7 @@ use thoosa_shared::ThoosaError;
 pub trait Stage: Debug + Send + Sync {
     type Ctx: RunCtx;
 
-    type In<'a>: Input + Sync + Send
+    type In<'a>: Input
     where
         Self: 'a;
 
@@ -21,7 +21,10 @@ pub trait Stage: Debug + Send + Sync {
         self: Arc<Self>,
         _input: Arc<Self::In<'static>>,
         _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
+    ) -> Result<Self::Out, ThoosaError>
+    where
+        for <'a> Self::In<'a>:Send + Sync
+    {
         unimplemented!()
     }
 
