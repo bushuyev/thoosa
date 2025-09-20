@@ -4,3 +4,4 @@ mod cross_loader;
 mod dists_tracker;
 mod cross_batch_clc;
 mod cross_dims;
+mod slices_iter;
