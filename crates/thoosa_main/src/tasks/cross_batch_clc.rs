@@ -29,6 +29,18 @@ impl  <'a, R:AsRef<Resource>> BatchInput<'a, R> {
     pub fn new(tensors: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>], b_0: &'a [R], b_1: &'a [R]) -> Self {
         Self { tensors, b_0, b_1 }
     }
+
+    pub fn tensors(&self) -> &'a [&'a ThoTensor2<ChannelsData2, SimpleId>] {
+        self.tensors
+    }
+
+    pub fn batch_0(&self) -> &'a [R] {
+        self.b_0
+    }
+
+    pub fn batch_1(&self) -> &'a [R] {
+        self.b_1
+    }
 }
 
 impl <'a, R:AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {}
@@ -64,7 +76,7 @@ where
 impl <F,R> Stage for CrossBatchClc<F,R>
 where
     F:Fn(Tensor, Tensor)->Result<R, ThoosaError> +'static,
-    R:Debug+Output + 'static
+    R: Debug + Output + Input + Send + 'static
 {
     type In<'a> = BatchInput<'a, &'a Arc<Resource>>; //where Self:'a, R:'a, F: 'a;
     type Out = R;
