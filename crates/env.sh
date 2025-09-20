@@ -1,0 +1,2 @@
+#LD_PRELOAD=/home/bu/dvl/torch/src/pytorch/pytorch-2.7.1-debug-dsa-install/lib/libtorch_cuda.so:/home/bu/dvl/torch/src/pytorch/pytorch-2.7.1-debug-dsa-install/lib/libtorch_cpu.so:/home/bu/dvl/torch/src/pytorch/pytorch-2.7.1-debug-dsa-install/lib/libc10.so
+export LD_PRELOAD=/home/bu/dvl/torch/libtorch-2.7.1/lib/libtorch_cuda.so:/home/bu/dvl/torch/libtorch-2.7.1/lib/libtorch_cpu.so:/home/bu/dvl/torch/libtorch-2.7.1/lib/libc10.so
