@@ -75,10 +75,10 @@ impl<CLC, RSV> CrossLoader<CLC, RSV>
 where
     CLC: CrossLoaderClc + 'static,
 {
-    pub fn new(loader: Arc<TensorLoader>, cross_unfold: Arc<CLC>, receiver:Arc<RSV>) -> Self {
+    pub fn new(loader: Arc<TensorLoader>, batch_clc: Arc<CLC>, receiver:Arc<RSV>) -> Self {
         Self {
             loader,
-            batch_clc: cross_unfold,
+            batch_clc,
             receiver
         }
     }
