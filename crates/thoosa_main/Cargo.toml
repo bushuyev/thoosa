@@ -55,7 +55,7 @@ async-trait.workspace = true
 [dev-dependencies]
 rand_chacha = "0.3.1"
 approx = "0.5.1"
-
+mockall.workspace = true
 chrono.workspace = true
 [build-dependencies]
 chrono.workspace = true
