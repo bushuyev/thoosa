@@ -23,6 +23,10 @@ use thoosa_shared::traits::{Named, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 
+/// Small adapter trait that hides the `Stage` GATs so `CrossLoader` can accept
+/// any batched CLC stage while storing it behind an `Arc`.  Without this extra
+/// trait the HRTB requirements on `Stage::In<'_>` make the `CrossLoader` type
+/// ergonomics (and clone of the stage) far more tedious.
 pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
 
     type Out:Send;
