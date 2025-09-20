@@ -9,10 +9,12 @@ use thoosa_shared::ThoosaError;
 #[async_trait]
 pub trait Stage: Debug + Send + Sync {
     type Ctx: RunCtx;
-    type Out: Output + Sync + Send + 'static;
+
     type In<'a>: Input + Sync + Send
     where
         Self: 'a;
+
+    type Out: Output + Sync + Send + 'static;
 
     //should implement either run for multistep or do_run for single step (can be oom-handled)
     async fn run(
