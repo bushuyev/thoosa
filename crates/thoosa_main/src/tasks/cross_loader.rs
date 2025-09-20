@@ -25,7 +25,7 @@ use torch_runner::metrics::TwoDimsMetrics;
 
 pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
 
-    type Out;
+    type Out:Send;
 
     fn run_batch<'s>(
         self: Arc<Self>,
@@ -191,8 +191,11 @@ where
                         debug!("input={input:?}");
 
                         let out = Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&ctx))?;
-
-                        Arc::clone(&self.receiver).do_run(&out, Arc::clone(&ctx))?;
+                        let receiver_arc = Arc::clone(&self.receiver);
+                        let ctx_arc = Arc::clone(&ctx);
+                        tokio::task::spawn_blocking(move ||{
+                            receiver_arc.do_run(&out, ctx_arc).unwrap();
+                        });
 
                         Ok(())
                     },
