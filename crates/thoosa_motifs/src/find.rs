@@ -1429,7 +1429,7 @@ fn collect_dists<'a, F, C>(
 
 //TODO trait for MotifTracker
 #[derive(Debug)]
-pub(crate) struct SimpleMotifTracker<'a> {
+pub struct SimpleMotifTracker<'a> {
     last:Option<SlicesMatch>,
     motifs: Vec<SlicesMatch>, //i_0, match_0, match_1, dist
     dumper: Box<dyn MotifTrackerStore + 'a>, //lifetime is for DummyDumper
