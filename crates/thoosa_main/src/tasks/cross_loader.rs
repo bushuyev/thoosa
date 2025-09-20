@@ -274,10 +274,10 @@ where
                 }
 
                 let _ = DataCacheWrapper::with_data_array(
-                    [t_0_batch.clone(), t_1_batch].concat().as_slice(),
+                    [t_0_batch.clone(), t_1_batch].concat().as_slice(),//t_0_batch and t_1_batch are DataCacheWrappers
                     device_idx,
                     None,
-                    |data| {
+                    |data| {//t_0_batch + t_1_batch - loaded to device_idx
 
                         let input = BatchInput::new(
                             data,
@@ -288,6 +288,7 @@ where
                         debug!("input={input:?}");
 
                         let out = Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&ctx))?;
+
                         let receiver_arc = Arc::clone(&self.receiver);
                         let ctx_arc = Arc::clone(&ctx);
                         tokio::task::spawn_blocking(move || {
@@ -295,7 +296,7 @@ where
                         });
 
                         Ok(())
-                    },
+                    }
                 )
                 .await?;
 
@@ -316,6 +317,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
     use super::*;
     use crate::tasks::cross_batch_clc::CrossBatchClc;
     use crate::tasks::cross_loader::{CrossLoader, ResourcesVec};
@@ -330,9 +333,12 @@ mod tests {
     use thoosa_common::applicables::ThoDevice;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{cdt_for_dir, ThoosaError};
     use tokio::task::yield_now;
     use tokio::time::sleep;
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::ws::FsWorkspace;
+    use thoosa_motifs::find::FixedFindMotifsConfig;
     use torch_runner::data::ThoTensor2;
 
     static INIT: Once = Once::new();
@@ -347,6 +353,13 @@ mod tests {
     #[tokio::test]
     async fn test_cross_clc() -> Result<(), ThoosaError> {
         init_env();
+        let test_dir = Path::new("/tmp/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
+
+        let run_config = FindMotifsRunConfig::new(Some(0), 1, 2, None, None);
+        let fixed_config = FixedFindMotifsConfig::new(None, 2, false, None);
+
         let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
             .enumerate()
@@ -389,7 +402,7 @@ mod tests {
             Ok(DistWithMask::new(dists.0, dists.1))
         }));
 
-        let receiver = Arc::new(DistsTracker::new());
+        let receiver = Arc::new(DistsTracker::new_2(&ws, &run_config, &fixed_config, None));
 
         let cross_loader = Arc::new(CrossLoader::new(
             loader,
