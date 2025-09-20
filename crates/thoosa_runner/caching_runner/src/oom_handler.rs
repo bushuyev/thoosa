@@ -276,7 +276,8 @@ where
         run_context: Arc<RwLock<R::Ctx>>,
         mut contexts: Contexts<R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
-     where <R as Stage>::In<'static>: WithId
+     where
+         <R as Stage>::In<'static>: WithId + Send + Sync
     {
 
         let (device_idx, ctx_name) = {
