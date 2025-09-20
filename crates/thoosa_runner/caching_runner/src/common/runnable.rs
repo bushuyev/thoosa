@@ -7,14 +7,14 @@ use thoosa_shared::ThoosaError;
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 #[async_trait]
-pub trait Stage: Debug + Send + Sync {
+pub trait Stage: Debug {
     type Ctx: RunCtx;
 
     type In<'a>: Input
     where
         Self: 'a;
 
-    type Out: Output + Sync + Send + 'static;
+    type Out: Output;
 
     //should implement either run for multistep or do_run for single step (can be oom-handled)
     async fn run(

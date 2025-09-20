@@ -65,7 +65,7 @@ quote = "1"
 
 libloading = "0"
 plotters = { version = "0"}
-mockall = "0"
+mockall = { version = "0", features = ["nightly"] }
 mockall_double = "0"
 ambassador = "0"
 dashmap = "6"
