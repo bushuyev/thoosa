@@ -10,12 +10,13 @@ use caching_runner::common::runnable::Stage;
 use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
 use thoosa_shared::traits::{SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsSlicesData2};
 use crate::tasks::dists_tracker::DistWithMask;
 use crate::tasks::run_ctx_2::RunCtx2;
+use crate::tasks::slices_iter::SlicesIter;
 
 #[derive(Debug)]
 pub struct BatchInput<'a, R:AsRef<Resource>> {
@@ -72,6 +73,51 @@ where
     }
 }
 
+#[derive(Debug)]
+pub struct CrossBatchClcOutput<R:Debug> {
+    id:SimpleId,
+    clc_result:R,
+    iter:SlicesIter
+}
+
+impl <R:Debug> CrossBatchClcOutput<R> {
+    pub fn new(clc_result: R, iter:SlicesIter) -> Self {
+        Self { id: "".into(), clc_result, iter }
+    }
+
+    pub fn id(&self) -> &SimpleId {
+        &self.id
+    }
+
+    pub fn clc_result(&self) -> &R {
+        &self.clc_result
+    }
+
+    pub fn iter(&self) -> SlicesIter {
+        self.iter.clone()
+    }
+}
+
+
+
+
+impl <R:Debug> WithId for CrossBatchClcOutput<R> {
+    type ID = SimpleId;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+impl <R:Debug> Input for CrossBatchClcOutput<R> {
+
+}
+
+impl <R:Debug> Output for CrossBatchClcOutput<R> {
+
+}
+
+
+
 #[async_trait]
 impl <F,R> Stage for CrossBatchClc<F,R>
 where
@@ -79,7 +125,7 @@ where
     R: Debug + Output + Input + Send + 'static
 {
     type In<'a> = BatchInput<'a, &'a Arc<Resource>>; //where Self:'a, R:'a, F: 'a;
-    type Out = R;
+    type Out = CrossBatchClcOutput<R>;
     type Ctx = RunCtx2;
 
     fn do_run<'s>(
@@ -90,28 +136,108 @@ where
     where
         Self: Sized
     {
-        // let mut mask_makers = vec![];
+
+        let mut batch_sizes = vec![];
 
         let batch_0_t = Tensor::concat(
             input.tensors[0..input.b_0.len()]
                 .iter()
-                .map(|t| t.t().unfold(1, 2, 1))
+                .map(|t| {
+                    let unfolded = t.t().unfold(1, 2, 1);
+                    batch_sizes.push(unfolded.size()[1]);//number of blocks
+                    unfolded
+                })
                 .collect::<Vec<_>>()
                 .as_slice(),
             1,
         );
+
+
+        // let mut batch_1_sizes = vec![];
 
         let batch_1_t = Tensor::concat(
             input.tensors[input.b_0.len()..]
                 .iter()
-                .map(|t| t.t().unfold(1, 2, 1))
+                .map(|t| {
+                    let unfolded = t.t().unfold(1, 2, 1);
+                    batch_sizes.push(unfolded.size()[1]);//number of blocks
+                    unfolded
+                })
                 .collect::<Vec<_>>()
                 .as_slice(),
             1,
         );
 
+        assert_eq!(batch_sizes.len(), input.b_0.len() + input.b_1.len());
+
+
+        let resource_ids_sizes:Vec<_> = input.b_0.into_iter().chain(input.b_1.into_iter()).zip(batch_sizes.into_iter()).map(|v|(v.0.id(), v.1 as usize)).collect();
+
+        debug!("resource_ids_sizes={resource_ids_sizes:?}");
+
         debug!("CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?}");
 
-        (self.batch_clc)(batch_0_t.shallow_clone(), batch_1_t)
+        let iter = SlicesIter::new(2, resource_ids_sizes);
+
+        (self.batch_clc)(batch_0_t.shallow_clone(), batch_1_t).map(|v|CrossBatchClcOutput::new(v, iter))
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use log::debug;
+    use parking_lot::RwLock;
+    use tch::kind::FLOAT_CPU;
+    use tch::Tensor;
+    use caching_runner::common::MockRunCtx;
+    use caching_runner::common::runnable::Stage;
+    use thoosa_common::utils::lin_t;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::ThoosaError;
+    use torch_runner::data::ThoTensor2;
+    use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc};
+    use crate::tasks::dists_tracker::DistWithMask;
+    use crate::tasks::run_ctx_2::RunCtx2;
+
+    #[test]
+    fn test_0() -> Result<(), ThoosaError>{
+
+        let cross_batch_clc= Arc::new(CrossBatchClc::new(|t_0, t_1|{
+
+            debug!("t_0=\n{t_0}");
+            debug!("t_1=\n{t_1}");
+
+            Ok(DistWithMask::new(Tensor::rand(&[0], FLOAT_CPU), Some(Tensor::rand(&[0], FLOAT_CPU))))
+        }));
+
+        let tensor_00 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 10], FLOAT_CPU));
+        let tensor_01 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 13], FLOAT_CPU));
+
+        let tensor_1 = ThoTensor2::new("2".into(), Tensor::rand(&[3, 20], FLOAT_CPU));
+
+        let tensors = [&tensor_00, &tensor_01, &tensor_1];
+
+        let resource_00 = Arc::new(Resource::new(0, 0, "file_00".to_string(), 10));
+        let resource_01 = Arc::new(Resource::new(1, 0, "file_01".to_string(), 10));
+        let chunk_0_resources = vec![&resource_00, &resource_01];
+
+
+        let resource_1 = Arc::new(Resource::new(2, 0, "file_1".to_string(), 10));
+        let chunk_1_resources = vec![&resource_1];
+
+        let input = BatchInput::new(
+            &tensors,
+            &chunk_0_resources.as_slice(),
+            &chunk_1_resources.as_slice()
+        );
+        cross_batch_clc.do_run(
+            &input,
+            Arc::new(RwLock::new(RunCtx2::new(0, 0, "test")))
+        )?;
+
+        Ok(())
+
+    }
+
 }
