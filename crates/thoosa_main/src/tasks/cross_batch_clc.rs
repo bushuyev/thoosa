@@ -85,6 +85,6 @@ impl Stage for CrossBatchClc {
 
         debug!("CrossBatchClc::do_run:  dists={dists:?}");
 
-        Ok(DistWithMask::new())
+        Ok(DistWithMask::new(dists.0, dists.1))
     }
 }
