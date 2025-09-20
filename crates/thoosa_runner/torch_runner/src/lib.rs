@@ -48,7 +48,7 @@ mod tests {
     use crate::metrics::TwoDimsMetrics;
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
-    use caching_runner::common::cachable::{Cached, DataCacheWrapper, Runner};
+    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
     use caching_runner::common::{Data, DropIf, OutId, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
