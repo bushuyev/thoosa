@@ -226,6 +226,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoosaError>
 where
     R: Stage + Cached + OutId + 'static,
+    R::Out: Data<Sub = R::Out>,
     StageInStatic<R>: WithId + From<&'static str>,
     F:Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF:Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
@@ -873,6 +874,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_dummy() -> Result<(), ThoosaError> {
+
         let _global_ctx = GlobalCtx::init_devices(2);
 
         let device_idx = 0;

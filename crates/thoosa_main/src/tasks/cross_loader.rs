@@ -118,6 +118,28 @@ impl WithId for ResourcesVec {
 
 impl Input for ResourcesVec {}
 
+#[derive(Debug)]
+pub struct CrossResult {
+    id:SimpleId
+}
+
+impl WithId for CrossResult {
+    type ID = SimpleId;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+impl Output for CrossResult {}
+
+
+impl CrossResult {
+    pub fn new(id: SimpleId) -> Self {
+        Self { id }
+    }
+}
+
+
 #[async_trait]
 impl<CLC, RSV> Stage for CrossLoader<CLC, RSV>
 where
@@ -125,7 +147,7 @@ where
     RSV: for<'a> Stage<In<'a>=CLC::Out,Ctx=RunCtx2> + Debug + Send + Sync + 'static,
 {
     type In<'a> = ResourcesVec where Self: 'a;
-    type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
+    type Out = CrossResult;
     type Ctx = RunCtx2;
 
     async fn run(
@@ -217,10 +239,7 @@ where
             t_0_batch_len = 0;
         }
 
-        Ok(ThoTensor2::new(
-            "id".into(),
-            Tensor::zeros(&[10, 0], FLOAT_CPU),
-        ))
+        Ok(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))
     }
 }
 
