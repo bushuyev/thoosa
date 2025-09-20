@@ -17,8 +17,8 @@ use crate::tasks::run_ctx_2::RunCtx2;
 
 #[derive(Debug)]
 pub struct DistWithMask {
-    // mask:Tensor,
-    // dists:Option<Tensor>
+    mask:Tensor,
+    dists:Option<Tensor>
 }
 
 
@@ -37,7 +37,7 @@ impl WithId for DistWithMask {
 
 impl DistWithMask {
     pub fn new(mask: Tensor, dists: Option<Tensor>) -> Self {
-        Self { /*mask, dists*/ }
+        Self { mask, dists }
     }
 }
 

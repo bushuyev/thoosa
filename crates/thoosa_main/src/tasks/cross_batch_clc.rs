@@ -1,5 +1,6 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use async_trait::async_trait;
 use log::debug;
 use parking_lot::RwLock;
 use tch::kind::FLOAT_CPU;
@@ -7,7 +8,7 @@ use tch::Tensor;
 use caching_runner::common::cachable::DataCacheWrapper;
 use caching_runner::common::runnable::Stage;
 use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
-use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{SimpleId, WithId};
@@ -32,18 +33,41 @@ impl  <'a, R:AsRef<Resource>> BatchInput<'a, R> {
 
 impl <'a, R:AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {}
 
-#[derive(Debug)]
-pub struct CrossBatchClc;
+pub struct CrossBatchClc<F, R>
+where
+    F:Fn(Tensor, Tensor)->Result<R, ThoosaError>
+{
+    batch_clc:F
+}
 
-impl CrossBatchClc {
-    pub fn new() -> Self {
-        Self
+impl <F, R>  Debug for CrossBatchClc<F, R>
+where
+    F:Fn(Tensor, Tensor)->Result<R, ThoosaError>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CrossBatchClc").finish()
     }
 }
 
-impl Stage for CrossBatchClc {
-    type In<'s> = BatchInput<'s, &'s Arc<Resource>>;
-    type Out = DistWithMask;
+impl <F, R> CrossBatchClc<F, R>
+where
+    F:Fn(Tensor, Tensor)->Result<R, ThoosaError>
+{
+    pub fn new(batch_clc:F) -> Self {
+        Self {
+            batch_clc
+        }
+    }
+}
+
+#[async_trait]
+impl <F,R> Stage for CrossBatchClc<F,R>
+where
+    F:Fn(Tensor, Tensor)->Result<R, ThoosaError> +'static,
+    R:Debug+Output + 'static
+{
+    type In<'a> = BatchInput<'a, &'a Arc<Resource>>; //where Self:'a, R:'a, F: 'a;
+    type Out = R;
     type Ctx = RunCtx2;
 
     fn do_run<'s>(
@@ -52,9 +76,9 @@ impl Stage for CrossBatchClc {
         _ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError>
     where
-        Self: Sized,
+        Self: Sized
     {
-        let mut mask_makers = vec![];
+        // let mut mask_makers = vec![];
 
         let batch_0_t = Tensor::concat(
             input.tensors[0..input.b_0.len()]
@@ -76,15 +100,6 @@ impl Stage for CrossBatchClc {
 
         debug!("CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?}");
 
-        let dists = clc_dist_d2_and_mask(
-            batch_0_t.shallow_clone(),
-            batch_1_t,
-            true,
-            &mut mask_makers
-        )?;
-
-        debug!("CrossBatchClc::do_run:  dists={dists:?}");
-
-        Ok(DistWithMask::new(dists.0, dists.1))
+        (self.batch_clc)(batch_0_t.shallow_clone(), batch_1_t)
     }
 }
