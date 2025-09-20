@@ -191,6 +191,7 @@ pub struct NoopInputContext<R: Stage + 'static>(pub Option<R::Out>);
 impl<R> InputContext<R> for NoopInputContext<R>
 where
     <R as Stage>::In<'static>: Data,
+    <R as Stage>::Out: Send + Sync,
     R: Stage + 'static,
 {
     fn add_partial_output(&mut self, o: R::Out) {

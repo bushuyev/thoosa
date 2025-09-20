@@ -30,7 +30,7 @@ pub trait Input: Debug {
 
 
 #[async_trait]
-pub trait Output:WithId + Send+Sync+Debug {
+pub trait Output:WithId +Debug {
     async fn copy_to_device(self:Arc<Self>, device_ordinal:usize) -> Arc<Self> {
         todo!()
     }

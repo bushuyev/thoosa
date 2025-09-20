@@ -77,6 +77,7 @@ where
             Sub = StageInStatic<R>,
             SubSelect = std::ops::Range<StageInMetrics<R>>,
         >,
+        R::Out:Send + Sync,
         R::Ctx: Adjustable,
         R: OutId,
         StageInMetrics<R>: for<'a> AddAssign<&'a StageInMetrics<R>>,
@@ -224,7 +225,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 where
     R: Stage + Cached + OutId + Send + Sync + 'static,
     for<'a> <R as Stage>::In<'a>: Send + Sync,
-    R::Out: Data<Sub = R::Out>,
+    R::Out: Data<Sub = R::Out> + Send + Sync,
     StageInStatic<R>: WithId + From<&'static str>,
     F:Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF:Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
