@@ -17,28 +17,10 @@ use crate::tasks::run_ctx_2::RunCtx2;
 
 #[derive(Debug)]
 pub struct DistWithMask {
+    // mask:Tensor,
+    // dists:Option<Tensor>
 }
 
-
-#[async_trait]
-impl CopyToDevice for DistWithMask {
-    async fn copy_to_device(&self, dst_device: usize) ->Self {
-        todo!()
-    }
-}
-impl Data for DistWithMask{
-    type Metrics = ();
-    type Sub = DistWithMask;
-    type SubSelect = ();
-
-    fn size(&self) -> Self::Metrics {
-        todo!()
-    }
-
-    fn device(&self) -> usize {
-        todo!()
-    }
-}
 
 impl Output for DistWithMask {
 
@@ -54,8 +36,8 @@ impl WithId for DistWithMask {
 }
 
 impl DistWithMask {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(mask: Tensor, dists: Option<Tensor>) -> Self {
+        Self { /*mask, dists*/ }
     }
 }
 
