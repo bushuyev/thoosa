@@ -16,25 +16,24 @@ fn generate_morlet_wavelet(center_freq: f64, sample_rate: f64, n_cycles: f64) ->
 
 #[cfg(test)]
 mod tests {
-    use std::f64;
-    use log::debug;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::*;
-    use tch::{Device, IndexOp, Kind, Tensor};
-    use thoosa_shared::test_utils::are_close;
-    use thoosa_shared::ThoosaError;
     use crate::transforms::filters::clc_frequencies;
     use crate::transforms::utils::{complex_conv, generate_signal, sin_t};
     use crate::transforms::wavelets::generate_morlet_wavelet;
     use crate::utils::{from, plot_series, vec_f32_from};
+    use log::debug;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use std::f64;
+    use tch::kind::FLOAT_CPU;
+    use tch::nn::*;
+    use tch::{Device, IndexOp, Kind, Tensor};
+    use thoosa_shared::ThoosaError;
+    use thoosa_shared::test_utils::are_close;
 
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
-
 
     #[test]
     fn test_morlet_wavelet() -> Result<(), ThoosaError> {
@@ -42,12 +41,15 @@ mod tests {
         let duration_secs = 2.0;
         let samples = (duration_secs * sample_rate) as i64;
 
-
         let target_freq = 10.0; // Hz
         let n_cycles = 6.0; // Adjust trade-off time/frequency resolution
 
-        let (wavelet_real, wavelet_imag) = generate_morlet_wavelet(target_freq, sample_rate, n_cycles);
-        let t = Tensor::arange((sample_rate * duration_secs) as i64, (Kind::Float, Device::Cpu)) / sample_rate;
+        let (wavelet_real, wavelet_imag) =
+            generate_morlet_wavelet(target_freq, sample_rate, n_cycles);
+        let t = Tensor::arange(
+            (sample_rate * duration_secs) as i64,
+            (Kind::Float, Device::Cpu),
+        ) / sample_rate;
 
         let input_signal_0 = sin_t(&t, target_freq);
         let input_signal_1 = sin_t(&t, 3. * target_freq);
@@ -66,10 +68,23 @@ mod tests {
         plot_series(
             vec![
                 // (format!("0ch"), plotters::prelude::GREEN,   vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&signal.i((0, 0, ..)))).collect::<Vec<(f32, f32)>>()),//sig_0_v match
-                (format!("1ch"), plotters::prelude::RED,     vec_f32_from(&t).into_iter().zip(from::<Vec<f32>>(&envelope)).collect::<Vec<(f32, f32)>>()),//no matches
-            ], "wavelet", (2000, 1000), &format!("/tmp/plots/wavelet_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str()
+                (
+                    format!("1ch"),
+                    plotters::prelude::RED,
+                    vec_f32_from(&t)
+                        .into_iter()
+                        .zip(from::<Vec<f32>>(&envelope))
+                        .collect::<Vec<(f32, f32)>>(),
+                ), //no matches
+            ],
+            "wavelet",
+            (2000, 1000),
+            &format!(
+                "/tmp/plots/wavelet_{:?}.png",
+                chrono::Utc::now().to_rfc3339()
+            )
+            .as_str(),
         )?;
-
 
         //TODO
 

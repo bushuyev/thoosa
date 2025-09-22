@@ -1,20 +1,19 @@
+use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
-use async_trait::async_trait;
-use tokio::sync::{Notify, OwnedSemaphorePermit};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
+use tokio::sync::{Notify, OwnedSemaphorePermit};
 
 pub mod runner_queue;
 pub mod runner_semaphore;
-
 
 #[derive(Debug)]
 pub enum PermitStep {
     TEN,
     TWENTY,
-    FIFTY
+    FIFTY,
 }
 
 impl Deref for PermitStep {
@@ -24,15 +23,15 @@ impl Deref for PermitStep {
         match self {
             PermitStep::TEN => &10,
             PermitStep::TWENTY => &20,
-            PermitStep::FIFTY => &50
+            PermitStep::FIFTY => &50,
         }
     }
 }
 
-pub const MAX_PERMITS:NumPermits = 100;
+pub const MAX_PERMITS: NumPermits = 100;
 
 #[async_trait]
-pub trait PermitSource:Debug + Send + Sync {
+pub trait PermitSource: Debug + Send + Sync {
     async fn acquire(
         &self,
         n: NumPermits,
@@ -61,11 +60,18 @@ impl RunnerPerm {
         self.inner.num_permits() as NumPermits
     }
 
-    pub fn new(inner: OwnedSemaphorePermit) -> Self { Self { inner, notify: None } }
-
+    pub fn new(inner: OwnedSemaphorePermit) -> Self {
+        Self {
+            inner,
+            notify: None,
+        }
+    }
 
     pub fn with_notify(inner: OwnedSemaphorePermit, notify: Arc<Notify>) -> Self {
-        Self { inner, notify: Some(notify) }
+        Self {
+            inner,
+            notify: Some(notify),
+        }
     }
 }
 

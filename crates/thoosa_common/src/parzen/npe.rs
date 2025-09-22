@@ -1,15 +1,15 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
+use crate::parzen::optimizer::{Distribution, ParzenEstimator};
+use crate::parzen::util::uniform_weight;
 use log::{debug, trace};
 use num_traits::*;
 use rand::Rng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use tch::{IndexOp, Kind, Tensor};
-use thoosa_shared::val::Val;
 use thoosa_shared::opt_rng::opt_rnd;
-use crate::parzen::optimizer::{Distribution, ParzenEstimator};
-use crate::parzen::util::uniform_weight;
+use thoosa_shared::val::Val;
 
 #[allow(dead_code)]
 pub enum BandwidthFactor<N>
@@ -17,7 +17,6 @@ where
     N: Num,
     f64: Into<N>,
     f64: From<N>,
-
 {
     Min(N),
     MagicClipExponent(N, N),
@@ -71,7 +70,6 @@ where
     N: Num + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
-
 {
     pub fn value(&self, size: i64) -> N {
         match self {
@@ -94,7 +92,6 @@ where
     N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
-
 {
     fn default() -> Self {
         BandwidthFactor::Min(1e-2.into())
@@ -106,16 +103,15 @@ where
     N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
-
     tch::Scalar: From<N>,
 {
-    name:Option<String>,
+    name: Option<String>,
     lb: N,
     ub: N,
     bandwidth_clip: BandwidthFactor<N>,
     bandwidth: BandwidthFn,
     prior: bool,
-    quant_step: Option<usize>
+    quant_step: Option<usize>,
 }
 
 impl<N> Debug for NumericalParzenEstimator<N>
@@ -123,7 +119,6 @@ where
     N: Num + tch::kind::Element + PartialOrd + Copy,
     f64: Into<N>,
     f64: From<N>,
-
     tch::Scalar: From<N>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -140,18 +135,27 @@ where
     N: Num + tch::kind::Element + PartialOrd + Copy + Send,
     f64: Into<N>,
     f64: From<N>,
-
     tch::Scalar: From<N>,
 {
     fn clc_distr(&self, samples: Tensor, _weights: Option<Tensor>) -> Box<dyn Distribution> {
         Box::new(self.clc_distr(samples))
     }
 
-    fn clc_distr_from_vec(&self, samples:&mut dyn Iterator<Item=Val>, _weights: Option<Tensor>) -> Box<dyn Distribution>{
-        Box::new(self.clc_distr(Tensor::from_slice(samples.map(|p| p.try_into().unwrap()).collect::<Vec<f32>>().as_slice())))
+    fn clc_distr_from_vec(
+        &self,
+        samples: &mut dyn Iterator<Item = Val>,
+        _weights: Option<Tensor>,
+    ) -> Box<dyn Distribution> {
+        Box::new(
+            self.clc_distr(Tensor::from_slice(
+                samples
+                    .map(|p| p.try_into().unwrap())
+                    .collect::<Vec<f32>>()
+                    .as_slice(),
+            )),
+        )
         // todo!()
     }
-
 }
 
 const SQR2PI: f64 = 2.5066282746310002;
@@ -163,7 +167,14 @@ where
     f64: From<N>,
     tch::Scalar: From<N>,
 {
-    pub fn new(name: Option<String>, lb: N, ub: N, bandwidth_factor: BandwidthFactor<N>, prior: bool, quant_step: Option<usize>) -> Self {
+    pub fn new(
+        name: Option<String>,
+        lb: N,
+        ub: N,
+        bandwidth_factor: BandwidthFactor<N>,
+        prior: bool,
+        quant_step: Option<usize>,
+    ) -> Self {
         let i = Self {
             name,
             lb,
@@ -171,7 +182,7 @@ where
             bandwidth_clip: bandwidth_factor,
             bandwidth: BandwidthFn::Simp,
             prior,
-            quant_step
+            quant_step,
         };
 
         i
@@ -224,7 +235,7 @@ where
             weights,
             self.lb.into(),
             self.ub.into(),
-            self.quant_step.clone()
+            self.quant_step.clone(),
         )
     }
 
@@ -251,7 +262,6 @@ pub struct NumericalGaussian {
     normal_dists: Vec<(f64, f64)>,
     quant_step: Option<usize>,
 }
-
 
 impl NumericalGaussian {
     pub fn new(
@@ -282,7 +292,7 @@ impl NumericalGaussian {
             weights,
             lb,
             ub,
-            quant_step
+            quant_step,
         }
     }
 
@@ -323,7 +333,9 @@ impl NumericalGaussian {
 
                     if self.lb <= val && val <= self.ub {
                         if let Some(q_val) = self.quant_step.as_ref() {
-                            return (((val - self.lb) / *q_val as f64).round() as usize * *q_val) as f64 + self.lb; //TODO hard bounds
+                            return (((val - self.lb) / *q_val as f64).round() as usize * *q_val)
+                                as f64
+                                + self.lb; //TODO hard bounds
                         } else {
                             return val;
                         }
@@ -334,15 +346,20 @@ impl NumericalGaussian {
     }
 }
 
-
-
 impl Distribution for NumericalGaussian {
     fn sample(&self, n_samples: usize) -> Vec<Val> {
-        self._sample(n_samples).into_iter().map(|v|v.into()).collect()
+        self._sample(n_samples)
+            .into_iter()
+            .map(|v| v.into())
+            .collect()
     }
 
-    fn basis_loglikelihood(&self, x:&mut dyn Iterator<Item=&Val>) -> Tensor {
-        self._basis_loglikelihood(&Tensor::from_slice(x.map(|v|v.try_into().unwrap()).collect::<Vec<f64>>().as_slice()))
+    fn basis_loglikelihood(&self, x: &mut dyn Iterator<Item = &Val>) -> Tensor {
+        self._basis_loglikelihood(&Tensor::from_slice(
+            x.map(|v| v.try_into().unwrap())
+                .collect::<Vec<f64>>()
+                .as_slice(),
+        ))
     }
 
     fn weights(&self) -> &Tensor {
@@ -375,12 +392,12 @@ pub fn compute_config_loglikelihoods(
 #[cfg(test)]
 mod tests {
     use log::debug;
-    use rand::rngs::StdRng;
     use rand::SeedableRng;
-    use tch::kind::FLOAT_CPU;
+    use rand::rngs::StdRng;
     use tch::Tensor;
+    use tch::kind::FLOAT_CPU;
 
-    use super::{BandwidthFactor, compute_config_loglikelihoods, NumericalParzenEstimator};
+    use super::{BandwidthFactor, NumericalParzenEstimator, compute_config_loglikelihoods};
 
     #[ctor::ctor]
     fn init() {

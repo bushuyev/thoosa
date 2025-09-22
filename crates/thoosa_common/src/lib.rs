@@ -5,33 +5,33 @@ use tch::Device;
 
 pub mod utils;
 
-pub mod builder;
-pub mod my_tch;
-pub mod simp;
-pub mod train_nets;
-mod opt;
-mod bfgs;
-mod argmin;
-mod gaussian;
 mod acquisitions;
-pub mod parzen;
-pub mod loader;
-pub mod ws;
-pub mod runs;
-pub mod bool_iter;
-pub mod input_probs;
-pub mod transforms;
-pub mod find_motifs_run_config;
-pub mod dims;
 pub mod applicables;
+mod argmin;
 pub mod batches;
-pub mod tho_tensor;
-pub mod cuda_utils;
+mod bfgs;
+pub mod bool_iter;
+pub mod builder;
 pub mod copy_ctx;
+pub mod cuda_utils;
+pub mod dims;
+pub mod find_motifs_run_config;
+mod gaussian;
+pub mod input_probs;
+pub mod loader;
+pub mod my_tch;
+mod opt;
+pub mod parzen;
+pub mod runs;
+pub mod simp;
+pub mod tho_tensor;
+pub mod train_nets;
+pub mod transforms;
+pub mod ws;
 
-pub trait ResourceLoader:Send+Sync {
+pub trait ResourceLoader: Send + Sync {
     type K;
     type V;
 
-    fn load(&self, key:&Self::K, device:Device)->Self::V;
+    fn load(&self, key: &Self::K, device: Device) -> Self::V;
 }

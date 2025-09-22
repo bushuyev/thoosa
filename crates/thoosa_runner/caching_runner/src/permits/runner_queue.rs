@@ -1,19 +1,19 @@
 use crate::permits::{NumPermits, PermitSource, RunnerPerm};
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Notify, Semaphore, TryAcquireError};
-use tokio::task::JoinHandle;
-use thoosa_shared::{MyError, ThoosaError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use thoosa_shared::traits::CachableIdTr;
+use thoosa_shared::{MyError, ThoosaError};
+use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 /// ---------- FIFO Arbiter built on tokio::Semaphore ----------
 
 #[derive(Debug)]
 pub struct Arbiter {
     #[allow(dead_code)]
-    sem: Arc<Semaphore>,//TODO for statistics
+    sem: Arc<Semaphore>, //TODO for statistics
     notify: Arc<Notify>,
     tx: Option<mpsc::Sender<Req>>,
     capacity: NumPermits,
@@ -63,7 +63,11 @@ impl Arbiter {
             .tx
             .as_ref()
             .ok_or_else(|| MyError::SomethingElse("arbiter closed".to_string()))?;
-        tx.send(Req { needed, reply, out_id })
+        tx.send(Req {
+            needed,
+            reply,
+            out_id,
+        })
         .await
         .map_err(|_| MyError::SomethingElse("arbiter closed".to_string()))?;
         recv.await
@@ -98,7 +102,8 @@ impl Arbiter {
             loop {
                 if shutdown.load(Ordering::Acquire) {
                     while let Some(Req { reply, .. }) = q.pop_front() {
-                        let _ = reply.send(Err(MyError::SomethingElse("arbiter closed".into()).into()));
+                        let _ =
+                            reply.send(Err(MyError::SomethingElse("arbiter closed".into()).into()));
                     }
                     break;
                 }
@@ -124,10 +129,8 @@ impl Arbiter {
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
                                 let Req { reply, out_id, .. } = q.remove(pos).unwrap();
-                                let _ = reply.send(Ok(RunnerPerm::with_notify(
-                                    inner,
-                                    Arc::clone(&notify),
-                                )));
+                                let _ = reply
+                                    .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
                                 fail_counts.remove(&out_id);
                                 super_id = None;
                             }
@@ -140,14 +143,18 @@ impl Arbiter {
 
                 // Strict head-of-line: only grant from the front if it fits.
                 while super_id.is_none() {
-                    let Some(front) = q.front() else { break; };
+                    let Some(front) = q.front() else {
+                        break;
+                    };
                     match Arc::clone(&sem).try_acquire_many_owned(front.needed as u32) {
                         Ok(inner) => {
-                            let Req { needed: _, reply, out_id } = q.pop_front().unwrap();
-                            let _ = reply.send(Ok(RunnerPerm::with_notify(
-                                inner,
-                                Arc::clone(&notify),
-                            )));
+                            let Req {
+                                needed: _,
+                                reply,
+                                out_id,
+                            } = q.pop_front().unwrap();
+                            let _ =
+                                reply.send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
                             // Success → reset failure count for this context
                             fail_counts.remove(&out_id);
                             // loop to try the new head
@@ -168,7 +175,10 @@ impl Arbiter {
                         }
                         Err(_) => {
                             let Req { reply, .. } = q.pop_front().unwrap();
-                            let _ = reply.send(Err(MyError::SomethingElse("semaphore closed".into()).into()));
+                            let _ = reply
+                                .send(
+                                    Err(MyError::SomethingElse("semaphore closed".into()).into()),
+                                );
                         }
                     }
                 }
@@ -191,10 +201,8 @@ impl Arbiter {
                         match Arc::clone(&sem).try_acquire_many_owned(capacity) {
                             Ok(inner) => {
                                 let Req { reply, out_id, .. } = q.remove(pos).unwrap();
-                                let _ = reply.send(Ok(RunnerPerm::with_notify(
-                                    inner,
-                                    Arc::clone(&notify),
-                                )));
+                                let _ = reply
+                                    .send(Ok(RunnerPerm::with_notify(inner, Arc::clone(&notify))));
                                 fail_counts.remove(&out_id);
                                 super_id = None;
                             }
@@ -234,7 +242,11 @@ impl Drop for Arbiter {
 
 #[async_trait]
 impl PermitSource for Arbiter {
-    async fn acquire(&self, n: NumPermits, out_id: Arc<dyn CachableIdTr>) -> Result<RunnerPerm, ThoosaError> {
+    async fn acquire(
+        &self,
+        n: NumPermits,
+        out_id: Arc<dyn CachableIdTr>,
+    ) -> Result<RunnerPerm, ThoosaError> {
         self.send_acquire_rq(n, out_id).await
     }
 }
@@ -244,8 +256,8 @@ mod tests {
     use super::*;
     use crate::permits::MAX_PERMITS;
     use rand::random_range;
-    use tokio::task::JoinSet;
     use thoosa_shared::traits::SimpleId;
+    use tokio::task::JoinSet;
 
     #[derive(Debug)]
     struct SomeTask {
@@ -276,8 +288,8 @@ mod tests {
         }
     }
 
-    use std::sync::Arc;
     use log::debug;
+    use std::sync::Arc;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_fifo_arbiter() -> Result<(), ()> {
@@ -337,11 +349,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn graceful_shutdown_closes_waiters() {
-        use tokio::time::{sleep, Duration};
+        use tokio::time::{Duration, sleep};
 
         let arb = Arbiter::new(1);
         // Hold the only permit so next acquire waits
-        let permit = arb.send_acquire_rq(1, Arc::new(SimpleId::from("a")) as Arc<dyn CachableIdTr>).await.unwrap();
+        let permit = arb
+            .send_acquire_rq(1, Arc::new(SimpleId::from("a")) as Arc<dyn CachableIdTr>)
+            .await
+            .unwrap();
 
         // Enqueue a request that will wait
         let (reply, recv) = oneshot::channel();
@@ -377,7 +392,15 @@ mod tests {
     async fn send_after_close_returns_error() {
         let mut arb = Arbiter::new(1);
         drop(arb.tx.take());
-        let res = arb.send_acquire_rq(1, Arc::new(SimpleId::from("c")) as Arc<dyn CachableIdTr>).await;
-        assert!(matches!(res, Err(ThoosaError{what: MyError::SomethingElse(_), ..})));
+        let res = arb
+            .send_acquire_rq(1, Arc::new(SimpleId::from("c")) as Arc<dyn CachableIdTr>)
+            .await;
+        assert!(matches!(
+            res,
+            Err(ThoosaError {
+                what: MyError::SomethingElse(_),
+                ..
+            })
+        ));
     }
 }

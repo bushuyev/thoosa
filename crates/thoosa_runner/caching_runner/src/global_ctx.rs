@@ -1,18 +1,18 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::{Arc, OnceLock};
+use crate::permits::NumPermits;
+use crate::permits::runner_queue::Arbiter;
+use crate::permits::{PermitSource, RunnerPerm};
+use crate::purge::FuturesRunnerMapPurger;
 use log::debug;
 #[allow(unused_imports)]
 use mockall::automock;
-use tokio::sync::RwLock as AsyncRwLock;
-use thoosa_shared::{MyError, ThoosaError};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Arc, OnceLock};
 use thoosa_shared::traits::CachableIdTr;
-use crate::permits::NumPermits;
-use crate::permits::{PermitSource, RunnerPerm};
-use crate::permits::runner_queue::Arbiter;
-use crate::purge::FuturesRunnerMapPurger;
+use thoosa_shared::{MyError, ThoosaError};
+use tokio::sync::RwLock as AsyncRwLock;
 
 #[derive(Debug)]
 pub struct CacheAreasKeeper {
@@ -40,7 +40,6 @@ pub(crate) fn remove_mask(from: u64, mask: u64) -> u64 {
     !mask & from
 }
 
-
 pub(crate) fn first_free_bit(c: u64) -> u64 {
     if c == u64::MAX {
         0
@@ -55,12 +54,11 @@ pub struct GlobalCtx {
     device_count: usize,
     device_locks: Vec<Arc<AsyncRwLock<()>>>,
     caches: tokio::sync::RwLock<Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)>>,
-    is_all_on_cpu:Vec<AtomicBool>,
+    is_all_on_cpu: Vec<AtomicBool>,
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
-    cache_age: AtomicU64,//for tracking CPU-only lifetime
-    purge_lock:tokio::sync::Mutex<()>
+    cache_age: AtomicU64, //for tracking CPU-only lifetime
+    purge_lock: tokio::sync::Mutex<()>,
 }
-
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
 
@@ -81,14 +79,12 @@ impl GlobalCtx {
 
             caches: tokio::sync::RwLock::new(vec![]),
 
-            is_all_on_cpu: (0..device_count)
-                .map(|_| AtomicBool::new(false))
-                .collect(),
+            is_all_on_cpu: (0..device_count).map(|_| AtomicBool::new(false)).collect(),
 
             caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new()),
 
             cache_age: Default::default(),
-            purge_lock: tokio::sync::Mutex::new(())
+            purge_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -100,7 +96,7 @@ impl GlobalCtx {
         Self::global()
     }
 
-    pub async fn purge_lock<'a>(&'a self) -> tokio::sync::MutexGuard<'a, ()>{
+    pub async fn purge_lock<'a>(&'a self) -> tokio::sync::MutexGuard<'a, ()> {
         self.purge_lock.lock().await
     }
 
@@ -120,15 +116,20 @@ impl GlobalCtx {
         Arc::clone(&GlobalCtx::global().device_locks[device_idx])
     }
 
-    pub fn is_all_on_cpu(&self, device_idx:usize) -> bool {
+    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
         self.is_all_on_cpu[device_idx].load(Relaxed)
     }
 
-    pub async fn reset_all_on_cpu(&self, device_idx:usize) {
+    pub async fn reset_all_on_cpu(&self, device_idx: usize) {
         self.is_all_on_cpu[device_idx].store(false, Relaxed);
     }
 
-    pub async fn acquire_many(&self, ordinal: usize, n: NumPermits, out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, ThoosaError> {
+    pub async fn acquire_many(
+        &self,
+        ordinal: usize,
+        n: NumPermits,
+        out_id: std::sync::Arc<dyn CachableIdTr>,
+    ) -> Result<RunnerPerm, ThoosaError> {
         self.semaphores[ordinal].acquire(n, out_id).await
     }
 
@@ -144,24 +145,20 @@ impl GlobalCtx {
         //should be ok to read lock -  caches are expected to be updated (GlobalCtx::register_cache) rarely, perhaps on app startup only or before running set of runs
         let maps = self.caches.read().await;
 
-        for (type_name,  map) in maps.iter() {
+        for (type_name, map) in maps.iter() {
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
 
-            map.purge_gpu(
-                required_ids.get(type_name).map(|v|*v),
-
-                device_idx
-            ).await?;
+            map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx)
+                .await?;
 
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} done");
         }
 
-        self.is_all_on_cpu[device_idx].store( true, Relaxed);
+        self.is_all_on_cpu[device_idx].store(true, Relaxed);
         Ok(())
     }
 
     pub async fn purge_cpu(&self, purge_since: u64) {
-
         //should be ok to read lock - see dump_all_to_cpu
         let maps = self.caches.read().await;
 
@@ -181,30 +178,26 @@ impl GlobalCtx {
         self.cache_age.fetch_add(1, Relaxed);
     }
 
-    pub fn cache_age(&self) -> u64{
-        self.cache_age.load( Relaxed)
+    pub fn cache_age(&self) -> u64 {
+        self.cache_age.load(Relaxed)
     }
-
 }
-
-
 
 #[cfg(test)]
 pub(crate) mod mock_global_ctx {
     use crate::global_ctx::MockGlobalCtx;
 
     pub struct MockGlobalCtxBuilder {
-        mock:MockGlobalCtx
+        mock: MockGlobalCtx,
     }
 
     impl MockGlobalCtxBuilder {
-
-        pub fn with_reset_all_on_cpu(mut self)->Self {
+        pub fn with_reset_all_on_cpu(mut self) -> Self {
             let _ = self.mock.expect_reset_all_on_cpu();
             self
         }
 
-        pub fn with_age(mut self, out:u64) -> Self {
+        pub fn with_age(mut self, out: u64) -> Self {
             self.mock.expect_cache_age().return_const(out);
 
             self
@@ -216,17 +209,14 @@ pub(crate) mod mock_global_ctx {
             self
         }
 
-        pub fn finish(self)->MockGlobalCtx {
+        pub fn finish(self) -> MockGlobalCtx {
             self.mock
         }
-
-
     }
 
-    pub fn build() ->MockGlobalCtxBuilder {
-
+    pub fn build() -> MockGlobalCtxBuilder {
         MockGlobalCtxBuilder {
-            mock: super::MockGlobalCtx::default()
+            mock: super::MockGlobalCtx::default(),
         }
     }
 }
