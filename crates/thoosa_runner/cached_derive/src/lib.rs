@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Meta, Lit, Expr};
+use syn::{DeriveInput, Expr, Lit, Meta, parse_macro_input};
 // Legacy macro kept for compatibility in this workspace (unused here)
 #[proc_macro_derive(ACachable)]
 pub fn derive_acachable(_input: TokenStream) -> TokenStream {

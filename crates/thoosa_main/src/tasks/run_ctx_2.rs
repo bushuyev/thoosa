@@ -4,20 +4,15 @@ use caching_runner::oom_handler::Adjustable;
 use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Named, SimpleId};
 
-
-
-
 #[derive(Debug)]
 pub struct RunCtx2 {
     device_idx: usize,
     permits: Vec<RunnerPerm>,
     cache_area: u64,
-    name: &'static str
+    name: &'static str,
 }
 
-impl Adjustable for RunCtx2 {
-
-}
+impl Adjustable for RunCtx2 {}
 
 impl Named for RunCtx2 {
     fn name(&self) -> &'static str {
@@ -26,11 +21,14 @@ impl Named for RunCtx2 {
 }
 impl RunCtx2 {
     pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
-        Self { device_idx, permits:vec![], cache_area, name }
+        Self {
+            device_idx,
+            permits: vec![],
+            cache_area,
+            name,
+        }
     }
-
 }
-
 
 #[async_trait]
 impl RunCtx for RunCtx2 {

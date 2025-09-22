@@ -1,14 +1,13 @@
-use std::cell::{RefMut};
+use std::cell::RefMut;
 use std::collections::VecDeque;
 
-use std::fmt::{Debug};
+use std::fmt::Debug;
 use std::io::Write;
 use std::iter::Map;
 
-use std::ops::{ Range};
+use std::ops::Range;
 use std::time::Instant;
 use std::{fs, ptr};
-
 
 use log::{debug, error, trace, warn};
 use plotters::backend::BitMapBackend;
@@ -16,29 +15,28 @@ use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
 use plotters::element::PathElement;
 use plotters::prelude::*;
-use rand::prelude::ThreadRng;
 use rand::Rng;
+use rand::prelude::ThreadRng;
 use std::panic::AssertUnwindSafe;
 
-use std::sync::Arc;
 use parking_lot::lock_api::{RawRwLock, RwLock};
+use std::sync::Arc;
+use tch::Device::Cuda;
+use tch::Kind::Float;
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::Optimizer;
-use tch::nn::{VarStore};
-use tch::Device::{Cuda};
-use tch::Kind::Float;
+use tch::nn::VarStore;
 use tch::{Device, Kind, TchError, Tensor};
-use thoosa_shared::{gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
+use thoosa_shared::{ThoosaError, gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw};
 use torch_sys::cuda::atc_cuda_device_count;
-
 
 use crate::my_tch::{LossFp, ThoModule};
 
 use crate::batches::AsyncDataBatch;
 use crate::dims::{Batch, Dims};
 
-pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Error>> {
+pub fn plot_heatmap(path: &str, _t: &Tensor) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
 
     root.fill(&WHITE)?;
@@ -62,8 +60,6 @@ pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Err
     let (_pw, _ph) = (range.0.end - range.0.start, range.1.end - range.1.start);
     let (_xr, _yr) = (chart.x_range(), chart.y_range());
 
-
-
     // for (x, y, c) in mandelbrot_set(xr, yr, (pw as usize, ph as usize), 100) {
     //     if c != 100 {
     //         plotting_area.draw_pixel((x, y), &MandelbrotHSL::get_color(c as f64 / 100.0))?;
@@ -76,53 +72,85 @@ pub fn plot_heatmap(path:&str, _t:&Tensor) -> Result<(), Box<dyn std::error::Err
     root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
     debug!("Result has been saved to {}", path);
 
-
     Ok(())
 }
 
-pub fn list_devices() ->Vec<Device> {
+pub fn list_devices() -> Vec<Device> {
     let cuda_if_available = Device::cuda_if_available();
     debug!("cuda_if_available={cuda_if_available:?}");
 
-    let devices = unsafe {atc_cuda_device_count()};
+    let devices = unsafe { atc_cuda_device_count() };
     if devices == 0 {
         vec![Device::Cpu]
     } else {
-        (0..devices).map(|i|Device::Cuda(i.try_into().unwrap())).collect()
+        (0..devices)
+            .map(|i| Device::Cuda(i.try_into().unwrap()))
+            .collect()
     }
 }
 
-pub fn plot_series<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>) -> Result<(), ThoosaError> where S:Into<ShapeStyle> + Clone{
+pub fn plot_series<S>(
+    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    w_h: (u32, u32),
+    path: &impl AsRef<std::path::Path>,
+) -> Result<(), ThoosaError>
+where
+    S: Into<ShapeStyle> + Clone,
+{
     _plot_series_with_points(name_x_y_vec, caption, w_h, path, None)
 }
 
-pub fn plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points:&Vec<(f32, f32)>) -> Result<(), ThoosaError> where S:Into<ShapeStyle> + Clone{
+pub fn plot_series_with_points<S>(
+    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    w_h: (u32, u32),
+    path: &impl AsRef<std::path::Path>,
+    points: &Vec<(f32, f32)>,
+) -> Result<(), ThoosaError>
+where
+    S: Into<ShapeStyle> + Clone,
+{
     _plot_series_with_points(name_x_y_vec, caption, w_h, path, Some(points))
 }
 
-fn _plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, caption: &str, w_h: (u32, u32), path: &impl AsRef<std::path::Path>, points:Option<&Vec<(f32, f32)>>) -> Result<(), ThoosaError> where S:Into<ShapeStyle> + Clone{
+fn _plot_series_with_points<S>(
+    name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>,
+    caption: &str,
+    w_h: (u32, u32),
+    path: &impl AsRef<std::path::Path>,
+    points: Option<&Vec<(f32, f32)>>,
+) -> Result<(), ThoosaError>
+where
+    S: Into<ShapeStyle> + Clone,
+{
     if let Some(parent) = path.as_ref().parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let (min_x, max_x, min_y, max_y) = name_x_y_vec.iter().flat_map(|name_x_y_vec| name_x_y_vec.2.iter()).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN, ), |mut max_min, (x, y)| {
-        if max_min.0 > *x {
-            max_min.0 = *x
-        }
-        if max_min.1 < *x {
-            max_min.1 = *x
-        }
+    let (min_x, max_x, min_y, max_y) = name_x_y_vec
+        .iter()
+        .flat_map(|name_x_y_vec| name_x_y_vec.2.iter())
+        .fold(
+            (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
+            |mut max_min, (x, y)| {
+                if max_min.0 > *x {
+                    max_min.0 = *x
+                }
+                if max_min.1 < *x {
+                    max_min.1 = *x
+                }
 
-        if max_min.2 > *y {
-            max_min.2 = *y
-        }
-        if max_min.3 < *y {
-            max_min.3 = *y
-        }
+                if max_min.2 > *y {
+                    max_min.2 = *y
+                }
+                if max_min.3 < *y {
+                    max_min.3 = *y
+                }
 
-        max_min
-    });
-
+                max_min
+            },
+        );
 
     let root = BitMapBackend::new(path, w_h).into_drawing_area();
     root.fill(&WHITE)?;
@@ -136,24 +164,17 @@ fn _plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, 
     chart.configure_mesh().draw()?;
 
     for (name, color, x_y) in name_x_y_vec {
-
         chart
-            .draw_series(LineSeries::new(
-                x_y,
-                color.clone(),
-            ))?
+            .draw_series(LineSeries::new(x_y, color.clone()))?
             .label(name)
             .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.clone()));
     }
-
-
 
     chart
         .configure_series_labels()
         .background_style(&WHITE.mix(0.8))
         .border_style(&BLACK)
         .draw()?;
-
 
     // let motif_area = |x: i32, dx: i32| {
     //     return EmptyElement::at((x as f32, 10.))
@@ -168,13 +189,17 @@ fn _plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, 
     //
     // chart.plotting_area().draw(&motif_area(100, 100)).expect("Drawing Failure");
 
-    if let Some(points) = points{
+    if let Some(points) = points {
         for point in points {
-            root.draw(&Circle::new(chart.backend_coord(point), 10, ShapeStyle {
-                color: BLUE. mix(0.6),
-                filled: false,
-                stroke_width: 2,
-            }))?;
+            root.draw(&Circle::new(
+                chart.backend_coord(point),
+                10,
+                ShapeStyle {
+                    color: BLUE.mix(0.6),
+                    filled: false,
+                    stroke_width: 2,
+                },
+            ))?;
         }
     }
 
@@ -183,9 +208,7 @@ fn _plot_series_with_points<S>(name_x_y_vec: Vec<(String, S, Vec<(f32, f32)>)>, 
     Ok(())
 }
 
-
-
-pub fn plot_3d(){//TODO
+pub fn plot_3d() { //TODO
     // let root = BitMapBackend::gif(crate::bfgs::opt_tests::OUT_FILE_NAME, (600, 400), 100)?.into_drawing_area();
     //
     // for pitch in 9..10 {
@@ -225,13 +248,12 @@ pub fn plot_3d(){//TODO
 
 //from tch-0.14.0/tests/test_utils.rs
 pub fn from<'a, T>(t: &'a Tensor) -> T
-    where
-        <T as TryFrom<&'a tch::Tensor>>::Error: std::fmt::Debug,
-        T: TryFrom<&'a Tensor>,
+where
+    <T as TryFrom<&'a tch::Tensor>>::Error: std::fmt::Debug,
+    T: TryFrom<&'a Tensor>,
 {
     T::try_from(t).unwrap()
 }
-
 
 pub fn vec_f32_from(t: &Tensor) -> Vec<f32> {
     from::<Vec<f32>>(&t.reshape(-1))
@@ -241,11 +263,19 @@ pub fn vec_f64_from(t: &Tensor) -> Vec<f64> {
     from::<Vec<f64>>(&t.reshape(-1))
 }
 
-pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, ThoosaError>{
-    debug!("pad_to: input.size={:?}, to_size{:?}", input.size(), to_size);
+pub fn pad_to(input: &Tensor, to_size: &[i64]) -> Result<Tensor, ThoosaError> {
+    debug!(
+        "pad_to: input.size={:?}, to_size{:?}",
+        input.size(),
+        to_size
+    );
 
     if input.size().len() != to_size.len() {
-        ThoosaError::new(format!("dimensions don't match: {:?} {:?}", input.size(), to_size));
+        ThoosaError::new(format!(
+            "dimensions don't match: {:?} {:?}",
+            input.size(),
+            to_size
+        ));
     }
     let mut to_size = to_size.to_vec();
 
@@ -253,14 +283,14 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, ThoosaError>{
     input_size.reverse();
     to_size.reverse();
 
-    let pad_idx = input_size.into_iter().zip(
-        to_size.into_iter()
-    )
+    let pad_idx = input_size
+        .into_iter()
+        .zip(to_size.into_iter())
         .enumerate()
         .flat_map(|(i, (from, to))| {
             debug!("pad_to: i={i} from={from} to={to}");
             if from > to {
-                error!("from {from} > to {to} at {i}");//panic doesn't show up in test
+                error!("from {from} > to {to} at {i}"); //panic doesn't show up in test
                 panic!("from {from} > to {to} at {i}");
             } else {
                 [0, to - from]
@@ -268,31 +298,32 @@ pub fn pad_to(input:&Tensor, to_size:&[i64])-> Result<Tensor, ThoosaError>{
         })
         .collect::<Vec<i64>>();
 
-    Ok(
-        input.pad(
-            pad_idx.as_slice(),
-            "constant",
-            0.
-        )
-    )
-
+    Ok(input.pad(pad_idx.as_slice(), "constant", 0.))
 }
 
-pub fn load_tensor(base_path: &str, tensor_id: &str, device: Device) -> Result<Tensor, ThoosaError> {
+pub fn load_tensor(
+    base_path: &str,
+    tensor_id: &str,
+    device: Device,
+) -> Result<Tensor, ThoosaError> {
     Tensor::load(std::path::Path::new(base_path).join(format!("{}.pt", tensor_id)))
-        .map(|t|t.to_device(device)).map_err(|e| ThoosaError::new(e.to_string()))
+        .map(|t| t.to_device(device))
+        .map_err(|e| ThoosaError::new(e.to_string()))
 }
 
-pub fn clone(from:&Tensor) -> Tensor {
-    let to = Tensor::zeros(from.size(), FLOAT_CPU);//TODO clone
+pub fn clone(from: &Tensor) -> Tensor {
+    let to = Tensor::zeros(from.size(), FLOAT_CPU); //TODO clone
     let _ = from.clone(&to);
 
     to
 }
 
 pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
-    assert_eq!(tensor.dim(), 2, "hist_1_dim: input tensor must have exactly two dimensions.");
-
+    assert_eq!(
+        tensor.dim(),
+        2,
+        "hist_1_dim: input tensor must have exactly two dimensions."
+    );
 
     let min_vals = tensor.min_dim(1, true).0; //channels x 1
     let max_vals = tensor.max_dim(1, true).0; //channels x 1
@@ -314,9 +345,8 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
     one_hot.sum_dim_intlist(1, false, Kind::Int)
 }
 
-
 //free_mem, total_mem
-pub fn cuda_mem() -> (usize, usize){
+pub fn cuda_mem() -> (usize, usize) {
     use cudarc::driver::CudaContext;
     use cust::sys::cuMemGetInfo_v2;
 
@@ -332,17 +362,14 @@ pub fn cuda_mem() -> (usize, usize){
 
 #[macro_export]
 macro_rules! panic_to_err_async {
-
     ($expr:expr) => {{
-         let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || {
-            $expr
-        }));
-         
-         match x {
+        let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
+
+        match x {
             //no panic
             Ok(inner_result) => match inner_result.await {
                 Ok(val) => Ok(val),
-                Err(err) => Err(thoosa_shared::ThoosaError::from(err))
+                Err(err) => Err(thoosa_shared::ThoosaError::from(err)),
             },
             //panic
             Err(e) => {
@@ -352,7 +379,6 @@ macro_rules! panic_to_err_async {
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
-
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("thoosa_err str: {msg}");
                     Err(thoosa_shared::ThoosaError::from(*msg))
@@ -365,18 +391,14 @@ macro_rules! panic_to_err_async {
     }};
 }
 
-
 #[macro_export]
 macro_rules! panic_to_err {
-
     ($expr:expr) => {{
-        match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
-            $expr
-        })) {
+        match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| $expr)) {
             //no panic
             Ok(inner_result) => match inner_result {
                 Ok(val) => Ok(val),
-                Err(err) => Err(ThoosaError::from(err))
+                Err(err) => Err(ThoosaError::from(err)),
             },
             //panic
             Err(e) => {
@@ -386,7 +408,6 @@ macro_rules! panic_to_err {
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
-
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("thoosa_err str: {msg}");
                     Err(ThoosaError::from(*msg))
@@ -400,52 +421,63 @@ macro_rules! panic_to_err {
 }
 
 pub trait Splittable<const SIZE: usize> {
-    fn split(&self) -> Option<[Self; SIZE]> where Self: Sized;
+    fn split(&self) -> Option<[Self; SIZE]>
+    where
+        Self: Sized;
 }
 
-
-
-impl <R, S> Splittable<1> for RwLock<R,S>
-where R: RawRwLock {
+impl<R, S> Splittable<1> for RwLock<R, S>
+where
+    R: RawRwLock,
+{
     fn split(&self) -> Option<[Self; 1]>
     where
-        Self: Sized
+        Self: Sized,
     {
         todo!()
     }
 }
 
 pub trait Splitter<const SIZE: usize> {
-    type S:Splittable<SIZE>;
+    type S: Splittable<SIZE>;
     fn next(&mut self) -> Option<Self::S>;
     fn split(&mut self, split: Self::S) -> Result<(), ThoosaError>;
 }
 
 #[derive(Debug)]
 pub struct SplitQueue<const SIZE: usize, T> {
-    queue:VecDeque<T>
+    queue: VecDeque<T>,
 }
 
-impl <const SIZE: usize, T> SplitQueue<SIZE, T> where T:Debug + Splittable<SIZE>{
+impl<const SIZE: usize, T> SplitQueue<SIZE, T>
+where
+    T: Debug + Splittable<SIZE>,
+{
     pub fn new(chunk: T) -> Self {
         Self {
-            queue: VecDeque::from([chunk])
+            queue: VecDeque::from([chunk]),
         }
     }
 }
 
-impl <const SIZE: usize, T> Splitter<SIZE> for SplitQueue<SIZE, T> where T:Debug + Splittable<SIZE> {
-    type S=T;
+impl<const SIZE: usize, T> Splitter<SIZE> for SplitQueue<SIZE, T>
+where
+    T: Debug + Splittable<SIZE>,
+{
+    type S = T;
 
     fn next(&mut self) -> Option<T> {
         let v = self.queue.pop_front();
 
-        debug!("SplitQueue::next: self.queue.len={} pop_front={v:?}", self.queue.len());
+        debug!(
+            "SplitQueue::next: self.queue.len={} pop_front={v:?}",
+            self.queue.len()
+        );
 
         v
     }
 
-    fn split(&mut self, chunk:T) -> Result<(), ThoosaError> {
+    fn split(&mut self, chunk: T) -> Result<(), ThoosaError> {
         debug!("SplitQueue::split: chunk={chunk:?}");
 
         let splits = chunk.split();
@@ -464,16 +496,19 @@ impl <const SIZE: usize, T> Splitter<SIZE> for SplitQueue<SIZE, T> where T:Debug
 
 #[derive(Debug)]
 pub struct Reducer<T> {
-    value:Option<T>
+    value: Option<T>,
 }
 
-impl <T> Reducer<T> {
+impl<T> Reducer<T> {
     pub fn new(value: T) -> Self {
-        Self { value:Some(value) }
+        Self { value: Some(value) }
     }
 }
 
-impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
+impl<T> Splitter<1> for Reducer<T>
+where
+    T: Debug + Splittable<1>,
+{
     type S = T;
 
     fn next(&mut self) -> Option<Self::S> {
@@ -482,9 +517,7 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
 
     fn split(&mut self, v: Self::S) -> Result<(), ThoosaError> {
         match v.split() {
-            None => {
-                Err(ThoosaError::new("Can't split anymore".to_owned()))
-            }
+            None => Err(ThoosaError::new("Can't split anymore".to_owned())),
             Some(a) => {
                 let [v_0] = a;
                 self.value = Some(v_0);
@@ -517,20 +550,31 @@ impl <T> Splitter<1> for Reducer<T> where T:Debug + Splittable<1> {
 //     }
 // }
 
-
-
-pub async fn run_split_on_oom_2<'s, 'v, 'fr, const SIZE: usize, S: 's, SV: 'v, F, FR: 'fr, OkF, OkR>(
-    mut splitter: S, mut f: F, on_ok: OkF, max_attempts: i32
+pub async fn run_split_on_oom_2<
+    's,
+    'v,
+    'fr,
+    const SIZE: usize,
+    S: 's,
+    SV: 'v,
+    F,
+    FR: 'fr,
+    OkF,
+    OkR,
+>(
+    mut splitter: S,
+    mut f: F,
+    on_ok: OkF,
+    max_attempts: i32,
 ) -> Result<(), ThoosaError>
 where
-    SV:Splittable<SIZE>,
-    S: for <'x> Splitter<SIZE, S=SV>,
+    SV: Splittable<SIZE>,
+    S: for<'x> Splitter<SIZE, S = SV>,
     //F: for <'f> AsyncFnMut(&'f mut V) -> Result<FR, ThoosaError>,
     // F: for<'a, 'b> AsyncFnMut(&'a mut (dyn Splittable<SIZE> + 'b)) -> Result<FR, ThoosaError>,
-    F:  AsyncFnMut(Arc<SV>) -> Result<FR, ThoosaError>,
-    OkF:AsyncFn(FR, Arc<SV>) -> OkR,
+    F: AsyncFnMut(Arc<SV>) -> Result<FR, ThoosaError>,
+    OkF: AsyncFn(FR, Arc<SV>) -> OkR,
 {
-
     'out: while let Some(split_0) = splitter.next() {
         let split_0_arc = Arc::new(split_0);
         for attempt in 0..max_attempts {
@@ -540,7 +584,9 @@ where
                     continue 'out;
                 }
                 Err(e) if e.is_oom() => {
-                    debug!("run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}");
+                    debug!(
+                        "run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}"
+                    );
                 }
                 Err(e) => {
                     debug!("run_split_on_oom: failed on oom {e:?}");
@@ -553,18 +599,20 @@ where
         }
     }
 
-
     Ok(())
 }
 
-
-pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(mut splitter: S, mut f: F, mut on_ok: OkF, max_attempts: i32) -> Result<(), ThoosaError>
+pub fn run_split_on_oom<const SIZE: usize, F, FR, V, S, OkF, OkR>(
+    mut splitter: S,
+    mut f: F,
+    mut on_ok: OkF,
+    max_attempts: i32,
+) -> Result<(), ThoosaError>
 where
     F: FnMut(&mut V) -> Result<FR, ThoosaError>,
-    S: Splitter<SIZE, S=V>,
+    S: Splitter<SIZE, S = V>,
     OkF: FnMut(FR, &mut V) -> OkR,
 {
-
     'out: while let Some(mut split_0) = splitter.next() {
         for attempt in 0..max_attempts {
             match panic_to_err!(f(&mut split_0)) {
@@ -573,7 +621,9 @@ where
                     continue 'out;
                 }
                 Err(e) if e.is_oom() => {
-                    debug!("run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}");
+                    debug!(
+                        "run_split_on_oom: splitting on oom, max_attempts={max_attempts} attempt={attempt}"
+                    );
                 }
                 Err(e) => {
                     debug!("run_split_on_oom: failed on oom {e:?}");
@@ -586,24 +636,30 @@ where
         }
     }
 
-
     Ok(())
 }
 
 #[derive(Debug)]
-pub struct SplittableTensor<const D:i64>(pub Tensor);//TODO more than one dimension?
+pub struct SplittableTensor<const D: i64>(pub Tensor); //TODO more than one dimension?
 
-impl <const S:usize, const D:i64> Splittable<S> for SplittableTensor<D> {
+impl<const S: usize, const D: i64> Splittable<S> for SplittableTensor<D> {
     fn split(&self) -> Option<[Self; S]>
     where
         Self: Sized,
     {
-
         let split_size = self.0.size()[D as usize] / S as i64 + 1; //TODO if self.0.size()[D as usize] < 2
 
-        debug!("SplittableTensor::split: self.0.size()={:?} S={S} D={D} split_size={split_size}", self.0.size());
+        debug!(
+            "SplittableTensor::split: self.0.size()={:?} S={S} D={D} split_size={split_size}",
+            self.0.size()
+        );
 
-        let splits = self.0.split(split_size, D).into_iter().map(|t|SplittableTensor::<D>(t)).collect::<Vec<_>>();
+        let splits = self
+            .0
+            .split(split_size, D)
+            .into_iter()
+            .map(|t| SplittableTensor::<D>(t))
+            .collect::<Vec<_>>();
 
         debug!("SplittableTensor::split: splits={splits:?}");
 
@@ -615,22 +671,22 @@ impl <const S:usize, const D:i64> Splittable<S> for SplittableTensor<D> {
 
 //TODO for batch + degrade Kind: Double->Float->BFloat16
 pub struct CompositeReducer {
-    _reducers:Vec<Box<dyn Splittable<1>>>
+    _reducers: Vec<Box<dyn Splittable<1>>>,
 }
 
 impl CompositeReducer {
-    pub fn new(_reducers:Vec<Box<dyn Splittable<1>>>) -> Self {
+    pub fn new(_reducers: Vec<Box<dyn Splittable<1>>>) -> Self {
         Self { _reducers }
     }
 }
 
-impl <const D:i64> AsRef<Tensor> for SplittableTensor<D> {
+impl<const D: i64> AsRef<Tensor> for SplittableTensor<D> {
     fn as_ref(&self) -> &Tensor {
         &self.0
     }
 }
 
-pub fn kick_register_cuda_hooks(){
+pub fn kick_register_cuda_hooks() {
     unsafe {
         //TODO to kick REGISTER_CUDA_HOOKS(CUDAHooks); in
         // ATen   cuda
@@ -645,7 +701,6 @@ pub fn kick_register_cuda_hooks(){
     };
 }
 
-
 pub struct DummyListener;
 
 impl TrainListener for DummyListener {
@@ -659,28 +714,20 @@ pub mod tests {
 
     use crate::bool_iter::BoolTensorIterator;
 
+    use crate::utils::{CompositeReducer, Splittable, SplittableTensor, TrainListener, hist_1_dim};
+    use clap::{Args, Parser, Subcommand, arg, command};
 
-
-    use crate::utils::{hist_1_dim, CompositeReducer,Splittable, SplittableTensor, TrainListener};
-    use clap::{arg, command, Args, Parser, Subcommand};
-
-    use log::{debug};
+    use log::debug;
     use std::collections::{HashMap, HashSet};
 
+    use std::fmt::Debug;
+    use std::fs;
 
-    use std::{fs};
-    use std::fmt::{Debug};
-
-
-
-
-
-
-    use serde::{Deserialize};
-    use tch::kind::FLOAT_CPU;
-    use tch::Device::{Cpu};
+    use serde::Deserialize;
+    use tch::Device::Cpu;
     use tch::Kind::Float;
-    use tch::{Tensor};
+    use tch::Tensor;
+    use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -691,17 +738,14 @@ pub mod tests {
 
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{ cdt_for_dir, clc_step, RangeOrValue, ThoosaError};
+    use thoosa_shared::{RangeOrValue, ThoosaError, cdt_for_dir, clc_step};
 
-    use thoosa_shared::run_configs::{   RunId};
-
-
+    use thoosa_shared::run_configs::RunId;
 
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
     }
-
 
     #[test]
     fn test_splittable_tensor() {
@@ -712,7 +756,7 @@ pub mod tests {
 
         debug!("sp_t=\n{sp_t:?}");
 
-        let splits:[_; 2] = sp_t.split().expect("some splits");
+        let splits: [_; 2] = sp_t.split().expect("some splits");
 
         debug!("splits={splits:?}");
 
@@ -723,10 +767,8 @@ pub mod tests {
     }
 
     #[test]
-    fn test_composite_reducer(){
-        let _reducer = CompositeReducer::new(vec![
-
-        ]);
+    fn test_composite_reducer() {
+        let _reducer = CompositeReducer::new(vec![]);
         //TODO
     }
 
@@ -752,13 +794,15 @@ pub mod tests {
     // }
 
     #[test]
-    fn test_clc_step(){
+    fn test_clc_step() {
         let n = 10_000u32;
         let w = 1000;
         let t = Tensor::rand(&[1, n as i64], FLOAT_CPU);
         let slices_num = 100;
         let (step, pad) = clc_step(n, w, slices_num); //(n-w)/(k-1);
-        let u = t.pad([0i64, pad as i64], "constant", 0.).unfold(1, w as i64, step as i64);
+        let u = t
+            .pad([0i64, pad as i64], "constant", 0.)
+            .unfold(1, w as i64, step as i64);
 
         debug!("u={u:?}");
 
@@ -766,32 +810,25 @@ pub mod tests {
     }
 
     #[test]
-    fn test_splittable_tensor_cant_split(){
+    fn test_splittable_tensor_cant_split() {
         let t = Tensor::rand(&[3, 3], FLOAT_CPU);
         debug!("t=\n{t}");
 
         let sp_t = SplittableTensor::<0>(t.shallow_clone());
-        let splits:Option<[_; 4]> = sp_t.split();
+        let splits: Option<[_; 4]> = sp_t.split();
 
-        assert!(
-            splits.is_none()
-        )
+        assert!(splits.is_none())
     }
 
-
     #[test]
-    fn test_cdt_for_dir(){
-        debug!("{}", cdt_for_dir() );
+    fn test_cdt_for_dir() {
+        debug!("{}", cdt_for_dir());
         assert_eq!(false, cdt_for_dir().contains(":"))
     }
 
     #[test]
-    fn test_pad_to() -> Result<(), ThoosaError>{
-        let t = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2.]),
-            Tensor::from_slice(&[3., 4.]),
-        ]);
-
+    fn test_pad_to() -> Result<(), ThoosaError> {
+        let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
 
         assert_eq!(
             Tensor::vstack(&[
@@ -799,39 +836,26 @@ pub mod tests {
                 Tensor::from_slice(&[3., 4., 0.]),
                 Tensor::from_slice(&[0., 0., 0.]),
             ]),
-            super::pad_to(
-                &t,
-                &[3,3]
-            )?
+            super::pad_to(&t, &[3, 3])?
         );
 
         Ok(())
     }
 
     #[test]
-    fn test_pad_to_same() -> Result<(), ThoosaError>{
-        let t = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2.]),
-            Tensor::from_slice(&[3., 4.]),
-        ]);
-
+    fn test_pad_to_same() -> Result<(), ThoosaError> {
+        let t = Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.])]);
 
         assert_eq!(
-            Tensor::vstack(&[
-                Tensor::from_slice(&[1., 2.]),
-                Tensor::from_slice(&[3., 4.]),
-            ]),
-            super::pad_to(
-                &t,
-                &[2,2]
-            )?
+            Tensor::vstack(&[Tensor::from_slice(&[1., 2.]), Tensor::from_slice(&[3., 4.]),]),
+            super::pad_to(&t, &[2, 2])?
         );
 
         Ok(())
     }
 
     #[test]
-    fn test_pad_to_one_dim() -> Result<(), ThoosaError>{
+    fn test_pad_to_one_dim() -> Result<(), ThoosaError> {
         let t = Tensor::ones([1, 3], (Float, Cpu));
 
         assert_eq!(
@@ -839,21 +863,14 @@ pub mod tests {
                 Tensor::from_slice(&[1., 1., 1.]),
                 Tensor::from_slice(&[0., 0., 0.]),
             ]),
-
-            super::pad_to(
-                &t,
-                &[2,3]
-            )?
+            super::pad_to(&t, &[2, 3])?
         );
-
 
         Ok(())
     }
 
-
     #[test]
-    fn test_save_and_load()  -> Result<(), ThoosaError>{
-
+    fn test_save_and_load() -> Result<(), ThoosaError> {
         let base_path = format!("/tmp/test_test_save_and_load/{}", cdt_for_dir());
         fs::create_dir_all(&base_path)?;
 
@@ -871,29 +888,39 @@ pub mod tests {
     }
 
     #[test]
-    fn test_devices(){
+    fn test_devices() {
         let devices = vec!["dev1", "dev2"];
-        let classes = ["seizure_vote", "lpd_vote", "gpd_vote", "lrda_vote", "grda_vote", "other_vote"];
+        let classes = [
+            "seizure_vote",
+            "lpd_vote",
+            "gpd_vote",
+            "lrda_vote",
+            "grda_vote",
+            "other_vote",
+        ];
 
-
-        let chunk_len = classes.len()/devices.len();
-        let devices_classes = devices.into_iter().cycle().zip(classes.chunks(chunk_len).into_iter()).collect::<Vec<(&str, &[&str])>>();
-        let mut processed_classes:HashSet<&str> = HashSet::new();
-        devices_classes.into_iter().for_each( |(device, classes_chunk)| {
-            debug!("2. device={:?} class={:?}", device, classes_chunk);
-            processed_classes.extend(classes_chunk)
-        });
+        let chunk_len = classes.len() / devices.len();
+        let devices_classes = devices
+            .into_iter()
+            .cycle()
+            .zip(classes.chunks(chunk_len).into_iter())
+            .collect::<Vec<(&str, &[&str])>>();
+        let mut processed_classes: HashSet<&str> = HashSet::new();
+        devices_classes
+            .into_iter()
+            .for_each(|(device, classes_chunk)| {
+                debug!("2. device={:?} class={:?}", device, classes_chunk);
+                processed_classes.extend(classes_chunk)
+            });
 
         assert_eq!(processed_classes.len(), 6);
         //TODO devices
 
         debug!("processed_classes={:?}", processed_classes);
-
     }
 
     #[test]
     fn test_run_config_args() {
-
         #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         struct SomeSubTrainConfig {
             #[in_map]
@@ -909,15 +936,14 @@ pub mod tests {
 
             #[in_map]
             #[run_config]
-            sub_config:SomeSubTrainConfig
+            sub_config: SomeSubTrainConfig,
         }
 
         #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         enum NetType {
             NetOne(NetOneConfig),
-            NetTwo(NetTwoConfig)
+            NetTwo(NetTwoConfig),
         }
-
 
         #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug)]
         struct NetOneConfig {
@@ -937,15 +963,15 @@ pub mod tests {
         #[run_config_opt]
         struct TrainLabelsRunConfig {
             #[in_map]
-            pub id:Option<RunId>,
+            pub id: Option<RunId>,
 
             #[in_map]
             #[run_config]
-            some_prop:u32,
+            some_prop: u32,
 
             #[in_map]
             #[run_config]
-            common_config:CommonTrainConfig,
+            common_config: CommonTrainConfig,
 
             #[in_map]
             #[run_config]
@@ -953,8 +979,7 @@ pub mod tests {
 
             #[in_map]
             #[run_config]
-            net_type_1: Option<NetType>
-
+            net_type_1: Option<NetType>,
         }
 
         // impl RunConfig for TrainLabelsRunConfig {
@@ -983,26 +1008,29 @@ pub mod tests {
 
         #[derive(Debug, Subcommand, Clone)]
         enum Commands {
-            StandardCommand {number:u32},
+            StandardCommand { number: u32 },
 
-            TrainLabels(TraneLabelsArgs)
+            TrainLabels(TraneLabelsArgs),
         }
 
         #[derive(Debug, Args, Clone)]
-        struct TraneLabelsArgs{
+        struct TraneLabelsArgs {
             #[arg(long)]
             resources: String,
 
             #[arg(long)]
-            run_config_cnt:String,
+            run_config_cnt: String,
         }
 
         let cli = TestCli::parse_from([
             "",
-            "--some-field", "zzz",
+            "--some-field",
+            "zzz",
             "train-labels",
-                "--resources", "zzzz",
-                "--run-config-cnt", r#"
+            "--resources",
+            "zzzz",
+            "--run-config-cnt",
+            r#"
                     {
                         some_prop:'1',
                         common_config:{
@@ -1018,41 +1046,70 @@ pub mod tests {
                             NetTwo:{num_bbb:'10..100:50,1'}
                         }
                     }
-                "#
+                "#,
         ]);
-
 
         #[derive(Debug, Default)]
         struct TestNodeParams {
-            layers:u32
+            layers: u32,
         }
 
-        fn test_train_label(vs:&VarStore, run_config:&TrainLabelsRunConfig, ls:&mut dyn TrainListener)->Result<(f32, TestNodeParams), ThoosaError>{
+        fn test_train_label(
+            vs: &VarStore,
+            run_config: &TrainLabelsRunConfig,
+            ls: &mut dyn TrainListener,
+        ) -> Result<(f32, TestNodeParams), ThoosaError> {
             debug!("test_train_label: run_config={:?}", run_config);
 
-            Ok((0.1, TestNodeParams{ layers: 0 }))
+            Ok((0.1, TestNodeParams { layers: 0 }))
         }
 
-
         let opt_sources = match &cli.command {
-
-            Commands::TrainLabels(train_labels_args) =>{
+            Commands::TrainLabels(train_labels_args) => {
                 debug!("Commands::TrainLabels: train_labels_args={train_labels_args:?}");
 
-                let v: TrainLabelsRunConfigRangeOrValue = serde_json5::from_str(&train_labels_args.run_config_cnt).unwrap();
+                let v: TrainLabelsRunConfigRangeOrValue =
+                    serde_json5::from_str(&train_labels_args.run_config_cnt).unwrap();
 
                 debug!("TrainLabelsRunConfigRangeOrValue: v={v:?}");
 
                 assert_eq!(RangeOrValue::Value(1), v.some_prop);
-                assert_eq!(Some(RangeOrValue::Range{range: 1..10, step: None}), v.common_config.beta);
-                assert_eq!(RangeOrValue::Range{range: 0..10, step: Some((5,1))}, v.common_config.sub_config.lr);
+                assert_eq!(
+                    Some(RangeOrValue::Range {
+                        range: 1..10,
+                        step: None
+                    }),
+                    v.common_config.beta
+                );
+                assert_eq!(
+                    RangeOrValue::Range {
+                        range: 0..10,
+                        step: Some((5, 1))
+                    },
+                    v.common_config.sub_config.lr
+                );
 
-                let NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {num_aaa: ref num_aaa_range_or_value}) = v.net_type_0 else {panic!("no NetOne/num_aaa")};
+                let NetTypeRangeOrValue::NetOne(NetOneConfigRangeOrValue {
+                    num_aaa: ref num_aaa_range_or_value,
+                }) = v.net_type_0
+                else {
+                    panic!("no NetOne/num_aaa")
+                };
                 assert_eq!(&RangeOrValue::Value(1), num_aaa_range_or_value);
 
-                let Some(NetTypeRangeOrValue::NetTwo(NetTwoConfigRangeOrValue {num_bbb: ref num_bbb_range_or_value})) = v.net_type_1 else {panic!("no NetOne/num_bbb")};
-                assert_eq!(&RangeOrValue::Range{range: 10..100, step: Some((50,1))}, num_bbb_range_or_value);
-
+                let Some(NetTypeRangeOrValue::NetTwo(NetTwoConfigRangeOrValue {
+                    num_bbb: ref num_bbb_range_or_value,
+                })) = v.net_type_1
+                else {
+                    panic!("no NetOne/num_bbb")
+                };
+                assert_eq!(
+                    &RangeOrValue::Range {
+                        range: 10..100,
+                        step: Some((50, 1))
+                    },
+                    num_bbb_range_or_value
+                );
 
                 v.opt_run_configs()
             }
@@ -1062,44 +1119,70 @@ pub mod tests {
             }
         };
 
-        debug!("const_params={:?}", opt_sources.grid_run_config_source().const_params());
+        debug!(
+            "const_params={:?}",
+            opt_sources.grid_run_config_source().const_params()
+        );
         assert_eq!(
             &vec![
                 NamedVal::new(TrainLabelsRunConfigFields::SomeProp, UInt(1)),
-                NamedVal::new(TrainLabelsRunConfigFields::NetType0(NetTypeFields::NetOne(NetOneConfigFields::NumAaa)), UInt(1)),
+                NamedVal::new(
+                    TrainLabelsRunConfigFields::NetType0(NetTypeFields::NetOne(
+                        NetOneConfigFields::NumAaa
+                    )),
+                    UInt(1)
+                ),
                 // NamedVal::new(TrainLabelsRunConfigFields::NetType1(NetTypeFields::NetTwo(NetTwoConfigFields::NumBbb)), UInt(2)),
             ],
             opt_sources.grid_run_config_source().const_params()
         );
 
-
-        debug!("       grid_to_vals={:?}", opt_sources.grid_run_config_source().grid_to_vals());
-        assert_eq!((10..100).step_by(50).flat_map(|num_bbb| (0..10).step_by(5).map(move |lr| {
-
-            vec![
-                NamedVal::<TrainLabelsRunConfigFields>::new(TrainLabelsRunConfigFields::CommonConfig(CommonTrainConfigFields::SubConfig(SomeSubTrainConfigFields::Lr)), Int(lr)),
-                NamedVal::<TrainLabelsRunConfigFields>::new(TrainLabelsRunConfigFields::NetType1(NetTypeFields::NetTwo(NetTwoConfigFields::NumBbb)), UInt(num_bbb))
-            ]
-
-        })).collect::<Vec<_>>(), opt_sources.grid_run_config_source().grid_to_vals());
+        debug!(
+            "       grid_to_vals={:?}",
+            opt_sources.grid_run_config_source().grid_to_vals()
+        );
+        assert_eq!(
+            (10..100)
+                .step_by(50)
+                .flat_map(|num_bbb| (0..10).step_by(5).map(move |lr| {
+                    vec![
+                        NamedVal::<TrainLabelsRunConfigFields>::new(
+                            TrainLabelsRunConfigFields::CommonConfig(
+                                CommonTrainConfigFields::SubConfig(SomeSubTrainConfigFields::Lr),
+                            ),
+                            Int(lr),
+                        ),
+                        NamedVal::<TrainLabelsRunConfigFields>::new(
+                            TrainLabelsRunConfigFields::NetType1(NetTypeFields::NetTwo(
+                                NetTwoConfigFields::NumBbb,
+                            )),
+                            UInt(num_bbb),
+                        ),
+                    ]
+                }))
+                .collect::<Vec<_>>(),
+            opt_sources.grid_run_config_source().grid_to_vals()
+        );
 
         debug!("opt_params={:?}", opt_sources.opt_params());
         assert_eq!(
-            &vec![Hyperparameter::UniformInt { name: TrainLabelsRunConfigFields::CommonConfig(CommonTrainConfigFields::Beta), lower: 1, upper: 10 }],
+            &vec![Hyperparameter::UniformInt {
+                name: TrainLabelsRunConfigFields::CommonConfig(CommonTrainConfigFields::Beta),
+                lower: 1,
+                upper: 10
+            }],
             opt_sources.opt_params()
         );
 
         // opt_train_2(test_train_label, &opt_sources, Cpu, "test").unwrap();
-
     }
 
     #[test]
     fn test_run_config_option() {
-
         #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
         #[run_config_opt]
         pub struct TestRunConfig {
-            pub id:Option<u32>,
+            pub id: Option<u32>,
 
             #[run_config]
             pub step: u32,
@@ -1122,7 +1205,7 @@ pub mod tests {
         #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
         enum TestFilter {
             Filter1(Filter1RunConfig),
-            Filter2(Filter2RunConfig)
+            Filter2(Filter2RunConfig),
         }
 
         #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
@@ -1137,29 +1220,32 @@ pub mod tests {
             pub param_b: u32,
         }
 
-        let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
+        let run_config_range_or_value: TestRunConfigRangeOrValue = serde_json5::from_str(
+            r#" {
             step:'1',
             window:'10',
             keep_slice_matches: 'true',
             dist_quantile: '0.1',
             descr: 'test'
-        } "#).unwrap();
+        } "#,
+        )
+        .unwrap();
 
         assert_eq!(
             TestRunConfig {
-                id:None,
+                id: None,
                 step: 1,
                 window: 10,
                 dist_quantile: 0.1,
                 keep_slice_matches: true,
                 descr: "test".to_string(),
-                filter:None
+                filter: None
             },
             build_test_run_config(run_config_range_or_value)
         );
 
-
-        let run_config_range_or_value:TestRunConfigRangeOrValue = serde_json5::from_str(r#" {
+        let run_config_range_or_value: TestRunConfigRangeOrValue = serde_json5::from_str(
+            r#" {
             id:111,
             step:'1',
             window:'10',
@@ -1171,7 +1257,9 @@ pub mod tests {
                     param_a: '1'
                 }
             }
-        } "#).unwrap();
+        } "#,
+        )
+        .unwrap();
 
         debug!("run_config_range_or_value={run_config_range_or_value:?}");
         assert_eq!(
@@ -1187,39 +1275,42 @@ pub mod tests {
             build_test_run_config(run_config_range_or_value)
         );
 
-
         fn build_test_run_config<P, S, R>(run_config_range_or_value: S) -> R
-        where P:FieldName, S:OptRunConfigSource<P=P>,
-            R:From<std::vec::IntoIter<NamedVal<P>>>
-
+        where
+            P: FieldName,
+            S: OptRunConfigSource<P = P>,
+            R: From<std::vec::IntoIter<NamedVal<P>>>,
         {
             let run_config_source = run_config_range_or_value.opt_run_configs();
 
-            let const_vals: Vec<NamedVal<P>> = run_config_source.grid_run_config_source().const_params().clone();
+            let const_vals: Vec<NamedVal<P>> = run_config_source
+                .grid_run_config_source()
+                .const_params()
+                .clone();
             let grid_vals: Vec<NamedVal<P>> = run_config_source.grid_to_vals()[0].clone();
-            let opt_vals: Vec<NamedVal<P>> = run_config_source.opt_params().into_iter().map(|opt_param| opt_param.try_into().unwrap()).collect();
+            let opt_vals: Vec<NamedVal<P>> = run_config_source
+                .opt_params()
+                .into_iter()
+                .map(|opt_param| opt_param.try_into().unwrap())
+                .collect();
 
             [
                 const_vals.as_slice(),
                 grid_vals.as_slice(),
-                opt_vals.as_slice()
+                opt_vals.as_slice(),
             ]
-                .concat()
-                .into_iter()
-                .into()
+            .concat()
+            .into_iter()
+            .into()
         }
-
     }
-
 
     #[test]
     fn test_build_from_named_vals() {
-
         #[derive(ThoosaRunConfig, Debug, Clone)]
         struct SubStruct0 {
             #[run_config]
             field_a: u32,
-
         }
 
         #[derive(ThoosaRunConfig, Debug, PartialEq, Clone)]
@@ -1245,7 +1336,7 @@ pub mod tests {
         #[derive(ThoosaRunConfig, Debug)]
         #[run_config_opt]
         struct SomeStruct {
-            pub id:Option<RunId>,
+            pub id: Option<RunId>,
 
             #[run_config]
             field_00: u32,
@@ -1260,17 +1351,35 @@ pub mod tests {
             sub_struct_op: Option<SubStructB>,
 
             #[run_config]
-            sub_enum: SubEnum
+            sub_enum: SubEnum,
         }
 
         let path_vals = [
-            NamedVal::new(SomeStructFields::Field00, Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
-            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Int(4)),
-            NamedVal::new(SomeStructFields::SubStructOp(SubStructBFields::FieldA), Int(5)), NamedVal::new(SomeStructFields::SubStructOp(SubStructBFields::FieldB), Int(6)),
-            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)), UInt(1)),
+            NamedVal::new(SomeStructFields::Field00, Int(1)),
+            NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
+            NamedVal::new(
+                SomeStructFields::SubStruct(SubStructBFields::FieldA),
+                Int(3),
+            ),
+            NamedVal::new(
+                SomeStructFields::SubStruct(SubStructBFields::FieldB),
+                Int(4),
+            ),
+            NamedVal::new(
+                SomeStructFields::SubStructOp(SubStructBFields::FieldA),
+                Int(5),
+            ),
+            NamedVal::new(
+                SomeStructFields::SubStructOp(SubStructBFields::FieldB),
+                Int(6),
+            ),
+            NamedVal::new(
+                SomeStructFields::SubEnum(SubEnumFields::Sub0(SubStruct0Fields::FieldA)),
+                UInt(1),
+            ),
         ];
 
-        let some_struct: SomeStruct = path_vals.into_iter().into();// SomeStructBuilder::add_path_vals(path_vals);
+        let some_struct: SomeStruct = path_vals.into_iter().into(); // SomeStructBuilder::add_path_vals(path_vals);
 
         debug!("some_struct={some_struct:?}");
 
@@ -1279,8 +1388,14 @@ pub mod tests {
         assert_eq!(some_struct.sub_struct.field_a, 3);
         assert_eq!(some_struct.sub_struct.field_b, 4);
 
-        assert_eq!(some_struct.sub_struct_op.as_ref().map(|v|v.field_a), Some(5));
-        assert_eq!(some_struct.sub_struct_op.as_ref().map(|v|v.field_b), Some(6));
+        assert_eq!(
+            some_struct.sub_struct_op.as_ref().map(|v| v.field_a),
+            Some(5)
+        );
+        assert_eq!(
+            some_struct.sub_struct_op.as_ref().map(|v| v.field_b),
+            Some(6)
+        );
 
         let SubEnum::Sub0(sub_struct_0) = some_struct.sub_enum else {
             panic!("some_struct.sub_enum should be Sub0");
@@ -1288,12 +1403,23 @@ pub mod tests {
         assert_eq!(sub_struct_0.field_a, 1);
 
         let path_vals = [
-            NamedVal::new(SomeStructFields::Field00, Val::Int(1)), NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
-            NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldA), Val::Int(3)), NamedVal::new(SomeStructFields::SubStruct(SubStructBFields::FieldB), Val::Int(4)),
-            NamedVal::new(SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)), Val::UInt(2)),
+            NamedVal::new(SomeStructFields::Field00, Val::Int(1)),
+            NamedVal::new(SomeStructFields::Field01, Val::Real(2.0)),
+            NamedVal::new(
+                SomeStructFields::SubStruct(SubStructBFields::FieldA),
+                Val::Int(3),
+            ),
+            NamedVal::new(
+                SomeStructFields::SubStruct(SubStructBFields::FieldB),
+                Val::Int(4),
+            ),
+            NamedVal::new(
+                SomeStructFields::SubEnum(SubEnumFields::Sub1(SubStruct1Fields::FieldB)),
+                Val::UInt(2),
+            ),
         ];
 
-        let some_struct: SomeStruct = path_vals.into_iter().into();// SomeStructBuilder_::add_path_vals(path_vals);
+        let some_struct: SomeStruct = path_vals.into_iter().into(); // SomeStructBuilder_::add_path_vals(path_vals);
         assert_eq!(some_struct.field_00, 1);
         assert_eq!(some_struct.field_01, 2.0);
         assert_eq!(some_struct.sub_struct.field_a, 3);
@@ -1302,30 +1428,24 @@ pub mod tests {
             panic!("some_struct.sub_enum should be Sub0");
         };
         assert_eq!(sub_struct_1.field_b, 2);
-
-
     }
 
-
     #[test]
-    fn test_bool_tensor_iterator(){
+    fn test_bool_tensor_iterator() {
+        let t = Tensor::from_slice((0..100).map(|v| v % 2 == 0).collect::<Vec<_>>().as_slice());
 
-        let t = Tensor::from_slice((0..100).map(|v|v % 2 == 0).collect::<Vec<_>>().as_slice());
-
-
-        for (i, b) in (0..100).zip::<BoolTensorIterator>((&t).into()){
+        for (i, b) in (0..100).zip::<BoolTensorIterator>((&t).into()) {
             assert_eq!(i % 2 == 0, b);
         }
-
     }
 
     #[test]
-    fn test_hist_1_dim(){
+    fn test_hist_1_dim() {
         // log::set_max_level(Trace);
         let t = Tensor::vstack(&[
-            Tensor::from_slice(&[1., 2., 3., 4., 5., 6., 7., 8., 9.,]),
-            Tensor::from_slice(&[1., 2., 4., 4., 5., 6., 6., 8., 9.,]),
-            Tensor::from_slice(&[1., 1., 1., 1., 1., 1., 1., 1., 1.,]),
+            Tensor::from_slice(&[1., 2., 3., 4., 5., 6., 7., 8., 9.]),
+            Tensor::from_slice(&[1., 2., 4., 4., 5., 6., 6., 8., 9.]),
+            Tensor::from_slice(&[1., 1., 1., 1., 1., 1., 1., 1., 1.]),
         ]);
 
         // debug!("t={t}");
@@ -1334,115 +1454,119 @@ pub mod tests {
         // debug!("hist={hist}");
 
         assert_eq!(
-            Tensor::from_slice(&[
-               3, 3, 3,
-               2, 5, 2,
-               9, 0, 0
-            ]).view((3,3)),
+            Tensor::from_slice(&[3, 3, 3, 2, 5, 2, 9, 0, 0]).view((3, 3)),
             hist
         )
     }
 
     #[test]
-    fn test_to_from_hashmap(){
-
+    fn test_to_from_hashmap() {
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct TestTopStruct {
             #[in_map]
-            field_a:u32,
+            field_a: u32,
 
             #[in_map]
-            field_b:i32,
+            field_b: i32,
 
             #[in_map]
-            field_o:Option<i32>,
+            field_o: Option<i32>,
 
             #[in_map]
-            sub_struct:AnotherTestStruct,
+            sub_struct: AnotherTestStruct,
 
             #[in_map]
-            sub_struct_o:Option<AnotherTestStruct>,
+            sub_struct_o: Option<AnotherTestStruct>,
 
             #[in_map]
-            sub_enum:SomeEnum,
+            sub_enum: SomeEnum,
 
             #[in_map]
-            sub_enum_o:Option<SomeEnum>
+            sub_enum_o: Option<SomeEnum>,
         }
-
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         enum SomeEnum {
             VariantA(VariantA),
-            VariantB(VariantB)
+            VariantB(VariantB),
         }
-
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct VariantA {
             #[in_map]
-            some_field:u32
+            some_field: u32,
         }
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct VariantB {
             #[in_map]
-            another_field:u32
+            another_field: u32,
         }
 
         #[derive(ThoosaPropertiesMap, Debug, PartialEq)]
         struct AnotherTestStruct {
             #[in_map]
-            field_c:u32,
+            field_c: u32,
             #[in_map]
-            field_d:i32,
+            field_d: i32,
         }
 
         let run_config = TestTopStruct {
             field_a: 1,
             field_b: 2,
             field_o: Some(22),
-            sub_struct: AnotherTestStruct { field_c: 3, field_d: 4 },
-            sub_struct_o: Some(AnotherTestStruct { field_c: 30, field_d: 40 }),
-            sub_enum: SomeEnum::VariantA(VariantA{ some_field: 5 }),
-            sub_enum_o: Some(SomeEnum::VariantB(VariantB{ another_field: 50 })),
+            sub_struct: AnotherTestStruct {
+                field_c: 3,
+                field_d: 4,
+            },
+            sub_struct_o: Some(AnotherTestStruct {
+                field_c: 30,
+                field_d: 40,
+            }),
+            sub_enum: SomeEnum::VariantA(VariantA { some_field: 5 }),
+            sub_enum_o: Some(SomeEnum::VariantB(VariantB { another_field: 50 })),
         };
 
-        let props:HashMap<String, Val> = run_config.to_properties_iter(None).collect();
+        let props: HashMap<String, Val> = run_config.to_properties_iter(None).collect();
         debug!("props={props:?}");
-        assert_eq!(run_config, TestTopStruct::from_properties_map(None, &props).unwrap());
-
+        assert_eq!(
+            run_config,
+            TestTopStruct::from_properties_map(None, &props).unwrap()
+        );
 
         let run_config = TestTopStruct {
             field_a: 1,
             field_b: 2,
             field_o: None,
-            sub_struct: AnotherTestStruct { field_c: 3, field_d: 4 },
+            sub_struct: AnotherTestStruct {
+                field_c: 3,
+                field_d: 4,
+            },
             sub_struct_o: None,
-            sub_enum: SomeEnum::VariantA(VariantA{ some_field: 5 }),
-            sub_enum_o: None
+            sub_enum: SomeEnum::VariantA(VariantA { some_field: 5 }),
+            sub_enum_o: None,
         };
 
-        let props:HashMap<String, Val> = run_config.to_properties_iter(None).collect();
+        let props: HashMap<String, Val> = run_config.to_properties_iter(None).collect();
 
-        assert_eq!(run_config, TestTopStruct::from_properties_map(None, &props).unwrap());
-
+        assert_eq!(
+            run_config,
+            TestTopStruct::from_properties_map(None, &props).unwrap()
+        );
     }
-
 }
 
-pub fn z_norm(t:&Tensor, dim: i64) -> Tensor {
-
+pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
     let mean_t = t.mean_dim(dim, false, Float);
     let std_t = t.std(false);
     let z_t = (t - mean_t) / std_t;
     z_t
 }
 
-pub fn z_norm_2(t_0:&Tensor, _dim:i64) -> Result<Tensor, ThoosaError>{
+pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoosaError> {
     let std = t_0.std_dim(1, true, true);
     //TODO std - 0
-    Ok((t_0 -t_0.mean_dim(1, true, Float))/ std)
+    Ok((t_0 - t_0.mean_dim(1, true, Float)) / std)
 }
 
 pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
@@ -1464,15 +1588,22 @@ pub fn skewness_kurtosis_1_dim(dists: &Tensor) -> (Tensor, Tensor) {
     (skewness, kurtosis)
 }
 
-
 pub fn dot_norm(dim: i64, slice_01: &Tensor, slice_02: &Tensor) -> Result<Tensor, ThoosaError> {
-    Ok(norm_2(slice_01, dim).tensordot(&norm_2(slice_02, dim), [dim], [dim]).diag(0))
+    Ok(norm_2(slice_01, dim)
+        .tensordot(&norm_2(slice_02, dim), [dim], [dim])
+        .diag(0))
 }
 
-
-pub fn self_dot(t1: &Tensor, i_0: i64, i_1: i64, dim:i64, step:i64, d_i: i64) -> Result<Tensor, ThoosaError> {
-    let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0+d_i), step)?;
-    let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1+d_i), step)?;
+pub fn self_dot(
+    t1: &Tensor,
+    i_0: i64,
+    i_1: i64,
+    dim: i64,
+    step: i64,
+    d_i: i64,
+) -> Result<Tensor, ThoosaError> {
+    let slice_1 = t1.f_slice(dim, Some(i_0), Some(i_0 + d_i), step)?;
+    let slice_2 = t1.f_slice(dim, Some(i_1), Some(i_1 + d_i), step)?;
 
     Ok(slice_1.tensordot(&slice_2, [dim], [dim]).diag(0))
 }
@@ -1482,81 +1613,82 @@ pub fn norm(t: &Tensor, dim: &[i64]) -> Tensor {
 }
 
 pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
-    t/ t.tensordot(&t, dim, dim).diag(0).sqrt().view([1, -1]).transpose(0, 1)
+    t / t
+        .tensordot(&t, dim, dim)
+        .diag(0)
+        .sqrt()
+        .view([1, -1])
+        .transpose(0, 1)
 }
 
 pub fn lin_t(n: u32) -> Tensor {
     Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
 }
 
-pub fn lin_for_size(k:f64, size:[i64;2], kind:Kind, device:&Device)->Tensor {
-
+pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tensor {
     let end = size.iter().fold(1, |a, v| a * *v);
 
     println!("lin_t: end={end}");
 
-    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device))).expect("f_arange failed").view(&size[..]);
+    let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))
+        .expect("f_arange failed")
+        .view(&size[..]);
 
     t = t.set_requires_grad(false);
     match kind {
         Kind::Uint8 | Kind::Int8 | Kind::Int16 | Kind::Int | Kind::Int64 => {
             t *= k as i32;
         }
-        _=> {
+        _ => {
             t *= k;
         }
     }
 
-
     println!("lin_t: t.size()={:?} t=\n{t}", t.size());
 
     t
-
 }
-
 
 pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
     (0..n).map(|x| x as f32)
 }
 
-
 use crate::dims::ThoBatch;
 
-pub trait DataBatch<D:Dims>  {
+pub trait DataBatch<D: Dims> {
     /// returns (inputs, labels)
     fn train_batch(&self) -> (ThoBatch<D>, Tensor);
     fn valid_batch(&self) -> (ThoBatch<D>, Tensor);
 }
 
-pub trait SplittableDataBatch<D:Dims>: DataBatch<D> + Splittable<1> + Debug {
+pub trait SplittableDataBatch<D: Dims>: DataBatch<D> + Splittable<1> + Debug {}
 
-}
-
-
-pub trait TrainListener:Send + Sync {
-    fn on_cycle(&mut self, _cycle:usize, _loss:f32) -> ListenerResponse {
+pub trait TrainListener: Send + Sync {
+    fn on_cycle(&mut self, _cycle: usize, _loss: f32) -> ListenerResponse {
         ListenerResponse::Nope
     }
-    fn on_valid_cycle(&mut self, cycle:usize, loss:f32) -> ListenerResponse;
+    fn on_valid_cycle(&mut self, cycle: usize, loss: f32) -> ListenerResponse;
 }
 
 pub enum ListenerResponse {
     Stop,
     UpdateLR(f64),
-    Nope
+    Nope,
 }
 
-pub async fn train_2<F, DI:Dims, DO:Dims>(
-    _device:&Device,
-    _data:&mut dyn AsyncDataBatch<DI>,
-    _net:&Box<dyn ThoModule<Batch<DI>, DO>>,
-    _loss_fn:LossFp,
+pub async fn train_2<F, DI: Dims, DO: Dims>(
+    _device: &Device,
+    _data: &mut dyn AsyncDataBatch<DI>,
+    _net: &Box<dyn ThoModule<Batch<DI>, DO>>,
+    _loss_fn: LossFp,
     _cycles: usize,
     _opt: Optimizer,
-    _x_f:F,
-    _listener: Option<&mut dyn TrainListener>
+    _x_f: F,
+    _listener: Option<&mut dyn TrainListener>,
 ) -> Result<f32, ThoosaError>
-where F:Fn(ThoBatch<DI>)->ThoBatch<DI> {
+where
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
+{
     todo!()
     // debug!("train: device={:?} cycles={}", device, cycles);
     // debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
@@ -1636,23 +1768,26 @@ where F:Fn(ThoBatch<DI>)->ThoBatch<DI> {
     // Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
 
-
-pub fn train<F, DI:Dims, DO:Dims>(
-    device:&Device,
-    data:&mut dyn DataBatch<DI>,
-    net:&Box<dyn ThoModule<Batch<DI>, DO>>,
-    loss_fn:LossFp,
+pub fn train<F, DI: Dims, DO: Dims>(
+    device: &Device,
+    data: &mut dyn DataBatch<DI>,
+    net: &Box<dyn ThoModule<Batch<DI>, DO>>,
+    loss_fn: LossFp,
     cycles: usize,
     mut opt: Optimizer,
-    x_f:F,
-    mut listener: Option<&mut dyn TrainListener>
+    x_f: F,
+    mut listener: Option<&mut dyn TrainListener>,
 ) -> Result<f32, ThoosaError>
-    where F:Fn(ThoBatch<DI>)->ThoBatch<DI> {
-
+where
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI>,
+{
     debug!("train: device={:?} cycles={}", device, cycles);
-    debug!("train: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
+    debug!(
+        "train: opt={opt:?} optimizer_size={}",
+        optimizer_mem_size(&opt)
+    );
 
-    let mut last_valid_loss = [0f32;3];
+    let mut last_valid_loss = [0f32; 3];
 
     for idx in 1..cycles {
         debug!("train:  cuda_mem={:?}", cuda_mem());
@@ -1662,31 +1797,45 @@ pub fn train<F, DI:Dims, DO:Dims>(
 
         let x_t = x_f(x_t_0);
 
-        debug!("train: device={:?}  x_t.size()={:?} y_t.size()={:?}", device, x_t.size(), expected_y.size());
+        debug!(
+            "train: device={:?}  x_t.size()={:?} y_t.size()={:?}",
+            device,
+            x_t.size(),
+            expected_y.size()
+        );
 
         let predicted_y = net.tho_forward(&x_t, true);
-        debug!("train: 1. cuda_mem={:?}",  cuda_mem());
+        debug!("train: 1. cuda_mem={:?}", cuda_mem());
         trace!("train: x_t=\n{x_t}");
         x_t.drop();
         // unsafe { at_autocast_clear_cache(); }
 
         let loss = loss_fn(predicted_y.as_ref(), &expected_y);
 
-        debug!("train: 2. cuda_mem={:?}",  cuda_mem());
-        trace!("train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}", optimizer_mem_size(&opt));
+        debug!("train: 2. cuda_mem={:?}", cuda_mem());
+        trace!(
+            "train: loss={loss} predicted_y=\n{predicted_y} y_t=\n{expected_y} optimizer_size={}",
+            optimizer_mem_size(&opt)
+        );
         predicted_y.drop();
         drop(expected_y);
-        debug!("train: 2.1 cuda_mem={:?}",  cuda_mem());
+        debug!("train: 2.1 cuda_mem={:?}", cuda_mem());
         let t1 = Instant::now();
 
         opt.backward_step(&loss);
 
-        debug!("train: 3. cuda_mem={:?}  optimizer_size={}", cuda_mem(),  optimizer_mem_size(&opt));
-        debug!("train: device={:?}  backward_step done in {}", device, t1.elapsed().as_millis());
-
+        debug!(
+            "train: 3. cuda_mem={:?}  optimizer_size={}",
+            cuda_mem(),
+            optimizer_mem_size(&opt)
+        );
+        debug!(
+            "train: device={:?}  backward_step done in {}",
+            device,
+            t1.elapsed().as_millis()
+        );
 
         if idx % 10 == 0 {
-
             if let Some(rs) = tch::no_grad(||{
                 let (x_t_0, y_t) = data.valid_batch();
                 // debug!("train: x_t_0.size={:?}", x_t_0.size());
@@ -1719,38 +1868,54 @@ pub fn train<F, DI:Dims, DO:Dims>(
         debug!("train: idx={} loss={:?}", idx, loss);
         std::io::stdout().flush()?;
     }
-    debug!("train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",  last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32);
+    debug!(
+        "train: final valid last_valid_loss={last_valid_loss:?} avgvalid_loss={}",
+        last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32
+    );
     Ok(last_valid_loss.into_iter().sum::<f32>() / last_valid_loss.len() as f32)
 }
 
 pub fn two_sigs(n: u32) -> (Tensor, Tensor) {
     let sig_1 = Tensor::from_slice(
-        pulses_in_const(n, &[
-            // (10, pulse_v(8., 3., 20, 2.)),
-            // (30, pulse_v(8., 3., 20, 2.))
-            (100, pulse_v(80., 30., 200, 20.)),
-            (300, pulse_v(80., 30., 200, 20.))
-        ]).as_slice()
+        pulses_in_const(
+            n,
+            &[
+                // (10, pulse_v(8., 3., 20, 2.)),
+                // (30, pulse_v(8., 3., 20, 2.))
+                (100, pulse_v(80., 30., 200, 20.)),
+                (300, pulse_v(80., 30., 200, 20.)),
+            ],
+        )
+        .as_slice(),
     );
 
-    let sig_2 = Tensor::from_slice(
-        pulse_in_rand(n, &[], 10., 0.001, 0.1).as_slice()
-    );
+    let sig_2 = Tensor::from_slice(pulse_in_rand(n, &[], 10., 0.001, 0.1).as_slice());
     (sig_1, sig_2)
 }
 
 //f(x)=-sin(3x)+x^2+0.7 *x
-pub fn sin3_pow2(n:i64, min: f32, max: f32, with_noise: Option<f32>) -> (Tensor, Tensor, Vec<f32>) {
-
+pub fn sin3_pow2(
+    n: i64,
+    min: f32,
+    max: f32,
+    with_noise: Option<f32>,
+) -> (Tensor, Tensor, Vec<f32>) {
     let mut rng = rand::rng();
-    let x = (0..n).map(|i| min + (i as f32 / (n-1) as f32) * (max-min)).into_iter().collect::<Vec<f32>>();
+    let x = (0..n)
+        .map(|i| min + (i as f32 / (n - 1) as f32) * (max - min))
+        .into_iter()
+        .collect::<Vec<f32>>();
 
-    let y_train_full = Tensor::from_slice(x.iter().map(|x|{
-        sin3_pow2_with_noise_f(with_noise, &mut rng, *x)
-    } ).collect::<Vec<f32>>().as_slice()).view((1, -1)).totype(Float); //.transpose(0,1);
+    let y_train_full = Tensor::from_slice(
+        x.iter()
+            .map(|x| sin3_pow2_with_noise_f(with_noise, &mut rng, *x))
+            .collect::<Vec<f32>>()
+            .as_slice(),
+    )
+    .view((1, -1))
+    .totype(Float); //.transpose(0,1);
 
     let x_t = Tensor::from_slice(x.as_slice()).totype(Float).view((-1, 1));
-
 
     (y_train_full, x_t, x)
 }
@@ -1763,10 +1928,9 @@ pub fn sin3_pow2_f(x: f32) -> f32 {
     -(3. * x).sin() + x.powi(2) + 0.7 * x
 }
 
-pub fn sin3_pow2_t(t:&Tensor)->Tensor {
+pub fn sin3_pow2_t(t: &Tensor) -> Tensor {
     t.multiply_scalar(-3.).sin() + t.pow_tensor_scalar(2) + t.multiply_scalar(0.7) //TODO noise?
 }
-
 
 pub fn gauss_t(μ: f32, σ: f32, n: i64) -> Tensor {
     Tensor::from(gauss_i(μ, σ, n).collect::<Vec<_>>().as_slice())
@@ -1776,7 +1940,12 @@ pub fn pulse_t(μ: f32, σ: f32, n: i64, f: f32) -> Tensor {
     Tensor::from(pulse_v(μ, σ, n, f).as_slice())
 }
 
-pub fn three_sigs_tensor(n: u32, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> (Tensor, Tensor, Tensor, Tensor) {
+pub fn three_sigs_tensor(
+    n: u32,
+    sig_0_v: &Vec<f32>,
+    sig_1_v: &Vec<f32>,
+    sig_2_v: &Vec<f32>,
+) -> (Tensor, Tensor, Tensor, Tensor) {
     let t_0_0 = t_0_0(n, sig_0_v, sig_2_v);
 
     // debug!("t_0_0 mean={} max-min={}", t_0_0.mean(None).double_value(&[]), t_0_0.max() - t_0_0.min());
@@ -1785,9 +1954,7 @@ pub fn three_sigs_tensor(n: u32, sig_0_v: &Vec<f32>, sig_1_v: &Vec<f32>, sig_2_v
 
     // debug!("t_0_1 mean={} max-min={}", t_0_1.mean(None).double_value(&[]), t_0_1.max() - t_0_1.min());
 
-
     let t_1_0 = t_1_0(n, sig_1_v, sig_2_v);
-
 
     // debug!("t_1_0 mean={} max-min={}", t_1_0.mean(None).double_value(&[]), t_1_0.max() - t_1_0.min());
 
@@ -1815,7 +1982,7 @@ pub fn t_1_0(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     Tensor::vstack(&[
         Tensor::from_slice([saw(n), saw(n), saw(n)].concat().as_slice()),
         Tensor::from_slice([saw(n), sig_1_v.clone(), saw(n)].concat().as_slice()),
-        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice())
+        Tensor::from_slice([saw(n), sig_2_v.clone(), saw(n)].concat().as_slice()),
     ])
 }
 
@@ -1827,15 +1994,16 @@ pub fn t_1_1(n: u32, sig_1_v: &Vec<f32>, sig_2_v: &Vec<f32>) -> Tensor {
     ])
 }
 
-
-pub fn reset_print_options(){
+pub fn reset_print_options() {
     let mut printer_options = PrinterOptions::default();
 
     unsafe {
         let printer_options_ptr: *mut PrinterOptions = &mut printer_options;
 
-        let threshold_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>()*1) as *mut usize;
-        let line_width_ptr = (printer_options_ptr as *mut u8).add(size_of::<usize>()*3) as *mut usize;
+        let threshold_ptr =
+            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 1) as *mut usize;
+        let line_width_ptr =
+            (printer_options_ptr as *mut u8).add(size_of::<usize>() * 3) as *mut usize;
 
         ptr::write(threshold_ptr, 100_000);
         ptr::write(line_width_ptr, 10_000);
@@ -1843,24 +2011,28 @@ pub fn reset_print_options(){
     tch::display::set_print_options(printer_options);
 }
 
-pub fn tensor_mem_size(t:&Tensor) -> usize {
+pub fn tensor_mem_size(t: &Tensor) -> usize {
     t.numel() * t.kind().elt_size_in_bytes()
 }
 
-pub fn vs_mem_size(opt:&VarStore) -> usize {
-    opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
+pub fn vs_mem_size(opt: &VarStore) -> usize {
+    opt.trainable_variables()
+        .iter()
+        .map(|t| tensor_mem_size(t))
+        .sum()
 }
 
-pub fn optimizer_mem_size(opt:&Optimizer) -> usize {
-    opt.trainable_variables().iter().map(|t| tensor_mem_size(t)).sum()
+pub fn optimizer_mem_size(opt: &Optimizer) -> usize {
+    opt.trainable_variables()
+        .iter()
+        .map(|t| tensor_mem_size(t))
+        .sum()
 }
-
 
 pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad: bool) {
-
     for (name, tensor) in vsd.variables() {
         if name.contains("batch_norm") {
-            continue
+            continue;
         }
         let freezing = name.starts_with(subpath);
         debug!("freeze_subpath: name={name:?} freezing={freezing}");
@@ -1869,5 +2041,4 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
             _ = tensor.set_requires_grad(requires_grad);
         }
     }
-
 }

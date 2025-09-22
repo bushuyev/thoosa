@@ -1,15 +1,15 @@
 use crate::applicables::{ThoRunCtx, ThoRunner};
 use crate::dims::{AnyDims, Batch, Dims, ThoBatch};
-use thoosa_shared::applicables_runner::CachableId;
 use crate::loader::{LoadRunner, Loader};
-use crate::utils::{tensor_mem_size, DataBatch, Splittable, SplittableDataBatch};
+use crate::tho_tensor::ThoTensor;
+use crate::utils::{DataBatch, Splittable, SplittableDataBatch, tensor_mem_size};
 use async_trait::async_trait;
 use crossbeam_utils::sync::WaitGroup;
 use futures_util::FutureExt;
 use log::debug;
 use parking_lot::{Mutex, RwLock};
-use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
+use rand::seq::{IndexedRandom, SliceRandom};
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::{fmt, thread};
 use tch::Kind::Float;
 use tch::{Device, Tensor};
+use thoosa_shared::applicables_runner::CachableId;
 use thoosa_shared::resource::Resource;
-use crate::tho_tensor::ThoTensor;
 
 #[async_trait]
 pub trait AsyncDataBatch<D: Dims>: Send + Sync {
@@ -51,8 +51,11 @@ pub struct AsyncLoadingTensorsDataBatch<
     last_cache_area: Vec<ThoRunCtx>,
 }
 
-impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync> Debug
-    for AsyncLoadingTensorsDataBatch<DI, DO, F>
+impl<
+    DI: Dims,
+    DO: Dims + Send,
+    F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
+> Debug for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("")
@@ -64,8 +67,11 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO
     }
 }
 
-impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync>
-    AsyncLoadingTensorsDataBatch<DI, DO, F>
+impl<
+    DI: Dims,
+    DO: Dims + Send,
+    F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
+> AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     pub fn new(
         train: Arc<Vec<(i64, Vec<Resource>)>>,
@@ -97,7 +103,10 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO
         transform_fn: Option<Arc<RwLock<Box<F>>>>,
         area: Option<Arc<RwLock<ThoRunCtx>>>,
     ) -> (ThoBatch<DO>, Tensor) {
-        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}", class_resources.len());
+        debug!(
+            "AsyncLoadingTensorsDataBatch::choose_for_batch: batch_size={batch_size} class_resources.len={}",
+            class_resources.len()
+        );
 
         // let wg = WaitGroup::new();
         let mut x_y_acc: Vec<(ThoTensor<DO, CachableId>, i64)> = vec![];
@@ -136,7 +145,10 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO
         }
 
         let per_class_len = batch_size / class_resources.len();
-        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: class_tensors={} per_class_len={per_class_len}", class_resources.len());
+        debug!(
+            "AsyncLoadingTensorsDataBatch::choose_for_batch: class_tensors={} per_class_len={per_class_len}",
+            class_resources.len()
+        );
 
         let mut x_y_vecs = vec![];
         for (class, resources) in class_resources {
@@ -165,7 +177,10 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO
             }
         }
 
-        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}", x_y_vecs.len());
+        debug!(
+            "AsyncLoadingTensorsDataBatch::choose_for_batch: x_y_vecs.1.len={} batch_size={batch_size}",
+            x_y_vecs.len()
+        );
         // loader.read().debug("AsyncLoadingTensorsDataBatch::choose_for_batch");
 
         //TODO throw if not enough tensors for batch?
@@ -199,7 +214,12 @@ impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO
         .to_device(*device)
         .set_requires_grad(true);
 
-        debug!("AsyncLoadingTensorsDataBatch::choose_for_batch: tensor.size={:?} tensor_size_in_bytes={:?} tensor.device()={:?}", tensor.size(), tensor_mem_size(&tensor), tensor.device());
+        debug!(
+            "AsyncLoadingTensorsDataBatch::choose_for_batch: tensor.size={:?} tensor_size_in_bytes={:?} tensor.device()={:?}",
+            tensor.size(),
+            tensor_mem_size(&tensor),
+            tensor.device()
+        );
 
         (tensor.totype(Float).into(), classes.totype(Float))
     }
@@ -236,25 +256,31 @@ pub async fn load_tensor<
         .run_loader(&resource_id, &Device::Cpu, Some(Arc::clone(&area)))
         .await; //TODO device
 
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} ");
+    debug!(
+        "AsyncLoadingTensorsDataBatch::load_tensor: 2 resource_id={resource_id_debug:?} area={area:?} "
+    );
 
     let t = if let Some(transform) = transform_fn {
         transform.read()(t.shallow_clone().into()) //TODO move load_tensor into Batch args to return correct DO
     } else {
         t.shallow_clone().into()
     };
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} ");
+    debug!(
+        "AsyncLoadingTensorsDataBatch::load_tensor: 3 resource_id={resource_id_debug:?} area={area:?} "
+    );
     // x_y_acc_in_exec.push((t.into(), class));
-    debug!("AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} ");
+    debug!(
+        "AsyncLoadingTensorsDataBatch::load_tensor: 4 resource_id={resource_id_debug:?} area={area:?} "
+    );
     t
 }
 
 #[async_trait]
 impl<
-        DI: Dims + Sync,
-        DO: Dims + Send + Sync,
-        F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
-    > AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F>
+    DI: Dims + Sync,
+    DO: Dims + Send + Sync,
+    F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
+> AsyncDataBatch<DO> for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let next_ctx = self.runner.next_ctx();
@@ -303,8 +329,11 @@ impl<
     }
 }
 
-impl<DI: Dims, DO: Dims + Send, F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync> Splittable<1>
-    for AsyncLoadingTensorsDataBatch<DI, DO, F>
+impl<
+    DI: Dims,
+    DO: Dims + Send,
+    F: Fn(ThoTensor<DI, CachableId>) -> ThoTensor<DO, CachableId> + Send + Sync,
+> Splittable<1> for AsyncLoadingTensorsDataBatch<DI, DO, F>
 {
     //TODO change to spelt(self)?
     fn split(&self) -> Option<[Self; 1]>
@@ -397,9 +426,9 @@ impl<DI: Dims, DO: Dims /*F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/>
 }
 #[async_trait]
 impl<
-        DI: Dims + Sync,
-        DO: Dims + Send + Sync, /*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/
-    > AsyncDataBatch<DO> for AsyncClassTensorsLoaderData<DI, DO /*, F*/>
+    DI: Dims + Sync,
+    DO: Dims + Send + Sync, /*, F: Fn(ThoTensor<DI>)->ThoTensor<DO> + Send + Sync*/
+> AsyncDataBatch<DO> for AsyncClassTensorsLoaderData<DI, DO /*, F*/>
 {
     async fn train_batch(&self) -> (ThoBatch<DO>, Tensor) {
         let next_ctx = self.runner.next_ctx();

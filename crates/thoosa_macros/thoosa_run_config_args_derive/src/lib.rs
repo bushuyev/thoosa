@@ -1,13 +1,16 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
-use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, DeriveInput};
+use quote::{ToTokens, format_ident, quote};
 use syn::spanned::Spanned;
+use syn::{DeriveInput, parse_macro_input};
 use thoosa_macros_utils::*;
 
 const RUN_CONFIG_ATTR: &'static str = "run_config";
 
-#[proc_macro_derive(ThoosaRunConfig, attributes(run_config, run_config_opt, run_config_grid))]
+#[proc_macro_derive(
+    ThoosaRunConfig,
+    attributes(run_config, run_config_opt, run_config_grid)
+)]
 pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
@@ -22,34 +25,32 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
     let builder_enum_ident = format_ident!("{}BuilderEnum", target_struct_ident);
 
     struct TokenStreams {
-        range_or_value_fields:Vec<proc_macro2::TokenStream>,
-        range_or_value_add_calls:Vec<proc_macro2::TokenStream>,
-        enum_fields:Vec<proc_macro2::TokenStream>,
-        field_names:Vec<String>,
+        range_or_value_fields: Vec<proc_macro2::TokenStream>,
+        range_or_value_add_calls: Vec<proc_macro2::TokenStream>,
+        enum_fields: Vec<proc_macro2::TokenStream>,
+        field_names: Vec<String>,
 
-        builder_fields:Vec<proc_macro2::TokenStream>,
-        builder_add_val_match_cases:Vec<proc_macro2::TokenStream>,
-        builder_assignments:Vec<proc_macro2::TokenStream>,
-        builder_enum_variants:Vec<proc_macro2::TokenStream>
+        builder_fields: Vec<proc_macro2::TokenStream>,
+        builder_add_val_match_cases: Vec<proc_macro2::TokenStream>,
+        builder_assignments: Vec<proc_macro2::TokenStream>,
+        builder_enum_variants: Vec<proc_macro2::TokenStream>,
     }
 
     impl TokenStreams {
-
         pub fn new() -> Self {
             Self {
-                range_or_value_fields:vec![],
-                range_or_value_add_calls:vec![],
-                enum_fields:vec![],
-                field_names:vec![],
+                range_or_value_fields: vec![],
+                range_or_value_add_calls: vec![],
+                enum_fields: vec![],
+                field_names: vec![],
 
-                builder_fields:vec![],
-                builder_add_val_match_cases:vec![],
-                builder_assignments:vec![],
-                builder_enum_variants:vec![]
+                builder_fields: vec![],
+                builder_add_val_match_cases: vec![],
+                builder_assignments: vec![],
+                builder_enum_variants: vec![],
             }
         }
     }
-
 
     let (
         range_or_value_fields,
@@ -64,10 +65,8 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
         builder_enum_variants,
     ) = match &ast.data {
         syn::Data::Struct(data_struct) => {
-
             match &data_struct.fields {
                 syn::Fields::Named(named_fields) => {
-
                     let  token_streams = named_fields.named.iter().fold(TokenStreams::new(), |mut a, field| {
                         let field_ident = field.ident.as_ref().unwrap();
                         let camel_field_ident = Ident::new(&thoosa_shared::snake_to_camel(&field_ident.to_string()), fields_enum_ident.span());
@@ -309,7 +308,7 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         },
                         quote! {},
                     )
-                },
+                }
                 _ => {
                     println!("unnamed fields");
                     (
@@ -321,13 +320,16 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         quote! {},
                         quote! {},
                         quote! {},
-                        quote! {}
+                        quote! {},
                     )
                 }
             }
-        },
+        }
         syn::Data::Enum(data_enum) => {
-            let builder_enum_field = Ident::new(&thoosa_shared::camel_to_snake(&builder_enum_ident.to_string()), data_enum.variants.span());
+            let builder_enum_field = Ident::new(
+                &thoosa_shared::camel_to_snake(&builder_enum_ident.to_string()),
+                data_enum.variants.span(),
+            );
 
             let mut token_streams = data_enum.variants.iter().fold(TokenStreams::new(), |mut a, variant| {
                 let variant_ident = &variant.ident;
@@ -403,8 +405,17 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                 builder_fields,
                 builder_enum_variants,
                 builder_assignments,
-                builder_add_val_match_cases
-            ) = (token_streams.range_or_value_fields, token_streams.enum_fields, token_streams.field_names, token_streams.range_or_value_add_calls, token_streams.builder_fields, token_streams.builder_enum_variants, token_streams.builder_assignments, token_streams.builder_add_val_match_cases);
+                builder_add_val_match_cases,
+            ) = (
+                token_streams.range_or_value_fields,
+                token_streams.enum_fields,
+                token_streams.field_names,
+                token_streams.range_or_value_add_calls,
+                token_streams.builder_fields,
+                token_streams.builder_enum_variants,
+                token_streams.builder_assignments,
+                token_streams.builder_add_val_match_cases,
+            );
             let expect_msg = format!("{} is required", target_struct_ident);
             (
                 quote! { #(# range_or_value_fields)* },
@@ -423,31 +434,31 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                         #(#builder_assignments)*
                     }
                 },
-                quote! { #(#builder_enum_variants)*}
+                quote! { #(#builder_enum_variants)*},
             )
         }
-        _ => {
-            (
-                quote! {},
-                quote! {},
-                quote! {},
-                quote! {},
-                quote! {},
-                quote! {},
-                quote! {},
-                quote! {},
-                quote! {}
-            )
-        }
+        _ => (
+            quote! {},
+            quote! {},
+            quote! {},
+            quote! {},
+            quote! {},
+            quote! {},
+            quote! {},
+            quote! {},
+            quote! {},
+        ),
     };
 
-    let has_run_config_opt = ast.attrs.iter().any(|attr| {
-        attr.path().is_ident("run_config_opt")
-    });
+    let has_run_config_opt = ast
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("run_config_opt"));
 
-    let has_run_config_grid = ast.attrs.iter().any(|attr| {
-        attr.path().is_ident("run_config_grid")
-    });
+    let has_run_config_grid = ast
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("run_config_grid"));
 
     let source_impl = if has_run_config_opt {
         quote! {
@@ -494,33 +505,37 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
             }
         }
     } else {
-        quote! {
-
-        }
+        quote! {}
     };
 
     let (into_impl, set_id) = if has_run_config_opt || has_run_config_grid {
-        (quote! {
-            impl <I:IntoIterator<Item=thoosa_shared::val::NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
-                fn from(value: I) -> Self {
-                    let mut builder = #builder_ident::default();
+        (
+            quote! {
+                impl <I:IntoIterator<Item=thoosa_shared::val::NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
+                    fn from(value: I) -> Self {
+                        let mut builder = #builder_ident::default();
 
-                    for path_val in value {
-                        builder.add_val(path_val.path(), path_val.val());
+                        for path_val in value {
+                            builder.add_val(path_val.path(), path_val.val());
+                        }
+
+                        builder.build()
+
                     }
-
-                    builder.build()
-
                 }
-            }
 
-        }, quote!{
-            self.id.replace(id);
-        })
+            },
+            quote! {
+                self.id.replace(id);
+            },
+        )
     } else {
-        (quote! {}, quote! {
-            panic!("set id should not be called on run config sub")
-        })
+        (
+            quote! {},
+            quote! {
+                panic!("set id should not be called on run config sub")
+            },
+        )
     };
 
     //eprintln!("range_or_value_type={}", range_or_value_type.to_string());

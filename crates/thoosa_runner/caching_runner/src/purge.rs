@@ -1,60 +1,54 @@
+use crate::common::Data;
 use crate::common::cachable::DataCacheWrapper;
-use crate::common::{Data};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use futures_util::StreamExt;
+use log::debug;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
-use log::debug;
 use thoosa_common::tho_tensor::CopyToDevice;
-use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::CachableIdTr;
 
 pub(crate) const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
 #[async_trait]
 pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError>;
+    async fn purge_gpu(
+        &self,
+        ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
+        device_idx: usize,
+    ) -> Result<(), ThoosaError>;
     // async fn purge(&self, device_idx: usize);
 
     async fn purge_cpu(&self, i: u64);
-
 }
 
 #[async_trait]
 impl<K, O> FuturesRunnerMapPurger
-for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, ThoosaError>>>>
+    for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, ThoosaError>>>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
-    O: Data<Sub=O> + CopyToDevice + Output + Send + Sync + 'static,
+    O: Data<Sub = O> + CopyToDevice + Output + Send + Sync + 'static,
 {
-
-    async fn purge_cpu(&self, purge_since: u64){
-
-
-        self.retain(|k, v|{
+    async fn purge_cpu(&self, purge_since: u64) {
+        self.retain(|k, v| {
             debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
-            if v
-                .peek()
-                .and_then(
-                    |v| v
-                        .as_ref()
-                        .map(|r|r.is_on_cpu_since(purge_since))
-                        .ok()
-                )
-                .unwrap_or(false){
+            if v.peek()
+                .and_then(|v| v.as_ref().map(|r| r.is_on_cpu_since(purge_since)).ok())
+                .unwrap_or(false)
+            {
                 debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?} removed");
                 false
             } else {
                 true
             }
         });
-
     }
 
     async fn purge_gpu(
@@ -62,7 +56,6 @@ where
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
     ) -> Result<(), ThoosaError> {
-
         debug!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
 
         let items: Vec<(
@@ -82,7 +75,6 @@ where
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
 
-
         stream::iter(items)
             //TODO  limit config
             .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
@@ -101,13 +93,12 @@ where
 
         Ok(())
     }
-
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
     use async_trait::async_trait;
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, FutureExt};
@@ -115,7 +106,6 @@ mod tests {
     use std::time::Duration;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{DummyCachableId, WithId};
-    use crate::global_ctx::{mock_global_ctx, MockGlobalCtx};
 
     #[derive(Debug, Clone)]
     struct DummyOutput {
@@ -174,12 +164,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn tasks_are_throttled_and_complete() -> Result<(), ThoosaError> {
         let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(||{
-            Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .finish()
-            )) as &'static MockGlobalCtx
+        ctx.expect().returning(|| {
+            Box::leak(Box::new(mock_global_ctx::build().with_age(0).finish()))
+                as &'static MockGlobalCtx
         });
 
         let map: DashMap<
@@ -195,9 +182,8 @@ mod tests {
 
         let total = PURGE_GPU_CONCURRENCY_LIMIT * 4;
         for i in 0..total {
-
-            let key: DummyCachableId = DummyCachableId::from(format!("key_{i}").leak() as &'static str);
-
+            let key: DummyCachableId =
+                DummyCachableId::from(format!("key_{i}").leak() as &'static str);
 
             let out = DummyOutput {
                 id: DummyCachableId::from(format!("out_{i}").leak() as &'static str),
@@ -228,8 +214,8 @@ mod tests {
                 processed_c.fetch_add(1, Ordering::SeqCst);
                 Ok(wrapper)
             }
-                .boxed()
-                .shared();
+            .boxed()
+            .shared();
 
             map.insert(key, fut);
         }

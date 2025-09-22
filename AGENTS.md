@@ -12,6 +12,9 @@ Format with `cargo fmt --all` before committing. Keep `cargo clippy --workspace 
 ## Testing Guidelines
 Async tests use `#[tokio::test(flavor = "multi_thread")]` to match production runtimes. Split slow GPU or probabilistic suites into `slow`-prefixed test names so `nextest.sh` can isolate them. Integration and caching regression tests live in `caching_runner_test`; keep fixtures small enough for CI and document any large reference files. Capture new failure modes with targeted unit tests rather than expanding broad stress suites.
 
+## Mock Builder Conventions
+When adding test-only mocks, place builders named `Mock{TypeName}Builder` in `#[cfg(test)]` modules following the `mock_{type_name}` naming pattern alongside the real trait or struct. This keeps builders co-located with the code they cover—for example, the cross loader traits expose their builders in `mock_cross_loader_*` modules in the same file.
+
 ## Commit & Pull Request Guidelines
 Recent history favors short, component-scoped subjects (e.g., `ThoTensor2/CrossBatchClc`). Follow the `<Subsystem>/<Change>` pattern or a concise imperative sentence. Each PR should describe the behavior change, link tracking issues, note required follow-up, and list test commands executed. Never submit unformatted code or new clippy warnings; include coverage for new branches and mention any slow tests skipped locally.
 

@@ -1,33 +1,32 @@
+use crate::common::Data;
+use crate::common::runnable::Stage;
 use crate::oom_handler::{Adjustable, Adjuster, InputContext};
+use ambassador::delegatable_trait;
 use async_trait::async_trait;
-use crate::common::{Data};
+use log::debug;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
-use ambassador::delegatable_trait;
-use log::debug;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::ThoosaError;
-use crate::common::runnable::Stage;
 
 #[derive(Debug)]
 pub struct SplitsAdjuster<A>
 where
-    A:Data + Adjustable,
-    <A as Data>::Metrics:DivAssign<i64>
+    A: Data + Adjustable,
+    <A as Data>::Metrics: DivAssign<i64>,
 {
-    pd:PhantomData<A>,
-    min_split_len:<A as Data>::Metrics
+    pd: PhantomData<A>,
+    min_split_len: <A as Data>::Metrics,
 }
 
-impl <A> SplitsAdjuster<A>
+impl<A> SplitsAdjuster<A>
 where
-    A:Data + Adjustable,
-    <A as Data>::Metrics:DivAssign<i64>,
-    <A as Data>::Metrics: PartialOrd<<A as Data>::Metrics>
-
+    A: Data + Adjustable,
+    <A as Data>::Metrics: DivAssign<i64>,
+    <A as Data>::Metrics: PartialOrd<<A as Data>::Metrics>,
 {
-    pub fn new(min_split_len:<A as Data>::Metrics) -> Self {
+    pub fn new(min_split_len: <A as Data>::Metrics) -> Self {
         Self {
             pd: Default::default(),
             min_split_len,
@@ -36,14 +35,15 @@ where
 }
 
 #[async_trait]
-impl <AC: SplitsAdjusterContext<Metrics=<A as Data>::Metrics>, A:Data + Adjustable> Adjuster<AC> for SplitsAdjuster<A>
+impl<AC: SplitsAdjusterContext<Metrics = <A as Data>::Metrics>, A: Data + Adjustable> Adjuster<AC>
+    for SplitsAdjuster<A>
 where
-    A: Data<Sub=A, SubSelect=std::ops::Range<<A as Data>::Metrics>> + Adjustable,
-    A::SubSelect:Adjustable,
+    A: Data<Sub = A, SubSelect = std::ops::Range<<A as Data>::Metrics>> + Adjustable,
+    A::SubSelect: Adjustable,
     <A as Data>::Metrics: DivAssign<i64>,
     <A as Data>::Metrics: PartialOrd<<A as Data>::Metrics>,
-    for <'a, 'b>  &'a <A as Data>::Metrics: Add<&'b <A as Data>::Metrics, Output=<A as Data>::Metrics>,
-
+    for<'a, 'b> &'a <A as Data>::Metrics:
+        Add<&'b <A as Data>::Metrics, Output = <A as Data>::Metrics>,
 {
     type A = A::SubSelect;
 
@@ -52,11 +52,10 @@ where
         _adjustable: &Self::A,
         adjust_context: &mut AC,
     ) -> Result<Self::A, ThoosaError> {
-
         let size_0 = adjust_context.done_to();
         let size_1 = size_0 + adjust_context.split_len(); //TODO cap on adjustable.size()
 
-        Ok(size_0.clone().. size_1)
+        Ok(size_0.clone()..size_1)
         // Ok(adjustable.subview(size_0.clone(), size_1))
         // Err(MyError::SomethingElse("zzz".to_string()))
     }
@@ -64,7 +63,7 @@ where
     fn degrade(&self, adjust_context: &mut AC) -> bool {
         debug!("Adjuster::degrade: 0. adjust_context={adjust_context:?}");
 
-        (*adjust_context.split_len_mut())/=2;
+        (*adjust_context.split_len_mut()) /= 2;
         debug!("Adjuster::degrade: 1. adjust_context={adjust_context:?}");
 
         adjust_context.split_len() > &self.min_split_len
@@ -72,10 +71,8 @@ where
 }
 
 #[delegatable_trait]
-pub trait SplitsAdjusterContext: Debug + Send + Sync
-{
+pub trait SplitsAdjusterContext: Debug + Send + Sync {
     type Metrics: Debug + Send + Sync;
-
 
     fn split_len(&self) -> &Self::Metrics;
     fn done_to(&self) -> &Self::Metrics;
@@ -92,10 +89,10 @@ where
     split_len: <<R as Stage>::In<'static> as Data>::Metrics,
     input_len: <<R as Stage>::In<'static> as Data>::Metrics,
 
-    output_builder: Box<dyn OutputBuilder<O=<R as Stage>::Out>>
+    output_builder: Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
 }
 
-impl <R: Stage + Adjustable + 'static> InputContext<R> for SplitsAdjusterContextImpl<R>
+impl<R: Stage + Adjustable + 'static> InputContext<R> for SplitsAdjusterContextImpl<R>
 where
     <R as Stage>::In<'static>: Data,
     <<R as Stage>::In<'static> as Data>::Metrics:
@@ -103,12 +100,14 @@ where
     <<R as Stage>::In<'static> as Data>::Metrics: PartialOrd,
 {
     fn add_partial_output(&mut self, o: R::Out) {
-
         self.output_builder.add_partial_output(o);
 
         self.done_to += &self.split_len;
 
-        debug!("SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}", self.done_to, self.split_len);
+        debug!(
+            "SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",
+            self.done_to, self.split_len
+        );
     }
 
     fn all_done(&self) -> bool {
@@ -122,29 +121,27 @@ where
     fn build_final_output(self) -> R::Out {
         self.output_builder.build()
     }
-
 }
 
-impl <R: Stage + Adjustable + 'static>  SplitsAdjusterContextImpl<R>
+impl<R: Stage + Adjustable + 'static> SplitsAdjusterContextImpl<R>
 where
     <R as Stage>::In<'static>: Data,
 {
     pub fn new(
         input_len: <<R as Stage>::In<'static> as Data>::Metrics,
-        output_builder: Box<dyn OutputBuilder<O=<R as Stage>::Out>>
+        output_builder: Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
     ) -> Self {
         Self {
             done_to: Default::default(),
             split_len: input_len.clone(),
             input_len,
             // partial_output: vec![],
-            output_builder
+            output_builder,
         }
     }
-
 }
 
-impl <R: Stage + Adjustable + 'static> SplitsAdjusterContext for SplitsAdjusterContextImpl<R>
+impl<R: Stage + Adjustable + 'static> SplitsAdjusterContext for SplitsAdjusterContextImpl<R>
 where
     R: Stage + Adjustable,
     <R as Stage>::In<'static>: Data,
@@ -164,9 +161,9 @@ where
     }
 }
 
-pub trait OutputBuilder:Debug + Send + Sync {
+pub trait OutputBuilder: Debug + Send + Sync {
     type O;
-    fn add_partial_output(&mut self, o:Self::O);
+    fn add_partial_output(&mut self, o: Self::O);
     fn build(self: Box<Self>) -> Self::O;
 }
 
@@ -174,19 +171,17 @@ pub trait OutputBuilder:Debug + Send + Sync {
 mod tests {
     use mockall::mock;
 
-
     mock! {
         TestInputId {}
     }
-    mock!{
+    mock! {
         pub TestInput{
         }
 
     }
 
-
     #[test]
-    fn test_0(){
+    fn test_0() {
         // use super::super::{
         //     RunnableContext, Adjustable, Adjuster, Adjusters, Contexts, InputContext,
         //     OOMHandler, RunCtxContext,
@@ -194,5 +189,4 @@ mod tests {
         // let x:RunnableContext = RunnableContext{};
         // let ctx = SplitsAdjusterAcontextImpl::new(100, "test");
     }
-
 }
