@@ -7,7 +7,9 @@ The Rust workspace lives under `crates/`, with `Cargo.toml` wiring all subcrates
 Compile everything with `cargo build` (nightly toolchain pinned in `crates/rust-toolchain.toml`). Use `cargo build -p thoosa_main` for targeted binaries or `cargo run -p thoosa_main -- --help` to inspect available tasks. Fast Rust tests run via `cargo test`; prefer `./crates/nextest.sh` for consistent filtering (`./crates/nextest.sh` for regular suites, `./crates/nextest.sh slow` for CUDA-heavy cases). Set `CARGO_TARGET_DIR=crates/target` if you need deterministic artifact locations.
 
 ## Coding Style & Naming Conventions
+this is applicable only two newly created files:
 Format with `cargo fmt --all` before committing. Keep `cargo clippy --workspace --all-targets -- -D warnings` clean; add crate-specific allows only with a comment explaining the exception. Code follows standard Rust 4-space indentation, `snake_case` modules/functions, `PascalCase` types/traits, and `SCREAMING_SNAKE_CASE` constants. Prefer explicit error types and `?` propagation over panics in shared crates; log with `tracing` where relevant.
+never format or fix warnings in code which is not relevant to the task. 
 
 ## Testing Guidelines
 Async tests use `#[tokio::test(flavor = "multi_thread")]` to match production runtimes. Split slow GPU or probabilistic suites into `slow`-prefixed test names so `nextest.sh` can isolate them. Integration and caching regression tests live in `caching_runner_test`; keep fixtures small enough for CI and document any large reference files. Capture new failure modes with targeted unit tests rather than expanding broad stress suites.
