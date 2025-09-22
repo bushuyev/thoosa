@@ -1,60 +1,67 @@
-
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use log::{debug};
+use log::debug;
 use tch::Tensor;
 
-use thoosa_shared::ThoosaError;
 use thoosa_shared::TensorIdSliceIdx;
-
+use thoosa_shared::ThoosaError;
 
 pub trait TensorsStore {
     fn get_tensor(&mut self, index: usize) -> Result<&Tensor, ThoosaError>;
 
     fn get_tensors(&mut self, indexes: &[usize]) -> Result<Vec<Tensor>, ThoosaError> {
-        indexes.into_iter().map(|i|*i).map( |i| self.get_tensor(i).map(|t|t.shallow_clone())).collect()
+        indexes
+            .into_iter()
+            .map(|i| *i)
+            .map(|i| self.get_tensor(i).map(|t| t.shallow_clone()))
+            .collect()
     }
 
     fn tensors_len(&self) -> usize;
 }
 
-
-pub struct TensorSliceIter {//TODO SliceIndex?
+pub struct TensorSliceIter {
+    //TODO SliceIndex?
     tensors_store: Box<dyn TensorsStore + Send>,
-    tensor_index_0:usize,
-    tensor_index_1:usize,
+    tensor_index_0: usize,
+    tensor_index_1: usize,
 
-    slice_index_0:i64,
-    slice_index_1:i64,
+    slice_index_0: i64,
+    slice_index_1: i64,
 
-    dim:usize,
-    step:i64,
-    m:i64,
-    iteration_n:AtomicUsize,
+    dim: usize,
+    step: i64,
+    m: i64,
+    iteration_n: AtomicUsize,
 }
 
 impl TensorSliceIter {
-
     #[allow(dead_code)]
-    pub fn new(tensors_store: Box<impl TensorsStore + Send +'static>, dim:usize, m:usize, step:usize) -> Self {
-
+    pub fn new(
+        tensors_store: Box<impl TensorsStore + Send + 'static>,
+        dim: usize,
+        m: usize,
+        step: usize,
+    ) -> Self {
         assert!(step <= m);
 
-        debug!("tensors_store.tensors_len()={}", tensors_store.tensors_len());
+        debug!(
+            "tensors_store.tensors_len()={}",
+            tensors_store.tensors_len()
+        );
 
         Self {
             tensors_store,
             tensor_index_0: 0,
             tensor_index_1: 0,
 
-            slice_index_0:0,
-            slice_index_1:step as i64,
+            slice_index_0: 0,
+            slice_index_1: step as i64,
 
             dim,
             step: step as i64,
             m: m as i64,
-            iteration_n:  AtomicUsize::new(0)
+            iteration_n: AtomicUsize::new(0),
         }
     }
 }
@@ -64,40 +71,58 @@ impl Iterator for TensorSliceIter {
     type Item = Result<(TensorSlice, TensorSlice, usize), ThoosaError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        debug!("self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}", self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1);
+        debug!(
+            "self.tensor_index_0={:?}, self.slice_index_0={:?}, self.tensor_index_1={:?}, self.slice_index_1={:?}",
+            self.tensor_index_0, self.slice_index_0, self.tensor_index_1, self.slice_index_1
+        );
         let tensors_len = self.tensors_store.tensors_len();
 
         if self.tensor_index_0 < self.tensors_store.tensors_len() {
             // let t_0 = self.tensors_store.get_tensor(self.tensor_index_0).unwrap();
             // let t_1 = self.tensors_store.get_tensor(self.tensor_index_1).unwrap();
 
-            let mut tensors = self.tensors_store.get_tensors(&[self.tensor_index_0, self.tensor_index_1]).unwrap();
+            let mut tensors = self
+                .tensors_store
+                .get_tensors(&[self.tensor_index_0, self.tensor_index_1])
+                .unwrap();
             let t_1 = tensors.pop().unwrap();
             let t_0 = tensors.pop().unwrap();
 
             let v = Some(Ok((
                 //TODO self.tensor_index_0.to_string() -> store.index_to_key
-                (TensorIdSliceIdx(self.tensor_index_0 as u32, self.slice_index_0 as u32), t_0.f_slice(self.dim as i64, Some(self.slice_index_0), Some(self.slice_index_0 + self.m), 1).unwrap()), //TODO unwrap
-                (TensorIdSliceIdx(self.tensor_index_1 as u32, self.slice_index_1 as u32), t_1.f_slice(self.dim as i64, Some(self.slice_index_1), Some(self.slice_index_1 + self.m), 1).unwrap()),
-                self.iteration_n.fetch_add(1, Ordering::Relaxed)
+                (
+                    TensorIdSliceIdx(self.tensor_index_0 as u32, self.slice_index_0 as u32),
+                    t_0.f_slice(
+                        self.dim as i64,
+                        Some(self.slice_index_0),
+                        Some(self.slice_index_0 + self.m),
+                        1,
+                    )
+                    .unwrap(),
+                ), //TODO unwrap
+                (
+                    TensorIdSliceIdx(self.tensor_index_1 as u32, self.slice_index_1 as u32),
+                    t_1.f_slice(
+                        self.dim as i64,
+                        Some(self.slice_index_1),
+                        Some(self.slice_index_1 + self.m),
+                        1,
+                    )
+                    .unwrap(),
+                ),
+                self.iteration_n.fetch_add(1, Ordering::Relaxed),
             )));
-
 
             //TODO m < tensor
             if self.slice_index_1 + self.step + self.m <= t_1.size()[self.dim] {
                 self.slice_index_1 += self.step;
-
-
             } else {
-
-                if self.tensor_index_1 < tensors_len -1 {
+                if self.tensor_index_1 < tensors_len - 1 {
                     self.tensor_index_1 += 1;
                     self.slice_index_1 = 0;
-
                 } else {
                     if self.slice_index_0 + self.step + self.m <= t_0.size()[self.dim] {
                         self.slice_index_0 += self.step;
-
                     } else {
                         self.slice_index_0 = 0;
                         self.tensor_index_0 += 1;
@@ -106,18 +131,23 @@ impl Iterator for TensorSliceIter {
                     self.slice_index_1 = self.slice_index_0 + self.m;
                     self.tensor_index_1 = self.tensor_index_0;
 
-                    if self.slice_index_1 + self.m > self.tensors_store.get_tensor(self.tensor_index_1).unwrap().size()[self.dim] {//to avoid "i=10 0: [8.0, 9.0] 1: []" in test_one_inner
+                    if self.slice_index_1 + self.m
+                        > self
+                            .tensors_store
+                            .get_tensor(self.tensor_index_1)
+                            .unwrap()
+                            .size()[self.dim]
+                    {
+                        //to avoid "i=10 0: [8.0, 9.0] 1: []" in test_one_inner
                         self.slice_index_0 = 0;
                         self.tensor_index_0 += 1;
 
                         self.slice_index_1 = self.slice_index_0 + self.m;
                         self.tensor_index_1 = self.tensor_index_0;
                     }
-
                 }
             }
             return v;
-
         }
 
         None
@@ -129,18 +159,19 @@ mod tests {
 
     use tch::{Device, Kind, Tensor};
 
+    use crate::tensor_iter::{TensorSliceIter, TensorsStore};
     use thoosa_common::utils::*;
     use thoosa_shared::ThoosaError;
-    use crate::tensor_iter::{TensorSliceIter, TensorsStore};
-
 
     struct VecTensorsStore {
-        tensors:Vec<Tensor>
+        tensors: Vec<Tensor>,
     }
 
     impl VecTensorsStore {
         pub fn new(tensors: Vec<Tensor>) -> Box<Self> {
-            Box::new(Self { tensors:tensors.into_iter().map(|t|t).collect() })
+            Box::new(Self {
+                tensors: tensors.into_iter().map(|t| t).collect(),
+            })
         }
     }
     impl TensorsStore for VecTensorsStore {
@@ -154,13 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn test_one_inner(){
-
-        let t_0= Tensor::vstack(&[
+    fn test_one_inner() {
+        let t_0 = Tensor::vstack(&[
             Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice())
+            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
         ]);
-
 
         let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
         let r = ts_to_vec(ts);
@@ -185,17 +214,14 @@ mod tests {
             ],
             r
         );
-
     }
 
     #[test]
-    fn test_one_inner_m_3(){
-
-        let t_0= Tensor::vstack(&[
+    fn test_one_inner_m_3() {
+        let t_0 = Tensor::vstack(&[
             Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice())
+            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
         ]);
-
 
         let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
         let r = ts_to_vec(ts);
@@ -211,21 +237,17 @@ mod tests {
             ],
             r
         );
-
     }
 
     #[test]
-    fn test_one_inner_m_3_unfit(){
-
-        let t_0= Tensor::vstack(&[
+    fn test_one_inner_m_3_unfit() {
+        let t_0 = Tensor::vstack(&[
             Tensor::from_slice((0..11).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..11).collect::<Vec<i64>>().as_slice())
+            Tensor::from_slice((0..11).collect::<Vec<i64>>().as_slice()),
         ]);
-
 
         let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 3, 2);
         let r = ts_to_vec(ts);
-
 
         assert_eq!(
             vec![
@@ -239,29 +261,32 @@ mod tests {
             ],
             r
         );
-
     }
 
     fn ts_to_vec(ts: TensorSliceIter) -> Vec<String> {
-        ts.enumerate().map(|(i, v)| {
-            match v {
+        ts.enumerate()
+            .map(|(i, v)| match v {
                 Ok(ref x) => {
-                    format!("i={} 0: {:?} 1: {:?}", i, from::<Vec<Vec<f32>>>(&x.0.1)[0], from::<Vec<Vec<f32>>>(&x.1.1)[0])
+                    format!(
+                        "i={} 0: {:?} 1: {:?}",
+                        i,
+                        from::<Vec<Vec<f32>>>(&x.0.1)[0],
+                        from::<Vec<Vec<f32>>>(&x.1.1)[0]
+                    )
                 }
                 Err(e) => {
                     format!("e={:?}", e)
                 }
-            }
-        }).collect::<Vec<String>>()
+            })
+            .collect::<Vec<String>>()
     }
 
     #[test]
     fn test_one_inner_unfit() {
         let t_0 = Tensor::vstack(&[
             Tensor::from_slice((0..11).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..11).collect::<Vec<i64>>().as_slice())
+            Tensor::from_slice((0..11).collect::<Vec<i64>>().as_slice()),
         ]);
-
 
         let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0]), 1, 2, 2);
         let r = ts_to_vec(ts);
@@ -284,16 +309,15 @@ mod tests {
     }
 
     #[test]
-    fn test_two_inner(){
-
-        let t_0= Tensor::vstack(&[
+    fn test_two_inner() {
+        let t_0 = Tensor::vstack(&[
             Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice())
+            Tensor::from_slice((0..10).collect::<Vec<i64>>().as_slice()),
         ]);
 
-        let t_1= Tensor::vstack(&[
+        let t_1 = Tensor::vstack(&[
             Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice()),
-            Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice())
+            Tensor::from_slice((0..100).step_by(10).collect::<Vec<i64>>().as_slice()),
         ]);
 
         let ts = TensorSliceIter::new(VecTensorsStore::new(vec![t_0, t_1]), 1, 2, 2);
@@ -347,7 +371,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn load_rand_tensor(_key:&String) ->Tensor{
+    fn load_rand_tensor(_key: &String) -> Tensor {
         Tensor::rand(&[2, 10], (Kind::Float, Device::Cpu))
     }
 }

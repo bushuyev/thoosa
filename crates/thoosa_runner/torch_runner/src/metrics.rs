@@ -1,12 +1,12 @@
+use log::debug;
 use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, DivAssign};
-use log::debug;
 use thoosa_shared::{MyError, ThoosaError};
 
 #[derive(Debug, Clone, Default)]
 pub struct TwoDimsMetrics {
-    pub(crate) dim_0:i64,
-    pub(crate) dim_1:i64
+    pub(crate) dim_0: i64,
+    pub(crate) dim_1: i64,
 }
 
 impl TwoDimsMetrics {
@@ -44,7 +44,7 @@ impl PartialEq<i64> for TwoDimsMetrics {
 
 impl PartialOrd<i64> for TwoDimsMetrics {
     fn partial_cmp(&self, other: &i64) -> Option<Ordering> {
-        self.dim_0.partial_cmp( other)
+        self.dim_0.partial_cmp(other)
     }
 }
 
@@ -60,10 +60,13 @@ impl PartialOrd<TwoDimsMetrics> for TwoDimsMetrics {
     }
 }
 
-impl <'a> AddAssign<&'a TwoDimsMetrics> for TwoDimsMetrics {
+impl<'a> AddAssign<&'a TwoDimsMetrics> for TwoDimsMetrics {
     fn add_assign(&mut self, rhs: &'a TwoDimsMetrics) {
-        self.dim_0+=rhs.dim_0;
-        debug!("AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}", rhs.dim_0, self.dim_0);
+        self.dim_0 += rhs.dim_0;
+        debug!(
+            "AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}",
+            rhs.dim_0, self.dim_0
+        );
         // self.dim_1+=rhs.dim_1;TODO dimension
     }
 }
@@ -73,38 +76,33 @@ impl TryFrom<Vec<i64>> for TwoDimsMetrics {
 
     fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
         let &[dim_0, dim_1, ..] = value.as_slice() else {
-            return Err(MyError::SomethingElse(format!("can't make LoadedTensorMetrics from {value:?}")).into());
+            return Err(MyError::SomethingElse(format!(
+                "can't make LoadedTensorMetrics from {value:?}"
+            ))
+            .into());
         };
 
-        Ok(Self {
-            dim_0,
-            dim_1
-        })
+        Ok(Self { dim_0, dim_1 })
     }
 }
 
-impl From<&TwoDimsMetrics> for [i64;2] {
+impl From<&TwoDimsMetrics> for [i64; 2] {
     fn from(value: &TwoDimsMetrics) -> Self {
         [value.dim_0, value.dim_1]
     }
 }
 
-
-impl From<[i64;2]> for TwoDimsMetrics {
+impl From<[i64; 2]> for TwoDimsMetrics {
     fn from([dim_0, dim_1]: [i64; 2]) -> Self {
-        Self {
-            dim_0,
-            dim_1
-        }
+        Self { dim_0, dim_1 }
     }
 }
 
-impl From<&[i64;2]> for TwoDimsMetrics {
+impl From<&[i64; 2]> for TwoDimsMetrics {
     fn from([dim_0, dim_1]: &[i64; 2]) -> Self {
         Self {
             dim_0: *dim_0,
-            dim_1: *dim_1
+            dim_1: *dim_1,
         }
     }
 }
-

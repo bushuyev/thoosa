@@ -1,7 +1,7 @@
-use thoosa_shared::resource::ResourceId;
 use thoosa_shared::TensorIdSliceIdx;
+use thoosa_shared::resource::ResourceId;
 
-#[derive(Debug, Clone)]//TODO clone? reset idx
+#[derive(Debug, Clone)] //TODO clone? reset idx
 pub struct SlicesIter {
     step: usize,
     resource_ids_sizes: Vec<(ResourceId, usize)>,
@@ -76,7 +76,15 @@ mod tests {
         // Expected:
         // (1, 0), (1, 3), (1, 6), (1, 9),
         // (2, 0), (2, 3), (2, 6)
-        let expected = vec![TensorIdSliceIdx(1, 0), TensorIdSliceIdx(1, 3), TensorIdSliceIdx(1, 6), TensorIdSliceIdx(1, 9), TensorIdSliceIdx(2, 0), TensorIdSliceIdx(2, 3), TensorIdSliceIdx(2, 6)];
+        let expected = vec![
+            TensorIdSliceIdx(1, 0),
+            TensorIdSliceIdx(1, 3),
+            TensorIdSliceIdx(1, 6),
+            TensorIdSliceIdx(1, 9),
+            TensorIdSliceIdx(2, 0),
+            TensorIdSliceIdx(2, 3),
+            TensorIdSliceIdx(2, 6),
+        ];
         assert_eq!(got, expected);
     }
 
@@ -84,7 +92,11 @@ mod tests {
     fn test_zero_lengths_and_step_1() {
         let it = SlicesIter::new(1, vec![(10, 0), (11, 1), (12, 2), (13, 0)]);
         let got: Vec<_> = it.collect();
-        let expected = vec![TensorIdSliceIdx(11, 0), TensorIdSliceIdx(12, 0), TensorIdSliceIdx(12, 1)];
+        let expected = vec![
+            TensorIdSliceIdx(11, 0),
+            TensorIdSliceIdx(12, 0),
+            TensorIdSliceIdx(12, 1),
+        ];
         assert_eq!(got, expected);
     }
 }

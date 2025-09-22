@@ -1,39 +1,38 @@
-use std::fmt::{Display, Formatter};
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::sync::Arc;
-use tch::{Device, Kind, Tensor};
-use async_trait::async_trait;
-use ambassador::delegatable_trait;
-use mockall::automock;
-use torch_sys::IntList;
-use thoosa_shared::applicables_runner::{CachableId, Input, Output};
-use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Named, WithId};
 use crate::applicables::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;
 use crate::dims::{Dimensional, Dims};
 use crate::panic_to_err;
+use ambassador::delegatable_trait;
+use async_trait::async_trait;
+use mockall::automock;
+use std::fmt::{Display, Formatter};
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::sync::Arc;
+use tch::{Device, Kind, Tensor};
+use thoosa_shared::ThoosaError;
+use thoosa_shared::applicables_runner::{CachableId, Input, Output};
+use thoosa_shared::traits::{Named, WithId};
+use torch_sys::IntList;
 
 #[derive(Debug)]
 pub struct ThoTensor<D: Dims, Id: Named + Clone> {
-    id: Id,//TODO move to wrappers (RawChannels etc)?
+    id: Id,        //TODO move to wrappers (RawChannels etc)?
     pub t: Tensor, // attach the actual tensor
     pub _pd: PhantomData<D>,
 
     #[allow(dead_code)]
-    tracking:parking_lot::RwLock<Vec<&'static str>>,
+    tracking: parking_lot::RwLock<Vec<&'static str>>,
 }
 
-impl <D:Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Clone> Dimensional for ThoTensor<D, Id> {
     type Dimensions = D;
 }
 
-unsafe impl <D:Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
+unsafe impl<D: Dims, Id: Named + Clone> Sync for ThoTensor<D, Id> {}
 
-
-impl <D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
+impl<D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: Tensor) -> Self {
         Self {
             id: "1".into(),
@@ -44,7 +43,7 @@ impl <D: Dims> From<Tensor> for ThoTensor<D, CachableId> {
     }
 }
 
-impl <D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
+impl<D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
             id: "2".into(),
@@ -56,25 +55,20 @@ impl <D: Dims> From<&Tensor> for ThoTensor<D, CachableId> {
 }
 
 #[async_trait]
-impl <D:Dims> Output for ThoTensor<D, CachableId> {
-
+impl<D: Dims> Output for ThoTensor<D, CachableId> {
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
         if self.t.device().eq(&ThoDevice::from(device_ordinal).into()) {
-            Arc::new(ThoTensor::new(
-                self.id.clone(),
-                self.t.shallow_clone()
-            ))
+            Arc::new(ThoTensor::new(self.id.clone(), self.t.shallow_clone()))
         } else {
             Arc::new(ThoTensor::new(
                 self.id.clone(),
-                self.t.to_device(ThoDevice::from(device_ordinal).into())
+                self.t.to_device(ThoDevice::from(device_ordinal).into()),
             ))
         }
-
     }
 }
 
-impl <D:Dims> WithId for ThoTensor<D, CachableId> {
+impl<D: Dims> WithId for ThoTensor<D, CachableId> {
     type ID = CachableId;
 
     fn id(&self) -> &Self::ID {
@@ -82,13 +76,13 @@ impl <D:Dims> WithId for ThoTensor<D, CachableId> {
     }
 }
 
-impl <D:Dims> Input for ThoTensor<D, CachableId> {
+impl<D: Dims> Input for ThoTensor<D, CachableId> {
     fn id(&self) -> &CachableId {
         &self.id
     }
 }
 
-impl <D:Dims> WithId for &ThoTensor<D, CachableId> {
+impl<D: Dims> WithId for &ThoTensor<D, CachableId> {
     type ID = CachableId;
 
     fn id(&self) -> &Self::ID {
@@ -96,23 +90,21 @@ impl <D:Dims> WithId for &ThoTensor<D, CachableId> {
     }
 }
 
-impl <D:Dims> Input for &ThoTensor<D, CachableId> {
+impl<D: Dims> Input for &ThoTensor<D, CachableId> {
     fn id(&self) -> &CachableId {
         &self.id
     }
 }
 
-impl <D:Dims> AsRef<Tensor> for ThoTensor<D, CachableId>{
-    fn as_ref(&self) -> &Tensor{
+impl<D: Dims> AsRef<Tensor> for ThoTensor<D, CachableId> {
+    fn as_ref(&self) -> &Tensor {
         &self.t
     }
 }
 
-impl <D:Dims> ThoTensor<D, CachableId> {
-
-
+impl<D: Dims> ThoTensor<D, CachableId> {
     //TODO remove
-    pub fn shallow_clone<DO:Dims>(&self) -> ThoTensor<DO, CachableId> {
+    pub fn shallow_clone<DO: Dims>(&self) -> ThoTensor<DO, CachableId> {
         ThoTensor {
             id: self.id.clone(),
             t: self.t.shallow_clone(),
@@ -125,7 +117,6 @@ impl <D:Dims> ThoTensor<D, CachableId> {
         drop(self.t);
     }
 
-
     // pub fn new(id: CachableId, tensor: Tensor) -> Self {
     //     Self {
     //         id,
@@ -135,7 +126,7 @@ impl <D:Dims> ThoTensor<D, CachableId> {
     // }
 }
 
-impl <D:Dims, Id: Named + Clone> ThoTensor<D, Id> {
+impl<D: Dims, Id: Named + Clone> ThoTensor<D, Id> {
     pub fn new(id: Id, tensor: Tensor) -> Self {
         Self {
             id,
@@ -149,9 +140,13 @@ impl <D:Dims, Id: Named + Clone> ThoTensor<D, Id> {
         }
     }
 
-
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Self {
-        Self { id, t:Tensor::zeros(size, options), tracking: Default::default(), _pd: PhantomData::default() }
+        Self {
+            id,
+            t: Tensor::zeros(size, options),
+            tracking: Default::default(),
+            _pd: PhantomData::default(),
+        }
     }
 
     pub fn requires_grad(&self) -> bool {
@@ -169,67 +164,58 @@ impl <D:Dims, Id: Named + Clone> ThoTensor<D, Id> {
             id: self.id.clone(),
             t: self.t.to_kind(k),
             tracking: Default::default(),
-            _pd:PhantomData
+            _pd: PhantomData,
         }
     }
     pub fn to_device(&self, d: Device) -> ThoTensor<D, Id> {
-        ThoTensor::new(
-            self.id.clone(),
-            self.t.to_device(d),
-        )
+        ThoTensor::new(self.id.clone(), self.t.to_device(d))
     }
     pub fn contiguous(&self) -> ThoTensor<D, Id> {
-        ThoTensor::new(
-            self.id.clone(),
-            self.t.contiguous(),
-        )
+        ThoTensor::new(self.id.clone(), self.t.contiguous())
     }
 
     pub fn add(&self, rhs: &ThoTensor<D, Id>) -> ThoTensor<D, Id> {
-        ThoTensor::new(
-            self.id.clone(),
-            &self.t + &rhs.t,
-        )
+        ThoTensor::new(self.id.clone(), &self.t + &rhs.t)
     }
 
-    pub fn mm<RD:Dims>(&self, rhs: &ThoTensor<RD, Id>) -> Result<ThoTensor<D, Id>, ThoosaError> {
+    pub fn mm<RD: Dims>(&self, rhs: &ThoTensor<RD, Id>) -> Result<ThoTensor<D, Id>, ThoosaError> {
         let mm_r = panic_to_err!(self.t.f_matmul(&rhs.t))?;
-        println!("mm: self.t.size={:?}, rhs.t.size={:?} mm_r.size={:?}", self.t.size(), rhs.t.size(), mm_r.size());
+        println!(
+            "mm: self.t.size={:?}, rhs.t.size={:?} mm_r.size={:?}",
+            self.t.size(),
+            rhs.t.size(),
+            mm_r.size()
+        );
 
-        Ok(ThoTensor::new(
-            self.id.clone(),
-            mm_r
-        ))
+        Ok(ThoTensor::new(self.id.clone(), mm_r))
     }
 
     pub fn sum(&self, k: Kind) -> ThoTensor<D, Id> {
-        ThoTensor::new(self.id.clone(),self.t.sum(k))
+        ThoTensor::new(self.id.clone(), self.t.sum(k))
     }
 
-
-    pub fn sum_dim_intlist(&self, dim:i64) -> Result<ThoTensor<D, Id>, ThoosaError> {
+    pub fn sum_dim_intlist(&self, dim: i64) -> Result<ThoTensor<D, Id>, ThoosaError> {
         Ok(ThoTensor::new(
             self.id.clone(),
-            panic_to_err!(self.t.f_sum_dim_intlist(dim, false, self.t.kind()))?
+            panic_to_err!(self.t.f_sum_dim_intlist(dim, false, self.t.kind()))?,
         ))
     }
 
-
-    pub fn hadamard<RD:Dims>(&self, rhs: &ThoTensor<RD, Id>, to_id: Id) -> Result<ThoTensor<D, Id>, ThoosaError> {
-        Ok(ThoTensor::new(
-            to_id,
-            self.t.f_multiply(&rhs.t)?
-        ))
+    pub fn hadamard<RD: Dims>(
+        &self,
+        rhs: &ThoTensor<RD, Id>,
+        to_id: Id,
+    ) -> Result<ThoTensor<D, Id>, ThoosaError> {
+        Ok(ThoTensor::new(to_id, self.t.f_multiply(&rhs.t)?))
     }
 
     pub fn mean(&self, k: Kind) -> ThoTensor<D, Id> {
-        ThoTensor::new(self.id.clone(),self.t.mean(k))
+        ThoTensor::new(self.id.clone(), self.t.mean(k))
     }
 
     // explicit deep copy (no aliasing)
     pub fn deep_clone(&self) -> ThoTensor<D, Id> {
         ThoTensor::new(self.id.clone(), self.t.copy())
-
     }
 
     pub fn id(&self) -> &Id {
@@ -241,17 +227,25 @@ impl <D:Dims, Id: Named + Clone> ThoTensor<D, Id> {
         &self.t
     }
 
-    pub fn run_inner_with_params<F, OutDim:Dims, P:Dims>(
-        &self, id:Id,
-        func:&F,
-        params:&[&ThoTensor<P, Id>]
+    pub fn run_inner_with_params<F, OutDim: Dims, P: Dims>(
+        &self,
+        id: Id,
+        func: &F,
+        params: &[&ThoTensor<P, Id>],
     ) -> Result<ThoTensor<OutDim, Id>, ThoosaError>
-    where F:Fn(&Tensor, &[&Tensor])->Result<Tensor, ThoosaError> + ?Sized{
-
-
+    where
+        F: Fn(&Tensor, &[&Tensor]) -> Result<Tensor, ThoosaError> + ?Sized,
+    {
         Ok(ThoTensor::new(
             id,
-            func(&self.t,  params.into_iter().map(|p|&p.t).collect::<Vec<&Tensor>>().as_slice())?
+            func(
+                &self.t,
+                params
+                    .into_iter()
+                    .map(|p| &p.t)
+                    .collect::<Vec<&Tensor>>()
+                    .as_slice(),
+            )?,
         ))
     }
 
@@ -279,40 +273,46 @@ impl <D:Dims, Id: Named + Clone> ThoTensor<D, Id> {
         }
     }
 
-    pub fn double_value(&self, idx: &[i64])->f64{
+    pub fn double_value(&self, idx: &[i64]) -> f64 {
         self.t.double_value(idx)
     }
 
-    pub fn device(&self)->usize {
+    pub fn device(&self) -> usize {
         ThoDevice::from(self.t.device()).ordinal()
     }
 }
 
-impl <D:Dims> Display for ThoTensor<D, CachableId> {
+impl<D: Dims> Display for ThoTensor<D, CachableId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.t, f)
     }
 }
 
 #[async_trait]
-impl <D:Dims, Id> CopyToDevice for ThoTensor<D, Id>
-where Id: Named + Clone //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
+impl<D: Dims, Id> CopyToDevice for ThoTensor<D, Id>
+where
+    Id: Named + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
 {
-    async fn copy_to_device(&self, dst_device: usize) ->Self {
-
-        let copy = if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
-            self.t.to_device(ThoDevice::from(dst_device).deref().clone())
-        }  else {
-            assert!(self.t.is_contiguous());
-            CopyCtx::instance().copy_from_ptr(self.t.data_ptr() as usize, &self.t.size(), dst_device, self.t.kind()).await
-        };
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        let copy =
+            if tensor_mem_size(self.t.kind(), &self.t.size()) < CopyCtx::instance().buf_size() {
+                self.t
+                    .to_device(ThoDevice::from(dst_device).deref().clone())
+            } else {
+                assert!(self.t.is_contiguous());
+                CopyCtx::instance()
+                    .copy_from_ptr(
+                        self.t.data_ptr() as usize,
+                        &self.t.size(),
+                        dst_device,
+                        self.t.kind(),
+                    )
+                    .await
+            };
 
         // println!("CopyToDevice for ThoTensor: self.t.size={:?} self.t.device={:?} dst_device={dst_device} self.t=\n{} copy=\n{copy}", self.t.size(), self.t.device(), self.t);
 
-        ThoTensor::new(
-            self.id.clone(),
-            copy
-        )
+        ThoTensor::new(self.id.clone(), copy)
     }
 }
 
@@ -320,21 +320,19 @@ where Id: Named + Clone //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug
 #[delegatable_trait]
 #[automock]
 pub trait CopyToDevice {
-    async fn copy_to_device(&self, dst_device: usize) ->Self;
+    async fn copy_to_device(&self, dst_device: usize) -> Self;
 }
 
-
-
-pub struct ThoTensorMut<'a, D:Dims, Id: Named + Clone>  {
+pub struct ThoTensorMut<'a, D: Dims, Id: Named + Clone> {
     _id: &'a Id,
     t: &'a mut Tensor,
-    pd:PhantomData<D>
+    pd: PhantomData<D>,
 }
-unsafe impl<'a, D:Dims, Id: Named + Clone>  Send for ThoTensorMut<'a, D, Id> {}
+unsafe impl<'a, D: Dims, Id: Named + Clone> Send for ThoTensorMut<'a, D, Id> {}
 // (no Sync)
 
 impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
-    pub fn new(id: &'a Id, t: &'a  mut Tensor) -> Self {
+    pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
         Self {
             _id: id,
             t,
@@ -354,13 +352,17 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
         self.t.copy_(&rhs.t);
     }
 
-    pub fn copy_partial_from_(&mut self, _dim:i64, start: i64, length: i64, rhs: &ThoTensor<D, Id>) {
+    pub fn copy_partial_from_(
+        &mut self,
+        _dim: i64,
+        start: i64,
+        length: i64,
+        rhs: &ThoTensor<D, Id>,
+    ) {
         self.t.narrow(0, start, length).copy_(&rhs.t);
     }
-
 
     pub fn resize_(&mut self, new_shape: &[i64]) {
         let _ = self.t.resize_(new_shape);
     }
-
 }

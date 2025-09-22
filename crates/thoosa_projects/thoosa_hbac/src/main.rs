@@ -1,41 +1,41 @@
 mod data;
 
-use std::time::Instant;
 use log::{error, info};
+use std::time::Instant;
 use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
 
-fn main()  {
+fn main() {
     kick_register_cuda_hooks();
 
     let t1 = Instant::now();
 
     /*
-   sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
-   2227|seizure
-   1181|lpd
-   806|gpd
-   384|lrda
-   1154|grda
-   4208|other
-   */
+    sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
+    2227|seizure
+    1181|lpd
+    806|gpd
+    384|lrda
+    1154|grda
+    4208|other
+    */
     match run_cli(
-        |source_path|data::labeled_resourses(source_path.as_ref().join("train.csv")),
-        |source_path, key| thoosa_main::data::parquet_to_tensor_by_path(source_path.as_ref().join("train_eegs").join(format!("{}.parquet", key)), Cpu),
-        &[
-            "seizure",
-            "lpd",
-            "gpd",
-            "lrda",
-            "grda",
-            "other"
-        ],
+        |source_path| data::labeled_resourses(source_path.as_ref().join("train.csv")),
+        |source_path, key| {
+            thoosa_main::data::parquet_to_tensor_by_path(
+                source_path
+                    .as_ref()
+                    .join("train_eegs")
+                    .join(format!("{}.parquet", key)),
+                Cpu,
+            )
+        },
+        &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
         20,
         684400,
-        200
+        200,
     ) {
-
         Ok(_) => {
             info!("All done in {} mls", t1.elapsed().as_millis());
         }
@@ -44,27 +44,27 @@ fn main()  {
             error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
         }
     }
-    std::process::exit(0x0000);//for jupyter
+    std::process::exit(0x0000); //for jupyter
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
-    use std::any::Any;
-    use std::ffi::c_void;
-    use std::sync::atomic::AtomicU64;
-    use std::sync::RwLock;
-    use std::time::Instant;
     use cudarc::driver::sys::CUdeviceptr_v2;
     use log::{debug, info};
     use parking_lot::Mutex;
+    use std::any::Any;
+    use std::ffi::c_void;
+    use std::sync::RwLock;
+    use std::sync::atomic::AtomicU64;
+    use std::time::Instant;
 
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{IndexOp, Kind, Tensor};
-    use thoosa_motifs::distance::{dist_d2, clc_dist_d2_and_mask};
     use thoosa_motifs::chunks::ChunkOfSlicedTensors;
+    use thoosa_motifs::distance::{clc_dist_d2_and_mask, dist_d2};
     use thoosa_shared::ThoosaError;
 
     use thoosa_common::loader::SyncWrapper;
@@ -75,7 +75,7 @@ mod tests {
     }
 
     // #[test]
-    fn test_0(){
+    fn test_0() {
         println!("Ok");
     }
 
@@ -86,12 +86,10 @@ mod tests {
 
             // let n = 2_147_483_647-1;
             let n = 4_000_000_000;
-            let t = Tensor::rand([n], FLOAT_CUDA).view((1,-1));
+            let t = Tensor::rand([n], FLOAT_CUDA).view((1, -1));
             let inst_0 = Instant::now();
 
-
             for i in 0..10 {
-
                 let indices = Tensor::randint(n, &[1000], (Kind::Int64, t.device()));
                 let samples = t.index_select(1, &indices);
                 // println!("samples.size={:?}", samples.size());
@@ -111,18 +109,17 @@ mod tests {
                 // free_cudarc(le_buf);
                 // free_cudarc(buf);
 
-
                 // let t_cpu =t.to_device(Cpu);
                 // let buf = copy_cudarc(&t) as *mut f32;
                 // free_cudarc(buf);
-
             }
 
             //
-            println!("t={:?} inst={}", t.size(), inst_0.elapsed().as_millis()/10);
+            println!(
+                "t={:?} inst={}",
+                t.size(),
+                inst_0.elapsed().as_millis() / 10
+            );
         }
     }
-
-
-
 }

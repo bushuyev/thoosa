@@ -1,47 +1,44 @@
+use parking_lot::{Mutex, RwLock};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Add;
 use std::path::Path;
-use parking_lot::{Mutex, RwLock};
 
 use log::debug;
 use polars::prelude::*;
-use polars::prelude::{
-    LazyFrame, NamedFrom,
-    ScanArgsParquet, Series,
-};
+use polars::prelude::{LazyFrame, NamedFrom, ScanArgsParquet, Series};
 
 use tch::{Device, IndexOp, Tensor};
 
 use thoosa_common::ResourceLoader;
 use thoosa_common::utils::{from, load_tensor};
-use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::ThoosaError;
+use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_store::Store;
 
 #[derive(Default)]
 pub enum Set {
     #[default]
     Train,
-    Valid
+    Valid,
 }
 
 pub trait Splitter {
     type Type;
 
-    fn split_to(&self, v:&Self::Type) ->Set;
+    fn split_to(&self, v: &Self::Type) -> Set;
 
-    fn init(&self, df:LazyFrame) -> Result<LazyFrame, ThoosaError> {
+    fn init(&self, df: LazyFrame) -> Result<LazyFrame, ThoosaError> {
         Ok(df.clone())
     }
 }
 
 pub struct AllTrainSplitter<E> {
-    _pd:PhantomData<E>
+    _pd: PhantomData<E>,
 }
 
-impl <E> Splitter for AllTrainSplitter<E> {
+impl<E> Splitter for AllTrainSplitter<E> {
     type Type = E;
 
     fn split_to(&self, _v: &Self::Type) -> Set {
@@ -49,45 +46,67 @@ impl <E> Splitter for AllTrainSplitter<E> {
     }
 }
 
-
-pub fn series_to_tensor(s: &Series) ->  Result<Tensor, ThoosaError> {
-
-    Ok(match s.dtype(){
+pub fn series_to_tensor(s: &Series) -> Result<Tensor, ThoosaError> {
+    Ok(match s.dtype() {
         // DataType::UInt8 => {}
         // DataType::UInt16 => {}
-        DataType::UInt32 => {
-            Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())
-        }
-        DataType::UInt64 => {
-            Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())
-        }
+        DataType::UInt32 => Tensor::from_slice(
+            s.u32()?
+                .to_vec()
+                .iter()
+                .map(|v| v.unwrap_or_default() as i32)
+                .collect::<Vec<i32>>()
+                .as_slice(),
+        ),
+        DataType::UInt64 => Tensor::from_slice(
+            s.i64()?
+                .to_vec()
+                .iter()
+                .map(|v| v.unwrap_or_default() as i32)
+                .collect::<Vec<i32>>()
+                .as_slice(),
+        ),
         // DataType::Int8 => {}
         // DataType::Int16 => {}
-        DataType::Int32 => {
-            Tensor::from_slice(s.u32()?.to_vec().iter().map(|v| v.unwrap_or_default() as i32).collect::<Vec<i32>>().as_slice())
-        }
+        DataType::Int32 => Tensor::from_slice(
+            s.u32()?
+                .to_vec()
+                .iter()
+                .map(|v| v.unwrap_or_default() as i32)
+                .collect::<Vec<i32>>()
+                .as_slice(),
+        ),
         // DataType::Int64 => {
         //     // tensors.push(Tensor::from_slice(s.i64()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<i64>>().as_slice()));
         // }
-        DataType::Float32 => {
-            Tensor::from_slice(s.f32()?.to_vec().iter().map(|v| v.unwrap_or_default()).collect::<Vec<f32>>().as_slice())
+        DataType::Float32 => Tensor::from_slice(
+            s.f32()?
+                .to_vec()
+                .iter()
+                .map(|v| v.unwrap_or_default())
+                .collect::<Vec<f32>>()
+                .as_slice(),
+        ),
+        DataType::Float64 => Tensor::from_slice(
+            s.f64()?
+                .to_vec()
+                .iter()
+                .map(|v| v.unwrap_or_default() as f32)
+                .collect::<Vec<f32>>()
+                .as_slice(),
+        ),
+        _ => {
+            todo!()
         }
-        DataType::Float64 => {
-            Tensor::from_slice(s.f64()?.to_vec().iter().map(|v| v.unwrap_or_default() as f32).collect::<Vec<f32>>().as_slice())
-        }
-       _=>{
-           todo!()
-       }
     })
-
 }
 
 #[allow(dead_code)]
 fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
-    where
-        T: IntoIterator<Item = X>,
-        X: Add + Into<Expr> + Copy,
-        Expr: From<<X as Add>::Output>,
+where
+    T: IntoIterator<Item = X>,
+    X: Add + Into<Expr> + Copy,
+    Expr: From<<X as Add>::Output>,
 {
     iter.into_iter()
         .fold(None, |expr_op: Option<Expr>, v| {
@@ -106,16 +125,20 @@ fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
 }
 
 #[allow(dead_code)]
-fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<Vec<DataFrame>> where I: IntoIterator<Item = i64> + Clone {
-
+fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec: I) -> PolarsResult<Vec<DataFrame>>
+where
+    I: IntoIterator<Item = i64> + Clone,
+{
     let shape = df.shape();
     let it_1 = offsets_sec.clone().into_iter();
-    let mut it_2 = offsets_sec.into_iter().chain(std::iter::once(shape.0 as i64));
+    let mut it_2 = offsets_sec
+        .into_iter()
+        .chain(std::iter::once(shape.0 as i64));
     it_2.next();
 
-
-    let ids = it_2.zip(it_1)
-        .map(|(v2, v1)| v2-v1)
+    let ids = it_2
+        .zip(it_1)
+        .map(|(v2, v1)| v2 - v1)
         .enumerate()
         .flat_map(|(i, frag)| std::iter::repeat(i as i64).take(frag as usize))
         .collect::<Vec<i64>>();
@@ -127,12 +150,20 @@ fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec:I) -> PolarsResult<V
     df.partition_by::<_, &str>(["frag_id"], false)
 }
 
-
-pub fn load_to_logits_tensors(group: &str, store: Arc<RwLock<Box<dyn Store>>>) -> Vec<(Resource, Vec<f32>)> {
-    store.read().list_resource_random_in_group(group).expect("list_resource_random_in_group")
+pub fn load_to_logits_tensors(
+    group: &str,
+    store: Arc<RwLock<Box<dyn Store>>>,
+) -> Vec<(Resource, Vec<f32>)> {
+    store
+        .read()
+        .list_resource_random_in_group(group)
+        .expect("list_resource_random_in_group")
         .into_iter()
         .map(move |(resource_id, labels_p)| {
-            debug!("load_to_logits_tensors: resourceId={resource_id:?} labels_p={:?}", labels_p);
+            debug!(
+                "load_to_logits_tensors: resourceId={resource_id:?} labels_p={:?}",
+                labels_p
+            );
             (
                 resource_id,
                 labels_p, //Box::new(Tensor::from_slice(labels_p.as_slice()).to_device(*device))
@@ -141,19 +172,27 @@ pub fn load_to_logits_tensors(group: &str, store: Arc<RwLock<Box<dyn Store>>>) -
         .collect()
 }
 
-pub fn parquet_to_tensor_by_path(path: impl AsRef<Path>, device: Device) -> Result<Tensor, ThoosaError> {
+pub fn parquet_to_tensor_by_path(
+    path: impl AsRef<Path>,
+    device: Device,
+) -> Result<Tensor, ThoosaError> {
     let df = read_parquet_to_df(path)?;
 
-    let tensor = Tensor::vstack(&df.get_columns().into_iter().map(|s| series_to_tensor(s.as_series().unwrap()).unwrap()).collect::<Vec<Tensor>>());
+    let tensor = Tensor::vstack(
+        &df.get_columns()
+            .into_iter()
+            .map(|s| series_to_tensor(s.as_series().unwrap()).unwrap())
+            .collect::<Vec<Tensor>>(),
+    );
     Ok(tensor.set_requires_grad(false).to_device(device))
 }
 
 pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoosaError> {
     let scan_conf = ScanArgsParquet::default();
 
-    let df = LazyFrame::scan_parquet( //TODO read_parallel?
-      path,
-      scan_conf,
+    let df = LazyFrame::scan_parquet(
+        //TODO read_parallel?
+        path, scan_conf,
     )?;
 
     Ok(df.collect()?)
@@ -163,19 +202,24 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
     let mut scan_conf = ScanArgsParquet::default();
     scan_conf.cache = false;
 
-    Ok(resource_ids.iter().map(|resource_id| {
-        //TODO config path
-        let df = LazyFrame::scan_parquet(
-            format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
-            scan_conf.clone(),
-        ).unwrap().collect().unwrap();
+    Ok(resource_ids
+        .iter()
+        .map(|resource_id| {
+            //TODO config path
+            let df = LazyFrame::scan_parquet(
+                format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
+                scan_conf.clone(),
+            )
+            .unwrap()
+            .collect()
+            .unwrap();
 
-        debug!("eeg_id={:?} eeg_df.shape()={:?}", resource_id, df.shape());
+            debug!("eeg_id={:?} eeg_df.shape()={:?}", resource_id, df.shape());
 
-        df.shape().0
-    }).sum())
+            df.shape().0
+        })
+        .sum())
 }
-
 
 pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
     assert_eq!(t.size().len(), 2);
@@ -184,60 +228,74 @@ pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
     let mut df = DataFrame::new(
         [
             vec![Series::new(columns[0].into(), ids).into()],
-            columns.iter().skip(1).enumerate().map(|(i, c)| {
-                let col_tensor = t.i((.., i as i64));
-                let col_data: Vec<f32> = from::<Vec<f32>>(&col_tensor);
-                Series::new((*c).into(), col_data).into()
-            }).collect()
+            columns
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(i, c)| {
+                    let col_tensor = t.i((.., i as i64));
+                    let col_data: Vec<f32> = from::<Vec<f32>>(&col_tensor);
+                    Series::new((*c).into(), col_data).into()
+                })
+                .collect(),
         ]
-            .concat()
-    ).unwrap();
+        .concat(),
+    )
+    .unwrap();
 
     let mut file = std::fs::File::create(path).unwrap();
     CsvWriter::new(&mut file).finish(&mut df).unwrap();
 }
 
-pub fn labeled_tensors_by_descr<'a,  >(label:&String, resource_set_descr:&String, store: Arc<RwLock<Box<dyn Store>>>) -> Vec<(i64, Vec <Resource>)>  {
-    debug!("labeled_tensors_by_descr: label={:?} resource_set_descr={:?}", label, resource_set_descr);
+pub fn labeled_tensors_by_descr<'a>(
+    label: &String,
+    resource_set_descr: &String,
+    store: Arc<RwLock<Box<dyn Store>>>,
+) -> Vec<(i64, Vec<Resource>)> {
+    debug!(
+        "labeled_tensors_by_descr: label={:?} resource_set_descr={:?}",
+        label, resource_set_descr
+    );
 
     let store_lock = store.read();
 
     vec![
         (
             1,
-            store_lock.list_resource_set_resources_by_descr(resource_set_descr).expect("list_resource_set_resources_by_descr")
+            store_lock
+                .list_resource_set_resources_by_descr(resource_set_descr)
+                .expect("list_resource_set_resources_by_descr"),
         ),
         (
             0,
-            store_lock.list_resource_random_not_label(label.as_str(), 100).expect("list_resource_random_not_label")
-        )
+            store_lock
+                .list_resource_random_not_label(label.as_str(), 100)
+                .expect("list_resource_random_not_label"),
+        ),
     ]
 }
 
-
 #[cfg(test)]
 mod data_tests {
-    use std::mem::forget;
+    use crate::data::{arr_to_expr, split_frame_by_offsets};
     use log::debug;
     use polars::prelude::*;
     use polars_arrow::array::Float32Array;
     use polars_arrow::buffer::Buffer;
+    use std::mem::forget;
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::{Device, IndexOp, Kind, Tensor};
-    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::test_utils::init_test_logging;
-    use crate::data::{arr_to_expr, split_frame_by_offsets};
+    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
 
     #[ctor::ctor]
     fn init() {
         init_test_logging();
     }
 
-
     #[test]
     pub fn test_arr_to_expr() -> Result<(), ThoosaError> {
-
         let df: DataFrame = df!(
             "val"       => [1, 2, 3, 4, 5, 6, 7, 8, 9],
         )?;
@@ -267,16 +325,14 @@ mod data_tests {
 
     #[test]
     pub fn test_split_frame_by_offsets() -> Result<(), ThoosaError> {
-
         let df = df!(
             "col1"  => (0..10).map(|i| i as f64).collect::<Vec<f64>>(),
             "col2"  => (0..10).map(|i| i as f64 * 10.).collect::<Vec<f64>>(),
         )?;
 
-
         let mut frames = split_frame_by_offsets(df, [0i64, 3i64, 8i64])?;
 
-        frames.sort_by(|f1, f2|f1.shape().0.cmp(&f2.shape().0));
+        frames.sort_by(|f1, f2| f1.shape().0.cmp(&f2.shape().0));
 
         assert_eq!(
             &df!(
@@ -302,95 +358,99 @@ mod data_tests {
             &frames[2],
         );
 
-
         Ok(())
     }
 
-
     #[test]
-    fn test_save_tensor() -> Result<(), ThoosaError>{
+    fn test_save_tensor() -> Result<(), ThoosaError> {
         let t = Tensor::randn([3, 6], (Float, Cpu));
 
         let path = "/tmp/sub.csv";
         let ids = vec!["a111".to_string(), "b222".to_string(), "c333".to_string()];
         super::save_tensor(
-            &["eeg_id","seizure_vote","lpd_vote","gpd_vote","lrda_vote","grda_vote","other_vote"],
+            &[
+                "eeg_id",
+                "seizure_vote",
+                "lpd_vote",
+                "gpd_vote",
+                "lrda_vote",
+                "grda_vote",
+                "other_vote",
+            ],
             ids.clone(),
             &t,
-            path
+            path,
         );
 
         let lf = LazyCsvReader::new(path).finish().unwrap().collect()?;
         let mut checked = 0;
         for (column_i, column) in lf.get_columns().iter().enumerate() {
             if column_i == 0 {
-             for (row_i, v) in column.str()?.into_iter().enumerate() {
-                 assert_eq!(ids[row_i], v.unwrap());
-                 checked += 1;
-             }
-
+                for (row_i, v) in column.str()?.into_iter().enumerate() {
+                    assert_eq!(ids[row_i], v.unwrap());
+                    checked += 1;
+                }
             } else {
                 for (row_i, v) in column.f64()?.into_iter().enumerate() {
                     assert_eq!(
-                        format!("{:.3}", t.i((row_i as i64, column_i as i64-1)).double_value(&[])),
+                        format!(
+                            "{:.3}",
+                            t.i((row_i as i64, column_i as i64 - 1)).double_value(&[])
+                        ),
                         format!("{:.3}", v.unwrap())
                     );
                     checked += 1;
                 }
             }
-
         }
         assert_eq!(checked, 21);
 
         Ok(())
     }
-
 }
 
 pub struct ParquetLoader {
-    base_path:String,
-    tensors_path:Option<String>,
+    base_path: String,
+    tensors_path: Option<String>,
     dsp_filters: Option<Box<dyn Fn(Tensor) -> Tensor + Send + Sync>>,
-    resource_to_path:Box<dyn Fn(&str, &str)->String  + Send + Sync>
+    resource_to_path: Box<dyn Fn(&str, &str) -> String + Send + Sync>,
 }
 
 impl ParquetLoader {
-
     pub fn new(
         base_path: String,
         tensors_path: Option<String>,
-        dsp_filters: Option<Box<dyn Fn(Tensor)->Tensor +Send + Sync>>,
-        resource_to_path:Box<dyn Fn(&str, &str)->String  + Send + Sync>
+        dsp_filters: Option<Box<dyn Fn(Tensor) -> Tensor + Send + Sync>>,
+        resource_to_path: Box<dyn Fn(&str, &str) -> String + Send + Sync>,
     ) -> Self {
         Self {
-            base_path, tensors_path, dsp_filters, resource_to_path
+            base_path,
+            tensors_path,
+            dsp_filters,
+            resource_to_path,
         }
     }
-
 }
 
 impl ResourceLoader for ParquetLoader {
     type K = String;
     type V = Tensor;
 
-    fn load(&self, key: &String, device:Device) -> Tensor {
-
-        let t = if let Some(tensors_path) = self.tensors_path.as_ref() {//TODO move into another loader
+    fn load(&self, key: &String, device: Device) -> Tensor {
+        let t = if let Some(tensors_path) = self.tensors_path.as_ref() {
+            //TODO move into another loader
             load_tensor(tensors_path.as_str(), key.as_str(), device)
-
         } else {
             parquet_to_tensor_by_path(
                 (self.resource_to_path)(self.base_path.as_str(), key.as_str()),
-                device
+                device,
             )
-
-        }.map(|t|{
-            match self.dsp_filters.as_ref() {
-                None => t,
-                Some(f) => f(t)
-            }
-
-        }).expect(format!("can't load {}", key).as_str());
+        }
+        .map(|t| match self.dsp_filters.as_ref() {
+            None => t,
+            Some(f) => f(t),
+        })
+        .expect(format!("can't load {}", key).as_str());
 
         t
     }

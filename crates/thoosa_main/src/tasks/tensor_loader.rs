@@ -11,16 +11,15 @@ use tch::Device;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
-use thoosa_shared::ThoosaError;
 use torch_runner::data::ThoTensor2;
-
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
-pub struct TensorLoader{
+pub struct TensorLoader {
     device: ThoDevice,
     loader_fn: Box<dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send>,
 }
@@ -32,7 +31,6 @@ impl Debug for TensorLoader {
             .finish()
     }
 }
-
 
 #[async_trait]
 impl Stage for TensorLoader {
@@ -49,19 +47,16 @@ impl Stage for TensorLoader {
     }
 }
 
-
 impl OutId for TensorLoader {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("loaded_{}", input_id.id()))
     }
 }
 
-
-
-impl  TensorLoader {
-    pub fn new<F>(loader_fn:F, device: ThoDevice) -> Self
+impl TensorLoader {
+    pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
-        F: Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send + 'static
+        F: Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send + 'static,
     {
         Self {
             device,
@@ -79,15 +74,14 @@ mod tests {
     use std::sync::Arc;
     use tch::{Device, Tensor};
     use thoosa_common::applicables::ThoDevice;
+    use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::ThoosaError;
     use torch_runner::data::ThoTensor2;
 
     #[tokio::test]
-    async fn test_load() -> Result<(), ThoosaError>{
+    async fn test_load() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
-
 
         let mut data = vec![0f32; 16];
         rand::rng().fill(&mut data[..]);
@@ -95,32 +89,34 @@ mod tests {
 
         let loader = Arc::new(TensorLoader::new(
             move |key, _| {
-
-                ThoTensor2::new(Input::id(key).clone(), Tensor::from_slice(&data_0).view((-1, 1)))
+                ThoTensor2::new(
+                    Input::id(key).clone(),
+                    Tensor::from_slice(&data_0).view((-1, 1)),
+                )
             },
-            ThoDevice::from(Device::Cpu)
+            ThoDevice::from(Device::Cpu),
         ));
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
-        let loaded = loader.run_cached(
-            Arc::new(Resource::new(0, 0, "aaa".to_string(), 20)), ctx
-        ).await.map_err(|e|ThoosaError::new("zzz"))?;
+        let loaded = loader
+            .run_cached(Arc::new(Resource::new(0, 0, "aaa".to_string(), 20)), ctx)
+            .await
+            .map_err(|e| ThoosaError::new("zzz"))?;
 
-
-        let result = loaded.with_data(0, None, None, |v|{
-            println!("loaded: v={v:?}");
-            v.run_inner(
-                |t|{
-                    Ok(Tensor::from_slice(&data).view((-1,1)).allclose(t, 0.01, 0.01, false))
-                }
-            )
-        }).await?;
-
+        let result = loaded
+            .with_data(0, None, None, |v| {
+                println!("loaded: v={v:?}");
+                v.run_inner(|t| {
+                    Ok(Tensor::from_slice(&data)
+                        .view((-1, 1))
+                        .allclose(t, 0.01, 0.01, false))
+                })
+            })
+            .await?;
 
         assert!(result);
 
         Ok(())
     }
-
 }

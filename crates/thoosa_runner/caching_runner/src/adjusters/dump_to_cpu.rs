@@ -1,15 +1,15 @@
-use crate::common::{RunCtx};
+use crate::common::RunCtx;
 use crate::global_ctx::GlobalCtx;
 use crate::oom_handler::{Adjustable, Adjuster, RunCtxContext};
 use crate::permits::MAX_PERMITS;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
+use log::debug;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use log::debug;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::CachableIdTr;
 
@@ -39,23 +39,24 @@ pub trait DumpToCpuContext<'a>: Debug + RunCtxContext {
 
 #[derive(Debug)]
 pub struct DumpToCpuContextImpl<'a> {
-    ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>
+    ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
 }
 
-impl <'a> DumpToCpuContextImpl<'a> {
-    pub fn new(ids_to_exclude:&'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>) -> Self {
+impl<'a> DumpToCpuContextImpl<'a> {
+    pub fn new(
+        ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
+    ) -> Self {
         Self { ids_to_exclude }
     }
 }
 
-impl <'a> DumpToCpuContext<'a> for DumpToCpuContextImpl<'a> {
-    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>{
+impl<'a> DumpToCpuContext<'a> for DumpToCpuContextImpl<'a> {
+    fn ids_to_exclude(&self) -> &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>> {
         self.ids_to_exclude
     }
 }
 
-impl <'a> RunCtxContext for DumpToCpuContextImpl<'a> {}
-
+impl<'a> RunCtxContext for DumpToCpuContextImpl<'a> {}
 
 #[async_trait]
 impl<'a, A, C> Adjuster<C> for DumpToCpu<A>
@@ -80,8 +81,10 @@ where
             .dump_all_to_cpu(ids_to_exclude, device_idx)
             .await?;
 
-
-        debug!("DumpToCpu::adjust done: is_all_on_cpu={}", GlobalCtx::global().is_all_on_cpu(device_idx));
+        debug!(
+            "DumpToCpu::adjust done: is_all_on_cpu={}",
+            GlobalCtx::global().is_all_on_cpu(device_idx)
+        );
 
         Ok(Arc::clone(adjustable))
     }

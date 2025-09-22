@@ -3,7 +3,7 @@ use std::iter::Fuse;
 pub enum Repeat {
     First,
     Last,
-    Both
+    Both,
 }
 
 //https://stackoverflow.com/questions/76218621/rust-iterator-that-repeats-the-first-and-last-element-of-another-iterator
@@ -14,13 +14,11 @@ pub struct FirstLastRepeat<I, T> {
     stash: Option<T>,
 }
 
-
-
 impl<I, T> FirstLastRepeat<I, T>
-    where
-        I: Iterator<Item = T>,
+where
+    I: Iterator<Item = T>,
 {
-    pub fn new(iter: I, repeat:Repeat) -> Self {
+    pub fn new(iter: I, repeat: Repeat) -> Self {
         let mut iter = iter.fuse();
         let head = iter.next();
 
@@ -30,23 +28,22 @@ impl<I, T> FirstLastRepeat<I, T>
                 iter,
                 head: None,
                 tail: None,
-                stash: head
+                stash: head,
             },
             Repeat::Both => Self {
                 iter,
                 head,
                 tail: None,
-                stash: None
-            }
+                stash: None,
+            },
         }
-
     }
 }
 
 impl<I, T> Iterator for FirstLastRepeat<I, T>
-    where
-        I: Iterator<Item = T>,
-        T: Clone,
+where
+    I: Iterator<Item = T>,
+    T: Clone,
 {
     type Item = T;
 
@@ -70,8 +67,8 @@ impl<I, T> Iterator for FirstLastRepeat<I, T>
 #[cfg(test)]
 mod tests {
 
-    use crate::test_utils::init_test_logging;
     use crate::repeat_iter::{FirstLastRepeat, Repeat};
+    use crate::test_utils::init_test_logging;
 
     #[ctor::ctor]
     fn init() {
@@ -93,5 +90,4 @@ mod tests {
 
         assert_eq!(vec![1, 2, 3, 3], flr);
     }
-
 }

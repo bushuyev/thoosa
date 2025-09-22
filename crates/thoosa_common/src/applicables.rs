@@ -1,20 +1,23 @@
-use std::fmt::{Debug, Formatter};
-use async_trait::async_trait;
-use dashmap::DashMap;
-use futures_util::future::{join_all, BoxFuture, Shared};
-use parking_lot::RwLock;
-use std::ops::Deref;
-use std::sync::Arc;
-use log::debug;
-use rayon::ThreadPool;
-use tch::{Device, Tensor};
-use tch::Kind::Float;
 use crate::dims::{TCD, TCDF, TCSD};
-use thoosa_shared::applicables_runner::{CachableId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input, MapWithThread, Output, RunCtx, Runner, Statistics, ToOrdinal};
-use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::{Cachable, Runnable};
 use crate::find_motifs_run_config::FindMotifsApplicable;
 use crate::train_nets::{LoadMotifNetCachable, LoadMotifNetInput, LoadMotifNetOutput};
+use async_trait::async_trait;
+use dashmap::DashMap;
+use futures_util::future::{BoxFuture, Shared, join_all};
+use log::debug;
+use parking_lot::RwLock;
+use rayon::ThreadPool;
+use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
+use std::sync::Arc;
+use tch::Kind::Float;
+use tch::{Device, Tensor};
+use thoosa_shared::applicables_runner::{
+    CachableId, DataInDevices, DeviceThreadPools, FuturesRunner, FuturesRunnerMap, Input,
+    MapWithThread, Output, RunCtx, Runner, Statistics, ToOrdinal,
+};
+use thoosa_shared::resource::Resource;
+use thoosa_shared::run_configs::{Cachable, Runnable};
 
 #[derive(Debug, Clone)]
 pub struct ThoDevice(Device);
@@ -43,24 +46,22 @@ impl From<usize> for ThoDevice {
     fn from(value: usize) -> Self {
         match value {
             0 => ThoDevice(Device::Cpu),
-            d => ThoDevice(Device::Cuda(d-1)),
+            d => ThoDevice(Device::Cuda(d - 1)),
         }
     }
 }
 
 impl ThoDevice {
-    pub fn ordinal(&self)-> usize {
+    pub fn ordinal(&self) -> usize {
         match &self.0 {
             Device::Cpu => 0,
-            Device::Cuda(v) => v+1,
-            _=> {
+            Device::Cuda(v) => v + 1,
+            _ => {
                 unimplemented!()
             }
         }
     }
 }
-
-
 
 #[derive(Debug)]
 pub struct ThoRunCtx {
@@ -72,7 +73,7 @@ pub struct ThoRunCtx {
 }
 
 impl ThoRunCtx {
-    pub fn new(cache_area:u64) -> Self {
+    pub fn new(cache_area: u64) -> Self {
         Self {
             cache_area,
             loaded: Vec::new(),
@@ -83,18 +84,13 @@ impl ThoRunCtx {
 }
 
 impl RunCtx for ThoRunCtx {
-    fn into_cached_iter_mut(self) -> impl Iterator<Item=Vec<CachableId>> {
-        [
-            self.loaded,
-            self.find_motifs,
-            self.motif_nets,
-        ].into_iter()
+    fn into_cached_iter_mut(self) -> impl Iterator<Item = Vec<CachableId>> {
+        [self.loaded, self.find_motifs, self.motif_nets].into_iter()
     }
 
     fn cache_area(&self) -> u64 {
         self.cache_area
     }
-
 }
 
 pub struct TCDLoader {
@@ -103,14 +99,13 @@ pub struct TCDLoader {
 }
 
 impl TCDLoader {
-
-    pub fn new<F>(loader_fn:F, device: ThoDevice) -> TCDLoader
+    pub fn new<F>(loader_fn: F, device: ThoDevice) -> TCDLoader
     where
         F: Fn(&Resource, &Device) -> TCD + Sync + Send + 'static,
     {
         Self {
             device,
-            loader_fn:Box::new(loader_fn),
+            loader_fn: Box::new(loader_fn),
         }
     }
 }
@@ -127,7 +122,12 @@ impl Debug for TCDLoader {
 impl Runnable<Resource, TCD, ()> for TCDLoader {
     type R = ThoRunner;
 
-    async fn async_run(self: Arc<Self>, input: Arc<Resource>, runner: Arc<ThoRunner>, ctx: Option<Arc<RwLock<ThoRunCtx>>>) -> Arc<TCD> {
+    async fn async_run(
+        self: Arc<Self>,
+        input: Arc<Resource>,
+        runner: Arc<ThoRunner>,
+        ctx: Option<Arc<RwLock<ThoRunCtx>>>,
+    ) -> Arc<TCD> {
         Arc::new((self.loader_fn)(&input, &*self.device))
     }
     fn device(&self) -> impl ToOrdinal {
@@ -137,7 +137,6 @@ impl Runnable<Resource, TCD, ()> for TCDLoader {
 
 #[async_trait]
 impl Cachable<Resource, TCD, ()> for TCDLoader {
-
     fn applied_id(&self, prev_id: &CachableId) -> CachableId {
         Self::format_0(&prev_id.0)
     }
@@ -149,15 +148,13 @@ impl Cachable<Resource, TCD, ()> for TCDLoader {
     fn run_id(&self) -> String {
         "".to_string()
     }
-
-
 }
 
 impl ToOrdinal for ThoDevice {
     fn ordinal(&self) -> usize {
         match self.0 {
             Device::Cpu => 0,
-            Device::Cuda(d) => d+1,
+            Device::Cuda(d) => d + 1,
             _ => {
                 unimplemented!()
             }
@@ -165,16 +162,15 @@ impl ToOrdinal for ThoDevice {
     }
 }
 
-
 #[derive(Debug)]
 pub struct ThoRunner {
-    futures_runner:Arc<FuturesRunner>,
+    futures_runner: Arc<FuturesRunner>,
 
     loader_cache_fut: MapWithThread<TCD>,
     find_motifs_cache_fut: MapWithThread<TCDF>,
     motif_nets_cache_fut: MapWithThread<LoadMotifNetOutput>,
 
-    tcd_loaders:Vec<Arc<TCDLoader>>
+    tcd_loaders: Vec<Arc<TCDLoader>>,
 }
 
 impl Runner for ThoRunner {
@@ -182,37 +178,39 @@ impl Runner for ThoRunner {
 }
 
 impl ThoRunner {
-
-    pub fn new<F>(devices_threads: &[usize], loader_fn:F) -> Self where
-        F: Fn(&Resource, &Device) -> TCD + Sync + Send + Clone + 'static {
-
+    pub fn new<F>(devices_threads: &[usize], loader_fn: F) -> Self
+    where
+        F: Fn(&Resource, &Device) -> TCD + Sync + Send + Clone + 'static,
+    {
         let mut tcd_loaders = Vec::with_capacity(devices_threads.len());
-        tcd_loaders.push(
-            Arc::new(TCDLoader::new(loader_fn.clone(), Device::Cpu.into()))
-        );
+        tcd_loaders.push(Arc::new(TCDLoader::new(
+            loader_fn.clone(),
+            Device::Cpu.into(),
+        )));
 
-        for i in 0..devices_threads.len()-1 {
-            tcd_loaders.push(
-                Arc::new(TCDLoader::new(loader_fn.clone(), Device::Cuda(i).into()))
-            );
+        for i in 0..devices_threads.len() - 1 {
+            tcd_loaders.push(Arc::new(TCDLoader::new(
+                loader_fn.clone(),
+                Device::Cuda(i).into(),
+            )));
         }
 
         Self {
-            futures_runner: Arc::new(FuturesRunner::new(&devices_threads)),//TODO config
+            futures_runner: Arc::new(FuturesRunner::new(&devices_threads)), //TODO config
 
             loader_cache_fut: MapWithThread::new("loader_cache"),
 
             find_motifs_cache_fut: MapWithThread::new("find_motifs_cache"),
 
             motif_nets_cache_fut: MapWithThread::new("motif_nets_cache_fut"),
-            tcd_loaders
+            tcd_loaders,
         }
     }
 
-    pub fn run<I, O, A: Runnable<I, O, (), R=Self> + 'static>(
+    pub fn run<I, O, A: Runnable<I, O, (), R = Self> + 'static>(
         self: &Arc<Self>,
         input: Arc<I>,
-        applicable:&Arc<A>,
+        applicable: &Arc<A>,
     ) -> BoxFuture<'static, O>
     where
         O: Debug + Send + Sync + 'static,
@@ -225,12 +223,14 @@ impl ThoRunner {
         self: &Arc<Self>,
         input: &Resource,
         on_device: &Device,
-        ctx: Option<Arc<RwLock<ThoRunCtx>>>
+        ctx: Option<Arc<RwLock<ThoRunCtx>>>,
     ) -> Shared<BoxFuture<'static, Arc<TCD>>> {
         let applicable = &self.tcd_loaders[ThoDevice::from(*on_device).ordinal()];
 
         if let Some(ctx) = ctx.as_ref() {
-            ctx.write().loaded.push(applicable.applied_id(Input::id(input)));
+            ctx.write()
+                .loaded
+                .push(applicable.applied_id(Input::id(input)));
         }
 
         self.futures_runner.run_cached_task(
@@ -246,11 +246,15 @@ impl ThoRunner {
         self: &Arc<Self>,
         input: &Arc<TCD>,
         applicable: &Arc<FindMotifsApplicable>,
-        ctx: Option<Arc<RwLock<ThoRunCtx>>>
+        ctx: Option<Arc<RwLock<ThoRunCtx>>>,
     ) -> Shared<BoxFuture<'static, Arc<TCDF>>> {
-
         if let Some(ctx) = ctx.as_ref() {
-            ctx.write().loaded.push(<FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(applicable, Input::id(input.as_ref())));
+            ctx.write().loaded.push(
+                <FindMotifsApplicable as Cachable<TCD, TCDF, ()>>::applied_id(
+                    applicable,
+                    Input::id(input.as_ref()),
+                ),
+            );
         }
 
         self.futures_runner.run_cached_task(
@@ -266,13 +270,20 @@ impl ThoRunner {
         self: &Arc<Self>,
         input: &Arc<LoadMotifNetInput>,
         applicable: &Arc<LoadMotifNetCachable>,
-        ctx: Option<Arc<RwLock<ThoRunCtx>>>
+        ctx: Option<Arc<RwLock<ThoRunCtx>>>,
     ) -> Shared<BoxFuture<'static, Arc<LoadMotifNetOutput>>> {
-
         if let Some(ctx) = ctx.as_ref() {
-            ctx.write().motif_nets.push(<LoadMotifNetCachable as Cachable<LoadMotifNetInput, LoadMotifNetOutput, ()>>::applied_id(applicable, Input::id(input.as_ref())));
+            ctx.write()
+                .motif_nets
+                .push(<LoadMotifNetCachable as Cachable<
+                    LoadMotifNetInput,
+                    LoadMotifNetOutput,
+                    (),
+                >>::applied_id(
+                    applicable, Input::id(input.as_ref())
+                ));
         }
-        
+
         self.futures_runner.run_cached_task(
             &self.motif_nets_cache_fut,
             Arc::clone(&input),
@@ -286,25 +297,30 @@ impl ThoRunner {
         [
             &self.loader_cache_fut as &dyn FuturesRunnerMap,
             &self.find_motifs_cache_fut as &dyn FuturesRunnerMap,
-        ].into_iter()
+        ]
+        .into_iter()
     }
 
-    pub async fn purge_all_gpu_caches(self:Arc<Self>, ctx: ThoRunCtx, device:Device){
-        Arc::clone(&self.futures_runner).purge_all_gpu_caches(ctx, &ThoDevice::from(device), self.to_futs_iter()).await;
+    pub async fn purge_all_gpu_caches(self: Arc<Self>, ctx: ThoRunCtx, device: Device) {
+        Arc::clone(&self.futures_runner)
+            .purge_all_gpu_caches(ctx, &ThoDevice::from(device), self.to_futs_iter())
+            .await;
     }
 
     pub fn next_ctx(&self) -> Arc<RwLock<ThoRunCtx>> {
-        Arc::new(RwLock::new(ThoRunCtx::new(self.futures_runner.next_available_cache_area())))
+        Arc::new(RwLock::new(ThoRunCtx::new(
+            self.futures_runner.next_available_cache_area(),
+        )))
     }
 
-    pub fn futures_runner(self:&Arc<Self>) -> &Arc<FuturesRunner> {
+    pub fn futures_runner(self: &Arc<Self>) -> &Arc<FuturesRunner> {
         &self.futures_runner
     }
-    
+
     pub fn loader_keys(&self) -> Vec<String> {
         self.loader_cache_fut.keys()
     }
-    
+
     pub fn find_motif_keys(&self) -> Vec<String> {
         self.find_motifs_cache_fut.keys()
     }
@@ -313,32 +329,28 @@ impl ThoRunner {
 #[cfg(test)]
 mod tests {
     use super::{TCDLoader, ThoRunner};
-    use std::sync::Arc;
-    use std::time::Instant;
+    use crate::dims::TCD;
     use futures::executor::block_on;
     use log::debug;
+    use std::sync::Arc;
+    use std::time::Instant;
     use tch::Kind::Float;
     use tch::{Device, Tensor};
-    use crate::dims::TCD;
     use thoosa_shared::resource::Resource;
 
-
     #[test]
-    fn test_loader(){
+    fn test_loader() {
         let t_0 = Instant::now();
 
-        let runner = Arc::new(ThoRunner::new(
-            &[10, 2, 2],
-              |key, device| {
-                  debug!("loader_fn: thread={:?}", std::thread::current().name());
-                  Tensor::rand(&[1000], (Float, *device)).into()
-              }
-        ));
+        let runner = Arc::new(ThoRunner::new(&[10, 2, 2], |key, device| {
+            debug!("loader_fn: thread={:?}", std::thread::current().name());
+            Tensor::rand(&[1000], (Float, *device)).into()
+        }));
 
-        let res:Arc<TCD> = block_on(runner.clone().run_loader(
+        let res: Arc<TCD> = block_on(runner.clone().run_loader(
             &Resource::new(0, 1, "aaa".to_string(), 1000),
             &Device::Cpu,
-            None
+            None,
         ));
 
         debug!("loader_cache keys:{:?}", runner.loader_cache_fut.keys());
