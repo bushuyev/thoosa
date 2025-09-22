@@ -51,14 +51,14 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {
 
 pub struct CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor) -> Result<R, ThoosaError>,
+    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError>,
 {
     batch_clc: F,
 }
 
 impl<F, R> Debug for CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor) -> Result<R, ThoosaError>,
+    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossBatchClc").finish()
@@ -67,7 +67,7 @@ where
 
 impl<F, R> CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor) -> Result<R, ThoosaError>,
+    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError>,
 {
     pub fn new(batch_clc: F) -> Self {
         Self { batch_clc }
@@ -117,7 +117,7 @@ impl<R: Debug> Output for CrossBatchClcOutput<R> {}
 #[async_trait]
 impl<F, R> Stage for CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor) -> Result<R, ThoosaError> + 'static,
+    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError> + 'static,
     R: Debug + Output + Input + Send + 'static,
 {
     type In<'a> = BatchInput<'a, &'a Arc<Resource>>; //where Self:'a, R:'a, F: 'a;
@@ -178,7 +178,7 @@ where
 
         let iter = SlicesIter::new(2, resource_ids_sizes);
 
-        (self.batch_clc)(batch_0_t.shallow_clone(), batch_1_t)
+        (self.batch_clc)(batch_0_t, batch_1_t, input.b_0[0].id().eq(&input.b_1[0].id()))
             .map(|v| CrossBatchClcOutput::new(v, iter))
     }
 }
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
-        let cross_batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1| {
+        let cross_batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, is_diag| {
             debug!("t_0=\n{t_0}");
             debug!("t_1=\n{t_1}");
 

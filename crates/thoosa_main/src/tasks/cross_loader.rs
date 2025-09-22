@@ -595,6 +595,7 @@ mod tests {
     use thoosa_shared::{cdt_for_dir, ThoosaError};
     use tokio::task::yield_now;
     use tokio::time::sleep;
+    use thoosa_motifs::distance::MaskMaker::Tril;
     use torch_runner::data::ThoTensor2;
 
     static INIT: Once = Once::new();
@@ -678,10 +679,13 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1| {
+        let batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, is_diag| {
             let mut mask_makers = vec![];
+            if is_diag {
+                mask_makers.push(Tril);
+            }
             let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                t_0.shallow_clone(),
+                t_0,
                 t_1,
                 true,
                 &mut mask_makers,
