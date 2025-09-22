@@ -1,20 +1,19 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter};
-use std::fs::File;
-use std::io::{BufReader, Read, Write};
-use std::marker::PhantomData;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::{IdSlice, MotifTrackerStore, SlicesMatch, Store, filter_groups_by_slices_count};
 use bytemuck::AnyBitPattern;
 use log::{debug, error, info, trace};
 use parking_lot::RwLock;
-use zstd_framed::{ZstdReader, ZstdWriter};
-use zstd_framed::table::ZstdFrame;
-use thoosa_shared::{group_slices, ThoosaError};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
+use std::fs::File;
+use std::io;
+use std::io::{BufReader, Read, Write};
+use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thoosa_shared::run_configs::RunId;
-use crate::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMatch, Store};
-
+use thoosa_shared::{ThoosaError, group_slices};
+use zstd_framed::table::ZstdFrame;
+use zstd_framed::{ZstdReader, ZstdWriter};
 
 pub struct FileMotifTrackerStore {
     run_id: RunId,
@@ -34,35 +33,38 @@ impl Debug for FileMotifTrackerStore {
 }
 
 impl FileMotifTrackerStore {
-
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(
+        path: P,
+        run_id: RunId,
+        channel: u32,
+    ) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
         debug!("FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel}");
 
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path.as_ref().join(format!("{run_id}_{channel}_slices.zstd").as_str()))?;
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(
+            path.as_ref()
+                .join(format!("{run_id}_{channel}_slices.zstd").as_str()),
+        )?;
 
         let writer = ZstdWriter::builder(file)
             .with_compression_level(3) // Set compression level
             .with_seek_table(u32::MAX)
             .build()?;
 
-
         Ok(Box::new(Self {
             run_id,
             channel,
             writer,
             path: path.as_ref().to_path_buf(),
-
         }))
     }
 }
 
 impl MotifTrackerStore for FileMotifTrackerStore {
-
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
-        debug!("MotifTrackerStore::save_slices: slices_pairs.len()={}", slices_pairs.len());
+        debug!(
+            "MotifTrackerStore::save_slices: slices_pairs.len()={}",
+            slices_pairs.len()
+        );
 
         let data_bytes = unsafe {
             std::slice::from_raw_parts(
@@ -78,31 +80,45 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
-        debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
-        
+    fn load_slices_into_groups(
+        &mut self,
+        store: &Arc<RwLock<Box<dyn Store>>>,
+        max_slices_counts: Option<u32>,
+    ) -> Result<(), ThoosaError> {
+        debug!(
+            "MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}"
+        );
+
         self.writer.shutdown()?;
         let mut slice_id = 0;
 
-        let groups:HashMap<u16, HashSet<IdSlice>> = group_slices(
-
-            ZstdFramedReader::new(&self.path.join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()))?.flat_map(|slices|{
-                slices.unwrap().into_iter().map(move |slices:SlicesMatch|{
-                    slice_id+=1;
+        let groups: HashMap<u16, HashSet<IdSlice>> = group_slices(
+            ZstdFramedReader::new(
+                &self
+                    .path
+                    .join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()),
+            )?
+            .flat_map(|slices| {
+                slices.unwrap().into_iter().map(move |slices: SlicesMatch| {
+                    slice_id += 1;
                     (
                         IdSlice(slice_id, slices.0.0, slices.0.1),
-                        IdSlice(slice_id, slices.1.0, slices.1.1)
+                        IdSlice(slice_id, slices.1.0, slices.1.1),
                     )
                 })
-            })
+            }),
         );
-        info!("inserting {} groups {} slices", groups.len(), groups.values().map(|s|s.len()).sum::<usize>());
+        info!(
+            "inserting {} groups {} slices",
+            groups.len(),
+            groups.values().map(|s| s.len()).sum::<usize>()
+        );
         store.write().save_groups_as_motifs(
-            self.run_id, self.channel as i64,
-            filter_groups_by_slices_count(max_slices_counts, groups)
+            self.run_id,
+            self.channel as i64,
+            filter_groups_by_slices_count(max_slices_counts, groups),
         )
     }
-
 
     fn run_id(&self) -> RunId {
         self.run_id
@@ -117,18 +133,16 @@ impl MotifTrackerStore for FileMotifTrackerStore {
     }
 }
 
-pub struct ZstdFramedReader<T:AnyBitPattern> {
+pub struct ZstdFramedReader<T: AnyBitPattern> {
     reader: ZstdReader<'static, BufReader<File>>,
-    frames:Vec<ZstdFrame>,
+    frames: Vec<ZstdFrame>,
     _phantom: PhantomData<T>,
-    frame_i:usize,
-    file_path:PathBuf
+    frame_i: usize,
+    file_path: PathBuf,
 }
 
-impl<T:AnyBitPattern> ZstdFramedReader<T> {
-
+impl<T: AnyBitPattern> ZstdFramedReader<T> {
     pub fn new(file_path: &Path) -> std::io::Result<Self> {
-
         let mut reader = File::open(&file_path)?;
         let table = zstd_framed::table::read_seek_table(&mut reader)?.unwrap();
 
@@ -136,15 +150,15 @@ impl<T:AnyBitPattern> ZstdFramedReader<T> {
 
         Ok(Self {
             reader: zstd_framed::ZstdReader::builder(reader).build()?,
-            frames:table.frames().collect(),
+            frames: table.frames().collect(),
             frame_i: 0,
             _phantom: PhantomData,
-            file_path: file_path.to_path_buf()
+            file_path: file_path.to_path_buf(),
         })
     }
 }
 
-impl<T:AnyBitPattern> Iterator for ZstdFramedReader<T> {
+impl<T: AnyBitPattern> Iterator for ZstdFramedReader<T> {
     type Item = io::Result<Vec<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -152,59 +166,79 @@ impl<T:AnyBitPattern> Iterator for ZstdFramedReader<T> {
             let mut buff = vec![0; self.frames[self.frame_i].decompressed_size() as usize];
             self.reader.read_exact(&mut buff).unwrap();
 
-            self.frame_i+=1;
+            self.frame_i += 1;
 
-            Some(Ok(bytemuck::try_cast_slice(&mut buff).map_err(|e|{
-                error!("ZstdFramedReader:next: file_path={:?} self.frame_i={} e={e:?}", self.file_path, self.frame_i);
-                e
-            }).expect("bytemuck failed").to_vec()))
-
+            Some(Ok(bytemuck::try_cast_slice(&mut buff)
+                .map_err(|e| {
+                    error!(
+                        "ZstdFramedReader:next: file_path={:?} self.frame_i={} e={e:?}",
+                        self.file_path, self.frame_i
+                    );
+                    e
+                })
+                .expect("bytemuck failed")
+                .to_vec()))
         } else {
             None
         }
     }
 }
 
-
 #[cfg(test)]
 mod tests {
+    use crate::fs_store::{FileMotifTrackerStore, SlicesMatch, ZstdFramedReader};
+    use crate::{IdSlice, SqlStore, filter_groups_by_slices_count};
+    use log::LevelFilter::Trace;
+    use log::{debug, error};
+    use parking_lot::{Mutex, RwLock};
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use log::{debug, error};
-    use log::LevelFilter::Trace;
-    use parking_lot::{Mutex, RwLock};
-    use thoosa_shared::{cdt_for_dir, group_slices, TensorIdSliceIdx, ThoosaError};
-    use crate::fs_store::{ZstdFramedReader, FileMotifTrackerStore, SlicesMatch};
-    use crate::{filter_groups_by_slices_count, IdSlice, SqlStore};
+    use thoosa_shared::{TensorIdSliceIdx, ThoosaError, cdt_for_dir, group_slices};
 
     #[test]
-    fn test_single_part() -> Result<(), ThoosaError>{
+    fn test_single_part() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
+            test_dir.join("main_store.db3"),
+        )?));
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+        let run_id =
+            store
+                .write()
+                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
-        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
-
-        let mut file_store = FileMotifTrackerStore::new(
-            test_dir,
-            run_id,
-            3
-        )?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 200), 0.1),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 200), TensorIdSliceIdx(resource_ids[0], 300), 0.2),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 700), 0.3),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 100),
+                TensorIdSliceIdx(resource_ids[0], 200),
+                0.1,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 200),
+                TensorIdSliceIdx(resource_ids[0], 300),
+                0.2,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 100),
+                TensorIdSliceIdx(resource_ids[0], 700),
+                0.3,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 700),
+                TensorIdSliceIdx(resource_ids[0], 800),
+                0.4,
+            ),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -212,43 +246,58 @@ mod tests {
         let resources = store.read().list_resources_by_ids(&resource_ids)?;
         let map = store.read().list_motifs_slices(run_id)?;
 
-
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices
+            .into_iter()
+            .map(|s| s.slice_idx)
+            .collect::<Vec<_>>();
         slise_idxs.sort();
 
-        assert_eq!(
-            vec![100, 200, 300, 700, 800],
-            slise_idxs
-        );
+        assert_eq!(vec![100, 200, 300, 700, 800], slise_idxs);
 
         Ok(())
     }
 
     #[test]
-    fn test_two_motifs() -> Result<(), ThoosaError>{
+    fn test_two_motifs() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
+            test_dir.join("main_store.db3"),
+        )?));
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+        let run_id =
+            store
+                .write()
+                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
-        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
-
-        let mut file_store = FileMotifTrackerStore::new(
-            test_dir,
-            run_id,
-            3
-        )?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 200), 0.1),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 200), TensorIdSliceIdx(resource_ids[1], 700), 0.3),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 300), TensorIdSliceIdx(resource_ids[1], 400), 0.2),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 400), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 100),
+                TensorIdSliceIdx(resource_ids[1], 200),
+                0.1,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[1], 200),
+                TensorIdSliceIdx(resource_ids[1], 700),
+                0.3,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 300),
+                TensorIdSliceIdx(resource_ids[1], 400),
+                0.2,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[1], 400),
+                TensorIdSliceIdx(resource_ids[0], 800),
+                0.4,
+            ),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -257,55 +306,76 @@ mod tests {
         let map = store.read().list_motifs_slices(run_id)?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let resoruce_0_motifs = motifs_slices.iter().map(|ms|ms.motif_id).collect::<HashSet<_>>();
+        let resoruce_0_motifs = motifs_slices
+            .iter()
+            .map(|ms| ms.motif_id)
+            .collect::<HashSet<_>>();
         assert_eq!(resoruce_0_motifs.len(), 2);
-        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices
+            .into_iter()
+            .map(|s| s.slice_idx)
+            .collect::<Vec<_>>();
         slise_idxs.sort();
 
-        assert_eq!(
-            vec![100, 300, 800],
-            slise_idxs
-        );
+        assert_eq!(vec![100, 300, 800], slise_idxs);
 
         let motifs_slices = map.get(&resources[1]).expect("resource 0");
-        let resoruce_1_motifs = motifs_slices.iter().map(|ms|ms.motif_id).collect::<HashSet<_>>();
+        let resoruce_1_motifs = motifs_slices
+            .iter()
+            .map(|ms| ms.motif_id)
+            .collect::<HashSet<_>>();
         assert_eq!(resoruce_1_motifs.len(), 2);
-        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices
+            .into_iter()
+            .map(|s| s.slice_idx)
+            .collect::<Vec<_>>();
         slise_idxs.sort();
 
-        assert_eq!(
-            vec![200, 400, 700],
-            slise_idxs
-        );
-
+        assert_eq!(vec![200, 400, 700], slise_idxs);
 
         Ok(())
     }
 
     #[test]
-    fn test_single_part_with_resources() -> Result<(), ThoosaError>{
+    fn test_single_part_with_resources() -> Result<(), ThoosaError> {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
+            test_dir.join("main_store.db3"),
+        )?));
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+        let run_id =
+            store
+                .write()
+                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
-        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
-
-        let mut file_store = FileMotifTrackerStore::new(
-            test_dir,
-            run_id,
-            3
-        )?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 200), 0.1),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 200), TensorIdSliceIdx(resource_ids[0], 300), 0.2),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 700), 0.3),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[1], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 100),
+                TensorIdSliceIdx(resource_ids[1], 200),
+                0.1,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[1], 200),
+                TensorIdSliceIdx(resource_ids[0], 300),
+                0.2,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 100),
+                TensorIdSliceIdx(resource_ids[1], 700),
+                0.3,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[1], 700),
+                TensorIdSliceIdx(resource_ids[0], 800),
+                0.4,
+            ),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -313,56 +383,71 @@ mod tests {
         let resources = store.read().list_resources_by_ids(&resource_ids)?;
         let map = store.read().list_motifs_slices(run_id)?;
 
-
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs_0 = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        let mut slise_idxs_0 = motifs_slices
+            .into_iter()
+            .map(|s| s.slice_idx)
+            .collect::<Vec<_>>();
         slise_idxs_0.sort();
 
-        assert_eq!(
-            vec![100, 300, 800],
-            slise_idxs_0
-        );
+        assert_eq!(vec![100, 300, 800], slise_idxs_0);
 
         let motifs_slices = map.get(&resources[1]).expect("resource 0");
-        let mut slise_idxs_1 = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        let mut slise_idxs_1 = motifs_slices
+            .into_iter()
+            .map(|s| s.slice_idx)
+            .collect::<Vec<_>>();
         slise_idxs_1.sort();
 
-        assert_eq!(
-            vec![200,700],
-            slise_idxs_1
-        );
+        assert_eq!(vec![200, 700], slise_idxs_1);
 
         Ok(())
     }
 
     #[test]
-    fn test_two_parts() -> Result<(), ThoosaError>{
+    fn test_two_parts() -> Result<(), ThoosaError> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
+            test_dir.join("main_store.db3"),
+        )?));
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+        let run_id =
+            store
+                .write()
+                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
-        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
-
-        let mut file_store = FileMotifTrackerStore::new(
-            test_dir,
-            run_id,
-            3
-        )?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.save_slices(vec![
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 200), 0.1),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 200), TensorIdSliceIdx(resource_ids[0], 300), 0.2),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 100),
+                TensorIdSliceIdx(resource_ids[0], 200),
+                0.1,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 200),
+                TensorIdSliceIdx(resource_ids[0], 300),
+                0.2,
+            ),
         ])?;
 
         file_store.save_slices(vec![
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 700), 0.3),
-            SlicesMatch(TensorIdSliceIdx(resource_ids[0], 700), TensorIdSliceIdx(resource_ids[0], 800), 0.4)
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 100),
+                TensorIdSliceIdx(resource_ids[0], 700),
+                0.3,
+            ),
+            SlicesMatch(
+                TensorIdSliceIdx(resource_ids[0], 700),
+                TensorIdSliceIdx(resource_ids[0], 800),
+                0.4,
+            ),
         ])?;
 
         file_store.load_slices_into_groups(&store, None)?;
@@ -370,38 +455,37 @@ mod tests {
         let resources = store.read().list_resources_by_ids(&resource_ids)?;
         let map = store.read().list_motifs_slices(run_id)?;
 
-
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
-        let mut slise_idxs = motifs_slices.into_iter().map(|s|s.slice_idx).collect::<Vec<_>>();
+        let mut slise_idxs = motifs_slices
+            .into_iter()
+            .map(|s| s.slice_idx)
+            .collect::<Vec<_>>();
         slise_idxs.sort();
 
-        assert_eq!(
-            vec![100, 200, 300, 700, 800],
-            slise_idxs
-        );
+        assert_eq!(vec![100, 200, 300, 700, 800], slise_idxs);
 
         Ok(())
     }
 
     #[test]
-    fn test_no_matches() -> Result<(), ThoosaError>{
+    fn test_no_matches() -> Result<(), ThoosaError> {
         // log::set_max_level(Trace);
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         debug!("test_single_part: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(
+            test_dir.join("main_store.db3"),
+        )?));
 
-        let mut store = Arc::new(RwLock::new(SqlStore::from_path(test_dir.join("main_store.db3"))?));
+        let resource_ids = crate::store_tests::init_test_store(&mut store)?;
 
-        let resource_ids= crate::store_tests::init_test_store(&mut store)?;
+        let run_id =
+            store
+                .write()
+                .save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
 
-        let run_id = store.write().save_run_config(None, &"todo", "test", "keys", HashMap::new())?;
-
-        let mut file_store = FileMotifTrackerStore::new(
-            test_dir,
-            run_id,
-            3
-        )?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
 
         file_store.load_slices_into_groups(&store, None)?;
 
@@ -411,7 +495,6 @@ mod tests {
 
         Ok(())
     }
-
 
     /*
      not a test - util to debug failing deserialization
@@ -460,5 +543,4 @@ mod tests {
          Ok(())
 
      }*/
-
 }

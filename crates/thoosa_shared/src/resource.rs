@@ -1,38 +1,58 @@
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
+use crate::ThoosaError;
+use crate::applicables_runner::{CachableId, Input};
+use crate::traits::{Named, WithId};
 use log::trace;
-use std::sync::Arc;
 use mockall::automock;
 use parking_lot::RwLock;
-use crate::applicables_runner::{CachableId, Input};
-use crate::ThoosaError;
-use crate::traits::{Named, WithId};
+use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 #[automock]
 pub trait ResourceStore {
-    fn list_resources_by_file_stems<'a>(&self, file_stems: &'a [&'a str])-> Result<Vec<Resource>, ThoosaError>;
-    fn list_resource_set_resources_by_descr(&self, descr: &str) -> Result<Vec<Resource>, ThoosaError>;
-    fn list_resource_set_group_sets(&self, group_descr: &str) -> Result<Vec<(usize, String)>, ThoosaError>;
-    fn list_group_labeled_resources_sets(&self, group_decr: &str) -> Result<Vec<(String, String)>, ThoosaError>;
+    fn list_resources_by_file_stems<'a>(
+        &self,
+        file_stems: &'a [&'a str],
+    ) -> Result<Vec<Resource>, ThoosaError>;
+    fn list_resource_set_resources_by_descr(
+        &self,
+        descr: &str,
+    ) -> Result<Vec<Resource>, ThoosaError>;
+    fn list_resource_set_group_sets(
+        &self,
+        group_descr: &str,
+    ) -> Result<Vec<(usize, String)>, ThoosaError>;
+    fn list_group_labeled_resources_sets(
+        &self,
+        group_decr: &str,
+    ) -> Result<Vec<(String, String)>, ThoosaError>;
     fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
-    fn list_resource_random_in_group(&self, group_descr: &str) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
+    fn list_resource_random_in_group(
+        &self,
+        group_descr: &str,
+    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
 }
 
 #[derive(Debug, Clone)]
 pub struct Resource {
-    id:ResourceId,
-    import_id:u32,
-    file_stem:String,
-    length:u32,
-    applied_id: CachableId
+    id: ResourceId,
+    import_id: u32,
+    file_stem: String,
+    length: u32,
+    applied_id: CachableId,
 }
-
 
 impl Resource {
     pub fn new(id: u32, import_id: u32, file_stem: String, length: u32) -> Self {
         trace!("Resource::new: id={id} import_id={import_id} file_stem={file_stem}");
         let applied_id = format!("{}_{}", id, import_id).into();
-        Self { id, import_id, file_stem, length, applied_id}
+        Self {
+            id,
+            import_id,
+            file_stem,
+            length,
+            applied_id,
+        }
     }
 
     pub fn id(&self) -> ResourceId {
@@ -52,9 +72,7 @@ impl Resource {
     }
 }
 
-impl Named for Resource {
-
-}
+impl Named for Resource {}
 
 impl WithId for Resource {
     type ID = Resource;
@@ -63,7 +81,6 @@ impl WithId for Resource {
         &self
     }
 }
-
 
 impl Input for Resource {
     fn id(&self) -> &CachableId {
@@ -89,9 +106,7 @@ impl PartialEq<Self> for Resource {
     }
 }
 
-impl Eq for Resource {
-
-}
+impl Eq for Resource {}
 
 impl PartialOrd<Self> for Resource {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -115,28 +130,33 @@ impl AsRef<ResourceId> for Resource {
 
 //TODO mean, std per channel
 pub struct ResourceStats {
-    size:Vec<u32>,
-    length_dim:usize
+    size: Vec<u32>,
+    length_dim: usize,
 }
 
 impl ResourceStats {
-
     pub fn new(size: Vec<u32>) -> Self {
-        assert!(size.len() > 1, "should be two dimensions at least: channels x values, was {size:?}");
+        assert!(
+            size.len() > 1,
+            "should be two dimensions at least: channels x values, was {size:?}"
+        );
         Self {
             size,
             length_dim: 1, //TODO param
         }
     }
 
-    pub fn length(&self)->u32 {
+    pub fn length(&self) -> u32 {
         self.size[self.length_dim]
     }
 }
 
 pub trait ResourcesConfig {
     type Result;
-    fn to_resources<S:ResourceStore+ ?Sized>(&self, store:&Arc<RwLock<Box<S>>>) -> Result<Self::Result, ThoosaError>;
+    fn to_resources<S: ResourceStore + ?Sized>(
+        &self,
+        store: &Arc<RwLock<Box<S>>>,
+    ) -> Result<Self::Result, ThoosaError>;
 
     fn serialize(&self) -> String {
         "TODO".to_string()

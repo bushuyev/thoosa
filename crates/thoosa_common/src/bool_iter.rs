@@ -8,9 +8,7 @@ pub struct BoolTensorIterator<'a> {
 }
 
 impl<'a> BoolTensorIterator<'a> {
-
     fn new(tensor: &'a Tensor) -> Self {
-
         assert_eq!(tensor.kind(), Kind::Bool);
         let numel = tensor.numel() as usize;
         let data_ptr = tensor.data_ptr() as *const u8;
@@ -39,7 +37,7 @@ impl<'a> Iterator for BoolTensorIterator<'a> {
     }
 }
 
-impl <'a> From<&'a Tensor> for BoolTensorIterator<'a> {
+impl<'a> From<&'a Tensor> for BoolTensorIterator<'a> {
     fn from(t: &'a Tensor) -> Self {
         BoolTensorIterator::new(t)
     }

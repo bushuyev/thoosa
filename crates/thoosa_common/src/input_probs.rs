@@ -1,18 +1,21 @@
-use std::collections::HashMap;
 use log::{debug, info};
+use std::collections::HashMap;
 use tch::{Kind, Tensor};
 
 pub struct InputProbs {
-    labels:Vec<String>,
-    inputs_probs:HashMap<String, Vec<f32>>
+    labels: Vec<String>,
+    inputs_probs: HashMap<String, Vec<f32>>,
 }
 
 impl InputProbs {
     pub fn new(labels: Vec<String>) -> Self {
-        Self { labels, inputs_probs: HashMap::new()}
+        Self {
+            labels,
+            inputs_probs: HashMap::new(),
+        }
     }
 
-    pub fn add(&mut self, input:String, probs:Vec<f32>) {
+    pub fn add(&mut self, input: String, probs: Vec<f32>) {
         assert_eq!(self.labels.len(), probs.len());
         assert!(self.inputs_probs.insert(input, probs).is_none());
     }
@@ -25,7 +28,6 @@ impl InputProbs {
         &self.inputs_probs
     }
 }
-
 
 // ----------------------------------------
 // Metric utilities
@@ -42,15 +44,15 @@ fn mse_loss(inferred: &Tensor, expected: &Tensor) -> Tensor {
 fn soft_cross_entropy(inferred: &Tensor, expected: &Tensor) -> Tensor {
     let log_inferred = inferred.log();
     // Summation over c => shape [n], then average over n
-    - (expected * log_inferred).sum(Kind::Float) / inferred.size()[0] as f64
+    -(expected * log_inferred).sum(Kind::Float) / inferred.size()[0] as f64
 }
 
 /// Compute argmax-based accuracy:
 ///   1) argmax along last dimension for both inferred and expected
 ///   2) compare how many match
 fn argmax_accuracy(inferred: &Tensor, expected: &Tensor) -> f64 {
-    let pred = inferred.argmax(-1, false);  // shape [n]
-    let gold = expected.argmax(-1, false);  // shape [n]
+    let pred = inferred.argmax(-1, false); // shape [n]
+    let gold = expected.argmax(-1, false); // shape [n]
     let correct = pred.eq_tensor(&gold).to_kind(Kind::Float).sum(Kind::Float);
     correct.double_value(&[]) / inferred.size()[0] as f64
 }
@@ -124,10 +126,10 @@ pub fn compare_input_probs(expected: &InputProbs, inferred: &InputProbs) -> (f64
 
 #[cfg(test)]
 pub mod tests {
-    use crate::input_probs::{compare_input_probs, InputProbs};
+    use crate::input_probs::{InputProbs, compare_input_probs};
 
     #[test]
-    fn test_0(){
+    fn test_0() {
         // Example: 3 labels
         let labels = vec!["cat".into(), "dog".into(), "mouse".into()];
 
@@ -149,5 +151,4 @@ pub mod tests {
         // Compare
         compare_input_probs(&exp, &inf);
     }
-
 }

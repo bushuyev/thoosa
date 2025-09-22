@@ -1,13 +1,13 @@
-use std::sync::Arc;
-use parking_lot::Mutex;
-use std::time::Duration;
+use crate::permits::{NumPermits, PermitSource, RunnerPerm};
 use async_trait::async_trait;
 use log::debug;
+use parking_lot::Mutex;
+use std::sync::Arc;
+use std::time::Duration;
+use thoosa_shared::traits::CachableIdTr;
+use thoosa_shared::{MyError, ThoosaError};
 use tokio::sync::Semaphore;
 use tokio::time;
-use thoosa_shared::{MyError, ThoosaError};
-use thoosa_shared::traits::CachableIdTr;
-use crate::permits::{NumPermits, PermitSource, RunnerPerm};
 
 impl RunnerSemaphore {
     pub fn new(permits: NumPermits) -> RunnerSemaphore {
@@ -64,7 +64,11 @@ impl RunnerSemaphore {
 
 #[async_trait]
 impl PermitSource for RunnerSemaphore {
-    async fn acquire(&self, n: NumPermits, _out_id: std::sync::Arc<dyn CachableIdTr>) -> Result<RunnerPerm, ThoosaError> {
+    async fn acquire(
+        &self,
+        n: NumPermits,
+        _out_id: std::sync::Arc<dyn CachableIdTr>,
+    ) -> Result<RunnerPerm, ThoosaError> {
         self.acquire_many_owned(n).await
     }
 }
@@ -79,21 +83,30 @@ pub struct RunnerSemaphore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     #[tokio::test]
     async fn acquire_after_close_returns_error() {
         let sem = RunnerSemaphore::new_with_timeout(1, Duration::from_millis(100));
         sem.sem.close();
         let res = sem.acquire_many_owned(1).await;
-        assert!(matches!(res, Err(ThoosaError{what: MyError::OutOfPermits, ..})));
+        assert!(matches!(
+            res,
+            Err(ThoosaError {
+                what: MyError::OutOfPermits,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
     async fn high_contention_only_one_succeeds() {
         use std::sync::Arc;
 
-        let sem = Arc::new(RunnerSemaphore::new_with_timeout(1, Duration::from_millis(100)));
+        let sem = Arc::new(RunnerSemaphore::new_with_timeout(
+            1,
+            Duration::from_millis(100),
+        ));
         let mut handles = vec![];
         for _ in 0..3 {
             let s = Arc::clone(&sem);

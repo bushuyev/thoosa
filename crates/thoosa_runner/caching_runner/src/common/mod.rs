@@ -1,23 +1,21 @@
 // removed unused feature gate to reduce warnings
 
-use std::fmt::{Debug, Display, Formatter};
-use std::hash::Hash;
-use std::ops::{Deref, Range};
-use std::sync::Arc;
+use crate::permits::{NumPermits, RunnerPerm};
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Stage;
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::Hash;
+use std::ops::{Deref, Range};
+use std::sync::Arc;
 use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
-use crate::permits::{NumPermits, RunnerPerm};
 
-pub mod runnable;
 pub mod cachable;
-
-
+pub mod runnable;
 
 #[async_trait]
 #[delegatable_trait]
@@ -25,35 +23,32 @@ pub mod cachable;
 pub trait Data: Debug + CopyToDevice {
     type Metrics: Debug + Clone + Send + Sync + Default;
 
+    type Sub: CopyToDevice;
+    type SubSelect: Debug + Send + Sync;
 
-    type Sub:CopyToDevice;
-    type SubSelect:Debug + Send + Sync;
-
-    fn size(&self)-> Self::Metrics;
+    fn size(&self) -> Self::Metrics;
 
     fn subview(&self, _select: &Self::SubSelect) -> Self::Sub {
         unimplemented!()
     }
 
-    fn track_used_in(&self, _token:&'static str){}
+    fn track_used_in(&self, _token: &'static str) {}
 
-    fn device(&self)->usize;
+    fn device(&self) -> usize;
 }
 
 #[async_trait]
-impl CopyToDevice for MockData{
+impl CopyToDevice for MockData {
     async fn copy_to_device(&self, _dst_device: usize) -> Self {
         MockData::new()
     }
 }
 
-
 #[derive(Debug)]
 pub enum DropIf {
     Always,
-    IfNotMax
+    IfNotMax,
 }
-
 
 #[automock]
 #[async_trait]
@@ -74,31 +69,30 @@ pub trait RunCtx: Named + Debug + Send + Sync {
     }
 
     fn cache_area(&self) -> u64;
-
 }
 impl Named for MockRunCtx {}
 
 #[cfg(test)]
 pub(crate) mod mock_run_ctx {
-    use crate::permits::NumPermits;
     use super::{DropIf, MockRunCtx};
+    use crate::permits::NumPermits;
 
     pub struct MockRunCtxBuilder {
-        mock:MockRunCtx
+        mock: MockRunCtx,
     }
 
     impl MockRunCtxBuilder {
-        pub fn with_device_idx(mut self, out:usize) ->Self {
+        pub fn with_device_idx(mut self, out: usize) -> Self {
             self.mock.expect_device_idx().return_const(out);
             self
         }
 
-        pub fn with_acquired_permits(mut self, out:NumPermits) ->Self {
+        pub fn with_acquired_permits(mut self, out: NumPermits) -> Self {
             self.mock.expect_acquired_permits().return_const(out);
             self
         }
 
-        pub fn with_drop_permits(mut self, inp:Vec<DropIf>) ->Self {
+        pub fn with_drop_permits(mut self, inp: Vec<DropIf>) -> Self {
             for param in inp {
                 self.mock.expect_drop_permits().call(param);
             }
@@ -106,24 +100,20 @@ pub(crate) mod mock_run_ctx {
             self
         }
 
-        pub fn finish(self)->MockRunCtx {
+        pub fn finish(self) -> MockRunCtx {
             self.mock
         }
     }
 
-    pub fn build() ->MockRunCtxBuilder {
-
+    pub fn build() -> MockRunCtxBuilder {
         MockRunCtxBuilder {
-            mock: super::MockRunCtx::new()
+            mock: super::MockRunCtx::new(),
         }
     }
 }
 
-
 // pub trait Input: WithId + Debug {}
 // pub trait Output: WithId + Debug {}
-
-
 
 // #[cfg(test)]
 // pub mod mock_input_output {
@@ -156,7 +146,6 @@ pub(crate) mod mock_run_ctx {
 //
 // }
 
-
 /////////////////////////////////
 
 pub trait OutId: Stage
@@ -164,7 +153,10 @@ where
     Self: 'static,
     <Self as Stage>::In<'static>: WithId,
 {
-    fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID;
+    fn out_id(
+        &self,
+        input_id: &<<Self as Stage>::In<'static> as WithId>::ID,
+    ) -> <Self::Out as WithId>::ID;
 
     fn on_cached(
         &self,

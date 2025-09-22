@@ -10,8 +10,8 @@ use parking_lot::{Mutex, RwLock};
 use std::fmt::Debug;
 use std::iter::Repeat;
 use std::sync::Arc;
-use tch::{IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
+use tch::{IndexOp, Tensor};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::tho_tensor::CopyToDevice;
@@ -98,10 +98,11 @@ impl DistsTracker {
         Self { channel_trackers }
     }
 
-    fn dist_iter(dists_flattened: Option<Tensor>) -> Box<dyn Iterator<Item=f64>> {//TODO use Either::
+    fn dist_iter(dists_flattened: Option<Tensor>) -> Box<dyn Iterator<Item = f64>> {
+        //TODO use Either::
         match dists_flattened.as_ref().map(|v| v.iter::<f64>().unwrap()) {
-            None => Box::new(std::iter::repeat(0f64)) as Box<dyn Iterator<Item=f64>>,
-            Some(v) => Box::new(v) as  Box<dyn Iterator<Item=f64>>
+            None => Box::new(std::iter::repeat(0f64)) as Box<dyn Iterator<Item = f64>>,
+            Some(v) => Box::new(v) as Box<dyn Iterator<Item = f64>>,
         }
     }
 }
@@ -120,35 +121,38 @@ impl Stage for DistsTracker {
         Self: Sized,
     {
         let DistWithMask {
-            mask:mask_cpu,
+            mask: mask_cpu,
             dists,
         } = input.clc_result();
 
-
-
-        for (channel, mt) in self.channel_trackers.iter().enumerate()/*.par_bridge()*/ {
+        for (channel, mt) in self.channel_trackers.iter().enumerate()
+        /*.par_bridge()*/
+        {
             let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
-            let dists_flattened = dists.as_ref().map(|d|d.i((channel as i64, .., ..)).flatten(0, 1));
-
+            let dists_flattened = dists
+                .as_ref()
+                .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
 
             trace!("find_motifs_by_euc_dist: mask_cpu_flattened=\n{mask_cpu_flattened}");
-            trace!("find_motifs_by_euc_dist: dists_flattened=\n{:?}", dists_flattened);
+            trace!(
+                "find_motifs_by_euc_dist: dists_flattened=\n{:?}",
+                dists_flattened
+            );
 
             let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
             let mut dists_and_mask_iter = channel_mask.zip(Self::dist_iter(dists_flattened));
-            debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}", mask_cpu_flattened.size());
+            debug!(
+                "find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}",
+                mask_cpu_flattened.size()
+            );
             trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
 
-
-            input.iter().zip(dists_and_mask_iter).for_each(|v|{
+            input.iter().zip(dists_and_mask_iter).for_each(|v| {
                 debug!("find_motifs_by_euc_dist: v={v:?}");
             });
+        }
 
-
-        };
-
-
-       Ok(ThoTensor2::new(
+        Ok(ThoTensor2::new(
             "".into(),
             Tensor::rand(&[10, 1], FLOAT_CPU),
         ))

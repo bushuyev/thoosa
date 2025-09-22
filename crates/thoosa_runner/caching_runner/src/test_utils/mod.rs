@@ -5,13 +5,13 @@ use ambassador::Delegate;
 use async_trait::async_trait;
 use log::debug;
 use thoosa_common::tho_tensor::CopyToDevice;
-use thoosa_shared::traits::{DummyCachableId, MockWithId};
 use thoosa_shared::traits::*;
+use thoosa_shared::traits::{DummyCachableId, MockWithId};
 
 #[derive(Debug, Clone)]
-pub struct  DummyTensor(pub Vec<f32>);
+pub struct DummyTensor(pub Vec<f32>);
 
-impl From<Vec<f32>> for DummyTensor{
+impl From<Vec<f32>> for DummyTensor {
     fn from(value: Vec<f32>) -> Self {
         DummyTensor(value)
     }
@@ -41,23 +41,23 @@ pub fn parse_numeric_part(name: &str) -> Option<f64> {
     }
 }
 
-
-#[derive(Debug,Delegate)]
+#[derive(Debug, Delegate)]
 // #[delegate(Data, target = "data")]
 #[delegate(WithId, target = "with_id")]
 #[cfg(test)]
 pub struct MockDataWithId {
-    data:MockData,
-    with_id:MockWithId,
-    device:Option<usize>
+    data: MockData,
+    with_id: MockWithId,
+    device: Option<usize>,
 }
 
 #[cfg(test)]
 impl MockDataWithId {
     pub fn whatever() -> Self {
         let mut with_id = MockWithId::new();
-        with_id.expect_id().return_const(DummyCachableId::from("id"));
-
+        with_id
+            .expect_id()
+            .return_const(DummyCachableId::from("id"));
 
         let mut mock_data = MockData::new();
         mock_data.expect_size().return_const([0]);
@@ -65,26 +65,25 @@ impl MockDataWithId {
         Self {
             data: mock_data,
             with_id,
-            device:None
+            device: None,
         }
     }
 
-    pub fn for_device(device:usize) -> Self{
+    pub fn for_device(device: usize) -> Self {
         let mut me = Self::whatever();
         me.device = Some(device);
 
         me
     }
 
-    pub fn device(&self)->Option<&usize> {
+    pub fn device(&self) -> Option<&usize> {
         self.device.as_ref()
     }
-
 }
 
 #[cfg(test)]
 impl Data for MockDataWithId {
-    type Metrics = [usize;1];
+    type Metrics = [usize; 1];
     type Sub = Self;
     type SubSelect = std::ops::Range<Self::Metrics>;
 
@@ -97,12 +96,10 @@ impl Data for MockDataWithId {
     }
 }
 
-
 #[cfg(test)]
 #[async_trait]
 impl CopyToDevice for MockDataWithId {
     async fn copy_to_device(&self, dst_device: usize) -> Self {
         MockDataWithId::for_device(dst_device)
     }
-
 }

@@ -2,8 +2,8 @@ use crate::common::{Data, RunCtx};
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
-use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::ThoosaError;
+use thoosa_shared::applicables_runner::{Input, Output};
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 #[async_trait]
@@ -23,7 +23,7 @@ pub trait Stage: Debug {
         _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError>
     where
-        for <'a> Self::In<'a>:Send + Sync
+        for<'a> Self::In<'a>: Send + Sync,
     {
         unimplemented!()
     }
