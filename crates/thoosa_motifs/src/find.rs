@@ -990,6 +990,12 @@ pub struct FindMotifsSavableResult {
     run_config: Arc<FindMotifsRunConfig>,
 }
 
+impl FindMotifsSavableResult {
+    pub fn new(run_config: Arc<FindMotifsRunConfig>) -> Self {
+        Self { run_config }
+    }
+}
+
 impl SavableResult for FindMotifsSavableResult {
     fn value(&self) -> f32 {
         0.0
