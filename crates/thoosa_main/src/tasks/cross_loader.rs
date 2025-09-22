@@ -597,14 +597,11 @@ mod tests {
     use tokio::time::sleep;
     use thoosa_motifs::distance::MaskMaker::Tril;
     use torch_runner::data::ThoTensor2;
+    use crate::cli::Commands::FindMotifs;
 
-    static INIT: Once = Once::new();
-
-    fn init_env() {
-        INIT.call_once(|| {
-            GlobalCtx::init_devices(2);
-            thoosa_shared::test_utils::init_test_logging();
-        });
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -642,7 +639,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_cross_clc() -> Result<(), ThoosaError> {
-        init_env();
+        GlobalCtx::init_devices(2);
+
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
@@ -703,6 +701,8 @@ mod tests {
             .run(Arc::new(ResourcesVec::new("".into(), resources)), ctx)
             .await?;
 
+
+
         yield_now().await;
         sleep(Duration::from_millis(10)).await;
 
@@ -711,7 +711,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_with_mocks() -> Result<(), ThoosaError> {
-        init_env();
 
         let resource_a: Resource = (1, 1, "resource_a", 2).into();
         let resource_b: Resource = (2, 1, "resource_b", 2).into();
