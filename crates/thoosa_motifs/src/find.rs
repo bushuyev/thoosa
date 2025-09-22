@@ -986,7 +986,7 @@ pub fn find_motifs_by_euc_dist(
 }
 
 #[derive(Debug)]
-struct FindMotifsSavableResult {
+pub struct FindMotifsSavableResult {
     run_config: Arc<FindMotifsRunConfig>,
 }
 
@@ -1001,6 +1001,15 @@ impl SavableResult for FindMotifsSavableResult {
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoosaError> {
         Ok(self.run_config.id.expect("id"))
+    }
+}
+
+impl Output for FindMotifsSavableResult {}
+impl WithId for FindMotifsSavableResult {
+    type ID = RunId;
+
+    fn id(&self) -> &Self::ID {
+        self.run_config.id.as_ref().unwrap()
     }
 }
 

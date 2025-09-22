@@ -44,7 +44,7 @@ impl WithId for CachableId {
 }
 
 impl Input for CachableId {
-    fn id(&self) -> &CachableId {
+    fn id(&self) -> &CachableId {//TODO remove, use WithId::id
         self
     }
 }
