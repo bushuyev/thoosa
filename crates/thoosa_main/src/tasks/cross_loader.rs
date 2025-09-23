@@ -364,8 +364,7 @@ pub struct CrossLoader<SRC, CLC, RSV> {
     loader: Arc<SRC>,
     batch_clc: Arc<CLC>,
     receiver: Arc<RSV>,
-    window: usize,
-    stride: usize,
+    chunk_size: usize,
     max_batch: usize,
 }
 
@@ -380,16 +379,14 @@ where
         loader: Arc<SRC>,
         batch_clc: Arc<CLC>,
         receiver: Arc<RSV>,
-        window: usize,
-        stride: usize,
+        chunk_size: usize,
         max_batch: usize,
     ) -> Self {
         Self {
             loader,
             batch_clc,
             receiver,
-            window,
-            stride,
+            chunk_size,
             max_batch,
         }
     }
@@ -472,13 +469,12 @@ where
         input: Arc<Self::In<'static>>,
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
-        let window = self.window;
-        let stride = self.stride;
+        let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.max_batch).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
         debug!(
-            "CrossLoader::run window={window} stride={stride} max_batch={max_batch} resources={}",
+            "CrossLoader::run chunk_size={chunk_size}  max_batch={max_batch} resources={}",
             input.resources.len()
         );
 
@@ -555,7 +551,7 @@ where
                 t_1_batch_len = 0;
             }
 
-            skip_0_i = i_0.saturating_add(stride.saturating_sub(1));
+            skip_0_i = i_0;
             t_0_batch.clear();
             t_0_batch_resources.clear();
             t_0_batch_len = 0;
@@ -679,9 +675,9 @@ mod tests {
 
         let batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, is_diag| {
             let mut mask_makers = vec![];
-            if is_diag {
-                mask_makers.push(Tril);
-            }
+            // if is_diag {
+            //     mask_makers.push(Tril);
+            // }
             let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
                 t_0,
                 t_1,
@@ -695,7 +691,7 @@ mod tests {
 
         let receiver = Arc::new(DistsTracker::new_2(&ws, &run_config, &fixed_config, None));
 
-        let cross_loader = Arc::new(CrossLoader::new(loader, batch_clc, receiver, 2, 1, 20));
+        let cross_loader = Arc::new(CrossLoader::new(loader, batch_clc, receiver, 2, 20));
 
         let _ = cross_loader
             .run(Arc::new(ResourcesVec::new("".into(), resources)), ctx)
@@ -789,7 +785,7 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "mock")));
 
-        let cross_loader = Arc::new(CrossLoader::new(loader, batch_clc, receiver, 1, 1, 2));
+        let cross_loader = Arc::new(CrossLoader::new(loader, batch_clc, receiver, 1, 2));
 
         let _ = cross_loader
             .run(

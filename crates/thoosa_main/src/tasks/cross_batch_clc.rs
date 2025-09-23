@@ -8,6 +8,7 @@ use caching_runner::common::runnable::Stage;
 use log::debug;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Tensor;
 use tch::kind::FLOAT_CPU;
@@ -49,16 +50,17 @@ impl<'a, R: AsRef<Resource>> BatchInput<'a, R> {
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {}
 
+
 pub struct CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError>,
 {
     batch_clc: F,
 }
 
 impl<F, R> Debug for CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossBatchClc").finish()
@@ -67,7 +69,7 @@ where
 
 impl<F, R> CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError>,
 {
     pub fn new(batch_clc: F) -> Self {
         Self { batch_clc }
@@ -117,10 +119,10 @@ impl<R: Debug> Output for CrossBatchClcOutput<R> {}
 #[async_trait]
 impl<F, R> Stage for CrossBatchClc<F, R>
 where
-    F: Fn(Tensor, Tensor, bool) -> Result<R, ThoosaError> + 'static,
+    for<'a> F:  Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
 {
-    type In<'a> = BatchInput<'a, &'a Arc<Resource>>; //where Self:'a, R:'a, F: 'a;
+    type In<'a> = BatchInput<'a, &'a Arc<Resource>> where F:'a; //where Self:'a, R:'a, F: 'a;
     type Out = CrossBatchClcOutput<R>;
     type Ctx = RunCtx2;
 
@@ -130,7 +132,7 @@ where
         _ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError>
     where
-        Self: Sized,
+        Self: Sized
     {
         let mut batch_sizes = vec![];
 
@@ -178,7 +180,7 @@ where
 
         let iter = SlicesIter::new(2, resource_ids_sizes);
 
-        (self.batch_clc)(batch_0_t, batch_1_t, input.b_0[0].id().eq(&input.b_1[0].id()))
+        (self.batch_clc)(batch_0_t, batch_1_t, &input)
             .map(|v| CrossBatchClcOutput::new(v, iter))
     }
 }

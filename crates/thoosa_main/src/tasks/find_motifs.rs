@@ -7,23 +7,55 @@ use parking_lot::{Mutex, RwLock};
 use tch::Kind::Float;
 use tch::{Kind, Tensor};
 use caching_runner::common::runnable::Stage;
+use thoosa_common::applicables::ThoDevice;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeRunningMean, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
+use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
-use crate::tasks::cross_batch_clc::{CrossBatchClc, CrossBatchClcOutput};
+use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc, CrossBatchClcOutput};
 use crate::tasks::cross_loader::{CrossLoader, CrossLoaderTensorSource, ResourcesVec};
 use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::TensorLoader;
 
 #[derive(Debug)]
+struct FindMotifsCtx<SRC>
+where
+    SRC: CrossLoaderTensorSource + 'static
+{
+    run_config:FindMotifsRunConfig,
+    cross_loader:Arc<CrossLoader<SRC, CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask>, DistsTracker>>,
+    means_acc: Mutex<Tensor>,
+    total_samples: Mutex<Tensor>,
+}
+
+impl <SRC> FindMotifsCtx <SRC>
+where
+    SRC: CrossLoaderTensorSource + 'static
+{
+    pub fn new(
+        run_config: FindMotifsRunConfig,
+        cross_loader: Arc<CrossLoader<SRC, CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask>, DistsTracker>>,
+        means_acc: Mutex<Tensor>,
+        total_samples: Mutex<Tensor>,
+    ) -> Self {
+        Self {
+            run_config,
+            cross_loader,
+            means_acc,
+            total_samples,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct FindMotifsStage<SRC>
 where
     SRC: CrossLoaderTensorSource + 'static,
 {
-    cross_loaders:  Vec<(FindMotifsRunConfig, Arc<CrossLoader<SRC, CrossBatchClc<Box<dyn Fn(Tensor, Tensor, bool) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask>, DistsTracker>>)>,
+    cross_loaders:  Vec<FindMotifsCtx<SRC>>,
     pd:PhantomData<SRC>,
 }
 
@@ -31,18 +63,55 @@ impl <SRC> FindMotifsStage<SRC>
 where
     SRC: CrossLoaderTensorSource + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: Arc<SRC>, run_configs:Vec<FindMotifsRunConfig>, fixed_config:FixedFindMotifsConfig) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: Arc<SRC>, run_configs:Vec<FindMotifsRunConfig>, fixed_config:FixedFindMotifsConfig, device:ThoDevice) -> Self {//TODO remove device, make means_acc & total_samples cachable stage?
 
         let cross_loaders = run_configs.into_iter().map(|run_config|{
+            let channels = ws.read().channels();
+            let device = device.clone();
+
+            let means_acc =  Mutex::new(Tensor::zeros(
+                [channels as i64, 1],
+            (Kind::Float, device.clone().into()),
+            ));
+            let total_samples = Mutex::new(Tensor::zeros(
+                [channels as i64, 1],
+            (Kind::Int64, device.clone().into()),
+            ));
+            let filter = run_config.slices_filter.clone();
 
             let batch_clc:CrossBatchClc<
-                Box<dyn Fn(Tensor, Tensor, bool) -> Result<DistWithMask, ThoosaError> + Send + Sync>,
+                Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>) -> Result<DistWithMask, ThoosaError> + Send + Sync>,
                 DistWithMask
-            > = CrossBatchClc::new(Box::new(|t_0, t_1, is_diag| {
+            > = CrossBatchClc::new(Box::new( move |t_0, t_1, is_diag| {
+
                 let mut mask_makers = vec![];
-                if is_diag {
-                    mask_makers.push(Tril);
-                }
+
+                // let mut mask_makers = match &filter {
+                //     SlicesFilter::DistanceRunningMeanK(v) => {
+                //         vec![
+                //             LocalMin,
+                //             // LeRunningMean {
+                //             //     k: v.mean,
+                //             //     avg: &means_acc,
+                //             //     total_samples: &total_samples,
+                //             // },
+                //         ]
+                //     }
+                //     SlicesFilter::MaxDistance(v) => {
+                //         vec![Le {
+                //             v: Tensor::full(
+                //                 &[channels as i64, 1],
+                //                 v.distance as f64,
+                //                 (Float, device.clone().into()),
+                //             ),
+                //         }]
+                //     }
+                // };
+                //
+                //
+                // if is_diag {
+                //     mask_makers.push(Tril);
+                // }
                 let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
                     t_0,
                     t_1,
@@ -56,8 +125,8 @@ where
 
             let receiver = Arc::new(DistsTracker::new_2(&ws, &run_config, &fixed_config, None));
 
-            let arc = Arc::new(CrossLoader::new(Arc::clone(&loader), Arc::new(batch_clc), receiver, 2, 1, 20));
-            (run_config, arc)
+            let arc = Arc::new(CrossLoader::new(Arc::clone(&loader), Arc::new(batch_clc), receiver, 2, 20));
+            FindMotifsCtx::new(run_config, arc, means_acc, total_samples)
         }).collect();
 
 
@@ -81,9 +150,9 @@ where
             for<'a> Self::In<'a>: Send + Sync
     {
         let best = 0;
-        let out = Arc::clone(&self.cross_loaders[0].1).run(input, ctx).await?;
+        let out = Arc::clone(&self.cross_loaders[0].cross_loader).run(input, ctx).await?;
 
-        Ok(FindMotifsSavableResult::new(Arc::new(self.cross_loaders[best].0.clone())))//just dummy result for now
+        Ok(FindMotifsSavableResult::new(Arc::new(self.cross_loaders[best].run_config.clone())))//just dummy result for now
     }
 }
 
@@ -94,6 +163,7 @@ mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use tch::{Device, Tensor};
+    use tch::Device::Cuda;
     use caching_runner::common::runnable::Stage;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::applicables::ThoDevice;
@@ -116,6 +186,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_0() -> Result<(), ThoosaError>{
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
         GlobalCtx::init_devices(2);
 
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
@@ -152,7 +225,7 @@ mod tests {
         let run_config = FindMotifsRunConfig::new(Some(0), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(None, 2, false, None);
 
-        let find_motifs = Arc::new(FindMotifsStage::new(&ws, loader,  vec![run_config], fixed_config));
+        let find_motifs = Arc::new(FindMotifsStage::new(&ws, loader,  vec![run_config], fixed_config, ThoDevice::from(Cuda(0))));
 
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
