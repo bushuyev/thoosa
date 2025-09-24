@@ -15,7 +15,7 @@ use thoosa_motifs::distance::MaskMaker::{Le, LeRunningMean, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
-use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc, CrossBatchClcOutput};
+use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc, CrossBatchClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{CrossLoader, CrossLoaderTensorSource, CrossResult, ResourcesVec};
 use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -100,47 +100,48 @@ where
                 DistWithMask,
                 MeanDistsCtx
             > = CrossBatchClc::new(
-                    Box::new( move |t_0, t_1, input, ctx| {
-                    let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
+                Box::new( move |t_0, t_1, input, ctx| {
+                let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
-                    let mut mask_makers = match &filter {
-                        SlicesFilter::DistanceRunningMeanK(v) => {
-                            vec![
-                                LocalMin,
-                                LeRunningMean {
-                                    k: v.mean,
-                                    avg: &ctx.means_acc,
-                                    total_samples: &ctx.total_samples,
-                                },
-                            ]
-                        }
-                        SlicesFilter::MaxDistance(v) => {
-                            vec![Le {
-                                v: Tensor::full(
-                                    &[channels as i64, 1],
-                                    v.distance as f64,
-                                    (Float, t_0.device()),
-                                ),
-                            }]
-                        }
-                    };
-
-
-                    if is_diag {
-                        mask_makers.push(Tril);
+                let mut mask_makers = match &filter {
+                    SlicesFilter::DistanceRunningMeanK(v) => {
+                        vec![
+                            LocalMin,
+                            LeRunningMean {
+                                k: v.mean,
+                                avg: &ctx.means_acc,
+                                total_samples: &ctx.total_samples,
+                            },
+                        ]
                     }
+                    SlicesFilter::MaxDistance(v) => {
+                        vec![Le {
+                            v: Tensor::full(
+                                &[channels as i64, 1],
+                                v.distance as f64,
+                                (Float, t_0.device()),
+                            ),
+                        }]
+                    }
+                };
 
-                    let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                        t_0,
-                        t_1,
-                        true,
-                        &mut mask_makers,
-                    )?;
 
-                    debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                    Ok(DistWithMask::new(dists.0, dists.1))
-                }),
-                MeanDistsCtx::new(channels, device.into())
+                if is_diag {
+                    mask_makers.push(Tril);
+                }
+
+                let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                    t_0,
+                    t_1,
+                    true,
+                    &mut mask_makers,
+                )?;
+
+                debug!("CrossBatchClc::do_run:  dists={dists:?}");
+                Ok(DistWithMask::new(dists.0, dists.1))
+            }),
+                MeanDistsCtx::new(channels, device.into()),
+                UnfoldParams::new(1, run_config.window as i64, run_config.step as i64)
             );
 
             let receiver = Arc::new(DistsTracker::new_2(&ws, &run_config, &fixed_config, None));

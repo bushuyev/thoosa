@@ -567,7 +567,7 @@ mod tests {
     use super::mock_cross_loader_receiver;
     use super::mock_cross_loader_tensor_source;
     use super::*;
-    use crate::tasks::cross_batch_clc::CrossBatchClc;
+    use crate::tasks::cross_batch_clc::{CrossBatchClc, UnfoldParams};
     use crate::tasks::cross_loader::{CrossLoader, ResourcesVec};
     use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
@@ -674,20 +674,21 @@ mod tests {
         ));
 
         let batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, input, ctx| {
-            let mut mask_makers = vec![];
-            // if is_diag {
-            //     mask_makers.push(Tril);
-            // }
-            let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                t_0,
-                t_1,
-                true,
-                &mut mask_makers,
-            )?;
+                    let mut mask_makers = vec![];
+                    // if is_diag {
+                    //     mask_makers.push(Tril);
+                    // }
+                    let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                        t_0,
+                        t_1,
+                        true,
+                        &mut mask_makers,
+                    )?;
 
-            debug!("CrossBatchClc::do_run:  dists={dists:?}");
-            Ok(DistWithMask::new(dists.0, dists.1))
-        }, ()));
+                    debug!("CrossBatchClc::do_run:  dists={dists:?}");
+                    Ok(DistWithMask::new(dists.0, dists.1))
+                }, (),
+                                                    UnfoldParams::new(1, 2, 1)));
 
         let receiver = Arc::new(DistsTracker::new_2(&ws, &run_config, &fixed_config, None));
 

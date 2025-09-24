@@ -50,6 +50,17 @@ impl<'a, R: AsRef<Resource>> BatchInput<'a, R> {
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {}
 
+#[derive(Debug)]
+pub(crate) struct UnfoldParams {
+    dimension: i64, size: i64, step: i64
+}
+
+impl UnfoldParams {
+    pub fn new(dimension: i64, size: i64, step: i64) -> Self {
+        Self { dimension, size, step }
+    }
+}
+
 
 pub struct CrossBatchClc<F, R, CrossBatchCtx>
 where
@@ -57,6 +68,7 @@ where
 {
     batch_clc: F,
     cross_batch_ctx: CrossBatchCtx,
+    unfold_params: UnfoldParams
 }
 
 impl<F, R, CrossBatchCtx> Debug for CrossBatchClc<F, R, CrossBatchCtx>
@@ -72,8 +84,8 @@ impl<F, R, CrossBatchCtx> CrossBatchClc<F, R, CrossBatchCtx>
 where
     F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
 {
-    pub fn new(batch_clc: F, cross_batch_ctx: CrossBatchCtx) -> Self {
-        Self { batch_clc, cross_batch_ctx }
+    pub fn new(batch_clc: F, cross_batch_ctx: CrossBatchCtx, unfold_params: UnfoldParams) -> Self {
+        Self { batch_clc, cross_batch_ctx, unfold_params }
     }
 }
 
@@ -189,7 +201,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc};
+    use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc, UnfoldParams};
     use crate::tasks::dists_tracker::DistWithMask;
     use crate::tasks::run_ctx_2::RunCtx2;
     use caching_runner::common::MockRunCtx;
@@ -209,14 +221,15 @@ mod tests {
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
         let cross_batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, input, ctx| {
-            debug!("t_0=\n{t_0}");
-            debug!("t_1=\n{t_1}");
+                    debug!("t_0=\n{t_0}");
+                    debug!("t_1=\n{t_1}");
 
-            Ok(DistWithMask::new(
-                Tensor::rand(&[0], FLOAT_CPU),
-                Some(Tensor::rand(&[0], FLOAT_CPU)),
-            ))
-        }, MeanDistsCtx::new(3, Cuda(0))));
+                    Ok(DistWithMask::new(
+                        Tensor::rand(&[0], FLOAT_CPU),
+                        Some(Tensor::rand(&[0], FLOAT_CPU)),
+                    ))
+                }, MeanDistsCtx::new(3, Cuda(0)),
+                                                          UnfoldParams::new(1, 1, 1)));
 
         let tensor_00 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 10], FLOAT_CPU));
         let tensor_01 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 13], FLOAT_CPU));
