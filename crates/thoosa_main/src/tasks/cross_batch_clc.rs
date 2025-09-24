@@ -51,28 +51,29 @@ impl<'a, R: AsRef<Resource>> BatchInput<'a, R> {
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {}
 
 
-pub struct CrossBatchClc<F, R>
+pub struct CrossBatchClc<F, R, CrossBatchCtx>
 where
-    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
 {
     batch_clc: F,
+    cross_batch_ctx: CrossBatchCtx,
 }
 
-impl<F, R> Debug for CrossBatchClc<F, R>
+impl<F, R, CrossBatchCtx> Debug for CrossBatchClc<F, R, CrossBatchCtx>
 where
-    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossBatchClc").finish()
     }
 }
 
-impl<F, R> CrossBatchClc<F, R>
+impl<F, R, CrossBatchCtx> CrossBatchClc<F, R, CrossBatchCtx>
 where
-    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
 {
-    pub fn new(batch_clc: F) -> Self {
-        Self { batch_clc }
+    pub fn new(batch_clc: F, cross_batch_ctx: CrossBatchCtx) -> Self {
+        Self { batch_clc, cross_batch_ctx }
     }
 }
 
@@ -117,12 +118,13 @@ impl<R: Debug> Input for CrossBatchClcOutput<R> {}
 impl<R: Debug> Output for CrossBatchClcOutput<R> {}
 
 #[async_trait]
-impl<F, R> Stage for CrossBatchClc<F, R>
+impl<F, R, CrossBatchCtx> Stage for CrossBatchClc<F, R, CrossBatchCtx>
 where
-    for<'a> F:  Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError> + 'a,
+    for<'a> F:  Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
+    for<'a> CrossBatchCtx:'a
 {
-    type In<'a> = BatchInput<'a, &'a Arc<Resource>> where F:'a; //where Self:'a, R:'a, F: 'a;
+    type In<'a> = BatchInput<'a, &'a Arc<Resource>> where F:'a;
     type Out = CrossBatchClcOutput<R>;
     type Ctx = RunCtx2;
 
@@ -180,7 +182,7 @@ where
 
         let iter = SlicesIter::new(2, resource_ids_sizes);
 
-        (self.batch_clc)(batch_0_t, batch_1_t, &input)
+        (self.batch_clc)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx)
             .map(|v| CrossBatchClcOutput::new(v, iter))
     }
 }
@@ -195,16 +197,18 @@ mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;
+    use tch::Device::Cuda;
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
     use torch_runner::data::ThoTensor2;
+    use crate::tasks::find_motifs::MeanDistsCtx;
 
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
-        let cross_batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, is_diag| {
+        let cross_batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, input, ctx| {
             debug!("t_0=\n{t_0}");
             debug!("t_1=\n{t_1}");
 
@@ -212,7 +216,7 @@ mod tests {
                 Tensor::rand(&[0], FLOAT_CPU),
                 Some(Tensor::rand(&[0], FLOAT_CPU)),
             ))
-        }));
+        }, MeanDistsCtx::new(3, Cuda(0))));
 
         let tensor_00 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 10], FLOAT_CPU));
         let tensor_01 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 13], FLOAT_CPU));
