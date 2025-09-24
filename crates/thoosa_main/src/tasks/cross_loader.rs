@@ -673,7 +673,7 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, is_diag| {
+        let batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, input, ctx| {
             let mut mask_makers = vec![];
             // if is_diag {
             //     mask_makers.push(Tril);
@@ -687,7 +687,7 @@ mod tests {
 
             debug!("CrossBatchClc::do_run:  dists={dists:?}");
             Ok(DistWithMask::new(dists.0, dists.1))
-        }));
+        }, ()));
 
         let receiver = Arc::new(DistsTracker::new_2(&ws, &run_config, &fixed_config, None));
 

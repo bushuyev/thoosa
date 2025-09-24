@@ -19,7 +19,7 @@ use thoosa_shared::applicables_runner::{
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{Cachable, Runnable};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct ThoDevice(Device);
 
 impl Deref for ThoDevice {
