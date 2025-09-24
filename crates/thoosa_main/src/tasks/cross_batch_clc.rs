@@ -119,7 +119,7 @@ impl<R: Debug> Output for CrossBatchClcOutput<R> {}
 #[async_trait]
 impl<F, R> Stage for CrossBatchClc<F, R>
 where
-    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError> + 'static,
+    for<'a> F:  Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
 {
     type In<'a> = BatchInput<'a, &'a Arc<Resource>> where F:'a; //where Self:'a, R:'a, F: 'a;

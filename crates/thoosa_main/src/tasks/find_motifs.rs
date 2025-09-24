@@ -186,6 +186,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_0() -> Result<(), ThoosaError>{
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
         GlobalCtx::init_devices(2);
 
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
