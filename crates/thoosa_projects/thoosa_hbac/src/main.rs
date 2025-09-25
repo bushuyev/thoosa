@@ -6,22 +6,26 @@ use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     kick_register_cuda_hooks();
-
+    //
     let t1 = Instant::now();
-
-    /*
-    sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
-    2227|seizure
-    1181|lpd
-    806|gpd
-    384|lrda
-    1154|grda
-    4208|other
-    */
+    //
+    // /*
+    // sqlite> select count(*), lb.label from (select count(*), label_id from labeled_resources group by resource_id having sum(p)=max(p)) as cnt left join labels lb on lb.id=cnt.label_id group by label_id;
+    // 2227|seizure
+    // 1181|lpd
+    // 806|gpd
+    // 384|lrda
+    // 1154|grda
+    // 4208|other
+    // */
     match run_cli(
-        |source_path| data::labeled_resourses(source_path.as_ref().join("train.csv")),
+        |source_path| data::labeled_resourses(
+            source_path,
+            "train.csv"
+        ),
         |source_path, key| {
             thoosa_main::data::parquet_to_tensor_by_path(
                 source_path
@@ -35,7 +39,7 @@ fn main() {
         20,
         684400,
         200,
-    ) {
+    ).await {
         Ok(_) => {
             info!("All done in {} mls", t1.elapsed().as_millis());
         }
@@ -44,7 +48,7 @@ fn main() {
             error!("failed with {:?} in {} mls", e, t1.elapsed().as_millis());
         }
     }
-    std::process::exit(0x0000); //for jupyter
+    // std::process::exit(0x0000); //for jupyter
 }
 
 #[cfg(test)]
@@ -79,7 +83,7 @@ mod tests {
         println!("Ok");
     }
 
-    // #[test]
+    #[test]
     fn test_to_cpu() {
         unsafe {
             let lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");

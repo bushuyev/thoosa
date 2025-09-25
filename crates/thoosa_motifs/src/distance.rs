@@ -10,7 +10,7 @@ use tch::Kind;
 use tch::Kind::Bool;
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
-use thoosa_common::utils::{skewness_kurtosis_1_dim, z_norm_2};
+use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2};
 use thoosa_shared::ThoosaError;
 
 #[allow(dead_code)]
@@ -137,13 +137,14 @@ pub fn clc_dist_d2_and_mask(
 ) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
     let de = t_0.device();
 
-    let distances = clc_dist_d2(t_0, t_1, 1)?;
+    // let distances = clc_dist_d2(t_0, t_1, 1)?;
+    let distances = Tensor::f_cdist(&t_0, &t_1, 2.0, 0)?;
 
     debug!(
         "clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}",
         distances.size()
     );
-    trace!("clc_dist_d2_and_mask: distances=\n{distances}");
+    trace!("clc_dist_d2_and_mask: distances=\n{distances} device={:?}", distances.device());
 
     Ok((
         mask_makers
@@ -406,8 +407,10 @@ fn mean_mask(
 }
 
 pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
-    let t_0 = t_0.unsqueeze(dim + 1); // channels x num_slices x 1 x slice_len
-    let t_1 = t_1.unsqueeze(dim); // channels x 1 x num_slices x slice_len
+    let t_0 = t_0.f_unsqueeze(dim + 1)?; // channels x num_slices x 1 x slice_len
+    let t_1 = t_1.f_unsqueeze(dim)?; // channels x 1 x num_slices x slice_len
+
+    debug!("clc_dist_d2: t_0.size()={:?} t_0.mem={:?}  t_1.size()={:?} t_1.mem={:?}", t_0.size(), tensor_mem_size(&t_0), t_1.size(), tensor_mem_size(&t_1));
 
     let mut diff = t_0.f_subtract(&t_1)?;
     drop(t_0);
@@ -2061,5 +2064,22 @@ mod distance_tests {
 
         println!("s={}", t.slice(0, 3, 6, 2));
         println!("n={}", t.narrow(0, 0, 6));
+    }
+
+    #[test]
+    fn test_big(){
+        let t_0 = Tensor::rand(&[20, 1661, 100], FLOAT_CPU);
+        let t_1 = Tensor::rand(&[20, 1661, 100], FLOAT_CPU);
+
+
+        let dist_1 = Tensor::cdist(&t_0, &t_1, 2.0, 0);
+        let dist_0 = clc_dist_d2(t_0, t_1, 1).unwrap();
+
+        println!("diff_0=\n{dist_0:?}");
+        println!("dist_1=\n{dist_1:?}");
+        let eq = dist_1.allclose(&dist_0, 0.01, 0.02, false);
+        println!("eq={}", eq);
+
+        assert!(eq);
     }
 }

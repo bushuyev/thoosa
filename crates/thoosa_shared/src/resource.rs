@@ -152,11 +152,11 @@ impl ResourceStats {
 }
 
 pub trait ResourcesConfig {
-    type Result;
+    type R;
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<Self::Result, ThoosaError>;
+    ) -> Result<Self::R, ThoosaError>;
 
     fn serialize(&self) -> String {
         "TODO".to_string()
