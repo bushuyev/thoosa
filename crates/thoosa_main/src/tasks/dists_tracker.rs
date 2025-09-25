@@ -5,11 +5,13 @@ use async_trait::async_trait;
 use caching_runner::common::Data;
 use caching_runner::common::cachable::DataCacheWrapper;
 use caching_runner::common::runnable::Stage;
-use log::{debug, trace};
+use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::iter::Repeat;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use thoosa_common::bool_iter::BoolTensorIterator;
@@ -20,7 +22,7 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{SimpleId, WithId};
-use thoosa_store::SqlMotifTrackerStore;
+use thoosa_store::{SqlMotifTrackerStore, Store};
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use torch_runner::data::ThoTensor2;
 
@@ -47,20 +49,24 @@ impl DistWithMask {
     }
 }
 
-#[derive(Debug)]
 pub struct DistsTracker {
     channel_trackers: Vec<Mutex<SimpleMotifTracker<'static>>>,
+    store:Arc<RwLock<Box<dyn Store>>>,
+}
+
+impl Debug for DistsTracker {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DistsTracker")
+        .field("channel_trackers", &self.channel_trackers)
+        .finish()
+    }
 }
 
 impl DistsTracker {
-    pub fn new() -> Self {
-        Self {
-            channel_trackers: vec![],
-        }
-    }
 
-    pub fn new_2(
+    pub fn new (
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        store:&Arc<RwLock<Box<dyn Store>>>,
         run_config: &FindMotifsRunConfig,
         fixed_config: &FixedFindMotifsConfig,
         max_slices_counts: Option<u32>,
@@ -95,7 +101,7 @@ impl DistsTracker {
             .collect::<Vec<Mutex<SimpleMotifTracker>>>();
 
         debug!("DistsTracker: channel_trackers={:?}", channel_trackers);
-        Self { channel_trackers }
+        Self { channel_trackers, store: Arc::clone(store) }
     }
 
     fn dist_iter(dists_flattened: Option<Tensor>) -> Box<dyn Iterator<Item = f64>> {
@@ -105,7 +111,17 @@ impl DistsTracker {
             Some(v) => Box::new(v) as Box<dyn Iterator<Item = f64>>,
         }
     }
+
+    pub async fn build_groups(&self) {
+        let mut trackers_done = AtomicU32::new(0);
+
+        for mt in &self.channel_trackers {
+            mt.lock().build_groups(&self.store).expect("build_groups");
+            info!(" {} trackers done", trackers_done.fetch_add(1, Relaxed) + 1);
+        }
+    }
 }
+
 #[async_trait]
 impl Stage for DistsTracker {
     type In<'a> = CrossBatchClcOutput<DistWithMask>;
@@ -134,6 +150,10 @@ impl Stage for DistsTracker {
                 .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
 
             trace!("find_motifs_by_euc_dist: mask_cpu_flattened=\n{mask_cpu_flattened}");
+            debug!(
+                "find_motifs_by_euc_dist: dists_flattened.size={:?}",
+                dists_flattened.as_ref().map(|v|v.size())
+            );
             trace!(
                 "find_motifs_by_euc_dist: dists_flattened=\n{:?}",
                 dists_flattened
@@ -147,9 +167,31 @@ impl Stage for DistsTracker {
             );
             trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
 
-            input.iter().zip(dists_and_mask_iter).for_each(|v| {
-                debug!("find_motifs_by_euc_dist: v={v:?}");
+            input.iter_0().for_each(|slice_0| {
+                input.iter_1().for_each(|slice_1| {
+
+
+                    if let Some((mask, dist)) = dists_and_mask_iter.next() {
+
+                        trace!("find_motifs_by_euc_dist: slice_0={slice_0:?}  slice_1={slice_1:?} mask={mask:?} dist={dist}");
+
+                        if mask
+                            && (slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1
+                        ) {
+                            mt.lock().track(
+                                slice_0.clone(),
+                                slice_1.clone(),
+                                dist as f32, //TODO actual distances not needed?
+                            );
+                        }
+
+                    } else {
+                        error!("find_motifs_by_euc_dist: not enough dists");
+                        panic!("find_motifs_by_euc_dist: not enough dists");
+                    }
+                });
             });
+            mt.lock().dump();
         }
 
         Ok(ThoTensor2::new(

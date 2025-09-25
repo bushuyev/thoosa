@@ -605,7 +605,7 @@ impl Runnable<TrackDistInput, TrackDistOutput, ()> for TrackDistRunnable {
 
             input.chunk_0.iter().for_each(|slice_0| {
                 input.chunk_1.iter().for_each(|slice_1| {
-                    debug!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel}");
+                    // debug!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel}");
                     let (mask, dist) = match dists_and_mask_iter.next() {
                         None => {
                             error!("find_motifs_by_euc_dist: no next");
@@ -1864,7 +1864,7 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    fn dump(&mut self) {
+    pub fn dump(&mut self) {
         debug!("SimpMotifTracker::dump: self.motifs={}", self.motifs.len());
         if let Some(last) = self.last.take() {
             self.motifs.push(last);
@@ -1877,7 +1877,7 @@ impl<'a> SimpleMotifTracker<'a> {
         }
     }
 
-    fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoosaError> {
+    pub fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoosaError> {
         self.dumper
             .load_slices_into_groups(store, self.max_slices_counts)
     }
