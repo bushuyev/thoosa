@@ -74,9 +74,9 @@ impl FindMotifsRunConfig {
     }
 }
 
-impl Input for FindMotifsRunConfig {
-    
-}
+// impl Input for FindMotifsRunConfig {
+//     
+// }
 
 //TODO rename to apply DSP Filter
 #[derive(Debug)]

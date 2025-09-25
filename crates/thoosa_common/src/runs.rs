@@ -34,7 +34,7 @@ impl Simple {
 }
 
 impl ResourcesConfig for Simple {
-    type Result = Vec<Resource>;
+    type R = Vec<Resource>;
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
@@ -71,12 +71,12 @@ impl ResourcesConfig for Simple {
 pub struct Empty {}
 
 impl ResourcesConfig for Empty {
-    type Result = ();
+    type R = ();
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<Self::Result, ThoosaError> {
+    ) -> Result<Self::R, ThoosaError> {
         Ok(())
     }
 }
@@ -100,7 +100,7 @@ impl Labeled {
 
 impl ResourcesConfig for Labeled {
     // (label, resources)
-    type Result = Vec<(String, Vec<Resource>)>;
+    type R = Vec<(String, Vec<Resource>)>;
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
@@ -139,7 +139,7 @@ impl Logits {
 
 impl ResourcesConfig for Logits {
     // (label, resources)
-    type Result = Vec<(Resource, Vec<f32>)>;
+    type R = Vec<(Resource, Vec<f32>)>;
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
@@ -186,12 +186,12 @@ impl<RC: ResourcesConfig> NetResources<RC> {
 }
 
 impl<RC: ResourcesConfig> ResourcesConfig for NetResources<RC> {
-    type Result = (RC::Result, RC::Result);
+    type R = (RC::R, RC::R);
 
     fn to_resources<S: ResourceStore + ?Sized>(
         &self,
         store: &Arc<RwLock<Box<S>>>,
-    ) -> Result<(RC::Result, RC::Result), ThoosaError> {
+    ) -> Result<(RC::R, RC::R), ThoosaError> {
         self.train_resources.to_resources(store).and_then(|train| {
             self.valid_resources
                 .to_resources(store)

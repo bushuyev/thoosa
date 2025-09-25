@@ -30,6 +30,7 @@ use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::nn::VarStore;
 use tch::{Device, Tensor};
+use tokio::runtime::Runtime;
 use thoosa_common::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use thoosa_common::batches::{
     AsyncBatchTransform, AsyncClassTensorsLoaderData, AsyncLoadingTensorsDataBatch,
@@ -41,7 +42,7 @@ use thoosa_common::find_motifs_run_config::{
 };
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
-use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
+use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{
@@ -60,23 +61,28 @@ use thoosa_common::train_nets::{
 use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{
-    FindMotifsArgs, SelectMotifsArgs, find_motifs_by_euc_dist_2, select_motifs_for_label,
-};
+use thoosa_motifs::find::{FindMotifsArgs, SelectMotifsArgs, find_motifs_by_euc_dist_2, select_motifs_for_label, FixedFindMotifsConfig};
 use thoosa_motifs::fragments::{
     MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs, load_motif_slices, load_motif_slices_2,
     motifs_to_tensor,
 };
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
-use thoosa_shared::applicables_runner::{Runner, ToOrdinal};
+use thoosa_shared::applicables_runner::{Input, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{ThoosaError, cdt, cdt_for_dir};
+use thoosa_shared::{ThoosaError, cdt, cdt_for_dir, ResourceType};
 use thoosa_store::{SqlStore, Store};
 use torch_sys::at_grad_set_enabled;
+use caching_runner::common::runnable::Stage;
+use caching_runner::global_ctx::GlobalCtx;
+use thoosa_shared::traits::SimpleId;
+use torch_runner::data::ThoTensor2;
+use crate::tasks::cross_loader::ResourcesConfigInput;
+use crate::tasks::run_ctx_2::RunCtx2;
+use crate::tasks::tensor_loader::TensorLoader;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -156,7 +162,7 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
-pub fn run_cli<F, R>(
+pub async fn run_cli<F, R>(
     labeled_resources: F,
     resource_to_tensor: R,
     labels: &[&str],
@@ -168,6 +174,8 @@ where
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoosaError> + Sync + Send,
 {
+
+    ;
     // set_oom_score_adj(-1000);
 
     unsafe {
@@ -229,49 +237,63 @@ where
     std::io::stdout().flush()?;
 
     let tensors_path = ws.read().tensors_path().clone();
+    let tensors_path_2 = tensors_path.clone();
     let tensors_path_runner = ws.read().tensors_path().clone();
 
-    let loader = Arc::new(RwLock::new(LoadRunner::new(
-        move |key: &Resource| {
-            let tensor = Tensor::load_multi_with_device(
-                FsWorkspace::resource_tensor_path(&tensors_path, key),
-                Cpu,
-            )
-            .map_err(|e| ThoosaError::new(e.to_string()))
-            .expect(format!("can't load {key:?}").as_str())
-            .pop()
-            .unwrap()
-            .1
-            .totype(Float);
-            if tensor.requires_grad() || tensor.retains_grad() {
-                warn!("tensor requires grad!");
-            }
-            debug!("key={key:?} tensor.size={:?}", tensor.size());
-            tensor.into()
-        },
-        loader_threads,
-        cli.futures_channel_bound,
-        2,
-    )));
+    // let loader = Arc::new(RwLock::new(LoadRunner::new(
+    //     move |key: &Resource| {
+    //         let tensor = Tensor::load_multi_with_device(
+    //             FsWorkspace::resource_tensor_path(&tensors_path, key),
+    //             Cpu,
+    //         )
+    //         .map_err(|e| ThoosaError::new(e.to_string()))
+    //         .expect(format!("can't load {key:?}").as_str())
+    //         .pop()
+    //         .unwrap()
+    //         .1
+    //         .totype(Float);
+    //         if tensor.requires_grad() || tensor.retains_grad() {
+    //             warn!("tensor requires grad!");
+    //         }
+    //         debug!("key={key:?} tensor.size={:?}", tensor.size());
+    //         tensor.into()
+    //     },
+    //     loader_threads,
+    //     cli.futures_channel_bound,
+    //     2,
+    // )));
 
-    let runner = Arc::new(ThoRunner::new(&[10, 2], move |key, device| {
-        debug!("loader_fn: thread={:?}", std::thread::current().name());
-        let tensor = Tensor::load_multi_with_device(
-            FsWorkspace::resource_tensor_path(&tensors_path_runner, key),
-            *device,
-        )
-        .map_err(|e| ThoosaError::new(e.to_string()))
-        .expect(format!("can't load {key:?}").as_str())
-        .pop()
-        .unwrap()
-        .1
-        .totype(Float);
-        if tensor.requires_grad() || tensor.retains_grad() {
-            warn!("tensor requires grad!");
-        }
-        debug!("key={key:?} tensor.size={:?}", tensor.size());
-        tensor.into()
-    }));
+
+
+    let loader_2 = Arc::new(TensorLoader::new(
+        move |key, _| {
+
+            ThoTensor2::new(
+                Input::id(key).clone(),
+                Tensor::load(tensors_path_2.join(format!("{}_{}.pt", key.import_id(), key.file_stem()))).unwrap()
+            )
+        },
+        ThoDevice::from(Device::Cpu),
+    ));
+
+    // let runner = Arc::new(ThoRunner::new(&[10, 2], move |key, device| {
+    //     debug!("loader_fn: thread={:?}", std::thread::current().name());
+    //     let tensor = Tensor::load_multi_with_device(
+    //         FsWorkspace::resource_tensor_path(&tensors_path_runner, key),
+    //         *device,
+    //     )
+    //     .map_err(|e| ThoosaError::new(e.to_string()))
+    //     .expect(format!("can't load {key:?}").as_str())
+    //     .pop()
+    //     .unwrap()
+    //     .1
+    //     .totype(Float);
+    //     if tensor.requires_grad() || tensor.retains_grad() {
+    //         warn!("tensor requires grad!");
+    //     }
+    //     debug!("key={key:?} tensor.size={:?}", tensor.size());
+    //     tensor.into()
+    // }));
 
     match &cli.command {
         Some(ImportResources(import_resources_params)) => {
@@ -307,7 +329,7 @@ where
                 "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
             );
 
-            let run_ids = run_all_grid_step_2(
+            /*let run_ids = run_all_grid_step_2(
                 None,
                 find_motifs_run_config_range_or_value,
                 &find_motifs_args.fixed_config,
@@ -320,66 +342,90 @@ where
                 devices.clone(),
                 "FindMotifs",
                 true,
-            )?;
+            )?;*/
+
+
+            GlobalCtx::init_devices(2);
+
+            // Use the runtime to block until the async function completes
+
+
+            let run_ids = run_grid::<Simple, _, _, _, _, _>(
+                None,
+                find_motifs_run_config_range_or_value,
+                Arc::new(ResourcesConfigInput::new(
+                    SimpleId::from("resources"),
+                    find_motifs_args.resource_config(),
+                )),
+                &store,
+                true,
+                |run_configs| {
+                    Arc::new(crate::tasks::find_motifs::FindMotifsStage::new(&ws, &store, loader_2, run_configs, FixedFindMotifsConfig::new(None, 2, false, None), ThoDevice::from(1)))
+                },
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa"))),
+            ).await.unwrap();
 
             info!("FindMotifs done, run_ids={run_ids:?}");
+
+
+            // info!("FindMotifs done, run_ids={run_ids:?}");
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
-            debug!(
-                "SelectMotifs2: select_motifs_args.run_config_cnt={:?}",
-                select_motifs_args.run_config_cnt
-            );
-
-            let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
-                serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
-
-            let run_ids = run_all_grid_step(
-                Some(select_motifs_args.find_motifs_run_ids.clone()),
-                select_motifs_run_config_range_or_value,
-                &(),
-                &select_motifs_args.resource_config(),
-                select_motifs_for_label,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "SelectMotifs",
-                false,
-            )?;
-
-            info!("SelectMotifs done, run_ids={run_ids:?}");
+            // debug!(
+            //     "SelectMotifs2: select_motifs_args.run_config_cnt={:?}",
+            //     select_motifs_args.run_config_cnt
+            // );
+            //
+            // let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue =
+            //     serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
+            //
+            // let run_ids = run_all_grid_step(
+            //     Some(select_motifs_args.find_motifs_run_ids.clone()),
+            //     select_motifs_run_config_range_or_value,
+            //     &(),
+            //     &select_motifs_args.resource_config(),
+            //     select_motifs_for_label,
+            //     &ws,
+            //     &store,
+            //     &loader,
+            //     devices.clone(),
+            //     "SelectMotifs",
+            //     false,
+            // )?;
+            //
+            // info!("SelectMotifs done, run_ids={run_ids:?}");
         }
 
         Some(TrainMotifsNets(train_motif_nets_args)) => {
-            debug!(
-                "TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",
-                train_motif_nets_args.run_config_cnt
-            );
-            let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue =
-                serde_json5::from_str(&train_motif_nets_args.run_config_cnt)
-                    .expect("TrainMotifsNets2");
+            // debug!(
+            //     "TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",
+            //     train_motif_nets_args.run_config_cnt
+            // );
+            // let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue =
+            //     serde_json5::from_str(&train_motif_nets_args.run_config_cnt)
+            //         .expect("TrainMotifsNets2");
+            //
+            // let run_ids = run_opt_step::<
+            //     TrainMotifsNetsRunConfig,
+            //     TrainMotifsNetsRunConfigRangeOrValue,
+            //     OptConfig,
+            //     Empty,
+            //     _,
+            // >(
+            //     Some(train_motif_nets_args.motif_selection_run_id.clone()),
+            //     train_motif_nets_run_config_range_or_value,
+            //     &train_motif_nets_args.fixed_config,
+            //     &train_motif_nets_args.resource_config(),
+            //     run_train_motif_nodes_on_motif_selection,
+            //     &ws,
+            //     &store,
+            //     &loader,
+            //     devices.clone(),
+            //     "TrainMotifsNets2",
+            // )?;
 
-            let run_ids = run_opt_step::<
-                TrainMotifsNetsRunConfig,
-                TrainMotifsNetsRunConfigRangeOrValue,
-                OptConfig,
-                Empty,
-                _,
-            >(
-                Some(train_motif_nets_args.motif_selection_run_id.clone()),
-                train_motif_nets_run_config_range_or_value,
-                &train_motif_nets_args.fixed_config,
-                &train_motif_nets_args.resource_config(),
-                run_train_motif_nodes_on_motif_selection,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "TrainMotifsNets2",
-            )?;
-
-            info!("TrainMotifsNets done, run_ids={run_ids:?}");
+            // info!("TrainMotifsNets done, run_ids={run_ids:?}");
         }
 
         Some(Commands::TrainLabelNets(train_label_nets_args)) => {
@@ -387,30 +433,30 @@ where
                 "TrainMotifsNets2: train_motif_nets_args.run_config_cnt={:?}",
                 train_label_nets_args.run_config_cnt
             );
-            let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue =
-                serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect(
-                    "TrainLabelNets2\
-            ",
-                );
-
-            run_opt_step::<
-                TrainLabelNetsRunConfig,
-                TrainLabelNetsRunConfigRangeOrValue,
-                OptConfig,
-                NetResources<Labeled>,
-                _,
-            >(
-                Some(train_label_nets_args.motif_selection_run_id.clone()),
-                train_label_nets_run_config_range_or_value,
-                &train_label_nets_args.fixed_config,
-                &train_label_nets_args.resource_config(),
-                run_train_label_nets,
-                &ws,
-                &store,
-                &loader,
-                devices.clone(),
-                "TrainMotifsNets2",
-            )?;
+            // let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue =
+            //     serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect(
+            //         "TrainLabelNets2\
+            // ",
+            //     );
+            //
+            // run_opt_step::<
+            //     TrainLabelNetsRunConfig,
+            //     TrainLabelNetsRunConfigRangeOrValue,
+            //     OptConfig,
+            //     NetResources<Labeled>,
+            //     _,
+            // >(
+            //     Some(train_label_nets_args.motif_selection_run_id.clone()),
+            //     train_label_nets_run_config_range_or_value,
+            //     &train_label_nets_args.fixed_config,
+            //     &train_label_nets_args.resource_config(),
+            //     run_train_label_nets,
+            //     &ws,
+            //     &store,
+            //     &loader,
+            //     devices.clone(),
+            //     "TrainMotifsNets2",
+            // )?;
 
             info!("TrainMotifsNets done");
         }
@@ -531,35 +577,35 @@ where
         }
 
         Some(Infer(infer_params)) => {
-            block_on(run_infer(
-                &ws,
-                &store,
-                infer_params,
-                devices[0],
-                |path| {
-                    data::parquet_to_tensor_by_path(
-                        //TODO move load_tensor to project params
-                        <Path as AsRef<Path>>::as_ref(path),
-                        *devices.first().expect("first device"),
-                    )
-                },
-                &runner,
-            ))?;
+            // block_on(run_infer(
+            //     &ws,
+            //     &store,
+            //     infer_params,
+            //     devices[0],
+            //     |path| {
+            //         data::parquet_to_tensor_by_path(
+            //             //TODO move load_tensor to project params
+            //             <Path as AsRef<Path>>::as_ref(path),
+            //             *devices.first().expect("first device"),
+            //         )
+            //     },
+            //     &runner,
+            // ))?;
         }
 
         Some(PlotMotifSlices(plot_motif_slices_params)) => {
-            run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params, &devices[0])?;
+            // run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params, &devices[0])?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
-            motifs_to_tensor_cmd(
-                &cli,
-                &store,
-                *devices.first().expect("first device"),
-                choose_fragments_params,
-                &ws,
-                &loader,
-            )?;
+            // motifs_to_tensor_cmd(
+            //     &cli,
+            //     &store,
+            //     *devices.first().expect("first device"),
+            //     choose_fragments_params,
+            //     &ws,
+            //     &loader,
+            // )?;
         }
 
         //gdb --args target/x86_64-unknown-linux-gnu/debug/thoosa_hbac --term-logger-level=DEBUG --base-path=/tmp/ --resource-pattern=xxx say-hello
@@ -2238,6 +2284,59 @@ where
         panic!("todo")
     }
 }
+
+
+pub async  fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
+    input_run_ids: Option<Vec<RunId>>,
+    rcrv: RCRV,
+    // fixed_config: FC,
+    input: Arc<ST::In<'static>>,
+    // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
+    // stage: Arc<ST>,
+    // ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    store: &Arc<RwLock<Box<dyn Store>>>,
+    // loader: &Arc<RwLock<LoadRunner<Tensor>>>,
+    // devices: Vec<Device>,
+    // _descr: &str,
+    presave: bool,
+    f:F,
+    ctx_f:CtxF
+) -> Result<Vec<RunId>, ThoosaError>
+where
+    ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
+    F:FnOnce(Vec<RC>)->Arc<ST>,
+    ST: Stage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>> + thoosa_properties_map::ToHashmap,
+    RCRV: GridRunConfigSource,
+    // ResConf: ResourcesConfig,
+    for <'c> <ST as Stage>::In<'c>: Send + Sync,
+    CtxF:FnOnce()->Arc<RwLock<<ST as Stage>::Ctx>>
+{
+    let grid_run_configs = rcrv.grid_run_configs();
+    debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
+
+    let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
+    let mut run_ids = if presave {
+        save_run_configs(
+            input_run_ids.as_ref().map(|v| v.as_slice()),
+            &store,
+            &mut run_configs,
+            "find motifs",
+        )
+    } else {
+        vec![]
+    };
+
+    let stage = f(run_configs);
+
+    let ctx = Arc::new(parking_lot::RwLock::new(crate::tasks::run_ctx_2::RunCtx2::new(0, 0, "aa")));
+
+    stage.run(input, ctx_f()).await?;
+
+
+    Ok(run_ids)
+}
+
 
 #[cfg(test)]
 mod cli_tests {

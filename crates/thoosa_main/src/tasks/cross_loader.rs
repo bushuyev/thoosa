@@ -11,19 +11,24 @@ use caching_runner::common::{Data, OutId, RunCtx};
 use log::debug;
 use parking_lot::RwLock;
 use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
+use futures_util::future::BoxFuture;
 use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
+use thoosa_common::runs::Simple;
 use thoosa_common::tho_tensor::CopyToDevice;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::resource::Resource;
+use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use thoosa_shared::ThoosaError;
+use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 
 #[async_trait]
-pub trait CrossLoaderTensorSource: Send + Sync + Debug {
+pub trait CrossTensorLoader: Send + Sync + Debug {
     async fn load(
         self: Arc<Self>,
         resource: Arc<Resource>,
@@ -32,7 +37,7 @@ pub trait CrossLoaderTensorSource: Send + Sync + Debug {
 }
 
 #[async_trait]
-impl CrossLoaderTensorSource for TensorLoader {
+impl CrossTensorLoader for TensorLoader {
     async fn load(
         self: Arc<Self>,
         resource: Arc<Resource>,
@@ -45,7 +50,7 @@ impl CrossLoaderTensorSource for TensorLoader {
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_tensor_source {
     use super::ChannelsData2;
-    use super::{CrossLoaderTensorSource, DataCacheWrapper, RunCtx2, SimpleId, ThoTensor2};
+    use super::{CrossTensorLoader, DataCacheWrapper, RunCtx2, SimpleId, ThoTensor2};
     use async_trait::async_trait;
     use parking_lot::RwLock;
     use std::future::Future;
@@ -79,7 +84,7 @@ pub(crate) mod mock_cross_loader_tensor_source {
     }
 
     #[async_trait]
-    impl CrossLoaderTensorSource for MockCrossLoaderTensorSource {
+    impl CrossTensorLoader for MockCrossLoaderTensorSource {
         async fn load(
             self: Arc<Self>,
             resource: Arc<Resource>,
@@ -357,44 +362,78 @@ pub(crate) mod mock_cross_loader_receiver {
     }
 }
 
-// #[derive(Debug, cached_derive::Cached)]
-#[derive(Debug)]
-// #[cache_name = "LoadedTensorId"]
-pub struct CrossLoader<SRC, CLC, RSV> {
-    loader: Arc<SRC>,
-    batch_clc: Arc<CLC>,
-    receiver: Arc<RSV>,
-    chunk_size: usize,
-    max_batch: usize,
-}
 
-impl<SRC, CLC, RSV> CrossLoader<SRC, CLC, RSV>
+
+// #[derive(Debug, cached_derive::Cached)]
+// #[cache_name = "LoadedTensorId"]
+pub struct CrossLoader<RC, SRC, CLC, RSV>
 where
-    SRC: CrossLoaderTensorSource + 'static,
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    SRC: CrossTensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
 {
-    pub fn new(
+    loader: Arc<SRC>,
+    store:Arc<RwLock<Box<dyn Store>>>,
+    batch_clc: Arc<CLC>,
+    receiver: Arc<RSV>,
+    chunk_size: usize,
+    max_batch: usize,
+    on_all_done:Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
+    pd:PhantomData<RC>
+}
+
+impl <RC, SRC, CLC, RSV> Debug for CrossLoader<RC, SRC, CLC, RSV>
+where
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    SRC: CrossTensorLoader + 'static,
+    CLC: CrossLoaderClc + 'static,
+    CLC::Out: Input + Output + Send + Debug + 'static,
+    RSV: CrossLoaderReceiver<CLC::Out> + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CrossLoader").finish()
+    }
+}
+
+impl<RC, SRC, CLC, RSV> CrossLoader<RC, SRC, CLC, RSV>
+where
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    SRC: CrossTensorLoader + 'static,
+    CLC: CrossLoaderClc + 'static,
+    CLC::Out: Input + Output + Send + Debug + 'static,
+    RSV: CrossLoaderReceiver<CLC::Out> + 'static,
+{
+    pub fn new<OnAllDone>(
         loader: Arc<SRC>,
+        store:&Arc<RwLock<Box<dyn Store>>>,
         batch_clc: Arc<CLC>,
         receiver: Arc<RSV>,
         chunk_size: usize,
         max_batch: usize,
-    ) -> Self {
+        on_all_done:OnAllDone
+    ) -> Self
+    where
+        OnAllDone: Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send + 'static,
+    {
         Self {
             loader,
+            store: Arc::clone(store),
             batch_clc,
             receiver,
             chunk_size,
             max_batch,
+            on_all_done: Box::new(on_all_done),
+            pd: Default::default(),
         }
     }
 }
 
-impl<SRC, CLC, RSV> OutId for CrossLoader<SRC, CLC, RSV>
+impl<RC, SRC, CLC, RSV> OutId for CrossLoader<RC, SRC, CLC, RSV>
 where
-    SRC: CrossLoaderTensorSource + 'static,
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    SRC: CrossTensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
@@ -405,21 +444,23 @@ where
 }
 
 #[derive(Debug)]
-pub struct ResourcesVec {
+pub struct ResourcesConfigInput<RC:ResourcesConfig>
+
+{
     id: SimpleId,
-    resources: Vec<Arc<Resource>>,
+    resources_config: RC,
 }
 
-impl ResourcesVec {
-    pub fn new(id: SimpleId, resources: Vec<Resource>) -> Self {
+impl <RC:ResourcesConfig+Debug>  ResourcesConfigInput<RC> {
+    pub fn new(id: SimpleId, resources: RC) -> Self {
         Self {
             id,
-            resources: resources.into_iter().map(|r| Arc::new(r)).collect(),
+            resources_config: resources //: resources.to_resources().into_iter().map(|r| Arc::new(r)).collect(),
         }
     }
 }
 
-impl WithId for ResourcesVec {
+impl <RC:ResourcesConfig> WithId for ResourcesConfigInput<RC> {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -427,7 +468,7 @@ impl WithId for ResourcesVec {
     }
 }
 
-impl Input for ResourcesVec {}
+impl <RC:ResourcesConfig+Debug> Input for ResourcesConfigInput<RC> {}
 
 #[derive(Debug)]
 pub struct CrossResult {
@@ -450,15 +491,16 @@ impl CrossResult {
 }
 
 #[async_trait]
-impl<SRC, CLC, RSV> Stage for CrossLoader<SRC, CLC, RSV>
+impl<RC, SRC, CLC, RSV> Stage for CrossLoader<RC, SRC, CLC, RSV>
 where
-    SRC: CrossLoaderTensorSource + 'static,
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    SRC: CrossTensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
 {
     type In<'a>
-        = ResourcesVec
+        = ResourcesConfigInput<RC>
     where
         Self: 'a;
     type Out = CrossResult;
@@ -473,9 +515,10 @@ where
         let max_batch = i64::try_from(self.max_batch).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
+        let resources = input.resources_config.to_resources(&self.store)?.into_iter().map(|r|Arc::new(r)).collect::<Vec<_>>();
         debug!(
             "CrossLoader::run chunk_size={chunk_size}  max_batch={max_batch} resources={}",
-            input.resources.len()
+            resources.len()
         );
 
         let mut t_0_batch: Vec<_> = vec![];
@@ -484,7 +527,7 @@ where
 
         let mut skip_0_i = 0;
 
-        for (i_0, resource_0) in input.resources.iter().enumerate() {
+        for (i_0, resource_0) in resources.iter().enumerate() {
             let t_0 = Arc::clone(&self.loader)
                 .load(Arc::clone(resource_0), Arc::clone(&ctx))
                 .await?;
@@ -493,7 +536,7 @@ where
             t_0_batch.push(t_0);
             t_0_batch_resources.push(resource_0);
 
-            if t_0_batch_len < max_batch && i_0 < input.resources.len() - 1 {
+            if t_0_batch_len < max_batch && i_0 < resources.len() - 1 {
                 continue;
             }
 
@@ -501,7 +544,7 @@ where
             let mut t_1_batch_resources: Vec<_> = vec![];
             let mut t_1_batch_len = 0;
 
-            for (i_1, resource_1) in input.resources.iter().enumerate().skip(skip_0_i) {
+            for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
                 //skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
@@ -513,7 +556,7 @@ where
                 t_1_batch.push(t_1);
                 t_1_batch_resources.push(resource_1);
 
-                if t_1_batch_len < max_batch && i_1 < input.resources.len() - 1 {
+                if t_1_batch_len < max_batch && i_1 < resources.len() - 1 {
                     continue;
                 }
 
@@ -557,6 +600,8 @@ where
             t_0_batch_len = 0;
         }
 
+        (self.on_all_done)(&self.receiver).await;
+
         Ok(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))
     }
 }
@@ -568,7 +613,7 @@ mod tests {
     use super::mock_cross_loader_tensor_source;
     use super::*;
     use crate::tasks::cross_batch_clc::{CrossBatchClc, UnfoldParams};
-    use crate::tasks::cross_loader::{CrossLoader, ResourcesVec};
+    use crate::tasks::cross_loader::{CrossLoader, ResourcesConfigInput};
     use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::TensorLoader;
@@ -581,6 +626,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, Once};
     use std::time::Duration;
+    use futures_util::FutureExt;
     use tch::{Device, Tensor};
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
@@ -588,10 +634,11 @@ mod tests {
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{cdt_for_dir, ThoosaError};
+    use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use thoosa_motifs::distance::MaskMaker::Tril;
+    use thoosa_store::{MockStore, SqlStore};
     use torch_runner::data::ThoTensor2;
     use crate::cli::Commands::FindMotifs;
 
@@ -640,14 +687,16 @@ mod tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
+        let mut store = Arc::new(RwLock::new(SqlStore::from_path(ws.read().store_path())?));
 
         let run_config = FindMotifsRunConfig::new(Some(0), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(None, 2, false, None);
 
-        let resources: Vec<Resource> = vec!["111", "222", "333", "444", "555", "666"]
-            .into_iter()
+        let resource_keys:Vec<String> = vec!["111", "222", "333", "444", "555", "666"].into_iter().map(|v|v.to_string()).collect();
+        let resources: Vec<Resource> = resource_keys
+            .iter()
             .enumerate()
-            .map(|(i, v)| (i as u32, 1u32, v, 10).into())
+            .map(|(i, v)| (i as u32, 1u32, v.as_str(), 10).into())
             .collect();
         let resources_to_move = resources.clone();
 
@@ -690,12 +739,15 @@ mod tests {
                 }, (),
                                                     UnfoldParams::new(1, 2, 1)));
 
-        let receiver = Arc::new(DistsTracker::new_2(&ws, &run_config, &fixed_config, None));
+        let receiver = Arc::new(DistsTracker::new(&ws, &store, &run_config, &fixed_config, None));
 
-        let cross_loader = Arc::new(CrossLoader::new(loader, batch_clc, receiver, 2, 20));
+        let cross_loader = Arc::new(CrossLoader::new(loader, &store, batch_clc, receiver, 2, 20, |p| async {
+            // cross_loader.receiver;
+        }.boxed()
+        ));
 
         let _ = cross_loader
-            .run(Arc::new(ResourcesVec::new("".into(), resources)), ctx)
+            .run(Arc::new(ResourcesConfigInput::new("".into(), Simple::new(ResourceType::List(resource_keys)))), ctx)
             .await?;
 
 
@@ -786,13 +838,18 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "mock")));
 
-        let cross_loader = Arc::new(CrossLoader::new(loader, batch_clc, receiver, 1, 2));
+        let mut mocked_store = Arc::new(RwLock::new(Box::new(MockStore::new()) as Box<dyn Store>));
+
+        let cross_loader = Arc::new(CrossLoader::new(loader, &mocked_store, batch_clc, receiver, 1, 2,                      |p| async {
+            // cross_loader.receiver;
+        }.boxed()
+        ));
 
         let _ = cross_loader
             .run(
-                Arc::new(ResourcesVec::new(
+                Arc::new(ResourcesConfigInput::new(
                     SimpleId::from("resources"),
-                    resources.clone(),
+                    Simple::new(ResourceType::List(vec!["resource_a".to_string(), "resource_b".to_string()])),
                 )),
                 Arc::clone(&ctx),
             )
