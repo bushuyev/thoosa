@@ -14,6 +14,6 @@ log.workspace = true
 simplelog.workspace = true
 parking_lot.workspace = true
 mockall.workspace = true
-ctor = "0.2.7"
+ctor.workspace = true
 rusqlite = { version = "0.32.1", features = ["bundled"] }
-zstd-framed = "0.1.1"
+zstd-framed = "0"

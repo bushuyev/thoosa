@@ -12,6 +12,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Tensor;
 use tch::kind::FLOAT_CPU;
+use thoosa_common::utils::tensor_mem_size;
 use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
@@ -93,15 +94,17 @@ where
 pub struct CrossBatchClcOutput<R: Debug> {
     id: SimpleId,
     clc_result: R,
-    iter: SlicesIter,
+    iter_0: SlicesIter,
+    iter_1: SlicesIter,
 }
 
 impl<R: Debug> CrossBatchClcOutput<R> {
-    pub fn new(clc_result: R, iter: SlicesIter) -> Self {
+    pub fn new(clc_result: R, iter_0: SlicesIter, iter_1: SlicesIter) -> Self {
         Self {
             id: "".into(),
             clc_result,
-            iter,
+            iter_0,
+            iter_1,
         }
     }
 
@@ -113,9 +116,14 @@ impl<R: Debug> CrossBatchClcOutput<R> {
         &self.clc_result
     }
 
-    pub fn iter(&self) -> SlicesIter {
-        self.iter.clone()
+    pub fn iter_0(&self) -> SlicesIter {
+        self.iter_0.clone()
     }
+
+    pub fn iter_1(&self) -> SlicesIter {
+        self.iter_1.clone()
+    }
+
 }
 
 impl<R: Debug> WithId for CrossBatchClcOutput<R> {
@@ -148,14 +156,14 @@ where
     where
         Self: Sized
     {
-        let mut batch_sizes = vec![];
+        let mut batch_0_sizes = vec![];
 
         let batch_0_t = Tensor::concat(
             input.tensors[0..input.b_0.len()]
                 .iter()
                 .map(|t| {
-                    let unfolded = t.t().unfold(1, 2, 1);
-                    batch_sizes.push(unfolded.size()[1]); //number of blocks
+                    let unfolded = t.t().unfold(self.unfold_params.dimension, self.unfold_params.size, self.unfold_params.step);
+                    batch_0_sizes.push(unfolded.size()[1]); //number of blocks
                     unfolded
                 })
                 .collect::<Vec<_>>()
@@ -163,14 +171,14 @@ where
             1,
         );
 
-        // let mut batch_1_sizes = vec![];
+        let mut batch_1_sizes = vec![];
 
         let batch_1_t = Tensor::concat(
             input.tensors[input.b_0.len()..]
                 .iter()
                 .map(|t| {
-                    let unfolded = t.t().unfold(1, 2, 1);
-                    batch_sizes.push(unfolded.size()[1]); //number of blocks
+                    let unfolded = t.t().unfold(self.unfold_params.dimension, self.unfold_params.size, self.unfold_params.step);
+                    batch_1_sizes.push(unfolded.size()[1]); //number of blocks
                     unfolded
                 })
                 .collect::<Vec<_>>()
@@ -178,24 +186,34 @@ where
             1,
         );
 
-        assert_eq!(batch_sizes.len(), input.b_0.len() + input.b_1.len());
+        assert_eq!(batch_0_sizes.len(), input.b_0.len());
+        assert_eq!(batch_1_sizes.len(), input.b_1.len());
 
-        let resource_ids_sizes: Vec<_> = input
+        let resource_ids_sizes_0: Vec<_> = input
             .b_0
             .into_iter()
-            .chain(input.b_1.into_iter())
-            .zip(batch_sizes.into_iter())
+            .zip(batch_0_sizes.into_iter())
             .map(|v| (v.0.id(), v.1 as usize))
             .collect();
 
-        debug!("resource_ids_sizes={resource_ids_sizes:?}");
+        let resource_ids_sizes_1: Vec<_> = input
+            .b_1
+            .into_iter()
+            .zip(batch_1_sizes.into_iter())
+            .map(|v| (v.0.id(), v.1 as usize))
+            .collect();
 
-        debug!("CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?}");
 
-        let iter = SlicesIter::new(2, resource_ids_sizes);
+        debug!("resource_ids_sizes={resource_ids_sizes_0:?}");
+
+        debug!("CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
 
         (self.batch_clc)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx)
-            .map(|v| CrossBatchClcOutput::new(v, iter))
+            .map(|v| CrossBatchClcOutput::new(
+                v,
+                SlicesIter::new(self.unfold_params.step as usize, resource_ids_sizes_0),
+                SlicesIter::new(self.unfold_params.step as usize, resource_ids_sizes_1)
+            ))
     }
 }
 

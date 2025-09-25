@@ -1,6 +1,6 @@
 use crate::{IdSlice, MotifTrackerStore, SlicesMatch, Store, filter_groups_by_slices_count};
 use bytemuck::AnyBitPattern;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -38,12 +38,14 @@ impl FileMotifTrackerStore {
         run_id: RunId,
         channel: u32,
     ) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
-        debug!("FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel}");
+
 
         let file = std::fs::OpenOptions::new().create(true).append(true).open(
             path.as_ref()
                 .join(format!("{run_id}_{channel}_slices.zstd").as_str()),
         )?;
+
+        debug!("FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel} file={file:?}");
 
         let writer = ZstdWriter::builder(file)
             .with_compression_level(3) // Set compression level
@@ -61,10 +63,7 @@ impl FileMotifTrackerStore {
 
 impl MotifTrackerStore for FileMotifTrackerStore {
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
-        debug!(
-            "MotifTrackerStore::save_slices: slices_pairs.len()={}",
-            slices_pairs.len()
-        );
+
 
         let data_bytes = unsafe {
             std::slice::from_raw_parts(
@@ -73,7 +72,24 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             )
         };
 
-        self.writer.write_all(data_bytes)?;
+        debug!(
+            "MotifTrackerStore::save_slices: slices_pairs.len()={} data_bytes={data_bytes:?}",
+            slices_pairs.len()
+        );
+
+
+        // self.writer.write_all(data_bytes)?;
+        if let Err(e) = self.writer.write_all(data_bytes) {
+            error!("write_all failed: kind={:?} os={:?} len={}", e.kind(), e.raw_os_error(), data_bytes.len());
+            match e.kind() {
+                io::ErrorKind::WriteZero => error!("Likely out-of-space on a fixed-capacity writer (Cursor<&mut [u8]>/Take) or a buggy Write impl."),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset => error!("Peer closed; recreate the connection."),
+                _ => {}
+            }
+            std::process::abort();
+        }
+
+
         self.writer.finish_frame()?;
         self.writer.flush()?;
 
@@ -192,12 +208,15 @@ mod tests {
     use log::{debug, error};
     use parking_lot::{Mutex, RwLock};
     use std::collections::{HashMap, HashSet};
-    use std::fs;
+    use std::{fs, thread};
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::thread::Thread;
+    use zstd_framed::ZstdWriter;
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError, cdt_for_dir, group_slices};
+    use thoosa_shared::test_utils::init_test_logging;
 
     #[test]
     fn test_single_part() -> Result<(), ThoosaError> {
@@ -543,4 +562,52 @@ mod tests {
          Ok(())
 
      }*/
+
+    #[test]
+    fn test_write_all(){
+        init_test_logging();
+
+        debug!("test_write_all");
+
+        let nums = [1, 2, 3, 4, 5];
+
+        let mut file = File::create("/tmp/foo.txt").expect("create failed");
+        let mut writer = ZstdWriter::builder(file)
+            .with_compression_level(3) // Set compression level
+            .with_seek_table(u32::MAX)
+            .build().unwrap();
+
+        let data_bytes = &[3, 0, 0, 0, 232, 3, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 232, 3, 0, 0, 0, 0, 0, 0];
+
+        let results: Vec<()> = thread::scope(|s| {
+            let mut handles = Vec::new();
+
+            handles.push(s.spawn(move || {
+                for i in  0..1000 {
+
+                    match writer.write_all(data_bytes) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            panic!("{:?}", e);
+                        },
+                    }
+
+                    writer.finish_frame().unwrap();
+                    writer.flush().unwrap();
+                }
+            }));
+
+            for t in (0..32){
+                handles.push(s.spawn(move || {
+                    for i in 0..10000 {
+                        debug!("worker {t} on {i} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                    }
+
+                }));
+            }
+
+            // Collect results (join happens here)
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+    }
 }
