@@ -16,6 +16,12 @@ pub struct ChannelsDataMetrics {
     seq:i64
 }
 
+impl ChannelsDataMetrics {
+    pub fn new(channel: i64, seq: i64) -> Self {
+        Self { channel, seq }
+    }
+}
+
 impl From<[i64; 2]> for ChannelsDataMetrics {
     fn from([channel, seq]: [i64; 2]) -> Self {
         Self { channel, seq }

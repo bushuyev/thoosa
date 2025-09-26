@@ -3,6 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
+use log::debug;
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
@@ -16,7 +17,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{DataId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_dims::MotifSlices;
+use crate::tasks::cross_dims::{ChannelsDataMetrics, MotifSlices};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 
@@ -80,12 +81,22 @@ impl <SRC> Stage for MotifLoader <SRC>
             a
         });
 
+        let window = find_motifs_run_config.window;
+        let device_idx = ctx.read().device_idx();
+
         for (resource_id, slices) in tensors_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
-            //
-            // t.with_data(ctx.read().device_idx(), None, None, |t|{
-            //     Ok(())
-            // }).await?;
+
+            for slice in slices {
+
+                t.with_data(device_idx, Some(
+                    &(ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel, (slice  + window) as i64))
+                ), None, |t| {
+
+                    debug!("MotifLoader::run/with_data: t={t:?}");
+                    Ok(())
+                }).await?;
+            }
             // t.da().i((channel, slice_idx as i64..(slice_idx + window )as i64))
         }
 
@@ -139,8 +150,9 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "test")));
 
-        motif_loader.run_cached(Arc::new(DataId::from(10)), ctx).await?;
+        let motif = motif_loader.run_cached(Arc::new(DataId::from(10)), ctx).await?;
 
+        println!("motif={motif:?}");
 
         Ok(())
     }
