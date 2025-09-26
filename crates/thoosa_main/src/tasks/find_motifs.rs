@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Kind::Float;
 use tch::{Device, Kind, Tensor};
+use tch::Device::Cpu;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
@@ -193,20 +194,23 @@ where
                         )?;
 
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                        Ok(tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                DistWithMask::new(
-                                    CopyCtx::instance().copy(&dists.0, 0, Kind::Bool).await,
-                                    match dists.1 {
-                                        None => None,
-                                        Some(t) => {
-                                            Some(CopyCtx::instance().copy(&t, 0, Kind::Bool).await)
-                                        }
-                                    },
-                                )
-                            })
-                        }))
-                        // Ok(DistWithMask::new(dists.0, dists.1))
+                        if dists.0.device().ne(&Cpu) {
+                            Ok(tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(async {
+                                    DistWithMask::new(
+                                        CopyCtx::instance().copy(&dists.0, 0, dists.0.kind()).await,
+                                        match dists.1 {
+                                            None => None,
+                                            Some(t) => {
+                                                Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)
+                                            }
+                                        },
+                                    )
+                                })
+                            }))
+                        } else {
+                            Ok(DistWithMask::new(dists.0, dists.1))
+                        }
                     }),
                     MeanDistsCtx::new(channels, device.into()),
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
@@ -341,11 +345,12 @@ mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_0() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
+
         // log::set_max_level(log::LevelFilter::Trace);
         GlobalCtx::init_devices(2);
 
@@ -370,7 +375,7 @@ mod tests {
         let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
-        let x = lin_t(n);
+       /* let x = lin_t(n);
         plot_series(
             vec![
                 (
@@ -401,7 +406,7 @@ mod tests {
             "test_find_motifs_euc",
             (2000, 1000),
             &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
-        )?;
+        )?;*/
 
         let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
         debug!(
