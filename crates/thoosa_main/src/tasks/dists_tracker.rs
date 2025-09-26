@@ -22,8 +22,8 @@ use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{SimpleId, WithId};
-use thoosa_store::{SqlMotifTrackerStore, Store};
 use thoosa_store::fs_store::FileMotifTrackerStore;
+use thoosa_store::{SqlMotifTrackerStore, Store};
 use torch_runner::data::ThoTensor2;
 
 #[derive(Debug)]
@@ -51,22 +51,21 @@ impl DistWithMask {
 
 pub struct DistsTracker {
     channel_trackers: Vec<Mutex<SimpleMotifTracker<'static>>>,
-    store:Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<RwLock<Box<dyn Store>>>,
 }
 
 impl Debug for DistsTracker {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DistsTracker")
-        .field("channel_trackers", &self.channel_trackers)
-        .finish()
+            .field("channel_trackers", &self.channel_trackers)
+            .finish()
     }
 }
 
 impl DistsTracker {
-
-    pub fn new (
+    pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store:&Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<RwLock<Box<dyn Store>>>,
         run_config: &FindMotifsRunConfig,
         fixed_config: &FixedFindMotifsConfig,
         max_slices_counts: Option<u32>,
@@ -101,7 +100,10 @@ impl DistsTracker {
             .collect::<Vec<Mutex<SimpleMotifTracker>>>();
 
         debug!("DistsTracker: channel_trackers={:?}", channel_trackers);
-        Self { channel_trackers, store: Arc::clone(store) }
+        Self {
+            channel_trackers,
+            store: Arc::clone(store),
+        }
     }
 
     fn dist_iter(dists_flattened: Option<Tensor>) -> Box<dyn Iterator<Item = f64>> {
@@ -152,7 +154,7 @@ impl Stage for DistsTracker {
             trace!("find_motifs_by_euc_dist: mask_cpu_flattened=\n{mask_cpu_flattened}");
             debug!(
                 "find_motifs_by_euc_dist: dists_flattened.size={:?}",
-                dists_flattened.as_ref().map(|v|v.size())
+                dists_flattened.as_ref().map(|v| v.size())
             );
             trace!(
                 "find_motifs_by_euc_dist: dists_flattened=\n{:?}",

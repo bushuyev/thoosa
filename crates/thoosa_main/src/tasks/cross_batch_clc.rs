@@ -53,28 +53,43 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for BatchInput<'a, R> {
 
 #[derive(Debug)]
 pub(crate) struct UnfoldParams {
-    dimension: i64, size: i64, step: i64
+    dimension: i64,
+    size: i64,
+    step: i64,
 }
 
 impl UnfoldParams {
     pub fn new(dimension: i64, size: i64, step: i64) -> Self {
-        Self { dimension, size, step }
+        Self {
+            dimension,
+            size,
+            step,
+        }
     }
 }
 
-
 pub struct CrossBatchClc<F, R, CrossBatchCtx>
 where
-    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(
+        Tensor,
+        Tensor,
+        &BatchInput<'a, &'a Arc<Resource>>,
+        &CrossBatchCtx,
+    ) -> Result<R, ThoosaError>,
 {
     batch_clc: F,
     cross_batch_ctx: CrossBatchCtx,
-    unfold_params: UnfoldParams
+    unfold_params: UnfoldParams,
 }
 
 impl<F, R, CrossBatchCtx> Debug for CrossBatchClc<F, R, CrossBatchCtx>
 where
-    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(
+        Tensor,
+        Tensor,
+        &BatchInput<'a, &'a Arc<Resource>>,
+        &CrossBatchCtx,
+    ) -> Result<R, ThoosaError>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossBatchClc").finish()
@@ -83,10 +98,19 @@ where
 
 impl<F, R, CrossBatchCtx> CrossBatchClc<F, R, CrossBatchCtx>
 where
-    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(
+        Tensor,
+        Tensor,
+        &BatchInput<'a, &'a Arc<Resource>>,
+        &CrossBatchCtx,
+    ) -> Result<R, ThoosaError>,
 {
     pub fn new(batch_clc: F, cross_batch_ctx: CrossBatchCtx, unfold_params: UnfoldParams) -> Self {
-        Self { batch_clc, cross_batch_ctx, unfold_params }
+        Self {
+            batch_clc,
+            cross_batch_ctx,
+            unfold_params,
+        }
     }
 }
 
@@ -123,7 +147,6 @@ impl<R: Debug> CrossBatchClcOutput<R> {
     pub fn iter_1(&self) -> SlicesIter {
         self.iter_1.clone()
     }
-
 }
 
 impl<R: Debug> WithId for CrossBatchClcOutput<R> {
@@ -140,11 +163,20 @@ impl<R: Debug> Output for CrossBatchClcOutput<R> {}
 #[async_trait]
 impl<F, R, CrossBatchCtx> Stage for CrossBatchClc<F, R, CrossBatchCtx>
 where
-    for<'a> F:  Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError> + 'a,
+    for<'a> F: Fn(
+            Tensor,
+            Tensor,
+            &BatchInput<'a, &'a Arc<Resource>>,
+            &CrossBatchCtx,
+        ) -> Result<R, ThoosaError>
+        + 'a,
     R: Debug + Output + Input + Send + 'static,
-    for<'a> CrossBatchCtx:'a
+    for<'a> CrossBatchCtx: 'a,
 {
-    type In<'a> = BatchInput<'a, &'a Arc<Resource>> where F:'a;
+    type In<'a>
+        = BatchInput<'a, &'a Arc<Resource>>
+    where
+        F: 'a;
     type Out = CrossBatchClcOutput<R>;
     type Ctx = RunCtx2;
 
@@ -154,7 +186,7 @@ where
         _ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError>
     where
-        Self: Sized
+        Self: Sized,
     {
         let mut batch_0_sizes = vec![];
 
@@ -162,7 +194,11 @@ where
             input.tensors[0..input.b_0.len()]
                 .iter()
                 .map(|t| {
-                    let unfolded = t.t().unfold(self.unfold_params.dimension, self.unfold_params.size, self.unfold_params.step);
+                    let unfolded = t.t().unfold(
+                        self.unfold_params.dimension,
+                        self.unfold_params.size,
+                        self.unfold_params.step,
+                    );
                     batch_0_sizes.push(unfolded.size()[1]); //number of blocks
                     unfolded
                 })
@@ -177,7 +213,11 @@ where
             input.tensors[input.b_0.len()..]
                 .iter()
                 .map(|t| {
-                    let unfolded = t.t().unfold(self.unfold_params.dimension, self.unfold_params.size, self.unfold_params.step);
+                    let unfolded = t.t().unfold(
+                        self.unfold_params.dimension,
+                        self.unfold_params.size,
+                        self.unfold_params.step,
+                    );
                     batch_1_sizes.push(unfolded.size()[1]); //number of blocks
                     unfolded
                 })
@@ -203,17 +243,21 @@ where
             .map(|v| (v.0.id(), v.1 as usize))
             .collect();
 
-
         debug!("resource_ids_sizes={resource_ids_sizes_0:?}");
 
-        debug!("CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
+        debug!(
+            "CrossBatchClc::do_run:  batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}",
+            tensor_mem_size(&batch_0_t),
+            tensor_mem_size(&batch_1_t)
+        );
 
-        (self.batch_clc)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx)
-            .map(|v| CrossBatchClcOutput::new(
+        (self.batch_clc)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx).map(|v| {
+            CrossBatchClcOutput::new(
                 v,
                 SlicesIter::new(self.unfold_params.step as usize, resource_ids_sizes_0),
-                SlicesIter::new(self.unfold_params.step as usize, resource_ids_sizes_1)
-            ))
+                SlicesIter::new(self.unfold_params.step as usize, resource_ids_sizes_1),
+            )
+        })
     }
 }
 
@@ -221,6 +265,7 @@ where
 mod tests {
     use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc, UnfoldParams};
     use crate::tasks::dists_tracker::DistWithMask;
+    use crate::tasks::find_motifs::MeanDistsCtx;
     use crate::tasks::run_ctx_2::RunCtx2;
     use caching_runner::common::MockRunCtx;
     use caching_runner::common::runnable::Stage;
@@ -234,20 +279,22 @@ mod tests {
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
     use torch_runner::data::ThoTensor2;
-    use crate::tasks::find_motifs::MeanDistsCtx;
 
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
-        let cross_batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, input, ctx| {
-                    debug!("t_0=\n{t_0}");
-                    debug!("t_1=\n{t_1}");
+        let cross_batch_clc = Arc::new(CrossBatchClc::new(
+            |t_0, t_1, input, ctx| {
+                debug!("t_0=\n{t_0}");
+                debug!("t_1=\n{t_1}");
 
-                    Ok(DistWithMask::new(
-                        Tensor::rand(&[0], FLOAT_CPU),
-                        Some(Tensor::rand(&[0], FLOAT_CPU)),
-                    ))
-                }, MeanDistsCtx::new(3, Cuda(0)),
-                                                          UnfoldParams::new(1, 1, 1)));
+                Ok(DistWithMask::new(
+                    Tensor::rand(&[0], FLOAT_CPU),
+                    Some(Tensor::rand(&[0], FLOAT_CPU)),
+                ))
+            },
+            MeanDistsCtx::new(3, Cuda(0)),
+            UnfoldParams::new(1, 1, 1),
+        ));
 
         let tensor_00 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 10], FLOAT_CPU));
         let tensor_01 = ThoTensor2::new("1".into(), Tensor::rand(&[3, 13], FLOAT_CPU));
