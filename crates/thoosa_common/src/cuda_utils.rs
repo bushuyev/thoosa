@@ -2,6 +2,7 @@ use cudarc::driver::{CudaStream, PinnedHostSlice, sys};
 use std::ops::Add;
 use std::sync::Arc;
 use std::{iter, usize};
+use log::debug;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{MyError, ThoosaError};
@@ -63,6 +64,9 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
 ) -> Tensor {
+
+    assert!(src_t.as_ref().device().ne(&Device::Cpu));
+
     let src_ptr: usize = src_t.as_ref().data_ptr() as usize;
     let src_size = src_t.as_ref().size();
 
@@ -78,10 +82,10 @@ pub async fn copy_d2h_from_ptr_result(
 ) -> Result<Tensor, ThoosaError> {
     let tensor_mem_size = tensor_mem_size(init_type, &src_size);
 
-    // println!(
-    //     "copy_d2h: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes}",
-    //     src_size
-    // );
+    debug!(
+        "copy_d2h: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes}",
+        src_size
+    );
 
     let chunks = tensor_mem_size / buf_size_bytes;
 
@@ -125,7 +129,7 @@ pub async fn copy_d2h_from_ptr_result(
                 );
                 if r != sys::CUresult::CUDA_SUCCESS {
                     return Err(MyError::SomethingElse(format!(
-                        "cuMemcpyDtoHAsync_v2 failed at chunk {i} with {r:?}"
+                        "cuMemcpyDtoHAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}"
                     ))
                     .into());
                 }
@@ -177,7 +181,9 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
     dst_device_idx: usize,
 ) -> Tensor {
+    assert!(src_t.as_ref().device().eq(&Cpu));
     assert!(dst_device_idx > 0);
+
     let src_ptr = src_t.as_ref().data_ptr() as usize; // CPU mem
     let src_size = src_t.as_ref().size();
 
@@ -201,7 +207,7 @@ pub async fn copy_h2d_from_ptr(
     size: &[i64],
 ) -> Tensor {
     let tensor_mem_size = tensor_mem_size(init_type, &size);
-    // println!(
+    // debug!(
     //     "copy_h2d: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",
     //     size
     // );
@@ -652,5 +658,29 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_copy_from_block(){
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
+
+        let t_src = Tensor::rand(&[20, 10000], (Kind::Float, Cuda(0)));
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let t_dst = CopyCtx::instance().copy(&t_src, 0, t_src.kind()).await;
+
+                // assert!(
+                //     t_src.to_device(Cpu).allclose(&t_dst, 0.01, 0.01, false)
+                // );
+
+                println!("OK");
+            });
+        });
+
+
+
     }
 }
