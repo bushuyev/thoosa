@@ -6,7 +6,7 @@ use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 async fn main() {
     kick_register_cuda_hooks();
     //
