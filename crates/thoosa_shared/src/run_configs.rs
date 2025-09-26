@@ -1,5 +1,6 @@
 use crate::applicables_runner::{CachableId, Input, Output, Runner, ToOrdinal};
 use crate::hyperparameter::{FieldName, Hyperparameter};
+use crate::traits::Named;
 use crate::val::{NamedRange, NamedVal};
 use crate::{ThoosaError, make_combos};
 use async_trait::async_trait;
@@ -7,7 +8,6 @@ use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use crate::traits::Named;
 
 ////
 #[derive(Debug, Clone)]
@@ -122,9 +122,7 @@ impl<T: FieldName> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>, Vec<Hyper
 
 pub type RunId = u32;
 
-impl Named for RunId  {
-
-}
+impl Named for RunId {}
 
 pub trait RunConfig: Debug {
     fn set_id(&mut self, id: RunId);
