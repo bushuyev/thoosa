@@ -1,7 +1,10 @@
 use log::debug;
 use polars::datatypes::DataType;
 use polars::frame::DataFrame;
-use polars::prelude::{Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions, col, concat_list, lit, BooleanChunked};
+use polars::prelude::{
+    BooleanChunked, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader,
+    LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions, col, concat_list, lit,
+};
 use rand::Rng;
 use std::collections::HashMap;
 use std::fs;
@@ -111,28 +114,27 @@ pub fn labeled_resourses(
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
     let df = LazyCsvReader::new(path).finish()?.with_streaming(true);
 
-
     let gr_by_eeg_id_df = EEGs::group_by_eeg_id(None, df)?;
-
 
     let mask: BooleanChunked = gr_by_eeg_id_df
         .column("eeg_id")?
         .i64()?
         .into_iter()
-        .map(|opt| opt.map(|id|{
-
-            let p = PathBuf::from(format!("{}/train_eegs/{id}.parquet", eeg_path.display()));
-            let b = p.exists();
-            debug!("id={id:?} p={p:?} b={b:?}");
-            b
-
-        }).unwrap_or(false))
+        .map(|opt| {
+            opt.map(|id| {
+                let p = PathBuf::from(format!("{}/train_eegs/{id}.parquet", eeg_path.display()));
+                let b = p.exists();
+                debug!("id={id:?} p={p:?} b={b:?}");
+                b
+            })
+            .unwrap_or(false)
+        })
         .collect();
 
     Ok(gr_by_eeg_id_df
         .filter(&mask)?
         .column("eeg_id")?
-         .i64()?
+        .i64()?
         .into_iter()
         // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
         // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
