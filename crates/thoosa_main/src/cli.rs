@@ -332,24 +332,8 @@ where
                 "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
             );
 
-            /*let run_ids = run_all_grid_step_2(
-                None,
-                find_motifs_run_config_range_or_value,
-                &find_motifs_args.fixed_config,
-                &find_motifs_args.resource_config(),
-                // find_min_euc_dist,
-                find_motifs_by_euc_dist_2,
-                &ws,
-                &store,
-                &runner,
-                devices.clone(),
-                "FindMotifs",
-                true,
-            )?;*/
-
             GlobalCtx::init_devices(2);
 
-            // Use the runtime to block until the async function completes
 
             let run_ids = run_grid::<Simple, _, _, _, _, _>(
                 None,
@@ -372,12 +356,10 @@ where
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa"))),
             )
-            .await
-            .unwrap();
+            .await?;
 
             info!("FindMotifs done, run_ids={run_ids:?}");
 
-            // info!("FindMotifs done, run_ids={run_ids:?}");
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
