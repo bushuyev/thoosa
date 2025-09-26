@@ -88,19 +88,21 @@ impl TensorLoader for RawTensorLoader {
 
 #[cfg(test)]
 pub(crate) mod mock_tensor_loader {
+    use std::collections::HashMap;
     use crate::tasks::cross_dims::ChannelsData2;
     use async_trait::async_trait;
     use parking_lot::RwLock;
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
+    use tch::Tensor;
     use caching_runner::common::cachable::DataCacheWrapper;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
     use torch_runner::data::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::TensorLoader;
+    use crate::tasks::tensor_loader::{mock_tensor_loader, TensorLoader};
 
     type LoadFuture = Pin<
         Box<
@@ -142,7 +144,35 @@ pub(crate) mod mock_tensor_loader {
         load_fn: Option<Arc<LoadFn>>,
     }
 
+    pub fn make_wrapper(
+        id: &'static str,
+        data: &[f32],
+    ) -> Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>> {
+        let tensor = Tensor::from_slice(data).view((1, data.len() as i64));
+        let tho_tensor = ThoTensor2::new(SimpleId::from(id), tensor);
+        Arc::new(DataCacheWrapper::new(tho_tensor, 0, 1, 0))
+    }
+
+
     impl MockTensorLoaderBuilder {
+
+        pub fn with_data<H>(mut self, h:H ) -> Self
+        where
+            H:Into<HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>> + Send + Sync{
+
+            let map:Arc<HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>> = Arc::new(h.into());
+
+            self.with_load_fn(move |resource, _ctx| {
+                    let map = Arc::clone(&map);
+                    async move {
+                        Ok(map
+                            .get(&resource.id())
+                            .cloned()
+                            .expect("mock loader data should be present"))
+                    }
+            })
+        }
+
         pub fn with_load_fn<F, Fut>(mut self, f: F) -> Self
         where
             F: Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
@@ -158,7 +188,7 @@ pub(crate) mod mock_tensor_loader {
             self
         }
 
-        pub fn finish(self) -> MockTensorLoader {
+        pub fn build(self) -> MockTensorLoader {
             let load_fn = self
                 .load_fn
                 .expect("MockCrossLoaderTensorSourceBuilder requires load_fn to be set");
@@ -166,7 +196,7 @@ pub(crate) mod mock_tensor_loader {
         }
     }
 
-    pub fn build() -> MockTensorLoaderBuilder {
+    pub fn new() -> MockTensorLoaderBuilder {
         MockTensorLoaderBuilder { load_fn: None }
     }
 }
