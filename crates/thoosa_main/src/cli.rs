@@ -6,7 +6,7 @@ use crate::data;
 use crate::data::{ParquetLoader, clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::TensorLoader;
+use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::version::VERSION;
 use async_trait::async_trait;
 use caching_runner::common::runnable::Stage;
@@ -264,7 +264,7 @@ where
     //     2,
     // )));
 
-    let loader_2 = Arc::new(TensorLoader::new(
+    let loader_2 = Arc::new(RawTensorLoader::new(
         move |key, _| {
             ThoTensor2::new(
                 Input::id(key).clone(),

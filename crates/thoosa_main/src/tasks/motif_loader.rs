@@ -18,7 +18,7 @@ use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::MotifSlices;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::TensorLoader;
+use crate::tasks::tensor_loader::RawTensorLoader;
 
 #[derive(Debug, Cached)]
 struct MotifLoader {

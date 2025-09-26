@@ -3134,6 +3134,13 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_list_resources_by_file_stems(mut self) -> Self {
+        // (&self.store as &dyn ResourceStore).expect_list_resources_by_file_stems();
+
+        self
+    }
+
+
     pub fn build(self)->Box<dyn Store> {
         Box::new(self.store)
     }
