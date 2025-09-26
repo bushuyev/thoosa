@@ -4,8 +4,13 @@ use crate::cli::Commands::{
 };
 use crate::data;
 use crate::data::{ParquetLoader, clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
+use crate::tasks::cross_loader::ResourcesConfigInput;
+use crate::tasks::run_ctx_2::RunCtx2;
+use crate::tasks::tensor_loader::TensorLoader;
 use crate::version::VERSION;
 use async_trait::async_trait;
+use caching_runner::common::runnable::Stage;
+use caching_runner::global_ctx::GlobalCtx;
 use clap::{Args, Parser, Subcommand};
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
@@ -30,7 +35,6 @@ use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::nn::VarStore;
 use tch::{Device, Tensor};
-use tokio::runtime::Runtime;
 use thoosa_common::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use thoosa_common::batches::{
     AsyncBatchTransform, AsyncClassTensorsLoaderData, AsyncLoadingTensorsDataBatch,
@@ -61,7 +65,10 @@ use thoosa_common::train_nets::{
 use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
-use thoosa_motifs::find::{FindMotifsArgs, SelectMotifsArgs, find_motifs_by_euc_dist_2, select_motifs_for_label, FixedFindMotifsConfig};
+use thoosa_motifs::find::{
+    FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs, find_motifs_by_euc_dist_2,
+    select_motifs_for_label,
+};
 use thoosa_motifs::fragments::{
     MotifsBy, MotifsToTensorArgs, PlotMotifSlicesArgs, load_motif_slices, load_motif_slices_2,
     motifs_to_tensor,
@@ -72,17 +79,13 @@ use thoosa_shared::applicables_runner::{Input, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
-use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{ThoosaError, cdt, cdt_for_dir, ResourceType};
-use thoosa_store::{SqlStore, Store};
-use torch_sys::at_grad_set_enabled;
-use caching_runner::common::runnable::Stage;
-use caching_runner::global_ctx::GlobalCtx;
 use thoosa_shared::traits::SimpleId;
+use thoosa_shared::val::{NamedRange, NamedVal};
+use thoosa_shared::{ResourceType, ThoosaError, cdt, cdt_for_dir};
+use thoosa_store::{SqlStore, Store};
+use tokio::runtime::Runtime;
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::TensorLoader;
+use torch_sys::at_grad_set_enabled;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -174,8 +177,6 @@ where
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoosaError> + Sync + Send,
 {
-
-    ;
     // set_oom_score_adj(-1000);
 
     unsafe {
@@ -263,14 +264,16 @@ where
     //     2,
     // )));
 
-
-
     let loader_2 = Arc::new(TensorLoader::new(
         move |key, _| {
-
             ThoTensor2::new(
                 Input::id(key).clone(),
-                Tensor::load(tensors_path_2.join(format!("{}_{}.pt", key.import_id(), key.file_stem()))).unwrap()
+                Tensor::load(tensors_path_2.join(format!(
+                    "{}_{}.pt",
+                    key.import_id(),
+                    key.file_stem()
+                )))
+                .unwrap(),
             )
         },
         ThoDevice::from(Device::Cpu),
@@ -344,11 +347,9 @@ where
                 true,
             )?;*/
 
-
             GlobalCtx::init_devices(2);
 
             // Use the runtime to block until the async function completes
-
 
             let run_ids = run_grid::<Simple, _, _, _, _, _>(
                 None,
@@ -360,13 +361,21 @@ where
                 &store,
                 true,
                 |run_configs| {
-                    Arc::new(crate::tasks::find_motifs::FindMotifsStage::new(&ws, &store, loader_2, run_configs, FixedFindMotifsConfig::new(None, 2, false, None), ThoDevice::from(1)))
+                    Arc::new(crate::tasks::find_motifs::FindMotifsStage::new(
+                        &ws,
+                        &store,
+                        loader_2,
+                        run_configs,
+                        FixedFindMotifsConfig::new(None, 2, false, None),
+                        ThoDevice::from(1),
+                    ))
                 },
                 || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa"))),
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
 
             info!("FindMotifs done, run_ids={run_ids:?}");
-
 
             // info!("FindMotifs done, run_ids={run_ids:?}");
         }
@@ -2285,8 +2294,7 @@ where
     }
 }
 
-
-pub async  fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
+pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
@@ -2299,18 +2307,20 @@ pub async  fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     // devices: Vec<Device>,
     // _descr: &str,
     presave: bool,
-    f:F,
-    ctx_f:CtxF
+    f: F,
+    ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoosaError>
 where
     ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
-    F:FnOnce(Vec<RC>)->Arc<ST>,
+    F: FnOnce(Vec<RC>) -> Arc<ST>,
     ST: Stage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>> + thoosa_properties_map::ToHashmap,
+    RC: RunConfig
+        + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
+        + thoosa_properties_map::ToHashmap,
     RCRV: GridRunConfigSource,
     // ResConf: ResourcesConfig,
-    for <'c> <ST as Stage>::In<'c>: Send + Sync,
-    CtxF:FnOnce()->Arc<RwLock<<ST as Stage>::Ctx>>
+    for<'c> <ST as Stage>::In<'c>: Send + Sync,
+    CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
 {
     let grid_run_configs = rcrv.grid_run_configs();
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
@@ -2329,14 +2339,14 @@ where
 
     let stage = f(run_configs);
 
-    let ctx = Arc::new(parking_lot::RwLock::new(crate::tasks::run_ctx_2::RunCtx2::new(0, 0, "aa")));
+    let ctx = Arc::new(parking_lot::RwLock::new(
+        crate::tasks::run_ctx_2::RunCtx2::new(0, 0, "aa"),
+    ));
 
     stage.run(input, ctx_f()).await?;
 
-
     Ok(run_ids)
 }
-
 
 #[cfg(test)]
 mod cli_tests {

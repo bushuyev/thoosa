@@ -4918,7 +4918,7 @@ dependencies = [
  "rusqlite",
  "simplelog",
  "thoosa_shared",
- "zstd-framed",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -6109,17 +6109,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
 dependencies = [
  "zstd-safe 7.2.4",
-]
-
-[[package]]
-name = "zstd-framed"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62b9e3ab74fc13257dfb915a4410efab52f336b52ee99b7c11a89d76dc80ca4"
-dependencies = [
- "pin-project-lite",
- "thiserror 1.0.69",
- "zstd 0.13.3",
 ]
 
 [[package]]

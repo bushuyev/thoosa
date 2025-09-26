@@ -8,21 +8,21 @@ use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::Stage;
 use caching_runner::common::{Data, OutId, RunCtx};
+use futures_util::future::BoxFuture;
 use log::debug;
 use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
-use futures_util::future::BoxFuture;
 use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
 use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::traits::{Named, SimpleId, WithId};
-use thoosa_shared::ThoosaError;
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
@@ -56,8 +56,8 @@ pub(crate) mod mock_cross_loader_tensor_source {
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
-    use thoosa_shared::resource::Resource;
     use thoosa_shared::ThoosaError;
+    use thoosa_shared::resource::Resource;
 
     type LoadFuture = Pin<
         Box<
@@ -172,9 +172,9 @@ pub(crate) mod mock_cross_loader_clc {
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
+    use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::ThoosaError;
 
     type RunBatchFn<Out> = dyn for<'a> Fn(
             &BatchInput<'a, &'a Arc<Resource>>,
@@ -271,7 +271,8 @@ where
     ) -> Result<(), ThoosaError>;
 }
 
-impl<T, In> CrossLoaderReceiver<In> for T //TODO added for mocks, should be for DistsTracker only
+impl<T, In> CrossLoaderReceiver<In> for T
+//TODO added for mocks, should be for DistsTracker only
 where
     T: for<'a> Stage<In<'a> = In, Ctx = RunCtx2> + Send + Sync + Debug + 'static,
     In: Input + Output + Send + Debug + 'static,
@@ -291,8 +292,8 @@ pub(crate) mod mock_cross_loader_receiver {
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
-    use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::ThoosaError;
+    use thoosa_shared::applicables_runner::{Input, Output};
 
     type ReceiveFn<In> = dyn Fn(&In, Arc<RwLock<RunCtx2>>) -> Result<(), ThoosaError> + Send + Sync;
 
@@ -362,8 +363,6 @@ pub(crate) mod mock_cross_loader_receiver {
     }
 }
 
-
-
 // #[derive(Debug, cached_derive::Cached)]
 // #[cache_name = "LoadedTensorId"]
 pub struct CrossLoader<RC, SRC, CLC, RSV>
@@ -375,16 +374,16 @@ where
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
 {
     loader: Arc<SRC>,
-    store:Arc<RwLock<Box<dyn Store>>>,
+    store: Arc<RwLock<Box<dyn Store>>>,
     batch_clc: Arc<CLC>,
     receiver: Arc<RSV>,
     chunk_size: usize,
     max_batch: usize,
-    on_all_done:Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
-    pd:PhantomData<RC>
+    on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
+    pd: PhantomData<RC>,
 }
 
-impl <RC, SRC, CLC, RSV> Debug for CrossLoader<RC, SRC, CLC, RSV>
+impl<RC, SRC, CLC, RSV> Debug for CrossLoader<RC, SRC, CLC, RSV>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
     SRC: CrossTensorLoader + 'static,
@@ -407,12 +406,12 @@ where
 {
     pub fn new<OnAllDone>(
         loader: Arc<SRC>,
-        store:&Arc<RwLock<Box<dyn Store>>>,
+        store: &Arc<RwLock<Box<dyn Store>>>,
         batch_clc: Arc<CLC>,
         receiver: Arc<RSV>,
         chunk_size: usize,
         max_batch: usize,
-        on_all_done:OnAllDone
+        on_all_done: OnAllDone,
     ) -> Self
     where
         OnAllDone: Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send + 'static,
@@ -444,23 +443,21 @@ where
 }
 
 #[derive(Debug)]
-pub struct ResourcesConfigInput<RC:ResourcesConfig>
-
-{
+pub struct ResourcesConfigInput<RC: ResourcesConfig> {
     id: SimpleId,
     resources_config: RC,
 }
 
-impl <RC:ResourcesConfig+Debug>  ResourcesConfigInput<RC> {
+impl<RC: ResourcesConfig + Debug> ResourcesConfigInput<RC> {
     pub fn new(id: SimpleId, resources: RC) -> Self {
         Self {
             id,
-            resources_config: resources //: resources.to_resources().into_iter().map(|r| Arc::new(r)).collect(),
+            resources_config: resources, //: resources.to_resources().into_iter().map(|r| Arc::new(r)).collect(),
         }
     }
 }
 
-impl <RC:ResourcesConfig> WithId for ResourcesConfigInput<RC> {
+impl<RC: ResourcesConfig> WithId for ResourcesConfigInput<RC> {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -468,7 +465,7 @@ impl <RC:ResourcesConfig> WithId for ResourcesConfigInput<RC> {
     }
 }
 
-impl <RC:ResourcesConfig+Debug> Input for ResourcesConfigInput<RC> {}
+impl<RC: ResourcesConfig + Debug> Input for ResourcesConfigInput<RC> {}
 
 #[derive(Debug)]
 pub struct CrossResult {
@@ -515,7 +512,12 @@ where
         let max_batch = i64::try_from(self.max_batch).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
-        let resources = input.resources_config.to_resources(&self.store)?.into_iter().map(|r|Arc::new(r)).collect::<Vec<_>>();
+        let resources = input
+            .resources_config
+            .to_resources(&self.store)?
+            .into_iter()
+            .map(|r| Arc::new(r))
+            .collect::<Vec<_>>();
         debug!(
             "CrossLoader::run chunk_size={chunk_size}  max_batch={max_batch} resources={}",
             resources.len()
@@ -613,12 +615,14 @@ mod tests {
     use super::mock_cross_loader_receiver;
     use super::mock_cross_loader_tensor_source;
     use super::*;
+    use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossBatchClc, UnfoldParams};
     use crate::tasks::cross_loader::{CrossLoader, ResourcesConfigInput};
     use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::TensorLoader;
     use caching_runner::global_ctx::GlobalCtx;
+    use futures_util::FutureExt;
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -627,21 +631,19 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, Once};
     use std::time::Duration;
-    use futures_util::FutureExt;
     use tch::{Device, Tensor};
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::ws::FsWorkspace;
+    use thoosa_motifs::distance::MaskMaker::Tril;
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
+    use thoosa_shared::{ResourceType, ThoosaError, cdt_for_dir};
+    use thoosa_store::{MockStore, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
-    use thoosa_motifs::distance::MaskMaker::Tril;
-    use thoosa_store::{MockStore, SqlStore};
     use torch_runner::data::ThoTensor2;
-    use crate::cli::Commands::FindMotifs;
 
     #[ctor::ctor]
     fn init() {
@@ -693,7 +695,10 @@ mod tests {
         let run_config = FindMotifsRunConfig::new(Some(0), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(None, 2, false, None);
 
-        let resource_keys:Vec<String> = vec!["111", "222", "333", "444", "555", "666"].into_iter().map(|v|v.to_string()).collect();
+        let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect();
         let resources: Vec<Resource> = resource_keys
             .iter()
             .enumerate()
@@ -723,35 +728,58 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let batch_clc = Arc::new(CrossBatchClc::new(|t_0, t_1, input, ctx| {
-                    let mut mask_makers = vec![];
-                    // if is_diag {
-                    //     mask_makers.push(Tril);
-                    // }
-                    let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                        t_0,
-                        t_1,
-                        true,
-                        &mut mask_makers,
-                    )?;
+        let batch_clc = Arc::new(CrossBatchClc::new(
+            |t_0, t_1, input, ctx| {
+                let mut mask_makers = vec![];
+                // if is_diag {
+                //     mask_makers.push(Tril);
+                // }
+                let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                    t_0,
+                    t_1,
+                    true,
+                    &mut mask_makers,
+                )?;
 
-                    debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                    Ok(DistWithMask::new(dists.0, dists.1))
-                }, (),
-                                                    UnfoldParams::new(1, 2, 1)));
+                debug!("CrossBatchClc::do_run:  dists={dists:?}");
+                Ok(DistWithMask::new(dists.0, dists.1))
+            },
+            (),
+            UnfoldParams::new(1, 2, 1),
+        ));
 
-        let receiver = Arc::new(DistsTracker::new(&ws, &store, &run_config, &fixed_config, None));
+        let receiver = Arc::new(DistsTracker::new(
+            &ws,
+            &store,
+            &run_config,
+            &fixed_config,
+            None,
+        ));
 
-        let cross_loader = Arc::new(CrossLoader::new(loader, &store, batch_clc, receiver, 2, 20, |p| async {
-            // cross_loader.receiver;
-        }.boxed()
+        let cross_loader = Arc::new(CrossLoader::new(
+            loader,
+            &store,
+            batch_clc,
+            receiver,
+            2,
+            20,
+            |p| {
+                async {
+                    // cross_loader.receiver;
+                }
+                .boxed()
+            },
         ));
 
         let _ = cross_loader
-            .run(Arc::new(ResourcesConfigInput::new("".into(), Simple::new(ResourceType::List(resource_keys)))), ctx)
+            .run(
+                Arc::new(ResourcesConfigInput::new(
+                    "".into(),
+                    Simple::new(ResourceType::List(resource_keys)),
+                )),
+                ctx,
+            )
             .await?;
-
-
 
         yield_now().await;
         sleep(Duration::from_millis(10)).await;
@@ -761,7 +789,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_with_mocks() -> Result<(), ThoosaError> {
-
         let resource_a: Resource = (1, 1, "resource_a", 2).into();
         let resource_b: Resource = (2, 1, "resource_b", 2).into();
         let resources = vec![resource_a.clone(), resource_b.clone()];
@@ -841,16 +868,29 @@ mod tests {
 
         let mut mocked_store = Arc::new(RwLock::new(Box::new(MockStore::new()) as Box<dyn Store>));
 
-        let cross_loader = Arc::new(CrossLoader::new(loader, &mocked_store, batch_clc, receiver, 1, 2,                      |p| async {
-            // cross_loader.receiver;
-        }.boxed()
+        let cross_loader = Arc::new(CrossLoader::new(
+            loader,
+            &mocked_store,
+            batch_clc,
+            receiver,
+            1,
+            2,
+            |p| {
+                async {
+                    // cross_loader.receiver;
+                }
+                .boxed()
+            },
         ));
 
         let _ = cross_loader
             .run(
                 Arc::new(ResourcesConfigInput::new(
                     SimpleId::from("resources"),
-                    Simple::new(ResourceType::List(vec!["resource_a".to_string(), "resource_b".to_string()])),
+                    Simple::new(ResourceType::List(vec![
+                        "resource_a".to_string(),
+                        "resource_b".to_string(),
+                    ])),
                 )),
                 Arc::clone(&ctx),
             )
