@@ -4649,6 +4649,7 @@ dependencies = [
  "thoosa_motifs",
  "thoosa_shared",
  "thoosa_store",
+ "tokio",
  "torch-sys",
 ]
 

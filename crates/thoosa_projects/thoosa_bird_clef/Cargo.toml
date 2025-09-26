@@ -34,7 +34,7 @@ regex = "1.10.3"
 
 lewton = "0.10"
 ogg = "0.8"
-
+tokio.workspace = true
 [dev-dependencies]
 rand_chacha = "0.3.1"
 approx = "0.5.1"

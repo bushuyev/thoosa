@@ -8,6 +8,7 @@ use thoosa_main::cli::run_cli;
 mod data;
 mod labels;
 
+#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 fn main() {
     kick_register_cuda_hooks();
 
@@ -20,7 +21,7 @@ fn main() {
         1,
         u32::MAX, //TODO Option?
         32000,
-    ) {
+    ).await {
         Ok(_) => {
             info!("All done in {} mls", t1.elapsed().as_millis());
         }
