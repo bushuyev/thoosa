@@ -3121,8 +3121,21 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_list_run_config_values(mut self, run_id:RunId, r:Result<HashMap<String, Val>, ThoosaError>) -> Self {
+        self.store.expect_list_run_config_values()
+            .returning(move |p_run_id| {
+                if p_run_id == run_id {
+                    r.clone()
+                } else {
+                    Err(ThoosaError::new("Not found"))
+                }
+            });
+
+        self
+    }
+
     pub fn build(self)->Box<dyn Store> {
-        Box::new(MockStore::new())
+        Box::new(self.store)
     }
 
 
