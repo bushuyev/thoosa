@@ -3,6 +3,8 @@ use mockall::automock;
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+use crate::applicables_runner::{CachableId, Input};
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -120,15 +122,14 @@ pub trait Named {
         "n/a"
     }
 }
-
+///////////////////////////////////
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct SimpleId(pub &'static str);
 
 unsafe impl Send for SimpleId {}
 unsafe impl Sync for SimpleId {}
 
-pub trait TestId {}
-impl TestId for SimpleId {}
+
 
 impl Named for SimpleId {
     fn name(&self) -> &'static str {
@@ -153,6 +154,58 @@ impl Display for SimpleId {
         write!(f, "{}", self.0)
     }
 }
+///--------------------
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct DataId(pub u32);//for sql-store based stuff
+
+unsafe impl Send for DataId {}
+unsafe impl Sync for DataId {}
+
+
+impl Named for DataId {
+    fn name(&self) -> &'static str {
+        "DataId"
+    }
+}
+
+impl WithId for DataId {
+    type ID = Self;
+
+    fn id(&self) -> &Self::ID {
+        self
+    }
+}
+
+impl Input for DataId {}
+
+impl From<&u32> for DataId {
+    fn from(value: &u32) -> Self {
+        DataId(*value)
+    }
+}
+
+impl From<u32> for DataId {
+    fn from(value: u32) -> Self {
+        DataId(value)
+    }
+}
+
+impl Deref for DataId {
+    type Target = u32;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Display for DataId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+///////////////////////////////////
+
+
+
 
 #[delegatable_trait]
 #[automock(type ID=DummyCachableId;)]

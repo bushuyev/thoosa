@@ -128,7 +128,7 @@ impl ResourceStore for MockStore {
 }
 
 #[automock]
-pub trait Store: ResourceStore + Sync + Send {
+pub trait Store: ResourceStore + Debug + Sync + Send {
     fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
     fn save_run_config<'a>(
         &self,
@@ -254,6 +254,7 @@ impl Debug for SqlMotifTrackerStore {
     }
 }
 
+#[derive(Debug)]
 pub struct SqlStore {
     conn: Mutex<Connection>,
 }
@@ -3082,12 +3083,79 @@ mod store_tests {
     }
 }
 
+pub  struct MockStoreBuilder {
+
+    store:MockStore
+}
+
+impl MockStoreBuilder {
+    pub fn new() -> Self {
+        Self {
+            store: MockStore::new()
+        }
+    }
+    pub fn with_list_motif_slices(
+        mut self,  motif_id: u32, limit: Option<u32>, all_but_in_run_id: Option<(RunId, u32)>,
+        r:Result<
+            (
+                i64,
+                RunId,
+                Vec<TensorIdSliceIdx>,
+                HashMap<ResourceId, Resource>,
+            ),
+            ThoosaError,
+        >) -> Self{
+
+        self.store.expect_list_motif_slices().returning(
+            move |p_motif_id, limit, all_but_in_run_id| {
+                debug!("with_list_motif_slices: p_motif_id={p_motif_id} motif_id={motif_id} ");
+                if p_motif_id == motif_id {
+                    r.clone()
+                } else {
+                    Err(ThoosaError::new("Not found"))
+                }
+
+            }
+        );
+
+        self
+    }
+
+    pub fn with_list_run_config_values(mut self, run_id:RunId, r:Result<HashMap<String, Val>, ThoosaError>) -> Self {
+        self.store.expect_list_run_config_values()
+            .returning(move |p_run_id| {
+                if p_run_id == run_id {
+                    r.clone()
+                } else {
+                    Err(ThoosaError::new("Not found"))
+                }
+            });
+
+        self
+    }
+
+    pub fn with_list_resources_by_file_stems(mut self) -> Self {
+        // (&self.store as &dyn ResourceStore).expect_list_resources_by_file_stems();
+
+        self
+    }
+
+
+    pub fn build(self)->Box<dyn Store> {
+        Box::new(self.store)
+    }
+
+
+}
+
+
 pub fn mock_store_with_find_motifs_run_config(
     step: i32,
     window: i32,
     selected_motifs: Vec<Vec<(u32, f64)>>,
 ) -> Box<dyn Store> {
     let mut mock = MockStore::new();
+
     mock.expect_get_input_run_ids().return_const(Ok(vec![0]));
     mock.expect_list_run_config_values()
         .return_const(Ok(HashMap::from([

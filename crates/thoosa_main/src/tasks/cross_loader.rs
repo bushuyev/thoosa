@@ -3,7 +3,7 @@ use crate::tasks::cross_batch_clc::BatchInput;
 use crate::tasks::cross_batch_clc::CrossBatchClc;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsSlicesData2};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::TensorLoader;
+use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::Stage;
@@ -26,107 +26,6 @@ use thoosa_shared::traits::{Named, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
-
-#[async_trait]
-pub trait CrossTensorLoader: Send + Sync + Debug {
-    async fn load(
-        self: Arc<Self>,
-        resource: Arc<Resource>,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>;
-}
-
-#[async_trait]
-impl CrossTensorLoader for TensorLoader {
-    async fn load(
-        self: Arc<Self>,
-        resource: Arc<Resource>,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
-        <Self as Cached>::run_cached(self, resource, ctx).await
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod mock_cross_loader_tensor_source {
-    use super::ChannelsData2;
-    use super::{CrossTensorLoader, DataCacheWrapper, RunCtx2, SimpleId, ThoTensor2};
-    use async_trait::async_trait;
-    use parking_lot::RwLock;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use thoosa_shared::ThoosaError;
-    use thoosa_shared::resource::Resource;
-
-    type LoadFuture = Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>,
-                        ThoosaError,
-                    >,
-                > + Send,
-        >,
-    >;
-
-    type LoadFn = dyn Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> LoadFuture + Send + Sync;
-
-    #[derive(Clone)]
-    pub struct MockCrossLoaderTensorSource {
-        load_fn: Arc<LoadFn>,
-    }
-
-    impl std::fmt::Debug for MockCrossLoaderTensorSource {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("MockCrossLoaderTensorSource").finish()
-        }
-    }
-
-    #[async_trait]
-    impl CrossTensorLoader for MockCrossLoaderTensorSource {
-        async fn load(
-            self: Arc<Self>,
-            resource: Arc<Resource>,
-            ctx: Arc<RwLock<RunCtx2>>,
-        ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>
-        {
-            (self.load_fn)(resource, ctx).await
-        }
-    }
-
-    pub struct MockCrossLoaderTensorSourceBuilder {
-        load_fn: Option<Arc<LoadFn>>,
-    }
-
-    impl MockCrossLoaderTensorSourceBuilder {
-        pub fn with_load_fn<F, Fut>(mut self, f: F) -> Self
-        where
-            F: Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
-            Fut: Future<
-                    Output = Result<
-                        Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>,
-                        ThoosaError,
-                    >,
-                > + Send
-                + 'static,
-        {
-            self.load_fn = Some(Arc::new(move |resource, ctx| Box::pin(f(resource, ctx))));
-            self
-        }
-
-        pub fn finish(self) -> MockCrossLoaderTensorSource {
-            let load_fn = self
-                .load_fn
-                .expect("MockCrossLoaderTensorSourceBuilder requires load_fn to be set");
-            MockCrossLoaderTensorSource { load_fn }
-        }
-    }
-
-    pub fn build() -> MockCrossLoaderTensorSourceBuilder {
-        MockCrossLoaderTensorSourceBuilder { load_fn: None }
-    }
-}
 
 /// Small adapter trait that hides the `Stage` GATs so `CrossLoader` can accept
 /// any batched CLC stage while storing it behind an `Arc`.  Without this extra
@@ -368,7 +267,7 @@ pub(crate) mod mock_cross_loader_receiver {
 pub struct CrossLoader<RC, SRC, CLC, RSV>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
@@ -386,7 +285,7 @@ where
 impl<RC, SRC, CLC, RSV> Debug for CrossLoader<RC, SRC, CLC, RSV>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
@@ -399,7 +298,7 @@ where
 impl<RC, SRC, CLC, RSV> CrossLoader<RC, SRC, CLC, RSV>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
@@ -432,7 +331,7 @@ where
 impl<RC, SRC, CLC, RSV> OutId for CrossLoader<RC, SRC, CLC, RSV>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
@@ -491,7 +390,7 @@ impl CrossResult {
 impl<RC, SRC, CLC, RSV> Stage for CrossLoader<RC, SRC, CLC, RSV>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
     CLC: CrossLoaderClc + 'static,
     CLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CLC::Out> + 'static,
@@ -613,14 +512,14 @@ where
 mod tests {
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
-    use super::mock_cross_loader_tensor_source;
+    use crate::tasks::tensor_loader::mock_tensor_loader;
     use super::*;
     use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossBatchClc, UnfoldParams};
     use crate::tasks::cross_loader::{CrossLoader, ResourcesConfigInput};
     use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::TensorLoader;
+    use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::debug;
@@ -639,8 +538,8 @@ mod tests {
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::{ResourceType, ThoosaError, cdt_for_dir};
-    use thoosa_store::{MockStore, SqlStore};
+    use thoosa_shared::{cdt_for_dir, ResourceType, ThoosaError};
+    use thoosa_store::{MockStore, MockStoreBuilder, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use torch_runner::data::ThoTensor2;
@@ -708,7 +607,7 @@ mod tests {
 
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
-        let loader = Arc::new(TensorLoader::new(
+        let loader = Arc::new(RawTensorLoader::new(
             move |key, _| {
                 let i = resources_to_move
                     .iter()
@@ -811,7 +710,7 @@ mod tests {
 
         let loader_map = Arc::clone(&loader_data);
         let loader = Arc::new(
-            mock_cross_loader_tensor_source::build()
+            mock_tensor_loader::build()
                 .with_load_fn(move |resource, _ctx| {
                     let map = Arc::clone(&loader_map);
                     async move {
@@ -866,7 +765,9 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "mock")));
 
-        let mut mocked_store = Arc::new(RwLock::new(Box::new(MockStore::new()) as Box<dyn Store>));
+        let mut mocked_store = Arc::new(RwLock::new(MockStoreBuilder::new()
+            .with_list_resources_by_file_stems()
+            .build() as Box<dyn Store>));
 
         let cross_loader = Arc::new(CrossLoader::new(
             loader,

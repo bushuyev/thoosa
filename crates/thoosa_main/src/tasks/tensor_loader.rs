@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsSlicesData2};
+use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::common::runnable::Stage;
@@ -8,6 +8,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
+use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_common::tho_tensor::CopyToDevice;
@@ -19,12 +20,12 @@ use torch_runner::data::ThoTensor2;
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
-pub struct TensorLoader {
+pub struct RawTensorLoader {
     device: ThoDevice,
     loader_fn: Box<dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send>,
 }
 
-impl Debug for TensorLoader {
+impl Debug for RawTensorLoader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TensorLoader")
             .field("device", &self.device)
@@ -33,7 +34,7 @@ impl Debug for TensorLoader {
 }
 
 #[async_trait]
-impl Stage for TensorLoader {
+impl Stage for RawTensorLoader {
     type In<'a> = Resource;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
     type Ctx = RunCtx2;
@@ -47,13 +48,13 @@ impl Stage for TensorLoader {
     }
 }
 
-impl OutId for TensorLoader {
+impl OutId for RawTensorLoader {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("loaded_{}", input_id.id()))
     }
 }
 
-impl TensorLoader {
+impl RawTensorLoader {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
         F: Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send + 'static,
@@ -64,10 +65,116 @@ impl TensorLoader {
         }
     }
 }
+
+#[async_trait]
+pub trait TensorLoader: Send + Sync + Debug {
+    async fn load(
+        self: Arc<Self>,
+        resource: Arc<Resource>,
+        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
+    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>;
+}
+
+#[async_trait]
+impl TensorLoader for RawTensorLoader {
+    async fn load(
+        self: Arc<Self>,
+        resource: Arc<Resource>,
+        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
+    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
+        <Self as Cached>::run_cached(self, resource, ctx).await
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod mock_tensor_loader {
+    use crate::tasks::cross_dims::ChannelsData2;
+    use async_trait::async_trait;
+    use parking_lot::RwLock;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use caching_runner::common::cachable::DataCacheWrapper;
+    use thoosa_shared::ThoosaError;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::SimpleId;
+    use torch_runner::data::ThoTensor2;
+    use crate::tasks::run_ctx_2::RunCtx2;
+    use crate::tasks::tensor_loader::TensorLoader;
+
+    type LoadFuture = Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>,
+                        ThoosaError,
+                    >,
+                > + Send,
+        >,
+    >;
+
+    type LoadFn = dyn Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> LoadFuture + Send + Sync;
+
+    #[derive(Clone)]
+    pub struct MockTensorLoader {
+        load_fn: Arc<LoadFn>,
+    }
+
+    impl std::fmt::Debug for MockTensorLoader {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MockCrossLoaderTensorSource").finish()
+        }
+    }
+
+    #[async_trait]
+    impl TensorLoader for MockTensorLoader {
+        async fn load(
+            self: Arc<Self>,
+            resource: Arc<Resource>,
+            ctx: Arc<RwLock<RunCtx2>>,
+        ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>
+        {
+            (self.load_fn)(resource, ctx).await
+        }
+    }
+
+    pub struct MockTensorLoaderBuilder {
+        load_fn: Option<Arc<LoadFn>>,
+    }
+
+    impl MockTensorLoaderBuilder {
+        pub fn with_load_fn<F, Fut>(mut self, f: F) -> Self
+        where
+            F: Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
+            Fut: Future<
+                    Output = Result<
+                        Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>,
+                        ThoosaError,
+                    >,
+                > + Send
+                + 'static,
+        {
+            self.load_fn = Some(Arc::new(move |resource, ctx| Box::pin(f(resource, ctx))));
+            self
+        }
+
+        pub fn finish(self) -> MockTensorLoader {
+            let load_fn = self
+                .load_fn
+                .expect("MockCrossLoaderTensorSourceBuilder requires load_fn to be set");
+            MockTensorLoader { load_fn }
+        }
+    }
+
+    pub fn build() -> MockTensorLoaderBuilder {
+        MockTensorLoaderBuilder { load_fn: None }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::TensorLoader;
+    use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::common::cachable::Cached;
     use caching_runner::global_ctx::GlobalCtx;
     use rand::Rng;
@@ -87,7 +194,7 @@ mod tests {
         rand::rng().fill(&mut data[..]);
         let data_0 = data.clone();
 
-        let loader = Arc::new(TensorLoader::new(
+        let loader = Arc::new(RawTensorLoader::new(
             move |key, _| {
                 ThoTensor2::new(
                     Input::id(key).clone(),

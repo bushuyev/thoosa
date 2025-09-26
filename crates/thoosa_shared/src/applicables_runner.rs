@@ -1,6 +1,6 @@
 use crate::rayon_future::RayonFuture;
 use crate::run_configs::{Cachable, Runnable};
-use crate::traits::{SimpleId, TestId, WithId};
+use crate::traits::{SimpleId, WithId};
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet, Entry};
 use futures::FutureExt;
