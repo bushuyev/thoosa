@@ -8,7 +8,7 @@ use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 use cached_derive::Cached;
-use caching_runner::common::{Data, OutId};
+use caching_runner::common::{Data, OutId, RunCtx};
 use caching_runner::common::runnable::Stage;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::Output;
@@ -21,35 +21,46 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 
 #[derive(Debug, Cached)]
-struct MotifLoader {
+pub struct MotifLoader<SRC>
+where
+    SRC: TensorLoader + 'static
+{
     store: Arc<RwLock<Box<dyn Store>>>,
+    loader:Arc<SRC>
 }
 
-impl MotifLoader {
+impl <SRC> MotifLoader<SRC>
+    where SRC: TensorLoader + 'static
+{
     pub fn new(
         store: Arc<RwLock<Box<dyn Store>>>,
-        loader:Arc<Box<dyn TensorLoader>>
+        loader:Arc<SRC>
     ) -> Self {
         Self {
-            store
+            store,
+            loader
         }
     }
 }
 
-impl OutId for MotifLoader {
+impl <SRC> OutId for MotifLoader<SRC>
+where SRC: TensorLoader + 'static
+{
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         input_id.clone()
     }
 }
 
 #[async_trait]
-impl Stage for MotifLoader {
+impl <SRC> Stage for MotifLoader <SRC>
+    where SRC: TensorLoader + 'static
+{
     type In<'a> = DataId;
     type Out = ThoTensor2<MotifSlices, DataId>;
 
     type Ctx = RunCtx2;
 
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {
@@ -70,7 +81,12 @@ impl Stage for MotifLoader {
         });
 
         for (resource_id, slices) in tensors_ids_slices {
-
+            let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
+            //
+            // t.with_data(ctx.read().device_idx(), None, None, |t|{
+            //     Ok(())
+            // }).await?;
+            // t.da().i((channel, slice_idx as i64..(slice_idx + window )as i64))
         }
 
         Ok(ThoTensor2::new(DataId(0), Tensor::rand(&[10, 100], FLOAT_CPU)))
@@ -108,18 +124,18 @@ mod tests {
             )
             .build();
 
-
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::new(RwLock::new(store)),
-            // Arc::new(RawTensorLoader::new(run_id)),
 
-            Arc::new(Box::new(mock_tensor_loader::new()
-            .with_data([
-                (1, make_wrapper("tensor_a", &[1.0, 2.0])),
-                (2, make_wrapper("tensor_b", &[3.0, 4.0])),
-            ])
-            .build())
-        )));
+            Arc::new(
+                mock_tensor_loader::new()
+                .with_data([
+                    (1, make_wrapper("tensor_a", &[1.0, 2.0])),
+                    (2, make_wrapper("tensor_b", &[3.0, 4.0])),
+                ])
+                .build()
+            )
+        ));
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "test")));
 
