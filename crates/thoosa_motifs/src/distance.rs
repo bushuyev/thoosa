@@ -144,7 +144,10 @@ pub fn clc_dist_d2_and_mask(
         "clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}",
         distances.size()
     );
-    trace!("clc_dist_d2_and_mask: distances=\n{distances} device={:?}", distances.device());
+    trace!(
+        "clc_dist_d2_and_mask: distances=\n{distances} device={:?}",
+        distances.device()
+    );
 
     Ok((
         mask_makers
@@ -410,7 +413,13 @@ pub fn clc_dist_d2(t_0: Tensor, t_1: Tensor, dim: i64) -> Result<Tensor, ThoosaE
     let t_0 = t_0.f_unsqueeze(dim + 1)?; // channels x num_slices x 1 x slice_len
     let t_1 = t_1.f_unsqueeze(dim)?; // channels x 1 x num_slices x slice_len
 
-    debug!("clc_dist_d2: t_0.size()={:?} t_0.mem={:?}  t_1.size()={:?} t_1.mem={:?}", t_0.size(), tensor_mem_size(&t_0), t_1.size(), tensor_mem_size(&t_1));
+    debug!(
+        "clc_dist_d2: t_0.size()={:?} t_0.mem={:?}  t_1.size()={:?} t_1.mem={:?}",
+        t_0.size(),
+        tensor_mem_size(&t_0),
+        t_1.size(),
+        tensor_mem_size(&t_1)
+    );
 
     let mut diff = t_0.f_subtract(&t_1)?;
     drop(t_0);
@@ -2067,10 +2076,9 @@ mod distance_tests {
     }
 
     #[test]
-    fn test_big(){
+    fn test_big() {
         let t_0 = Tensor::rand(&[20, 1661, 100], FLOAT_CPU);
         let t_1 = Tensor::rand(&[20, 1661, 100], FLOAT_CPU);
-
 
         let dist_1 = Tensor::cdist(&t_0, &t_1, 2.0, 0);
         let dist_0 = clc_dist_d2(t_0, t_1, 1).unwrap();
