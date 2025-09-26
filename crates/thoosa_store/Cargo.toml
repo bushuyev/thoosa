@@ -16,4 +16,4 @@ parking_lot.workspace = true
 mockall.workspace = true
 ctor.workspace = true
 rusqlite = { version = "0.32.1", features = ["bundled"] }
-zstd-framed = "0"
+zstd = "0.13"
