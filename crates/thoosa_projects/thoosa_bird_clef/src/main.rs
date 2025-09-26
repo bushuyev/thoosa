@@ -9,8 +9,8 @@ mod data;
 mod labels;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
-fn main() {
-    /*kick_register_cuda_hooks();
+async fn main() {
+    kick_register_cuda_hooks();
 
     let t1 = Instant::now();
 
@@ -31,5 +31,5 @@ fn main() {
         }
     }
     std::process::exit(0x0000); //for jupyter
-*/
+
 }
