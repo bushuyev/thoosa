@@ -22,10 +22,7 @@ async fn main() {
     // 4208|other
     // */
     match run_cli(
-        |source_path| data::labeled_resourses(
-            source_path,
-            "train.csv"
-        ),
+        |source_path| data::labeled_resourses(source_path, "train.csv"),
         |source_path, key| {
             thoosa_main::data::parquet_to_tensor_by_path(
                 source_path
@@ -39,7 +36,9 @@ async fn main() {
         20,
         684400,
         200,
-    ).await {
+    )
+    .await
+    {
         Ok(_) => {
             info!("All done in {} mls", t1.elapsed().as_millis());
         }
