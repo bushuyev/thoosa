@@ -9,7 +9,7 @@ mod data;
 mod labels;
 
 fn main() {
-    kick_register_cuda_hooks();
+    /*kick_register_cuda_hooks();
 
     let t1 = Instant::now();
 
@@ -30,4 +30,5 @@ fn main() {
         }
     }
     std::process::exit(0x0000); //for jupyter
+*/
 }

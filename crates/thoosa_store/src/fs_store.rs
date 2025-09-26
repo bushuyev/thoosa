@@ -1,24 +1,117 @@
-use crate::{IdSlice, MotifTrackerStore, SlicesMatch, Store, filter_groups_by_slices_count};
-use bytemuck::AnyBitPattern;
+use crate::{filter_groups_by_slices_count, IdSlice, MotifTrackerStore, SlicesMatch, Store};
+use bytemuck::{AnyBitPattern, Pod};
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{ThoosaError, group_slices};
-use zstd_framed::table::ZstdFrame;
-use zstd_framed::{ZstdReader, ZstdWriter};
+use thoosa_shared::{group_slices, ThoosaError};
+use zstd::stream::write::Encoder;
+
+const FILE_MAGIC: [u8; 8] = *b"THOSCHNK";
+const FILE_VERSION: u32 = 1;
+const CHUNK_HEADER_SIZE: usize = 24;
+
+struct ChunkedWriter {
+    file: File,
+    compression_level: i32,
+    scratch: Vec<u8>,
+}
+
+impl ChunkedWriter {
+    fn new(mut file: File, compression_level: i32) -> io::Result<Self> {
+        let len = file.metadata()?.len();
+
+        if len == 0 {
+            file.write_all(&FILE_MAGIC)?;
+            file.write_all(&FILE_VERSION.to_le_bytes())?;
+            file.write_all(&[0u8; 4])?;
+            file.flush()?;
+        } else {
+            file.seek(SeekFrom::Start(0))?;
+
+            let mut magic = [0u8; FILE_MAGIC.len()];
+            file.read_exact(&mut magic)?;
+            if magic != FILE_MAGIC {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unexpected slice store header",
+                ));
+            }
+
+            let mut version_bytes = [0u8; 4];
+            file.read_exact(&mut version_bytes)?;
+            let version = u32::from_le_bytes(version_bytes);
+            if version != FILE_VERSION {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unsupported slice store version: {version}"),
+                ));
+            }
+
+            let mut reserved = [0u8; 4];
+            file.read_exact(&mut reserved)?;
+        }
+
+        file.seek(SeekFrom::End(0))?;
+
+        Ok(Self {
+            file,
+            compression_level,
+            scratch: Vec::with_capacity(8 * 1024),
+        })
+    }
+
+    fn write_items<T: Pod>(&mut self, items: &[T]) -> io::Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let bytes = bytemuck::cast_slice(items);
+
+        self.scratch.clear();
+        {
+            let mut encoder = Encoder::new(&mut self.scratch, self.compression_level)?;
+            encoder.write_all(bytes)?;
+            encoder.finish()?;
+        }
+
+        let decompressed_len = bytes.len() as u64;
+        let item_count = items.len() as u64;
+        let compressed_len = self.scratch.len() as u64;
+
+        let mut header = [0u8; CHUNK_HEADER_SIZE];
+        header[0..8].copy_from_slice(&decompressed_len.to_le_bytes());
+        header[8..16].copy_from_slice(&item_count.to_le_bytes());
+        header[16..24].copy_from_slice(&compressed_len.to_le_bytes());
+
+        self.file.write_all(&header)?;
+        self.file.write_all(&self.scratch)?;
+
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+
+    fn shutdown(&mut self) -> io::Result<()> {
+        self.file.sync_all()
+    }
+}
 
 pub struct FileMotifTrackerStore {
     run_id: RunId,
     channel: u32,
-    writer: ZstdWriter<'static, File>,
+    writer: ChunkedWriter,
     path: PathBuf,
 }
 
@@ -38,19 +131,21 @@ impl FileMotifTrackerStore {
         run_id: RunId,
         channel: u32,
     ) -> Result<Box<dyn MotifTrackerStore>, ThoosaError> {
+        let file_path = path
+            .as_ref()
+            .join(format!("{run_id}_{channel}_slices.zstd").as_str());
 
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&file_path)?;
 
-        let file = std::fs::OpenOptions::new().create(true).append(true).open(
-            path.as_ref()
-                .join(format!("{run_id}_{channel}_slices.zstd").as_str()),
-        )?;
+        debug!(
+            "FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel} file_path={file_path:?}"
+        );
 
-        debug!("FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel} file={file:?}");
-
-        let writer = ZstdWriter::builder(file)
-            .with_compression_level(3) // Set compression level
-            .with_seek_table(u32::MAX)
-            .build()?;
+        let writer = ChunkedWriter::new(file, 3)?;
 
         Ok(Box::new(Self {
             run_id,
@@ -63,32 +158,12 @@ impl FileMotifTrackerStore {
 
 impl MotifTrackerStore for FileMotifTrackerStore {
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
-
-        let data_bytes = unsafe {
-            std::slice::from_raw_parts(
-                slices_pairs.as_ptr() as *const u8,
-                slices_pairs.len() * size_of::<SlicesMatch>(),
-            )
-        };
-
         trace!(
-            "MotifTrackerStore::save_slices: slices_pairs.len()={} data_bytes={data_bytes:?}",
+            "MotifTrackerStore::save_slices: slices_pairs.len()={}",
             slices_pairs.len()
         );
 
-
-        // self.writer.write_all(data_bytes)?;
-        if let Err(e) = self.writer.write_all(data_bytes) {
-            error!("write_all failed: kind={:?} os={:?} len={}", e.kind(), e.raw_os_error(), data_bytes.len());
-            match e.kind() {
-                io::ErrorKind::WriteZero => error!("Likely out-of-space on a fixed-capacity writer (Cursor<&mut [u8]>/Take) or a buggy Write impl."),
-                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset => error!("Peer closed; recreate the connection."),
-                _ => {}
-            }
-            std::process::abort();
-        }
-
-        self.writer.finish_frame()?;
+        self.writer.write_items(&slices_pairs)?;
         self.writer.flush()?;
 
         Ok(())
@@ -107,7 +182,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         let mut slice_id = 0;
 
         let groups: HashMap<u16, HashSet<IdSlice>> = group_slices(
-            ZstdFramedReader::new(
+            ChunkedSlicesReader::new(
                 &self
                     .path
                     .join(format!("{}_{}_slices.zstd", self.run_id, self.channel).as_str()),
@@ -116,8 +191,8 @@ impl MotifTrackerStore for FileMotifTrackerStore {
                 slices.unwrap().into_iter().map(move |slices: SlicesMatch| {
                     slice_id += 1;
                     (
-                        IdSlice(slice_id, slices.0.0, slices.0.1),
-                        IdSlice(slice_id, slices.1.0, slices.1.1),
+                        IdSlice(slice_id, slices.0 .0, slices.0 .1),
+                        IdSlice(slice_id, slices.1 .0, slices.1 .1),
                     )
                 })
             }),
@@ -147,74 +222,144 @@ impl MotifTrackerStore for FileMotifTrackerStore {
     }
 }
 
-pub struct ZstdFramedReader<T: AnyBitPattern> {
-    reader: ZstdReader<'static, BufReader<File>>,
-    frames: Vec<ZstdFrame>,
+pub struct ChunkedSlicesReader<T: AnyBitPattern> {
+    reader: BufReader<File>,
     _phantom: PhantomData<T>,
-    frame_i: usize,
     file_path: PathBuf,
 }
 
-impl<T: AnyBitPattern> ZstdFramedReader<T> {
+impl<T: AnyBitPattern> ChunkedSlicesReader<T> {
     pub fn new(file_path: &Path) -> std::io::Result<Self> {
-        let mut reader = File::open(&file_path)?;
-        let table = zstd_framed::table::read_seek_table(&mut reader)?.unwrap();
+        let mut file = File::open(&file_path)?;
 
-        trace!("ChunkReader: table={table:?}");
+        let mut magic = [0u8; FILE_MAGIC.len()];
+        file.read_exact(&mut magic)?;
+        if magic != FILE_MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected slice store header",
+            ));
+        }
+
+        let mut version_bytes = [0u8; 4];
+        file.read_exact(&mut version_bytes)?;
+        let version = u32::from_le_bytes(version_bytes);
+        if version != FILE_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported slice store version: {version}"),
+            ));
+        }
+
+        let mut reserved = [0u8; 4];
+        file.read_exact(&mut reserved)?;
 
         Ok(Self {
-            reader: zstd_framed::ZstdReader::builder(reader).build()?,
-            frames: table.frames().collect(),
-            frame_i: 0,
+            reader: BufReader::new(file),
             _phantom: PhantomData,
             file_path: file_path.to_path_buf(),
         })
     }
 }
 
-impl<T: AnyBitPattern> Iterator for ZstdFramedReader<T> {
+impl<T: AnyBitPattern> Iterator for ChunkedSlicesReader<T> {
     type Item = io::Result<Vec<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.frame_i < self.frames.len() && self.frames[self.frame_i].decompressed_size() > 0 {
-            let mut buff = vec![0; self.frames[self.frame_i].decompressed_size() as usize];
-            self.reader.read_exact(&mut buff).unwrap();
+        let mut header = [0u8; CHUNK_HEADER_SIZE];
+        let mut read = 0;
 
-            self.frame_i += 1;
-
-            Some(Ok(bytemuck::try_cast_slice(&mut buff)
-                .map_err(|e| {
-                    error!(
-                        "ZstdFramedReader:next: file_path={:?} self.frame_i={} e={e:?}",
-                        self.file_path, self.frame_i
-                    );
-                    e
-                })
-                .expect("bytemuck failed")
-                .to_vec()))
-        } else {
-            None
+        while read < CHUNK_HEADER_SIZE {
+            match self.reader.read(&mut header[read..]) {
+                Ok(0) if read == 0 => return None,
+                Ok(0) => {
+                    return Some(Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated chunk header",
+                    )));
+                }
+                Ok(n) => read += n,
+                Err(e) => return Some(Err(e)),
+            }
         }
+
+        let decompressed_len = u64::from_le_bytes(header[0..8].try_into().unwrap()) as usize;
+        let item_count = u64::from_le_bytes(header[8..16].try_into().unwrap());
+        let compressed_len = u64::from_le_bytes(header[16..24].try_into().unwrap()) as usize;
+
+        let mut compressed = vec![0u8; compressed_len];
+        if let Err(e) = self.reader.read_exact(&mut compressed) {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("truncated chunk payload: {e}"),
+            )));
+        }
+
+        let decompressed = match zstd::decode_all(&compressed[..]) {
+            Ok(data) => data,
+            Err(e) => return Some(Err(e)),
+        };
+
+        if decompressed.len() != decompressed_len {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unexpected decompressed length: expected {decompressed_len}, got {}",
+                    decompressed.len()
+                ),
+            )));
+        }
+
+        let element_size = size_of::<T>();
+        if decompressed.len() % element_size != 0 {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "decompressed buffer size {} not aligned to element size {}",
+                    decompressed.len(),
+                    element_size
+                ),
+            )));
+        }
+
+        let actual_item_count = (decompressed.len() / element_size) as u64;
+        if actual_item_count != item_count {
+            warn!(
+                "ChunkedSlicesReader: item_count mismatch: header={item_count}, calculated={actual_item_count} file_path={:?}",
+                self.file_path
+            );
+        }
+
+        let result = match bytemuck::try_cast_slice(&decompressed) {
+            Ok(slice) => slice.to_vec(),
+            Err(e) => {
+                return Some(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "ChunkedSlicesReader: file_path={:?} cast error: {e:?}",
+                        self.file_path
+                    ),
+                )));
+            }
+        };
+
+        Some(Ok(result))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::fs_store::{FileMotifTrackerStore, SlicesMatch, ZstdFramedReader};
-    use crate::{IdSlice, SqlStore, filter_groups_by_slices_count};
+    use crate::fs_store::{ChunkedSlicesReader, FileMotifTrackerStore, SlicesMatch};
+    use crate::{filter_groups_by_slices_count, IdSlice, SqlStore};
     use log::LevelFilter::Trace;
     use log::{debug, error};
     use parking_lot::{Mutex, RwLock};
     use std::collections::{HashMap, HashSet};
-    use std::{fs, thread};
-    use std::fs::File;
-    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::thread::Thread;
-    use zstd_framed::ZstdWriter;
-    use thoosa_shared::{TensorIdSliceIdx, ThoosaError, cdt_for_dir, group_slices};
     use thoosa_shared::test_utils::init_test_logging;
+    use thoosa_shared::{cdt_for_dir, group_slices, TensorIdSliceIdx, ThoosaError};
 
     #[test]
     fn test_single_part() -> Result<(), ThoosaError> {
@@ -525,8 +670,8 @@ mod tests {
          log::set_max_level(Trace);
          let groups:HashMap<u16, HashSet<IdSlice>> = group_slices(
 
-             // ZstdFramedReader::<SlicesMatch>::new(&PathBuf::from(format!("/tmp/ws_test/tmp/{run_id}_{channel}_slices.zstd").as_str()))?.flat_map(|slices|{
-             ZstdFramedReader::<SlicesMatch>::new(&PathBuf::from("/tmp/2024-12-12T12_54_47.820_01_00_3468226743/tmp/1_0_slices.zstd"))?.flat_map(|slices|{
+            // ChunkedSlicesReader::<SlicesMatch>::new(&PathBuf::from(format!("/tmp/ws_test/tmp/{run_id}_{channel}_slices.zstd").as_str()))?.flat_map(|slices|{
+            ChunkedSlicesReader::<SlicesMatch>::new(&PathBuf::from("/tmp/2024-12-12T12_54_47.820_01_00_3468226743/tmp/1_0_slices.zstd"))?.flat_map(|slices|{
                  slices.unwrap().into_iter().map(move |slices:SlicesMatch|{
                      slice_id+=1;
                      (
@@ -560,52 +705,4 @@ mod tests {
          Ok(())
 
      }*/
-
-    #[test]
-    fn test_write_all(){
-        init_test_logging();
-
-        debug!("test_write_all");
-
-        let nums = [1, 2, 3, 4, 5];
-
-        let mut file = File::create("/tmp/foo.txt").expect("create failed");
-        let mut writer = ZstdWriter::builder(file)
-            .with_compression_level(3) // Set compression level
-            .with_seek_table(u32::MAX)
-            .build().unwrap();
-
-        let data_bytes = &[3, 0, 0, 0, 232, 3, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 232, 3, 0, 0, 0, 0, 0, 0];
-
-        let results: Vec<()> = thread::scope(|s| {
-            let mut handles = Vec::new();
-
-            handles.push(s.spawn(move || {
-                for i in  0..1000 {
-
-                    match writer.write_all(data_bytes) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            panic!("{:?}", e);
-                        },
-                    }
-
-                    writer.finish_frame().unwrap();
-                    writer.flush().unwrap();
-                }
-            }));
-
-            for t in (0..32){
-                handles.push(s.spawn(move || {
-                    for i in 0..10000 {
-                        debug!("worker {t} on {i} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-                    }
-
-                }));
-            }
-
-            // Collect results (join happens here)
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-    }
 }
