@@ -18,7 +18,7 @@ use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::MotifSlices;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::RawTensorLoader;
+use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 
 #[derive(Debug, Cached)]
 struct MotifLoader {
@@ -28,7 +28,7 @@ struct MotifLoader {
 impl MotifLoader {
     pub fn new(
         store: Arc<RwLock<Box<dyn Store>>>,
-        // loader:Arc<TensorLoader>
+        loader:Arc<Box<dyn TensorLoader>>
     ) -> Self {
         Self {
             store
@@ -91,6 +91,8 @@ mod tests {
     use thoosa_store::{MockStore, MockStoreBuilder, Store};
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
+    use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
+    use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_0()-> Result<(), ThoosaError> {
@@ -107,7 +109,17 @@ mod tests {
             .build();
 
 
-        let motif_loader = Arc::new(MotifLoader::new(Arc::new(RwLock::new(store))));
+        let motif_loader = Arc::new(MotifLoader::new(
+            Arc::new(RwLock::new(store)),
+            // Arc::new(RawTensorLoader::new(run_id)),
+
+            Arc::new(Box::new(mock_tensor_loader::new()
+            .with_data([
+                (1, make_wrapper("tensor_a", &[1.0, 2.0])),
+                (2, make_wrapper("tensor_b", &[3.0, 4.0])),
+            ])
+            .build())
+        )));
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "test")));
 

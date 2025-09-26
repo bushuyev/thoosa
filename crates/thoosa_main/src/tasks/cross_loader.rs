@@ -543,6 +543,7 @@ mod tests {
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use torch_runner::data::ThoTensor2;
+    use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper;
 
     #[ctor::ctor]
     fn init() {
@@ -686,20 +687,14 @@ mod tests {
         Ok(())
     }
 
+
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_with_mocks() -> Result<(), ThoosaError> {
         let resource_a: Resource = (1, 1, "resource_a", 2).into();
         let resource_b: Resource = (2, 1, "resource_b", 2).into();
         let resources = vec![resource_a.clone(), resource_b.clone()];
 
-        fn make_wrapper(
-            id: &'static str,
-            data: &[f32],
-        ) -> Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>> {
-            let tensor = Tensor::from_slice(data).view((1, data.len() as i64));
-            let tho_tensor = ThoTensor2::new(SimpleId::from(id), tensor);
-            Arc::new(DataCacheWrapper::new(tho_tensor, 0, 1, 0))
-        }
 
         let loader_data: Arc<
             HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>,
@@ -710,7 +705,7 @@ mod tests {
 
         let loader_map = Arc::clone(&loader_data);
         let loader = Arc::new(
-            mock_tensor_loader::build()
+            mock_tensor_loader::new()
                 .with_load_fn(move |resource, _ctx| {
                     let map = Arc::clone(&loader_map);
                     async move {
@@ -720,7 +715,7 @@ mod tests {
                             .expect("mock loader data should be present"))
                     }
                 })
-                .finish(),
+                .build(),
         );
 
         let observations = Arc::new(Mutex::new(Vec::<Observation>::new()));
