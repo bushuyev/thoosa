@@ -760,9 +760,14 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "mock")));
 
-        let mut mocked_store = Arc::new(RwLock::new(MockStoreBuilder::new()
-            .with_list_resources_by_file_stems()
-            .build() as Box<dyn Store>));
+        let mut mocked_store = Arc::new(RwLock::new(
+            MockStoreBuilder::new()
+                .with_list_resources_by_file_stems(
+                    vec!["resource_a".to_string(), "resource_b".to_string()],
+                    Ok(resources.clone()),
+                )
+                .build() as Box<dyn Store>,
+        ));
 
         let cross_loader = Arc::new(CrossLoader::new(
             loader,
