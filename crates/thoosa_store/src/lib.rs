@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use log::{debug, error, trace, warn};
-use mockall::automock;
+use mockall::mock;
 use rand::Rng;
 use rand::seq::SliceRandom;
 use rusqlite::types::Value;
@@ -80,54 +80,6 @@ impl SetCond {
     }
 }
 
-impl ResourceStore for MockStore {
-    #[allow(unconditional_recursion)]
-    fn list_resources_by_file_stems<'a>(
-        &self,
-        file_stems: &'a [&'a str],
-    ) -> Result<Vec<Resource>, ThoosaError> {
-        self.list_resources_by_file_stems(file_stems)
-    }
-
-    #[allow(unconditional_recursion)]
-    fn list_resource_set_resources_by_descr(
-        &self,
-        descr: &str,
-    ) -> Result<Vec<Resource>, ThoosaError> {
-        self.list_resource_set_resources_by_descr(descr)
-    }
-
-    #[allow(unconditional_recursion)]
-    fn list_resource_set_group_sets(
-        &self,
-        group_descr: &str,
-    ) -> Result<Vec<(usize, String)>, ThoosaError> {
-        self.list_resource_set_group_sets(group_descr)
-    }
-
-    #[allow(unconditional_recursion)]
-    fn list_group_labeled_resources_sets(
-        &self,
-        group_decr: &str,
-    ) -> Result<Vec<(String, String)>, ThoosaError> {
-        self.list_group_labeled_resources_sets(group_decr)
-    }
-
-    #[allow(unconditional_recursion)]
-    fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoosaError> {
-        self.list_resource_set_resources(set_id)
-    }
-
-    #[allow(unconditional_recursion)]
-    fn list_resource_random_in_group(
-        &self,
-        group_descr: &str,
-    ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError> {
-        self.list_resource_random_in_group(group_descr)
-    }
-}
-
-#[automock]
 pub trait Store: ResourceStore + Debug + Sync + Send {
     fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
     fn save_run_config<'a>(
@@ -246,6 +198,158 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     ) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError>;
     fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
+}
+
+mock! {
+    pub Store {}
+
+    impl Store for Store {
+        fn save_import<'a>(&self, descr: String, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
+        fn save_run_config<'a>(
+            &self,
+            input_run_id: Option<&'a [RunId]>,
+            run_config_type: &'a dyn Display,
+            descr: &'a str,
+            _keys: &'a str,
+            properties_vals: HashMap<String, Val>,
+        ) -> Result<RunId, ThoosaError>;
+        fn get_input_run_ids<'a>(
+            &self,
+            run_id: RunId,
+            input_type: Option<&'a dyn Display>,
+        ) -> Result<Vec<RunId>, ThoosaError>;
+        fn save_resources_set(
+            &mut self,
+            set: String,
+            resource_keys: Vec<String>,
+            group_id: Option<usize>,
+        ) -> Result<usize, ThoosaError>;
+        fn save_resource_set_group(&mut self, descr: String) -> Result<usize, ThoosaError>;
+        fn save_resources_labels<'a>(
+            &self,
+            resource_stats_labels_probs: &'a HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
+            import_id: u32,
+            t: &'a Transaction<'a>,
+        ) -> Result<Vec<ResourceId>, ThoosaError>;
+        fn save_pure_sets<'a>(
+            &self,
+            max_len: usize,
+            only_unused: bool,
+            t: &'a Transaction<'a>,
+        ) -> Result<(), ThoosaError>;
+        fn save_set_by_labels(
+            &mut self,
+            conds: Vec<(String, SetCond)>,
+            only_unused: bool,
+            limit: usize,
+        ) -> Result<(), ThoosaError>;
+        fn save_groups_by_label_cnt<'a>(
+            &self,
+            max_resources_in_set: usize,
+            t: &'a Transaction<'a>,
+        ) -> Result<(), ThoosaError>;
+        fn list_resources_by_ids(
+            &self,
+            file_stem: &Vec<ResourceId>,
+        ) -> Result<Vec<Resource>, ThoosaError>;
+        fn list_resource_random_not_label(
+            &self,
+            label: &str,
+            limit: i64,
+        ) -> Result<Vec<Resource>, ThoosaError>;
+        fn save_label<'a>(&self, label: &str, t: &'a Transaction<'a>) -> Result<u32, ThoosaError>;
+        fn list_labels(&self) -> Result<Vec<String>, ThoosaError>;
+        fn save_params_value<'a>(
+            &mut self,
+            params: HashMap<String, Val>,
+            run_id: RunId,
+            label: Option<&'a str>,
+        ) -> Result<(), ThoosaError>;
+        fn save_slices(
+            &mut self,
+            run_id: RunId,
+            channel: i64,
+            slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>,
+        ) -> Result<(), ThoosaError>;
+        fn save_groups_as_motifs_with_slices_matches(
+            &mut self,
+            run_id: RunId,
+            channel: i64,
+            groups: HashMap<u16, HashSet<IdSlice>>,
+            as_ref: &dyn AsRef<Path>,
+        ) -> Result<(), ThoosaError>;
+        fn save_groups_as_motifs(
+            &mut self,
+            run_id: RunId,
+            channel: i64,
+            groups: HashMap<u16, HashSet<IdSlice>>,
+        ) -> Result<(), ThoosaError>;
+        fn list_motifs(&self, run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
+        fn list_motifs_slices(
+            &self,
+            run_id: RunId,
+        ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoosaError>;
+        fn list_motif_slices(
+            &self,
+            motif_id: u32,
+            limit: Option<u32>,
+            all_but_in_run_id: Option<(RunId, u32)>,
+        ) -> Result<
+            (
+                i64,
+                RunId,
+                Vec<TensorIdSliceIdx>,
+                HashMap<ResourceId, Resource>,
+            ),
+            ThoosaError,
+        >;
+        fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoosaError>;
+        fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoosaError>;
+        fn save_selected_motifs(
+            &mut self,
+            run_id: RunId,
+            selected_motifs: Vec<(u32, f64)>,
+        ) -> Result<RunId, ThoosaError>;
+        fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoosaError>;
+        fn list_output_run_ids(&mut self, input_run_id: RunId) -> Result<Vec<usize>, ThoosaError>;
+        fn list_selected_motifs(
+            &self,
+            motif_selection_id: RunId,
+            channels: u32,
+        ) -> Result<Vec<Vec<(u32, f64)>>, ThoosaError>;
+        fn run_config_descr(&mut self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoosaError>;
+        fn conn(&self) -> &parking_lot::Mutex<Connection>;
+    }
+
+    impl ResourceStore for Store {
+        fn list_resources_by_file_stems<'a>(
+            &self,
+            file_stems: &'a [&'a str],
+        ) -> Result<Vec<Resource>, ThoosaError>;
+        fn list_resource_set_resources_by_descr(
+            &self,
+            descr: &str,
+        ) -> Result<Vec<Resource>, ThoosaError>;
+        fn list_resource_set_group_sets(
+            &self,
+            group_descr: &str,
+        ) -> Result<Vec<(usize, String)>, ThoosaError>;
+        fn list_group_labeled_resources_sets(
+            &self,
+            group_decr: &str,
+        ) -> Result<Vec<(String, String)>, ThoosaError>;
+        fn list_resource_set_resources(&self, set_id: usize) -> Result<Vec<Resource>, ThoosaError>;
+        fn list_resource_random_in_group(
+            &self,
+            group_descr: &str,
+        ) -> Result<Vec<(Resource, Vec<f32>)>, ThoosaError>;
+    }
+}
+
+impl fmt::Debug for MockStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MockStore").finish()
+    }
 }
 
 impl Debug for SqlMotifTrackerStore {
@@ -3134,8 +3238,21 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_resources_by_file_stems(mut self) -> Self {
-        // (&self.store as &dyn ResourceStore).expect_list_resources_by_file_stems();
+    pub fn with_list_resources_by_file_stems(
+        mut self,
+        expected_stems: Vec<String>,
+        result: Result<Vec<Resource>, ThoosaError>,
+    ) -> Self {
+        self.store
+            .expect_list_resources_by_file_stems()
+            .returning(move |requested| {
+                let stems = requested.iter().map(|stem| stem.to_string()).collect::<Vec<_>>();
+                if stems == expected_stems {
+                    result.clone()
+                } else {
+                    Err(ThoosaError::new("Not found"))
+                }
+            });
 
         self
     }
