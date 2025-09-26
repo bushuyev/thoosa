@@ -1,10 +1,10 @@
 use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc, CrossBatchClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
-    CrossLoader, CrossResult, CrossTensorLoader, ResourcesConfigInput,
+    CrossLoader, CrossResult, ResourcesConfigInput,
 };
 use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::TensorLoader;
+use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::Stage;
@@ -34,7 +34,7 @@ use tokio::task::JoinSet;
 struct FindMotifsStages<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
 {
     run_config: FindMotifsRunConfig,
     cross_loader: Arc<
@@ -63,7 +63,7 @@ where
 impl<RC, SRC> FindMotifsStages<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
 {
     pub fn new(
         run_config: FindMotifsRunConfig,
@@ -117,7 +117,7 @@ impl MeanDistsCtx {
 pub struct FindMotifsStage<ResConf, SRC>
 where
     ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: CrossTensorLoader + 'static + Debug,
+    SRC: TensorLoader + 'static + Debug,
 {
     run_config_stages: Vec<FindMotifsStages<ResConf, SRC>>,
     pd: PhantomData<(ResConf, SRC)>,
@@ -126,7 +126,7 @@ where
 impl<RC, SRC> FindMotifsStage<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -267,7 +267,7 @@ where
 impl<RC, SRC> Stage for FindMotifsStage<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    SRC: CrossTensorLoader + 'static,
+    SRC: TensorLoader + 'static,
 {
     type Ctx = RunCtx2;
     type In<'a>
@@ -310,7 +310,7 @@ mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::TensorLoader;
+    use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::common::RunCtx;
     use caching_runner::common::runnable::Stage;
     use caching_runner::global_ctx::GlobalCtx;
@@ -335,7 +335,7 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
     use thoosa_shared::{
-        ResourceType, ThoosaError, cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp,
+        cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError,
     };
     use thoosa_store::SqlStore;
     use torch_runner::data::ThoTensor2;
@@ -470,7 +470,7 @@ mod tests {
 
         debug!("test_motifs: resources_0_0={resources_0_0:?}");
 
-        let loader = Arc::new(TensorLoader::new(
+        let loader = Arc::new(RawTensorLoader::new(
             move |key, _| {
                 ThoTensor2::new(
                     Input::id(key).clone(),
