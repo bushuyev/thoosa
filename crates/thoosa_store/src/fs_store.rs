@@ -64,7 +64,6 @@ impl FileMotifTrackerStore {
 impl MotifTrackerStore for FileMotifTrackerStore {
     fn save_slices(&mut self, slices_pairs: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
 
-
         let data_bytes = unsafe {
             std::slice::from_raw_parts(
                 slices_pairs.as_ptr() as *const u8,
@@ -72,7 +71,7 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             )
         };
 
-        debug!(
+        trace!(
             "MotifTrackerStore::save_slices: slices_pairs.len()={} data_bytes={data_bytes:?}",
             slices_pairs.len()
         );
@@ -88,7 +87,6 @@ impl MotifTrackerStore for FileMotifTrackerStore {
             }
             std::process::abort();
         }
-
 
         self.writer.finish_frame()?;
         self.writer.flush()?;
