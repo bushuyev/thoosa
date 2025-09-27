@@ -148,11 +148,14 @@ pub(crate) mod mock_tensor_loader {
         id: &'static str,
         data: &[f32],
     ) -> Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>> {
-        let tensor = Tensor::from_slice(data).view((1, data.len() as i64));
+
+        make_wrapper_t(id, Tensor::from_slice(data).view((1, data.len() as i64)))
+    }
+
+    pub fn make_wrapper_t(id: &'static str, tensor: Tensor) -> Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>> {
         let tho_tensor = ThoTensor2::new(SimpleId::from(id), tensor);
         Arc::new(DataCacheWrapper::new(tho_tensor, 0, 1, 0))
     }
-
 
     impl MockTensorLoaderBuilder {
 

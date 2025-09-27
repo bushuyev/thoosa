@@ -1622,7 +1622,8 @@ pub fn norm_2(t: &Tensor, dim: i64) -> Tensor {
 }
 
 pub fn lin_t(n: u32) -> Tensor {
-    Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
+    // Tensor::from(lin_iter(n).collect::<Vec<f32>>().as_slice())
+    Tensor::arange(n as i64, FLOAT_CPU)
 }
 
 pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tensor {
