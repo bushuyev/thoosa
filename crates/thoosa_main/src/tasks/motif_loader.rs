@@ -84,13 +84,17 @@ impl <SRC> Stage for MotifLoader <SRC>
         let window = find_motifs_run_config.window;
         let device_idx = ctx.read().device_idx();
 
+        debug!("MotifLoader::run: window={window:?} device_idx={device_idx}");
+
         for (resource_id, slices) in tensors_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
 
             for slice in slices {
 
+                debug!("MotifLoader::run: slice={slice:?}");
+
                 t.with_data(device_idx, Some(
-                    &(ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel, (slice  + window) as i64))
+                    &(ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel+1, (slice  + window) as i64))
                 ), None, |t| {
 
                     debug!("MotifLoader::run/with_data: t={t:?}");
@@ -108,30 +112,42 @@ impl <SRC> Stage for MotifLoader <SRC>
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use log::LevelFilter::Trace;
+    use log::set_max_level;
     use parking_lot::RwLock;
     use caching_runner::common::cachable::Cached;
     use caching_runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::utils::lin_t;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
+    use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
     use thoosa_store::{MockStore, MockStoreBuilder, Store};
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
-    use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper;
+    use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper, make_wrapper_t};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_0()-> Result<(), ThoosaError> {
+        set_max_level(Trace);
         GlobalCtx::init_devices(2);
 
         let run_id = 1;
 
         let mut store = MockStoreBuilder::new()
-            .with_list_motif_slices(10u32, None, None, Ok((3i64, run_id, vec![], HashMap::new())))
+            .with_list_motif_slices(10u32, None, None, Ok((0i64, run_id, vec![
+                TensorIdSliceIdx(1, 100),
+                TensorIdSliceIdx(1, 200),
+                TensorIdSliceIdx(2, 100)
+            ], HashMap::from([
+                (1, Resource::new(1, 1, "aaa".into(), 1000)),
+                (2, Resource::new(2, 1, "bbb".into(), 1000))
+            ]))))
             .with_list_run_config_values(
                 run_id,
-                Ok(FindMotifsRunConfig::new(Some(run_id), 100, 1000, None, None).to_properties_iter(None).collect())
+                Ok(FindMotifsRunConfig::new(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect())
             )
             .build();
 
@@ -141,8 +157,8 @@ mod tests {
             Arc::new(
                 mock_tensor_loader::new()
                 .with_data([
-                    (1, make_wrapper("tensor_a", &[1.0, 2.0])),
-                    (2, make_wrapper("tensor_b", &[3.0, 4.0])),
+                    (1, make_wrapper_t("tensor_a", lin_t(1000).view((1,-1)))),
+                    (2, make_wrapper_t("tensor_b", lin_t(1000).view((1,-1)))),
                 ])
                 .build()
             )

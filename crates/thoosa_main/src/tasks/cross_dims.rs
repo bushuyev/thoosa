@@ -1,5 +1,5 @@
 use std::cmp::min;
-use log::debug;
+use log::{debug, trace};
 use tch::IndexOp;
 use thoosa_common::dims::Dims;
 use thoosa_shared::{MyError, ThoosaError};
@@ -62,17 +62,15 @@ impl Dims for ChannelsData2 {
         let channel_range = range.start.channel..min(size.channel, range.end.channel);
         let data_range = range.start.seq..min(size.seq, range.end.seq);
 
-        debug!(
-                "Data for LoadedTensor::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}"
-            );
-        debug!("Data for LoadedTensor::subview: t=\n{}", t);
+        debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
+        trace!("ChannelsData2::subview: t=\n{t}");
 
         let sub = ThoTensor2::new(
             SimpleId(format!("{}:{:?}:{:?}", t.id(), channel_range, data_range).leak()),//TODO display
             t.t().i((channel_range, data_range))
         );
 
-        debug!("Data for LoadedTensor::subview: sub.t=\n{}",t.t());
+        trace!("ChannelsData2::subview: sub.t=\n{}",sub.t());
 
         sub
     }
