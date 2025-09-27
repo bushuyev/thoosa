@@ -3,6 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
+use log::debug;
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
@@ -91,6 +92,8 @@ impl <SRC> Stage for MotifLoader <SRC>
                 t.with_data(device_idx, Some(
                     &(ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel, (slice  + window) as i64))
                 ), None, |t| {
+
+                    debug!("MotifLoader::run/with_data: t={t:?}");
                     Ok(())
                 }).await?;
             }
@@ -147,8 +150,9 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(RunCtx2::new(0, 0, "test")));
 
-        motif_loader.run_cached(Arc::new(DataId::from(10)), ctx).await?;
+        let motif = motif_loader.run_cached(Arc::new(DataId::from(10)), ctx).await?;
 
+        println!("motif={motif:?}");
 
         Ok(())
     }

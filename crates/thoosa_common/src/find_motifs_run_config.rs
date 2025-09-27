@@ -58,12 +58,10 @@ impl FindMotifsRunConfig {
         id: RunId,
         properties: &HashMap<String, Val>,
     ) -> Result<FindMotifsRunConfig, thoosa_shared::ThoosaError> {
-        let mut find_motifs_run_config =
-            FindMotifsRunConfig::from_properties_map(None, properties)?;
+        let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, properties)?;
 
-        debug!(
-            "FindMotifsRunConfig::from_properties_map__: find_motifs_run_config={find_motifs_run_config:?}"
-        );
+        debug!("FindMotifsRunConfig::from_properties_map__: find_motifs_run_config={find_motifs_run_config:?}");
+        
         find_motifs_run_config.set_id(id);
 
         Ok(find_motifs_run_config)
