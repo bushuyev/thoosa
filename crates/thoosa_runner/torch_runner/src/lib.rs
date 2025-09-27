@@ -63,7 +63,7 @@ mod tests {
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use futures_util::sink::With;
-    use log::debug;
+    use log::{debug, trace};
     use parking_lot::RwLock;
     use std::cmp::min;
     use std::collections::{HashMap, HashSet};
@@ -260,7 +260,7 @@ mod tests {
 
             let sub = ThoTensor2::new(t.id().clone(), t.t().i((dim_0_range.clone(), ..)));
 
-            debug!(
+            trace!(
                 "Data for LoadedTensor::subview: sub.t=\n{}",
                 t.t().i((dim_0_range, ..))
             );
