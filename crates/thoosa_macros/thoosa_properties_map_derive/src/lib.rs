@@ -61,7 +61,17 @@ pub fn thoosa_args_derive(input: TokenStream) -> TokenStream {
                                 });
 
                                 fields_in_from_properties.push(quote! {
-                                    #field_ident: #field_type::from_properties_map(Some(thoosa_shared::conc_str(&prefix, #field_name_path)), &properties).ok(),
+                                    #field_ident: {
+                                        let child_prefix = thoosa_shared::conc_str(&prefix, #field_name_path);
+                                        if properties.keys().any(|key| key.starts_with(child_prefix.as_str())) {
+                                            match #field_type::from_properties_map(Some(child_prefix), properties) {
+                                                Ok(value) => Some(value),
+                                                Err(_) => None,
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    },
 
                                 });
                             }
