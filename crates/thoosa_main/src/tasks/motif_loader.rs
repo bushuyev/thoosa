@@ -89,19 +89,18 @@ impl <SRC> Stage for MotifLoader <SRC>
         for (resource_id, slices) in tensors_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
 
-            for slice in slices {
+            t.with_data(device_idx, Some(
+                &crate::tasks::cross_dims::ChannelsDataSubSelect::Vec(
+                    slices.into_iter().map(|slice|{
+                        ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel+1, (slice  + window) as i64)
+                    }).collect()
+                )
+            ), None, |tt| {
 
-                debug!("MotifLoader::run: slice={slice:?}");
-
-                t.with_data(device_idx, Some(
-                    &(ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel+1, (slice  + window) as i64))
-                ), None, |t| {
-
-                    debug!("MotifLoader::run/with_data: t={t:?}");
-                    Ok(())
-                }).await?;
-            }
-            // t.da().i((channel, slice_idx as i64..(slice_idx + window )as i64))
+                debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t());
+                Ok(())
+            }).await?;
+            
         }
 
         Ok(ThoTensor2::new(DataId(0), Tensor::rand(&[10, 100], FLOAT_CPU)))
