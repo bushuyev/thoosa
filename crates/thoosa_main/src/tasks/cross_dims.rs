@@ -11,50 +11,6 @@ use torch_runner::metrics::TwoDimsMetrics;
 #[derive(Clone, Debug)]
 pub struct ChannelsData2;
 
-#[derive(Clone, Debug, Default)]
-pub struct ChannelsDataMetrics {
-    channel:i64,
-    seq:i64
-}
-
-impl ChannelsDataMetrics {
-    pub fn new(channel: i64, seq: i64) -> Self {
-        Self { channel, seq }
-    }
-}
-
-impl From<[i64; 2]> for ChannelsDataMetrics {
-    fn from([channel, seq]: [i64; 2]) -> Self {
-        Self { channel, seq }
-    }
-}
-
-impl TryFrom<Vec<i64>> for ChannelsDataMetrics {
-    type Error = ThoosaError;
-
-    fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
-        let &[channel, seq, ..] = value.as_slice() else {
-            return Err(MyError::SomethingElse(format!(
-                "can't make LoadedTensorMetrics from {value:?}"
-            ))
-                .into());
-        };
-
-        Ok(Self { channel, seq })
-    }
-}
-
-impl ChannelsDataMetrics {
-    pub fn seq_len(&self) -> i64 {
-        self.seq
-    }
-}
-
-#[derive(Debug)]
-pub enum ChannelsDataSubSelect{
-    Single(std::ops::Range<ChannelsDataMetrics>),
-    Vec(Vec<std::ops::Range<ChannelsDataMetrics>>)
-}
 
 impl Dims for ChannelsData2 {
     type Metrics = ChannelsDataMetrics;
@@ -111,6 +67,60 @@ impl ChannelsData2 {
         sub_t
     }
 }
+
+
+#[derive(Clone, Debug, Default)]
+pub struct ChannelsDataMetrics {
+    channel:i64,
+    seq:i64
+}
+
+impl ChannelsDataMetrics {
+    pub fn new(channel: i64, seq: i64) -> Self {
+        Self { channel, seq }
+    }
+}
+
+impl From<[i64; 2]> for ChannelsDataMetrics {
+    fn from([channel, seq]: [i64; 2]) -> Self {
+        Self { channel, seq }
+    }
+}
+
+impl TryFrom<Vec<i64>> for ChannelsDataMetrics {
+    type Error = ThoosaError;
+
+    fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
+        let &[channel, seq, ..] = value.as_slice() else {
+            return Err(MyError::SomethingElse(format!(
+                "can't make LoadedTensorMetrics from {value:?}"
+            ))
+                .into());
+        };
+
+        Ok(Self { channel, seq })
+    }
+}
+
+impl ChannelsDataMetrics {
+    pub fn seq_len(&self) -> i64 {
+        self.seq
+    }
+}
+
+#[derive(Debug)]
+pub enum ChannelsDataSubSelect{
+    Single(std::ops::Range<ChannelsDataMetrics>),
+    Vec(Vec<std::ops::Range<ChannelsDataMetrics>>)
+}
+
+
+#[derive(Debug)]
+pub enum ChannelsDataSubOutput {
+    Single(ThoTensor2<ChannelsData2, SimpleId>),
+    Vec(ThoTensor2<MotifSlices, SimpleId>)
+}
+
 
 #[derive(Clone, Debug)]
 pub struct ChannelsSlicesData2;
