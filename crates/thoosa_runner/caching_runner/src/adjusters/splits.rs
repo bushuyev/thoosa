@@ -38,14 +38,13 @@ where
 impl<AC: SplitsAdjusterContext<Metrics = <A as Data>::Metrics>, A: Data + Adjustable> Adjuster<AC>
     for SplitsAdjuster<A>
 where
-    A: Data<Sub = A, SubSelect = std::ops::Range<<A as Data>::Metrics>> + Adjustable,
-    A::SubSelect: Adjustable,
+    A: Data + Adjustable,
     <A as Data>::Metrics: DivAssign<i64>,
     <A as Data>::Metrics: PartialOrd<<A as Data>::Metrics>,
     for<'a, 'b> &'a <A as Data>::Metrics:
         Add<&'b <A as Data>::Metrics, Output = <A as Data>::Metrics>,
 {
-    type A = A::SubSelect;
+    type A = std::ops::Range<A::Metrics>;
 
     async fn adjust(
         &self,
