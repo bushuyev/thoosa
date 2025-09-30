@@ -60,8 +60,45 @@ impl Select<ChannelsDataSubSelect> for ThoTensor2<ChannelsData2, SimpleId> {
     type Output = ThoTensor2<ChannelsData2, SimpleId>;
 
     fn select(&self, selector: ChannelsDataSubSelect) -> Self::Output {
-        //TODO Selectoer
-        todo!()
+        match selector {
+            ChannelsDataSubSelect::Single(range) => {
+                let size: ChannelsDataMetrics = self
+                    .size()
+                    .try_into()
+                    .expect("ChannelsData2::select unable to convert size");
+
+                let sub_t = ChannelsData2::sub_single(self, &range, &size);
+                let sub = ThoTensor2::new(
+                    SimpleId::from(format!("{}:{range:?}", self.id().0)),
+                    sub_t,
+                );
+
+                trace!("ChannelsData2::select: Single sub.t=\n{}", sub.t());
+
+                sub
+            }
+            ChannelsDataSubSelect::Vec(ranges) => {
+                let size: ChannelsDataMetrics = self
+                    .size()
+                    .try_into()
+                    .expect("ChannelsData2::select unable to convert size");
+
+                let mut subs = Vec::with_capacity(ranges.len());
+                for range in &ranges {
+                    subs.push(ChannelsData2::sub_single(self, range, &size));
+                }
+
+                let stacked = Tensor::vstack(subs.as_slice());
+                let sub = ThoTensor2::new(
+                    SimpleId::from(format!("{}:{ranges:?}", self.id().0)),
+                    stacked,
+                );
+
+                trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t());
+
+                sub
+            }
+        }
     }
 }
 

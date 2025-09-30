@@ -53,7 +53,7 @@ mod tests {
     use async_trait::async_trait;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{Data, DropIf, OutId, RunCtx};
+    use caching_runner::common::{DropIf, OutId, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -240,12 +240,12 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct LoadedTensor;
-    impl Dims for LoadedTensor {
-        type Metrics = TwoDimsMetrics;
-        type Sub = ThoTensor2<LoadedTensor, SimpleId>;
-        type SubSelect = std::ops::Range<Self::Metrics>;
+impl Dims for LoadedTensor {
+    type Metrics = TwoDimsMetrics;
+    type Sub = ThoTensor2<LoadedTensor, SimpleId>;
+    type SubSelect = std::ops::Range<Self::Metrics>;
 
-        fn subview(t: &Self::Sub, range: &Self::SubSelect) -> Self::Sub
+    fn subview(t: &Self::Sub, range: &Self::SubSelect) -> Self::Sub
         where
             Self: Sized,
         {
@@ -268,9 +268,31 @@ mod tests {
             sub
         }
     }
-    impl LoadedTensor {}
+impl LoadedTensor {}
 
-    impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
+impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
+
+impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, SimpleId> {
+    type Output = ThoTensor2<LoadedTensor, SimpleId>;
+
+    fn select(&self, selector: std::ops::Range<TwoDimsMetrics>) -> Self::Output {
+        use std::cmp::min;
+
+        let size: TwoDimsMetrics = self
+            .size()
+            .try_into()
+            .expect("LoadedTensor::select unable to convert size");
+
+        let dim_0_range = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
+        let dim_1_range = selector.start.dim_1..min(size.dim_1, selector.end.dim_1);
+
+        let sub_tensor = self.t().i((dim_0_range.clone(), dim_1_range.clone()));
+
+        let new_id = SimpleId::from(format!("{}:{dim_0_range:?}:{dim_1_range:?}", self.id().0));
+
+        ThoTensor2::new(new_id, sub_tensor)
+    }
+}
 
     // #[async_trait]
     // impl Data for ThoTensor2<LoadedTensor, SimpleId> {
@@ -592,7 +614,7 @@ mod tests {
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics>>,
     }
 
     #[async_trait]
@@ -672,7 +694,7 @@ mod tests {
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
             dim: TwoDimsMetrics,
-            oom_runner: ClcOOMRunner<ClcTask>,
+            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
