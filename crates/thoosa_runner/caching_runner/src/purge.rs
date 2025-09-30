@@ -34,7 +34,7 @@ impl<K, O> FuturesRunnerMapPurger
     for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<O>>, ThoosaError>>>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
-    O: Data<Sub = O> + CopyToDevice + Output + Send + Sync + 'static,
+    O: Data + CopyToDevice + Output + Send + Sync + 'static,
 {
     async fn purge_cpu(&self, purge_since: u64) {
         self.retain(|k, v| {
@@ -140,8 +140,6 @@ mod tests {
 
     impl Data for DummyOutput {
         type Metrics = [usize; 1];
-        type Sub = DummyOutput;
-        type SubSelect = std::ops::Range<Self::Metrics>;
 
         fn size(&self) -> Self::Metrics {
             [1]
