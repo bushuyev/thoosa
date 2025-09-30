@@ -29,7 +29,6 @@ use tokio::task::JoinSet;
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
 type StageInMetrics<S> = <StageInStatic<S> as Data>::Metrics;
-type StageInSubSelect<S> = <StageInStatic<S> as Data>::SubSelect;
 
 #[derive(Debug)]
 pub enum FailUntil {
@@ -93,7 +92,7 @@ where
         StageInStatic<R>: WithId
             + Debug
             + Adjustable
-            + Data<Sub = StageInStatic<R>, SubSelect = std::ops::Range<StageInMetrics<R>>>,
+            + Data,
         R::Out: Send + Sync,
         R::Ctx: Adjustable,
         R: OutId,
@@ -102,7 +101,6 @@ where
         StageInMetrics<R>: PartialOrd<i64>,
         for<'a, 'b> &'a StageInMetrics<R>: Add<&'b StageInMetrics<R>, Output = StageInMetrics<R>>,
         StageInMetrics<R>: PartialOrd,
-        StageInSubSelect<R>: Adjustable,
         <R as Stage>::In<'static>: Select<std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>, Output=<R as Stage>::In<'static>>
     {
         let (device_idx, ctx_name) = {
@@ -240,7 +238,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 where
     R: Stage + Cached + OutId + Send + Sync + 'static,
     for<'a> <R as Stage>::In<'a>: Send + Sync,
-    R::Out: Data<Sub = R::Out> + Send + Sync,
+    R::Out: Data + Send + Sync,
     StageInStatic<R>: WithId + From<&'static str>,
     F: Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
@@ -515,10 +513,6 @@ mod tests {
     impl Data for DLoadedTensor {
         type Metrics = i64;
 
-        type Sub = Self;
-
-        type SubSelect = std::ops::Range<Self::Metrics>;
-
         fn size(&self) -> Self::Metrics {
             self.data.0.len() as i64
         }
@@ -761,9 +755,6 @@ mod tests {
     impl Data for DMulTaskOutput {
         type Metrics = [usize; 1];
 
-        type Sub = Self;
-
-        type SubSelect = std::ops::Range<Self::Metrics>;
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]

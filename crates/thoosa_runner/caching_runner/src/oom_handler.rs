@@ -170,7 +170,6 @@ where
     IC: InputContext<R>,
     R: Adjustable,
     <R as Stage>::In<'static>: Data + Debug,
-    <<R as Stage>::In<'static> as Data>::SubSelect: Adjustable,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
@@ -225,11 +224,7 @@ impl RunCtxContext for NoopRunCtxContext {}
 pub struct OOMHandler<'a, R, IC, RC, RCC, S>
 where
     R: Stage + Adjustable + OutId + 'static,
-    <<R as Stage>::In<'static> as Data>::SubSelect: Default + Debug + Adjustable,
-    <R as Stage>::In<'static>: Data<
-            Sub = <R as Stage>::In<'static>,
-            SubSelect = Range<<<R as Stage>::In<'static> as Data>::Metrics>,
-        > + WithId,
+    <R as Stage>::In<'static>: Data + WithId,
     R::Ctx: Adjustable,
     IC: InputContext<R>,
     RC: RunnableContext,
@@ -247,12 +242,8 @@ where
 impl<'a, R, IC, RC, RCC, S> OOMHandler<'a, R, IC, RC, RCC, S>
 where
     R: Stage + Adjustable + OutId + 'static,
-    <<R as Stage>::In<'static> as Data>::SubSelect: Debug + Adjustable,
-    <R as Stage>::In<'static>: Data<
-            Sub = <R as Stage>::In<'static>,
-            SubSelect = Range<<<R as Stage>::In<'static> as Data>::Metrics>,
-        > + WithId,
-    <R as Stage>::In<'static>: Debug + Data<Sub = <R as Stage>::In<'static>> + CopyToDevice,
+    <R as Stage>::In<'static>: Data + WithId,
+    <R as Stage>::In<'static>: Debug + Data + CopyToDevice,
     R::Ctx: Adjustable,
     IC: InputContext<R> + Debug,
     RC: RunnableContext + Debug,
@@ -526,8 +517,6 @@ pub(crate) mod test_types {
     #[async_trait]
     impl Data for TestInput {
         type Metrics = [usize; 1];
-        type Sub = Self;
-        type SubSelect = std::ops::Range<Self::Metrics>;
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]
@@ -593,8 +582,6 @@ pub(crate) mod test_types {
     #[async_trait]
     impl Data for TestOutput {
         type Metrics = [usize; 1];
-        type Sub = Self;
-        type SubSelect = std::ops::Range<Self::Metrics>;
 
         fn size(&self) -> Self::Metrics {
             [1]
@@ -719,7 +706,7 @@ pub(crate) mod mock_input_adjuster {
 
     pub fn build<I>(inputs: I) -> (MockInputAdjuster, Arc<AtomicUsize>)
     where
-        I: IntoIterator<Item = <MockDataWithId as Data>::SubSelect>,
+        I: IntoIterator<Item = std::ops::Range<[usize; 1]>>,
     {
         let mut adj = MockInputAdjuster::new();
         let calls = Arc::new(AtomicUsize::new(0));
