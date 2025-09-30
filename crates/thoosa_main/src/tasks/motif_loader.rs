@@ -171,7 +171,13 @@ mod tests {
 
         let motif = motif_loader.run_cached(Arc::new(DataId::from(10)), ctx).await?;
 
-        println!("motif={motif:?}");
+        let r = motif.with_data(0,  None,|t|{
+            println!("motif.t={}", t.t());
+
+            Ok(true)
+        }).await?;
+
+        assert_eq!(r, true);
 
         Ok(())
     }

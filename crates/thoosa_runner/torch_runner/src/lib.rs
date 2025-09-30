@@ -245,29 +245,7 @@ impl Dims for LoadedTensor {
     type Sub = ThoTensor2<LoadedTensor, SimpleId>;
     type SubSelect = std::ops::Range<Self::Metrics>;
 
-    fn subview(t: &Self::Sub, range: &Self::SubSelect) -> Self::Sub
-        where
-            Self: Sized,
-        {
-            let size: TwoDimsMetrics = t.size().try_into().unwrap();
-
-            let dim_0_range = range.start.dim_0..min(size.dim_0, range.end.dim_0);
-
-            debug!(
-                "Data for LoadedTensor::subview: dim_0_range={dim_0_range:?} size={size:?} range={range:?}"
-            );
-            debug!("Data for LoadedTensor::subview: t=\n{}", t);
-
-            let sub = ThoTensor2::new(t.id().clone(), t.t().i((dim_0_range.clone(), ..)));
-
-            trace!(
-                "Data for LoadedTensor::subview: sub.t=\n{}",
-                t.t().i((dim_0_range, ..))
-            );
-
-            sub
-        }
-    }
+}
 impl LoadedTensor {}
 
 impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}

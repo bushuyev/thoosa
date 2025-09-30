@@ -10,9 +10,6 @@ pub trait Dims: Send + Sync + Clone + Debug {
     type Sub: CopyToDevice;
     type SubSelect: Debug + Send + Sync;
 
-    fn subview(t: &Self::Sub, range: &Self::SubSelect) -> Self::Sub {
-        unimplemented!()
-    }
 }
 
 #[derive(Clone, Debug)]
