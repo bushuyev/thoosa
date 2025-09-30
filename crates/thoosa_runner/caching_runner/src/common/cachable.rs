@@ -33,7 +33,7 @@ where
     >
     where
         Self: Sized,
-        Self::Out: Data<Sub = Self::Out> + Sync + Send;
+        Self::Out: Data + Sync + Send;
 
     async fn run_cached(
         self: Arc<Self>,
@@ -46,7 +46,7 @@ where
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
-        Self::Out: Data<Sub = Self::Out>, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
+        Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
         let key = self.out_id(input.id());
         let (cache_area, device_idx) = {
@@ -106,7 +106,7 @@ where
     ) -> Result<(), ThoosaError>
     where
         Self: Sized + OutId,
-        Self::Out: Data<Sub = Self::Out> + Sync + Send,
+        Self::Out: Data + Sync + Send,
     {
         assert_ne!(device_idx, 0); //don't purge cpu
 
@@ -150,7 +150,7 @@ where
 #[derive(Debug)]
 pub struct DataCacheWrapper<O>
 where
-    O: WithId + Data<Sub = O> + CopyToDevice + Send + Sync,
+    O: WithId + Data + CopyToDevice + Send + Sync,
 {
     id: <O as WithId>::ID,
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
@@ -226,7 +226,7 @@ where
 {
 }
 
-impl<O: Data<Sub = O> + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
+impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
     pub fn new(o: O, _device_ordinal: usize, num_devices: usize, cache_area: u64) -> Self {
         let id = o.id().clone();
         let size = o.size();

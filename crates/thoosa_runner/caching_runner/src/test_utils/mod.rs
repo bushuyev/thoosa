@@ -105,8 +105,7 @@ impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
 #[cfg(test)]
 impl Data for MockDataWithId {
     type Metrics = [usize; 1];
-    type Sub = Self;
-    type SubSelect = std::ops::Range<Self::Metrics>;
+    
 
     fn size(&self) -> Self::Metrics {
         self.data.size()

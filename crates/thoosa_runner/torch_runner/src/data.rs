@@ -30,8 +30,7 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone> {
 
 impl<D: Dims<Sub = Self>, Id: Named + Clone> Data for ThoTensor2<D, Id> {
     type Metrics = D::Metrics;
-    type Sub = Self;
-    type SubSelect = D::SubSelect;
+    
 
     fn size(&self) -> Self::Metrics {
         self.t

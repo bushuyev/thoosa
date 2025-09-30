@@ -23,9 +23,6 @@ pub mod runnable;
 pub trait Data: Debug + CopyToDevice {
     type Metrics: Debug + Clone + Send + Sync + Default;
 
-    type Sub: CopyToDevice;
-    type SubSelect: Debug + Send + Sync;
-
     fn size(&self) -> Self::Metrics;
 
     fn track_used_in(&self, _token: &'static str) {}
