@@ -312,7 +312,7 @@ where
 
         match panic_to_err_async!(
             input
-                .with_data(device_idx, None, None, |data| {
+                .with_data(device_idx, None, |data| {
                     Arc::clone(task).do_run(data, Arc::clone(&run_context))
                 })
                 .await
@@ -383,17 +383,25 @@ where
                                     run_context.read().acquired_permits()
                                 );
 
-                                match input
-                                    .with_data(
-                                        device_idx,
-                                        input_select_adjusted.as_ref(),
-                                        None,
-                                        |data| {
+                                let run_result = if let Some(selector) =
+                                    input_select_adjusted.as_ref()
+                                {
+                                    input
+                                        .with_selected_data(device_idx, selector, None, |data| {
                                             Arc::clone(task_to_run)
                                                 .do_run(data, Arc::clone(&run_context))
-                                        },
-                                    )
-                                    .await
+                                        })
+                                        .await
+                                } else {
+                                    input
+                                        .with_data(device_idx, None, |data| {
+                                            Arc::clone(task_to_run)
+                                                .do_run(data, Arc::clone(&run_context))
+                                        })
+                                        .await
+                                };
+
+                                match run_result
                                 {
                                     Ok(v) => {
                                         contexts.input.add_partial_output(v);

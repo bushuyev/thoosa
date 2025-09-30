@@ -743,7 +743,7 @@ mod tests {
         debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
         let tensor_data_0_0 = loaded_tensor_0_0
-            .with_data(load_to_device, None, None, |tensor_data_0_0| {
+            .with_data(load_to_device, None, |tensor_data_0_0| {
                 debug!("tensor_data={}", (*tensor_data_0_0).t());
 
                 assert!(
@@ -771,7 +771,7 @@ mod tests {
             .await?;
 
         loaded_tensor_0_0
-            .with_data(load_to_device, None, None, |tensor_data_0_1| {
+            .with_data(load_to_device, None, |tensor_data_0_1| {
                 // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
                 assert_eq!(&tensor_data_0_0, tensor_data_0_1.t());
@@ -829,7 +829,7 @@ mod tests {
             .await?;
 
         multed
-            .with_data(1, None, None, |multed_tensor| {
+            .with_data(1, None, |multed_tensor| {
                 // let multed_tensor = multed.load_from_any_device(1, None).await?;
 
                 assert!(
@@ -1321,7 +1321,7 @@ mod tests {
         debug!("multed={multed:?}");
 
         multed
-            .with_data(1, None, None, |r: &ThoTensor2<ClcTaskOutput, SimpleId>| {
+            .with_data(1, None, |r: &ThoTensor2<ClcTaskOutput, SimpleId>| {
                 mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                     lin_for_size(k, size, t.kind(), &t.device())
                         .sum_dim_intlist(0, false, t.kind())

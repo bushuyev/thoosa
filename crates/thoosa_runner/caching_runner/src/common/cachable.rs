@@ -2,6 +2,7 @@
 #![allow(async_fn_in_trait)]
 use crate::common::runnable::Stage;
 use crate::common::*;
+use crate::common::Select;
 #[double]
 use crate::global_ctx::GlobalCtx;
 use async_trait::async_trait;
@@ -225,12 +226,6 @@ where
 {
 }
 
-#[derive(Debug)]
-pub enum Select<O: Data> {
-    Full,
-    SubSelect { sub: <O as Data>::SubSelect },
-}
-
 impl<O: Data<Sub = O> + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
     pub fn new(o: O, _device_ordinal: usize, num_devices: usize, cache_area: u64) -> Self {
         let id = o.id().clone();
@@ -306,57 +301,67 @@ impl<O: Data<Sub = O> + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O>
     pub async fn with_data<R>(
         &self,
         to_device_idx: usize,
-        select: Option<&<O as Data>::SubSelect>,
         trace_ctx: Option<&'static str>,
         do_run: impl FnOnce(&O) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError> {
-        match select {
-            None => {
-                if to_device_idx != 0 {
-                    GlobalCtx::global().reset_all_on_cpu(to_device_idx).await;
-                }
+        if to_device_idx != 0 {
+            GlobalCtx::global().reset_all_on_cpu(to_device_idx).await;
+        }
 
-                match self.load_from_any_device_(to_device_idx).await {
-                    Ok(v) => Self::do_run_trace(trace_ctx, do_run, v.deref()),
-                    Err(e) => Err(e),
-                }
-            }
-            Some(sub_select) => {
-                let read_guard = self.cached_data[to_device_idx].read().await;
-
-                if read_guard.is_some() {
-                    let data = read_guard
-                        .as_ref()
-                        .expect("no value behind guard")
-                        .subview(sub_select);
-
-                    Self::do_run_trace(trace_ctx, do_run, &data)
-                } else {
-                    drop(read_guard);
-
-                    for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-                        let source_read_guard = op.read().await;
-
-                        if source_device_idx != to_device_idx {
-                            if let Some(src) = source_read_guard.as_ref() {
-                                let sub_t = src.subview(sub_select);
-                                debug!(
-                                    "DataCacheWrapper::with_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
-                                    sub_t.size()
-                                );
-                                let data = sub_t.copy_to_device(to_device_idx);
-
-                                return Self::do_run_trace(trace_ctx, do_run, &data.await);
-                            }
-                        }
-                    }
-                    Err(MyError::NotFound.into())
-                }
-            }
+        match self.load_from_any_device_(to_device_idx).await {
+            Ok(v) => Self::do_run_trace_ref(trace_ctx, do_run, v.deref()),
+            Err(e) => Err(e),
         }
     }
 
-    fn do_run_trace<R>(
+    pub async fn with_selected_data<S, R>(
+        &self,
+        to_device_idx: usize,
+        selector: S,
+        trace_ctx: Option<&'static str>,
+        do_run: impl FnOnce(&<O as Select<S>>::Output) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError>
+    where
+        O: Select<S>,
+        <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
+        S: Clone,
+    {
+        let read_guard = self.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            let data = read_guard
+                .as_ref()
+                .expect("no value behind guard")
+                .select(selector.clone());
+
+            return Self::do_run_trace_owned(trace_ctx, do_run, data);
+        }
+
+        drop(read_guard);
+
+        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+            if source_device_idx == to_device_idx {
+                continue;
+            }
+
+            let source_read_guard = op.read().await;
+
+            if let Some(src) = source_read_guard.as_ref() {
+                let sub_t = src.select(selector.clone());
+                debug!(
+                    "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
+                    sub_t.size()
+                );
+                let data = sub_t.copy_to_device(to_device_idx);
+
+                return Self::do_run_trace_owned(trace_ctx, do_run, data.await);
+            }
+        }
+
+        Err(MyError::NotFound.into())
+    }
+
+    fn do_run_trace_ref<R>(
         trace_ctx: Option<&'static str>,
         do_run: impl FnOnce(&O) -> Result<R, ThoosaError>,
         data: &O,
@@ -365,6 +370,21 @@ impl<O: Data<Sub = O> + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O>
             do_run(data)
         } else {
             do_run(&TracingWrapper::new(data, trace_ctx))
+        }
+    }
+
+    fn do_run_trace_owned<T, R>(
+        trace_ctx: Option<&'static str>,
+        do_run: impl FnOnce(&T) -> Result<R, ThoosaError>,
+        data: T,
+    ) -> Result<R, ThoosaError>
+    where
+        T: Data + WithId + Send + Sync + CopyToDevice,
+    {
+        if trace_ctx.is_none() {
+            do_run(&data)
+        } else {
+            do_run(&TracingWrapper::new(&data, trace_ctx))
         }
     }
 
@@ -658,10 +678,21 @@ mod tests {
         let tested = super::DataCacheWrapper::new(MockDataWithId::whatever(), 1, 2, 0);
 
         tested
-            .with_data(0, None, None, |t| {
+            .with_data(0, None, |t| {
                 debug!("t={t:?}");
                 Ok(())
             })
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_selected_data() -> Result<(), ThoosaError> {
+        let tested = super::DataCacheWrapper::new(MockDataWithId::for_device(1), 1, 2, 0);
+
+        tested
+            .with_selected_data(1, &([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
             .await?;
 
         Ok(())
@@ -685,7 +716,7 @@ mod tests {
         assert!(tested.cached_data[1].read().await.is_none());
 
         tested
-            .with_data(1, None, None, |data_on_1| {
+            .with_data(1, None, |data_on_1| {
                 assert_eq!(data_on_1.device(), Some(&1));
 
                 Ok(())
