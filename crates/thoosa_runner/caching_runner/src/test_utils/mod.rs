@@ -91,6 +91,10 @@ impl Data for MockDataWithId {
         self.data.size()
     }
 
+    fn subview(&self, _select: &Self::SubSelect) -> Self::Sub {
+        MockDataWithId::for_device(self.device.unwrap_or(0))
+    }
+
     fn device(&self) -> usize {
         self.device.unwrap_or(0)
     }
