@@ -17,7 +17,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{DataId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_dims::{ChannelsDataMetrics, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsDataMetrics, ChannelsDataVec, MotifSlices};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 
@@ -89,7 +89,8 @@ impl <SRC> Stage for MotifLoader <SRC>
         for (resource_id, slices) in tensors_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
 
-            let selector = crate::tasks::cross_dims::ChannelsDataSubSelect::Vec(
+            let selector = ChannelsDataVec {
+                ranges:
                 slices
                     .into_iter()
                     .map(|slice| {
@@ -97,7 +98,7 @@ impl <SRC> Stage for MotifLoader <SRC>
                             ..ChannelsDataMetrics::new(channel + 1, (slice + window) as i64)
                     })
                     .collect(),
-            );
+            };
 
             t.with_selected_data(device_idx, selector, None, |tt| {
 
