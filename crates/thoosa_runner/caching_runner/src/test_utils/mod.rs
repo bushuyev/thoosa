@@ -1,3 +1,4 @@
+use std::ops::Range;
 #[cfg(test)]
 use crate::common::*;
 #[cfg(test)]
@@ -78,6 +79,16 @@ impl MockDataWithId {
 
     pub fn device(&self) -> Option<&usize> {
         self.device.as_ref()
+    }
+}
+
+#[cfg(test)]
+impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
+    type Output = MockDataWithId;
+
+    fn select(&self, selector: Range<[usize; 1]>) -> Self::Output {
+        //TODO Selectoer
+        todo!()
     }
 }
 

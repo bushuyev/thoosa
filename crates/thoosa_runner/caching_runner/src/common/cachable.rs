@@ -691,8 +691,9 @@ mod tests {
     async fn test_with_selected_data() -> Result<(), ThoosaError> {
         let tested = super::DataCacheWrapper::new(MockDataWithId::for_device(1), 1, 2, 0);
 
+        //TODO Selectoer ref
         tested
-            .with_selected_data(1, &([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
+            .with_selected_data(1, ([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
             .await?;
 
         Ok(())

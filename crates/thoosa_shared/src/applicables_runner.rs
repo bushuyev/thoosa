@@ -24,7 +24,7 @@ pub type CachableId = SimpleId;
 
 pub trait Input: Debug {
     fn id(&self) -> &CachableId {
-        todo!()
+        Box::leak(Box::new(SimpleId("todo")))//FIXME
     }
 }
 
