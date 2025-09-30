@@ -18,42 +18,6 @@ impl Dims for ChannelsData2 {
     type Sub = ThoTensor2<ChannelsData2, SimpleId>;
     type SubSelect = ChannelsDataSubSelect;
 
-    fn subview(t: &Self::Sub, sub_select: &Self::SubSelect) -> Self::Sub {
-        match sub_select {
-            ChannelsDataSubSelect::Single(range) => {
-                let size: ChannelsDataMetrics = t.size().try_into().unwrap();
-
-                let sub_t = Self::sub_single(t, range, &size);
-
-                let sub = ThoTensor2::new(
-                    SimpleId(format!("{}:{:?}", t.id(), range).leak()),//TODO display
-                    sub_t
-                );
-
-                trace!("ChannelsData2::subview: Single sub.t=\n{}",sub.t());
-
-                sub
-            }
-            ChannelsDataSubSelect::Vec(ranges) => {
-                let size: ChannelsDataMetrics = t.size().try_into().unwrap();
-
-                let subs = Tensor::vstack(
-                    ranges.into_iter().map(|range| {
-                        Self::sub_single(t, range, &size)
-                    }).collect::<Vec<_>>().as_slice(),
-                );
-
-                let sub = ThoTensor2::new(
-                    SimpleId(format!("{}:{:?}", t.id(), ranges).leak()),//TODO display
-                    subs
-                );
-
-                trace!("ChannelsData2::subview: Vec sub.t=\n{}",sub.t());
-
-                sub
-            }
-        }
-    }
 }
 
 impl Select<ChannelsDataSubSelect> for ThoTensor2<ChannelsData2, SimpleId> {

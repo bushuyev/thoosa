@@ -136,13 +136,6 @@ mod tests {
         type Sub = ThoTensor2<ABData, SimpleId>;
         type SubSelect = std::ops::Range<Self::Metrics>;
 
-        fn subview(t: &Self::Sub, range: &Self::SubSelect) -> Self::Sub {
-            use std::cmp::min;
-            let size = ABMetrics::from(t.t().size());
-            let d0 = range.start.dim_0..min(size.dim_0, range.end.dim_0);
-
-            ThoTensor2::new(t.id().clone(), t.t().i((d0, ..)))
-        }
     }
     impl Adjustable for ThoTensor2<ABData, SimpleId> {}
 
