@@ -89,13 +89,17 @@ impl <SRC> Stage for MotifLoader <SRC>
         for (resource_id, slices) in tensors_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
 
-            t.with_data(device_idx, Some(
-                &crate::tasks::cross_dims::ChannelsDataSubSelect::Vec(
-                    slices.into_iter().map(|slice|{
-                        ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel+1, (slice  + window) as i64)
-                    }).collect()
-                )
-            ), None, |tt| {
+            let selector = crate::tasks::cross_dims::ChannelsDataSubSelect::Vec(
+                slices
+                    .into_iter()
+                    .map(|slice| {
+                        ChannelsDataMetrics::new(channel, slice as i64)
+                            ..ChannelsDataMetrics::new(channel + 1, (slice + window) as i64)
+                    })
+                    .collect(),
+            );
+
+            t.with_selected_data(device_idx, &selector, None, |tt| {
 
                 debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t());
                 Ok(())

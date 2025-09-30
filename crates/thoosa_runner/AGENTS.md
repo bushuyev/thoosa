@@ -175,7 +175,7 @@ This repository can be vendored into a larger Rust workspace as a set of subcrat
   let _ = caching_runner::global_ctx::GlobalCtx::init_devices(2);
   // Later
   let out = Arc::new(MyTask).run_cached(Arc::new(my_input), Arc::new(RwLock::new(my_ctx))).await?;
-  out.with_data(1, None, None, |o| { /* use o on device 1 */ Ok(()) }).await?;
+  out.with_data(1, None, |o| { /* use o on device 1 */ Ok(()) }).await?;
   ```
 
 - Testing in a parent workspace

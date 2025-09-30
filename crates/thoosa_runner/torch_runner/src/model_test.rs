@@ -804,7 +804,7 @@ mod tests {
 
         debug!("acc={acc:?}");
 
-        acc.with_data(0, None, None, |acc_t| {
+        acc.with_data(0, None, |acc_t| {
             debug!("acc_t={acc_t:?} t=\n{}", acc_t.t());
 
             // Dim impls are to define domain-specific operations on tensors
@@ -855,7 +855,7 @@ mod tests {
             .run_cached(Arc::new(input), Arc::clone(&ctx))
             .await?;
 
-        acc.with_data(1, None, None, |acc| {
+        acc.with_data(1, None, |acc| {
             let v = ClsOut::accuracy(acc);
             assert!(v > 0.9, "training accuracy too low (4 files): {v}");
             Ok(())
@@ -910,7 +910,7 @@ mod tests {
             .run_cached(Arc::new(input), Arc::clone(&ctx))
             .await?;
 
-        acc.with_data(1, None, None, |acc| {
+        acc.with_data(1, None, |acc| {
             debug!("acc={}", acc.t());
 
             let v = ClsOut::accuracy(acc);
