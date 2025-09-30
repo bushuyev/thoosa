@@ -523,19 +523,6 @@ mod tests {
             self.data.0.len() as i64
         }
 
-        fn subview(&self, range: &Self::SubSelect) -> Self
-        where
-            Self: Sized,
-        {
-            DLoadedTensor {
-                id: self.id.clone(),
-                data: DummyTensor(
-                    self.data.0[range.start as usize..min(range.end as usize, self.data.0.len())]
-                        .to_vec(),
-                ),
-            }
-        }
-
         fn device(&self) -> usize {
             0
         }
@@ -780,16 +767,6 @@ mod tests {
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]
-        }
-
-        fn subview(&self, range: &Self::SubSelect) -> Self
-        where
-            Self: Sized,
-        {
-            DMulTaskOutput {
-                id: self.id.clone(),
-                data: DummyTensor(self.data.0[range.start[0]..range.end[0]].to_vec()),
-            }
         }
 
         fn device(&self) -> usize {
