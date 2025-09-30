@@ -2,6 +2,7 @@ use std::cmp::min;
 use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
+use caching_runner::common::Select;
 use thoosa_common::dims::Dims;
 use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{DataId, SimpleId};
@@ -52,6 +53,15 @@ impl Dims for ChannelsData2 {
                 sub
             }
         }
+    }
+}
+
+impl Select<ChannelsDataSubSelect> for ThoTensor2<ChannelsData2, SimpleId> {
+    type Output = ThoTensor2<ChannelsData2, SimpleId>;
+
+    fn select(&self, selector: ChannelsDataSubSelect) -> Self::Output {
+        //TODO Selectoer
+        todo!()
     }
 }
 
@@ -108,11 +118,12 @@ impl ChannelsDataMetrics {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ChannelsDataSubSelect{
     Single(std::ops::Range<ChannelsDataMetrics>),
     Vec(Vec<std::ops::Range<ChannelsDataMetrics>>)
 }
+
 
 
 #[derive(Debug)]
