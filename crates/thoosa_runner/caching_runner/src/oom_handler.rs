@@ -1,4 +1,4 @@
-use crate::common::RunCtx;
+use crate::common::{RunCtx, Select};
 use crate::common::cachable::DataCacheWrapper;
 use crate::common::runnable::Stage;
 use crate::common::{Data, DropIf, OutId};
@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
+use std::process::Output;
 use std::sync::Arc;
 use thoosa_common::panic_to_err_async;
 use thoosa_common::tho_tensor::CopyToDevice;
@@ -148,20 +149,22 @@ where
 }
 
 #[derive(Debug)]
-pub enum Adjusters<'a, R, IC, RC, RCC>
+pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
     R: Stage + 'static,
-    <R as Stage>::In<'static>: Data + Debug,
+    <R as Stage>::In<'static>: Data + Select<S> + Debug,
     IC: InputContext<R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
+    <R as Stage>::In<'static>: Select<S>,
+    S:Adjustable + Debug+Default+Clone
 {
-    Input(Box<dyn Adjuster<IC, A = <<R as Stage>::In<'static> as Data>::SubSelect> + 'a>),
+    Input(Box<dyn Adjuster<IC, A =S> + 'a>),
     Task(Box<dyn Adjuster<RC, A = R> + 'a>),
     RunContext(Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>> + 'a>),
 }
 
-impl<'a, R, IC, RC, RCC> Adjusters<'a, R, IC, RC, RCC>
+impl<'a, R, IC, RC, RCC, S> Adjusters<'a, R, IC, RC, RCC, S>
 where
     R: Stage + 'static,
     IC: InputContext<R>,
@@ -171,6 +174,8 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
+    <R as Stage>::In<'static>: Select<S>,
+    S:Adjustable + Debug+Default+Clone
 {
     fn degrade(&self, adjust_context: &mut Contexts<R, IC, RC, RCC>) -> bool {
         match self {
@@ -217,7 +222,7 @@ pub struct NoopRunCtxContext {}
 impl RunCtxContext for NoopRunCtxContext {}
 
 #[derive(Debug)]
-pub struct OOMHandler<'a, R, IC, RC, RCC>
+pub struct OOMHandler<'a, R, IC, RC, RCC, S>
 where
     R: Stage + Adjustable + OutId + 'static,
     <<R as Stage>::In<'static> as Data>::SubSelect: Default + Debug + Adjustable,
@@ -229,15 +234,17 @@ where
     IC: InputContext<R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
+    S: Adjustable + Debug + Clone + Default,
+    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>>
 {
-    adjusters: Vec<Adjusters<'a, R, IC, RC, RCC>>,
+    adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
     statistics: Option<&'a Arc<Statistics>>,
     pd_rc: PhantomData<RC>,
     pd_rcc: PhantomData<RCC>,
 }
 
-impl<'a, R, IC, RC, RCC> OOMHandler<'a, R, IC, RC, RCC>
+impl<'a, R, IC, RC, RCC, S> OOMHandler<'a, R, IC, RC, RCC, S>
 where
     R: Stage + Adjustable + OutId + 'static,
     <<R as Stage>::In<'static> as Data>::SubSelect: Debug + Adjustable,
@@ -250,9 +257,11 @@ where
     IC: InputContext<R> + Debug,
     RC: RunnableContext + Debug,
     RCC: RunCtxContext + Debug,
+    S: Adjustable + Debug + Clone + Default,
+    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>>
 {
     pub fn new(
-        adjusters: Vec<Adjusters<'a, R, IC, RC, RCC>>,
+        adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
         statistics: Option<&'a Arc<Statistics>>,
     ) -> Self {
         Self {
@@ -272,7 +281,7 @@ where
         mut contexts: Contexts<R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-        <R as Stage>::In<'static>: WithId + Send + Sync,
+        <R as Stage>::In<'static>: WithId +  Select<S, Output=<R as Stage>::In<'static>> + Send + Sync,
     {
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
@@ -303,8 +312,7 @@ where
 
         let mut i = 0;
 
-        let mut last_input_adjuster =
-            None::<&Box<dyn Adjuster<IC, A = <<R as Stage>::In<'static> as Data>::SubSelect>>>;
+        let mut last_input_adjuster = None::<&Box<dyn Adjuster<IC, A = S>>>;
         let mut last_task_adjuster = None::<&Box<dyn Adjuster<RC, A = R>>>;
         let mut last_context_adjuster = None::<&Box<dyn Adjuster<RCC, A = Arc<RwLock<R::Ctx>>>>>;
 
@@ -342,7 +350,7 @@ where
                                                 .adjust(
                                                     input_select_adjusted
                                                         .as_ref()
-                                                        .unwrap_or(&<<R as Stage>::In<'static> as Data>::SubSelect::default())/*.unwrap_or(input_guard_op.as_ref().unwrap())*/,
+                                                        .unwrap_or(&S::default())/*.unwrap_or(input_guard_op.as_ref().unwrap())*/,
                                                     &mut contexts.input,
                                                 )
                                                 .await?,
@@ -387,7 +395,7 @@ where
                                     input_select_adjusted.as_ref()
                                 {
                                     input
-                                        .with_selected_data(device_idx, selector, None, |data| {
+                                        .with_selected_data(device_idx, selector.clone(), None, |data| {
                                             Arc::clone(task_to_run)
                                                 .do_run(data, Arc::clone(&run_context))
                                         })
@@ -500,13 +508,17 @@ pub(crate) mod test_types {
         pub data: DummyTensor,
     }
 
-    // impl WithId for TestInput{
-    //     type ID = TestId;
-    //
-    //     fn id(&self) -> &Self::ID {
-    //         todo!()
-    //     }
-    // }
+    impl Select<Range<[usize;1]>> for TestInput {
+        type Output = TestInput;
+
+        fn select(&self, selector: Range<[usize; 1]>) -> Self::Output {
+            TestInput {
+                id: self.id.clone(),
+                data: DummyTensor(self.data.0[selector.start[0]..selector.end[0]].to_vec())//.0[selector.start..selector.end])
+            }
+        }
+    }
+
     impl Input for TestInput {}
 
     impl Adjustable for TestInput {}

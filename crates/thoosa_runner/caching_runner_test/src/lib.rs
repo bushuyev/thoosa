@@ -3,7 +3,7 @@ use caching_runner::adjusters::permits::{
     PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex,
 };
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use caching_runner::common::{Data, OutId, RunCtx};
+use caching_runner::common::{Data, OutId, RunCtx, Select};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{
     Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext,
@@ -40,8 +40,8 @@ pub enum FailUntil {
 }
 
 //for tests in torch_runner
-pub struct ClcOOMRunner<R: Stage + 'static> {
-    pd: PhantomData<R>,
+pub struct ClcOOMRunner<R: Stage + 'static, S:Debug+Default+Clone+Adjustable> {
+    pd: PhantomData<(R,S)>,
     config: OOMRunnerConfig,
     output_builder: Box<
         dyn Fn(<<R as Stage>::Out as WithId>::ID) -> Box<dyn OutputBuilder<O = <R as Stage>::Out>>
@@ -50,7 +50,7 @@ pub struct ClcOOMRunner<R: Stage + 'static> {
     >,
 }
 
-impl<R: Stage + Stage> Debug for ClcOOMRunner<R> {
+impl<R: Stage + Stage, S:Debug+Default+Clone+Adjustable> Debug for ClcOOMRunner<R, S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MulOOMRunner")
             .field("config", &self.config)
@@ -58,7 +58,7 @@ impl<R: Stage + Stage> Debug for ClcOOMRunner<R> {
     }
 }
 
-impl<R> ClcOOMRunner<R>
+impl<R, S:Debug+Default+Clone+Adjustable> ClcOOMRunner<R, S>
 where
     R: Stage + Adjustable + 'static,
     StageInStatic<R>: Adjustable,
@@ -103,6 +103,7 @@ where
         for<'a, 'b> &'a StageInMetrics<R>: Add<&'b StageInMetrics<R>, Output = StageInMetrics<R>>,
         StageInMetrics<R>: PartialOrd,
         StageInSubSelect<R>: Adjustable,
+        <R as Stage>::In<'static>: Select<std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>, Output=<R as Stage>::In<'static>>
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();
@@ -319,7 +320,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::min;
+    use std::cmp::{max, min};
     use std::collections::{HashMap, HashSet};
     use std::fmt::Debug;
 
@@ -328,7 +329,7 @@ mod tests {
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{Data, DropIf, OutId, RunCtx};
+    use caching_runner::common::{Data, DropIf, OutId, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -338,6 +339,7 @@ mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use std::mem;
+    use std::ops::Range;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
@@ -485,6 +487,17 @@ mod tests {
     struct DLoadedTensor {
         id: SimpleId,
         data: DummyTensor,
+    }
+
+    impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
+        type Output = DLoadedTensor;
+
+        fn select(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Self::Output {
+            DLoadedTensor {
+                id: self.id.clone(),
+                data: DummyTensor(self.data.0[selector.start as usize..min(self.data.0.len(), selector.end as usize)].to_vec()),
+            }
+        }
     }
 
     impl DLoadedTensor {}
@@ -849,7 +862,7 @@ mod tests {
 
         loader: Arc<DummyLoader>,
         mul: Arc<DMulTask>,
-        mul_oom_runner: ClcOOMRunner<DMulTask>,
+        mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>>,
     }
 
     #[async_trait]
@@ -880,7 +893,7 @@ mod tests {
             k: f32,
             fail_until: FailUntil,
             len: usize,
-            oom_runner: ClcOOMRunner<DMulTask>,
+            oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>>,
         ) -> Self {
             Self {
                 id,

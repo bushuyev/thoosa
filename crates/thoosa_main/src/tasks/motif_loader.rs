@@ -99,7 +99,7 @@ impl <SRC> Stage for MotifLoader <SRC>
                     .collect(),
             );
 
-            t.with_selected_data(device_idx, &selector, None, |tt| {
+            t.with_selected_data(device_idx, selector, None, |tt| {
 
                 debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t());
                 Ok(())

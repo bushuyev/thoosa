@@ -37,22 +37,12 @@ pub trait Data: Debug + CopyToDevice {
     fn device(&self) -> usize;
 }
 
-pub trait Select<S>: Data {
+pub trait Select<S> {
     type Output: CopyToDevice;
 
     fn select(&self, selector: S) -> Self::Output;
 }
 
-impl<T> Select<&<T as Data>::SubSelect> for T
-where
-    T: Data,
-{
-    type Output = T::Sub;
-
-    fn select(&self, selector: &<T as Data>::SubSelect) -> Self::Output {
-        self.subview(selector)
-    }
-}
 
 
 #[async_trait]
