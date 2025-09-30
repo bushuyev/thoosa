@@ -146,8 +146,6 @@ pub enum LabelNetInputTensors {
 
 impl Dims for LabelNetInputTensors {
     type Metrics = AnyMetrics;
-    type Sub = AnySub;
-    type SubSelect = ();
 }
 
 impl From<ThoTensor<ChannelsMotifsData, CachableId>>
