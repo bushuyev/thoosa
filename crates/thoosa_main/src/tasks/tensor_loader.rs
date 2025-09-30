@@ -245,7 +245,7 @@ mod tests {
             .map_err(|e| ThoosaError::new("zzz"))?;
 
         let result = loaded
-            .with_data(0, None, None, |v| {
+            .with_data(0, None, |v| {
                 println!("loaded: v={v:?}");
                 v.run_inner(|t| {
                     Ok(Tensor::from_slice(&data)
