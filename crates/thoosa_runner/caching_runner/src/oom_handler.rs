@@ -533,15 +533,6 @@ pub(crate) mod test_types {
             [self.data.0.len()]
         }
 
-        fn subview(&self, select: &Self::SubSelect) -> Self::Sub {
-            TestInput {
-                id: self.id.clone(),
-                data: DummyTensor {
-                    0: self.data.0[select.start[0]..select.end[0]].to_vec(),
-                },
-            }
-        }
-
         fn device(&self) -> usize {
             0
         }

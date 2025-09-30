@@ -41,9 +41,6 @@ impl<D: Dims<Sub = Self>, Id: Named + Clone> Data for ThoTensor2<D, Id> {
             .unwrap() //TODO
     }
 
-    fn subview(&self, select: &Self::SubSelect) -> Self::Sub {
-        D::subview(self, select)
-    }
 
     fn device(&self) -> usize {
         ThoDevice::from(self.t.device()).ordinal()
