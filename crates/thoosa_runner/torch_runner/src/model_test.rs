@@ -133,8 +133,6 @@ mod tests {
     struct ABData;
     impl Dims for ABData {
         type Metrics = ABMetrics;
-        type Sub = ThoTensor2<ABData, SimpleId>;
-        type SubSelect = std::ops::Range<Self::Metrics>;
 
     }
     impl Adjustable for ThoTensor2<ABData, SimpleId> {}
@@ -537,8 +535,6 @@ mod tests {
     struct ClsOut;
     impl Dims for ClsOut {
         type Metrics = TwoDimsMetrics;
-        type Sub = ThoTensor2<ClsOut, SimpleId>;
-        type SubSelect = std::ops::Range<Self::Metrics>;
     }
 
     impl ClsOut {
