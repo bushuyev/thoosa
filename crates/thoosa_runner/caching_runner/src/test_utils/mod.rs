@@ -87,8 +87,18 @@ impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
     type Output = MockDataWithId;
 
     fn select(&self, selector: Range<[usize; 1]>) -> Self::Output {
-        //TODO Selectoer
-        todo!()
+        let mut data = MockData::new();
+        let len = selector.end[0].saturating_sub(selector.start[0]);
+        data.expect_size().return_const([len]);
+
+        let mut with_id = MockWithId::new();
+        with_id.expect_id().return_const(self.id().clone());
+
+        MockDataWithId {
+            data,
+            with_id,
+            device: Some(self.device.unwrap_or(0)),
+        }
     }
 }
 

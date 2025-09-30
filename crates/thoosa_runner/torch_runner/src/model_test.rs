@@ -15,7 +15,7 @@ mod tests {
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{DropIf, OutId, RunCtx};
+    use caching_runner::common::{DropIf, OutId, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::{
         Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler,
@@ -145,6 +145,18 @@ mod tests {
         }
     }
     impl Adjustable for ThoTensor2<ABData, SimpleId> {}
+
+    impl Select<std::ops::Range<ABMetrics>> for ThoTensor2<ABData, SimpleId> {
+        type Output = ThoTensor2<ABData, SimpleId>;
+
+        fn select(&self, selector: std::ops::Range<ABMetrics>) -> Self::Output {
+            use std::cmp::min;
+            let size = ABMetrics::from(self.t().size());
+            let d0 = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
+
+            ThoTensor2::new(self.id().clone(), self.t().i((d0, ..)))
+        }
+    }
 
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     struct ABMetrics {
