@@ -28,10 +28,6 @@ pub trait Data: Debug + CopyToDevice {
 
     fn size(&self) -> Self::Metrics;
 
-    fn subview(&self, _select: &Self::SubSelect) -> Self::Sub {
-        unimplemented!()
-    }
-
     fn track_used_in(&self, _token: &'static str) {}
 
     fn device(&self) -> usize;
