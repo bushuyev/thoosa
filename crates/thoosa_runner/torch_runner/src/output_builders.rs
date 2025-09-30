@@ -18,14 +18,14 @@ pub enum BuildAs {
 #[derive(Debug)]
 pub struct SingleDimTensorOutputBuilder<D>
 where
-    D: Dims<Sub = ThoTensor2<D, SimpleId>>,
+    D: Dims,
 {
     output: ThoTensor2<D, thoosa_shared::traits::SimpleId>,
     added_partial_output_len: i64,
     add: BuildAs,
 }
 
-impl<D: Dims<Sub = ThoTensor2<D, SimpleId>>> SingleDimTensorOutputBuilder<D> {
+impl<D: Dims> SingleDimTensorOutputBuilder<D> {
     #[allow(dead_code)]
     pub fn new(
         id: <ThoTensor2<D, thoosa_shared::traits::SimpleId> as WithId>::ID,
@@ -43,7 +43,7 @@ impl<D: Dims<Sub = ThoTensor2<D, SimpleId>>> SingleDimTensorOutputBuilder<D> {
 
 impl<D> OutputBuilder for SingleDimTensorOutputBuilder<D>
 where
-    D: Dims<Sub = ThoTensor2<D, SimpleId>>,
+    D: Dims,
 {
     type O = ThoTensor2<D, thoosa_shared::traits::SimpleId>;
 
@@ -87,8 +87,6 @@ mod tests {
     struct TestDims;
     impl Dims for TestDims {
         type Metrics = AnyMetrics;
-        type Sub = ThoTensor2<TestDims, SimpleId>;
-        type SubSelect = ();
     }
 
     #[test]

@@ -28,7 +28,7 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone> {
     pd: PhantomData<D>,
 }
 
-impl<D: Dims<Sub = Self>, Id: Named + Clone> Data for ThoTensor2<D, Id> {
+impl<D: Dims, Id: Named + Clone> Data for ThoTensor2<D, Id> {
     type Metrics = D::Metrics;
     
 
@@ -55,7 +55,7 @@ impl<D: Dims, Id: Named + Clone> Debug for ThoTensor2<D, Id> {
     }
 }
 
-impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
+impl<D: Dims, Id: Named + Clone> ThoTensor2<D, Id> {
     pub fn new(id: Id, tensor: Tensor) -> Self {
         Self {
             id,
@@ -118,7 +118,7 @@ impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
         ThoTensor2::new(self.id.clone(), &self.t + &rhs.t)
     }
 
-    pub fn mm<RD: Dims<Sub = ThoTensor2<RD, Id>>>(
+    pub fn mm<RD: Dims>(
         &self,
         rhs: &ThoTensor2<RD, Id>,
     ) -> Result<ThoTensor2<D, Id>, ThoosaError> {
@@ -144,7 +144,7 @@ impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
         ))
     }
 
-    pub fn hadamard<RD: Dims<Sub = ThoTensor2<RD, Id>>>(
+    pub fn hadamard<RD: Dims>(
         &self,
         rhs: &ThoTensor2<RD, Id>,
         to_id: Id,
@@ -167,8 +167,8 @@ impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
 
     pub fn run_inner_with_params<
         F,
-        OutDim: Dims<Sub = ThoTensor2<OutDim, Id>>,
-        P: Dims<Sub = ThoTensor2<P, Id>>,
+        OutDim: Dims,
+        P: Dims,
     >(
         &self,
         id: Id,
@@ -220,13 +220,13 @@ impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensor2<D, Id> {
     }
 }
 
-impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> Display for ThoTensor2<D, Id> {
+impl<D: Dims, Id: Named + Clone> Display for ThoTensor2<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.t, f)
     }
 }
 
-impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id> WithId for ThoTensor2<D, Id>
+impl<D: Dims, Id> WithId for ThoTensor2<D, Id>
 where
     Id: CachableIdTr + Send + Sync + Eq + std::hash::Hash + Clone + std::fmt::Debug + Named,
 {
@@ -237,13 +237,13 @@ where
     }
 }
 
-impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id> Input for ThoTensor2<D, Id> where
+impl<D: Dims, Id> Input for ThoTensor2<D, Id> where
     Id: Named + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash + 'static
 {
 }
 
 #[async_trait]
-impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id> CopyToDevice for ThoTensor2<D, Id>
+impl<D: Dims, Id> CopyToDevice for ThoTensor2<D, Id>
 where
     Id: Named + Clone, //+ Send + Sync + Eq + std::hash::Hash + std::fmt::Debug //+ 'static
 {
@@ -270,12 +270,12 @@ where
     }
 }
 
-impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id> Output for ThoTensor2<D, Id> where
+impl<D: Dims, Id> Output for ThoTensor2<D, Id> where
     Id: Named + Clone + std::fmt::Debug + Send + Sync + Eq + std::hash::Hash + 'static
 {
 }
 
-unsafe impl<D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> Sync for ThoTensor2<D, Id> {}
+unsafe impl<D: Dims, Id: Named + Clone> Sync for ThoTensor2<D, Id> {}
 
 pub struct ThoTensorMut<'a, D: Dims, Id: Named + Clone> {
     _id: &'a Id,
@@ -285,7 +285,7 @@ pub struct ThoTensorMut<'a, D: Dims, Id: Named + Clone> {
 unsafe impl<'a, D: Dims, Id: Named + Clone> Send for ThoTensorMut<'a, D, Id> {}
 // (no Sync)
 
-impl<'a, D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
+impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
         Self {
             _id: id,

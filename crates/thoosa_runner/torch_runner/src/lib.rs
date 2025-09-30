@@ -20,19 +20,19 @@ use tch::{Device, Kind, Tensor};
 use thoosa_common::dims::Dims;
 use thoosa_shared::traits::Named;
 
-pub struct ThoTensorView<'a, D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> {
+pub struct ThoTensorView<'a, D: Dims, Id: Named + Clone> {
     t: Tensor,
     _owner: &'a ThoTensor2<D, Id>,
 }
-unsafe impl<'a, D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> Sync
+unsafe impl<'a, D: Dims, Id: Named + Clone> Sync
     for ThoTensorView<'a, D, Id>
 {
 }
-unsafe impl<'a, D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> Send
+unsafe impl<'a, D: Dims, Id: Named + Clone> Send
     for ThoTensorView<'a, D, Id>
 {
 }
-impl<'a, D: Dims<Sub = ThoTensor2<D, Id>>, Id: Named + Clone> ThoTensorView<'a, D, Id> {
+impl<'a, D: Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
     pub fn select(self, dim: i64, index: i64) -> Self {
         Self {
             t: self.t.select(dim, index),
@@ -242,8 +242,6 @@ mod tests {
     struct LoadedTensor;
 impl Dims for LoadedTensor {
     type Metrics = TwoDimsMetrics;
-    type Sub = ThoTensor2<LoadedTensor, SimpleId>;
-    type SubSelect = std::ops::Range<Self::Metrics>;
 
 }
 impl LoadedTensor {}
@@ -379,8 +377,6 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
 
     impl Dims for MulK {
         type Metrics = TwoDimsMetrics;
-        type Sub = ThoTensor2<MulK, SimpleId>;
-        type SubSelect = std::ops::Range<Self::Metrics>;
     }
 
     #[derive(Debug, cached_derive::Cached)]
@@ -466,8 +462,6 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
     struct ClcTaskOutput;
     impl Dims for ClcTaskOutput {
         type Metrics = TwoDimsMetrics;
-        type Sub = ThoTensor2<ClcTaskOutput, SimpleId>;
-        type SubSelect = std::ops::Range<Self::Metrics>;
     }
 
     impl LoadedTensor {
