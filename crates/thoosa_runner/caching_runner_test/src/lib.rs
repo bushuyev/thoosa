@@ -341,7 +341,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
-    use thoosa_common::tho_tensor::CopyToDevice;
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Named, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};

@@ -18,7 +18,7 @@ use std::ops::Range;
 use std::process::Output;
 use std::sync::Arc;
 use thoosa_common::panic_to_err_async;
-use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 use thoosa_shared::{MyError, ThoosaError};
 use tracing::instrument;
