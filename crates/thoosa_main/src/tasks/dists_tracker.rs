@@ -16,7 +16,7 @@ use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::CopyToDevice;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoosaError;

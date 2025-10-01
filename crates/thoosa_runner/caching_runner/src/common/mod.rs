@@ -10,7 +10,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::ops::{Deref, Range};
 use std::sync::Arc;
-use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
 

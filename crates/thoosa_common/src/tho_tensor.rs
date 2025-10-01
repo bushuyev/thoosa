@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::{Device, Kind, Tensor};
-use thoosa_shared::ThoosaError;
+use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::applicables_runner::{CachableId, Input, Output};
 use thoosa_shared::traits::{Named, WithId};
 use torch_sys::IntList;
@@ -314,13 +314,6 @@ where
 
         ThoTensor::new(self.id.clone(), copy)
     }
-}
-
-#[async_trait]
-#[delegatable_trait]
-#[automock]
-pub trait CopyToDevice {
-    async fn copy_to_device(&self, dst_device: usize) -> Self;
 }
 
 pub struct ThoTensorMut<'a, D: Dims, Id: Named + Clone> {
