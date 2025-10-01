@@ -15,6 +15,7 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -297,6 +298,21 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
     pub fn id(&self) -> &<O as WithId>::ID {
         &self.id
     }
+
+    pub async fn take_data(
+        self,
+        to_device_idx: usize,
+    ) -> Result<O, ThoosaError> {
+
+        let _ = self.load_from_any_device_(to_device_idx).await?;
+
+        let mut v = self.cached_data.into_vec();
+        let lock = v.swap_remove(to_device_idx);
+        let opt: Option<O> = lock.into_inner();
+        Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", self.id)))
+
+    }
+
 
     pub async fn with_data<R>(
         &self,
