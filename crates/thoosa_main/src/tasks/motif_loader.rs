@@ -72,7 +72,7 @@ impl <SRC> Stage for MotifLoader <SRC>
             &self.store.read().list_run_config_values(run_id)?,
         )?;
 
-        let tensors_ids_slices = slices
+        let resource_ids_slices = slices
             .iter()
             .fold(HashMap::new(), |mut a, slice| {
             a.entry(slice.0.clone()) //TODO clone
@@ -86,7 +86,7 @@ impl <SRC> Stage for MotifLoader <SRC>
 
         debug!("MotifLoader::run: window={window:?} device_idx={device_idx}");
 
-        for (resource_id, slices) in tensors_ids_slices {
+        for (resource_id, slices) in resource_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
 
             let selector = ChannelsDataVec {
@@ -94,8 +94,7 @@ impl <SRC> Stage for MotifLoader <SRC>
                 slices
                     .into_iter()
                     .map(|slice| {
-                        ChannelsDataMetrics::new(channel, slice as i64)
-                            ..ChannelsDataMetrics::new(channel + 1, (slice + window) as i64)
+                        ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel + 1, (slice + window) as i64)
                     })
                     .collect(),
             };
@@ -134,7 +133,7 @@ mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper, make_wrapper_t};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_0()-> Result<(), ThoosaError> {
+    async fn load_motifs() -> Result<(), ThoosaError> {
         set_max_level(Trace);
         GlobalCtx::init_devices(2);
 

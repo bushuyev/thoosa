@@ -70,12 +70,7 @@ impl UnfoldParams {
 
 pub struct CrossBatchClc<F, R, CrossBatchCtx>
 where
-    F: for<'a> Fn(
-        Tensor,
-        Tensor,
-        &BatchInput<'a, &'a Arc<Resource>>,
-        &CrossBatchCtx,
-    ) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
 {
     batch_clc: F,
     cross_batch_ctx: CrossBatchCtx,
@@ -282,6 +277,9 @@ mod tests {
 
     #[test]
     fn test_0() -> Result<(), ThoosaError> {
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
         let cross_batch_clc = Arc::new(CrossBatchClc::new(
             |t_0, t_1, input, ctx| {
                 debug!("t_0=\n{t_0}");
@@ -315,7 +313,10 @@ mod tests {
             &chunk_0_resources.as_slice(),
             &chunk_1_resources.as_slice(),
         );
-        cross_batch_clc.do_run(&input, Arc::new(RwLock::new(RunCtx2::new(0, 0, "test"))))?;
+        let out = cross_batch_clc.do_run(&input, Arc::new(RwLock::new(RunCtx2::new(0, 0, "test"))))?;
+
+        println!("{:?}", out);
+        //TODO asserts
 
         Ok(())
     }

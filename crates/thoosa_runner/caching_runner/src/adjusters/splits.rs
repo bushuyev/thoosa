@@ -7,7 +7,6 @@ use log::debug;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
-use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::ThoosaError;
 
 #[derive(Debug)]
