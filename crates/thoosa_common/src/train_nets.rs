@@ -9,7 +9,7 @@ use crate::utils::{
     cuda_mem, run_split_on_oom, tensor_mem_size, train_2,
 };
 use crate::ws::Workspace;
-use crate::{panic_to_err, panic_to_err_async};
+use thoosa_shared::{panic_to_err, panic_to_err_async};
 use clap::clap_derive::Args;
 use crossbeam_utils::sync::WaitGroup;
 use futures::FutureExt;
