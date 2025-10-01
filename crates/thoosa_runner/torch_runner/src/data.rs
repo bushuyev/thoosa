@@ -12,7 +12,7 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::tensor_mem_size;
 use thoosa_common::dims::Dims;
 use thoosa_common::panic_to_err;
-use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
@@ -30,7 +30,7 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone> {
 
 impl<D: Dims, Id: Named + Clone> Data for ThoTensor2<D, Id> {
     type Metrics = D::Metrics;
-    
+
 
     fn size(&self) -> Self::Metrics {
         self.t

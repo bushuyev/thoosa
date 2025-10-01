@@ -33,7 +33,7 @@ mod tests {
     use std::sync::OnceLock;
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
-    use thoosa_common::tho_tensor::CopyToDevice;
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};

@@ -5,7 +5,7 @@ use crate::common::*;
 use ambassador::Delegate;
 use async_trait::async_trait;
 use log::debug;
-use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::traits::*;
 use thoosa_shared::traits::{DummyCachableId, MockWithId};
 
@@ -105,7 +105,7 @@ impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
 #[cfg(test)]
 impl Data for MockDataWithId {
     type Metrics = [usize; 1];
-    
+
 
     fn size(&self) -> Self::Metrics {
         self.data.size()

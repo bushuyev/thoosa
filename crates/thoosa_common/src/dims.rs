@@ -1,8 +1,9 @@
-use crate::tho_tensor::{CopyToDevice, ThoTensor};
+use crate::tho_tensor::{ThoTensor};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display};
 use std::pin::Pin;
 use thoosa_shared::applicables_runner::CachableId;
+use thoosa_shared::CopyToDevice;
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
