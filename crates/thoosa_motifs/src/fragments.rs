@@ -26,7 +26,7 @@ use thoosa_common::find_motifs_run_config::{
     FindMotifsApplicable, FindMotifsRunConfig, FindMotifsRunConfigOptions,
 };
 use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
-use thoosa_common::panic_to_err;
+use thoosa_shared::panic_to_err;
 use thoosa_common::utils::*;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::TensorIdSliceIdx;

@@ -11,7 +11,7 @@ use thoosa_common::applicables::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::tensor_mem_size;
 use thoosa_common::dims::Dims;
-use thoosa_common::panic_to_err;
+use thoosa_shared::panic_to_err;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
