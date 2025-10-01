@@ -142,10 +142,10 @@ mod tests {
 
         fn select(&self, selector: std::ops::Range<ABMetrics>) -> Self::Output {
             use std::cmp::min;
-            let size = ABMetrics::from(self.t().size());
+            let size = ABMetrics::from(self.t_ref().size());
             let d0 = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
 
-            ThoTensor2::new(self.id().clone(), self.t().i((d0, ..)))
+            ThoTensor2::new(self.id().clone(), self.t_ref().i((d0, ..)))
         }
     }
 
@@ -806,7 +806,7 @@ mod tests {
         debug!("acc={acc:?}");
 
         acc.with_data(0, None, |acc_t| {
-            debug!("acc_t={acc_t:?} t=\n{}", acc_t.t());
+            debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
             // Dim impls are to define domain-specific operations on tensors
             let v = ClsOut::accuracy(acc_t);
@@ -912,7 +912,7 @@ mod tests {
             .await?;
 
         acc.with_data(1, None, |acc| {
-            debug!("acc={}", acc.t());
+            debug!("acc={}", acc.t_ref());
 
             let v = ClsOut::accuracy(acc);
             assert!(v >= 0.5, "should train after permits escalation: {v}");

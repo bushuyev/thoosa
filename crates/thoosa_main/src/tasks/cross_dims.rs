@@ -44,7 +44,7 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
             stacked,
         );
 
-        trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t());
+        trace!("ChannelsData2::select: Vec sub.t=\n{}", sub.t_ref());
 
         sub
     }
@@ -59,7 +59,7 @@ impl ChannelsData2 {
         debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
         trace!("ChannelsData2::subview: t=\n{t}");
 
-        let sub_t = t.t().i((channel_range.clone(), data_range.clone()));
+        let sub_t = t.t_ref().i((channel_range.clone(), data_range.clone()));
         sub_t
     }
 }
