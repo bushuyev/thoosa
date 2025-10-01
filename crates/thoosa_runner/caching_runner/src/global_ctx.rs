@@ -53,7 +53,7 @@ pub struct GlobalCtx {
     semaphores: Vec<Box<dyn PermitSource>>,
     device_count: usize,
     device_locks: Vec<Arc<AsyncRwLock<()>>>,
-    caches: tokio::sync::RwLock<Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)>>,
+    caches: tokio::sync::RwLock<HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>,
     is_all_on_cpu: Vec<AtomicBool>,
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
     cache_age: AtomicU64, //for tracking CPU-only lifetime
@@ -77,7 +77,7 @@ impl GlobalCtx {
                 .map(|_| Arc::new(AsyncRwLock::new(())))
                 .collect(),
 
-            caches: tokio::sync::RwLock::new(vec![]),
+            caches: tokio::sync::RwLock::new(HashMap::new()),
 
             is_all_on_cpu: (0..device_count).map(|_| AtomicBool::new(false)).collect(),
 
@@ -101,7 +101,11 @@ impl GlobalCtx {
     }
 
     pub async fn register_cache(&self, cache: (&'static str, &'static dyn FuturesRunnerMapPurger)) {
-        self.caches.write().await.push(cache);
+        assert!(self.caches.write().await.insert(cache.0, cache.1).is_none());
+    }
+
+    pub async fn remove_cache(&self, key:&'static str) {
+        assert!(self.caches.write().await.remove(key).is_some());
     }
 
     pub fn global() -> &'static Self {

@@ -99,7 +99,7 @@ impl <SRC> Stage for MotifLoader <SRC>
                     .collect(),
             };
 
-            t.with_selected_data(device_idx, selector, None, |tt| {
+            t.with_selected_data_ref(device_idx, selector, None, |tt| {
 
                 debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t());
                 Ok(())
@@ -120,6 +120,7 @@ mod tests {
     use parking_lot::RwLock;
     use caching_runner::common::cachable::Cached;
     use caching_runner::global_ctx::GlobalCtx;
+    use caching_runner::tmp_cache::TmpCached;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
     use thoosa_properties_map::ToHashmap;
@@ -127,6 +128,8 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
     use thoosa_store::{MockStore, MockStoreBuilder, Store};
+    use torch_runner::data::ThoTensor2;
+    use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
@@ -173,6 +176,7 @@ mod tests {
 
         let r = motif.with_data(0,  None,|t|{
             println!("motif.t={}", t.t());
+
 
             Ok(true)
         }).await?;
