@@ -15,6 +15,7 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -298,6 +299,21 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
         &self.id
     }
 
+    pub async fn take_data(
+        self,
+        to_device_idx: usize,
+    ) -> Result<O, ThoosaError> {
+
+        let _ = self.load_from_any_device_(to_device_idx).await?;
+
+        let mut v = self.cached_data.into_vec();
+        let lock = v.swap_remove(to_device_idx);
+        let opt: Option<O> = lock.into_inner();
+        Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", self.id)))
+
+    }
+
+
     pub async fn with_data<R>(
         &self,
         to_device_idx: usize,
@@ -314,7 +330,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
         }
     }
 
-    pub async fn with_selected_data<S, R>(
+    pub async fn with_selected_data_ref<S, R>(
         &self,
         to_device_idx: usize,
         selector: S,
@@ -693,7 +709,7 @@ mod tests {
 
         //TODO Selectoer ref
         tested
-            .with_selected_data(1, ([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
+            .with_selected_data_ref(1, ([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
             .await?;
 
         Ok(())

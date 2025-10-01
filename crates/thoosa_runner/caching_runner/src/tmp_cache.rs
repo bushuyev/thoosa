@@ -1,9 +1,13 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::mem;
 use std::sync::Arc;
 use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
+use futures_util::{FutureExt, StreamExt};
+use tokio::io::AsyncWriteExt;
+use tokio::runtime::Handle;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, SimpleId, WithId};
@@ -15,57 +19,83 @@ use crate::purge::FuturesRunnerMapPurger;
 
 #[derive(Debug)]
 pub struct TmpCached<D:Data + WithId  + Output+ Debug + Send + Sync + 'static> {
-    pd:PhantomData<D>,
+    name: &'static str,
+    cache_area:u64,
+    map: Box<DashMap<
+        <D as WithId>::ID,
+        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>,
+    >>
+
 }
 
-static __cached_map_ptr_for_MotifLoader: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-#[allow(non_upper_case_globals)]
-static __cached_register_for_MotifLoader: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
+    pub fn insert(&self, value: D) {
+        let cache_area = self.cache_area;
+        self.map.insert(
+            value.id().clone(),
+            async move {
+                Ok(Arc::new(DataCacheWrapper::new(value, 0, GlobalCtx::global().device_count(), cache_area)))
+            }.boxed().shared()
+        );
+
+    }
+
+    pub async fn take_all(mut self, device:usize) -> Vec<D> {
+        let mut res = vec![];
+        for (key, val) in mem::take(&mut self.map).into_iter() {
+            res.push(
+
+                Arc::into_inner(val.await.unwrap()).unwrap().take_data(device).await.unwrap()
+
+            );
+        }
+
+        res
+    }
+
+}
 
 impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
+    pub async fn new(name: &'static str) -> Self {
 
-    async fn cache() -> &'static DashMap<
-        SimpleId,
-        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>,
-    >
-    where
-        Self: Sized {
+        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>>> = Box::new(Default::default());
 
-        let ptr_ref = __cached_map_ptr_for_MotifLoader.get_or_init(|| {
-            let map: &'static dashmap::DashMap<SimpleId, Shared<BoxFuture<'static, Result<Arc<D>, ThoosaError>>>> = Box::leak(Box::new(Default::default()));
 
-            map as *const DashMap<SimpleId, Shared<BoxFuture<'static, Result<Arc<D>, ThoosaError>>>, > as usize
-        });
-        let map: &'static DashMap<SimpleId, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>, > = unsafe {
-            &*((*ptr_ref) as *const DashMap<SimpleId, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>> >)
+        let ptr_ref: *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>> = std::ptr::from_ref(&*map);
+
+        let map_ref: &'static DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>, > = unsafe {
+            &*(ptr_ref as *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>> >)
         };
 
-        let cache_name: &'static str = "tmp";
-        __cached_register_for_MotifLoader.get_or_init(|| async move { GlobalCtx::global().register_cache((cache_name, map as &'static dyn FuturesRunnerMapPurger,)).await; }).await;
-        map
-    }
+        GlobalCtx::global().register_cache((name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
 
-    pub fn new() -> Self {
-        Self { pd: PhantomData }
+        Self {
+            name,
+            map,
+            cache_area: GlobalCtx::global().next_cache_area().expect("next_cache_area failed")
+        }
+
     }
 }
-#[async_trait::async_trait]
-impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> FuturesRunnerMapPurger for TmpCached<D> {
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoosaError> {
-        todo!()
-    }
 
-    async fn purge_cpu(&self, i: u64) {
-        todo!()
+impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> Drop for TmpCached<D> {
+    fn drop(&mut self) {
+        tokio::task::block_in_place(move || {
+            Handle::current().block_on(async move {
+                GlobalCtx::global().remove_cache(self.name).await
+            });
+        });
+
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::pin::Pin;
     use futures_util::FutureExt;
-    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{SimpleId, WithId};
     use crate::common::Data;
@@ -73,13 +103,14 @@ mod tests {
     use crate::tmp_cache::TmpCached;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_0(){
-       
+    async fn test_0() -> Result<(), ThoosaError> {
+
         GlobalCtx::init_devices(2);
 
         #[derive(Debug, Clone)]
         struct DummyData {
             id:SimpleId,
+            device:usize
         }
 
         impl CopyToDevice for DummyData {
@@ -88,7 +119,12 @@ mod tests {
                 'life0: 'async_trait,
                 Self: 'async_trait
             {
-                async {DummyData { id: self.id.clone() }}.shared().boxed()
+                async move {
+                    DummyData {
+                        id: self.id.clone(),
+                        device: dst_device,
+                    }
+                }.shared().boxed()
             }
         }
 
@@ -112,10 +148,29 @@ mod tests {
         }
         impl Output for DummyData {}
 
+        impl DummyData {
+            pub fn new(id: SimpleId, device:usize) -> Self {
+                Self { id, device}
+            }
+        }
 
-        let tmp_cache:TmpCached<DummyData> = TmpCached::new();
+
+        let tmp_cache:TmpCached<DummyData> = TmpCached::new("tmp").await;
 
 
+        tmp_cache.insert(DummyData::new("foo".into(), 1));
+
+
+        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;
+
+
+        let all = tmp_cache.take_all(1).await;
+
+        println!("{:?}", all);
+
+        assert_eq!(all[0].device, 1);
+
+        Ok(())
 
     }
 
