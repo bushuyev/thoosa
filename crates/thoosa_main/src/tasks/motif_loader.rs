@@ -11,13 +11,14 @@ use tch::Tensor;
 use cached_derive::Cached;
 use caching_runner::common::{Data, OutId, RunCtx};
 use caching_runner::common::runnable::Stage;
+use caching_runner::tmp_cache::TmpCached;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{DataId, WithId};
+use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_dims::{ChannelsDataMetrics, ChannelsDataVec, MotifSlices};
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataMetrics, ChannelsDataVec, MotifSlices};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 
@@ -86,6 +87,8 @@ impl <SRC> Stage for MotifLoader <SRC>
 
         debug!("MotifLoader::run: window={window:?} device_idx={device_idx}");
 
+        let tmp_cache:TmpCached<ThoTensor2<ChannelsData2, SimpleId>> = TmpCached::new("tmp").await;
+
         for (resource_id, slices) in resource_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
 
@@ -99,15 +102,16 @@ impl <SRC> Stage for MotifLoader <SRC>
                     .collect(),
             };
 
-            t.with_selected_data_ref(device_idx, selector, None, |tt| {
+            t.with_selected_data(device_idx, selector, |tt| {
+                debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
+                tmp_cache.insert(tt);
 
-                debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t());
                 Ok(())
             }).await?;
-            
+
         }
 
-        Ok(ThoTensor2::new(DataId(0), Tensor::rand(&[10, 100], FLOAT_CPU)))
+        Ok(ThoTensor2::new(DataId(0), Tensor::cat(tmp_cache.take_all(device_idx).await.into_iter().map(|tt|tt.t()).collect::<Vec<Tensor>>().as_slice(), 0)))
     }
 }
 
@@ -175,7 +179,7 @@ mod tests {
         let motif = motif_loader.run_cached(Arc::new(DataId::from(10)), ctx).await?;
 
         let r = motif.with_data(0,  None,|t|{
-            println!("motif.t={}", t.t());
+            println!("motif.t={}", t.t_ref());
 
 
             Ok(true)

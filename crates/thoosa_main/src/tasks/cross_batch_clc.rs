@@ -189,7 +189,7 @@ where
             input.tensors[0..input.b_0.len()]
                 .iter()
                 .map(|t| {
-                    let unfolded = t.t().unfold(
+                    let unfolded = t.t_ref().unfold(
                         self.unfold_params.dimension,
                         self.unfold_params.size,
                         self.unfold_params.step,
@@ -208,7 +208,7 @@ where
             input.tensors[input.b_0.len()..]
                 .iter()
                 .map(|t| {
-                    let unfolded = t.t().unfold(
+                    let unfolded = t.t_ref().unfold(
                         self.unfold_params.dimension,
                         self.unfold_params.size,
                         self.unfold_params.step,
