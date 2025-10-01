@@ -26,6 +26,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::{fmt, fs};
+use async_trait::async_trait;
+use ambassador::delegatable_trait;
+use mockall::automock;
 
 pub mod repeat_iter;
 pub mod resource;
@@ -1200,9 +1203,9 @@ mod shared_tests {
     use crate::pulse_v;
     use crate::val::NamedVal;
     use crate::{
-        RangeOrValue, ResourceType, ThoosaError, add_prefix, arg_prefix, avg_hist, batch_windows,
-        camel_to_snake, clc_num_batches, group_slices, make_combos, parse_range_str,
-        snake_to_camel, test_utils,
+        add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
+        make_combos, parse_range_str, snake_to_camel, test_utils, RangeOrValue,
+        ResourceType, ThoosaError,
     };
     use clap::{Args, Parser};
     use log::debug;
@@ -1781,4 +1784,11 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
     let json = format!("{}.{}", file_stem, new_extension);
     let json = parent.join(json);
     (file_stem, json)
+}
+
+#[async_trait]
+#[delegatable_trait]
+#[automock]
+pub trait CopyToDevice {
+    async fn copy_to_device(&self, dst_device: usize) -> Self;
 }

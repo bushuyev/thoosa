@@ -65,7 +65,7 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> FuturesRunnerMapPur
 mod tests {
     // use std::pin::Pin;
     // use futures_util::FutureExt;
-    // use thoosa_common::tho_tensor::CopyToDevice;
+    // use thoosa_shared::CopyToDevice;
     // use thoosa_shared::applicables_runner::Output;
     // use thoosa_shared::traits::{SimpleId, WithId};
     // use crate::common::Data;

@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tch::Tensor;
 use thoosa_common::dims::{AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
-use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};

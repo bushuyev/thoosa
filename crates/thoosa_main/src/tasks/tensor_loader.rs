@@ -11,7 +11,7 @@ use tch::Device;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::dims::Dims;
-use thoosa_common::tho_tensor::CopyToDevice;
+use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
