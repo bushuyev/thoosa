@@ -1792,3 +1792,65 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
 pub trait CopyToDevice {
     async fn copy_to_device(&self, dst_device: usize) -> Self;
 }
+
+
+
+#[macro_export]
+macro_rules! panic_to_err_async {
+    ($expr:expr) => {{
+        let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
+
+        match x {
+            //no panic
+            Ok(inner_result) => match inner_result.await {
+                Ok(val) => Ok(val),
+                Err(err) => Err(thoosa_shared::ThoosaError::from(err)),
+            },
+            //panic
+            Err(e) => {
+                if let Some(msg) = e.downcast_ref::<String>() {
+                    log::debug!("thoosa_err String: {msg}");
+                    Err(thoosa_shared::ThoosaError::from(msg))
+                //TODO
+                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
+                //     Err(*thoosa_error)
+                } else if let Some(msg) = e.downcast_ref::<&str>() {
+                    log::debug!("thoosa_err str: {msg}");
+                    Err(thoosa_shared::ThoosaError::from(*msg))
+                } else {
+                    log::debug!("thoosa_err unknown: {e:?}");
+                    Err(thoosa_shared::ThoosaError::from(format!("{e:?}")))
+                }
+            }
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! panic_to_err {
+    ($expr:expr) => {{
+        match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| $expr)) {
+            //no panic
+            Ok(inner_result) => match inner_result {
+                Ok(val) => Ok(val),
+                Err(err) => Err(ThoosaError::from(err)),
+            },
+            //panic
+            Err(e) => {
+                if let Some(msg) = e.downcast_ref::<String>() {
+                    log::debug!("thoosa_err String: {msg}");
+                    Err(ThoosaError::from(msg))
+                //TODO
+                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
+                //     Err(*thoosa_error)
+                } else if let Some(msg) = e.downcast_ref::<&str>() {
+                    log::debug!("thoosa_err str: {msg}");
+                    Err(ThoosaError::from(*msg))
+                } else {
+                    log::debug!("thoosa_err unknown: {e:?}");
+                    Err(ThoosaError::from(format!("{e:?}")))
+                }
+            }
+        }
+    }};
+}

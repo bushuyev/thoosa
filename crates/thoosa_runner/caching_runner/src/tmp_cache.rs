@@ -1,4 +1,4 @@
-/*use std::collections::HashSet;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -59,26 +59,22 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> FuturesRunnerMapPur
     async fn purge_cpu(&self, i: u64) {
         todo!()
     }
-}*/
+}
 
 #[cfg(test)]
 mod tests {
-    // use std::pin::Pin;
-    // use futures_util::FutureExt;
-    // use thoosa_shared::CopyToDevice;
-    // use thoosa_shared::applicables_runner::Output;
-    // use thoosa_shared::traits::{SimpleId, WithId};
-    // use crate::common::Data;
-    // use crate::global_ctx::GlobalCtx;
-    // use crate::tmp_cache::TmpCached;
+    use std::pin::Pin;
+    use futures_util::FutureExt;
+    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::applicables_runner::Output;
+    use thoosa_shared::traits::{SimpleId, WithId};
+    use crate::common::Data;
+    use crate::global_ctx::GlobalCtx;
+    use crate::tmp_cache::TmpCached;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_0(){
-        // unsafe {
-        //     let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        // }
-/*
-
+       
         GlobalCtx::init_devices(2);
 
         #[derive(Debug, Clone)]
@@ -119,7 +115,7 @@ mod tests {
 
         let tmp_cache:TmpCached<DummyData> = TmpCached::new();
 
-*/
+
 
     }
 

@@ -2,7 +2,7 @@ use crate::applicables::ThoDevice;
 use crate::copy_ctx::CopyCtx;
 use crate::cuda_utils::tensor_mem_size;
 use crate::dims::{Dimensional, Dims};
-use crate::panic_to_err;
+use thoosa_shared::panic_to_err;
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use mockall::automock;

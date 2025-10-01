@@ -15,20 +15,20 @@ use plotters::chart::ChartBuilder;
 use plotters::drawing::IntoDrawingArea;
 use plotters::element::PathElement;
 use plotters::prelude::*;
-use rand::Rng;
 use rand::prelude::ThreadRng;
+use rand::Rng;
 use std::panic::AssertUnwindSafe;
 
 use parking_lot::lock_api::{RawRwLock, RwLock};
 use std::sync::Arc;
-use tch::Device::Cuda;
-use tch::Kind::Float;
 use tch::display::PrinterOptions;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::Optimizer;
 use tch::nn::VarStore;
+use tch::Device::Cuda;
+use tch::Kind::Float;
 use tch::{Device, Kind, TchError, Tensor};
-use thoosa_shared::{ThoosaError, gauss_i, pulse_in_rand, pulse_v, pulses_in_const, saw};
+use thoosa_shared::{gauss_i, panic_to_err, panic_to_err_async, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoosaError};
 use torch_sys::cuda::atc_cuda_device_count;
 
 use crate::my_tch::{LossFp, ThoModule};
@@ -360,66 +360,6 @@ pub fn cuda_mem() -> (usize, usize) {
     (free, total)
 }
 
-#[macro_export]
-macro_rules! panic_to_err_async {
-    ($expr:expr) => {{
-        let x = std::panic::catch_unwind(core::panic::AssertUnwindSafe(async || $expr));
-
-        match x {
-            //no panic
-            Ok(inner_result) => match inner_result.await {
-                Ok(val) => Ok(val),
-                Err(err) => Err(thoosa_shared::ThoosaError::from(err)),
-            },
-            //panic
-            Err(e) => {
-                if let Some(msg) = e.downcast_ref::<String>() {
-                    log::debug!("thoosa_err String: {msg}");
-                    Err(thoosa_shared::ThoosaError::from(msg))
-                //TODO
-                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
-                //     Err(*thoosa_error)
-                } else if let Some(msg) = e.downcast_ref::<&str>() {
-                    log::debug!("thoosa_err str: {msg}");
-                    Err(thoosa_shared::ThoosaError::from(*msg))
-                } else {
-                    log::debug!("thoosa_err unknown: {e:?}");
-                    Err(thoosa_shared::ThoosaError::from(format!("{e:?}")))
-                }
-            }
-        }
-    }};
-}
-
-#[macro_export]
-macro_rules! panic_to_err {
-    ($expr:expr) => {{
-        match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| $expr)) {
-            //no panic
-            Ok(inner_result) => match inner_result {
-                Ok(val) => Ok(val),
-                Err(err) => Err(ThoosaError::from(err)),
-            },
-            //panic
-            Err(e) => {
-                if let Some(msg) = e.downcast_ref::<String>() {
-                    log::debug!("thoosa_err String: {msg}");
-                    Err(ThoosaError::from(msg))
-                //TODO
-                // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
-                //     Err(*thoosa_error)
-                } else if let Some(msg) = e.downcast_ref::<&str>() {
-                    log::debug!("thoosa_err str: {msg}");
-                    Err(ThoosaError::from(*msg))
-                } else {
-                    log::debug!("thoosa_err unknown: {e:?}");
-                    Err(ThoosaError::from(format!("{e:?}")))
-                }
-            }
-        }
-    }};
-}
-
 pub trait Splittable<const SIZE: usize> {
     fn split(&self) -> Option<[Self; SIZE]>
     where
@@ -711,11 +651,10 @@ impl TrainListener for DummyListener {
 
 #[cfg(test)]
 pub mod tests {
-
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{CompositeReducer, Splittable, SplittableTensor, TrainListener, hist_1_dim};
-    use clap::{Args, Parser, Subcommand, arg, command};
+    use crate::utils::{hist_1_dim, CompositeReducer, Splittable, SplittableTensor, TrainListener};
+    use clap::{arg, command, Args, Parser, Subcommand};
 
     use log::debug;
     use std::collections::{HashMap, HashSet};
@@ -724,11 +663,11 @@ pub mod tests {
     use std::fs;
 
     use serde::Deserialize;
+    use tch::kind::FLOAT_CPU;
+    use tch::nn::VarStore;
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::Tensor;
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::VarStore;
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
@@ -738,7 +677,7 @@ pub mod tests {
 
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{RangeOrValue, ThoosaError, cdt_for_dir, clc_step};
+    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoosaError};
 
     use thoosa_shared::run_configs::RunId;
 
