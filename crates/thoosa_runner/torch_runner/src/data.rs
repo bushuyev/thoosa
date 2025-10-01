@@ -161,9 +161,14 @@ impl<D: Dims, Id: Named + Clone> ThoTensor2<D, Id> {
     }
 
     // #[cfg(test)]
-    pub fn t(&self) -> &Tensor {
+    pub fn t_ref(&self) -> &Tensor {
         &self.t
     }
+
+    pub fn t(self) -> Tensor {
+        self.t
+    }
+    
 
     pub fn run_inner_with_params<
         F,

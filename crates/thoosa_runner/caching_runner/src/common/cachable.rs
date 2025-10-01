@@ -330,6 +330,53 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
         }
     }
 
+    pub async fn with_selected_data<S, R>(
+        &self,
+        to_device_idx: usize,
+        selector: S,
+        do_run: impl FnOnce(<O as Select<S>>::Output) -> Result<R, ThoosaError>,
+    ) -> Result<R, ThoosaError>
+    where
+        O: Select<S>,
+        <O as Select<S>>::Output: Data + WithId + Send + Sync + CopyToDevice,
+        S: Clone,
+    {
+        let read_guard = self.cached_data[to_device_idx].read().await;
+
+        if read_guard.is_some() {
+            let data = read_guard
+                .as_ref()
+                .expect("no value behind guard")
+                .select(selector.clone());
+
+            return do_run(data);
+        }
+
+        drop(read_guard);
+
+        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+            if source_device_idx == to_device_idx {
+                continue;
+            }
+
+            let source_read_guard = op.read().await;
+
+            if let Some(src) = source_read_guard.as_ref() {
+                let sub_t = src.select(selector.clone());
+                debug!(
+                    "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
+                    sub_t.size()
+                );
+                let data = sub_t.copy_to_device(to_device_idx);
+
+                return do_run(data.await);
+            }
+        }
+
+        Err(MyError::NotFound.into())
+    }
+
+
     pub async fn with_selected_data_ref<S, R>(
         &self,
         to_device_idx: usize,

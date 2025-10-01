@@ -262,7 +262,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
         let dim_0_range = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
         let dim_1_range = selector.start.dim_1..min(size.dim_1, selector.end.dim_1);
 
-        let sub_tensor = self.t().i((dim_0_range.clone(), dim_1_range.clone()));
+        let sub_tensor = self.t_ref().i((dim_0_range.clone(), dim_1_range.clone()));
 
         let new_id = SimpleId::from(format!("{}:{dim_0_range:?}:{dim_1_range:?}", self.id().0));
 
@@ -738,7 +738,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
 
         let tensor_data_0_0 = loaded_tensor_0_0
             .with_data(load_to_device, None, |tensor_data_0_0| {
-                debug!("tensor_data={}", (*tensor_data_0_0).t());
+                debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
                 assert!(
                     Tensor::from_slice(&[
@@ -748,10 +748,10 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
                     .totype(Float)
                     .to_device(Device::Cuda(0))
                     .view((10, 3))
-                    .allclose(&(*tensor_data_0_0).t(), 0.01, 0.01, false)
+                    .allclose(&(*tensor_data_0_0).t_ref(), 0.01, 0.01, false)
                 );
 
-                Ok(tensor_data_0_0.t().shallow_clone())
+                Ok(tensor_data_0_0.t_ref().shallow_clone())
             })
             .await?;
 
@@ -768,7 +768,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
             .with_data(load_to_device, None, |tensor_data_0_1| {
                 // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
-                assert_eq!(&tensor_data_0_0, tensor_data_0_1.t());
+                assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
                 Ok(())
             })
             .await?;
@@ -835,7 +835,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
                     .multiply_scalar(k as f64)
                     .to_device(Device::Cuda(0))
                     .view((10, 3))
-                    .allclose(&(*multed_tensor).t(), 0.01, 0.01, false)
+                    .allclose(&(*multed_tensor).t_ref(), 0.01, 0.01, false)
                 );
                 Ok(())
             })
@@ -871,18 +871,18 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
     {
         let self_k = parse_numeric_part(res).unwrap_or(1.0);
 
-        let expected = exp_f(self_k * mul_k, &result.t());
+        let expected = exp_f(self_k * mul_k, &result.t_ref());
 
         debug!(
             "mul_check: res={res}  result_t.size()={:?} \n\n",
             result.size()
         );
 
-        let ok = expected.allclose(&result.t(), rtol, atol, false);
+        let ok = expected.allclose(&result.t_ref(), rtol, atol, false);
         // if !ok {
         debug!(
             "mul_check: res={res} expected=\n{expected} result_t=\n{} \n\n",
-            result.t()
+            result.t_ref()
         );
         // }
         assert!(ok);
