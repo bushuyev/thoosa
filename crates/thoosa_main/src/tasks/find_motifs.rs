@@ -251,17 +251,7 @@ where
         }
     }
 }
-//
-// impl <RC,SRC> From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<SRC>, Vec<FindMotifsRunConfig>, FixedFindMotifsConfig, Arc<RwLock<RunCtx2>>)> for FindMotifsStage<RC,SRC>
-// where
-//     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-//     SRC: CrossTensorLoader + 'static,
-// {
-//     fn from(value: (Arc<RwLock<Box<dyn Workspace>>>, Arc<RwLock<Box<dyn Store>>>, Arc<SRC>, Vec<FindMotifsRunConfig>, FixedFindMotifsConfig, Arc<RwLock<RunCtx2>>)) -> Self {
-//         let (ws, store, loader, run_config, fixed_config, ctx) = value;
-//         FindMotifsStage::new(&ws, &store, loader,  run_config, fixed_config, ThoDevice::from(ctx.read().device_idx()))
-//     }
-// }
+
 
 #[async_trait]
 impl<RC, SRC> Stage for FindMotifsStage<RC, SRC>
@@ -270,10 +260,7 @@ where
     SRC: TensorLoader + 'static,
 {
     type Ctx = RunCtx2;
-    type In<'a>
-        = ResourcesConfigInput<RC>
-    where
-        Self: 'a;
+    type In<'a> = ResourcesConfigInput<RC> where Self: 'a;
     type Out = FindMotifsSavableResult;
 
     async fn run(
