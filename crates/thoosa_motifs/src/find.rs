@@ -67,7 +67,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::*;
 use thoosa_common::transforms::filters::clc_frequencies;
 use thoosa_common::ws::{FsWorkspace, Workspace};
-use thoosa_common::{loader, panic_to_err};
+use thoosa_common::{loader};
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::run_configs::{RunConfig, Runnable};
 
@@ -83,6 +83,7 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConf
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::val::Val::UInt;
+use thoosa_shared::panic_to_err;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 
 #[derive(Debug, Args, Clone)]
