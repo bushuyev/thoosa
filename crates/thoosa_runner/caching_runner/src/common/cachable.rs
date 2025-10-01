@@ -330,7 +330,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
         }
     }
 
-    pub async fn with_selected_data<S, R>(
+    pub async fn with_selected_data_ref<S, R>(
         &self,
         to_device_idx: usize,
         selector: S,
@@ -709,7 +709,7 @@ mod tests {
 
         //TODO Selectoer ref
         tested
-            .with_selected_data(1, ([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
+            .with_selected_data_ref(1, ([0usize; 1]..[1usize; 1]), None, |_sub| Ok(()))
             .await?;
 
         Ok(())
