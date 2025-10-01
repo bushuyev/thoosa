@@ -57,7 +57,7 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
 
 impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
-    async fn new(name: &'static str) -> Self {
+    pub async fn new(name: &'static str) -> Self {
 
         let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>>> = Box::new(Default::default());
 

@@ -8,4 +8,4 @@ pub mod permits;
 pub mod purge;
 pub mod statistics;
 pub mod test_utils;
-mod tmp_cache;
+pub mod tmp_cache;
