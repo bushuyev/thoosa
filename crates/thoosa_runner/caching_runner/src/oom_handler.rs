@@ -157,7 +157,7 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::In<'static>: Select<S>,
-    S:Adjustable + Debug+Default+Clone
+    S: Adjustable + Debug + Default + Clone
 {
     Input(Box<dyn Adjuster<IC, A =S> + 'a>),
     Task(Box<dyn Adjuster<RC, A = R> + 'a>),
@@ -174,7 +174,7 @@ where
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
     <R as Stage>::In<'static>: Select<S>,
-    S:Adjustable + Debug+Default+Clone
+    S: Adjustable + Debug + Default + Clone
 {
     fn degrade(&self, adjust_context: &mut Contexts<R, IC, RC, RCC>) -> bool {
         match self {
@@ -248,8 +248,8 @@ where
     IC: InputContext<R> + Debug,
     RC: RunnableContext + Debug,
     RCC: RunCtxContext + Debug,
-    S: Adjustable + Debug + Clone + Default,
-    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>>
+    S: Adjustable + Debug + Clone + Default,//Selector (like range for a tensor)
+    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>> //Select<S... - something (ThoTensor) from what a part can be selected
 {
     pub fn new(
         adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,

@@ -246,7 +246,7 @@ impl Dims for LoadedTensor {
 }
 impl LoadedTensor {}
 
-impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
+// impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
 
 impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, SimpleId> {
     type Output = ThoTensor2<LoadedTensor, SimpleId>;

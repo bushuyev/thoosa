@@ -10,16 +10,16 @@ use std::ops::{Add, AddAssign, DivAssign};
 use thoosa_shared::ThoosaError;
 
 #[derive(Debug)]
-pub struct SplitsAdjuster<A>
+pub struct SplitsAdjuster<A, RA>
 where
     A: Data + Adjustable,
     <A as Data>::Metrics: DivAssign<i64>,
 {
-    pd: PhantomData<A>,
+    pd: PhantomData<(A, RA)>,
     min_split_len: <A as Data>::Metrics,
 }
 
-impl<A> SplitsAdjuster<A>
+impl<A, RA> SplitsAdjuster<A, RA>
 where
     A: Data + Adjustable,
     <A as Data>::Metrics: DivAssign<i64>,
@@ -34,16 +34,16 @@ where
 }
 
 #[async_trait]
-impl<AC: SplitsAdjusterContext<Metrics = <A as Data>::Metrics>, A: Data + Adjustable> Adjuster<AC>
-    for SplitsAdjuster<A>
+impl <AC, AJ, RA:Debug> Adjuster<AC> for SplitsAdjuster<AJ, RA>
 where
-    A: Data + Adjustable,
-    <A as Data>::Metrics: DivAssign<i64>,
-    <A as Data>::Metrics: PartialOrd<<A as Data>::Metrics>,
-    for<'a, 'b> &'a <A as Data>::Metrics:
-        Add<&'b <A as Data>::Metrics, Output = <A as Data>::Metrics>,
+    AC:SplitsAdjusterContext<Metrics = <AJ as Data>::Metrics>,
+    AJ: Data + Adjustable,
+    <AJ as Data>::Metrics: DivAssign<i64>,
+    <AJ as Data>::Metrics: PartialOrd<<AJ as Data>::Metrics>,
+    for<'a, 'b> &'a <AJ as Data>::Metrics: Add<&'b <AJ as Data>::Metrics, Output = <AJ as Data>::Metrics>,
+    RA:Adjustable + From<std::ops::Range<AJ::Metrics>>
 {
-    type A = std::ops::Range<A::Metrics>;
+    type A = RA;
 
     async fn adjust(
         &self,
@@ -53,9 +53,8 @@ where
         let size_0 = adjust_context.done_to();
         let size_1 = size_0 + adjust_context.split_len(); //TODO cap on adjustable.size()
 
-        Ok(size_0.clone()..size_1)
-        // Ok(adjustable.subview(size_0.clone(), size_1))
-        // Err(MyError::SomethingElse("zzz".to_string()))
+        Ok((size_0.clone()..size_1).into())
+
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {

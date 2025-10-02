@@ -125,6 +125,6 @@ pub struct MotifSlices {
 }
 
 impl Dims for MotifSlices {
-    type Metrics = [i64; 2];//slices x window
+    type Metrics = TwoDimsMetrics; //[i64;2]; // [i64; 2];//slices x window
 
 }

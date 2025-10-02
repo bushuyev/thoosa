@@ -90,6 +90,7 @@ use torch_sys::at_grad_set_enabled;
 use caching_runner::common::cachable::Cached;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
+use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
 use crate::tasks::motif_loader::MotifLoader;
 
 #[derive(Parser, Clone, Debug)]
@@ -1673,6 +1674,8 @@ async fn run_plot_motif_slices(
                 Arc::clone(store),
                 Arc::clone(loader)
             ));
+
+            let average_euclidean_distance = Arc::new(AverageEuclideanDistanceStage::new());
             let run_id = 0;
 
             let motif = motif_loader.run_cached(Arc::new(DataId::from(motif_id as u32)), ctx).await?;
