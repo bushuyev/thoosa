@@ -314,7 +314,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
     }
 
 
-    pub async fn with_data<R>(
+    pub async fn with_data_ref<R>(
         &self,
         to_device_idx: usize,
         trace_ctx: Option<&'static str>,
@@ -329,6 +329,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
             Err(e) => Err(e),
         }
     }
+
 
     pub async fn with_selected_data<S, R>(
         &self,
@@ -741,7 +742,7 @@ mod tests {
         let tested = super::DataCacheWrapper::new(MockDataWithId::whatever(), 1, 2, 0);
 
         tested
-            .with_data(0, None, |t| {
+            .with_data_ref(0, None, |t| {
                 debug!("t={t:?}");
                 Ok(())
             })
@@ -780,7 +781,7 @@ mod tests {
         assert!(tested.cached_data[1].read().await.is_none());
 
         tested
-            .with_data(1, None, |data_on_1| {
+            .with_data_ref(1, None, |data_on_1| {
                 assert_eq!(data_on_1.device(), Some(&1));
 
                 Ok(())

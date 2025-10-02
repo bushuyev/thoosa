@@ -127,6 +127,7 @@ mod tests {
     use caching_runner::tmp_cache::TmpCached;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
+    use thoosa_motifs::distance::average_euclidean_distance;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::resource::Resource;
@@ -178,8 +179,12 @@ mod tests {
 
         let motif = motif_loader.run_cached(Arc::new(DataId::from(10)), ctx).await?;
 
-        let r = motif.with_data(0,  None,|t|{
-            println!("motif.t={}", t.t_ref());
+        let r = motif.with_data_ref(0, None, |t|{
+            let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
+
+            println!("motif.t={} dist={dist}", t.t_ref());
+
+
 
 
             Ok(true)
