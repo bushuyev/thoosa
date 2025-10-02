@@ -311,7 +311,7 @@ where
 
         match panic_to_err_async!(
             input
-                .with_data(device_idx, None, |data| {
+                .with_data_ref(device_idx, None, |data| {
                     Arc::clone(task).do_run(data, Arc::clone(&run_context))
                 })
                 .await
@@ -390,7 +390,7 @@ where
                                         })
                                         .await
                                 } else {
-                                    input.with_data(device_idx, None, |data| {
+                                    input.with_data_ref(device_idx, None, |data| {
                                             Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
                                         })
                                         .await
