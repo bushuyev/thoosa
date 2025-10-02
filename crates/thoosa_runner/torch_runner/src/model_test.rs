@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use std::ops::Deref;
+    use std::ops::{Deref, Range};
     use std::sync::Arc;
 
     use parking_lot::RwLock;
@@ -135,7 +135,7 @@ mod tests {
         type Metrics = ABMetrics;
 
     }
-    impl Adjustable for ThoTensor2<ABData, SimpleId> {}
+    // impl Adjustable for ThoTensor2<ABData, SimpleId> {}
 
     impl Select<std::ops::Range<ABMetrics>> for ThoTensor2<ABData, SimpleId> {
         type Output = ThoTensor2<ABData, SimpleId>;
@@ -742,7 +742,7 @@ mod tests {
                         move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                     ))),
                     Adjusters::Input(Box::new(
-                        SplitsAdjuster::<ThoTensor2<ABData, SimpleId>>::new(min_split_len),
+                        SplitsAdjuster::<ThoTensor2<ABData, SimpleId>, Range<ABMetrics>>::new(min_split_len),
                     )),
                 ],
                 None,
