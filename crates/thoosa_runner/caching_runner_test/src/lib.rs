@@ -18,7 +18,7 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::ops::{Add, AddAssign, DivAssign};
+use std::ops::{Add, AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
@@ -140,7 +140,7 @@ where
             OOMRunnerConfig::Splits => {
                 OOMHandler::new(
                     vec![Adjusters::Input(Box::new(
-                        SplitsAdjuster::<StageInStatic<R>>::new(min_split_len),
+                        SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(min_split_len),
                     ))],
                     None,
                 )
@@ -167,7 +167,7 @@ where
                             *PermitStep::TWENTY,
                             |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>>::new(
+                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
                             min_split_len,
                         ))),
                     ],
@@ -194,7 +194,7 @@ where
                             |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new())),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>>::new(
+                        Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
                             min_split_len,
                         ))),
                     ],

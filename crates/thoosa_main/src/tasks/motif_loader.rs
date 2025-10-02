@@ -111,7 +111,13 @@ impl <SRC> Stage for MotifLoader <SRC>
 
         }
 
-        Ok(ThoTensor2::new(DataId(0), Tensor::cat(tmp_cache.take_all(device_idx).await.into_iter().map(|tt|tt.t()).collect::<Vec<Tensor>>().as_slice(), 0)))
+        Ok(ThoTensor2::new(
+            DataId(0), 
+            Tensor::cat(
+                tmp_cache.take_all(device_idx).await.into_iter().map(|tt|tt.t()).collect::<Vec<Tensor>>().as_slice(), 
+                0
+            )
+        ))
     }
 }
 

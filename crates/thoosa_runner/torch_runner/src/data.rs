@@ -17,6 +17,7 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
 use torch_sys::IntList;
+use caching_runner::oom_handler::Adjustable;
 
 pub struct ThoTensor2<D: Dims, Id: Named + Clone> {
     id: Id,
@@ -27,6 +28,8 @@ pub struct ThoTensor2<D: Dims, Id: Named + Clone> {
 
     pd: PhantomData<D>,
 }
+
+impl <D:Dims, Id:Named + Clone + Send> Adjustable for ThoTensor2<D, Id> {}
 
 impl<D: Dims, Id: Named + Clone> Data for ThoTensor2<D, Id> {
     type Metrics = D::Metrics;
@@ -168,7 +171,7 @@ impl<D: Dims, Id: Named + Clone> ThoTensor2<D, Id> {
     pub fn t(self) -> Tensor {
         self.t
     }
-    
+
 
     pub fn run_inner_with_params<
         F,
