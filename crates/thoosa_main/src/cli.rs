@@ -6,7 +6,7 @@ use crate::data;
 use crate::data::{ParquetLoader, clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::RawTensorLoader;
+use crate::tasks::tensor_loader::{RawTensorLoader};
 use crate::version::VERSION;
 use async_trait::async_trait;
 use caching_runner::common::runnable::Stage;
@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::{fs, process};
+use plotters::prelude::BLACK;
 use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::nn::VarStore;
@@ -62,7 +63,7 @@ use thoosa_common::train_nets::{
     run_opt_train_label_nets, run_train_motif_net, train_final_net, train_final_net_2,
     train_label_net_2,
 };
-use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices};
+use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices, lin_t, plot_series};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{
@@ -79,13 +80,17 @@ use thoosa_shared::applicables_runner::{Input, Runner, ToOrdinal};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId, Runnable};
-use thoosa_shared::traits::SimpleId;
+use thoosa_shared::traits::{DataId, SimpleId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ResourceType, ThoosaError, cdt, cdt_for_dir};
 use thoosa_store::{SqlStore, Store};
 use tokio::runtime::Runtime;
 use torch_runner::data::ThoTensor2;
 use torch_sys::at_grad_set_enabled;
+use caching_runner::common::cachable::Cached;
+use thoosa_motifs::distance::average_euclidean_distance;
+use thoosa_shared::colors_iter::DistinctColorIter;
+use crate::tasks::motif_loader::MotifLoader;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -263,6 +268,7 @@ where
     //     cli.futures_channel_bound,
     //     2,
     // )));
+    GlobalCtx::init_devices(2);
 
     let loader_2 = Arc::new(RawTensorLoader::new(
         move |key, _| {
@@ -332,7 +338,7 @@ where
                 "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
             );
 
-            GlobalCtx::init_devices(2);
+
 
 
             let run_ids = run_grid::<Simple, _, _, _, _, _>(
@@ -585,7 +591,7 @@ where
         }
 
         Some(PlotMotifSlices(plot_motif_slices_params)) => {
-            // run_plot_motif_slices(&ws, &store, &loader, &plot_motif_slices_params, &devices[0])?;
+            run_plot_motif_slices(&ws, &store, &loader_2, &plot_motif_slices_params, &devices[0]).await?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -1649,25 +1655,57 @@ where
     Ok(resource_ids) //for tests
 }
 
-fn run_plot_motif_slices(
+async fn run_plot_motif_slices(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<RwLock<Box<dyn Store>>>,
-    loader: &Arc<RwLock<LoadRunner<Tensor>>>,
+    loader: &Arc<RawTensorLoader>,
     plot_motif_slices_params: &PlotMotifSlicesArgs,
     device: &Device,
 ) -> Result<(), ThoosaError> {
+    let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
+
     match plot_motif_slices_params.motifs_by() {
         MotifsBy::MotifId(motif_id) => {
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
-            find::plot_motif_slices(
-                ws,
-                store,
-                loader,
-                motif_id as u32,
-                plot_motif_slices_params.limit,
-                device,
-            )?;
+
+            let motif_loader = Arc::new(MotifLoader::new(
+                Arc::clone(store),
+                Arc::clone(loader)
+            ));
+            let run_id = 0;
+
+            let motif = motif_loader.run_cached(Arc::new(DataId::from(motif_id as u32)), ctx).await?;
+
+            let r = motif.with_data_ref(0, None, |t|{
+                let dist = 0.0; //average_euclidean_distance(t.t_ref()).unwrap();
+
+                println!("motif.t={} dist={dist}", t.t_ref());
+                let all_slices= t.t_ref().unbind(0);
+
+                let mut color_iter = DistinctColorIter::new();
+                plot_series(
+                    all_slices.into_iter().enumerate().map(|(i, t)| {
+                        (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+                    }).collect(),
+                    "zzz",// format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={motif_avg_dist}").as_str(),
+                    (2000, 1000),
+                    &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
+                )?;
+
+
+                Ok(true)
+            }).await?;
+
+
+            // find::plot_motif_slices(
+            //     ws,
+            //     store,
+            //     loader,
+            //     motif_id as u32,
+            //     plot_motif_slices_params.limit,
+            //     device,
+            // )?;
         }
         MotifsBy::RunId(run_id) => {
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
@@ -1682,15 +1720,15 @@ fn run_plot_motif_slices(
                 .for_each(|motif_id| {
                     //TODO par in devices
                     debug!("run_plot_motif_slices: motif_id={motif_id}");
-                    find::plot_motif_slices(
-                        ws,
-                        store,
-                        loader,
-                        motif_id as u32,
-                        plot_motif_slices_params.limit,
-                        device,
-                    )
-                    .unwrap();
+                    // find::plot_motif_slices(
+                    //     ws,
+                    //     store,
+                    //     loader,
+                    //     motif_id as u32,
+                    //     plot_motif_slices_params.limit,
+                    //     device,
+                    // )
+                    // .unwrap();
                     let done = done_cnt.fetch_add(1, Relaxed);
                     if done % 10 == 0 {
                         info!("done {done} from  {motifs_len}");
@@ -3437,14 +3475,14 @@ mod cli_tests {
             true,
         )?;
 
-        run_plot_motif_slices(
-            &ws,
-            &store,
-            &loader,
-            &PlotMotifSlicesArgs::new(MotifsBy::RunId(find_motifs_run_ids[0])),
-            &devices[0],
-        )?;
-        debug!("test_run_step: find_motifs_run_ids={find_motifs_run_ids:?}");
+        // run_plot_motif_slices(
+        //     &ws,
+        //     &store,
+        //     &loader,
+        //     &PlotMotifSlicesArgs::new(MotifsBy::RunId(find_motifs_run_ids[0])),
+        //     &devices[0],
+        // )?;
+        // debug!("test_run_step: find_motifs_run_ids={find_motifs_run_ids:?}");
 
         let select_motifs_for_label_run_ids = run_all_grid_step_2(
             Some(find_motifs_run_ids),

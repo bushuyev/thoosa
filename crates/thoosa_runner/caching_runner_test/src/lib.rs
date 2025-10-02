@@ -279,7 +279,7 @@ where
                     .await?;
 
                 multed
-                    .with_data(device_idx, None, |guard: &<R as Stage>::Out| {
+                    .with_data_ref(device_idx, None, |guard: &<R as Stage>::Out| {
                         // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
                         check_arc(res, &guard);
@@ -958,7 +958,7 @@ mod tests {
 
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
         loaded_tensor_1_0
-            .with_data(1, None, |data| {
+            .with_data_ref(1, None, |data| {
                 assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
 
                 Ok(())
@@ -1008,7 +1008,7 @@ mod tests {
             .await?;
 
         multed
-            .with_data(1, None, |data| {
+            .with_data_ref(1, None, |data| {
                 assert_eq!(
                     data.data.0,
                     (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()

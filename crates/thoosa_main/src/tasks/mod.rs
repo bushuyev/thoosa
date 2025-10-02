@@ -6,4 +6,4 @@ pub mod find_motifs;
 pub mod run_ctx_2;
 pub mod slices_iter;
 pub mod tensor_loader;
-mod motif_loader;
+pub mod motif_loader;
