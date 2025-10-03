@@ -498,7 +498,7 @@ pub async fn run_split_on_oom_2<
     S: 's,
     SV: 'v,
     F,
-    FR: 'fr,
+    FR: 'fr + Debug,
     OkF,
     OkR,
 >(

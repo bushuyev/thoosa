@@ -476,9 +476,9 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
     let j = triu_indices.get(1);
 
     let pairwise_squared_dists = dists_squared
-        .index_select(0, &i)
-        .gather(1, &j.unsqueeze(1), false)
-        .squeeze();
+        .f_index_select(0, &i)?
+        .f_gather(1, &j.unsqueeze(1), false)?
+        .f_squeeze()?;
     drop(dists_squared);
     drop(i);
     drop(j);
@@ -489,7 +489,7 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
     drop(pairwise_squared_dists);
 
     // Step 6: Compute the mean of the distances
-    let mean_distance = clc_dist_d2s.mean(Kind::Float);
+    let mean_distance = clc_dist_d2s.f_mean(Kind::Float)?;
 
     trace!(
         "average_euclidean_distance: clc_dist_d2s=\n{clc_dist_d2s} mean_distance=\n{mean_distance}"
