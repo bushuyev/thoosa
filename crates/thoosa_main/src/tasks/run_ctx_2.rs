@@ -1,10 +1,12 @@
+use ambassador::Delegate;
 use async_trait::async_trait;
-use caching_runner::common::{DropIf, PermitsCtx, RunCtx};
+use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, PermitsCtx, RunCtx};
 use caching_runner::oom_handler::Adjustable;
 use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Named, SimpleId};
 
-#[derive(Debug)]
+#[derive(Debug, Delegate)]
+#[delegate(PermitsCtx, target = "perms")]
 pub struct RunCtx2 {
     device_idx: usize,
     cache_area: u64,
@@ -58,20 +60,6 @@ impl PermitsCtx for RunCtx2Perms {
 
     fn acquired_permits(&self) -> NumPermits {
         todo!()
-    }
-}
-
-impl PermitsCtx for RunCtx2 {
-    fn add_permit(&mut self, permit: RunnerPerm) {
-        self.perms.add_permit(permit);
-    }
-
-    fn drop_permits(&mut self, drop_if: DropIf) {
-        self.perms.drop_permits(drop_if);
-    }
-
-    fn acquired_permits(&self) -> NumPermits {
-        self.perms.acquired_permits()
     }
 }
 
