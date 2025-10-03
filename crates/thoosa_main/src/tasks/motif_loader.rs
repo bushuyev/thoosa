@@ -18,7 +18,8 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataMetrics, ChannelsDataVec, MotifSlices};
+use torch_runner::metrics::TwoDimsMetrics;
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 
@@ -97,7 +98,7 @@ impl <SRC> Stage for MotifLoader <SRC>
                 slices
                     .into_iter()
                     .map(|slice| {
-                        ChannelsDataMetrics::new(channel, slice as i64)..ChannelsDataMetrics::new(channel + 1, (slice + window) as i64)
+                        TwoDimsMetrics::from([channel, slice as i64])..TwoDimsMetrics::from([channel + 1, (slice + window) as i64])
                     })
                     .collect(),
             };

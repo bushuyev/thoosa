@@ -433,7 +433,7 @@ where
                 .load(Arc::clone(resource_0), Arc::clone(&ctx))
                 .await?;
 
-            t_0_batch_len += t_0.size().seq_len();
+            t_0_batch_len += t_0.size().dim_1();
             t_0_batch.push(t_0);
             t_0_batch_resources.push(resource_0);
 
@@ -452,7 +452,7 @@ where
                     .load(Arc::clone(resource_1), Arc::clone(&ctx))
                     .await?;
 
-                t_1_batch_len += t_1.size().seq_len();
+                t_1_batch_len += t_1.size().dim_1();
 
                 t_1_batch.push(t_1);
                 t_1_batch_resources.push(resource_1);

@@ -121,7 +121,7 @@ where
 
         let motif_size = motif.size();
 
-        debug!("LoadMotifAndClcDistanceStage::run: motif_id={} motif_size={motif_size:?}", input.id());
+        debug!("LoadMotifAndClcDistanceStage::run: out_id={} motif_size={motif_size:?}", out_id);
 
         let dist = OOMHandler::new(
             vec![Adjusters::Input(Box::new(
@@ -148,11 +148,11 @@ where
 
 #[derive(Clone, Debug, Default)]
 struct MotifSlicesSelector {
-    slices: Range<TwoDimsMetrics>
+    slices: Range<TwoDimsMetrics<0>>
 }
 
-impl From<Range<TwoDimsMetrics>>  for MotifSlicesSelector{
-    fn from(value: Range<TwoDimsMetrics>) -> Self {
+impl From<Range<TwoDimsMetrics<0>>>  for MotifSlicesSelector{
+    fn from(value: Range<TwoDimsMetrics<0>>) -> Self {
         MotifSlicesSelector { slices: value }
     }
 }
@@ -167,12 +167,12 @@ impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
 
         use std::cmp::min;
 
-        let size: TwoDimsMetrics = self
+        let size: TwoDimsMetrics<0> = self
             .size()
             .try_into()
             .expect("LoadedTensor::select unable to convert size");
 
-        let dim_0_range = selector.slices.start.dim_0()..min(size.dim_0(), selector.slices.start.dim_0());
+        let dim_0_range = selector.slices.start.dim_0()..min(size.dim_0(), selector.slices.end.dim_0());
 
         let sub_tensor = self.t_ref().i((dim_0_range.clone(), ..));
 
