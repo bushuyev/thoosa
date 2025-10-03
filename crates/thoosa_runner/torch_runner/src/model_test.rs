@@ -13,6 +13,8 @@ mod tests {
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
+    use ambassador::Delegate;
+    use caching_runner::common::ambassador_impl_PermitsCtx;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
     use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx, Select};
@@ -58,26 +60,28 @@ mod tests {
     }
 
     // ---------------- Run Context ----------------
-    #[derive(Debug)]
+    #[derive(Debug, Delegate)]
+    #[delegate(PermitsCtx, target = "perms")]
     struct CpuRunCtx {
         device_idx: usize,
         cache_area: u64,
+        perms: CpuPermsCtx,
+    }
+
+    #[derive(Debug)]
+    struct CpuPermsCtx {
         acquired: NumPermits,
     }
 
-    impl CpuRunCtx {
-        fn new(device_idx: usize, cache_area: u64) -> Self {
-            Self {
-                device_idx,
-                cache_area,
-                acquired: 0,
-            }
+    impl CpuPermsCtx {
+        fn new() -> Self {
+            Self { acquired: 0 }
         }
     }
 
-    impl Adjustable for CpuRunCtx {}
+    impl Named for CpuPermsCtx {}
 
-    impl PermitsCtx for CpuRunCtx {
+    impl PermitsCtx for CpuPermsCtx {
         fn add_permit(&mut self, permit: RunnerPerm) {
             self.acquired = self.acquired.saturating_add(permit.num_permits());
         }
@@ -90,6 +94,18 @@ mod tests {
             self.acquired
         }
     }
+
+    impl CpuRunCtx {
+        fn new(device_idx: usize, cache_area: u64) -> Self {
+            Self {
+                device_idx,
+                cache_area,
+                perms: CpuPermsCtx::new(),
+            }
+        }
+    }
+
+    impl Adjustable for CpuRunCtx {}
 
     impl RunCtx for CpuRunCtx {
         fn device_idx(&self) -> usize {

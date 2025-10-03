@@ -10,9 +10,11 @@ mod output_builders;
 
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
-use caching_runner::common::Data;
+use caching_runner::common::{Data, DropIf, PermitsCtx, RunCtx};
+use caching_runner::permits::{MAX_PERMITS, NumPermits, RunnerPerm};
 // test-only imports live under cfg(test)
 use data::ThoTensor2;
+use log::debug;
 use std::fmt::Debug;
 use std::ops::Deref;
 use tch::{Device, Kind, Tensor};
@@ -43,6 +45,58 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
     }
 }
 
+#[derive(Debug)]
+pub struct TorchPermsCtx {
+    name: &'static str,
+    permits: Vec<RunnerPerm>,
+}
+
+impl TorchPermsCtx {
+    pub fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            permits: Vec::new(),
+        }
+    }
+}
+
+impl Named for TorchPermsCtx {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl PermitsCtx for TorchPermsCtx {
+    fn add_permit(&mut self, permit: RunnerPerm) {
+        self.permits.push(permit);
+    }
+
+    fn drop_permits(&mut self, drop_if: DropIf) {
+        let acquired_permits: NumPermits = self.acquired_permits();
+        debug!(
+            "TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}",
+            self.name
+        );
+
+        match drop_if {
+            DropIf::Always => {
+                debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
+                self.permits.clear();
+            }
+            DropIf::IfNotMax => {
+                if acquired_permits < MAX_PERMITS {
+                    debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
+                    self.permits.clear();
+                }
+            }
+        }
+    }
+
+    fn acquired_permits(&self) -> NumPermits {
+        self.permits.iter().map(|p| p.num_permits()).sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
@@ -60,6 +114,9 @@ mod tests {
     use caching_runner_test::FailUntil::MinPermits;
     use caching_runner_test::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
     use dashmap::DashMap;
+    use ambassador::Delegate;
+    use caching_runner::common::ambassador_impl_PermitsCtx;
+    use crate::TorchPermsCtx;
     use futures_util::future::{BoxFuture, Shared};
     use futures_util::sink::With;
     use log::{debug, trace};
@@ -81,14 +138,15 @@ mod tests {
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{EnvFilter, fmt};
 
-    #[derive(Debug)]
+    #[derive(Debug, Delegate)]
+    #[delegate(PermitsCtx, target = "perms_ctx")]
     pub struct TorchRunCtx {
         device_idx: usize,
         loaded_tensors_cached: Vec<SimpleId>,
         multed_tensors_cached: Vec<SimpleId>,
         cache_area: u64,
         name: &'static str,
-        permits: Vec<RunnerPerm>,
+        perms_ctx: TorchPermsCtx,
     }
 
     impl TorchRunCtx {
@@ -99,43 +157,12 @@ mod tests {
                 multed_tensors_cached: vec![],
                 cache_area,
                 name,
-                permits: Vec::new(),
+                perms_ctx: TorchPermsCtx::new(name),
             }
         }
     }
 
     impl Adjustable for TorchRunCtx {}
-
-    impl PermitsCtx for TorchRunCtx {
-        fn add_permit(&mut self, permit: RunnerPerm) {
-            self.permits.push(permit);
-        }
-
-        fn drop_permits(&mut self, drop_if: DropIf) {
-            let acquired_permits = self.acquired_permits();
-            debug!(
-                "TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}",
-                self.name
-            );
-
-            match drop_if {
-                DropIf::Always => {
-                    debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
-                    self.permits.clear();
-                }
-                DropIf::IfNotMax => {
-                    if acquired_permits < MAX_PERMITS {
-                        debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
-                        self.permits.clear();
-                    }
-                }
-            }
-        }
-
-        fn acquired_permits(&self) -> NumPermits {
-            self.permits.iter().map(|p| p.num_permits()).sum()
-        }
-    }
 
     impl RunCtx for TorchRunCtx {
         fn device_idx(&self) -> usize {

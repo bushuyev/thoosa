@@ -323,11 +323,12 @@ mod tests {
     use std::fmt::Debug;
 
     use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
+    use ambassador::Delegate;
     use async_trait::async_trait;
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
+    use caching_runner::common::{ambassador_impl_PermitsCtx, Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -352,31 +353,39 @@ mod tests {
             .init();
     });
 
-    #[derive(Debug)]
+    #[derive(Debug, Delegate)]
+    #[delegate(PermitsCtx, target = "perms_ctx")]
     struct DummyRunCtx {
         device_idx: usize,
         loaded_tensors_cached: Vec<SimpleId>,
         multed_tensors_cached: Vec<DMulTaskOutputId>,
         cache_area: u64,
         name: &'static str,
+        perms_ctx: DummyPermsCtx,
+    }
+
+    #[derive(Debug)]
+    struct DummyPermsCtx {
+        name: &'static str,
         permits: Vec<RunnerPerm>,
     }
 
-    impl Adjustable for DummyRunCtx {}
-    impl DummyRunCtx {
-        pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
+    impl DummyPermsCtx {
+        fn new(name: &'static str) -> Self {
             Self {
-                device_idx,
-                loaded_tensors_cached: vec![],
-                multed_tensors_cached: vec![],
-                cache_area,
                 name,
                 permits: Vec::new(),
             }
         }
     }
 
-    impl PermitsCtx for DummyRunCtx {
+    impl Named for DummyPermsCtx {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+    }
+
+    impl PermitsCtx for DummyPermsCtx {
         fn add_permit(&mut self, permit: RunnerPerm) {
             self.permits.push(permit);
         }
@@ -405,6 +414,20 @@ mod tests {
 
         fn acquired_permits(&self) -> NumPermits {
             self.permits.iter().map(|p| p.num_permits()).sum()
+        }
+    }
+
+    impl Adjustable for DummyRunCtx {}
+    impl DummyRunCtx {
+        pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
+            Self {
+                device_idx,
+                loaded_tensors_cached: vec![],
+                multed_tensors_cached: vec![],
+                cache_area,
+                name,
+                perms_ctx: DummyPermsCtx::new(name),
+            }
         }
     }
 

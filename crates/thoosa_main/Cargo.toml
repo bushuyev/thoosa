@@ -14,6 +14,7 @@ thoosa_shared = {path = "../thoosa_shared" }
 caching_runner = {path = "../thoosa_runner/caching_runner"}
 torch_runner = {path = "../thoosa_runner/torch_runner"}
 tokio.workspace = true
+ambassador.workspace = true
 
 rand.workspace = true
 tch.workspace = true
@@ -59,4 +60,3 @@ mockall.workspace = true
 chrono.workspace = true
 [build-dependencies]
 chrono.workspace = true
-
