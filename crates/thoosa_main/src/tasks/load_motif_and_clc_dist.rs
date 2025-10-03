@@ -3,6 +3,7 @@ use std::ops::{Add, Deref, DivAssign, Range};
 use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
+use log::debug;
 use parking_lot::RwLock;
 use tch::IndexOp;
 use cached_derive::Cached;
@@ -33,10 +34,7 @@ where
     id:SimpleId,
     motif_loader:Arc<MotifLoader<SRC>>,
     clc_dist:Arc<AverageEuclideanDistanceStage>,
-    output_builder: Box<
-        dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = AverageDistanceValue>>
-        + Send
-        + Sync>
+    output_builder: Box<dyn Fn(<Self as WithId>::ID) -> Box<dyn OutputBuilder<O = AverageDistanceValue>> + Send + Sync>
 
 }
 
@@ -123,6 +121,8 @@ where
 
         let motif_size = motif.size();
 
+        debug!("LoadMotifAndClcDistanceStage::run: motif_id={} motif_size={motif_size:?}", input.id());
+
         let dist = OOMHandler::new(
             vec![Adjusters::Input(Box::new(
                 SplitsAdjuster::<ThoTensor2<MotifSlices, DataId>, MotifSlicesSelector>::new([(motif_size.dim_0() as f32 * 0.1) as i64 + 2, -1].into()),
@@ -183,11 +183,12 @@ impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
 #[derive(Debug)]
 struct DistOutputBuilder {
     id:SimpleId,
+    values:Vec<f32>
 }
 
 impl DistOutputBuilder {
     pub fn new(id:SimpleId) -> Self {
-        Self {id}
+        Self {id, values: vec![] }
     }
 }
 
@@ -195,11 +196,14 @@ impl OutputBuilder for DistOutputBuilder {
     type O = AverageDistanceValue;
 
     fn add_partial_output(&mut self, o: Self::O) {
-
+        debug!("DistOutputBuilder::add_partial_output: o={o:?}");
+        self.values.push(o.value());
     }
 
     fn build(self: Box<Self>) -> Self::O {
-        AverageDistanceValue::new(self.id.clone(), 0.0)
+        debug!("DistOutputBuilder::build: self.values={:?}", self.values);
+
+        AverageDistanceValue::new(self.id.clone(), if self.values.is_empty() {0.0} else {self.values.iter().sum::<f32>()/self.values.len() as f32})
     }
 }
 
