@@ -266,26 +266,26 @@ mod tests {
     #[derive(Debug, Clone)]
     struct LoadedTensor;
 impl Dims for LoadedTensor {
-    type Metrics = TwoDimsMetrics;
+    type Metrics = TwoDimsMetrics<0>;
 
 }
 impl LoadedTensor {}
 
 // impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
 
-impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, SimpleId> {
+impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, SimpleId> {
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
-    fn select(&self, selector: std::ops::Range<TwoDimsMetrics>) -> Self::Output {
+    fn select(&self, selector: std::ops::Range<TwoDimsMetrics<0>>) -> Self::Output {
         use std::cmp::min;
 
-        let size: TwoDimsMetrics = self
+        let size: TwoDimsMetrics<0> = self
             .size()
             .try_into()
             .expect("LoadedTensor::select unable to convert size");
 
-        let dim_0_range = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
-        let dim_1_range = selector.start.dim_1..min(size.dim_1, selector.end.dim_1);
+        let dim_0_range = selector.start.dim_0()..min(size.dim_0(), selector.end.dim_0());
+        let dim_1_range = selector.start.dim_1()..min(size.dim_1(), selector.end.dim_1());
 
         let sub_tensor = self.t_ref().i((dim_0_range.clone(), dim_1_range.clone()));
 
@@ -309,7 +309,6 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
     //
     //     fn subview(&self, range: &Self::SubSelect) -> Self
     //     where
-    //         Self: Sized
     //     {
     //         let size: TwoDimsMetrics = self.t().size().try_into().unwrap();
     //
@@ -341,12 +340,12 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
-        size: TwoDimsMetrics,
+        size: TwoDimsMetrics<0>,
         kind: Kind,
     }
 
     impl TestTensorLoader {
-        pub fn new(size: TwoDimsMetrics, kind: Kind) -> Self {
+        pub fn new(size: TwoDimsMetrics<0>, kind: Kind) -> Self {
             Self { size, kind }
         }
     }
@@ -401,7 +400,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
     struct MulK;
 
     impl Dims for MulK {
-        type Metrics = TwoDimsMetrics;
+        type Metrics = TwoDimsMetrics<0>;
     }
 
     #[derive(Debug, cached_derive::Cached)]
@@ -486,7 +485,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClcTaskOutput;
     impl Dims for ClcTaskOutput {
-        type Metrics = TwoDimsMetrics;
+        type Metrics = TwoDimsMetrics<0>;
     }
 
     impl LoadedTensor {
@@ -611,7 +610,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics>>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<0>>>,
     }
 
     #[async_trait]
@@ -690,13 +689,13 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
             id: LoadAndClcTaskId,
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
-            dim: TwoDimsMetrics,
-            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics>>,
+            dim: TwoDimsMetrics<0>,
+            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<0>>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
         ) -> Self {
-            let dim_1 = dim.dim_1;
+            let dim_1 = dim.dim_1();
             Self {
                 id,
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
@@ -873,7 +872,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
 
     fn mul_check(
         mul_k: f64,
-        size: TwoDimsMetrics,
+        size: TwoDimsMetrics<0>,
         res: &str,
         result: &ThoTensor2<ClcTaskOutput, SimpleId>,
         rtol: f64,

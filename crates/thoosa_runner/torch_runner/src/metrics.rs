@@ -4,12 +4,12 @@ use std::ops::{Add, AddAssign, DivAssign};
 use thoosa_shared::{MyError, ThoosaError};
 
 #[derive(Debug, Clone, Default)]
-pub struct TwoDimsMetrics {
-    pub(crate) dim_0: i64,
-    pub(crate) dim_1: i64,
+pub struct TwoDimsMetrics<const I:usize> {
+     dim_0: i64,
+     dim_1: i64,
 }
 
-impl TwoDimsMetrics {
+impl <const I:usize> TwoDimsMetrics<I> {
     pub fn dim_0(&self) -> i64 {
         self.dim_0
     }
@@ -19,10 +19,10 @@ impl TwoDimsMetrics {
     }
 }
 
-impl Add<&TwoDimsMetrics> for &TwoDimsMetrics {
-    type Output = TwoDimsMetrics;
+impl <const I:usize> Add<&TwoDimsMetrics<I>> for &TwoDimsMetrics<I> {
+    type Output = TwoDimsMetrics<I>;
 
-    fn add(self, rhs: &TwoDimsMetrics) -> Self::Output {
+    fn add(self, rhs: &TwoDimsMetrics<I>) -> Self::Output {
         TwoDimsMetrics {
             dim_0: self.dim_0 + rhs.dim_0,
             dim_1: self.dim_1,
@@ -30,38 +30,38 @@ impl Add<&TwoDimsMetrics> for &TwoDimsMetrics {
     }
 }
 
-impl DivAssign<i64> for TwoDimsMetrics {
+impl <const I:usize> DivAssign<i64> for TwoDimsMetrics<I> {
     fn div_assign(&mut self, rhs: i64) {
         self.dim_0 /= rhs;
     }
 }
 
-impl PartialEq<i64> for TwoDimsMetrics {
+impl <const I:usize> PartialEq<i64> for TwoDimsMetrics<I> {
     fn eq(&self, other: &i64) -> bool {
         self.dim_0.eq(other)
     }
 }
 
-impl PartialOrd<i64> for TwoDimsMetrics {
+impl <const I:usize> PartialOrd<i64> for TwoDimsMetrics<I> {
     fn partial_cmp(&self, other: &i64) -> Option<Ordering> {
         self.dim_0.partial_cmp(other)
     }
 }
 
-impl PartialEq<TwoDimsMetrics> for TwoDimsMetrics {
-    fn eq(&self, other: &TwoDimsMetrics) -> bool {
+impl <const I:usize> PartialEq<TwoDimsMetrics<I>> for TwoDimsMetrics<I> {
+    fn eq(&self, other: &TwoDimsMetrics<I>) -> bool {
         self.dim_0.eq(&other.dim_0)
     }
 }
 
-impl PartialOrd<TwoDimsMetrics> for TwoDimsMetrics {
-    fn partial_cmp(&self, other: &TwoDimsMetrics) -> Option<Ordering> {
+impl <const I:usize> PartialOrd<TwoDimsMetrics<I>> for TwoDimsMetrics<I> {
+    fn partial_cmp(&self, other: &TwoDimsMetrics<I>) -> Option<Ordering> {
         self.dim_0.partial_cmp(&other.dim_0)
     }
 }
 
-impl<'a> AddAssign<&'a TwoDimsMetrics> for TwoDimsMetrics {
-    fn add_assign(&mut self, rhs: &'a TwoDimsMetrics) {
+impl<'a, const I:usize> AddAssign<&'a TwoDimsMetrics<I>> for TwoDimsMetrics<I> {
+    fn add_assign(&mut self, rhs: &'a TwoDimsMetrics<I>) {
         self.dim_0 += rhs.dim_0;
         debug!(
             "AddAssign for LoadedTensorMetrics::add_assign rhs.dim_0={} self.dim_0={}",
@@ -71,7 +71,7 @@ impl<'a> AddAssign<&'a TwoDimsMetrics> for TwoDimsMetrics {
     }
 }
 
-impl TryFrom<Vec<i64>> for TwoDimsMetrics {
+impl <const I:usize> TryFrom<Vec<i64>> for TwoDimsMetrics<I> {
     type Error = ThoosaError;
 
     fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
@@ -86,19 +86,19 @@ impl TryFrom<Vec<i64>> for TwoDimsMetrics {
     }
 }
 
-impl From<&TwoDimsMetrics> for [i64; 2] {
-    fn from(value: &TwoDimsMetrics) -> Self {
+impl <const I:usize> From<&TwoDimsMetrics<I>> for [i64; 2] {
+    fn from(value: &TwoDimsMetrics<I>) -> Self {
         [value.dim_0, value.dim_1]
     }
 }
 
-impl From<[i64; 2]> for TwoDimsMetrics {
+impl <const I:usize> From<[i64; 2]> for TwoDimsMetrics<I> {
     fn from([dim_0, dim_1]: [i64; 2]) -> Self {
         Self { dim_0, dim_1 }
     }
 }
 
-impl From<&[i64; 2]> for TwoDimsMetrics {
+impl <const I:usize> From<&[i64; 2]> for TwoDimsMetrics<I> {
     fn from([dim_0, dim_1]: &[i64; 2]) -> Self {
         Self {
             dim_0: *dim_0,

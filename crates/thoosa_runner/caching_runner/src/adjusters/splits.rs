@@ -53,15 +53,17 @@ where
         let size_0 = adjust_context.done_to();
         let size_1 = size_0 + adjust_context.split_len(); //TODO cap on adjustable.size()
 
+        debug!("SplitsAdjuster::adjust: size_0={size_0:?} size_1={size_1:?}");
+
         Ok((size_0.clone()..size_1).into())
 
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {
-        debug!("Adjuster::degrade: 0. adjust_context={adjust_context:?}");
+        debug!("SplitsAdjuster::degrade: 0. adjust_context={adjust_context:?}");
 
         (*adjust_context.split_len_mut()) /= 2;
-        debug!("Adjuster::degrade: 1. adjust_context={adjust_context:?}");
+        debug!("SplitsAdjuster::degrade: 1. adjust_context={adjust_context:?}");
 
         adjust_context.split_len() > &self.min_split_len
     }
@@ -92,8 +94,7 @@ where
 impl<R: Stage + Adjustable + 'static> InputContext<R> for SplitsAdjusterContextImpl<R>
 where
     <R as Stage>::In<'static>: Data,
-    <<R as Stage>::In<'static> as Data>::Metrics:
-        for<'a> AddAssign<&'a <<R as Stage>::In<'static> as Data>::Metrics>,
+    <<R as Stage>::In<'static> as Data>::Metrics: for<'a> AddAssign<&'a <<R as Stage>::In<'static> as Data>::Metrics>,
     <<R as Stage>::In<'static> as Data>::Metrics: PartialOrd,
 {
     fn add_partial_output(&mut self, o: R::Out) {
@@ -132,7 +133,6 @@ where
             done_to: Default::default(),
             split_len: input_len.clone(),
             input_len,
-            // partial_output: vec![],
             output_builder,
         }
     }
