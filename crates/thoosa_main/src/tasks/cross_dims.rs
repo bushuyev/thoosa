@@ -14,13 +14,13 @@ pub struct ChannelsData2;
 
 
 impl Dims for ChannelsData2 {
-    type Metrics = ChannelsDataMetrics;
+    type Metrics = TwoDimsMetrics<1>;//channels x seq
 
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ChannelsDataVec {
-    pub ranges:Vec<Range<ChannelsDataMetrics>>
+    pub ranges:Vec<Range<TwoDimsMetrics<1>>>
 }
 
 impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
@@ -28,7 +28,7 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
 
     fn select(&self, selector: ChannelsDataVec) -> Self::Output {
         let ChannelsDataVec { ranges } = selector;
-        let size: ChannelsDataMetrics = self
+        let size: TwoDimsMetrics<1> = self
             .size()
             .try_into()
             .expect("ChannelsData2::select unable to convert size");
@@ -52,9 +52,9 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
 
 
 impl ChannelsData2 {
-    fn sub_single(t: &ThoTensor2<ChannelsData2, SimpleId>, range: &Range<ChannelsDataMetrics>, size: &ChannelsDataMetrics) -> Tensor {
-        let channel_range = range.start.channel..min(size.channel, range.end.channel);
-        let data_range = range.start.seq..min(size.seq, range.end.seq);
+    fn sub_single(t: &ThoTensor2<ChannelsData2, SimpleId>, range: &Range<TwoDimsMetrics<1>>, size: &TwoDimsMetrics<1>) -> Tensor {
+        let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
+        let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
 
         debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
         trace!("ChannelsData2::subview: t=\n{t}");
@@ -64,45 +64,6 @@ impl ChannelsData2 {
     }
 }
 
-
-#[derive(Clone, Debug, Default)]
-pub struct ChannelsDataMetrics {
-    channel:i64,
-    seq:i64
-}
-
-impl ChannelsDataMetrics {
-    pub fn new(channel: i64, seq: i64) -> Self {
-        Self { channel, seq }
-    }
-}
-
-impl From<[i64; 2]> for ChannelsDataMetrics {
-    fn from([channel, seq]: [i64; 2]) -> Self {
-        Self { channel, seq }
-    }
-}
-
-impl TryFrom<Vec<i64>> for ChannelsDataMetrics {
-    type Error = ThoosaError;
-
-    fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
-        let &[channel, seq, ..] = value.as_slice() else {
-            return Err(MyError::SomethingElse(format!(
-                "can't make LoadedTensorMetrics from {value:?}"
-            ))
-                .into());
-        };
-
-        Ok(Self { channel, seq })
-    }
-}
-
-impl ChannelsDataMetrics {
-    pub fn seq_len(&self) -> i64 {
-        self.seq
-    }
-}
 
 
 #[derive(Clone, Debug)]
@@ -118,6 +79,6 @@ pub struct MotifSlices {
 }
 
 impl Dims for MotifSlices {
-    type Metrics = TwoDimsMetrics; //[i64;2]; // [i64; 2];//slices x window
+    type Metrics = TwoDimsMetrics<0>; //[i64;2]; // [i64; 2];//slices x window
 
 }
