@@ -1676,11 +1676,13 @@ async fn run_plot_motif_slices(
                 Arc::clone(loader)
             ));
 
-            let run_id = 0;
+            let run_id = 0;//TODO
+            let channel = 0;//TODO
 
             let motif_id = Arc::new(DataId::from(motif_id as u32));
             let motif = Arc::clone(&motif_loader).run_cached(Arc::clone(&motif_id), Arc::clone(&ctx)).await?;
             let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(motif_loader, Arc::new(AverageEuclideanDistanceStage::new())));
+
             let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val|{
                 Ok(dist_val.value())
             }).await?; //average_euclidean_distance(t.t_ref()).unwrap();
@@ -1690,13 +1692,13 @@ async fn run_plot_motif_slices(
 
                 println!("motif.t={} dist={dist}", t.t_ref());
                 let all_slices= t.t_ref().unbind(0);
-
+                let slices_len = all_slices.len();
                 let mut color_iter = DistinctColorIter::new();
                 plot_series(
                     all_slices.into_iter().enumerate().map(|(i, t)| {
                         (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
                     }).collect(),
-                    "zzz",// format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={motif_avg_dist}").as_str(),
+                    format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
                     (2000, 1000),
                     &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
                 )?;

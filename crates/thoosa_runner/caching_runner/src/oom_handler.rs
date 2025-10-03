@@ -320,6 +320,8 @@ where
             Err(te) => {
                 match te.what() {
                     MyError::OutOfMemory => {
+                        debug!("OOMHandler::run: ctx_name={ctx_name} oom 0");
+
                         let mut task_adjusted = None::<Arc<R>>;
 
                         for adjuster in &self.adjusters {
@@ -329,6 +331,7 @@ where
                                     //TODO
                                     panic!("OOMHandler: ctx_name={ctx_name}  i={i}");
                                 }
+                                debug!("OOMHandler::run: ctx_name={ctx_name} oom i={i}");
 
                                 match adjuster {
                                     Adjusters::Input(input_ad) => {
@@ -445,7 +448,7 @@ where
                                                 }
                                             }
                                             e => {
-                                                debug!("ctx_name={ctx_name} other error 1");
+                                                debug!("OOMHandler::run: ctx_name={ctx_name} other error 1");
                                                 return Err(te);
                                             }
                                         }
@@ -455,7 +458,7 @@ where
                         }
                     }
                     _ => {
-                        debug!("ctx_name={ctx_name} other error 2");
+                        debug!("OOMHandler::run: ctx_name={ctx_name} other error 2");
                         return Err(te);
                     }
                 }

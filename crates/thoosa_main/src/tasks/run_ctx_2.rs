@@ -4,6 +4,7 @@ use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, PermitsCtx, Run
 use caching_runner::oom_handler::Adjustable;
 use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Named, SimpleId};
+use torch_runner::TorchPermsCtx;
 
 #[derive(Debug, Delegate)]
 #[delegate(PermitsCtx, target = "perms")]
@@ -11,7 +12,7 @@ pub struct RunCtx2 {
     device_idx: usize,
     cache_area: u64,
     name: &'static str,
-    perms: RunCtx2Perms,
+    perms: TorchPermsCtx,
 }
 
 impl Adjustable for RunCtx2 {}
@@ -27,39 +28,8 @@ impl RunCtx2 {
             device_idx,
             cache_area,
             name,
-            perms: RunCtx2Perms::new(name),
+            perms: TorchPermsCtx::new(name),
         }
-    }
-}
-
-#[derive(Debug)]
-struct RunCtx2Perms {
-    name: &'static str,
-}
-
-impl RunCtx2Perms {
-    fn new(name: &'static str) -> Self {
-        Self { name }
-    }
-}
-
-impl Named for RunCtx2Perms {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-}
-
-impl PermitsCtx for RunCtx2Perms {
-    fn add_permit(&mut self, _permit: RunnerPerm) {
-        todo!()
-    }
-
-    fn drop_permits(&mut self, _drop_if: DropIf) {
-        todo!()
-    }
-
-    fn acquired_permits(&self) -> NumPermits {
-        todo!()
     }
 }
 
