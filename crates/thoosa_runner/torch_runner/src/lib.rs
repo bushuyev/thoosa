@@ -45,11 +45,11 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
 }
 
 #[derive(Debug)]
-pub struct PermsCtx {
+pub struct TorchPermsCtx {
 
 }
 
-impl PermsCtx {
+impl TorchPermsCtx {
     pub fn new() -> Self {
         Self {
 
@@ -94,7 +94,7 @@ mod tests {
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{EnvFilter, fmt};
-    use crate::PermsCtx;
+    use crate::TorchPermsCtx;
 
     #[derive(Debug)]
     pub struct TorchRunCtx {
@@ -105,7 +105,7 @@ mod tests {
         cache_area: u64,
         name: &'static str,
 
-        perms_ctx: PermsCtx
+        perms_ctx: TorchPermsCtx
     }
 
     impl TorchRunCtx {
@@ -117,7 +117,7 @@ mod tests {
                 multed_tensors_cached: vec![],
                 cache_area,
                 name,
-                perms_ctx: PermsCtx::new(),
+                perms_ctx: TorchPermsCtx::new(),
             }
         }
     }
