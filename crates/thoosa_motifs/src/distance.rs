@@ -491,9 +491,8 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
     // Step 6: Compute the mean of the distances
     let mean_distance = clc_dist_d2s.f_mean(Kind::Float)?;
 
-    trace!(
-        "average_euclidean_distance: clc_dist_d2s=\n{clc_dist_d2s} mean_distance=\n{mean_distance}"
-    );
+    debug!("average_euclidean_distance: mean_distance=\n{mean_distance}");
+    trace!("average_euclidean_distance: clc_dist_d2s=\n{clc_dist_d2s}");
 
     Ok(mean_distance.double_value(&[]) as f32)
 }
