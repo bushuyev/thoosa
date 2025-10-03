@@ -4746,6 +4746,7 @@ dependencies = [
 name = "thoosa_main"
 version = "0.1.0"
 dependencies = [
+ "ambassador",
  "anyhow",
  "approx",
  "async-trait",
@@ -5149,6 +5150,7 @@ dependencies = [
 name = "torch_runner"
 version = "0.1.0"
 dependencies = [
+ "ambassador",
  "async-trait",
  "cached_derive",
  "caching_runner",

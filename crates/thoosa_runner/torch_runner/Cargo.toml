@@ -23,6 +23,7 @@ futures-util.workspace = true
 tokio-utils.workspace = true
 log.workspace = true
 simplelog.workspace = true
+ambassador.workspace = true
 [dev-dependencies]
 ctor.workspace = true
 caching_runner_test = {path = "../caching_runner_test"}

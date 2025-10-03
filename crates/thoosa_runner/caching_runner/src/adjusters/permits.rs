@@ -212,7 +212,9 @@ impl<'a> RunCtxContext for PermitsAndDumpToCpuAdjustableContex<'a> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::PermitsCtx;
     use crate::permits::NumPermits;
+    use futures_util::future::BoxFuture;
     use parking_lot::RwLock;
     use std::sync::Arc;
     use thoosa_shared::MyError;
@@ -224,31 +226,41 @@ mod tests {
         acquired: NumPermits,
     }
 
+    impl TestRunCtx {
+        fn new(device_idx: usize, acquired: NumPermits) -> Self {
+            Self {
+                device_idx,
+                acquired,
+            }
+        }
+    }
+
     impl Adjustable for TestRunCtx {}
 
-    #[async_trait]
-    impl RunCtx for TestRunCtx {
-        fn add_permit(&mut self, _permit: RunnerPerm) {
-            // not used in these tests
+    impl PermitsCtx for TestRunCtx {
+        fn add_permit(&mut self, permit: RunnerPerm) {
+            self.acquired += permit.num_permits();
         }
 
         fn drop_permits(&mut self, _drop_if: DropIf) {
             self.acquired = 0;
         }
 
+        fn acquired_permits(&self) -> NumPermits {
+            self.acquired
+        }
+    }
+
+    impl RunCtx for TestRunCtx {
         fn device_idx(&self) -> usize {
             self.device_idx
         }
 
-        fn acquired_permits(&self) -> NumPermits {
-            self.acquired
-        }
-
-        async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
+        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
         where
             Self: Sized,
         {
-            Ok(())
+            Box::pin(async { Ok(()) })
         }
 
         fn cache_area(&self) -> u64 {
@@ -266,10 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn adjust_handles_out_of_permits() {
-        let adjustable = Arc::new(RwLock::new(TestRunCtx {
-            device_idx: 0,
-            acquired: 0,
-        }));
+        let adjustable = Arc::new(RwLock::new(TestRunCtx::new(0, 0)));
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
             Err(MyError::OutOfPermits.into())
         });
@@ -283,10 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn adjust_propagates_other_errors() {
-        let adjustable = Arc::new(RwLock::new(TestRunCtx {
-            device_idx: 0,
-            acquired: 0,
-        }));
+        let adjustable = Arc::new(RwLock::new(TestRunCtx::new(0, 0)));
         let adjuster = PermitsAdjuster::<_, _, TestRunCtx>::new(100, 10, |_n| async {
             Err(MyError::SomethingElse("boom".into()).into())
         });
