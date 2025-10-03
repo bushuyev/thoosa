@@ -1802,23 +1802,31 @@ macro_rules! panic_to_err_async {
 
         match x {
             //no panic
-            Ok(inner_result) => match inner_result.await {
-                Ok(val) => Ok(val),
-                Err(err) => Err(thoosa_shared::ThoosaError::from(err)),
+            Ok(inner_result) => {
+                match inner_result.await {
+                    Ok(val) => {
+                        log::debug!("panic_to_err_async: val: {val:?}");
+                        Ok(val)
+                    },
+                    Err(err) => {
+                        log::debug!("panic_to_err_async: err: {err:?}");
+                        Err(thoosa_shared::ThoosaError::from(err))
+                    }
+                }
             },
             //panic
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
-                    log::debug!("thoosa_err String: {msg}");
+                    log::debug!("panic_to_err_async: String: {msg}");
                     Err(thoosa_shared::ThoosaError::from(msg))
                 //TODO
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
-                    log::debug!("thoosa_err str: {msg}");
+                    log::debug!("panic_to_err_async: str: {msg}");
                     Err(thoosa_shared::ThoosaError::from(*msg))
                 } else {
-                    log::debug!("thoosa_err unknown: {e:?}");
+                    log::debug!("panic_to_err_async: unknown: {e:?}");
                     Err(thoosa_shared::ThoosaError::from(format!("{e:?}")))
                 }
             }
