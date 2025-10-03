@@ -13,14 +13,17 @@ mod tests {
     use crate::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use caching_runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
     use caching_runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
+    use ambassador::Delegate;
+    use caching_runner::common::ambassador_impl_PermitsCtx;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{DropIf, OutId, RunCtx, Select};
+    use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::{
         Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler,
     };
-    use caching_runner::permits::{MAX_PERMITS, PermitStep};
+    use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
+    use futures_util::future::BoxFuture;
     use caching_runner::test_utils::parse_numeric_part;
 
     use crate::data::ThoTensor2;
@@ -57,11 +60,39 @@ mod tests {
     }
 
     // ---------------- Run Context ----------------
-    #[derive(Debug)]
+    #[derive(Debug, Delegate)]
+    #[delegate(PermitsCtx, target = "perms")]
     struct CpuRunCtx {
         device_idx: usize,
         cache_area: u64,
-        acquired: usize,
+        perms: CpuPermsCtx,
+    }
+
+    #[derive(Debug)]
+    struct CpuPermsCtx {
+        acquired: NumPermits,
+    }
+
+    impl CpuPermsCtx {
+        fn new() -> Self {
+            Self { acquired: 0 }
+        }
+    }
+
+    impl Named for CpuPermsCtx {}
+
+    impl PermitsCtx for CpuPermsCtx {
+        fn add_permit(&mut self, permit: RunnerPerm) {
+            self.acquired = self.acquired.saturating_add(permit.num_permits());
+        }
+
+        fn drop_permits(&mut self, _drop_if: DropIf) {
+            self.acquired = 0;
+        }
+
+        fn acquired_permits(&self) -> NumPermits {
+            self.acquired
+        }
     }
 
     impl CpuRunCtx {
@@ -69,32 +100,22 @@ mod tests {
             Self {
                 device_idx,
                 cache_area,
-                acquired: 0,
+                perms: CpuPermsCtx::new(),
             }
         }
     }
 
     impl Adjustable for CpuRunCtx {}
 
-    #[async_trait]
     impl RunCtx for CpuRunCtx {
-        fn add_permit(&mut self, permit: caching_runner::permits::RunnerPerm) {
-            self.acquired = self.acquired.saturating_add(permit.num_permits() as usize);
-        }
-        fn drop_permits(&mut self, _drop_if: DropIf) {
-            self.acquired = 0;
-        }
         fn device_idx(&self) -> usize {
             self.device_idx
         }
-        fn acquired_permits(&self) -> caching_runner::permits::NumPermits {
-            self.acquired as u8
-        }
-        async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
+        fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
         where
             Self: Sized,
         {
-            Ok(())
+            Box::pin(async { Ok(()) })
         }
         fn cache_area(&self) -> u64 {
             self.cache_area

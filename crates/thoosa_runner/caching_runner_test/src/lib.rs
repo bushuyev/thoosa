@@ -323,11 +323,12 @@ mod tests {
     use std::fmt::Debug;
 
     use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
+    use ambassador::Delegate;
     use async_trait::async_trait;
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{Data, DropIf, OutId, RunCtx, Select};
+    use caching_runner::common::{ambassador_impl_PermitsCtx, Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -352,43 +353,46 @@ mod tests {
             .init();
     });
 
-    #[derive(Debug)]
+    #[derive(Debug, Delegate)]
+    #[delegate(PermitsCtx, target = "perms_ctx")]
     struct DummyRunCtx {
         device_idx: usize,
-        permits: Vec<RunnerPerm>,
         loaded_tensors_cached: Vec<SimpleId>,
         multed_tensors_cached: Vec<DMulTaskOutputId>,
         cache_area: u64,
         name: &'static str,
+        perms_ctx: DummyPermsCtx,
     }
 
-    impl Adjustable for DummyRunCtx {}
-    impl DummyRunCtx {
-        pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
+    #[derive(Debug)]
+    struct DummyPermsCtx {
+        name: &'static str,
+        permits: Vec<RunnerPerm>,
+    }
+
+    impl DummyPermsCtx {
+        fn new(name: &'static str) -> Self {
             Self {
-                device_idx,
-                permits: vec![],
-                loaded_tensors_cached: vec![],
-                multed_tensors_cached: vec![],
-                cache_area,
                 name,
+                permits: Vec::new(),
             }
         }
     }
 
-    #[async_trait]
-    impl RunCtx for DummyRunCtx {
-        fn device_idx(&self) -> usize {
-            self.device_idx
+    impl Named for DummyPermsCtx {
+        fn name(&self) -> &'static str {
+            self.name
         }
+    }
 
+    impl PermitsCtx for DummyPermsCtx {
         fn add_permit(&mut self, permit: RunnerPerm) {
             self.permits.push(permit);
         }
 
         fn drop_permits(&mut self, drop_if: DropIf) {
             debug!("MyRunCtx: {} drop_permits", self.name);
-            let acquired_permits = self.acquired_permits();
+            let acquired_permits: NumPermits = self.acquired_permits();
             debug!(
                 "TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}",
                 self.name
@@ -401,7 +405,6 @@ mod tests {
                 }
                 DropIf::IfNotMax => {
                     if acquired_permits < MAX_PERMITS {
-                        //TODO param
                         debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
                         self.permits.clear();
                     }
@@ -412,35 +415,55 @@ mod tests {
         fn acquired_permits(&self) -> NumPermits {
             self.permits.iter().map(|p| p.num_permits()).sum()
         }
+    }
 
-        async fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
+    impl Adjustable for DummyRunCtx {}
+    impl DummyRunCtx {
+        pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
+            Self {
+                device_idx,
+                loaded_tensors_cached: vec![],
+                multed_tensors_cached: vec![],
+                cache_area,
+                name,
+                perms_ctx: DummyPermsCtx::new(name),
+            }
+        }
+    }
+
+    impl RunCtx for DummyRunCtx {
+        fn device_idx(&self) -> usize {
+            self.device_idx
+        }
+
+        fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
         where
             Self: Sized,
         {
-            // let _purge_lock = GlobalCtx::global().purge_lock().await;
+            Box::pin(async move {
+                let device_idx = ctx.read().device_idx;
+                assert_ne!(device_idx, 0);
 
-            let device_idx = ctx.read().device_idx;
-            assert_ne!(device_idx, 0); //shouldn't purge CPU
+                let (cache_area, loaded_tensors_cached, mul_output_cached) = {
+                    let mut guard = ctx.write();
 
-            let (cache_area, loaded_tensors_cached, mul_output_cached) = {
-                let mut guard = ctx.write();
+                    (
+                        guard.cache_area,
+                        mem::replace(&mut guard.loaded_tensors_cached, Vec::new()),
+                        mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
+                    )
+                };
+                debug!(
+                    "purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}"
+                );
 
-                (
-                    guard.cache_area,
-                    mem::replace(&mut guard.loaded_tensors_cached, Vec::new()),
-                    mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
-                )
-            };
-            debug!(
-                "purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}"
-            );
+                tokio::try_join!(
+                    DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
+                    DMulTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
+                )?;
 
-            tokio::try_join!(
-                DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
-                DMulTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
-            )?;
-
-            Ok(())
+                Ok(())
+            })
         }
 
         fn cache_area(&self) -> u64 {
