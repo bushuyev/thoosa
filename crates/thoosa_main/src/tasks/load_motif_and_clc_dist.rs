@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
+use tch::IndexOp;
 use cached_derive::Cached;
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
@@ -25,7 +26,7 @@ use crate::tasks::tensor_loader::TensorLoader;
 
 
 #[derive(Cached)]
-struct LoadMotifAndClcDistanceStage<SRC>
+pub struct LoadMotifAndClcDistanceStage<SRC>
 where
     SRC: TensorLoader + 'static
 {
@@ -81,7 +82,7 @@ impl <SRC> LoadMotifAndClcDistanceStage<SRC>
 where
     SRC: TensorLoader + 'static
 {
-    fn new(motif_loader:Arc<MotifLoader<SRC>>, clc_dist:Arc<AverageEuclideanDistanceStage>) -> Self {
+    pub fn new(motif_loader:Arc<MotifLoader<SRC>>, clc_dist:Arc<AverageEuclideanDistanceStage>) -> Self {
         Self {
             id: SimpleId("LoadMotifAndClcDistanceStage"),
             motif_loader,
@@ -90,57 +91,7 @@ where
         }
     }
 }
-/*
-#[derive(Debug)]
-struct MotifWIdhDistance {
-    id: SimpleId,
-    dist: AverageDistanceValue,
-    motif: ThoTensor2<MotifSlices, DataId>,
-}
 
-#[async_trait]
-impl CopyToDevice for MotifWIdhDistance {
-    async fn copy_to_device(&self, dst_device: usize) -> Self {
-        MotifWIdhDistance {
-            id: self.id.clone(),
-            dist: self.dist.clone(),
-            motif: self.motif.copy_to_device(dst_device).await,
-        }
-
-    }
-}
-
-impl Data for MotifWIdhDistance {
-    type Metrics = <ThoTensor2<MotifSlices, SimpleId> as Data>::Metrics;
-
-    fn size(&self) -> Self::Metrics {
-        self.motif.size()
-    }
-
-    fn device(&self) -> usize {
-        0
-    }
-}
-
-impl MotifWIdhDistance {
-    pub fn new(id: SimpleId, dist: AverageDistanceValue, motif: ThoTensor2<MotifSlices, DataId>) -> Self {
-        Self {
-            id,
-            dist,
-            motif,
-        }
-    }
-}
-
-impl WithId for MotifWIdhDistance {
-    type ID = SimpleId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-impl Output for MotifWIdhDistance {}
-*/
 impl <SRC> OutId for LoadMotifAndClcDistanceStage<SRC>
 where
     SRC: TensorLoader + 'static
@@ -149,8 +100,6 @@ where
         SimpleId::from(format!("{}_avg_ec_dist", input_id))
     }
 }
-
-
 
 
 #[async_trait]
@@ -172,20 +121,20 @@ where
 
         let motif = Arc::clone(&self.motif_loader).run_cached(input, Arc::clone(&ctx)).await?;
 
+        let motif_size = motif.size();
 
         let dist = OOMHandler::new(
             vec![Adjusters::Input(Box::new(
-                SplitsAdjuster::<ThoTensor2<MotifSlices, DataId>, MotifSlicesSelector>::new([10, -1].into()),
+                SplitsAdjuster::<ThoTensor2<MotifSlices, DataId>, MotifSlicesSelector>::new([(motif_size.dim_0() as f32 * 0.1) as i64 + 2, -1].into()),
             ))],
             None,
         )
             .run(
                 &self.clc_dist,
-                motif,
+                Arc::clone(&motif),
                 ctx,
                 Contexts::new(
-                    // NoopInputContext(None),
-                    SplitsAdjusterContextImpl::new([10, -1].into(), (self.output_builder)(out_id.clone()/*it shold be dist id*/)),
+                    SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone()/*it should be dist id*/)),
                     NoopRunnableContext {},
                     NoopRunCtxContext {},
                 ),
@@ -199,12 +148,12 @@ where
 
 #[derive(Clone, Debug, Default)]
 struct MotifSlicesSelector {
-
+    slices: Range<TwoDimsMetrics>
 }
 
 impl From<Range<TwoDimsMetrics>>  for MotifSlicesSelector{
     fn from(value: Range<TwoDimsMetrics>) -> Self {
-        todo!()
+        MotifSlicesSelector { slices: value }
     }
 }
 
@@ -215,7 +164,19 @@ impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
     type Output = ThoTensor2<MotifSlices, DataId>;
 
     fn select(&self, selector: MotifSlicesSelector) -> Self::Output {
-        todo!()
+
+        use std::cmp::min;
+
+        let size: TwoDimsMetrics = self
+            .size()
+            .try_into()
+            .expect("LoadedTensor::select unable to convert size");
+
+        let dim_0_range = selector.slices.start.dim_0()..min(size.dim_0(), selector.slices.start.dim_0());
+
+        let sub_tensor = self.t_ref().i((dim_0_range.clone(), ..));
+
+        ThoTensor2::new(self.id().clone(), sub_tensor)
     }
 }
 

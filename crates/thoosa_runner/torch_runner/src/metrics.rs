@@ -10,11 +10,11 @@ pub struct TwoDimsMetrics {
 }
 
 impl TwoDimsMetrics {
-    pub fn channels(&self) -> i64 {
+    pub fn dim_0(&self) -> i64 {
         self.dim_0
     }
 
-    pub fn seq_len(&self) -> i64 {
+    pub fn dim_1(&self) -> i64 {
         self.dim_1
     }
 }

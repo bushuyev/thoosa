@@ -105,13 +105,6 @@ impl ChannelsDataMetrics {
 }
 
 
-#[derive(Debug)]
-pub enum ChannelsDataSubOutput {
-    Single(ThoTensor2<ChannelsData2, SimpleId>),
-    Vec(ThoTensor2<MotifSlices, SimpleId>)
-}
-
-
 #[derive(Clone, Debug)]
 pub struct ChannelsSlicesData2;
 
@@ -121,7 +114,7 @@ impl Dims for ChannelsSlicesData2 {
 
 #[derive(Clone, Debug)]
 pub struct MotifSlices {
-
+    
 }
 
 impl Dims for MotifSlices {
