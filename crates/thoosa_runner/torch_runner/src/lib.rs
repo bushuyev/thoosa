@@ -44,6 +44,19 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
     }
 }
 
+#[derive(Debug)]
+pub struct PermsCtx {
+
+}
+
+impl PermsCtx {
+    pub fn new() -> Self {
+        Self {
+
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
@@ -81,6 +94,7 @@ mod tests {
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{EnvFilter, fmt};
+    use crate::PermsCtx;
 
     #[derive(Debug)]
     pub struct TorchRunCtx {
@@ -90,6 +104,8 @@ mod tests {
         multed_tensors_cached: Vec<SimpleId>,
         cache_area: u64,
         name: &'static str,
+
+        perms_ctx: PermsCtx
     }
 
     impl TorchRunCtx {
@@ -101,6 +117,7 @@ mod tests {
                 multed_tensors_cached: vec![],
                 cache_area,
                 name,
+                perms_ctx: PermsCtx::new(),
             }
         }
     }
@@ -993,7 +1010,7 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
         let device_idx = 1;
 
         const MUL_K: f64 = 2.;
-        let size = [100, 3];
+        let size = [10, 3];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
@@ -1001,10 +1018,10 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
             size.into(),
             ClcOOMRunner::new(
                 OOMRunnerConfig::Splits {},
-                Box::new(|id| {
+                Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
-                        &[100, 3],
+                        &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
                     ))
@@ -1045,20 +1062,21 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
+        let size = [10, 3];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
             vec![FailUntil::MinPermits(MAX_PERMITS), FailUntil::MemLimit(12)],
-            [10, 3].into(),
+            size.into(),
             ClcOOMRunner::new(
                 OOMRunnerConfig::PermitsAndSplits {
                     max: MAX_PERMITS,
                     step: *PermitStep::TEN,
                 },
-                Box::new(|id| {
+                Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
-                        &[10, 3],
+                        &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
                     ))
@@ -1077,8 +1095,8 @@ impl Select<std::ops::Range<TwoDimsMetrics>> for ThoTensor2<LoadedTensor, Simple
                 .as_slice(), //&["resource_1", "resource_2", "resource_3"],
             device_idx,
             |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
-            |res, out| {
-                mul_check(MUL_K, [10, 3].into(), res, out, 0.1, 0.1);
+            move |res, out| {
+                mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
         )
         .await?;

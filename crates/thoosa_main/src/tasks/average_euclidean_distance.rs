@@ -48,7 +48,6 @@ impl AverageEuclideanDistanceStage {
 pub struct AverageDistanceValue {
     id: SimpleId,
     value: f32,
-
 }
 
 impl AverageDistanceValue {
@@ -57,6 +56,10 @@ impl AverageDistanceValue {
             id,
             value
         }
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
     }
 }
 

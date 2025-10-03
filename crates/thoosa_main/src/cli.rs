@@ -91,6 +91,7 @@ use caching_runner::common::cachable::Cached;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
+use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
 use crate::tasks::motif_loader::MotifLoader;
 
 #[derive(Parser, Clone, Debug)]
@@ -1675,13 +1676,17 @@ async fn run_plot_motif_slices(
                 Arc::clone(loader)
             ));
 
-            let average_euclidean_distance = Arc::new(AverageEuclideanDistanceStage::new());
             let run_id = 0;
 
-            let motif = motif_loader.run_cached(Arc::new(DataId::from(motif_id as u32)), ctx).await?;
+            let motif_id = Arc::new(DataId::from(motif_id as u32));
+            let motif = Arc::clone(&motif_loader).run_cached(Arc::clone(&motif_id), Arc::clone(&ctx)).await?;
+            let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(motif_loader, Arc::new(AverageEuclideanDistanceStage::new())));
+            let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val|{
+                Ok(dist_val.value())
+            }).await?; //average_euclidean_distance(t.t_ref()).unwrap();
 
             let r = motif.with_data_ref(0, None, |t|{
-                let dist = 0.0; //average_euclidean_distance(t.t_ref()).unwrap();
+
 
                 println!("motif.t={} dist={dist}", t.t_ref());
                 let all_slices= t.t_ref().unbind(0);
