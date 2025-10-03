@@ -2,6 +2,7 @@
 
 use crate::permits::{NumPermits, RunnerPerm};
 use ambassador::delegatable_trait;
+use futures_util::future::BoxFuture;
 use async_trait::async_trait;
 use mockall::automock;
 use parking_lot::RwLock;
@@ -51,32 +52,61 @@ pub enum DropIf {
     IfNotMax,
 }
 
-#[automock]
-#[async_trait]
-pub trait RunCtx: Named + Debug + Send + Sync {
+#[delegatable_trait]
+pub trait PermitsCtx: Named + Debug + Send + Sync {
     fn add_permit(&mut self, permit: RunnerPerm);
 
     fn drop_permits(&mut self, drop_if: DropIf);
 
+    fn acquired_permits(&self) -> NumPermits;
+}
+
+pub trait RunCtx: PermitsCtx {
     fn device_idx(&self) -> usize;
 
-    fn acquired_permits(&self) -> NumPermits;
-
-    async fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
+    fn purge_gpu_caches(_ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
     where
         Self: Sized,
     {
-        Ok(())
+        Box::pin(async { Ok(()) })
     }
 
     fn cache_area(&self) -> u64;
 }
-impl Named for MockRunCtx {}
 
-#[cfg(test)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod mock_run_ctx {
-    use super::{DropIf, MockRunCtx};
-    use crate::permits::NumPermits;
+    use super::{DropIf, PermitsCtx, RunCtx};
+    use crate::permits::{NumPermits, RunnerPerm};
+    use futures_util::future::BoxFuture;
+    use mockall::mock;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use thoosa_shared::traits::Named;
+    use thoosa_shared::ThoosaError;
+
+    mock! {
+        #[derive(Debug)]
+        pub RunCtx {}
+
+        impl Named for RunCtx {
+            fn name(&self) -> &'static str {
+                "MockRunCtx"
+            }
+        }
+
+        impl PermitsCtx for RunCtx {
+            fn add_permit(&mut self, permit: RunnerPerm);
+            fn drop_permits(&mut self, drop_if: DropIf);
+            fn acquired_permits(&self) -> NumPermits;
+        }
+
+        impl RunCtx for RunCtx {
+            fn device_idx(&self) -> usize;
+            fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>;
+            fn cache_area(&self) -> u64;
+        }
+    }
 
     pub struct MockRunCtxBuilder {
         mock: MockRunCtx,
@@ -107,11 +137,13 @@ pub(crate) mod mock_run_ctx {
     }
 
     pub fn build() -> MockRunCtxBuilder {
-        MockRunCtxBuilder {
-            mock: super::MockRunCtx::new(),
-        }
+        let mut mock = super::MockRunCtx::new();
+        mock.expect_name().return_const("MockRunCtx");
+        MockRunCtxBuilder { mock }
     }
 }
+
+pub use mock_run_ctx::MockRunCtx;
 
 // pub trait Input: WithId + Debug {}
 // pub trait Output: WithId + Debug {}

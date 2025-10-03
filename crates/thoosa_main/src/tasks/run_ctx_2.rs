@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use caching_runner::common::{DropIf, RunCtx};
+use caching_runner::common::{DropIf, PermitsCtx, RunCtx};
 use caching_runner::oom_handler::Adjustable;
 use caching_runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Named, SimpleId};
@@ -7,9 +7,9 @@ use thoosa_shared::traits::{Named, SimpleId};
 #[derive(Debug)]
 pub struct RunCtx2 {
     device_idx: usize,
-    permits: Vec<RunnerPerm>,
     cache_area: u64,
     name: &'static str,
+    perms: RunCtx2Perms,
 }
 
 impl Adjustable for RunCtx2 {}
@@ -23,29 +23,62 @@ impl RunCtx2 {
     pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
         Self {
             device_idx,
-            permits: vec![],
             cache_area,
             name,
+            perms: RunCtx2Perms::new(name),
         }
+    }
+}
+
+#[derive(Debug)]
+struct RunCtx2Perms {
+    name: &'static str,
+}
+
+impl RunCtx2Perms {
+    fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+impl Named for RunCtx2Perms {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl PermitsCtx for RunCtx2Perms {
+    fn add_permit(&mut self, _permit: RunnerPerm) {
+        todo!()
+    }
+
+    fn drop_permits(&mut self, _drop_if: DropIf) {
+        todo!()
+    }
+
+    fn acquired_permits(&self) -> NumPermits {
+        todo!()
+    }
+}
+
+impl PermitsCtx for RunCtx2 {
+    fn add_permit(&mut self, permit: RunnerPerm) {
+        self.perms.add_permit(permit);
+    }
+
+    fn drop_permits(&mut self, drop_if: DropIf) {
+        self.perms.drop_permits(drop_if);
+    }
+
+    fn acquired_permits(&self) -> NumPermits {
+        self.perms.acquired_permits()
     }
 }
 
 #[async_trait]
 impl RunCtx for RunCtx2 {
-    fn add_permit(&mut self, permit: RunnerPerm) {
-        todo!()
-    }
-
-    fn drop_permits(&mut self, drop_if: DropIf) {
-        todo!()
-    }
-
     fn device_idx(&self) -> usize {
         self.device_idx
-    }
-
-    fn acquired_permits(&self) -> NumPermits {
-        todo!()
     }
 
     fn cache_area(&self) -> u64 {

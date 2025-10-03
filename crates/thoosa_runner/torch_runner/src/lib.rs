@@ -10,7 +10,6 @@ mod output_builders;
 
 #[allow(unused_imports)]
 use caching_runner::adjusters::splits::OutputBuilder;
-#[allow(unused_imports)]
 use caching_runner::common::Data;
 // test-only imports live under cfg(test)
 use data::ThoTensor2;
@@ -44,19 +43,6 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
     }
 }
 
-#[derive(Debug)]
-pub struct TorchPermsCtx {
-
-}
-
-impl TorchPermsCtx {
-    pub fn new() -> Self {
-        Self {
-
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
@@ -66,7 +52,7 @@ mod tests {
     use async_trait::async_trait;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{DropIf, OutId, RunCtx, Select};
+    use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -94,48 +80,38 @@ mod tests {
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{EnvFilter, fmt};
-    use crate::TorchPermsCtx;
 
     #[derive(Debug)]
     pub struct TorchRunCtx {
         device_idx: usize,
-        permits: Vec<RunnerPerm>,
         loaded_tensors_cached: Vec<SimpleId>,
         multed_tensors_cached: Vec<SimpleId>,
         cache_area: u64,
         name: &'static str,
-
-        perms_ctx: TorchPermsCtx
+        permits: Vec<RunnerPerm>,
     }
 
     impl TorchRunCtx {
         pub fn new(device_idx: usize, cache_area: u64, name: &'static str) -> Self {
             Self {
                 device_idx,
-                permits: vec![],
                 loaded_tensors_cached: vec![],
                 multed_tensors_cached: vec![],
                 cache_area,
                 name,
-                perms_ctx: TorchPermsCtx::new(),
+                permits: Vec::new(),
             }
         }
     }
 
     impl Adjustable for TorchRunCtx {}
 
-    #[async_trait]
-    impl RunCtx for TorchRunCtx {
-        fn device_idx(&self) -> usize {
-            self.device_idx
-        }
-
+    impl PermitsCtx for TorchRunCtx {
         fn add_permit(&mut self, permit: RunnerPerm) {
             self.permits.push(permit);
         }
 
         fn drop_permits(&mut self, drop_if: DropIf) {
-            //once we've got all permits try all adjusters - others weill wait - no danger of blocking.
             let acquired_permits = self.acquired_permits();
             debug!(
                 "TorchRunCtx: acquired_permits={acquired_permits} ctx.name={} drop_if={drop_if:?}",
@@ -149,7 +125,6 @@ mod tests {
                 }
                 DropIf::IfNotMax => {
                     if acquired_permits < MAX_PERMITS {
-                        //TODO param
                         debug!("TorchRunCtx: ctx.name={} dropping permits", self.name);
                         self.permits.clear();
                     }
@@ -160,46 +135,52 @@ mod tests {
         fn acquired_permits(&self) -> NumPermits {
             self.permits.iter().map(|p| p.num_permits()).sum()
         }
+    }
 
-        async fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> Result<(), ThoosaError>
+    impl RunCtx for TorchRunCtx {
+        fn device_idx(&self) -> usize {
+            self.device_idx
+        }
+
+        fn purge_gpu_caches(ctx: Arc<RwLock<Self>>) -> BoxFuture<'static, Result<(), ThoosaError>>
         where
             Self: Sized,
         {
-            // let _purge_lock = GlobalCtx::global().purge_lock().await;
+            Box::pin(async move {
+                let (device_idx, ctx_name) = {
+                    let guard = ctx.read();
+                    (guard.device_idx, guard.name)
+                };
+                assert_ne!(device_idx, 0);
 
-            let (device_idx, ctx_name) = {
-                let guard = ctx.read();
-                (guard.device_idx, guard.name)
-            };
-            assert_ne!(device_idx, 0); //shouldn't purge CPU
+                debug!("TorchRunCtx::purge_gpu_caches: 0 ctx_name={ctx_name} device_idx={device_idx} ");
 
-            debug!("TorchRunCtx::purge_gpu_caches: 0 ctx_name={ctx_name} device_idx={device_idx} ");
+                let (cache_area, loaded_tensors_cached, mul_output_cached) = {
+                    let mut guard = ctx.write();
 
-            let (cache_area, loaded_tensors_cached, mul_output_cached) = {
-                let mut guard = ctx.write();
+                    (
+                        guard.cache_area,
+                        mem::replace(&mut guard.loaded_tensors_cached, Vec::new()),
+                        mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
+                    )
+                };
+                debug!(
+                    "purge_gpu_caches: 1 ctx_name={ctx_name}device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}"
+                );
 
-                (
-                    guard.cache_area,
-                    mem::replace(&mut guard.loaded_tensors_cached, Vec::new()),
-                    mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
-                )
-            };
-            debug!(
-                "purge_gpu_caches: 1 ctx_name={ctx_name}device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}"
-            );
+                tokio::try_join!(
+                    TestTensorLoader::purge_gpu_cache_area(
+                        loaded_tensors_cached,
+                        cache_area,
+                        device_idx
+                    ),
+                    ClcTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
+                )?;
 
-            tokio::try_join!(
-                TestTensorLoader::purge_gpu_cache_area(
-                    loaded_tensors_cached,
-                    cache_area,
-                    device_idx
-                ),
-                ClcTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
-            )?;
+                debug!("purge_gpu_caches: 2 ctx_name={ctx_name} device_idx={device_idx}");
 
-            debug!("purge_gpu_caches: 2 ctx_name={ctx_name} device_idx={device_idx}");
-
-            Ok(())
+                Ok(())
+            })
         }
 
         fn cache_area(&self) -> u64 {
