@@ -30,6 +30,7 @@ Notes:
 ## Testing Guidelines
 - Frameworks: `cargo test` with `#[test]` and `#[tokio::test]` (multi-thread where needed).
 - Location: unit tests inline in `src/*` modules; crate-level scenarios in `caching_runner_test`.
+-  A struct being tested should receive its mocked dependencies which are configured through their Mock[StructName]Builder. If a struct can't be hidden behind a trait (although should not be a problem to hide a Stage struct behind Stage trait) it can be injected with mock_double.
 - Naming: `mod tests { ... }`, test fns `snake_case` describing behavior.
 - Run with logs: `RUST_BACKTRACE=1 cargo test -- --nocapture`.
 
