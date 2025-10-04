@@ -161,7 +161,7 @@ mod tests {
     impl Select<std::ops::Range<ABMetrics>> for ThoTensor2<ABData, SimpleId> {
         type Output = ThoTensor2<ABData, SimpleId>;
 
-        fn select(&self, selector: std::ops::Range<ABMetrics>) -> Self::Output {
+        fn subview(&self, selector: std::ops::Range<ABMetrics>) -> Self::Output {
             use std::cmp::min;
             let size = ABMetrics::from(self.t_ref().size());
             let d0 = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
