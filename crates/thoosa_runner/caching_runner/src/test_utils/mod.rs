@@ -86,7 +86,7 @@ impl MockDataWithId {
 impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
     type Output = MockDataWithId;
 
-    fn select(&self, selector: Range<[usize; 1]>) -> Self::Output {
+    fn subview(&self, selector: Range<[usize; 1]>) -> Self::Output {
         let mut data = MockData::new();
         let len = selector.end[0].saturating_sub(selector.start[0]);
         data.expect_size().return_const([len]);
