@@ -513,7 +513,7 @@ mod tests {
     impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
         type Output = DLoadedTensor;
 
-        fn select(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Self::Output {
+        fn subview(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Self::Output {
             DLoadedTensor {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start as usize..min(self.data.0.len(), selector.end as usize)].to_vec()),

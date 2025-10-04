@@ -20,13 +20,13 @@ use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::MotifSlices;
-use crate::tasks::motif_loader::MotifLoader;
+use crate::tasks::motif_loader::{MotifLoader, MotifWithData};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::TensorLoader;
 
 #[async_trait]
 pub trait MotifLoaderStage: Send + Sync + Debug {
-    type Output: MotifStageInput + 'static;
+    type Output: ClcMotifInput + 'static;
 
     async fn run_cached(
         self: Arc<Self>,
@@ -40,7 +40,7 @@ impl<SRC> MotifLoaderStage for MotifLoader<SRC>
 where
     SRC: TensorLoader + 'static,
 {
-    type Output = ThoTensor2<MotifSlices, DataId>;
+    type Output = MotifWithData;
 
     async fn run_cached(
         self: Arc<Self>,
@@ -56,13 +56,8 @@ where
 #[derive(Cached)]
 pub struct LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
-        + Adjustable
-        + OutId
-        + Send
-        + Sync
-        + 'static,
-    for<'a> CLC::In<'a>: MotifStageInput,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    for<'a> CLC::In<'a>: ClcMotifInput,
     CLC::In<'static>: 'static,
 {
     id: SimpleId,
@@ -93,13 +88,8 @@ impl Data for AverageDistanceValue {
 
 impl<CLC> Debug for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
-        + Adjustable
-        + OutId
-        + Send
-        + Sync
-        + 'static,
-    for<'a> CLC::In<'a>: MotifStageInput,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    for<'a> CLC::In<'a>: ClcMotifInput,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadMotifAndClcDistanceStage").finish()
@@ -108,13 +98,8 @@ where
 
 impl<CLC> WithId for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
-        + Adjustable
-        + OutId
-        + Send
-        + Sync
-        + 'static,
-    for<'a> CLC::In<'a>: MotifStageInput,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    for<'a> CLC::In<'a>: ClcMotifInput,
 {
     type ID = SimpleId;
 
@@ -125,13 +110,8 @@ where
 
 impl<CLC> LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
-        + Adjustable
-        + OutId
-        + Send
-        + Sync
-        + 'static,
-    for<'a> CLC::In<'a>: MotifStageInput,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    for<'a> CLC::In<'a>: ClcMotifInput,
 {
     pub fn new(
         motif_loader: Arc<dyn MotifLoaderStage<Output = <CLC as Stage>::In<'static>>>,
@@ -148,13 +128,8 @@ where
 
 impl<CLC> OutId for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
-        + Adjustable
-        + OutId
-        + Send
-        + Sync
-        + 'static,
-    for<'a> CLC::In<'a>: MotifStageInput,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    for<'a> CLC::In<'a>: ClcMotifInput,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         SimpleId::from(format!("{}_avg_ec_dist", input_id))
@@ -165,13 +140,8 @@ where
 #[async_trait]
 impl<CLC> Stage for LoadMotifAndClcDistanceStage<CLC>
 where
-    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue>
-        + Adjustable
-        + OutId
-        + Send
-        + Sync
-        + 'static,
-    for<'a> CLC::In<'a>: MotifStageInput,
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    for<'a> CLC::In<'a>: ClcMotifInput,
 {
 
     type In<'a> = DataId;
@@ -234,7 +204,7 @@ impl Adjustable for MotifSlicesSelector  {}
 impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
     type Output = ThoTensor2<MotifSlices, DataId>;
 
-    fn select(&self, selector: MotifSlicesSelector) -> Self::Output {
+    fn subview(&self, selector: MotifSlicesSelector) -> Self::Output {
 
         use std::cmp::min;
 
@@ -280,7 +250,7 @@ impl OutputBuilder for DistOutputBuilder {
 
 
 
-pub(crate) trait MotifStageInput:
+pub(crate) trait ClcMotifInput:
     WithId
     + Data<Metrics = TwoDimsMetrics<0>>
     + CopyToDevice
@@ -292,7 +262,7 @@ pub(crate) trait MotifStageInput:
 {
 }
 
-impl MotifStageInput for ThoTensor2<MotifSlices, DataId> {}
+// impl ClcMotifInput for ThoTensor2<MotifSlices, DataId> {}
 
 #[cfg(test)]
 mod tests {
@@ -307,7 +277,7 @@ mod tests {
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
     use crate::tasks::average_euclidean_distance::mock_average_stage;
-    use crate::tasks::motif_loader::mock_motif_loader;
+    use crate::tasks::motif_loader::{mock_motif_loader, MotifWithData};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_load_and_clc_average_euclidean_distance() -> Result<(), ThoosaError> {
@@ -329,7 +299,7 @@ mod tests {
         );
 
         let motif_wrapper = Arc::new(DataCacheWrapper::new(
-            motif_tensor,
+            MotifWithData::new(motif_tensor, 0, 1),
             0,
             GlobalCtx::global().device_count(),
             0,
@@ -348,7 +318,7 @@ mod tests {
             .finish();
 
         let stage = Arc::new(LoadMotifAndClcDistanceStage::new(
-            motif_loader as Arc<dyn MotifLoaderStage<Output = ThoTensor2<MotifSlices, DataId>>>,
+            motif_loader as Arc<dyn MotifLoaderStage<Output = MotifWithData>>,
             clc_stage,
         ));
 

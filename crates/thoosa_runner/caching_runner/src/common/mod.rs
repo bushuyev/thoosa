@@ -31,10 +31,11 @@ pub trait Data: Debug + CopyToDevice {
     fn device(&self) -> usize;
 }
 
+#[delegatable_trait]
 pub trait Select<S> {
     type Output: CopyToDevice;
 
-    fn select(&self, selector: S) -> Self::Output;
+    fn subview(&self, selector: S) -> Self::Output;
 }
 
 

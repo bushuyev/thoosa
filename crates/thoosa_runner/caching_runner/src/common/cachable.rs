@@ -348,7 +348,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
             let data = read_guard
                 .as_ref()
                 .expect("no value behind guard")
-                .select(selector.clone());
+                .subview(selector.clone());
 
             return do_run(data);
         }
@@ -363,7 +363,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
             let source_read_guard = op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
-                let sub_t = src.select(selector.clone());
+                let sub_t = src.subview(selector.clone());
                 debug!(
                     "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
                     sub_t.size()
@@ -396,7 +396,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
             let data = read_guard
                 .as_ref()
                 .expect("no value behind guard")
-                .select(selector.clone());
+                .subview(selector.clone());
 
             return Self::do_run_trace_owned(trace_ctx, do_run, data);
         }
@@ -411,7 +411,7 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
             let source_read_guard = op.read().await;
 
             if let Some(src) = source_read_guard.as_ref() {
-                let sub_t = src.select(selector.clone());
+                let sub_t = src.subview(selector.clone());
                 debug!(
                     "DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",
                     sub_t.size()

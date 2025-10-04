@@ -26,7 +26,7 @@ pub struct ChannelsDataVec {
 impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
     type Output = ThoTensor2<ChannelsData2, SimpleId>;
 
-    fn select(&self, selector: ChannelsDataVec) -> Self::Output {
+    fn subview(&self, selector: ChannelsDataVec) -> Self::Output {
         let ChannelsDataVec { ranges } = selector;
         let size: TwoDimsMetrics<1> = self
             .size()

@@ -15,7 +15,7 @@ use clap::{Args, Parser, Subcommand};
 use futures::executor::block_on;
 use futures_util::future::{join_all, try_join_all};
 use log::{Level, LevelFilter, debug, error, info, trace, warn};
-use parking_lot::RwLock;
+use parking_lot::{RawRwLock, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::cmp::max;
@@ -1666,95 +1666,81 @@ async fn run_plot_motif_slices(
 ) -> Result<(), ThoosaError> {
     let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa")));
 
+    let motif_loader_impl = Arc::new(MotifLoader::new(
+        Arc::clone(store),
+        Arc::clone(loader)
+    ));
+    let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
+        Arc::clone(&motif_loader_impl) as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as caching_runner::common::runnable::Stage>::In<'static>>>,
+        Arc::new(AverageEuclideanDistanceStage::new()),
+    ));
+
     match plot_motif_slices_params.motifs_by() {
         MotifsBy::MotifId(motif_id) => {
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
+            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist).await?;
 
-            let motif_loader_impl = Arc::new(MotifLoader::new(
-                Arc::clone(store),
-                Arc::clone(loader)
-            ));
-
-            let run_id = 0;//TODO
-            let channel = 0;//TODO
-
-            let motif_id = Arc::new(DataId::from(motif_id as u32));
-            let motif = MotifLoaderStage::run_cached(
-                Arc::clone(&motif_loader_impl),
-                Arc::clone(&motif_id),
-                Arc::clone(&ctx),
-            )
-            .await?;
-            let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-                Arc::clone(&motif_loader_impl)
-                    as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as caching_runner::common::runnable::Stage>::In<'static>>>,
-                Arc::new(AverageEuclideanDistanceStage::new()),
-            ));
-
-            let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val|{
-                Ok(dist_val.value())
-            }).await?; //average_euclidean_distance(t.t_ref()).unwrap();
-
-            let r = motif.with_data_ref(0, None, |t|{
-
-                println!("motif.t={} dist={dist}", t.t_ref());
-                let all_slices= t.t_ref().unbind(0);
-                let slices_len = all_slices.len();
-                let mut color_iter = DistinctColorIter::new();
-                plot_series(
-                    all_slices.into_iter().enumerate().map(|(i, t)| {
-                        (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
-                    }).collect(),
-                    format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
-                    (2000, 1000),
-                    &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
-                )?;
-
-
-                Ok(true)
-            }).await?;
-
-
-            // find::plot_motif_slices(
-            //     ws,
-            //     store,
-            //     loader,
-            //     motif_id as u32,
-            //     plot_motif_slices_params.limit,
-            //     device,
-            // )?;
         }
+
         MotifsBy::RunId(run_id) => {
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
-            fs::create_dir_all(ws.read().plots_path().join(run_id.to_string()))?;
 
-            //TODO add list for  motif_ids only without grouping by  slice_matches
             let motif_distances = store.read().list_motifs(run_id)?;
             let motifs_len = motif_distances.len();
             let done_cnt = AtomicU32::new(0);
-            motif_distances /*.into_iter()*/
-                .into_par_iter()
-                .for_each(|motif_id| {
-                    //TODO par in devices
-                    debug!("run_plot_motif_slices: motif_id={motif_id}");
-                    // find::plot_motif_slices(
-                    //     ws,
-                    //     store,
-                    //     loader,
-                    //     motif_id as u32,
-                    //     plot_motif_slices_params.limit,
-                    //     device,
-                    // )
-                    // .unwrap();
-                    let done = done_cnt.fetch_add(1, Relaxed);
-                    if done % 10 == 0 {
-                        info!("done {done} from  {motifs_len}");
-                    }
-                });
+
+            for motif_id in motif_distances {
+                debug!("run_plot_motif_slices: motif_id={motif_id}");
+                plot_motif(&ws, Arc::clone(&ctx), motif_id, &motif_loader_impl, Arc::clone(&clc_dist)).await?;
+
+                let done = done_cnt.fetch_add(1, Relaxed);
+                if done % 10 == 0 {
+                    info!("done {done} from  {motifs_len}");
+                }
+
+                // ctx.write().
+            };
         }
     }
 
+    Ok(())
+}
+
+async fn plot_motif(ws: &&Arc<RwLock<Box<dyn Workspace>>>, ctx: Arc<RwLock<RunCtx2>>, motif_id: usize, motif_loader_impl: &Arc<MotifLoader<RawTensorLoader>>, clc_dist: Arc<LoadMotifAndClcDistanceStage<AverageEuclideanDistanceStage>>) -> Result<(), ThoosaError> {
+    let motif_id = Arc::new(DataId::from(motif_id as u32));
+    let motif = MotifLoaderStage::run_cached(
+        Arc::clone(&motif_loader_impl),
+        Arc::clone(&motif_id),
+        Arc::clone(&ctx),
+    )
+        .await?;
+
+
+    let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val| {
+        Ok(dist_val.value())
+    }).await?;
+
+    let r = motif.with_data_ref(0, None, |motif| {
+        let run_id = motif.run_id();
+        let channel = motif.channel();
+
+        trace!("motif.t={} dist={dist}", motif.t().t_ref());
+        let all_slices = motif.t().t_ref().unbind(0);
+        let slices_len = all_slices.len();
+        let mut color_iter = DistinctColorIter::new();
+        plot_series(
+            all_slices.into_iter().enumerate().map(|(i, t)| {
+                (format!("{i}"), color_iter.next().unwrap_or(BLACK), t.iter::<f64>().unwrap().enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>())
+            }).collect(),
+            format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len} motif_avg_dist={dist}").as_str(),
+            (2000, 1000),
+            &ws.read().plots_path().join(run_id.to_string()).join(format!("motif_{}.png", motif_id))
+        )?;
+
+
+        Ok(true)
+    }).await?;
     Ok(())
 }
 
