@@ -1698,7 +1698,6 @@ async fn run_plot_motif_slices(
 
             let r = motif.with_data_ref(0, None, |t|{
 
-
                 println!("motif.t={} dist={dist}", t.t_ref());
                 let all_slices= t.t_ref().unbind(0);
                 let slices_len = all_slices.len();

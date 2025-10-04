@@ -131,7 +131,8 @@ where
                         let mut mask_makers = match &filter {
                             SlicesFilter::DistanceRunningMeanK(v) => {
                                 vec![
-                                    LocalMin,
+                                    LocalMin {dim: 1},
+                                    LocalMin {dim: 2},
                                     LeRunningMean {
                                         k: v.mean,
                                         avg: &ctx.means_acc,

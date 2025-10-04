@@ -394,7 +394,7 @@ impl Runnable<MotifsDistRunnableInput, MotifsDistRunnableOutput, ()> for MotifsD
         let mut mask_makers = match &self.find_motifs_run_config.slices_filter {
             SlicesFilter::DistanceRunningMeanK(v) => {
                 vec![
-                    LocalMin,
+                    LocalMin{dim:1},
                     LeRunningMean {
                         k: v.mean,
                         avg: &self.means_acc,
@@ -857,7 +857,7 @@ pub fn find_motifs_by_euc_dist(
             let mut mask_makers = match &find_motifs_run_config.run_config().slices_filter {
                 SlicesFilter::DistanceRunningMeanK(v) => {
                     vec![
-                        LocalMin,
+                        LocalMin{dim:1},
                         LeRunningMean {
                             k: v.mean,
                             avg: &mut means_acc,
