@@ -1531,6 +1531,8 @@ impl Store for SqlStore {
         ),
         ThoosaError,
     > {
+        debug!("list_motif_slices: motif_id={motif_id} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
+
         let mut guard = self.conn.lock();
         let t = guard.transaction()?;
 
@@ -1559,8 +1561,9 @@ impl Store for SqlStore {
 
             let params = match all_but_in_run_id {
                 Some((_run_id, channel_id)) => [motif_id, channel_id],
-                None => [motif_id, 0],
+                None => [motif_id, 1],
             };
+            debug!("list_motif_slices: params={params:?}");
 
             let (slices, channel_set, run_id, resources_map) = stmt
                 .query_map(params, |row| {
@@ -1595,6 +1598,7 @@ impl Store for SqlStore {
                         ),
                         Error,
                     >| {
+                        debug!("list_motif_slices: v={v:?}");
                         let v = v?;
                         let (mut a, mut channel_set, mut run_id, mut resources_map) = a?;
 
@@ -1617,7 +1621,7 @@ impl Store for SqlStore {
                 )?;
 
             if all_but_in_run_id.is_none() {
-                assert!(channel_set.len() == 1);
+                assert_eq!(channel_set.len(), 1, "channel_set={channel_set:?}");
                 (
                     channel_set.into_iter().nth(0).expect("channel"),
                     run_id.expect("no run id"),

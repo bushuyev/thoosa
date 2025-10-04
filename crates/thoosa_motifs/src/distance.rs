@@ -50,7 +50,7 @@ pub enum MaskMaker<'a> {
     Gt {
         v: Tensor,
     }, //channels x thresholds
-    LocalMin,
+    LocalMin {dim:i64},
 }
 
 impl<'a> MaskMaker<'a> {
@@ -99,7 +99,9 @@ impl<'a> MaskMaker<'a> {
                 Self::apply_prev(&prev_mask, le)
             }
             MaskMaker::Gt { v } => Self::apply_prev(&prev_mask, dists.gt_tensor(v)),
-            MaskMaker::LocalMin => Self::apply_prev(&prev_mask, local_min_mask(&dists)),
+            MaskMaker::LocalMin {dim} => {
+                Self::apply_prev(&prev_mask, local_min_mask(&dists, *dim))
+            },
             MaskMaker::LeRunningMean {
                 k,
                 avg,
@@ -228,20 +230,20 @@ fn quantile_mask(q: f64, distances: &Tensor, pre_mask: Option<&Tensor>) -> Tenso
 ///
 /// * distances - [channels x slices 0 x slices 1]
 /// * returns - Bool tensor of same size with true for local minimums for  slice 1 along slices 0.
-fn local_min_mask(distances: &Tensor) -> Tensor {
-    debug!("local_min_mask: distances.size={:?}", distances.size());
+fn local_min_mask(distances: &Tensor, dim: i64) -> Tensor {
+    debug!("local_min_mask: distances.size={:?} dim={dim}", distances.size());
     trace!("local_min_mask: distances=\n{distances}");
     let distances_size = distances.size();
 
     let first_min = distances
-        .f_narrow(1, 0, 1)
+        .f_narrow(dim, 0, 1)
         .map_err(|e| {
             debug!("local_min_mask: f_narrow e={e:?}");
             error!("local_min_mask: f_narrow e={e:?}");
             e
         })
         .unwrap()
-        .f_lt_tensor(&distances.narrow(1, 1, 1))
+        .f_lt_tensor(&distances.narrow(dim, 1, 1))
         .map_err(|e| {
             debug!("local_min_mask: f_lt_tensor e={e:?}");
             error!("local_min_mask: f_lt_tensor e={e:?}");
@@ -252,14 +254,14 @@ fn local_min_mask(distances: &Tensor) -> Tensor {
     trace!("local_min_mask: first_min=\n{first_min}");
 
     let last_min = distances
-        .narrow(1, distances_size[1] - 1, 1)
-        .lt_tensor(&distances.narrow(1, distances_size[1] - 2, 1));
+        .narrow(dim, distances_size[dim as usize] - 1, 1)
+        .lt_tensor(&distances.narrow(dim, distances_size[dim as usize] - 2, 1));
 
     trace!("local_min_mask: last_min=\n{first_min}");
 
-    let mid = distances.narrow(1, 1, distances_size[1] - 2);
-    let left = distances.narrow(1, 0, distances_size[1] - 2);
-    let right = distances.narrow(1, 2, distances_size[1] - 2);
+    let mid = distances.narrow(dim, 1, distances_size[dim as usize] - 2);
+    let left = distances.narrow(dim, 0, distances_size[dim as usize] - 2);
+    let right = distances.narrow(dim, 2, distances_size[dim as usize] - 2);
 
     trace!("local_min_mask: mid=\n{mid}");
     trace!("local_min_mask: left=\n{left}");
@@ -273,7 +275,7 @@ fn local_min_mask(distances: &Tensor) -> Tensor {
 
     let local_min_mask = is_less_than_left.logical_and(&is_less_than_right);
 
-    let full_mask = Tensor::cat(&[first_min, local_min_mask, last_min], 1);
+    let full_mask = Tensor::cat(&[first_min, local_min_mask, last_min], dim);
 
     debug!("local_min_mask: full_mask.size={:?}", full_mask.size());
 
@@ -570,7 +572,7 @@ mod distance_tests {
 
     #[test]
     fn test_dist_d2_0_1ch_with_sig() -> Result<(), ThoosaError> {
-        // set_max_level(Trace);
+        set_max_level(Trace);
 
         let n = 1000;
         let max_y = 30.0;
@@ -650,11 +652,12 @@ mod distance_tests {
             t_1_sliced.shallow_clone(),
             true,
             &mut [
-                LocalMin,
-                LeQuantile {
-                    q: 0.01,
-                    with_mask: true,
-                },
+                LocalMin{dim: 1},
+                LocalMin{dim: 2},
+                // LeQuantile {
+                //     q: 0.01,
+                //     with_mask: true,
+                // },
             ],
         )?
         else {
@@ -1107,7 +1110,7 @@ mod distance_tests {
 
         // let dist_t = super::dist_d2(&slice_0, &slice_1).unwrap();
         let (mask, Some(dist_t)) =
-            super::clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LocalMin]).unwrap()
+            super::clc_dist_d2_and_mask(slice_0, slice_1, true, &mut [LocalMin{dim:1}]).unwrap()
         else {
             panic!("no dists");
         };
@@ -1456,7 +1459,7 @@ mod distance_tests {
 
         debug!("distances=\n{distances}");
 
-        let mask = local_min_mask(&distances);
+        let mask = local_min_mask(&distances, 1);
 
         debug!("mask=\n{mask}");
 
@@ -1477,7 +1480,7 @@ mod distance_tests {
 
         debug!("distances=\n{distances}");
 
-        let mask = local_min_mask(&distances);
+        let mask = local_min_mask(&distances, 1);
 
         debug!("mask=\n{mask}");
     }
@@ -2053,7 +2056,9 @@ mod distance_tests {
         )
         .view((2, input_n as i64)); //unsqueeze to make it [channels x t_0 slices x t_1 slices]
 
-        let mask = LocalMin.make_mask(None, &distances);
+        debug!("distances={distances:?}");
+
+        let mask = LocalMin{dim: 1}.make_mask(None, &distances);
 
         trace!("mask=\n{mask}");
         debug!("mask.nonzero=\n{}", mask.nonzero());

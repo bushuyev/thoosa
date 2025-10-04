@@ -7,8 +7,8 @@ cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logge
 
 select count(*) cnt, motif_id from slice_matches group by motif_id order by cnt desc limit 100;
 
-export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.7.1/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test/ plot-motif-slices --motifs-by=motif_id:45761
-export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.7.1/lib/  && cargo run --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test/ plot-motif-slices --motifs-by=run_id:11
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.7.1/lib/  && cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test/ plot-motif-slices --motifs-by=motif_id:45761
+export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.7.1/lib/  && cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test/ plot-motif-slices --motifs-by=run_id:11
 
 
 
