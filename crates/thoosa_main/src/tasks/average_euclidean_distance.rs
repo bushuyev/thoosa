@@ -110,3 +110,159 @@ mod tests {
     }
 
 }
+#[cfg(test)]
+pub mod mock_average_stage {
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use async_trait::async_trait;
+    use parking_lot::{Mutex, RwLock};
+    use caching_runner::common::OutId;
+    use caching_runner::common::runnable::Stage;
+    use caching_runner::oom_handler::Adjustable;
+    use thoosa_shared::{MyError, ThoosaError};
+    use thoosa_shared::traits::{DataId, SimpleId, WithId};
+    use torch_runner::data::ThoTensor2;
+    use torch_runner::metrics::TwoDimsMetrics;
+    use crate::tasks::average_euclidean_distance::AverageDistanceValue;
+    use crate::tasks::cross_dims::MotifSlices;
+    use crate::tasks::run_ctx_2::RunCtx2;
+
+    #[derive(Debug)]
+    pub struct MockAverageStage {
+        id: SimpleId,
+        outputs: Mutex<VecDeque<f32>>,
+        fail_first: bool,
+        fail_while_dim0_gt: Option<i64>,
+        call_log: Arc<Mutex<Vec<i64>>>,
+        counter: AtomicUsize,
+    }
+
+    impl MockAverageStage {
+        fn next_value(&self) -> Option<f32> {
+            self.outputs.lock().pop_front()
+        }
+    }
+
+    impl Adjustable for MockAverageStage {}
+
+    impl WithId for MockAverageStage {
+        type ID = SimpleId;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
+    impl OutId for MockAverageStage {
+        fn out_id(
+            &self,
+            input_id: &<<Self as Stage>::In<'static> as WithId>::ID,
+        ) -> <Self::Out as WithId>::ID {
+            SimpleId::from(format!("{}_avg_ec_dist", input_id))
+        }
+    }
+
+    #[async_trait]
+    impl Stage for MockAverageStage {
+        type Ctx = RunCtx2;
+        type In<'a> = ThoTensor2<MotifSlices, DataId>;
+        type Out = AverageDistanceValue;
+
+        fn do_run<'a>(
+            self: Arc<Self>,
+            input: &Self::In<'a>,
+            ctx: Arc<RwLock<Self::Ctx>>,
+        ) -> Result<Self::Out, ThoosaError>
+        where
+            Self: Sized,
+        {
+            let _ = ctx;
+            let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
+            let metrics: TwoDimsMetrics<0> = input
+                .size()
+                .try_into()
+                .expect("MockAverageStage expects motif metrics");
+            let dim_0 = metrics.dim_0();
+            self.call_log.lock().push(dim_0);
+
+            if self.fail_first && call_idx == 0 {
+                return Err(MyError::OutOfMemory.into());
+            }
+
+            if let Some(threshold) = self.fail_while_dim0_gt {
+                if dim_0 > threshold {
+                    return Err(MyError::OutOfMemory.into());
+                }
+            }
+
+            let value = self
+                .next_value()
+                .expect("mock outputs exhausted");
+
+            Ok(AverageDistanceValue::new(
+                SimpleId::from(format!("partial_{call_idx}")),
+                value,
+            ))
+        }
+    }
+
+    pub struct MockAverageStageBuilder {
+        outputs: Vec<f32>,
+        fail_first: bool,
+        fail_while_dim0_gt: Option<i64>,
+        call_log: Option<Arc<Mutex<Vec<i64>>>>,
+    }
+
+    impl MockAverageStageBuilder {
+        pub fn with_outputs<I>(mut self, outputs: I) -> Self
+        where
+            I: Into<Vec<f32>>,
+        {
+            self.outputs = outputs.into();
+            self
+        }
+
+        pub fn fail_first(mut self) -> Self {
+            self.fail_first = true;
+            self
+        }
+
+        pub fn fail_while_dim0_gt(mut self, threshold: i64) -> Self {
+            self.fail_while_dim0_gt = Some(threshold);
+            self
+        }
+
+        pub fn with_call_log(mut self, call_log: Arc<Mutex<Vec<i64>>>) -> Self {
+            self.call_log = Some(call_log);
+            self
+        }
+
+        pub fn finish(self) -> Arc<MockAverageStage> {
+            let mut deque = VecDeque::new();
+            deque.extend(self.outputs);
+            let outputs = Mutex::new(deque);
+            let call_log = self
+                .call_log
+                .unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+
+            Arc::new(MockAverageStage {
+                id: SimpleId("MockAverageStage"),
+                outputs,
+                fail_first: self.fail_first,
+                fail_while_dim0_gt: self.fail_while_dim0_gt,
+                call_log,
+                counter: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    pub fn build() -> MockAverageStageBuilder {
+        MockAverageStageBuilder {
+            outputs: Vec::new(),
+            fail_first: false,
+            fail_while_dim0_gt: None,
+            call_log: None,
+        }
+    }
+}
