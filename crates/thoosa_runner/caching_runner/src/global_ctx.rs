@@ -30,6 +30,10 @@ impl CacheAreasKeeper {
         Ok(next)
     }
 
+    pub fn dispose_cache_area(&mut self, cache_area: u64)  {
+        remove_mask(self.cache_areas, cache_area);
+    }
+
     pub fn new() -> Self {
         Self { cache_areas: 0 }
     }
@@ -105,6 +109,7 @@ impl GlobalCtx {
     }
 
     pub async fn remove_cache(&self, key:&'static str) {
+
         assert!(self.caches.write().await.remove(key).is_some());
     }
 
@@ -175,6 +180,10 @@ impl GlobalCtx {
 
     pub fn next_cache_area(&self) -> Result<u64, ThoosaError> {
         self.caches_areas.write().next_available_cache_area()
+    }
+
+    pub fn dispose_cache_area(&self, cache_area:u64) {
+        self.caches_areas.write().dispose_cache_area(cache_area)
     }
 
     #[allow(dead_code)]

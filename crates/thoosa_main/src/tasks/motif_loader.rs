@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
@@ -9,19 +10,26 @@ use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 use cached_derive::Cached;
-use caching_runner::common::{Data, OutId, RunCtx};
+use caching_runner::common::{Data, OutId, RunCtx, Select};
 use caching_runner::common::runnable::Stage;
 use caching_runner::tmp_cache::TmpCached;
+use thoosa_common::dims::Dims;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
-use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::ThoosaError;
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::run_configs::RunId;
+use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
 use torch_runner::metrics::TwoDimsMetrics;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
+use crate::tasks::load_motif_and_clc_dist::{MotifSlicesSelector, ClcMotifInput};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
+use ambassador::Delegate;
+use rand::distr::{Alphanumeric, SampleString};
+use rand::thread_rng;
+use caching_runner::oom_handler::Adjustable;
 
 #[derive(Debug, Cached)]
 pub struct MotifLoader<SRC>
@@ -54,12 +62,88 @@ where SRC: TensorLoader + 'static
     }
 }
 
+#[derive(Debug)]//Delegate
+// #[delegate(Select<MotifSlicesSelector>, t)]
+pub struct MotifWithData {
+    t:ThoTensor2<MotifSlices, DataId>,
+    channel:i64,
+    run_id: RunId
+}
+
+impl Select<MotifSlicesSelector> for MotifWithData {
+    type Output = MotifWithData;
+
+    fn subview(&self, selector: MotifSlicesSelector) -> Self::Output {
+        MotifWithData {
+            t: self.t.subview(selector),
+            channel: self.channel,
+            run_id: self.run_id
+        }
+    }
+
+}
+
+impl Adjustable for MotifWithData {}
+impl ClcMotifInput for MotifWithData {}
+
+impl MotifWithData {
+    pub fn new(t: ThoTensor2<MotifSlices, DataId>, channel: i64, run_id: RunId) -> Self {
+        Self { t, channel, run_id }
+    }
+
+    pub fn t(&self) -> &ThoTensor2<MotifSlices, DataId> {
+        &self.t
+    }
+
+    pub fn channel(&self) -> i64 {
+        self.channel
+    }
+
+    pub fn run_id(&self) -> RunId {
+        self.run_id
+    }
+}
+
+impl WithId for MotifWithData {
+    type ID = DataId;
+
+    fn id(&self) -> &Self::ID {
+        self.t.id()
+    }
+}
+
+#[async_trait]
+impl CopyToDevice for MotifWithData {
+    async fn copy_to_device(&self, dst_device: usize) -> Self{
+        MotifWithData {
+            t: self.t.copy_to_device(dst_device).await,
+            channel: self.channel,
+            run_id: self.run_id
+        }
+    }
+}
+
+impl Data for MotifWithData {
+    type Metrics = <MotifSlices as Dims>::Metrics;
+
+    fn size(&self) -> Self::Metrics {
+        Data::size(&self.t)
+    }
+
+    fn device(&self) -> usize {
+        self.t.device()
+    }
+}
+
+impl Input for MotifWithData {}
+impl Output for MotifWithData {}
+
 #[async_trait]
 impl <SRC> Stage for MotifLoader <SRC>
     where SRC: TensorLoader + 'static
 {
     type In<'a> = DataId;
-    type Out = ThoTensor2<MotifSlices, DataId>;
+    type Out = MotifWithData;
 
     type Ctx = RunCtx2;
 
@@ -84,11 +168,15 @@ impl <SRC> Stage for MotifLoader <SRC>
         });
 
         let window = find_motifs_run_config.window;
-        let device_idx = ctx.read().device_idx();
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+
 
         debug!("MotifLoader::run: window={window:?} device_idx={device_idx}");
 
-        let tmp_cache:TmpCached<ThoTensor2<ChannelsData2, SimpleId>> = TmpCached::new("tmp").await;
+        let tmp_cache:TmpCached<ThoTensor2<ChannelsData2, SimpleId>> = TmpCached::new(format!("motif_{}", Alphanumeric.sample_string(&mut rand::rng(), 16)).leak(), cache_area).await;
 
         for (resource_id, slices) in resource_ids_slices {
             let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
@@ -112,13 +200,13 @@ impl <SRC> Stage for MotifLoader <SRC>
 
         }
 
-        Ok(ThoTensor2::new(
+        Ok(MotifWithData::new(ThoTensor2::new(
             DataId(0), 
             Tensor::cat(
                 tmp_cache.take_all(device_idx).await.into_iter().map(|tt|tt.t()).collect::<Vec<Tensor>>().as_slice(), 
                 0
             )
-        ))
+        ), channel, run_id))
     }
 }
 
@@ -135,12 +223,13 @@ pub mod mock_motif_loader {
     use torch_runner::data::ThoTensor2;
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::load_motif_and_clc_dist::MotifLoaderStage;
+    use crate::tasks::motif_loader::MotifWithData;
     use crate::tasks::run_ctx_2::RunCtx2;
 
     type RunCachedFuture = Pin<
         Box<
             dyn Future<
-                Output = Result<Arc<DataCacheWrapper<ThoTensor2<MotifSlices, DataId>>>, ThoosaError>,
+                Output = Result<Arc<DataCacheWrapper<MotifWithData>>, ThoosaError>,
             > + Send,
         >,
     >;
@@ -160,7 +249,7 @@ pub mod mock_motif_loader {
 
     #[async_trait]
     impl MotifLoaderStage for MockMotifLoader {
-        type Output = ThoTensor2<MotifSlices, DataId>;
+        type Output = MotifWithData;
 
         async fn run_cached(
             self: Arc<Self>,
@@ -180,7 +269,7 @@ pub mod mock_motif_loader {
         where
             F: Fn(Arc<DataId>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
             Fut: Future<
-                Output = Result<Arc<DataCacheWrapper<ThoTensor2<MotifSlices, DataId>>>, ThoosaError>,
+                Output = Result<Arc<DataCacheWrapper<MotifWithData>>, ThoosaError>,
             > + Send
             + 'static,
         {
@@ -190,7 +279,7 @@ pub mod mock_motif_loader {
 
         pub fn with_result(
             self,
-            data: Arc<DataCacheWrapper<ThoTensor2<MotifSlices, DataId>>>,
+            data: Arc<DataCacheWrapper<MotifWithData>>,
         ) -> Self {
             self.with_run_cached_fn(move |_input, _ctx| {
                 let data = Arc::clone(&data);
@@ -216,7 +305,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use log::LevelFilter::Trace;
-    use log::set_max_level;
+    use log::{set_max_level, trace};
     use parking_lot::RwLock;
     use caching_runner::common::cachable::Cached;
     use caching_runner::global_ctx::GlobalCtx;
@@ -274,10 +363,7 @@ mod tests {
         let r = motif.with_data_ref(0, None, |t|{
             let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
-            println!("motif.t={} dist={dist}", t.t_ref());
-
-
-
+            trace!("motif.t={} dist={dist}", t.t.t_ref());
 
             Ok(true)
         }).await?;

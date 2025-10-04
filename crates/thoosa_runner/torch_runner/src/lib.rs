@@ -276,7 +276,7 @@ impl LoadedTensor {}
 impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, SimpleId> {
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
-    fn select(&self, selector: std::ops::Range<TwoDimsMetrics<0>>) -> Self::Output {
+    fn subview(&self, selector: std::ops::Range<TwoDimsMetrics<0>>) -> Self::Output {
         use std::cmp::min;
 
         let size: TwoDimsMetrics<0> = self

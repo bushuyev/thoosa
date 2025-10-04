@@ -13,6 +13,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_shared::ThoosaError;
 use torch_runner::data::ThoTensor2;
+use crate::tasks::motif_loader::MotifWithData;
 
 pub struct AverageEuclideanDistanceStage {
     id:SimpleId,
@@ -81,7 +82,7 @@ impl OutId for AverageEuclideanDistanceStage {
 #[async_trait]
 impl Stage for AverageEuclideanDistanceStage {
     type Ctx = RunCtx2;
-    type In<'a> = ThoTensor2<MotifSlices, DataId>;
+    type In<'a> = MotifWithData;
     type Out = AverageDistanceValue;
 
 
@@ -92,7 +93,7 @@ impl Stage for AverageEuclideanDistanceStage {
         Self: Sized
     {
 
-        input.run_inner(|t|{
+        input.t().run_inner(|t|{
             Ok(AverageDistanceValue::new("todo".into(), average_euclidean_distance(t)?))
         })
 
@@ -126,6 +127,7 @@ pub mod mock_average_stage {
     use torch_runner::metrics::TwoDimsMetrics;
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::cross_dims::MotifSlices;
+    use crate::tasks::motif_loader::MotifWithData;
     use crate::tasks::run_ctx_2::RunCtx2;
 
     #[derive(Debug)]
@@ -166,7 +168,7 @@ pub mod mock_average_stage {
     #[async_trait]
     impl Stage for MockAverageStage {
         type Ctx = RunCtx2;
-        type In<'a> = ThoTensor2<MotifSlices, DataId>;
+        type In<'a> = MotifWithData;
         type Out = AverageDistanceValue;
 
         fn do_run<'a>(
@@ -179,7 +181,7 @@ pub mod mock_average_stage {
         {
             let _ = ctx;
             let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
-            let metrics: TwoDimsMetrics<0> = input
+            let metrics: TwoDimsMetrics<0> = input.t()
                 .size()
                 .try_into()
                 .expect("MockAverageStage expects motif metrics");

@@ -57,7 +57,7 @@ impl<D: Data + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D> {
 
 impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
-    pub async fn new(name: &'static str) -> Self {
+    pub async fn new(name: &'static str, cache_area: u64) -> Self {
 
         let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>>> = Box::new(Default::default());
 
@@ -73,7 +73,7 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
         Self {
             name,
             map,
-            cache_area: GlobalCtx::global().next_cache_area().expect("next_cache_area failed")
+            cache_area
         }
 
     }
@@ -155,7 +155,7 @@ mod tests {
         }
 
 
-        let tmp_cache:TmpCached<DummyData> = TmpCached::new("tmp").await;
+        let tmp_cache:TmpCached<DummyData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
 
 
         tmp_cache.insert(DummyData::new("foo".into(), 1));
