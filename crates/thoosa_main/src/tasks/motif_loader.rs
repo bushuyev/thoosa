@@ -123,6 +123,95 @@ impl <SRC> Stage for MotifLoader <SRC>
 }
 
 #[cfg(test)]
+pub mod mock_motif_loader {
+    use std::fmt;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use async_trait::async_trait;
+    use parking_lot::RwLock;
+    use caching_runner::common::cachable::DataCacheWrapper;
+    use thoosa_shared::ThoosaError;
+    use thoosa_shared::traits::DataId;
+    use torch_runner::data::ThoTensor2;
+    use crate::tasks::cross_dims::MotifSlices;
+    use crate::tasks::load_motif_and_clc_dist::MotifLoaderStage;
+    use crate::tasks::run_ctx_2::RunCtx2;
+
+    type RunCachedFuture = Pin<
+        Box<
+            dyn Future<
+                Output = Result<Arc<DataCacheWrapper<ThoTensor2<MotifSlices, DataId>>>, ThoosaError>,
+            > + Send,
+        >,
+    >;
+
+    type RunCachedFn = dyn Fn(Arc<DataId>, Arc<RwLock<RunCtx2>>) -> RunCachedFuture + Send + Sync;
+
+    #[derive(Clone)]
+    pub struct MockMotifLoader {
+        run_cached_fn: Arc<RunCachedFn>,
+    }
+
+    impl fmt::Debug for MockMotifLoader {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("MockMotifLoader").finish()
+        }
+    }
+
+    #[async_trait]
+    impl MotifLoaderStage for MockMotifLoader {
+        type Output = ThoTensor2<MotifSlices, DataId>;
+
+        async fn run_cached(
+            self: Arc<Self>,
+            input: Arc<DataId>,
+            ctx: Arc<RwLock<RunCtx2>>,
+        ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError> {
+            (self.run_cached_fn)(input, ctx).await
+        }
+    }
+
+    pub struct MockMotifLoaderBuilder {
+        run_cached_fn: Option<Arc<RunCachedFn>>,
+    }
+
+    impl MockMotifLoaderBuilder {
+        pub fn with_run_cached_fn<F, Fut>(mut self, f: F) -> Self
+        where
+            F: Fn(Arc<DataId>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
+            Fut: Future<
+                Output = Result<Arc<DataCacheWrapper<ThoTensor2<MotifSlices, DataId>>>, ThoosaError>,
+            > + Send
+            + 'static,
+        {
+            self.run_cached_fn = Some(Arc::new(move |input, ctx| Box::pin(f(input, ctx))));
+            self
+        }
+
+        pub fn with_result(
+            self,
+            data: Arc<DataCacheWrapper<ThoTensor2<MotifSlices, DataId>>>,
+        ) -> Self {
+            self.with_run_cached_fn(move |_input, _ctx| {
+                let data = Arc::clone(&data);
+                async move { Ok(data) }
+            })
+        }
+
+        pub fn finish(self) -> Arc<MockMotifLoader> {
+            let run_cached_fn = self
+                .run_cached_fn
+                .expect("MockMotifLoaderBuilder requires run_cached_fn to be set");
+            Arc::new(MockMotifLoader { run_cached_fn })
+        }
+    }
+
+    pub fn build() -> MockMotifLoaderBuilder {
+        MockMotifLoaderBuilder { run_cached_fn: None }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -131,21 +220,17 @@ mod tests {
     use parking_lot::RwLock;
     use caching_runner::common::cachable::Cached;
     use caching_runner::global_ctx::GlobalCtx;
-    use caching_runner::tmp_cache::TmpCached;
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
-    use thoosa_motifs::distance::average_euclidean_distance;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::DataId;
-    use thoosa_store::{MockStore, MockStoreBuilder, Store};
-    use torch_runner::data::ThoTensor2;
-    use crate::tasks::cross_dims::MotifSlices;
+    use thoosa_store::MockStoreBuilder;
     use crate::tasks::motif_loader::MotifLoader;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
-    use crate::tasks::tensor_loader::mock_tensor_loader::{make_wrapper, make_wrapper_t};
+    use crate::tasks::tensor_loader::mock_tensor_loader;
+    use crate::tasks::tensor_loader::mock_tensor_loader::make_wrapper_t;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn load_motifs() -> Result<(), ThoosaError> {
@@ -203,3 +288,4 @@ mod tests {
     }
 
 }
+
