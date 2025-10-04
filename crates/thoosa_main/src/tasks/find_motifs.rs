@@ -37,27 +37,11 @@ where
     SRC: TensorLoader + 'static,
 {
     run_config: FindMotifsRunConfig,
-    cross_loader: Arc<
-        CrossLoader<
+    cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossBatchClc<
-                Box<
-                    dyn Fn(
-                            Tensor,
-                            Tensor,
-                            &BatchInput<&Arc<Resource>>,
-                            &MeanDistsCtx,
-                        ) -> Result<DistWithMask, ThoosaError>
-                        + Send
-                        + Sync,
-                >,
-                DistWithMask,
-                MeanDistsCtx,
-            >,
-            DistsTracker,
-        >,
-    >,
+            CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
+        >>
 }
 
 impl<RC, SRC> FindMotifsStages<RC, SRC>
@@ -67,27 +51,11 @@ where
 {
     pub fn new(
         run_config: FindMotifsRunConfig,
-        cross_loader: Arc<
-            CrossLoader<
-                RC,
-                SRC,
-                CrossBatchClc<
-                    Box<
-                        dyn Fn(
-                                Tensor,
-                                Tensor,
-                                &BatchInput<&Arc<Resource>>,
-                                &MeanDistsCtx,
-                            ) -> Result<DistWithMask, ThoosaError>
-                            + Send
-                            + Sync,
-                    >,
-                    DistWithMask,
-                    MeanDistsCtx,
-                >,
-                DistsTracker,
-            >,
-        >,
+        cross_loader: Arc<CrossLoader<
+            RC,
+            SRC,
+            CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
+        >>
     ) -> Self {
         Self {
             run_config,
