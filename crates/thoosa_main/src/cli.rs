@@ -91,7 +91,7 @@ use caching_runner::common::cachable::Cached;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
-use crate::tasks::load_motif_and_clc_dist::LoadMotifAndClcDistanceStage;
+use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifLoaderStage};
 use crate::tasks::motif_loader::MotifLoader;
 
 #[derive(Parser, Clone, Debug)]
@@ -1671,7 +1671,7 @@ async fn run_plot_motif_slices(
             debug!("run_plot_motif_slices: MotifsBy::MotifId run_id={motif_id}");
 
 
-            let motif_loader = Arc::new(MotifLoader::new(
+            let motif_loader_impl = Arc::new(MotifLoader::new(
                 Arc::clone(store),
                 Arc::clone(loader)
             ));
@@ -1680,8 +1680,17 @@ async fn run_plot_motif_slices(
             let channel = 0;//TODO
 
             let motif_id = Arc::new(DataId::from(motif_id as u32));
-            let motif = Arc::clone(&motif_loader).run_cached(Arc::clone(&motif_id), Arc::clone(&ctx)).await?;
-            let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(motif_loader, Arc::new(AverageEuclideanDistanceStage::new())));
+            let motif = MotifLoaderStage::run_cached(
+                Arc::clone(&motif_loader_impl),
+                Arc::clone(&motif_id),
+                Arc::clone(&ctx),
+            )
+            .await?;
+            let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
+                Arc::clone(&motif_loader_impl)
+                    as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as caching_runner::common::runnable::Stage>::In<'static>>>,
+                Arc::new(AverageEuclideanDistanceStage::new()),
+            ));
 
             let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val|{
                 Ok(dist_val.value())
