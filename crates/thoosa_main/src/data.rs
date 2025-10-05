@@ -101,28 +101,6 @@ pub fn series_to_tensor(s: &Series) -> Result<Tensor, ThoosaError> {
     })
 }
 
-#[allow(dead_code)]
-fn arr_to_expr<T, X>(id_expr: Expr, iter: T, step: X) -> Expr
-where
-    T: IntoIterator<Item = X>,
-    X: Add + Into<Expr> + Copy,
-    Expr: From<<X as Add>::Output>,
-{
-    iter.into_iter()
-        .fold(None, |expr_op: Option<Expr>, v| {
-            let new_expr = id_expr
-                .clone()
-                .gt_eq(v)
-                .and(id_expr.clone().lt_eq(v + step));
-
-            if let Some(exp) = expr_op {
-                Some(exp.or(new_expr))
-            } else {
-                Some(new_expr)
-            }
-        })
-        .expect("exp")
-}
 
 #[allow(dead_code)]
 fn split_frame_by_offsets<I>(mut df: DataFrame, offsets_sec: I) -> PolarsResult<Vec<DataFrame>>
@@ -277,7 +255,7 @@ pub fn labeled_tensors_by_descr<'a>(
 
 #[cfg(test)]
 mod data_tests {
-    use crate::data::{arr_to_expr, split_frame_by_offsets};
+    use crate::data::{split_frame_by_offsets};
     use log::debug;
     use polars::prelude::*;
     use polars_arrow::array::Float32Array;
@@ -294,34 +272,6 @@ mod data_tests {
         init_test_logging();
     }
 
-    #[test]
-    pub fn test_arr_to_expr() -> Result<(), ThoosaError> {
-        let df: DataFrame = df!(
-            "val"       => [1, 2, 3, 4, 5, 6, 7, 8, 9],
-        )?;
-
-        let id_expr = col("id");
-
-        let filter_exps = arr_to_expr(id_expr, [2, 6], 2);
-
-        let df = df
-            .lazy()
-            .with_row_index("id", None)
-            .filter(filter_exps)
-            .collect()?;
-
-        debug!("df={:?}", df);
-
-        assert_eq!(
-            df!(
-                "id"   => [2, 3, 4, 6, 7, 8],
-                "val"  => [3, 4, 5, 7, 8, 9],
-            )?,
-            df,
-        );
-
-        Ok(())
-    }
 
     #[test]
     pub fn test_split_frame_by_offsets() -> Result<(), ThoosaError> {

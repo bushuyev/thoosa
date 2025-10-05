@@ -72,7 +72,7 @@ pub struct CrossBatchClc<F, R, CrossBatchCtx>
 where
     F: for<'a> Fn(Tensor, Tensor, &BatchInput<'a, &'a Arc<Resource>>, &CrossBatchCtx) -> Result<R, ThoosaError>,
 {
-    batch_clc: F,
+    batch_clc_fn: F,
     cross_batch_ctx: CrossBatchCtx,
     unfold_params: UnfoldParams,
 }
@@ -102,7 +102,7 @@ where
 {
     pub fn new(batch_clc: F, cross_batch_ctx: CrossBatchCtx, unfold_params: UnfoldParams) -> Self {
         Self {
-            batch_clc,
+            batch_clc_fn: batch_clc,
             cross_batch_ctx,
             unfold_params,
         }
@@ -246,7 +246,7 @@ where
             tensor_mem_size(&batch_1_t)
         );
 
-        (self.batch_clc)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx).map(|v| {
+        (self.batch_clc_fn)(batch_0_t, batch_1_t, &input, &self.cross_batch_ctx).map(|v| {
             CrossBatchClcOutput::new(
                 v,
                 SlicesIter::new(self.unfold_params.step as usize, resource_ids_sizes_0),
@@ -276,7 +276,7 @@ mod tests {
     use torch_runner::data::ThoTensor2;
 
     #[test]
-    fn test_0() -> Result<(), ThoosaError> {
+    fn test_cross_batch_clc() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }

@@ -98,7 +98,6 @@ impl CopyCtx {
         buf_size
     }
 
-    #[allow(dead_code)]
     pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_device: usize, kind: Kind) -> Tensor {
         if dst_device == 0 {
             copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool).await

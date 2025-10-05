@@ -165,7 +165,7 @@ where
         let dist = OOMHandler::new(
             vec![Adjusters::Input(Box::new(
                 SplitsAdjuster::<<CLC as Stage>::In<'static>, MotifSlicesSelector>::new(
-                    [(motif_size.dim_0() as f32 * 0.1) as i64 + 2, -1].into(),
+                    [1000, -1].into(),//TODO detect optimal min
                 ),
             ))],
             None,

@@ -17,6 +17,8 @@ use std::sync::Arc;
 use tch::Kind::Float;
 use tch::{Device, Kind, Tensor};
 use tch::Device::Cpu;
+use tch::kind::FLOAT_CPU;
+use tokio::runtime::Handle;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
@@ -82,28 +84,29 @@ impl MeanDistsCtx {
 }
 
 #[derive(Debug)]
-pub struct FindMotifsStage<ResConf, SRC>
-where
-    ResConf: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: TensorLoader + 'static + Debug,
-{
-    run_config_stages: Vec<FindMotifsStages<ResConf, SRC>>,
-    pd: PhantomData<(ResConf, SRC)>,
-}
-
-impl<RC, SRC> FindMotifsStage<RC, SRC>
+pub struct FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: TensorLoader + 'static,
+    L: TensorLoader + 'static + Debug,
+{
+    run_config_stages: Vec<FindMotifsStages<RC, L>>,
+    pd: PhantomData<(RC, L)>,
+}
+
+impl<RC, L> FindMotifsStage<RC, L>
+where
+    RC: ResourcesConfig<R = Vec<Resource>> + Debug,
+    L: TensorLoader + 'static,
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<RwLock<Box<dyn Store>>>,
-        loader: Arc<SRC>,
+        loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig,
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
     ) -> Self {
+
         let cross_loaders = run_configs
             .into_iter()
             .map(|run_config| {
@@ -111,21 +114,11 @@ where
 
                 let filter = run_config.slices_filter.clone();
 
-                let batch_clc: CrossBatchClc<
-                    Box<
-                        dyn Fn(
-                                Tensor,
-                                Tensor,
-                                &BatchInput<&Arc<Resource>>,
-                                &MeanDistsCtx,
-                            ) -> Result<DistWithMask, ThoosaError>
-                            + Send
-                            + Sync,
-                    >,
+                let batch_clc: CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync >,
                     DistWithMask,
                     MeanDistsCtx,
                 > = CrossBatchClc::new(
-                    Box::new(move |t_0, t_1, input, ctx| {
+                    Box::new(move |t_0, t_1, input, means_ctx| {
                         let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
                         let mut mask_makers = match &filter {
@@ -135,8 +128,8 @@ where
                                     LocalMin {dim: 2},
                                     LeRunningMean {
                                         k: v.mean,
-                                        avg: &ctx.means_acc,
-                                        total_samples: &ctx.total_samples,
+                                        avg: &means_ctx.means_acc,
+                                        total_samples: &means_ctx.total_samples,
                                     },
                                 ]
                             }
@@ -164,22 +157,29 @@ where
 
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
                         if dists.0.device().ne(&Cpu) {
+
                             Ok(tokio::task::block_in_place(|| {
-                                tokio::runtime::Handle::current().block_on(async {
+                                Handle::current().block_on(async {
+
                                     DistWithMask::new(
                                         CopyCtx::instance().copy(&dists.0, 0, dists.0.kind()).await,
-                                        match dists.1 {
-                                            None => None,
-                                            Some(t) => {
-                                                Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)
+                                        if fixed_config.keep_slice_matches {
+                                            match dists.1 {
+                                                None => None,
+                                                Some(t) => {
+                                                    Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)
+                                                }
                                             }
-                                        },
+                                        } else {
+                                            None
+                                        }
                                     )
                                 })
                             }))
                         } else {
                             Ok(DistWithMask::new(dists.0, dists.1))
                         }
+                        // Ok(DistWithMask::new(Tensor::zeros(&[3, 1000, 1000], FLOAT_CPU), None))
                     }),
                     MeanDistsCtx::new(channels, device.into()),
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
@@ -200,8 +200,8 @@ where
                         &store,
                         Arc::new(batch_clc),
                         receiver,
-                        2,
-                        20,
+                        0,
+                        fixed_config.chunk_size as usize,
                         |dists_tracker| {
                             let dists_tracker = Arc::clone(dists_tracker);
                             async move {
@@ -243,10 +243,10 @@ where
         for stage in self.run_config_stages.iter() {
             let ctx_arc = Arc::clone(&ctx);
             let input_arc = Arc::clone(&input);
-            let stage_arc = Arc::clone(&stage.cross_loader);
+            let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
             js.spawn(async {
-                let out = stage_arc.run(input_arc, ctx_arc).await?;
+                let out = cross_loader_arc.run(input_arc, ctx_arc).await?;
 
                 Ok(out)
             });
@@ -440,7 +440,7 @@ mod tests {
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
                 &r#"{
-                step:"200",
+                step:"100",
                 window:"1000",
                 slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
 
