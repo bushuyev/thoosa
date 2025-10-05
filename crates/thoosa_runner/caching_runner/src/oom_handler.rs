@@ -389,14 +389,14 @@ where
                                     input_select_adjusted.as_ref()
                                 {
                                     input.with_selected_data_ref(device_idx, selector.clone(), None, |data| {
-                                            Arc::clone(task_to_run).do_run(&data, Arc::clone(&run_context))
-                                        })
-                                        .await
+                                        Arc::clone(task_to_run).do_run(&data, Arc::clone(&run_context))
+                                    }).await
+
                                 } else {
                                     input.with_data_ref(device_idx, None, |data| {
-                                            Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
-                                        })
-                                        .await
+                                        Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
+                                    }).await
+
                                 };
 
                                 match run_result
@@ -418,6 +418,8 @@ where
                                         }
                                     }
                                     Err(te) => {
+                                        debug!("OOMHandler::run: err te={te:?}");
+
                                         if run_context.read().acquired_permits() == MAX_PERMITS {
                                             GlobalCtx::global()
                                                 .dump_all_to_cpu(&HashMap::new(), device_idx)
@@ -428,9 +430,8 @@ where
 
                                         match te.what() {
                                             MyError::OutOfMemory => {
-                                                debug!(
-                                                    "OOMHandler::run: err ctx_name={ctx_name}  adjust_context={contexts:?}"
-                                                );
+                                                debug!("OOMHandler::run: err ctx_name={ctx_name}  adjust_context={contexts:?}");
+
                                                 if !adjuster.degrade(&mut contexts) {
                                                     match adjuster {
                                                         Adjusters::Input(v) => {

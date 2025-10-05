@@ -36,6 +36,7 @@ use tch::Device::Cpu;
 use tch::Kind::Float;
 use tch::nn::VarStore;
 use tch::{Device, Tensor};
+use tch::kind::FLOAT_CPU;
 use thoosa_common::applicables::{ThoDevice, ThoRunCtx, ThoRunner};
 use thoosa_common::batches::{
     AsyncBatchTransform, AsyncClassTensorsLoaderData, AsyncLoadingTensorsDataBatch,
@@ -282,6 +283,7 @@ where
                     key.file_stem()
                 )))
                 .unwrap(),
+                // Tensor::zeros(&[20, 10_000], FLOAT_CPU)
             )
         },
         ThoDevice::from(Device::Cpu),
@@ -340,9 +342,6 @@ where
                 "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
             );
 
-
-
-
             let run_ids = run_grid::<Simple, _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
@@ -358,7 +357,7 @@ where
                         &store,
                         loader_2,
                         run_configs,
-                        FixedFindMotifsConfig::new(None, 2, false, None),
+                        FixedFindMotifsConfig::new(None, 100_000, false, None),
                         ThoDevice::from(1),
                     ))
                 },
