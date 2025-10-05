@@ -144,7 +144,6 @@ impl Stage for DistsTracker {
         } = input.clc_result();
 
         for (channel, mt) in self.channel_trackers.iter().enumerate()
-        /*.par_bridge()*/
         {
             let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
             let dists_flattened = dists

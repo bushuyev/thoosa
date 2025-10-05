@@ -276,7 +276,7 @@ mod tests {
     use torch_runner::data::ThoTensor2;
 
     #[test]
-    fn test_0() -> Result<(), ThoosaError> {
+    fn test_cross_batch_clc() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
