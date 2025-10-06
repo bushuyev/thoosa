@@ -173,7 +173,6 @@ impl <SRC> Stage for MotifLoader <SRC>
             (guard.device_idx(), guard.cache_area())
         };
 
-
         debug!("MotifLoader::run: window={window:?} device_idx={device_idx}");
 
         let tmp_cache:TmpCached<ThoTensor2<ChannelsData2, SimpleId>> = TmpCached::new(format!("motif_{}", Alphanumeric.sample_string(&mut rand::rng(), 16)).leak(), cache_area).await;
@@ -201,7 +200,7 @@ impl <SRC> Stage for MotifLoader <SRC>
         }
 
         Ok(MotifWithData::new(ThoTensor2::new(
-            DataId(0), 
+            input.deref().clone(),
             Tensor::cat(
                 tmp_cache.take_all(device_idx).await.into_iter().map(|tt|tt.t()).collect::<Vec<Tensor>>().as_slice(), 
                 0

@@ -357,11 +357,11 @@ where
                         &store,
                         loader_2,
                         run_configs,
-                        FixedFindMotifsConfig::new(None, 100_000, false, None),
+                        FixedFindMotifsConfig::new(None, 200_000, false, None),
                         ThoDevice::from(1),
                     ))
                 },
-                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "aa"))),
+                || Arc::new(parking_lot::RwLock::new(RunCtx2::new(1, 0, "find motifs"))),
             )
             .await?;
 
@@ -1691,7 +1691,11 @@ async fn run_plot_motif_slices(
 
             for motif_id in motif_distances {
                 debug!("run_plot_motif_slices: motif_id={motif_id}");
-                plot_motif(&ws, Arc::clone(&ctx), motif_id, &motif_loader_impl, Arc::clone(&clc_dist)).await?;
+                plot_motif(&ws, Arc::clone(&ctx), motif_id, &motif_loader_impl, Arc::clone(&clc_dist)).await.map_err(|e|{
+                    error!("motif {motif_id} failed");
+                    e
+                })?;
+                MotifLoader::<RawTensorLoader>::cache().await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 10 == 0 {
@@ -2363,7 +2367,7 @@ where
     let stage = f(run_configs);
 
     let ctx = Arc::new(parking_lot::RwLock::new(
-        crate::tasks::run_ctx_2::RunCtx2::new(0, 0, "aa"),
+        RunCtx2::new(0, 0, "aa"),
     ));
 
     stage.run(input, ctx_f()).await?;

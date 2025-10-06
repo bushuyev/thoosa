@@ -426,6 +426,8 @@ where
         let mut skip_0_i = 0;
 
         for (i_0, resource_0) in resources.iter().enumerate() {
+            info!("on resource_0={resource_0:?}");
+
             let t_0 = Arc::clone(&self.loader)
                 .load(Arc::clone(resource_0), Arc::clone(&ctx))
                 .await?;
@@ -473,15 +475,16 @@ where
 
                         debug!("input={input:?}");
 
-                        let out =
-                            Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&ctx))?;
+                        let out = Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&ctx))?;
 
-                        let receiver_arc = Arc::clone(&self.receiver);
+                        /*let receiver_arc = Arc::clone(&self.receiver);
                         let ctx_arc = Arc::clone(&ctx);
-                        tokio::task::spawn_blocking(move || {
-                            //DistsTracker::do_run
-                            receiver_arc.receive(&out, ctx_arc).unwrap();
-                        });
+                        tokio::task::block_in_place(|| {
+                            // tokio::runtime::Handle::current().block_on(tokio::task::spawn_blocking(move || {
+                                //DistsTracker::do_run
+                                receiver_arc.receive(&out, ctx_arc)
+                            // }))
+                        })?;*/
 
                         Ok(())
                     },
@@ -498,7 +501,7 @@ where
             t_0_batch_resources.clear();
             t_0_batch_len = 0;
 
-            info!("resource_0={resource_0:?} done");
+
         }
 
         (self.on_all_done)(&self.receiver).await;
