@@ -290,6 +290,7 @@ fn mean_mask(
 ) -> Result<Tensor, ThoosaError> {
     let distances_size = distances.size();
 
+    debug!("mean_mask: k={k} distances={distances:?} pre_mask={pre_mask:?} means_acc={means_acc:?} total_samples={total_samples:?}");
     trace!("mean_mask: after pre_mask distances=\n{distances}");
 
     let (mean_t, counts_t) = if let Some(pm) = pre_mask {
@@ -457,9 +458,9 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
     drop(gram);
     drop(squared_norms_sum);
 
-    let dists_squared = dists_squared.clamp_min(0.0); // Replace negative values with 0
+    let dists_squared = dists_squared.f_clamp_min(0.0)?; // Replace negative values with 0
     // Step 4: Extract upper triangle without diagonal
-    let triu_indices = Tensor::triu_indices(n, n, 1, (Kind::Int64, t.device())); // Indices of upper triangle without diagonal
+    let triu_indices = Tensor::f_triu_indices(n, n, 1, (Kind::Int64, t.device()))?; // Indices of upper triangle without diagonal
     let i = triu_indices.get(0);
     let j = triu_indices.get(1);
 
@@ -482,7 +483,7 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoosaError> {
     debug!("average_euclidean_distance: mean_distance=\n{mean_distance}");
     trace!("average_euclidean_distance: clc_dist_d2s=\n{clc_dist_d2s}");
 
-    Ok(mean_distance.double_value(&[]) as f32)
+    Ok(mean_distance.f_double_value(&[])? as f32)
 }
 
 #[cfg(test)]

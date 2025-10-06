@@ -18,6 +18,7 @@ use tch::Kind::Float;
 use tch::{Device, Kind, Tensor};
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
+use tokio::runtime::Handle;
 use thoosa_common::applicables::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SlicesFilter};
@@ -156,8 +157,10 @@ where
 
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
                         if dists.0.device().ne(&Cpu) {
+
                             Ok(tokio::task::block_in_place(|| {
-                                tokio::runtime::Handle::current().block_on(async {
+                                Handle::current().block_on(async {
+
                                     DistWithMask::new(
                                         CopyCtx::instance().copy(&dists.0, 0, dists.0.kind()).await,
                                         if fixed_config.keep_slice_matches {

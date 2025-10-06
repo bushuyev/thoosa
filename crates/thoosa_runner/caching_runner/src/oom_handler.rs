@@ -388,14 +388,14 @@ where
                                 let run_result = if let Some(selector) =
                                     input_select_adjusted.as_ref()
                                 {
-                                    input.with_selected_data_ref(device_idx, selector.clone(), None, |data| {
+                                    panic_to_err_async!(input.with_selected_data_ref(device_idx, selector.clone(), None, |data| {
                                         Arc::clone(task_to_run).do_run(&data, Arc::clone(&run_context))
-                                    }).await
+                                    }).await)
 
                                 } else {
-                                    input.with_data_ref(device_idx, None, |data| {
+                                    panic_to_err_async!(input.with_data_ref(device_idx, None, |data| {
                                         Arc::clone(task_to_run).do_run(data, Arc::clone(&run_context))
-                                    }).await
+                                    }).await)
 
                                 };
 
@@ -464,7 +464,7 @@ where
                     }
                 }
 
-                Err(MyError::SomethingElse("all failed".to_string()).into())
+                Err(MyError::SomethingElse(format!("all failed: task={task:?} input={input:?}")).into())
             }
         }
     }

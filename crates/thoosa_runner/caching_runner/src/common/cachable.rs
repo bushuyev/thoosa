@@ -8,7 +8,7 @@ use crate::global_ctx::GlobalCtx;
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::FutureExt;
-use futures_util::future::{BoxFuture, Shared, join_all};
+use futures_util::future::{BoxFuture, Shared, join_all, try_join_all};
 use log::debug;
 use mockall_double::double;
 use parking_lot::RwLock;
@@ -262,36 +262,24 @@ impl<O: Data + WithId + Send + Sync + CopyToDevice> DataCacheWrapper<O> {
         }
     }
 
-    pub async fn with_data_array<W: AsRef<DataCacheWrapper<O>>, R>(
+    pub async fn with_data_array<W: AsRef<DataCacheWrapper<O>> + Debug, R>(
         other: &[W],
         to_device_idx: usize,
         _trace_ctx: Option<&'static str>,
         do_run: impl FnOnce(&[&O]) -> Result<R, ThoosaError>,
     ) -> Result<R, ThoosaError> {
-        let results = join_all(
+        let results = try_join_all(
             other
                 .into_iter()
                 .map(|w| w.as_ref().load_from_any_device_(to_device_idx)),
-        )
-        .await;
+        ).await?;
 
-        let mut owners: Vec<_> = Vec::new();
-        let mut errs: Vec<ThoosaError> = Vec::new();
 
-        for r in results {
-            match r {
-                Ok(o) => {
-                    owners.push(o);
-                }
-                Err(e) => errs.push(e), //TODO log errors
-            }
+        if results.is_empty() {
+            return Err(MyError::SomethingElse(format!("no data in all devices for {other:?} ")).into());
         }
 
-        if owners.is_empty() {
-            return Err(MyError::SomethingElse("all failed".into()).into());
-        }
-
-        let refs: Vec<&O> = owners.iter().map(|o| &**o).collect();
+        let refs: Vec<&O> = results.iter().map(|o| &**o).collect();
         do_run(&refs)
     }
 
