@@ -14,7 +14,7 @@ use parking_lot::{Mutex, RwLock};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tch::Kind::Float;
+use tch::Kind::{Bool, Float};
 use tch::{Device, Kind, Tensor};
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
@@ -179,7 +179,7 @@ where
                         } else {
                             Ok(DistWithMask::new(dists.0, dists.1))
                         }
-                        // Ok(DistWithMask::new(Tensor::zeros(&[3, 1000, 1000], FLOAT_CPU), None))
+                        // Ok(DistWithMask::new(Tensor::zeros(&[3, 200_000, 200_000], (Bool, Cpu)), None))
                     }),
                     MeanDistsCtx::new(channels, device.into()),
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
@@ -200,8 +200,7 @@ where
                         &store,
                         Arc::new(batch_clc),
                         receiver,
-                        0,
-                        fixed_config.chunk_size as usize,
+                        fixed_config.max_chunk_size as usize,
                         |dists_tracker| {
                             let dists_tracker = Arc::clone(dists_tracker);
                             async move {

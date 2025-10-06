@@ -274,7 +274,6 @@ where
     batch_clc: Arc<CrossCLC>,
     receiver: Arc<RSV>,
     chunk_size: usize,
-    max_batch: usize,
     on_all_done: Box<dyn Fn(&Arc<RSV>) -> BoxFuture<'static, ()> + Sync + Send>,
     pd: PhantomData<ResC>,
 }
@@ -306,7 +305,6 @@ where
         batch_clc: Arc<CrossCLC>,
         receiver: Arc<RSV>,
         chunk_size: usize,
-        max_batch: usize,
         on_all_done: OnAllDone,
     ) -> Self
     where
@@ -318,7 +316,6 @@ where
             batch_clc,
             receiver,
             chunk_size,
-            max_batch,
             on_all_done: Box::new(on_all_done),
             pd: Default::default(),
         }
@@ -405,7 +402,7 @@ where
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         // let chunk_size = self.chunk_size;
-        let max_batch = i64::try_from(self.max_batch).unwrap_or(i64::MAX);
+        let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
         let resources = input
@@ -480,10 +477,7 @@ where
                         let receiver_arc = Arc::clone(&self.receiver);
                         let ctx_arc = Arc::clone(&ctx);
                         tokio::task::block_in_place(|| {
-                            // tokio::runtime::Handle::current().block_on(tokio::task::spawn_blocking(move || {
-                                //DistsTracker::do_run
-                                receiver_arc.receive(&out, ctx_arc)
-                            // }))
+                            receiver_arc.receive(&out, ctx_arc)
                         })?;
 
                         Ok(())
@@ -663,7 +657,6 @@ mod tests {
             &store,
             batch_clc,
             receiver,
-            2,
             20,
             |p| {
                 async {
@@ -776,7 +769,6 @@ mod tests {
             &mocked_store,
             batch_clc,
             receiver,
-            1,
             2,
             |p| {
                 async {
