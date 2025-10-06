@@ -357,7 +357,7 @@ where
                         &store,
                         loader_2,
                         run_configs,
-                        FixedFindMotifsConfig::new(None, 200_000, false, None),
+                        FixedFindMotifsConfig::new(None, 10_000, false, None),
                         ThoDevice::from(1),
                     ))
                 },
