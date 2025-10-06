@@ -111,7 +111,7 @@ pub struct FixedFindMotifsConfig {
     pub min_tracker_step: Option<usize>, //TODO usize
 
     #[arg(long, default_value_t = 100)]
-    pub chunk_size: u32,
+    pub max_chunk_size: u32, //max number of entries in butched tensors
 
     #[arg(long, default_value_t = false)]
     pub keep_slice_matches: bool, //sql
@@ -123,13 +123,13 @@ pub struct FixedFindMotifsConfig {
 impl FixedFindMotifsConfig {
     pub fn new(
         min_tracker_step: Option<usize>,
-        chunk_size: u32,
+        max_chunk_size: u32,
         keep_slice_matches: bool,
         max_slices_k: Option<f32>,
     ) -> Self {
         Self {
             min_tracker_step,
-            chunk_size,
+            max_chunk_size,
             keep_slice_matches,
             max_slices_k,
         }
@@ -186,7 +186,7 @@ pub fn find_min_euc_dist(
 
     chunk_and_slice_2x(
         resource_keys,
-        common_config.chunk_size as usize,
+        common_config.max_chunk_size as usize,
         &run_configs_arcs,
         &mut move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>,
                    chunk_sliced_1: &ChunkOfSlicedTensors,
@@ -730,7 +730,7 @@ pub async fn find_motifs_by_euc_dist_2(
 
     chunk_and_slice_2x_2(
         resource_keys,
-        common_config.chunk_size as usize,
+        common_config.max_chunk_size as usize,
         Arc::clone(&run_configs_arcs),
         runner,
         Cpu,
@@ -842,7 +842,7 @@ pub fn find_motifs_by_euc_dist(
 
     chunk_and_slice_2x(
         resource_keys,
-        common_config.chunk_size as usize,
+        common_config.max_chunk_size as usize,
         &run_configs_arcs,
         &mut move |chunk_sliced_0: &Arc<ChunkOfSlicedTensors>,
                    chunk_sliced_1: &ChunkOfSlicedTensors,
