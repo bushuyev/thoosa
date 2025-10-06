@@ -440,7 +440,7 @@ mod tests {
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
                 &r#"{
-                step:"200",
+                step:"100",
                 window:"1000",
                 slices_filter: {'DistanceRunningMeanK':{'mean':'0.2'}}
 
