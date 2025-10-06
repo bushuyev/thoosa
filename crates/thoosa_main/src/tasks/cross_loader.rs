@@ -477,14 +477,14 @@ where
 
                         let out = Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&ctx))?;
 
-                        /*let receiver_arc = Arc::clone(&self.receiver);
+                        let receiver_arc = Arc::clone(&self.receiver);
                         let ctx_arc = Arc::clone(&ctx);
                         tokio::task::block_in_place(|| {
                             // tokio::runtime::Handle::current().block_on(tokio::task::spawn_blocking(move || {
                                 //DistsTracker::do_run
                                 receiver_arc.receive(&out, ctx_arc)
                             // }))
-                        })?;*/
+                        })?;
 
                         Ok(())
                     },
