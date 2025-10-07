@@ -17,7 +17,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::MonoMetrics;
+use thoosa_shared::traits::MonoMetrics;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::MotifSlices;
 use crate::tasks::motif_loader::{MotifLoader, MotifWithData};

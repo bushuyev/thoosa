@@ -21,7 +21,7 @@ use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::MonoMetrics;
+use thoosa_shared::traits::MonoMetrics;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::{MotifSlicesSelector, ClcMotifInput};
 use crate::tasks::run_ctx_2::RunCtx2;

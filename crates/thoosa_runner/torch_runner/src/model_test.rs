@@ -27,7 +27,7 @@ mod tests {
     use caching_runner::test_utils::parse_numeric_part;
 
     use crate::data::ThoTensor2;
-    use crate::metrics::MonoMetrics;
+    use thoosa_shared::traits::MonoMetrics;
     use crate::tests::TorchRunCtx;
     use dashmap::DashMap as DMap;
     use log::debug;
