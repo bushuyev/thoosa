@@ -266,20 +266,20 @@ mod tests {
     #[derive(Debug, Clone)]
     struct LoadedTensor;
 impl Dims for LoadedTensor {
-    type Metrics = TwoDimsMetrics<0>;
+    type Metrics = TwoDimsMetrics<1>;
 
 }
 impl LoadedTensor {}
 
 // impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
 
-impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, SimpleId> {
+impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, SimpleId> {
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
-    fn subview(&self, selector: std::ops::Range<TwoDimsMetrics<0>>) -> Self::Output {
+    fn subview(&self, selector: std::ops::Range<TwoDimsMetrics<1>>) -> Self::Output {
         use std::cmp::min;
 
-        let size: TwoDimsMetrics<0> = self
+        let size: TwoDimsMetrics<1> = self
             .size()
             .try_into()
             .expect("LoadedTensor::select unable to convert size");
@@ -290,6 +290,8 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
         let sub_tensor = self.t_ref().i((dim_0_range.clone(), dim_1_range.clone()));
 
         let new_id = SimpleId::from(format!("{}:{dim_0_range:?}:{dim_1_range:?}", self.id().0));
+
+        debug!("Select for ThoTensor2<LoadedTensor, SimpleId>: dim_0_range={dim_0_range:?} dim_1_range={dim_1_range:?} sub_tensor={sub_tensor:?}");
 
         ThoTensor2::new(new_id, sub_tensor)
     }
@@ -340,12 +342,12 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
-        size: TwoDimsMetrics<0>,
+        size: TwoDimsMetrics<1>,
         kind: Kind,
     }
 
     impl TestTensorLoader {
-        pub fn new(size: TwoDimsMetrics<0>, kind: Kind) -> Self {
+        pub fn new(size: TwoDimsMetrics<1>, kind: Kind) -> Self {
             Self { size, kind }
         }
     }
@@ -400,7 +402,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
     struct MulK;
 
     impl Dims for MulK {
-        type Metrics = TwoDimsMetrics<0>;
+        type Metrics = TwoDimsMetrics<1>;
     }
 
     #[derive(Debug, cached_derive::Cached)]
@@ -485,7 +487,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClcTaskOutput;
     impl Dims for ClcTaskOutput {
-        type Metrics = TwoDimsMetrics<0>;
+        type Metrics = TwoDimsMetrics<1>;
     }
 
     impl LoadedTensor {
@@ -610,7 +612,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<0>>>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1>>>,
     }
 
     #[async_trait]
@@ -689,8 +691,8 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
             id: LoadAndClcTaskId,
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
-            dim: TwoDimsMetrics<0>,
-            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<0>>>,
+            dim: TwoDimsMetrics<1>,
+            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1>>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
@@ -727,7 +729,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
     }
 
     #[tokio::test]
-    async fn heavy_test_load_tensor_cpu_to_cuda() -> Result<(), ThoosaError> {
+    async fn test_load_tensor_cpu_to_cuda() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -816,7 +818,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
             LoadAndClcTaskId("load_and_mul_id"),
             k,
             vec![FailUntil::Never],
-            [10, 3].into(),
+            [3, 10].into(),
             ClcOOMRunner::new(
                 OOMRunnerConfig::Permits {
                     max: MAX_PERMITS,
@@ -872,7 +874,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
 
     fn mul_check(
         mul_k: f64,
-        size: TwoDimsMetrics<0>,
+        size: TwoDimsMetrics<1>,
         res: &str,
         result: &ThoTensor2<ClcTaskOutput, SimpleId>,
         rtol: f64,
@@ -922,17 +924,18 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
         let device_idx = 1;
         const MUL_K: f64 = 2.;
 
+        let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
             vec![FailUntil::MinPermits(20)],
-            [10, 3].into(),
+            size.into(),
             ClcOOMRunner::new(
                 OOMRunnerConfig::Permits { max: 20, step: 10 },
-                Box::new(|id| {
+                Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
-                        &[10, 3],
+                        &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
                     ))
@@ -948,8 +951,8 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
             |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
-            |res, out| {
-                mul_check(MUL_K, [10, 3].into(), res, out, 0.1, 0.1);
+            move |res, out| {
+                mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
         )
         .await?;
@@ -958,7 +961,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_load_and_mul_oom_compete_for_permits_tensor() -> Result<(), ThoosaError> {
+    async fn test_load_and_mul_oom_compete_for_permits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -968,20 +971,21 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
         let device_idx = 1;
 
         const MUL_K: f64 = 2.;
+        let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
             vec![FailUntil::MinPermits(MAX_PERMITS)],
-            [10, 3].into(),
+            size.into(),
             ClcOOMRunner::new(
                 OOMRunnerConfig::Permits {
                     max: MAX_PERMITS,
                     step: *PermitStep::TEN,
                 },
-                Box::new(|id| {
+                Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
-                        &[10, 3],
+                        &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
                     ))
@@ -997,8 +1001,8 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
             |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
-            |res, out| {
-                mul_check(MUL_K, [10, 3].into(), res, out, 0.1, 0.1);
+            move |res, out| {
+                mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
         )
         .await?;
@@ -1017,7 +1021,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
         let device_idx = 1;
 
         const MUL_K: f64 = 2.;
-        let size = [10, 3];
+        let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
@@ -1060,7 +1064,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn heavy_test_load_and_mul_oom_permits_and_splits_tensor() -> Result<(), ThoosaError> {
+    async fn test_load_and_mul_oom_permits_and_splits_tensor() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1069,7 +1073,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
-        let size = [10, 3];
+        let size = [3, 100];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
@@ -1122,7 +1126,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
         let device_idx = 1;
 
         const MUL_K: f64 = 2.;
-        let size = [100000, 3];
+        let size = [3, 100];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
@@ -1130,10 +1134,10 @@ impl Select<std::ops::Range<TwoDimsMetrics<0>>> for ThoTensor2<LoadedTensor, Sim
             size.into(),
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
-                Box::new(|id| {
+                Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
-                        &[100000, 3],
+                        &[3, 100],
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
                     ))

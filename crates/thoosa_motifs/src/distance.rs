@@ -1223,7 +1223,7 @@ mod distance_tests {
         let mask = Le {
             v: thresholds_t_broadcasted,
         }
-        .make_mask(None, &dists_t);
+        .make_mask(None, &dists_t).unwrap();
 
         debug!("mask=\n{mask}");
 
@@ -1256,7 +1256,7 @@ mod distance_tests {
             avg: &mut means,
             total_samples: &mut Mutex::new(Tensor::zeros([3], INT64_CPU)),
         }
-        .make_mask(None, &dists_t);
+        .make_mask(None, &dists_t).unwrap();
 
         debug!("mask=\n{mask}");
         assert_eq!(
@@ -1299,7 +1299,7 @@ mod distance_tests {
             avg: &mut means,
             total_samples: &mut total_samples,
         }
-        .make_mask(None, &dists_t_1);
+        .make_mask(None, &dists_t_1).unwrap();
 
         debug!("mask=\n{mask}");
         //
@@ -1353,7 +1353,7 @@ mod distance_tests {
             None,
             &mut means_acc,
             &mut total_samples,
-        );
+        ).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[false, false, false, false, false, false,])
@@ -1382,7 +1382,7 @@ mod distance_tests {
             None,
             &mut means_acc,
             &mut total_samples,
-        );
+        ).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[false, false, false, false, false, false,])
@@ -1411,7 +1411,7 @@ mod distance_tests {
             None,
             &mut means_acc,
             &mut total_samples,
-        );
+        ).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -1446,7 +1446,7 @@ mod distance_tests {
 
         debug!("distances=\n{distances}");
 
-        let mask = local_min_mask(&distances, 1);
+        let mask = local_min_mask(&distances, 1).unwrap();
 
         debug!("mask=\n{mask}");
 
@@ -1467,7 +1467,7 @@ mod distance_tests {
 
         debug!("distances=\n{distances}");
 
-        let mask = local_min_mask(&distances, 1);
+        let mask = local_min_mask(&distances, 1).unwrap();
 
         debug!("mask=\n{mask}");
     }
@@ -1482,7 +1482,7 @@ mod distance_tests {
             q: 0.5,
             with_mask: false,
         }
-        .make_mask(None, &dists_t);
+        .make_mask(None, &dists_t).unwrap();
 
         debug!("mask=\n{mask}");
 
@@ -1530,7 +1530,7 @@ mod distance_tests {
                 .view((3, 7, 5)),
             ),
             &dists_t,
-        );
+        ).unwrap();
 
         debug!("mask=\n{mask}");
 
@@ -1577,7 +1577,7 @@ mod distance_tests {
                 .view((3, 7, 5)),
             ),
             &dists_t,
-        );
+        ).unwrap();
 
         debug!("mask=\n{mask}");
 
@@ -1624,7 +1624,7 @@ mod distance_tests {
                 .view((3, 7, 5)),
             ),
             &dists_t,
-        );
+        ).unwrap();
 
         debug!("mask=\n{mask}");
 
@@ -1725,7 +1725,7 @@ mod distance_tests {
             q: 0.5,
             with_mask: true,
         }
-        .make_mask(None, &dists_t);
+        .make_mask(None, &dists_t).unwrap();
 
         debug!("mask=\n{mask}");
         //Quantiles (0.5):             (matlab ignores infs)
@@ -1813,7 +1813,7 @@ mod distance_tests {
                 .view((1, 9, 5)),
             ),
             &dists_t,
-        );
+        ).unwrap();
 
         debug!("mask=\n{mask}");
 
@@ -1977,7 +1977,7 @@ mod distance_tests {
 
     #[test]
     fn test_mask_maker_diag() {
-        let mask = Diagonal.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu)));
+        let mask = Diagonal.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu))).unwrap();
 
         assert_eq!(
             Tensor::from_slice(&[
@@ -1993,7 +1993,7 @@ mod distance_tests {
 
     #[test]
     fn test_mask_maker_tril() {
-        let mask = Tril.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu)));
+        let mask = Tril.make_mask(None, &Tensor::ones(&[2, 3, 3], (Bool, Cpu))).unwrap();
         debug!("mask=\n{mask}");
 
         assert_eq!(
@@ -2045,7 +2045,7 @@ mod distance_tests {
 
         debug!("distances={distances:?}");
 
-        let mask = LocalMin{dim: 1}.make_mask(None, &distances);
+        let mask = LocalMin{dim: 1}.make_mask(None, &distances).unwrap();
 
         trace!("mask=\n{mask}");
         debug!("mask.nonzero=\n{}", mask.nonzero());
