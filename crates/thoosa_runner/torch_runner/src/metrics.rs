@@ -4,7 +4,7 @@ use std::ops::{Add, AddAssign, DivAssign};
 use thoosa_shared::{MyError, ThoosaError};
 
 #[derive(Debug, Clone, Default)]
-pub struct TwoDimsMetrics<const I:usize> {
+pub struct TwoDimsMetrics<const I:usize> {//TODO rename to SingleDimMetrics and use I to detect which dim to act on
      dim_0: i64,
      dim_1: i64,
 }

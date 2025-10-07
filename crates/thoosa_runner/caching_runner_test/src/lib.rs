@@ -111,6 +111,8 @@ where
         let size = input.size().clone();
         let mut min_split_len = size.clone();
         min_split_len /= 10;
+
+        debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?}");
         let out_id = runnable.out_id(input.id()); //.clone();
         let out_key = std::sync::Arc::new(out_id.clone()) as std::sync::Arc<dyn CachableIdTr>;
 
