@@ -117,6 +117,7 @@ pub mod mock_average_stage {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use async_trait::async_trait;
+    use log::debug;
     use parking_lot::{Mutex, RwLock};
     use caching_runner::common::OutId;
     use caching_runner::common::runnable::Stage;
@@ -124,7 +125,7 @@ pub mod mock_average_stage {
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
-    use torch_runner::metrics::TwoDimsMetrics;
+    use torch_runner::metrics::MonoMetrics;
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::motif_loader::MotifWithData;
@@ -181,10 +182,13 @@ pub mod mock_average_stage {
         {
             let _ = ctx;
             let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
-            let metrics: TwoDimsMetrics<0, 2> = input.t()
+            let metrics: MonoMetrics<0, 2> = input.t()
                 .size()
                 .try_into()
                 .expect("MockAverageStage expects motif metrics");
+
+            debug!("MockAverageStage::do_run: metrics={metrics:?}");
+
             let dim_0 = metrics.dim_0();
             self.call_log.lock().push(dim_0);
 
@@ -259,7 +263,7 @@ pub mod mock_average_stage {
         }
     }
 
-    pub fn build() -> MockAverageStageBuilder {
+    pub fn builder() -> MockAverageStageBuilder {
         MockAverageStageBuilder {
             outputs: Vec::new(),
             fail_first: false,

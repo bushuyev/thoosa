@@ -1,5 +1,5 @@
 use crate::ThoTensorView;
-use crate::metrics::TwoDimsMetrics;
+use crate::metrics::MonoMetrics;
 use async_trait::async_trait;
 use caching_runner::common::Data;
 use log::debug;
@@ -316,12 +316,12 @@ impl<'a, D: Dims, Id: Named + Clone> ThoTensorMut<'a, D, Id> {
 
     pub fn copy_partial_from_(
         &mut self,
-        _dim: i64,
+        dim: i64,
         start: i64,
         length: i64,
         rhs: &ThoTensor2<D, Id>,
     ) {
-        self.t.narrow(0, start, length).copy_(&rhs.t);
+        self.t.narrow(dim, start, length).copy_(&rhs.t);
     }
 
     pub fn resize_(&mut self, new_shape: &[i64]) {

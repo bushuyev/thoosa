@@ -101,7 +101,7 @@ impl PermitsCtx for TorchPermsCtx {
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
     use crate::data::ThoTensor2;
-    use crate::metrics::TwoDimsMetrics;
+    use crate::metrics::MonoMetrics;
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
@@ -137,6 +137,11 @@ mod tests {
     use thoosa_shared::{MyError, ThoosaError};
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{EnvFilter, fmt};
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
 
     #[derive(Debug, Delegate)]
     #[delegate(PermitsCtx, target = "perms_ctx")]
@@ -266,88 +271,47 @@ mod tests {
     #[derive(Debug, Clone)]
     struct LoadedTensor;
 impl Dims for LoadedTensor {
-    type Metrics = TwoDimsMetrics<1, 2>;
+    type Metrics = MonoMetrics<1, 2>;
 
 }
 impl LoadedTensor {}
 
 // impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
 
-impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, SimpleId> {
+impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, SimpleId> {
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
-    fn subview(&self, selector: std::ops::Range<TwoDimsMetrics<1, 2>>) -> Self::Output {
+    fn subview(&self, selector: std::ops::Range<MonoMetrics<1, 2>>) -> Result<Self::Output, ThoosaError> {
         use std::cmp::min;
 
-        let size: TwoDimsMetrics<1, 2> = self
+        let size: MonoMetrics<1, 2> = self
             .size()
             .try_into()
             .expect("LoadedTensor::select unable to convert size");
 
-        let dim_0_range = selector.start.dim_0()..min(size.dim_0(), selector.end.dim_0());
-        let dim_1_range = selector.start.dim_1()..min(size.dim_1(), selector.end.dim_1());
 
-        let sub_tensor = self.t_ref().i((dim_0_range.clone(), dim_1_range.clone()));
+        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.start, &selector.end).unwrap();//TODO unwrap
 
-        let new_id = SimpleId::from(format!("{}:{dim_0_range:?}:{dim_1_range:?}", self.id().0));
+        let sub_tensor = self.t_ref().i((ranges[0].clone(), ranges[1].clone()));
 
-        debug!("Select for ThoTensor2<LoadedTensor, SimpleId>: dim_0_range={dim_0_range:?} dim_1_range={dim_1_range:?} sub_tensor={sub_tensor:?}");
+        let new_id = SimpleId::from(format!("{}:{ranges:?}", self.id().0));
 
-        ThoTensor2::new(new_id, sub_tensor)
+        debug!("Select for ThoTensor2<LoadedTensor, SimpleId>: ranges={ranges:?} sub_tensor={sub_tensor:?}");
+
+        Ok(ThoTensor2::new(new_id, sub_tensor))
     }
 }
 
-    // #[async_trait]
-    // impl Data for ThoTensor2<LoadedTensor, SimpleId> {
-    //     type Metrics = TwoDimsMetrics;
-    //
-    //     type Sub = Self;
-    //
-    //     type SubSelect = std::ops::Range<Self::Metrics>;
-    //
-    //     fn size(&self) -> Self::Metrics {
-    //         self.size().try_into().expect("can't get size")
-    //     }
-    //
-    //     fn subview(&self, range: &Self::SubSelect) -> Self
-    //     where
-    //     {
-    //         let size: TwoDimsMetrics = self.t().size().try_into().unwrap();
-    //
-    //
-    //         let dim_0_range = range.start.dim_0..min(size.dim_0, range.end.dim_0);
-    //
-    //
-    //
-    //         debug!("Data for LoadedTensor::subview: dim_0_range={dim_0_range:?} size={size:?} range={range:?}");
-    //         debug!("Data for LoadedTensor::subview: t=\n{}", self.t());
-    //
-    //         let sub = ThoTensor2::new(self.id().clone(), self.t().i((dim_0_range.clone(), ..)));
-    //
-    //
-    //         debug!("Data for LoadedTensor::subview: sub.t=\n{}", self.t().i((dim_0_range, ..)));
-    //
-    //         sub
-    //     }
-    //
-    //     fn track_used_in(&self, token: &'static str) {
-    //         self._track_used_in(token);
-    //     }
-    //
-    //     fn device(&self) -> usize {
-    //         self.device()
-    //     }
-    // }
 
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
-        size: TwoDimsMetrics<1, 2>,
+        size: MonoMetrics<1, 2>,
         kind: Kind,
     }
 
     impl TestTensorLoader {
-        pub fn new(size: TwoDimsMetrics<1, 2>, kind: Kind) -> Self {
+        pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
             Self { size, kind }
         }
     }
@@ -402,7 +366,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
     struct MulK;
 
     impl Dims for MulK {
-        type Metrics = TwoDimsMetrics<1, 2>;
+        type Metrics = MonoMetrics<1, 2>;
     }
 
     #[derive(Debug, cached_derive::Cached)]
@@ -487,7 +451,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClcTaskOutput;
     impl Dims for ClcTaskOutput {
-        type Metrics = TwoDimsMetrics<1, 2>;
+        type Metrics = MonoMetrics<1, 2>;
     }
 
     impl LoadedTensor {
@@ -612,7 +576,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1, 2>>>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<MonoMetrics<1, 2>>>,
     }
 
     #[async_trait]
@@ -691,8 +655,8 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
             id: LoadAndClcTaskId,
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
-            dim: TwoDimsMetrics<1, 2>,
-            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1, 2>>>,
+            dim: MonoMetrics<1, 2>,
+            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<MonoMetrics<1, 2>>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
@@ -808,26 +772,24 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-
         let _global_ctx = GlobalCtx::init_devices(2);
 
-        let _device_idx = 0;
+        let device_idx = 1;
+        const MUL_K: f64 = 2.;
 
-        let k = 2.;
+        let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
-            k,
-            vec![FailUntil::Never],
-            [3, 10].into(),
+            MUL_K,
+            vec![],
+            size.into(),
             ClcOOMRunner::new(
-                OOMRunnerConfig::Permits {
-                    max: MAX_PERMITS,
-                    step: 10,
-                },
-                Box::new(|id| {
+                OOMRunnerConfig::Permits { max: 20, step: 10 },
+                Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
-                        &[10, 3],
+                        1,
+                        &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
                     ))
@@ -837,44 +799,24 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
             Device::Cuda(0),
             false,
         ));
-        let ctx_device_0 = Arc::new(RwLock::new(TorchRunCtx::new(1, 0, "noname")));
 
-        let multed = load_and_mut
-            .run_cached(
-                Arc::new(LoaderInput {
-                    id: LoaderInputId("resource_1"),
-                }),
-                ctx_device_0,
-            )
+        run_mul_task_invocations(
+            Arc::clone(&load_and_mut),
+            &["resource_1", "resource_2", "resource_3"],
+            device_idx,
+            |_device_idx, _cache_area, _name| TorchRunCtx::new(1, 0, "noname"),
+            move |res, out| {
+                mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
+            },
+        )
             .await?;
-
-        multed
-            .with_data_ref(1, None, |multed_tensor| {
-                // let multed_tensor = multed.load_from_any_device(1, None).await?;
-
-                assert!(
-                    Tensor::from_slice(&[
-                        0., 1., 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
-                        17., 18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29.
-                    ])
-                    .totype(Float)
-                    .multiply_scalar(k as f64)
-                    .to_device(Device::Cuda(0))
-                    .view((10, 3))
-                    .allclose(&(*multed_tensor).t_ref(), 0.01, 0.01, false)
-                );
-                Ok(())
-            })
-            .await?;
-
-        // debug!("multed={multed_tensor:?}");
 
         Ok(())
     }
 
     fn mul_check(
         mul_k: f64,
-        size: TwoDimsMetrics<1, 2>,
+        size: MonoMetrics<1, 2>,
         res: &str,
         result: &ThoTensor2<ClcTaskOutput, SimpleId>,
         rtol: f64,
@@ -935,6 +877,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
                 Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
+                        1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
@@ -985,6 +928,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
                 Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
+                        1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
@@ -1032,6 +976,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
                 Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
+                        1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
@@ -1087,6 +1032,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
                 Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
+                        1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
@@ -1137,6 +1083,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
                 Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
+                        1,
                         &[3, 100],
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
@@ -1186,6 +1133,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
                 Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
+                        1,
                         &size,
                         (Float, Device::Cuda(0)),
                         BuildAs::Append,
@@ -1302,14 +1250,14 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
         let (free_mem, _total_mem) = cuda_mem();
         let init_type = Kind::Int64;
 
-        let total_size = (free_mem as f64 * 0.9) as i64 / init_type.elt_size_in_bytes() as i64; //123456; //25000; //123456; //
-        let dim_1 = 4i64;
+        let total_size = (free_mem as f64 * 0.7) as i64 / init_type.elt_size_in_bytes() as i64; //123456; //25000; //123456; //
+        let dim_1 = 3i64;
         let input_n = total_size / dim_1;
 
         debug!("test_real_oom_dump_and_split: input_n={input_n} dim_1={dim_1}");
 
         const MUL_K: i64 = 1;
-        let size = [input_n, dim_1];
+        let size = [dim_1, input_n,];
 
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
@@ -1321,8 +1269,9 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
                 Box::new(move |id| {
                     Box::new(SingleDimTensorOutputBuilder::<ClcTaskOutput>::new(
                         id,
+                        1,
                         &[dim_1, 1],
-                        (Kind::Int64, Device::Cuda(0)),
+                        (init_type, Device::Cuda(0)),
                         BuildAs::Sum,
                     ))
                 }),
@@ -1347,7 +1296,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, 
             .with_data_ref(1, None, |r: &ThoTensor2<ClcTaskOutput, SimpleId>| {
                 mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                     lin_for_size(k, size, t.kind(), &t.device())
-                        .sum_dim_intlist(0, false, t.kind())
+                        .sum_dim_intlist(1, false, t.kind())
                         .view((-1, 1))
                 });
 

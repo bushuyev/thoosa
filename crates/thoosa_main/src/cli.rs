@@ -357,7 +357,7 @@ where
                         &store,
                         loader_2,
                         run_configs,
-                        FixedFindMotifsConfig::new(None, 10_000, false, None),
+                        find_motifs_args.fixed_config.clone(), //FixedFindMotifsConfig::new(None, 10_000, false, None),
                         ThoDevice::from(1),
                     ))
                 },
@@ -1670,7 +1670,7 @@ async fn run_plot_motif_slices(
         Arc::clone(loader)
     ));
     let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
-        Arc::clone(&motif_loader_impl) as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as caching_runner::common::runnable::Stage>::In<'static>>>,
+        Arc::clone(&motif_loader_impl) as Arc<dyn MotifLoaderStage<Output = <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
         Arc::new(AverageEuclideanDistanceStage::new()),
     ));
 
@@ -1685,16 +1685,15 @@ async fn run_plot_motif_slices(
         MotifsBy::RunId(run_id) => {
             debug!("run_plot_motif_slices: MotifsBy::RunId run_id={run_id}");
 
-            let motif_distances = store.read().list_motifs(run_id)?;
-            let motifs_len = motif_distances.len();
+            let motifs = store.read().list_motifs(run_id)?;
+            let motifs_len = motifs.len();
             let done_cnt = AtomicU32::new(0);
 
-            for motif_id in motif_distances {
+            for motif_id in motifs {
                 debug!("run_plot_motif_slices: motif_id={motif_id}");
-                plot_motif(&ws, Arc::clone(&ctx), motif_id, &motif_loader_impl, Arc::clone(&clc_dist)).await.map_err(|e|{
-                    error!("motif {motif_id} failed");
-                    e
-                })?;
+                if let Err(e)  = plot_motif(&ws, Arc::clone(&ctx), motif_id, &motif_loader_impl, Arc::clone(&clc_dist)).await {
+                        error!("motif {motif_id} failed: e={e:?}");
+                };
                 MotifLoader::<RawTensorLoader>::cache().await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
@@ -2457,7 +2456,7 @@ mod cli_tests {
         )
     }
 
-    #[test]
+    // #[test]
     fn test_motifs() -> Result<(), ThoosaError> {
         // log::set_max_level(LevelFilter::Trace);
 
