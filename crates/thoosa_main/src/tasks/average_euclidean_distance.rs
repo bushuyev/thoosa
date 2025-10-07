@@ -181,7 +181,7 @@ pub mod mock_average_stage {
         {
             let _ = ctx;
             let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
-            let metrics: TwoDimsMetrics<0> = input.t()
+            let metrics: TwoDimsMetrics<0, 2> = input.t()
                 .size()
                 .try_into()
                 .expect("MockAverageStage expects motif metrics");

@@ -189,11 +189,11 @@ where
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MotifSlicesSelector {
-    slices: Range<TwoDimsMetrics<0>>
+    slices: Range<TwoDimsMetrics<0, 2>>
 }
 
-impl From<Range<TwoDimsMetrics<0>>>  for MotifSlicesSelector{
-    fn from(value: Range<TwoDimsMetrics<0>>) -> Self {
+impl From<Range<TwoDimsMetrics<0, 2>>>  for MotifSlicesSelector{
+    fn from(value: Range<TwoDimsMetrics<0, 2>>) -> Self {
         MotifSlicesSelector { slices: value }
     }
 }
@@ -208,7 +208,7 @@ impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
 
         use std::cmp::min;
 
-        let size: TwoDimsMetrics<0> = self
+        let size: TwoDimsMetrics<0, 2> = self
             .size()
             .try_into()
             .expect("LoadedTensor::select unable to convert size");
@@ -252,7 +252,7 @@ impl OutputBuilder for DistOutputBuilder {
 
 pub(crate) trait ClcMotifInput:
     WithId
-    + Data<Metrics = TwoDimsMetrics<0>>
+    + Data<Metrics = TwoDimsMetrics<0, 2>>
     + CopyToDevice
     + Select<MotifSlicesSelector, Output = Self>
     + Adjustable

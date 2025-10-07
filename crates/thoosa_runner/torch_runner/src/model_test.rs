@@ -555,7 +555,7 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClsOut;
     impl Dims for ClsOut {
-        type Metrics = TwoDimsMetrics<1>;
+        type Metrics = TwoDimsMetrics<1, 2>;
     }
 
     impl ClsOut {
