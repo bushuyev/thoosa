@@ -1,7 +1,7 @@
 use crate::tasks::cross_batch_clc::BatchInput;
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::CrossBatchClc;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsSlicesData2};
+use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
@@ -25,7 +25,7 @@ use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::TwoDimsMetrics;
+use torch_runner::metrics::MonoMetrics;
 
 /// Small adapter trait that hides the `Stage` GATs so `CrossLoader` can accept
 /// any batched CLC stage while storing it behind an `Arc`.  Without this extra

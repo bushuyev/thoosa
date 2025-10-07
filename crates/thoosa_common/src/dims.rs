@@ -4,9 +4,10 @@ use std::fmt::{Debug, Display};
 use std::pin::Pin;
 use thoosa_shared::applicables_runner::CachableId;
 use thoosa_shared::CopyToDevice;
+use thoosa_shared::traits::Metrics;
 
 pub trait Dims: Send + Sync + Clone + Debug {
-    type Metrics: Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
+    type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
 
 }
 
@@ -121,6 +122,8 @@ impl CopyToDevice for AnySub {
 
 #[derive(Clone, Debug, Default)]
 pub struct AnyMetrics;
+
+impl Metrics for AnyMetrics {}
 
 unsafe impl Sync for AnyMetrics {}
 unsafe impl Send for AnyMetrics {}

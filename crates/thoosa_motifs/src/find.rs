@@ -110,7 +110,7 @@ pub struct FixedFindMotifsConfig {
     #[arg(long)]
     pub min_tracker_step: Option<usize>, //TODO usize
 
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 10_000)]
     pub max_chunk_size: u32, //max number of entries in butched tensors
 
     #[arg(long, default_value_t = false)]

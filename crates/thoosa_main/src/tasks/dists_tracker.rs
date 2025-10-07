@@ -1,5 +1,4 @@
 use crate::tasks::cross_batch_clc::CrossBatchClcOutput;
-use crate::tasks::cross_dims::ChannelsSlicesData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::common::Data;
@@ -127,7 +126,7 @@ impl DistsTracker {
 #[async_trait]
 impl Stage for DistsTracker {
     type In<'a> = CrossBatchClcOutput<DistWithMask>;
-    type Out = ThoTensor2<ChannelsSlicesData2, SimpleId>;
+    type Out = ();
     type Ctx = RunCtx2;
 
     fn do_run<'a>(
@@ -195,10 +194,7 @@ impl Stage for DistsTracker {
             mt.lock().dump();
         }
 
-        Ok(ThoTensor2::new(
-            "".into(),
-            Tensor::rand(&[10, 1], FLOAT_CPU),
-        ))
+        Ok(())
     }
 }
 

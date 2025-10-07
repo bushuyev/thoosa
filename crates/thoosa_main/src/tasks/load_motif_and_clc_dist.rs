@@ -17,7 +17,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::TwoDimsMetrics;
+use torch_runner::metrics::MonoMetrics;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
 use crate::tasks::cross_dims::MotifSlices;
 use crate::tasks::motif_loader::{MotifLoader, MotifWithData};
@@ -165,7 +165,7 @@ where
         let dist = OOMHandler::new(
             vec![Adjusters::Input(Box::new(
                 SplitsAdjuster::<<CLC as Stage>::In<'static>, MotifSlicesSelector>::new(
-                    [1000, -1].into(),//TODO detect optimal min
+                    [2, -1].into(),//[(motif_size.dim_0() as f32 * 0.1) as i64 + 2, -1].into(),
                 ),
             ))],
             None,
@@ -189,11 +189,11 @@ where
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MotifSlicesSelector {
-    slices: Range<TwoDimsMetrics<0, 2>>
+    slices: Range<MonoMetrics<0, 2>>
 }
 
-impl From<Range<TwoDimsMetrics<0, 2>>>  for MotifSlicesSelector{
-    fn from(value: Range<TwoDimsMetrics<0, 2>>) -> Self {
+impl From<Range<MonoMetrics<0, 2>>>  for MotifSlicesSelector{
+    fn from(value: Range<MonoMetrics<0, 2>>) -> Self {
         MotifSlicesSelector { slices: value }
     }
 }
@@ -204,20 +204,17 @@ impl Adjustable for MotifSlicesSelector  {}
 impl Select<MotifSlicesSelector> for ThoTensor2<MotifSlices, DataId> {
     type Output = ThoTensor2<MotifSlices, DataId>;
 
-    fn subview(&self, selector: MotifSlicesSelector) -> Self::Output {
+    fn subview(&self, selector: MotifSlicesSelector) -> Result<Self::Output, ThoosaError> {
 
-        use std::cmp::min;
-
-        let size: TwoDimsMetrics<0, 2> = self
+        let size: MonoMetrics<0, 2> = self
             .size()
-            .try_into()
-            .expect("LoadedTensor::select unable to convert size");
+            .try_into()?;
 
-        let dim_0_range = selector.slices.start.dim_0()..min(size.dim_0(), selector.slices.end.dim_0());
+        let ranges = MonoMetrics::<0,2>::map_to_ranges(&selector.slices.start, &selector.slices.end)?;
 
-        let sub_tensor = self.t_ref().i((dim_0_range.clone(), ..));
+        let sub_tensor = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
 
-        ThoTensor2::new(self.id().clone(), sub_tensor)
+        Ok(ThoTensor2::new(self.id().clone(), sub_tensor))
     }
 }
 
@@ -252,7 +249,7 @@ impl OutputBuilder for DistOutputBuilder {
 
 pub(crate) trait ClcMotifInput:
     WithId
-    + Data<Metrics = TwoDimsMetrics<0, 2>>
+    + Data<Metrics = MonoMetrics<0, 2>>
     + CopyToDevice
     + Select<MotifSlicesSelector, Output = Self>
     + Adjustable
@@ -311,7 +308,7 @@ mod tests {
 
         let call_log = Arc::new(Mutex::new(Vec::new()));
 
-        let clc_stage = mock_average_stage::build()
+        let clc_stage = mock_average_stage::builder()
             .fail_while_dim0_gt(3)
             .with_outputs(vec![10.0, 30.0])
             .with_call_log(Arc::clone(&call_log))

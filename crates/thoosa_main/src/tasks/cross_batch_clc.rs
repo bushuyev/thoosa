@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsSlicesData2};
+use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::dists_tracker::DistWithMask;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::slices_iter::SlicesIter;

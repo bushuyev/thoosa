@@ -277,6 +277,8 @@ mod tests {
     use std::sync::Arc;
     use tch::Device::Cuda;
     use tch::{Device, Tensor};
+    use tch::kind::INT64_CPU;
+    use caching_runner::common::cachable::Cached;
     use thoosa_common::applicables::ThoDevice;
     use thoosa_common::find_motifs_run_config::{
         FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue,
@@ -285,15 +287,18 @@ mod tests {
     use thoosa_common::runs::Simple;
     use thoosa_common::utils::{lin_t, plot_series, three_sigs_tensor, vec_f32_from};
     use thoosa_common::ws::FsWorkspace;
-    use thoosa_motifs::find::FixedFindMotifsConfig;
+    use thoosa_motifs::find::{plot_motif_slices, FixedFindMotifsConfig};
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::SimpleId;
+    use thoosa_shared::traits::{DataId, SimpleId};
     use thoosa_shared::{
         cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoosaError,
     };
     use thoosa_store::SqlStore;
     use torch_runner::data::ThoTensor2;
+    use crate::tasks::average_euclidean_distance::AverageEuclideanDistanceStage;
+    use crate::tasks::load_motif_and_clc_dist::{LoadMotifAndClcDistanceStage, MotifLoaderStage};
+    use crate::tasks::motif_loader::MotifLoader;
 
     #[ctor::ctor]
     fn init() {
@@ -301,7 +306,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_0() -> Result<(), ThoosaError> {
+    async fn test_find_motifs() -> Result<(), ThoosaError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -330,7 +335,7 @@ mod tests {
         let sig_1_v = sig_two_imp(n, max_y, None, None, 0.1);
         let sig_2_v = sig_three_imp(n, max_y, None, None);
 
-       /* let x = lin_t(n);
+        let x = lin_t(n);
         plot_series(
             vec![
                 (
@@ -361,7 +366,7 @@ mod tests {
             "test_find_motifs_euc",
             (2000, 1000),
             &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
-        )?;*/
+        )?;
 
         let (t_0_0, t_0_1, t_1_0, t_1_1) = three_sigs_tensor(n, &sig_0_v, &sig_1_v, &sig_2_v);
         debug!(
@@ -435,6 +440,8 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
+        let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
+
         let run_ids = run_grid::<Simple, _, _, _, _, _>(
             None,
             serde_json5::from_str::<FindMotifsRunConfigRangeOrValue>(
@@ -461,22 +468,56 @@ mod tests {
                 Arc::new(FindMotifsStage::new(
                     &ws,
                     &store,
-                    loader,
+                    Arc::clone(&loader),
                     run_configs,
                     FixedFindMotifsConfig::new(None, 2, false, None),
                     ThoDevice::from(0),
                 ))
             },
-            || Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa"))),
+            || Arc::clone(&ctx),
         )
         .await?;
 
-        let mut slices = store.read().list_motifs_slices(run_ids[0])?;
+        let motif_loader_impl = Arc::new(MotifLoader::new(
+            Arc::clone(&store),
+            Arc::clone(&loader)
+        ));
 
-        debug!("slices={slices:?}");
+        let clc_dist = Arc::new(LoadMotifAndClcDistanceStage::new(
+            Arc::clone(&motif_loader_impl) as Arc<dyn MotifLoaderStage<Output= <AverageEuclideanDistanceStage as Stage>::In<'static>>>,
+            Arc::new(AverageEuclideanDistanceStage::new())
+        ));
 
-        assert!(slices.len() >= 4);
+        let motifs = store.read().list_motifs(run_ids[0])?;
+
+        for motif_id in motifs {
+            let motif_id = Arc::new(DataId::from(motif_id as u32));
+            let motif = MotifLoaderStage::run_cached(
+                Arc::clone(&motif_loader_impl),
+                Arc::clone(&motif_id),
+                Arc::clone(&ctx),
+            )
+                .await?;
+
+            motif.with_data_ref(1, None, |t|{
+                debug!("motif_id={motif_id} slices={:?}", t.t());
+
+                Ok(())
+            }).await?;
+
+            let dist = Arc::clone(&clc_dist).run_cached(Arc::clone(&motif_id), Arc::clone(&ctx)).await?.with_data_ref(0, None, |dist_val| {
+                Ok(dist_val.value())
+            }).await?;
+
+        }
+
+        // let mut slices = store.read().list_motifs_slices(run_ids[0])?;
+        //
+        // debug!("slices={slices:?}");
+        //
+        // assert!(slices.len() >= 4);
 
         Ok(())
     }
+
 }
