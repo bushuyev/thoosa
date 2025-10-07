@@ -125,7 +125,7 @@ pub mod mock_average_stage {
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
     use torch_runner::data::ThoTensor2;
-    use torch_runner::metrics::MonoMetrics;
+    use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::average_euclidean_distance::AverageDistanceValue;
     use crate::tasks::cross_dims::MotifSlices;
     use crate::tasks::motif_loader::MotifWithData;
