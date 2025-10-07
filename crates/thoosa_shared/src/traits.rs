@@ -234,6 +234,10 @@ pub trait Metrics:Default {//TODO remove Default
     fn default_end(&self) -> Self {
         Default::default()
     }
+
+    fn cap(&self, other:&mut  Self)  {
+        todo!()
+    }
 }
 
 impl Metrics for () {} //for stages without output
@@ -260,6 +264,14 @@ impl <const Idx:usize, const Size:usize> Metrics for MonoMetrics<Idx, Size> {
                     *v
                 }
             }).collect::<Vec<_>>().try_into().expect("could not convert array"),
+        }
+    }
+
+    fn cap(&self, other:&mut  Self)  {
+        for (my_dim, other_dim) in self.dims.iter().zip(other.dims.iter_mut()) {
+            if my_dim < other_dim {
+                *other_dim = *my_dim;
+            }
         }
     }
 }
