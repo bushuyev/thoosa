@@ -26,6 +26,8 @@ where
     <A as Data>::Metrics: PartialOrd<<A as Data>::Metrics>,
 {
     pub fn new(min_split_len: <A as Data>::Metrics) -> Self {
+        debug!("SplitsAdjuster::new: min_split_len={min_split_len:?}");
+
         Self {
             pd: Default::default(),
             min_split_len,
