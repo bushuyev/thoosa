@@ -21,7 +21,7 @@ use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::{DataId, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::TwoDimsMetrics;
+use torch_runner::metrics::MonoMetrics;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, MotifSlices};
 use crate::tasks::load_motif_and_clc_dist::{MotifSlicesSelector, ClcMotifInput};
 use crate::tasks::run_ctx_2::RunCtx2;
@@ -73,12 +73,12 @@ pub struct MotifWithData {
 impl Select<MotifSlicesSelector> for MotifWithData {
     type Output = MotifWithData;
 
-    fn subview(&self, selector: MotifSlicesSelector) -> Self::Output {
-        MotifWithData {
-            t: self.t.subview(selector),
+    fn subview(&self, selector: MotifSlicesSelector) -> Result<Self::Output, ThoosaError> {
+        Ok(MotifWithData {
+            t: self.t.subview(selector)?,
             channel: self.channel,
             run_id: self.run_id
-        }
+        })
     }
 
 }
@@ -185,7 +185,7 @@ impl <SRC> Stage for MotifLoader <SRC>
                 slices
                     .into_iter()
                     .map(|slice| {
-                        TwoDimsMetrics::from([channel, slice as i64])..TwoDimsMetrics::from([channel + 1, (slice + window) as i64])
+                        MonoMetrics::from([channel, slice as i64])..MonoMetrics::from([channel + 1, (slice + window) as i64])
                     })
                     .collect(),
             };

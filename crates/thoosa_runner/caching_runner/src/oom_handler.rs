@@ -502,11 +502,11 @@ pub(crate) mod test_types {
     impl Select<Range<[usize;1]>> for TestInput {
         type Output = TestInput;
 
-        fn subview(&self, selector: Range<[usize; 1]>) -> Self::Output {
-            TestInput {
+        fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoosaError> {
+            Ok(TestInput {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start[0]..selector.end[0]].to_vec())//.0[selector.start..selector.end])
-            }
+            })
         }
     }
 

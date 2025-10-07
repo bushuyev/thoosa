@@ -225,3 +225,18 @@ impl From<&'static str> for DummyCachableId {
         DummyCachableId(value)
     }
 }
+
+
+pub trait Metrics:Default {//TODO remove Default
+    fn default_end(&self) -> Self {
+        Default::default()
+    }
+}
+
+impl Metrics for () {} //for stages without output
+
+impl Metrics for [usize; 1] {}
+
+//TODO  for tests, replace with MonoMetrics
+impl Metrics for i64 {}
+impl Metrics for usize {}

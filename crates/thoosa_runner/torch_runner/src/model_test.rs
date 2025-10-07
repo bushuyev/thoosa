@@ -27,7 +27,7 @@ mod tests {
     use caching_runner::test_utils::parse_numeric_part;
 
     use crate::data::ThoTensor2;
-    use crate::metrics::TwoDimsMetrics;
+    use crate::metrics::MonoMetrics;
     use crate::tests::TorchRunCtx;
     use dashmap::DashMap as DMap;
     use log::debug;
@@ -38,7 +38,7 @@ mod tests {
     use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{CachableIdTr, Named, SimpleId, WithId};
+    use thoosa_shared::traits::{CachableIdTr, Metrics, Named, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};
 
     #[ctor::ctor]
@@ -161,12 +161,12 @@ mod tests {
     impl Select<std::ops::Range<ABMetrics>> for ThoTensor2<ABData, SimpleId> {
         type Output = ThoTensor2<ABData, SimpleId>;
 
-        fn subview(&self, selector: std::ops::Range<ABMetrics>) -> Self::Output {
+        fn subview(&self, selector: std::ops::Range<ABMetrics>) -> Result<Self::Output, ThoosaError> {
             use std::cmp::min;
             let size = ABMetrics::from(self.t_ref().size());
             let d0 = selector.start.dim_0..min(size.dim_0, selector.end.dim_0);
 
-            ThoTensor2::new(self.id().clone(), self.t_ref().i((d0, ..)))
+            Ok(ThoTensor2::new(self.id().clone(), self.t_ref().i((d0, ..))))
         }
     }
 
@@ -175,6 +175,8 @@ mod tests {
         dim_0: i64,
         dim_1: i64,
     }
+    impl Metrics for ABMetrics {}
+
     impl From<Vec<i64>> for ABMetrics {
         fn from(v: Vec<i64>) -> Self {
             ABMetrics {
@@ -555,7 +557,7 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClsOut;
     impl Dims for ClsOut {
-        type Metrics = TwoDimsMetrics<1, 2>;
+        type Metrics = MonoMetrics<1, 2>;
     }
 
     impl ClsOut {
@@ -777,6 +779,7 @@ mod tests {
                         size,
                         Box::new(SingleDimTensorOutputBuilder::<ClsOut>::new(
                             out_id,
+                            1,
                             &[1, 1],
                             (Kind::Float, ThoDevice::from(device_idx).deref().clone()),
                             BuildAs::Sum,

@@ -1568,7 +1568,7 @@ pub fn lin_t(n: u32) -> Tensor {
 pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tensor {
     let end = size.iter().fold(1, |a, v| a * *v);
 
-    println!("lin_t: end={end}");
+    debug!("lin_for_size: end={end}");
 
     let mut t = panic_to_err!(Tensor::f_arange(end, (kind, *device)))
         .expect("f_arange failed")
@@ -1584,7 +1584,8 @@ pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tens
         }
     }
 
-    println!("lin_t: t.size()={:?} t=\n{t}", t.size());
+    trace!("lin_for_size:t=\n{t}");
+    debug!("lin_for_size: t.size()={:?}", t.size());
 
     t
 }

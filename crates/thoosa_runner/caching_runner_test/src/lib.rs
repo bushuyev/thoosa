@@ -112,9 +112,9 @@ where
         let mut min_split_len = size.clone();
         min_split_len /= 10;
 
-        debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?}");
+        debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?} size={size:?}");
         let out_id = runnable.out_id(input.id()); //.clone();
-        let out_key = std::sync::Arc::new(out_id.clone()) as std::sync::Arc<dyn CachableIdTr>;
+        let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
 
         match self.config {
             OOMRunnerConfig::Permits { max, step } => {
@@ -515,11 +515,11 @@ mod tests {
     impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
         type Output = DLoadedTensor;
 
-        fn subview(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Self::Output {
-            DLoadedTensor {
+        fn subview(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Result<Self::Output, ThoosaError> {
+            Ok(DLoadedTensor {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start as usize..min(self.data.0.len(), selector.end as usize)].to_vec()),
-            }
+            })
         }
     }
 
