@@ -1,7 +1,10 @@
 
 
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.7.1/lib/ && cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/tmp/ws_test_hbac" import-resources --source-path=/home/bu/dvl/data/kaggle/hbac
+
 export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.7.1/lib/ && cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_hbac  find-motifs --resources="group:pure group 100" --run-config-cnt="{step:'10',window:'1000','slices_filter':{'MaxDistance':{'distance':'13.0'}}}"
+
+cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_hbac  find-motifs --resources="group:pure group 10" --run-config-cnt="{step:'100',window:'1000','slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}"
 cargo run --release --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/tmp/ws_test_hbac  find-motifs --resources="group:pure group 10" --run-config-cnt="{step:'100',window:'1000..10000:1000,0','slices_filter':{'DistanceRunningMeanK':{'mean':'0.02'}}}"
 
 

@@ -1,6 +1,6 @@
 use crate::rayon_future::RayonFuture;
 use crate::run_configs::{Cachable, Runnable};
-use crate::traits::{SimpleId, WithId};
+use crate::traits::{Named, SimpleId, WithId};
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet, Entry};
 use futures::FutureExt;
@@ -33,6 +33,21 @@ pub trait Output: WithId + Debug {
     async fn copy_to_device(self: Arc<Self>, device_ordinal: usize) -> Arc<Self> {
         todo!()
     }
+}
+
+impl Named for (){
+
+}
+impl WithId for () {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+
+impl Output for () {
+
 }
 
 impl WithId for CachableId {

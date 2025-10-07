@@ -13,16 +13,17 @@ use std::ops::{Deref, Range};
 use std::sync::Arc;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{CachableIdTr, Named, WithId};
+use thoosa_shared::traits::{CachableIdTr, Metrics, Named, WithId};
 
 pub mod cachable;
 pub mod runnable;
+
 
 #[async_trait]
 #[delegatable_trait]
 #[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]
 pub trait Data: Debug + CopyToDevice {
-    type Metrics: Debug + Clone + Send + Sync + Default;
+    type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
 
     fn size(&self) -> Self::Metrics;
 
@@ -35,7 +36,7 @@ pub trait Data: Debug + CopyToDevice {
 pub trait Select<S> {
     type Output: CopyToDevice;
 
-    fn subview(&self, selector: S) -> Self::Output;
+    fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
 }
 
 

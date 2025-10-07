@@ -5,7 +5,7 @@ use crate::common::*;
 use ambassador::Delegate;
 use async_trait::async_trait;
 use log::debug;
-use thoosa_shared::CopyToDevice;
+use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::*;
 use thoosa_shared::traits::{DummyCachableId, MockWithId};
 
@@ -86,7 +86,7 @@ impl MockDataWithId {
 impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
     type Output = MockDataWithId;
 
-    fn subview(&self, selector: Range<[usize; 1]>) -> Self::Output {
+    fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoosaError> {
         let mut data = MockData::new();
         let len = selector.end[0].saturating_sub(selector.start[0]);
         data.expect_size().return_const([len]);
@@ -94,11 +94,11 @@ impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
         let mut with_id = MockWithId::new();
         with_id.expect_id().return_const(self.id().clone());
 
-        MockDataWithId {
+        Ok(MockDataWithId {
             data,
             with_id,
             device: Some(self.device.unwrap_or(0)),
-        }
+        })
     }
 }
 

@@ -2,6 +2,7 @@ use crate::data::ThoTensor2;
 use caching_runner::adjusters::splits::OutputBuilder;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use log::{debug, warn};
 use tch::Device;
 use tch::Kind;
 use thoosa_common::dims::Dims;
@@ -20,15 +21,17 @@ pub struct SingleDimTensorOutputBuilder<D>
 where
     D: Dims,
 {
-    output: ThoTensor2<D, thoosa_shared::traits::SimpleId>,
+    output: ThoTensor2<D, SimpleId>,
     added_partial_output_len: i64,
     add: BuildAs,
+    dim: i64
 }
 
 impl<D: Dims> SingleDimTensorOutputBuilder<D> {
     #[allow(dead_code)]
     pub fn new(
-        id: <ThoTensor2<D, thoosa_shared::traits::SimpleId> as WithId>::ID,
+        id: <ThoTensor2<D, SimpleId> as WithId>::ID,
+        dim: i64,
         size: &[i64],
         options: (Kind, Device),
         add: BuildAs,
@@ -37,6 +40,7 @@ impl<D: Dims> SingleDimTensorOutputBuilder<D> {
             output: ThoTensor2::zeros(id, size, options),
             added_partial_output_len: 0,
             add,
+            dim
         }
     }
 }
@@ -45,16 +49,17 @@ impl<D> OutputBuilder for SingleDimTensorOutputBuilder<D>
 where
     D: Dims,
 {
-    type O = ThoTensor2<D, thoosa_shared::traits::SimpleId>;
+    type O = ThoTensor2<D, SimpleId>;
 
     fn add_partial_output(&mut self, partial: Self::O) {
         let partial_size = partial.size();
+        debug!("SingleDimTensorOutputBuilder::add_partial_output: self.add={:?} self.output.size={:?} partial_size={partial_size:?}", self.add, self.output.size());
 
         match self.add {
             BuildAs::Append => {
                 let mut t = self.output.to_mut();
 
-                t.copy_partial_from_(0, self.added_partial_output_len, partial_size[0], &partial)
+                t.copy_partial_from_(self.dim, self.added_partial_output_len, partial_size[self.dim as usize], &partial)
             }
             BuildAs::Sum => {
                 let mut t = self.output.to_mut();
@@ -63,7 +68,7 @@ where
             }
         }
 
-        self.added_partial_output_len += partial_size[0];
+        self.added_partial_output_len += partial_size[self.dim as usize];
     }
 
     fn build(self: Box<Self>) -> Self::O {
@@ -92,7 +97,7 @@ mod tests {
     #[test]
     fn test_append() {
         let mut builder: Box<SingleDimTensorOutputBuilder<TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new("test".into(), &[10], FLOAT_CPU, BuildAs::Append),
+            SingleDimTensorOutputBuilder::new("test".into(), 0, &[10], FLOAT_CPU, BuildAs::Append),
         );
 
         builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[0, 1, 2])));
@@ -115,7 +120,7 @@ mod tests {
     #[test]
     fn test_sum() {
         let mut builder: Box<SingleDimTensorOutputBuilder<TestDims>> = Box::new(
-            SingleDimTensorOutputBuilder::new("test".into(), &[3], FLOAT_CPU, BuildAs::Sum),
+            SingleDimTensorOutputBuilder::new("test".into(), 0, &[3], FLOAT_CPU, BuildAs::Sum),
         );
 
         builder.add_partial_output(ThoTensor2::new("1".into(), Tensor::from_slice(&[0, 1, 2])));

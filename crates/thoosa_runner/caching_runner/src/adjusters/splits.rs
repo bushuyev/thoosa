@@ -8,6 +8,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use thoosa_shared::ThoosaError;
+use thoosa_shared::traits::Metrics;
 
 #[derive(Debug)]
 pub struct SplitsAdjuster<A, RA>
@@ -49,15 +50,17 @@ where
 
     async fn adjust(
         &self,
-        _adjustable: &Self::A,
+        adjustable: &Self::A,
         adjust_context: &mut AC,
     ) -> Result<Self::A, ThoosaError> {
         let size_0 = adjust_context.done_to();
         let size_1 = size_0 + adjust_context.split_len(); //TODO cap on adjustable.size()
 
-        debug!("SplitsAdjuster::adjust: size_0={size_0:?} size_1={size_1:?}");
+        debug!("SplitsAdjuster::adjust: size_0={size_0:?} size_1={size_1:?} adjustable.size={:?}", adjust_context.input_len());
 
         Ok((size_0.clone()..size_1).into())
+
+        // MonoMetrics::<0,2>::map_to_ranges(&selector.slices.start, &selector.slices.end)
 
     }
 
@@ -75,6 +78,7 @@ where
 pub trait SplitsAdjusterContext: Debug + Send + Sync {
     type Metrics: Debug + Send + Sync;
 
+    fn input_len(&self) -> &Self::Metrics;
     fn split_len(&self) -> &Self::Metrics;
     fn done_to(&self) -> &Self::Metrics;
     fn split_len_mut(&mut self) -> &mut Self::Metrics;
@@ -104,10 +108,7 @@ where
 
         self.done_to += &self.split_len;
 
-        debug!(
-            "SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",
-            self.done_to, self.split_len
-        );
+        debug!("SplitsAdjusterAcontextImpl::add_partial_output: self.done_to={:?}  self.split_len={:?}",self.done_to, self.split_len);
     }
 
     fn all_done(&self) -> bool {
@@ -132,7 +133,7 @@ where
         output_builder: Box<dyn OutputBuilder<O = <R as Stage>::Out>>,
     ) -> Self {
         Self {
-            done_to: Default::default(),
+            done_to: input_len.default_end(),
             split_len: input_len.clone(),
             input_len,
             output_builder,
@@ -150,6 +151,11 @@ where
     fn split_len(&self) -> &Self::Metrics {
         &self.split_len
     }
+
+    fn input_len(&self) -> &Self::Metrics {
+        &self.input_len
+    }
+
 
     fn done_to(&self) -> &Self::Metrics {
         &self.done_to
