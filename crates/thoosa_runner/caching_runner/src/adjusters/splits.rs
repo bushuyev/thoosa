@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::Metrics;
+use thoosa_shared::traits::{Metrics, MonoMetrics};
 
 #[derive(Debug)]
 pub struct SplitsAdjuster<A, RA>
@@ -53,15 +53,16 @@ where
         adjustable: &Self::A,
         adjust_context: &mut AC,
     ) -> Result<Self::A, ThoosaError> {
-        let size_0 = adjust_context.done_to();
-        let size_1 = size_0 + adjust_context.split_len(); //TODO cap on adjustable.size()
+        let split_start = adjust_context.done_to();
+        let mut split_end = (split_start + adjust_context.split_len());
+        adjust_context.input_len().cap(&mut split_end);
 
-        debug!("SplitsAdjuster::adjust: size_0={size_0:?} size_1={size_1:?} adjustable.size={:?}", adjust_context.input_len());
+        debug!("SplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} adjustable.size={:?}", adjust_context.input_len());
 
-        Ok((size_0.clone()..size_1).into())
+        // Ok((size_0.clone()..size_1).into())
 
-        // MonoMetrics::<0,2>::map_to_ranges(&selector.slices.start, &selector.slices.end)
-
+        // Ok(MonoMetrics::<0,2>::map_to_ranges(&split_start, &split_end)?.into())
+        Ok((split_start.clone()..split_end).into())
     }
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {
@@ -187,11 +188,6 @@ mod tests {
 
     #[test]
     fn test_0() {
-        // use super::super::{
-        //     RunnableContext, Adjustable, Adjuster, Adjusters, Contexts, InputContext,
-        //     OOMHandler, RunCtxContext,
-        // };
-        // let x:RunnableContext = RunnableContext{};
-        // let ctx = SplitsAdjusterAcontextImpl::new(100, "test");
+        //TODO
     }
 }
