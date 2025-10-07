@@ -266,20 +266,20 @@ mod tests {
     #[derive(Debug, Clone)]
     struct LoadedTensor;
 impl Dims for LoadedTensor {
-    type Metrics = TwoDimsMetrics<1>;
+    type Metrics = TwoDimsMetrics<1, 2>;
 
 }
 impl LoadedTensor {}
 
 // impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
 
-impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, SimpleId> {
+impl Select<std::ops::Range<TwoDimsMetrics<1, 2>>> for ThoTensor2<LoadedTensor, SimpleId> {
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
-    fn subview(&self, selector: std::ops::Range<TwoDimsMetrics<1>>) -> Self::Output {
+    fn subview(&self, selector: std::ops::Range<TwoDimsMetrics<1, 2>>) -> Self::Output {
         use std::cmp::min;
 
-        let size: TwoDimsMetrics<1> = self
+        let size: TwoDimsMetrics<1, 2> = self
             .size()
             .try_into()
             .expect("LoadedTensor::select unable to convert size");
@@ -342,12 +342,12 @@ impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, Sim
     #[derive(Debug, cached_derive::Cached)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
-        size: TwoDimsMetrics<1>,
+        size: TwoDimsMetrics<1, 2>,
         kind: Kind,
     }
 
     impl TestTensorLoader {
-        pub fn new(size: TwoDimsMetrics<1>, kind: Kind) -> Self {
+        pub fn new(size: TwoDimsMetrics<1, 2>, kind: Kind) -> Self {
             Self { size, kind }
         }
     }
@@ -402,7 +402,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, Sim
     struct MulK;
 
     impl Dims for MulK {
-        type Metrics = TwoDimsMetrics<1>;
+        type Metrics = TwoDimsMetrics<1, 2>;
     }
 
     #[derive(Debug, cached_derive::Cached)]
@@ -487,7 +487,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, Sim
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct ClcTaskOutput;
     impl Dims for ClcTaskOutput {
-        type Metrics = TwoDimsMetrics<1>;
+        type Metrics = TwoDimsMetrics<1, 2>;
     }
 
     impl LoadedTensor {
@@ -612,7 +612,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, Sim
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1>>>,
+        clc_oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1, 2>>>,
     }
 
     #[async_trait]
@@ -691,8 +691,8 @@ impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, Sim
             id: LoadAndClcTaskId,
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
-            dim: TwoDimsMetrics<1>,
-            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1>>>,
+            dim: TwoDimsMetrics<1, 2>,
+            oom_runner: ClcOOMRunner<ClcTask, std::ops::Range<TwoDimsMetrics<1, 2>>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
@@ -874,7 +874,7 @@ impl Select<std::ops::Range<TwoDimsMetrics<1>>> for ThoTensor2<LoadedTensor, Sim
 
     fn mul_check(
         mul_k: f64,
-        size: TwoDimsMetrics<1>,
+        size: TwoDimsMetrics<1, 2>,
         res: &str,
         result: &ThoTensor2<ClcTaskOutput, SimpleId>,
         rtol: f64,

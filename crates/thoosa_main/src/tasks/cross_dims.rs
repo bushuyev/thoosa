@@ -14,13 +14,13 @@ pub struct ChannelsData2;
 
 
 impl Dims for ChannelsData2 {
-    type Metrics = TwoDimsMetrics<1>;//channels x seq
+    type Metrics = TwoDimsMetrics<1, 2>;//channels x seq
 
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ChannelsDataVec {
-    pub ranges:Vec<Range<TwoDimsMetrics<1>>>
+    pub ranges:Vec<Range<TwoDimsMetrics<1, 2>>>
 }
 
 impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
@@ -28,7 +28,7 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
 
     fn subview(&self, selector: ChannelsDataVec) -> Self::Output {
         let ChannelsDataVec { ranges } = selector;
-        let size: TwoDimsMetrics<1> = self
+        let size: TwoDimsMetrics<1, 2> = self
             .size()
             .try_into()
             .expect("ChannelsData2::select unable to convert size");
@@ -52,7 +52,7 @@ impl Select<ChannelsDataVec> for ThoTensor2<ChannelsData2, SimpleId> {
 
 
 impl ChannelsData2 {
-    fn sub_single(t: &ThoTensor2<ChannelsData2, SimpleId>, range: &Range<TwoDimsMetrics<1>>, size: &TwoDimsMetrics<1>) -> Tensor {
+    fn sub_single(t: &ThoTensor2<ChannelsData2, SimpleId>, range: &Range<TwoDimsMetrics<1, 2>>, size: &TwoDimsMetrics<1, 2>) -> Tensor {
         let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
         let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
 
@@ -79,6 +79,6 @@ pub struct MotifSlices {
 }
 
 impl Dims for MotifSlices {
-    type Metrics = TwoDimsMetrics<0>; //[i64;2]; // [i64; 2];//slices x window
+    type Metrics = TwoDimsMetrics<0, 2>; //[i64;2]; // [i64; 2];//slices x window
 
 }
