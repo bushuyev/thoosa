@@ -7,7 +7,7 @@ use thoosa_common::dims::Dims;
 use thoosa_shared::{MyError, ThoosaError};
 use thoosa_shared::traits::{DataId, SimpleId};
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::MonoMetrics;
+use thoosa_shared::traits::MonoMetrics;
 
 #[derive(Clone, Debug)]
 pub struct ChannelsData2;

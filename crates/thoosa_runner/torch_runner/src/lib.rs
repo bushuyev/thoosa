@@ -101,7 +101,7 @@ impl PermitsCtx for TorchPermsCtx {
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
     use crate::data::ThoTensor2;
-    use crate::metrics::MonoMetrics;
+    use thoosa_shared::traits::MonoMetrics;
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};

@@ -25,7 +25,7 @@ use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use thoosa_store::Store;
 use torch_runner::data::ThoTensor2;
-use torch_runner::metrics::MonoMetrics;
+use thoosa_shared::traits::MonoMetrics;
 
 /// Small adapter trait that hides the `Stage` GATs so `CrossLoader` can accept
 /// any batched CLC stage while storing it behind an `Arc`.  Without this extra

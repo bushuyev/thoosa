@@ -1,5 +1,5 @@
 use crate::ThoTensorView;
-use crate::metrics::MonoMetrics;
+use thoosa_shared::traits::MonoMetrics;
 use async_trait::async_trait;
 use caching_runner::common::Data;
 use log::debug;
