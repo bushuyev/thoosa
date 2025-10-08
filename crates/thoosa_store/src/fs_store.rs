@@ -169,14 +169,8 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         Ok(())
     }
 
-    fn load_slices_into_groups(
-        &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
-        max_slices_counts: Option<u32>,
-    ) -> Result<(), ThoosaError> {
-        debug!(
-            "MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}"
-        );
+    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError> {
+        debug!("MotifTrackerStore::load_slices_into_groups: max_slices_counts={max_slices_counts:?}");
 
         self.writer.shutdown()?;
         let mut slice_id = 0;
