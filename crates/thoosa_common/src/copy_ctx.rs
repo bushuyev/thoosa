@@ -5,6 +5,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
+use tokio::runtime::Runtime;
 use tokio_utils::Pool;
 
 pub struct CopyCtx {
@@ -105,7 +106,7 @@ impl CopyCtx {
             copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_device).await
         }
     }
-
+    
     pub async fn copy_from_ptr(
         &self,
         src_ptr: usize,

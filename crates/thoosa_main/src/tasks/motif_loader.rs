@@ -175,14 +175,13 @@ impl <SRC> Stage for MotifLoader <SRC>
 
         debug!("MotifLoader::run: window={window:?} device_idx={device_idx}");
 
-        let tmp_cache:TmpCached<ThoTensor2<ChannelsData2, SimpleId>> = TmpCached::new(format!("motif_{}", Alphanumeric.sample_string(&mut rand::rng(), 16)).leak(), cache_area).await;
+        let tmp_cache:TmpCached<ThoTensor2<ChannelsData2, SimpleId>> = TmpCached::new("motifs", cache_area).await;
 
         for (resource_id, slices) in resource_ids_slices {
-            let t = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
+            let raw_tensor = Arc::clone(&self.loader).load(Arc::new(resources_map.get(&resource_id).expect(&format!("no resource with id={resource_id}")).clone()), Arc::clone(&ctx)).await?;
 
             let selector = ChannelsDataVec {
-                ranges:
-                slices
+                ranges: slices
                     .into_iter()
                     .map(|slice| {
                         MonoMetrics::from([channel, slice as i64])..MonoMetrics::from([channel + 1, (slice + window) as i64])
@@ -190,7 +189,7 @@ impl <SRC> Stage for MotifLoader <SRC>
                     .collect(),
             };
 
-            t.with_selected_data(device_idx, selector, |tt| {
+            raw_tensor.with_selected_data(device_idx, selector, |tt| {
                 debug!("MotifLoader::run/with_data:  resource_id={resource_id}  t={}", tt.t_ref());
                 tmp_cache.insert(tt);
 
