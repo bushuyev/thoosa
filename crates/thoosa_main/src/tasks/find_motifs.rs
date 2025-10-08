@@ -1,4 +1,4 @@
-use crate::tasks::cross_batch_clc::{BatchInput, CrossBatchClc, CrossBatchClcOutput, UnfoldParams};
+use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
     CrossLoader, CrossResult, ResourcesConfigInput,
 };
@@ -42,7 +42,7 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
         >>
 }
 
@@ -56,7 +56,7 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
         >>
     ) -> Self {
         Self {
@@ -114,10 +114,10 @@ where
 
                 let filter = run_config.slices_filter.clone();
 
-                let batch_clc: CrossBatchClc<Box<dyn Fn(Tensor, Tensor, &BatchInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync >,
+                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync >,
                     DistWithMask,
                     MeanDistsCtx,
-                > = CrossBatchClc::new(
+                > = CrossUnfoldClc::new(
                     Box::new(move |t_0, t_1, input, means_ctx| {
                         let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
@@ -198,7 +198,7 @@ where
                     Arc::new(CrossLoader::new(
                         Arc::clone(&loader),
                         &store,
-                        Arc::new(batch_clc),
+                        Arc::new(cross_unfold_clc),
                         receiver,
                         fixed_config.max_chunk_size as usize,
                         |dists_tracker| {
