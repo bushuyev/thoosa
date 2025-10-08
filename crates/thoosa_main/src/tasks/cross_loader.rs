@@ -1,6 +1,6 @@
-use crate::tasks::cross_batch_clc::BatchInput;
+use crate::tasks::cross_batch_clc::CrossInput;
 #[cfg(test)]
-use crate::tasks::cross_batch_clc::CrossBatchClc;
+use crate::tasks::cross_batch_clc::CrossUnfoldClc;
 use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
@@ -36,7 +36,7 @@ pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
 
     fn run_batch<'s>(
         self: Arc<Self>,
-        input: &BatchInput<'s, &'s Arc<Resource>>,
+        input: &CrossInput<'s, &'s Arc<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<Self::Out, ThoosaError>
     where
@@ -45,14 +45,14 @@ pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
 
 impl<T> CrossLoaderClc for T
 where
-    T: for<'s> Stage<In<'s> = BatchInput<'s, &'s Arc<Resource>>, Ctx = RunCtx2> + Send + Sync + 'static,
+    T: for<'s> Stage<In<'s> = CrossInput<'s, &'s Arc<Resource>>, Ctx = RunCtx2> + Send + Sync + 'static,
     T::Out: Input + Output + Send + Debug + 'static,
 {
     type Out = T::Out;
 
     fn run_batch<'s>(
         self: Arc<Self>,
-        input: &BatchInput<'s, &'s Arc<Resource>>,
+        input: &CrossInput<'s, &'s Arc<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<Self::Out, ThoosaError>
     where
@@ -64,7 +64,7 @@ where
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
-    use super::{BatchInput, CrossLoaderClc, RunCtx2};
+    use super::{CrossInput, CrossLoaderClc, RunCtx2};
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
@@ -73,7 +73,7 @@ pub(crate) mod mock_cross_loader_clc {
     use thoosa_shared::resource::Resource;
 
     type RunBatchFn<Out> = dyn for<'a> Fn(
-            &BatchInput<'a, &'a Arc<Resource>>,
+            &CrossInput<'a, &'a Arc<Resource>>,
             Arc<RwLock<RunCtx2>>,
         ) -> Result<Out, ThoosaError>
         + Send
@@ -104,7 +104,7 @@ pub(crate) mod mock_cross_loader_clc {
 
         fn run_batch<'s>(
             self: Arc<Self>,
-            input: &BatchInput<'s, &'s Arc<Resource>>,
+            input: &CrossInput<'s, &'s Arc<Resource>>,
             ctx: Arc<RwLock<RunCtx2>>,
         ) -> Result<Self::Out, ThoosaError>
         where
@@ -129,7 +129,7 @@ pub(crate) mod mock_cross_loader_clc {
         pub fn with_run_batch_fn<F>(mut self, f: F) -> Self
         where
             F: for<'a> Fn(
-                    &BatchInput<'a, &'a Arc<Resource>>,
+                    &CrossInput<'a, &'a Arc<Resource>>,
                     Arc<RwLock<RunCtx2>>,
                 ) -> Result<Out, ThoosaError>
                 + Send
@@ -464,7 +464,7 @@ where
                     |data| {
                         //t_0_batch + t_1_batch - loaded to device_idx
 
-                        let input = BatchInput::new(
+                        let input = CrossInput::new(
                             data,
                             t_0_batch_resources.as_slice(),
                             t_1_batch_resources.as_slice(),
@@ -511,7 +511,7 @@ mod tests {
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use super::*;
     use crate::cli::Commands::FindMotifs;
-    use crate::tasks::cross_batch_clc::{CrossBatchClc, UnfoldParams};
+    use crate::tasks::cross_batch_clc::{CrossUnfoldClc, UnfoldParams};
     use crate::tasks::cross_loader::{CrossLoader, ResourcesConfigInput};
     use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
@@ -624,7 +624,7 @@ mod tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let batch_clc = Arc::new(CrossBatchClc::new(
+        let batch_clc = Arc::new(CrossUnfoldClc::new(
             |t_0, t_1, input, ctx| {
                 let mut mask_makers = vec![];
                 // if is_diag {
