@@ -31,10 +31,10 @@ use thoosa_shared::traits::MonoMetrics;
 /// any batched CLC stage while storing it behind an `Arc`.  Without this extra
 /// trait the HRTB requirements on `Stage::In<'_>` make the `CrossLoader` type
 /// ergonomics (and clone of the stage) far more tedious.
-pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
-    type Out: Input + Output + Send + Debug + 'static;
+pub trait CrossClc: Send + Sync + std::fmt::Debug {
+    type Out: Input + Output + Send + Sync + Debug + 'static;
 
-    fn run_batch<'s>(
+    fn run_clc<'s>(
         self: Arc<Self>,
         input: &CrossInput<'s, &'s Arc<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
@@ -43,14 +43,14 @@ pub trait CrossLoaderClc: Send + Sync + std::fmt::Debug {
         Self: 's;
 }
 
-impl<T> CrossLoaderClc for T
+impl<T> CrossClc for T
 where
     T: for<'s> Stage<In<'s> = CrossInput<'s, &'s Arc<Resource>>, Ctx = RunCtx2> + Send + Sync + 'static,
-    T::Out: Input + Output + Send + Debug + 'static,
+    T::Out: Input + Output  + Sync + Send + Debug + 'static,
 {
     type Out = T::Out;
 
-    fn run_batch<'s>(
+    fn run_clc<'s>(
         self: Arc<Self>,
         input: &CrossInput<'s, &'s Arc<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
@@ -64,7 +64,7 @@ where
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
-    use super::{CrossInput, CrossLoaderClc, RunCtx2};
+    use super::{CrossInput, CrossClc, RunCtx2};
     use parking_lot::RwLock;
     use std::fmt::Debug;
     use std::sync::Arc;
@@ -96,13 +96,13 @@ pub(crate) mod mock_cross_loader_clc {
         }
     }
 
-    impl<Out> CrossLoaderClc for MockCrossLoaderClc<Out>
+    impl<Out> CrossClc for MockCrossLoaderClc<Out>
     where
-        Out: Input + Output + Send + Debug + 'static,
+        Out: Input + Output + Sync + Send + Debug + 'static,
     {
         type Out = Out;
 
-        fn run_batch<'s>(
+        fn run_clc<'s>(
             self: Arc<Self>,
             input: &CrossInput<'s, &'s Arc<Resource>>,
             ctx: Arc<RwLock<RunCtx2>>,
@@ -265,7 +265,7 @@ pub struct CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: TensorLoader + 'static,
-    CrossCLC: CrossLoaderClc + 'static,
+    CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
 {
@@ -282,7 +282,7 @@ impl<ResC, L, CrossCLC, RSV> Debug for CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: TensorLoader + 'static,
-    CrossCLC: CrossLoaderClc + 'static,
+    CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
 {
@@ -295,7 +295,7 @@ impl<ResC, L, CrossCLC, RSV> CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: TensorLoader + 'static,
-    CrossCLC: CrossLoaderClc + 'static,
+    CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
 {
@@ -326,7 +326,7 @@ impl<ResC, L, CrossCLC, RSV> OutId for CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: TensorLoader + 'static,
-    CrossCLC: CrossLoaderClc + 'static,
+    CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
 {
@@ -385,7 +385,7 @@ impl<ResC, L, CrossCLC, RSV> Stage for CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     L: TensorLoader + 'static,
-    CrossCLC: CrossLoaderClc + 'static,
+    CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
 {
@@ -457,12 +457,11 @@ where
                     continue;
                 }
 
-                let _ = DataCacheWrapper::with_data_array(
+                let cross_clc_output = DataCacheWrapper::with_data_array(
                     [t_0_batch.clone(), t_1_batch].concat().as_slice(), //t_0_batch and t_1_batch are DataCacheWrappers
                     device_idx,
                     None,
                     |data| {
-                        //t_0_batch + t_1_batch - loaded to device_idx
 
                         let input = CrossInput::new(
                             data,
@@ -472,18 +471,17 @@ where
 
                         debug!("input={input:?}");
 
-                        let out = Arc::clone(&self.batch_clc).run_batch(&input, Arc::clone(&ctx))?;
+                        Arc::clone(&self.batch_clc).run_clc(&input, Arc::clone(&ctx))
 
-                        let receiver_arc = Arc::clone(&self.receiver);
-                        let ctx_arc = Arc::clone(&ctx);
-                        tokio::task::block_in_place(|| {
-                            receiver_arc.receive(&out, ctx_arc)
-                        })?;
-
-                        Ok(())
                     },
                 )
                 .await?;
+
+                let receiver_arc = Arc::clone(&self.receiver);
+                let ctx_arc = Arc::clone(&ctx);
+
+                receiver_arc.receive(&cross_clc_output, ctx_arc)?;
+
 
                 t_1_batch = vec![];
                 t_1_batch_resources = vec![];
@@ -513,7 +511,7 @@ mod tests {
     use crate::cli::Commands::FindMotifs;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, UnfoldParams};
     use crate::tasks::cross_loader::{CrossLoader, ResourcesConfigInput};
-    use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
+    use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use caching_runner::global_ctx::GlobalCtx;
@@ -638,7 +636,7 @@ mod tests {
                 )?;
 
                 debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                Ok(DistWithMask::new(dists.0, dists.1))
+                Ok(DistsMask::new(dists.0, dists.1))
             },
             (),
             UnfoldParams::new(1, 2, 1),
