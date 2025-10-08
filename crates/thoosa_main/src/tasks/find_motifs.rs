@@ -2,7 +2,7 @@ use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, CrossUnfoldClcOu
 use crate::tasks::cross_loader::{
     CrossLoader, CrossResult, ResourcesConfigInput,
 };
-use crate::tasks::dists_tracker::{DistWithMask, DistsTracker};
+use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
         >>
 }
 
@@ -56,7 +56,7 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync>, DistWithMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
         >>
     ) -> Self {
         Self {
@@ -114,8 +114,8 @@ where
 
                 let filter = run_config.slices_filter.clone();
 
-                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistWithMask, ThoosaError> + Send + Sync >,
-                    DistWithMask,
+                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync >,
+                    DistsMask,
                     MeanDistsCtx,
                 > = CrossUnfoldClc::new(
                     Box::new(move |t_0, t_1, input, means_ctx| {
@@ -158,28 +158,29 @@ where
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
                         if dists.0.device().ne(&Cpu) {
 
-                            Ok(tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async {
-
-                                    DistWithMask::new(
-                                        CopyCtx::instance().copy(&dists.0, 0, dists.0.kind()).await,
-                                        if fixed_config.keep_slice_matches {
-                                            match dists.1 {
-                                                None => None,
-                                                Some(t) => {
-                                                    Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)
+                            Ok(
+                                tokio::task::block_in_place(|| {
+                                    Handle::current().block_on(async {
+                                        DistsMask::new(
+                                            CopyCtx::instance().copy(&dists.0, 0, dists.0.kind()).await,
+                                            if fixed_config.keep_slice_matches {
+                                                match dists.1 {
+                                                    None => None,
+                                                    Some(t) => {
+                                                        Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)
+                                                    }
                                                 }
+                                            } else {
+                                                None
                                             }
-                                        } else {
-                                            None
-                                        }
-                                    )
+                                        )
+                                    })
                                 })
-                            }))
+                            )
                         } else {
-                            Ok(DistWithMask::new(dists.0, dists.1))
+                            Ok(DistsMask::new(dists.0, dists.1))
                         }
-                        // Ok(DistWithMask::new(Tensor::zeros(&[3, 200_000, 200_000], (Bool, Cpu)), None))
+
                     }),
                     MeanDistsCtx::new(channels, device.into()),
                     UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),

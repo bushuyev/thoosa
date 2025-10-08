@@ -23,7 +23,7 @@ use thoosa_main::cli::run_cli;
     // */
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4) //std::thread::available_parallelism().expect("available_parallelism failed").into()) // async workers
-        .max_blocking_threads(64)        // more threads for spawn_blocking jobs
+        .max_blocking_threads(32)        // more threads for spawn_blocking jobs
         .enable_all()
         .build()
         .unwrap();

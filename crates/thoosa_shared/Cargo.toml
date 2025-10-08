@@ -32,3 +32,4 @@ futures-util.workspace = true
 async-trait.workspace = true
 time="0.3.41"
 ambassador.workspace = true
+uuid.workspace = true
