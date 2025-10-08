@@ -6,6 +6,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::{FutureExt, StreamExt};
+use rand::distr::{Alphanumeric, SampleString};
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Handle;
 use thoosa_shared::applicables_runner::Output;
@@ -17,6 +18,8 @@ use crate::common::runnable::Stage;
 use crate::global_ctx::GlobalCtx;
 use crate::purge::FuturesRunnerMapPurger;
 
+
+///To keep tensors in async functions in between async calls so that data can be dumped to CPU when competing task wins 100 Permits and requests others to be dumped.
 #[derive(Debug)]
 pub struct TmpCached<D:Data + WithId  + Output+ Debug + Send + Sync + 'static> {
     name: &'static str,
@@ -59,8 +62,9 @@ impl <D:Data + WithId+ Output+ Debug+ Send + Sync + 'static> TmpCached<D> {
 
     pub async fn new(name: &'static str, cache_area: u64) -> Self {
 
-        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>>> = Box::new(Default::default());
+        let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)).leak();
 
+        let map: Box<DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>>> = Box::new(Default::default());
 
         let ptr_ref: *const DashMap<<D as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<D>>, ThoosaError>>>> = std::ptr::from_ref(&*map);
 
@@ -102,8 +106,8 @@ mod tests {
     use crate::global_ctx::GlobalCtx;
     use crate::tmp_cache::TmpCached;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_0() -> Result<(), ThoosaError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_tmp_cache() -> Result<(), ThoosaError> {
 
         GlobalCtx::init_devices(2);
 

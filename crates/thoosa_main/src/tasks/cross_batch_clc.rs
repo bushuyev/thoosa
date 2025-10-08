@@ -1,5 +1,5 @@
 use crate::tasks::cross_dims::{ChannelsData2};
-use crate::tasks::dists_tracker::DistWithMask;
+use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::slices_iter::SlicesIter;
 use async_trait::async_trait;
@@ -19,7 +19,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{SimpleId, WithId};
 use thoosa_shared::{TensorIdSliceIdx, ThoosaError};
 use torch_runner::data::ThoTensor2;
-use crate::tasks::cross_loader::CrossLoaderClc;
+use crate::tasks::cross_loader::CrossClc;
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
@@ -239,7 +239,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClc, UnfoldParams};
-    use crate::tasks::dists_tracker::DistWithMask;
+    use crate::tasks::dists_tracker::DistsMask;
     use crate::tasks::find_motifs::MeanDistsCtx;
     use crate::tasks::run_ctx_2::RunCtx2;
     use caching_runner::common::MockRunCtx;
@@ -265,7 +265,7 @@ mod tests {
                 debug!("t_0=\n{t_0}");
                 debug!("t_1=\n{t_1}");
 
-                Ok(DistWithMask::new(
+                Ok(DistsMask::new(
                     Tensor::rand(&[0], FLOAT_CPU),
                     Some(Tensor::rand(&[0], FLOAT_CPU)),
                 ))

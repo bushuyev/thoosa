@@ -77,5 +77,6 @@ tokio-utils = "0"
 tracing = "0"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter"] }
 console-subscriber = "0"
+uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 [profile.test]
 opt-level = 0

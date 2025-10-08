@@ -13,7 +13,10 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
+use tokio::runtime::Handle;
+use futures::{stream, StreamExt};
 use thoosa_common::bool_iter::BoolTensorIterator;
+use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::CopyToDevice;
 use thoosa_common::ws::Workspace;
@@ -26,17 +29,28 @@ use thoosa_store::{SqlMotifTrackerStore, Store};
 use torch_runner::data::ThoTensor2;
 
 #[derive(Debug)]
-pub struct DistWithMask {
+pub struct DistsMask {
     mask: Tensor,
     dists: Option<Tensor>,
 }
 
-unsafe impl Sync for DistWithMask {}
+/*#[async_trait]
+impl CopyToDevice for DistWithMask {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        DistWithMask {
+            mask: CopyCtx::instance().copy(&self.mask, 0, self.mask.kind()).await,
+            dists: None,
+        }
+    }
+}
+*/
 
-impl Output for DistWithMask {}
-impl Input for DistWithMask {}
+unsafe impl Sync for DistsMask {}
 
-impl WithId for DistWithMask {
+impl Output for DistsMask {}
+impl Input for DistsMask {}
+
+impl WithId for DistsMask {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -44,7 +58,7 @@ impl WithId for DistWithMask {
     }
 }
 
-impl DistWithMask {
+impl DistsMask {
     pub fn new(mask: Tensor, dists: Option<Tensor>) -> Self {
         Self { mask, dists }
     }
@@ -127,7 +141,7 @@ impl DistsTracker {
 
 #[async_trait]
 impl Stage for DistsTracker {
-    type In<'a> = CrossUnfoldClcOutput<DistWithMask>;
+    type In<'a> = CrossUnfoldClcOutput<DistsMask>;
     type Out = ();
     type Ctx = RunCtx2;
 
@@ -139,62 +153,58 @@ impl Stage for DistsTracker {
     where
         Self: Sized,
     {
-        let DistWithMask {
+        let DistsMask {
             mask: mask_cpu,
             dists,
         } = input.clc_result();
 
-        for (channel, mt) in self.channel_trackers.iter().enumerate()
-        {
-            let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
-            let dists_flattened = dists
-                .as_ref()
-                .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
-
-            trace!("find_motifs_by_euc_dist: mask_cpu_flattened=\n{mask_cpu_flattened}");
-            debug!(
-                "find_motifs_by_euc_dist: dists_flattened.size={:?}",
-                dists_flattened.as_ref().map(|v| v.size())
-            );
-            trace!(
-                "find_motifs_by_euc_dist: dists_flattened=\n{:?}",
-                dists_flattened
-            );
-
-            let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
-            let mut dists_and_mask_iter = channel_mask.zip(Self::dist_iter(dists_flattened));
-            debug!(
-                "find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}",
-                mask_cpu_flattened.size()
-            );
-            trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
-
-            input.iter_0().for_each(|slice_0| {
-                input.iter_1().for_each(|slice_1| {
+        tokio::task::block_in_place(|| {
+            Handle::current().block_on(async {
+                stream::iter(self.channel_trackers.iter().enumerate()).map(|(channel, mt)| {
+                    async move {
+                        let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
+                        let dists_flattened = dists
+                            .as_ref()
+                            .map(|d| d.i((channel as i64, .., ..)).flatten(0, 1));
 
 
-                    if let Some((mask, dist)) = dists_and_mask_iter.next() {
+                        debug!("find_motifs_by_euc_dist: dists_flattened.size={:?}",dists_flattened.as_ref().map(|v| v.size()));
+                        trace!("find_motifs_by_euc_dist: mask_cpu_flattened=\n{mask_cpu_flattened}");
+                        trace!("find_motifs_by_euc_dist: dists_flattened=\n{:?}",dists_flattened);
 
-                        trace!("find_motifs_by_euc_dist: slice_0={slice_0:?}  slice_1={slice_1:?} mask={mask:?} dist={dist}");
+                        let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
+                        let mut dists_and_mask_iter = channel_mask.zip(Self::dist_iter(dists_flattened));
 
-                        if mask
-                            && (slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1
-                        ) {
-                            mt.lock().track(
-                                slice_0.clone(),
-                                slice_1.clone(),
-                                dist as f32, //TODO actual distances not needed?
-                            );
-                        }
+                        debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}",mask_cpu_flattened.size());
+                        trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
 
-                    } else {
-                        error!("find_motifs_by_euc_dist: not enough dists");
-                        panic!("find_motifs_by_euc_dist: not enough dists");
+                        input.iter_0().for_each(|slice_0| {
+                            input.iter_1().for_each(|slice_1| {
+                                if let Some((mask, dist)) = dists_and_mask_iter.next() {
+                                    trace!("find_motifs_by_euc_dist: slice_0={slice_0:?}  slice_1={slice_1:?} mask={mask:?} dist={dist}");
+
+                                    if mask
+                                        && (slice_0.0 != slice_1.0 || slice_0.1 != slice_0.1
+                                    ) {
+                                        mt.lock().track(
+                                            slice_0.clone(),
+                                            slice_1.clone(),
+                                            dist as f32, //TODO actual distances not needed?
+                                        );
+                                    }
+                                } else {
+                                    error!("find_motifs_by_euc_dist: not enough dists");
+                                    panic!("find_motifs_by_euc_dist: not enough dists");
+                                }
+                            });
+                        });
+                        mt.lock().dump();
                     }
-                });
-            });
-            mt.lock().dump();
-        }
+                }).buffer_unordered(self.channel_trackers.len()) // <- bound parallelism
+                    .collect::<Vec<()>>()
+                    .await
+            })
+        });
 
         Ok(())
     }

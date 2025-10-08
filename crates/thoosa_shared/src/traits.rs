@@ -6,8 +6,10 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use log::debug;
+use uuid::uuid;
 use crate::applicables_runner::{CachableId, Input};
 use crate::ThoosaError;
+use uuid::Uuid;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -153,6 +155,34 @@ impl From<String> for SimpleId {
 }
 
 impl Display for SimpleId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+///////////////////////////////////
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct TmpId(Uuid);
+
+
+impl TmpId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+unsafe impl Send for TmpId {}
+unsafe impl Sync for TmpId {}
+
+
+
+impl Named for TmpId {
+    fn name(&self) -> &'static str {
+        "TmpId"
+    }
+}
+
+
+
+impl Display for TmpId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
