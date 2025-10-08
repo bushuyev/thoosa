@@ -175,7 +175,9 @@ mod tests {
         dim_0: i64,
         dim_1: i64,
     }
-    impl Metrics for ABMetrics {}
+    impl Metrics for ABMetrics {
+        fn cap(&self, other: &mut Self) {}
+    }
 
     impl From<Vec<i64>> for ABMetrics {
         fn from(v: Vec<i64>) -> Self {

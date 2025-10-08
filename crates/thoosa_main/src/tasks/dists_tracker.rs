@@ -1,4 +1,4 @@
-use crate::tasks::cross_batch_clc::CrossBatchClcOutput;
+use crate::tasks::cross_batch_clc::CrossUnfoldClcOutput;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::common::Data;
@@ -30,6 +30,8 @@ pub struct DistWithMask {
     mask: Tensor,
     dists: Option<Tensor>,
 }
+
+unsafe impl Sync for DistWithMask {}
 
 impl Output for DistWithMask {}
 impl Input for DistWithMask {}
@@ -125,7 +127,7 @@ impl DistsTracker {
 
 #[async_trait]
 impl Stage for DistsTracker {
-    type In<'a> = CrossBatchClcOutput<DistWithMask>;
+    type In<'a> = CrossUnfoldClcOutput<DistWithMask>;
     type Out = ();
     type Ctx = RunCtx2;
 

@@ -568,28 +568,16 @@ impl Runnable<TrackDistInput, TrackDistOutput, ()> for TrackDistRunnable {
         self: Arc<Self>,
         input: Arc<TrackDistInput>,
         runner: Arc<Self::R>,
-        ctx: Option<
-            Arc<
-                RwLock<<<Self as Runnable<TrackDistInput, TrackDistOutput, ()>>::R as Runner>::Ctx>,
-            >,
-        >,
+        ctx: Option<Arc<RwLock<<<Self as Runnable<TrackDistInput, TrackDistOutput, ()>>::R as Runner>::Ctx>>>
     ) -> Arc<TrackDistOutput> {
-        // let channel_trackers = run_config__channels_trackers.get(&run_config_id).expect("channel_trackers");
+
         let (mask_cpu, dists) = (
             &input.motifs_dist_runnable_output.mask_dists_cpu,
             &input.motifs_dist_runnable_output.mask_dists_cpu,
         );
 
-        debug!(
-            "find_motifs_by_euc_dist: input.chunk_0.len={:?} input.chunk_1.len={:?}",
-            input.chunk_0.len(),
-            input.chunk_0.len()
-        );
-        debug!(
-            "find_motifs_by_euc_dist: mask_cpu.size={:?} dists.size={:?}",
-            mask_cpu.size(),
-            dists.size()
-        );
+        debug!("find_motifs_by_euc_dist: input.chunk_0.len={:?} input.chunk_1.len={:?}",input.chunk_0.len(),input.chunk_0.len());
+        debug!("find_motifs_by_euc_dist: mask_cpu.size={:?} dists.size={:?}",mask_cpu.size(),dists.size());
 
         self.channel_trackers.iter().enumerate()/*.par_bridge()*/.for_each(|(channel, mt)| {
             let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
@@ -601,12 +589,14 @@ impl Runnable<TrackDistInput, TrackDistOutput, ()> for TrackDistRunnable {
 
             let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
             let mut dists_and_mask_iter = channel_mask.zip(dists_flattened.iter::<f64>().expect("channel_mask.zip(dists_flattened.iter"));
+
             debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}", mask_cpu_flattened.size());
             trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
 
             input.chunk_0.iter().for_each(|slice_0| {
                 input.chunk_1.iter().for_each(|slice_1| {
-                    // debug!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel}");
+                    trace!("find_motifs_by_euc_dist: slice_0={slice_0:?} slice_1={slice_1:?} channel={channel}");
+
                     let (mask, dist) = match dists_and_mask_iter.next() {
                         None => {
                             error!("find_motifs_by_euc_dist: no next");
@@ -1879,8 +1869,7 @@ impl<'a> SimpleMotifTracker<'a> {
     }
 
     pub fn build_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>) -> Result<(), ThoosaError> {
-        self.dumper
-            .load_slices_into_groups(store, self.max_slices_counts)
+        self.dumper.load_slices_into_groups(store, self.max_slices_counts)
     }
 
     #[cfg(test)]

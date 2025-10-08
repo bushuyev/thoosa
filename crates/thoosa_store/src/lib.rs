@@ -2431,22 +2431,15 @@ pub struct SlicesMatch(pub TensorIdSliceIdx, pub TensorIdSliceIdx, pub f32);
 
 pub trait MotifTrackerStore: Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoosaError>;
-    fn load_slices_into_groups(
-        &mut self,
-        store: &Arc<RwLock<Box<dyn Store>>>,
-        max_slices_counts: Option<u32>,
-    ) -> Result<(), ThoosaError>;
+    fn load_slices_into_groups(&mut self, store: &Arc<RwLock<Box<dyn Store>>>, max_slices_counts: Option<u32>) -> Result<(), ThoosaError>;
 
     fn run_id(&self) -> RunId;
     fn channel(&self) -> u32;
     fn path(&self) -> &PathBuf;
 }
 
-pub fn filter_groups_by_slices_count(
-    max_slices_counts: Option<u32>,
-    groups: HashMap<u16, HashSet<IdSlice>>,
-) -> HashMap<u16, HashSet<IdSlice>> {
-    let groups = match max_slices_counts {
+pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: HashMap<u16, HashSet<IdSlice>>) -> HashMap<u16, HashSet<IdSlice>> {
+    match max_slices_counts {
         None => groups,
         Some(max_slices_counts) => groups.into_iter().fold(HashMap::new(), |mut a, v| {
             if v.1.len() < max_slices_counts as usize {
@@ -2459,17 +2452,12 @@ pub fn filter_groups_by_slices_count(
             }
             a
         }),
-    };
-    groups
+    }
 }
 
 impl MotifTrackerStore for SqlMotifTrackerStore {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoosaError> {
-        debug!(
-            "MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_id={:?}",
-            slices.len(),
-            self.run_id
-        );
+        debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_id={:?}",slices.len(),self.run_id);
 
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
