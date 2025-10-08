@@ -5,7 +5,7 @@ use crate::tasks::slices_iter::SlicesIter;
 use async_trait::async_trait;
 use caching_runner::common::cachable::DataCacheWrapper;
 use caching_runner::common::runnable::Stage;
-use log::debug;
+use log::{debug, trace};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -123,8 +123,8 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
         &self.id
     }
 
-    pub fn clc_result(&self) -> &R {
-        &self.clc_result
+    pub fn clc_result(self) -> R {
+        self.clc_result
     }
 
     pub fn iter_0(&self) -> SlicesIter {
@@ -165,41 +165,57 @@ where
     {
         let mut batch_0_sizes = vec![];
 
-        let batch_0_t = Tensor::concat(
-            input.tensors[0..input.resources_0.len()]
-                .iter()
-                .map(|t| {
-                    let unfolded = t.t_ref().unfold(
-                        self.unfold_params.dimension,
-                        self.unfold_params.size,
-                        self.unfold_params.step,
-                    );
-                    batch_0_sizes.push(unfolded.size()[1]); //number of blocks
-                    unfolded
-                })
-                .collect::<Vec<_>>()
-                .as_slice(),
-            1,
-        );
+        let batch_0_tensors = input.tensors[0..input.resources_0.len()]
+            .iter()
+            .filter(|t| t.size()[1] >= self.unfold_params.size) //TODO use metrics's size
+            .map(|t| {
+
+                debug!("CrossUnfoldClc::do_run: 0. t.size={:?} self.unfold_params={:?}", t.size(), self.unfold_params);
+
+                let unfolded = t.t_ref().unfold(
+                    self.unfold_params.dimension,
+                    self.unfold_params.size,
+                    self.unfold_params.step,
+                );
+                batch_0_sizes.push(unfolded.size()[1]); //number of blocks
+                unfolded
+            })
+            .collect::<Vec<_>>();
+
+        if batch_0_tensors.is_empty() {
+            return Err("batch 0 is empty".into());
+        }
+
+
+        let batch_0_t = Tensor::concat(batch_0_tensors.as_slice(), 1);
 
         let mut batch_1_sizes = vec![];
 
-        let batch_1_t = Tensor::concat(
-            input.tensors[input.resources_0.len()..]
-                .iter()
-                .map(|t| {
-                    let unfolded = t.t_ref().unfold(
-                        self.unfold_params.dimension,
-                        self.unfold_params.size,
-                        self.unfold_params.step,
-                    );
-                    batch_1_sizes.push(unfolded.size()[1]); //number of blocks
-                    unfolded
-                })
-                .collect::<Vec<_>>()
-                .as_slice(),
-            1,
-        );
+        let batch_1_tensors = input.tensors[input.resources_0.len()..]
+            .iter()
+            .filter(|t| t.size()[1] >= self.unfold_params.size) //TODO use metrics's size
+            .map(|t| {
+
+                debug!("CrossUnfoldClc::do_run: 1. t.size={:?} self.unfold_params={:?}", t.size(), self.unfold_params);
+
+                let unfolded = t.t_ref().unfold(
+                    self.unfold_params.dimension,
+                    self.unfold_params.size,
+                    self.unfold_params.step,
+                );
+                batch_1_sizes.push(unfolded.size()[1]); //number of blocks
+                unfolded
+            })
+            .collect::<Vec<_>>();
+
+        if batch_1_tensors.is_empty() {
+            return Err("batch 0 is empty".into());
+        }
+
+
+        let batch_1_t = Tensor::concat(batch_1_tensors.as_slice(), 1);
+
+
 
         assert_eq!(batch_0_sizes.len(), input.resources_0.len());
         assert_eq!(batch_1_sizes.len(), input.resources_1.len());

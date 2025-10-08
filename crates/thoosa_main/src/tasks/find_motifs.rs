@@ -9,11 +9,12 @@ use async_trait::async_trait;
 use caching_runner::common::RunCtx;
 use caching_runner::common::runnable::Stage;
 use futures_util::FutureExt;
-use log::debug;
+use log::{debug, error, info};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use tch::Kind::{Bool, Float};
 use tch::{Device, Kind, Tensor};
 use tch::Device::Cpu;
@@ -30,7 +31,8 @@ use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
 use thoosa_shared::ThoosaError;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
+use thoosa_common::cuda_utils::pack_bits_bool;
 
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
@@ -161,19 +163,8 @@ where
                             Ok(
                                 tokio::task::block_in_place(|| {
                                     Handle::current().block_on(async {
-                                        DistsMask::new(
-                                            CopyCtx::instance().copy(&dists.0, 0, dists.0.kind()).await,
-                                            if fixed_config.keep_slice_matches {
-                                                match dists.1 {
-                                                    None => None,
-                                                    Some(t) => {
-                                                        Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)
-                                                    }
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        )
+                                        DistsMask::new_async(dists.0, dists.1, true).await
+
                                     })
                                 })
                             )
@@ -252,7 +243,24 @@ where
             });
         }
 
-        let results = js.join_all().await;
+        // let results =js.join_all().await;
+
+        let mut failed = AtomicU8::new(0);
+
+        let mut results:Vec<CrossResult> = Vec::new();
+        while let Some(res) = js.join_next().await {
+            match res? {
+                Ok(r) => {
+                    results.push(r);
+                }
+                Err(e) => {
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    error!("Find motifs failed: {e:?}");
+                }
+            }
+        }
+
+        info!("failed {} out of {}", failed.load(Ordering::Relaxed), self.run_config_stages.len());
 
         Ok(FindMotifsSavableResult::new(Arc::new(
             self.run_config_stages[best].run_config.clone(),
