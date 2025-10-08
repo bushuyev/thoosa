@@ -8,15 +8,18 @@ use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::{Debug, Formatter};
 use std::iter::Repeat;
+use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use tch::kind::FLOAT_CPU;
-use tch::{IndexOp, Tensor};
+use tch::{IndexOp, Kind, Tensor};
 use tokio::runtime::Handle;
 use futures::{stream, StreamExt};
+use tch::Kind::{Bool, Uint8};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::copy_ctx::CopyCtx;
+use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::CopyToDevice;
 use thoosa_common::ws::Workspace;
@@ -32,6 +35,7 @@ use torch_runner::data::ThoTensor2;
 pub struct DistsMask {
     mask: Tensor,
     dists: Option<Tensor>,
+    sizes: Option<(Vec<i64>, Option<Vec<i64>>)>,//if packed
 }
 
 /*#[async_trait]
@@ -60,8 +64,46 @@ impl WithId for DistsMask {
 
 impl DistsMask {
     pub fn new(mask: Tensor, dists: Option<Tensor>) -> Self {
-        Self { mask, dists }
+        Self { mask, dists, sizes: None }
     }
+
+    pub async fn new_async(mask: Tensor, dists: Option<Tensor>, pack: bool) -> Self {
+        debug!("DistsMask::new_async: pack={pack}");
+        Self {
+            mask: if pack {
+                CopyCtx::instance().copy(&pack_bits_bool(&mask), 0, Uint8).await
+            } else {
+                CopyCtx::instance().copy(&mask, 0, Bool).await
+            },
+            dists: match dists.as_ref() {
+                None => None,
+                Some(t) => {
+                    Some(CopyCtx::instance().copy(&t, 0, mask.kind()).await)//TODO quantize
+                }
+            },
+            sizes: if pack {
+                Some((mask.size(), dists.map(|t|t.size())))
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn unpack(self) -> (Tensor, Option<Tensor>) {
+        debug!("DistsMask::unpack: self.sizes={:?}", self.sizes);
+        match &self.sizes {
+            None => {
+                (self.mask, self.dists)
+            },
+            Some(size) => {
+                (
+                    unpack_bits_u8(&self.mask, Some(size.0.iter().fold(1, |mut a, v| {a*=v; a}))).view(size.0.as_slice()),
+                    self.dists
+                )
+            }
+        }
+    }
+
 }
 
 pub struct DistsTracker {
@@ -145,22 +187,27 @@ impl Stage for DistsTracker {
     type Out = ();
     type Ctx = RunCtx2;
 
-    fn do_run<'a>(
+    fn consume<'a>(
         self: Arc<Self>,
-        input: &Self::In<'a>,
+        input: Self::In<'a>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError>
     where
         Self: Sized,
     {
-        let DistsMask {
-            mask: mask_cpu,
-            dists,
-        } = input.clc_result();
+
+
+        //TODO clone to resources ref
+        let iter_0 = input.iter_0();
+        let iter_1 = input.iter_1();
+
+        let (ref mask_cpu, ref dists )= input.clc_result().unpack();
 
         tokio::task::block_in_place(|| {
             Handle::current().block_on(async {
                 stream::iter(self.channel_trackers.iter().enumerate()).map(|(channel, mt)| {
+                    let iter_0 = iter_0.clone();
+                    let iter_1 = iter_1.clone();
                     async move {
                         let mask_cpu_flattened = mask_cpu.i((channel as i64, .., ..)).flatten(0, 1);
                         let dists_flattened = dists
@@ -178,8 +225,10 @@ impl Stage for DistsTracker {
                         debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}",mask_cpu_flattened.size());
                         trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");
 
-                        input.iter_0().for_each(|slice_0| {
-                            input.iter_1().for_each(|slice_1| {
+                        for slice_0 in iter_0 {
+                            let iter_1 = iter_1.clone();
+
+                            for slice_1 in iter_1 {
                                 if let Some((mask, dist)) = dists_and_mask_iter.next() {
                                     trace!("find_motifs_by_euc_dist: slice_0={slice_0:?}  slice_1={slice_1:?} mask={mask:?} dist={dist}");
 
@@ -196,8 +245,8 @@ impl Stage for DistsTracker {
                                     error!("find_motifs_by_euc_dist: not enough dists");
                                     panic!("find_motifs_by_euc_dist: not enough dists");
                                 }
-                            });
-                        });
+                            }
+                        }
                         mt.lock().dump();
                     }
                 }).buffer_unordered(self.channel_trackers.len()) // <- bound parallelism

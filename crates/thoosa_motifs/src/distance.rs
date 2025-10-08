@@ -1,4 +1,5 @@
 use core::f32;
+use std::fmt::format;
 use log::Level::Trace;
 use log::{debug, error, log_enabled, trace, warn};
 use parking_lot::{Mutex, RwLock};
@@ -140,31 +141,29 @@ pub fn clc_dist_d2_and_mask(
 ) -> Result<(Tensor, Option<Tensor>), ThoosaError> {
     let de = t_0.device();
 
-    // let distances = clc_dist_d2(t_0, t_1, 1)?;
+    if t_0.size()[1] < 3 || t_1.size()[1] < 3  {
+        return Err(format!("Not enough slices in dimension 1 to calculate distances and mask: t_0.size={:?} t_1.size={:?}", t_0.size(), t_1.size()).into());
+    }
+
+
     let distances = Tensor::f_cdist(&t_0, &t_1, 2.0, 0)?;
 
-    debug!(
-        "clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}",
-        distances.size()
-    );
-    trace!(
-        "clc_dist_d2_and_mask: distances=\n{distances} device={:?}",
-        distances.device()
-    );
+    debug!("clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}",distances.size());
+    trace!("clc_dist_d2_and_mask: distances=\n{distances} device={:?}",distances.device());
+
+    let mut mask_opt: Option<Tensor> = None;
+    for maker in mask_makers.iter_mut() {
+        debug!("clc_dist_d2_and_mask: mask={mask_opt:?}");
+
+        let new_mask = maker.make_mask(mask_opt.take(), &distances)?;
+        mask_opt = Some(new_mask);
+    }
+
+    let mask = mask_opt.unwrap_or_else(|| Tensor::ones(distances.size(), (Bool, de)));
 
     Ok((
-        mask_makers
-            .into_iter()
-            .fold(None::<Tensor>, |mask, mask_maker| {
-                debug!("clc_dist_d2_and_mask: mask={mask:?}");
-                mask_maker.make_mask(mask, &distances).ok()//TODO err!
-            })
-            .unwrap_or(Tensor::ones(distances.size(), (Bool, de))),
-        if with_distances {
-            Some(distances)
-        } else {
-            None
-        },
+        mask,
+        if with_distances { Some(distances) } else { None },
     ))
 }
 
@@ -243,7 +242,7 @@ fn local_min_mask(distances: &Tensor, dim: i64) -> Result<Tensor, ThoosaError> {
             error!("local_min_mask: f_narrow e={e:?}");
             e
         })?
-        .f_lt_tensor(&distances.narrow(dim, 1, 1)).map_err(|e| {
+        .f_lt_tensor(&distances.f_narrow(dim, 1, 1)?).map_err(|e| {
             debug!("local_min_mask: f_lt_tensor e={e:?}");
             error!("local_min_mask: f_lt_tensor e={e:?}");
             e
