@@ -35,6 +35,15 @@ pub trait Output: WithId + Debug {
     }
 }
 
+impl WithId for Shared<Pin<Box<dyn Future<Output = ()> + Send>>>{
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+impl Output for Shared<Pin<Box<dyn Future<Output = ()> + Send>>>{}
+
 impl Named for (){
 
 }

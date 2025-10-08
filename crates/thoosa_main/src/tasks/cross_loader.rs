@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::Stage;
 use caching_runner::common::{Data, OutId, RunCtx};
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, Shared};
 use log::{debug, info};
 use parking_lot::RwLock;
 use std::fmt::Debug;
@@ -164,21 +164,21 @@ where
         self: Arc<Self>,
         inp: In,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<(), ThoosaError>;
+    ) -> Result<Shared<Pin<Box<dyn Future<Output = ()> + Send>>>, ThoosaError>;
 }
 
 impl<T, In> CrossLoaderReceiver<In> for T
 //TODO added for mocks, should be for DistsTracker only
 where
-    T: for<'a> Stage<In<'a> = In, Ctx = RunCtx2> + Send + Sync + Debug + 'static,
+    T: for<'a> Stage<In<'a> = In, Ctx = RunCtx2, Out=Shared<Pin<Box<dyn Future<Output = ()> + Send>>>> + Send + Sync + Debug + 'static,
     In: Input + Output + Send + Debug + 'static,
 {
     fn consume(
         self: Arc<Self>,
         inp: In,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<(), ThoosaError> {
-        <Self as Stage>::consume(self, inp, ctx).map(|_| ())
+    ) -> Result<Shared<Pin<Box<dyn Future<Output = ()> + Send>>>, ThoosaError> {
+        <Self as Stage>::consume(self, inp, ctx) //.map(|_| ())
     }
 }
 
@@ -187,11 +187,13 @@ pub(crate) mod mock_cross_loader_receiver {
     use super::{CrossLoaderReceiver, RunCtx2};
     use parking_lot::RwLock;
     use std::fmt::Debug;
+    use std::pin::Pin;
     use std::sync::Arc;
+    use futures_util::future::Shared;
     use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::{Input, Output};
 
-    type ReceiveFn<In> = dyn Fn(In, Arc<RwLock<RunCtx2>>) -> Result<(), ThoosaError> + Send + Sync;
+    type ReceiveFn<In> = dyn Fn(In, Arc<RwLock<RunCtx2>>) -> Result<Shared<Pin<Box<dyn Future<Output = ()> + Send>>>, ThoosaError> + Send + Sync;
 
     #[derive(Clone)]
     pub struct MockCrossLoaderReceiver<In>
@@ -218,7 +220,7 @@ pub(crate) mod mock_cross_loader_receiver {
             self: Arc<Self>,
             out: In,
             ctx: Arc<RwLock<RunCtx2>>,
-        ) -> Result<(), ThoosaError> {
+        ) -> Result<Shared<Pin<Box<dyn Future<Output = ()> + Send>>>, ThoosaError> {
             let f = Arc::clone(&self.receive_fn);
             f(out, ctx)
         }
@@ -237,7 +239,7 @@ pub(crate) mod mock_cross_loader_receiver {
     {
         pub fn with_receive_fn<F>(mut self, f: F) -> Self
         where
-            F: Fn(In, Arc<RwLock<RunCtx2>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
+            F: Fn(In, Arc<RwLock<RunCtx2>>) -> Result<Shared<Pin<Box<dyn Future<Output = ()> + Send>>>, ThoosaError> + Send + Sync + 'static,
         {
             self.receive_fn = Some(Arc::new(f));
             self
@@ -480,7 +482,7 @@ where
                 let receiver_arc = Arc::clone(&self.receiver);
                 let ctx_arc = Arc::clone(&ctx);
 
-                receiver_arc.consume(cross_clc_output, ctx_arc)?;
+                receiver_arc.consume(cross_clc_output, ctx_arc)?.await;
 
 
                 t_1_batch = vec![];
@@ -746,7 +748,7 @@ mod tests {
             mock_cross_loader_receiver::build::<TestBatchOutput>()
                 .with_receive_fn(move |out, _ctx| {
                     receiver_observed.lock().unwrap().push(out.clone());
-                    Ok(())
+                    Ok(async {()}.boxed().shared())
                 })
                 .finish(),
         );

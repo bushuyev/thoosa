@@ -171,6 +171,7 @@ where
                         } else {
                             Ok(DistsMask::new(dists.0, dists.1))
                         }
+                        // Ok(DistsMask::new(Tensor::new(), None))
 
                     }),
                     MeanDistsCtx::new(channels, device.into()),
