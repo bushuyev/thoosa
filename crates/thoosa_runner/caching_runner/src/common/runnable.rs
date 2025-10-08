@@ -38,4 +38,15 @@ pub trait Stage: Debug {
     {
         unimplemented!()
     }
+
+    fn consume<'a>(
+        self: Arc<Self>,
+        _input: Self::In<'a>,
+        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+    ) -> Result<Self::Out, ThoosaError>
+    where
+        Self: Sized,
+    {
+        unimplemented!()
+    }
 }

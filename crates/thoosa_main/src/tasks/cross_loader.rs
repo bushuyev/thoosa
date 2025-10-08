@@ -160,9 +160,9 @@ pub trait CrossLoaderReceiver<In>: Send + Sync + Debug
 where
     In: Input + Output + Send + Debug + 'static,
 {
-    fn receive(
+    fn consume(
         self: Arc<Self>,
-        out: &In,
+        inp: In,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<(), ThoosaError>;
 }
@@ -173,12 +173,12 @@ where
     T: for<'a> Stage<In<'a> = In, Ctx = RunCtx2> + Send + Sync + Debug + 'static,
     In: Input + Output + Send + Debug + 'static,
 {
-    fn receive(
+    fn consume(
         self: Arc<Self>,
-        out: &In,
+        inp: In,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<(), ThoosaError> {
-        <Self as Stage>::do_run(self, out, ctx).map(|_| ())
+        <Self as Stage>::consume(self, inp, ctx).map(|_| ())
     }
 }
 
@@ -191,7 +191,7 @@ pub(crate) mod mock_cross_loader_receiver {
     use thoosa_shared::ThoosaError;
     use thoosa_shared::applicables_runner::{Input, Output};
 
-    type ReceiveFn<In> = dyn Fn(&In, Arc<RwLock<RunCtx2>>) -> Result<(), ThoosaError> + Send + Sync;
+    type ReceiveFn<In> = dyn Fn(In, Arc<RwLock<RunCtx2>>) -> Result<(), ThoosaError> + Send + Sync;
 
     #[derive(Clone)]
     pub struct MockCrossLoaderReceiver<In>
@@ -214,9 +214,9 @@ pub(crate) mod mock_cross_loader_receiver {
     where
         In: Input + Output + Send + Debug + 'static,
     {
-        fn receive(
+        fn consume(
             self: Arc<Self>,
-            out: &In,
+            out: In,
             ctx: Arc<RwLock<RunCtx2>>,
         ) -> Result<(), ThoosaError> {
             let f = Arc::clone(&self.receive_fn);
@@ -237,7 +237,7 @@ pub(crate) mod mock_cross_loader_receiver {
     {
         pub fn with_receive_fn<F>(mut self, f: F) -> Self
         where
-            F: Fn(&In, Arc<RwLock<RunCtx2>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
+            F: Fn(In, Arc<RwLock<RunCtx2>>) -> Result<(), ThoosaError> + Send + Sync + 'static,
         {
             self.receive_fn = Some(Arc::new(f));
             self
@@ -480,7 +480,7 @@ where
                 let receiver_arc = Arc::clone(&self.receiver);
                 let ctx_arc = Arc::clone(&ctx);
 
-                receiver_arc.receive(&cross_clc_output, ctx_arc)?;
+                receiver_arc.consume(cross_clc_output, ctx_arc)?;
 
 
                 t_1_batch = vec![];
