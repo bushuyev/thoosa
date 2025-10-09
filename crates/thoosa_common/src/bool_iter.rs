@@ -29,6 +29,7 @@ impl<'a> Iterator for BoolTensorIterator<'a> {
             None
         } else {
             unsafe {
+                //works both with Bool and Uint8
                 let value = *self.data_ptr.add(self.index) != 0;
                 self.index += 1;
                 Some(value)
