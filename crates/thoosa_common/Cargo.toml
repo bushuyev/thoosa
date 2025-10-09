@@ -32,6 +32,7 @@ cudarc.workspace = true
 libloading.workspace = true
 thoosa_shared = {path = "../thoosa_shared" }
 thoosa_store = {path = "../thoosa_store" }
+thoosa_shims = {path = "../thoosa_shims" }
 
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }

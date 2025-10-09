@@ -1,3 +1,4 @@
+use log::trace;
 use tch::{Kind, Tensor};
 
 pub struct BoolTensorIterator<'a> {
@@ -30,7 +31,9 @@ impl<'a> Iterator for BoolTensorIterator<'a> {
         } else {
             unsafe {
                 //works both with Bool and Uint8
-                let value = *self.data_ptr.add(self.index) != 0;
+                let bits = *self.data_ptr.add(self.index);
+                trace!("BoolTensorIterator::next: bits={bits:#08b}");
+                let value = bits != 0;
                 self.index += 1;
                 Some(value)
             }

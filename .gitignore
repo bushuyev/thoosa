@@ -9,3 +9,5 @@
 /data_down/**
 .~lock.doc.odt#
 **.venv
+**/build/
+**/cmake-build-*

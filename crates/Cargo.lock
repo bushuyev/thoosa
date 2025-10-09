@@ -685,6 +685,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
+name = "cmake"
+version = "0.1.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4626,7 +4635,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossbeam-channel",
- "ctor 0.2.9",
+ "ctor 0.5.0",
  "cudarc",
  "hound",
  "lewton",
@@ -4694,6 +4703,7 @@ dependencies = [
  "thoosa_run_config_args",
  "thoosa_run_config_args_derive",
  "thoosa_shared",
+ "thoosa_shims",
  "thoosa_store",
  "tokio",
  "tokio-utils",
@@ -4907,11 +4917,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "thoosa_shims"
+version = "0.1.0"
+dependencies = [
+ "cmake",
+ "torch-sys",
+]
+
+[[package]]
 name = "thoosa_store"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "ctor 0.2.9",
+ "ctor 0.5.0",
  "log",
  "mockall",
  "parking_lot",
@@ -5156,7 +5174,7 @@ dependencies = [
  "cached_derive",
  "caching_runner",
  "caching_runner_test",
- "ctor 0.2.9",
+ "ctor 0.5.0",
  "cudarc",
  "cust",
  "dashmap 6.1.0",

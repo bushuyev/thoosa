@@ -25,7 +25,7 @@ impl Debug for CopyCtx {
 impl CopyCtx {
     pub fn new(buffs: usize, buf_size: usize) -> Self {
         use cudarc::driver::CudaContext;
-        let cu_ctx = CudaContext::new(0).unwrap();
+        let cu_ctx = CudaContext::new(0).unwrap();//TODO device!
 
         let bufs_pool = Self::build_pool(buffs, buf_size, cu_ctx);
 

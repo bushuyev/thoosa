@@ -68,6 +68,9 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
 
+    tch::Cuda::synchronize(0);
+
+
     let src_ptr: usize = src_t.as_ref().data_ptr() as usize;
     let src_size = src_t.as_ref().size();
 
@@ -380,12 +383,13 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Float, Int64, Uint8};
-    use tch::kind::FLOAT_CPU;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{Kind, Tensor};
     use thoosa_shared::ThoosaError;
     use tokio::task::JoinSet;
     use tokio::time::Instant;
     use tokio_utils::Pool;
+    use thoosa_shims::stream::ThoCudaStream;
 
     #[ctor::ctor]
     fn init() {
@@ -796,5 +800,60 @@ mod tests {
         // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
     }
 
+
+    #[tokio::test]
+    async fn test_0() {
+        unsafe {
+            std::env::set_var("CUDA_API_PER_THREAD_DEFAULT_STREAM", "1");
+            let stream = thoosa_shims::stream::tho_get_current_stream(0);
+
+            debug!("0. stream: {stream:?}");//prints stream: 0x0
+
+            std::thread::spawn(move || {
+
+                let stream = thoosa_shims::stream::tho_get_current_stream(0);
+
+                debug!("0. thr stream: {stream:?}");//still stream: 0x0
+
+            }).join().unwrap();
+
+
+            let st_0 = ThoCudaStream::from_ptr(thoosa_shims::stream::tho_get_stream_from_pool(0, false));
+            thoosa_shims::stream::tho_set_current_stream(st_0.ptr());
+
+            let stream = thoosa_shims::stream::tho_get_current_stream(0);
+            debug!("1. stream: {stream:?}");//prints stream: 0x78d0846bb340
+
+            let a = Tensor::rand(&[10, 100], FLOAT_CUDA);
+            let b = Tensor::rand(&[100, 10], FLOAT_CUDA);
+            let c = a.mm(&b);
+
+
+            //this can be an async fn instead
+            std::thread::spawn(move || {
+
+                let stream = thoosa_shims::stream::tho_get_current_stream(0);
+                debug!("1. thr stream: {stream:?}");//again stream: 0x0 which is main problem cause resetting stream through all async invocations is a hurdle
+
+                //setting it back
+                thoosa_shims::stream::tho_set_current_stream(st_0.ptr());
+
+                let stream = thoosa_shims::stream::tho_get_current_stream(0);
+                debug!("2. thr stream: {stream:?}");//prints stream: 0x78d0846bb340
+
+                //and after few async calls we've got to run on another stream (like for copying)
+                let another_stream = ThoCudaStream::from_ptr(thoosa_shims::stream::tho_get_stream_from_pool(0, false));
+
+                let whatever = c.relu(); // where I must be sure that mm (which is a bunch of tensor operations on huge tensors in the real app so can take time) is done
+
+                debug!("3. whatever: {whatever:?}");
+
+
+            }).join().unwrap();
+        }
+
+
+
+    }
 
 }
