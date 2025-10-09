@@ -78,7 +78,7 @@ impl DistsMask {
             dists: match dists.as_ref() {
                 None => None,
                 Some(t) => {
-                    Some(CopyCtx::instance().copy(&t, 0, mask.kind()).await)//TODO quantize
+                    Some(CopyCtx::instance().copy(&t, 0, t.kind()).await)//TODO to Half?
                 }
             },
             sizes: if pack {
@@ -91,15 +91,19 @@ impl DistsMask {
 
     pub fn unpack(self) -> (Tensor, Option<Tensor>) {
         debug!("DistsMask::unpack: self.sizes={:?}", self.sizes);
-        match &self.sizes {
-            None => {
-                (self.mask, self.dists)
-            },
+        match &self.sizes {//was packed
             Some(size) => {
                 (
-                    unpack_bits_u8(&self.mask, Some(size.0.iter().fold(1, |mut a, v| {a*=v; a}))).view(size.0.as_slice()),
+                    unpack_bits_u8(
+                        &self.mask,
+                        Some(size.0.iter().fold(1, |mut a, v| {a*=v; a}))
+                    )
+                    .view(size.0.as_slice()),
                     self.dists
                 )
+            },
+            None => {
+                (self.mask, self.dists)
             }
         }
     }
@@ -220,7 +224,7 @@ impl Stage for DistsTracker {
                         trace!("find_motifs_by_euc_dist: dists_flattened=\n{:?}",dists_flattened);
 
                         let mut channel_mask: BoolTensorIterator = (&mask_cpu_flattened).into();
-                        let mut dists_and_mask_iter = channel_mask.zip(Self::dist_iter(dists_flattened));
+                        let mut dists_and_mask_iter = channel_mask.zip(Self::dist_iter(dists_flattened));//
 
                         debug!("find_motifs_by_euc_dist: channel={channel} mask_cpu_flattened.size={:?}",mask_cpu_flattened.size());
                         trace!("find_motifs_by_euc_dist: mask_cpu_flattened={mask_cpu_flattened}");

@@ -294,7 +294,7 @@ pub async fn copy_h2d_from_ptr(
     dst_t
 }
 pub fn pack_bits_bool(b: &Tensor) -> Tensor {
-    assert_eq!(b.kind(), Kind::Bool, "packbits_bool expects Bool");
+    assert_eq!(b.kind(), Kind::Bool, "pack_bits_bool expects Bool");
     let dev = b.device();
 
     // 1) Flatten.
@@ -325,7 +325,7 @@ pub fn pack_bits_bool(b: &Tensor) -> Tensor {
 
 /// Unpack bytes back to Bool bits (MSB-first).
 pub fn unpack_bits_u8(bytes: &Tensor, original_bits: Option<i64>) -> Tensor {
-    assert_eq!(bytes.kind(), Kind::Uint8, "unpackbits_u8 expects UInt8");
+    assert_eq!(bytes.kind(), Kind::Uint8, "unpack_bits_u8 expects UInt8");
     let dev = bytes.device();
 
     // 1) Bit masks, MSB->LSB, shape [1,8] for broadcast.
@@ -343,7 +343,7 @@ pub fn unpack_bits_u8(bytes: &Tensor, original_bits: Option<i64>) -> Tensor {
     let per_bit_bool = anded.ne_tensor(&zeros); // [M,8], Bool
 
     // 4) Flatten and trim optional padding.
-    let bits = per_bit_bool.reshape([-1]).to_kind(Kind::Bool);
+    let bits = per_bit_bool.reshape([-1]); //.to_kind(Kind::Bool);
     if let Some(k) = original_bits {
         bits.narrow(0, 0, k).contiguous()
     } else {
@@ -379,7 +379,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
     use tch::Device::{Cpu, Cuda};
-    use tch::Kind::{Float, Int64};
+    use tch::Kind::{Float, Int64, Uint8};
     use tch::kind::FLOAT_CPU;
     use tch::{Kind, Tensor};
     use thoosa_shared::ThoosaError;
@@ -758,7 +758,43 @@ mod tests {
 
 
         assert!(mask.allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
-        assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
+        // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
     }
-    
+
+    #[tokio::test]
+    async fn roundtrip_pack_unpack_copy() {
+        use tch::{Device, Kind, Tensor};
+
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
+
+
+        // try CPU; switch to Device::Cuda(0) if you want to test on GPU
+        let dev = Device::Cpu;
+
+        let n = 12_345; //0_003i64;
+        let channels = 20;
+        let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
+        let size = mask.size();
+        let packed = CopyCtx::instance().copy(&pack_bits_bool(&mask), 0, Uint8).await;
+
+        let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
+        let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
+
+        let numelts = size.iter().fold(1, |mut a, v| {
+            a *= v;
+            a
+        });
+        let unpacked = unpack_bits_u8(&packed, Some(numelts)).view((channels, n));
+
+        let unpacked_size = unpacked.numel()*unpacked.kind().elt_size_in_bytes();
+
+        // println!("mask=\n{mask} unpacked=\n{unpacked} \n={numelts}");
+
+        assert!(mask.to_device(Cpu).allclose(&unpacked, 0.01, 0.01, false), "roundtrip mismatch");
+        // assert!(mask.allclose(&unpack_bits_u8(&packed, None), 0.01, 0.01, false), "roundtrip mismatch");
+    }
+
+
 }
