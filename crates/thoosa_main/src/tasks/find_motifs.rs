@@ -150,26 +150,26 @@ where
                             mask_makers.push(Tril);
                         }
 
-                        let dists = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                        let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
                             t_0,
                             t_1,
-                            true,
+                            fixed_config.keep_slice_matches,//if true dists are returned
                             &mut mask_makers,
                         )?;
 
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
-                        if dists.0.device().ne(&Cpu) {
+                        if mask.device().ne(&Cpu) {
 
                             Ok(
                                 tokio::task::block_in_place(|| {
                                     Handle::current().block_on(async {
-                                        DistsMask::new_async(dists.0, dists.1, true).await
+                                        DistsMask::new_async(mask, dists, true).await
 
                                     })
                                 })
                             )
                         } else {
-                            Ok(DistsMask::new(dists.0, dists.1))
+                            Ok(DistsMask::new(mask, dists))
                         }
 
                     }),
