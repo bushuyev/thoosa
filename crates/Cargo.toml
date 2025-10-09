@@ -21,7 +21,9 @@ members = [
     "thoosa_runner/torch_runner",
 
     "thoosa_projects/thoosa_hbac",
-    "thoosa_projects/thoosa_bird_clef", "thoosa_macros/macros_tests",
+    "thoosa_projects/thoosa_bird_clef",
+    "thoosa_macros/macros_tests",
+    "thoosa_shims",
 ]
 
 [workspace.package]

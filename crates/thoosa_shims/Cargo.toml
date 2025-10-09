@@ -1,0 +1,17 @@
+[package]
+name = "thoosa_shims"
+version.workspace = true
+edition.workspace = true
+
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+torch-sys.workspace = true
+
+cmake = "0.1"
+
+
+[build-dependencies]
+cmake = "0.1"
