@@ -64,7 +64,7 @@ use thoosa_common::train_nets::{
     run_opt_train_label_nets, run_train_motif_net, train_final_net, train_final_net_2,
     train_label_net_2,
 };
-use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices, lin_t, plot_series};
+use thoosa_common::utils::{DummyListener, TrainListener, cuda_mem, from, list_devices, lin_t, plot_series, reset_print_options};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{
@@ -185,6 +185,9 @@ where
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoosaError>,
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoosaError> + Sync + Send,
 {
+    if log::log_enabled!(log::Level::Trace) {
+        reset_print_options();
+    }
     // set_oom_score_adj(-1000);
 
     unsafe {
