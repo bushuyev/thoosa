@@ -80,7 +80,7 @@ impl CopyCtx {
 
         INSTANCE.get_or_init(|| {
             // Self::make_instance(2.0, 64)
-            Self::make_instance(0.1, 32)
+            Self::make_instance(0.2, 16)//MAX 32,  leave 16 for clc https://github.com/pytorch/pytorch/issues/34878
         })
     }
 
