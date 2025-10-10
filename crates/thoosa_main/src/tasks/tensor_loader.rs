@@ -77,6 +77,7 @@ pub trait TensorLoader: Send + Sync + Debug {
 
 #[async_trait]
 impl TensorLoader for RawTensorLoader {
+
     async fn load(
         self: Arc<Self>,
         resource: Arc<Resource>,
@@ -130,6 +131,7 @@ pub(crate) mod mock_tensor_loader {
 
     #[async_trait]
     impl TensorLoader for MockTensorLoader {
+
         async fn load(
             self: Arc<Self>,
             resource: Arc<Resource>,
