@@ -26,4 +26,5 @@ extern "C" {
   void tho_delete_stream(void *raw) {
     delete static_cast<c10::cuda::CUDAStream *>(raw);
   }
+
 }
