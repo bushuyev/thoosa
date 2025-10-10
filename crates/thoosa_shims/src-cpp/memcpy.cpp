@@ -1,4 +1,5 @@
 #include <cuda.h>
+#include <c10/cuda/CUDAStream.h>
 
 extern "C" {
   CUresult tho_cu_memcpy_dtoh_async(
@@ -6,8 +7,12 @@ extern "C" {
       CUdeviceptr src_device,
       size_t byte_count,
       void *stream) {
-    return cuMemcpyDtoHAsync(dst_host, src_device, byte_count,
-                             reinterpret_cast<CUstream>(stream));
+    CUstream cu_stream = nullptr;
+    if (stream != nullptr) {
+      auto *cuda_stream = static_cast<c10::cuda::CUDAStream *>(stream);
+      cu_stream = cuda_stream->stream();
+    }
+    return cuMemcpyDtoHAsync(dst_host, src_device, byte_count, cu_stream);
   }
 
   CUresult tho_cu_memcpy_htod_async(
@@ -15,8 +20,12 @@ extern "C" {
       const void *src_host,
       size_t byte_count,
       void *stream) {
-    return cuMemcpyHtoDAsync(dst_device, src_host, byte_count,
-                             reinterpret_cast<CUstream>(stream));
+    CUstream cu_stream = nullptr;
+    if (stream != nullptr) {
+      auto *cuda_stream = static_cast<c10::cuda::CUDAStream *>(stream);
+      cu_stream = cuda_stream->stream();
+    }
+    return cuMemcpyHtoDAsync(dst_device, src_host, byte_count, cu_stream);
   }
 
   CUresult tho_cu_mem_host_alloc(
