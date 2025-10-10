@@ -47,6 +47,7 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=c10_cuda");
 
     println!("cargo:rerun-if-changed=src-cpp/stream.cpp");
+    println!("cargo:rerun-if-changed=src-cpp/memcpy.cpp");
 
 }
 

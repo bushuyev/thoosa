@@ -18,4 +18,15 @@ extern "C" {
     return cuMemcpyHtoDAsync(dst_device, src_host, byte_count,
                              reinterpret_cast<CUstream>(stream));
   }
+
+  CUresult tho_cu_mem_host_alloc(
+      void **ptr,
+      size_t byte_count,
+      unsigned int flags) {
+    return cuMemHostAlloc(ptr, byte_count, flags);
+  }
+
+  CUresult tho_cu_mem_free_host(void *ptr) {
+    return cuMemFreeHost(ptr);
+  }
 }
