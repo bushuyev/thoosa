@@ -1,4 +1,4 @@
-use cudarc::driver::{CudaStream, PinnedHostSlice, sys};
+use cudarc::driver::{CudaStream, sys};
 use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
@@ -9,6 +9,68 @@ use tch::{Device, Kind, Tensor};
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::task::JoinSet;
 use tokio_utils::Pool;
+
+pub struct PinnedHostBuffer {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl PinnedHostBuffer {
+    pub fn new(len: usize) -> Result<Self, ThoosaError> {
+        use cudarc::driver::sys::CUresult::CUDA_SUCCESS;
+
+        let mut raw: *mut c_void = std::ptr::null_mut();
+        let flags = sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+        let res = unsafe {
+            thoosa_shims::memcpy::tho_cu_mem_host_alloc(&mut raw, len, flags)
+        };
+
+        if res != CUDA_SUCCESS as i32 {
+            return Err(MyError::SomethingElse(format!(
+                "cuMemHostAlloc failed with {res:?} (len={len})"
+            ))
+            .into());
+        }
+
+        Ok(Self {
+            ptr: raw as *mut u8,
+            len,
+        })
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        self.ptr
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+}
+
+unsafe impl Send for PinnedHostBuffer {}
+unsafe impl Sync for PinnedHostBuffer {}
+
+impl Drop for PinnedHostBuffer {
+    fn drop(&mut self) {
+        use cudarc::driver::sys::CUresult::CUDA_SUCCESS;
+
+        if self.ptr.is_null() {
+            return;
+        }
+
+        let res = unsafe {
+            thoosa_shims::memcpy::tho_cu_mem_free_host(self.ptr as *mut c_void)
+        };
+
+        if res != CUDA_SUCCESS as i32 {
+            log::error!("cuMemFreeHost failed with {res:?}");
+        }
+    }
+}
 // test-only imports moved into test modules
 
 //free_mem, total_mem
@@ -64,7 +126,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
     buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
 ) -> Tensor {
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
@@ -81,7 +143,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
 pub async fn copy_d2h_from_ptr_result(
     init_type: Kind,
     buf_size_bytes: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
     src_ptr: usize,
     src_size: &[i64],
 ) -> Result<Tensor, ThoosaError> {
@@ -122,7 +184,7 @@ pub async fn copy_d2h_from_ptr_result(
             async move {
                 // println!("starting {i}");
                 let buf_stream = pool.acquire().await;
-                let buf_ptr = buf_stream.0.as_ptr().unwrap() as usize;
+                let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
 
                 let stream = buf_stream.1.clone();
                 // from cuda to pinned buffer
@@ -169,7 +231,7 @@ pub async fn copy_d2h_from_ptr_result(
 pub async fn copy_d2h_from_ptr(
     init_type: Kind,
     buf_size_bytes: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
     src_ptr: usize,
     src_size: &[i64],
 ) -> Tensor {
@@ -184,7 +246,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
     buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
     dst_device_idx: usize,
 ) -> Tensor {
     assert!(src_t.as_ref().device().eq(&Cpu));
@@ -207,7 +269,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
 pub async fn copy_h2d_from_ptr(
     init_type: Kind,
     buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
     dst_device_idx: usize,
     src_ptr: usize,
     size: &[i64],
@@ -256,7 +318,7 @@ pub async fn copy_h2d_from_ptr(
             async move {
                 // grab (pinned slice, stream) from the pool
                 let buf_stream = pool.acquire().await;
-                let buf_ptr = buf_stream.0.as_ptr().unwrap() as usize;
+                let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
                 let stream = buf_stream.1.clone();
 
                 //----------------------------------------------------------
@@ -381,7 +443,16 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::copy_ctx::CopyCtx;
-    use crate::cuda_utils::{copy_d2h_from_ptr, copy_h2d_from_ptr, cuda_mem, equal_bytes, pack_bits_bool, speed_gb_per_s, unpack_bits_u8};
+    use crate::cuda_utils::{
+        copy_d2h_from_ptr,
+        copy_h2d_from_ptr,
+        cuda_mem,
+        equal_bytes,
+        pack_bits_bool,
+        speed_gb_per_s,
+        unpack_bits_u8,
+        PinnedHostBuffer,
+    };
     use crate::utils::lin_for_size;
     use log::{debug, info};
     use rand::random_range;
@@ -404,7 +475,7 @@ mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     #[cfg_attr(miri, ignore)]
     #[allow(dead_code)]
     async fn heavy_test_copy_cudarc() {
@@ -413,8 +484,8 @@ mod tests {
 
             let mut ctx: Option<UnsafeCell<crate::copy_ctx::CopyCtx>> = None;
 
-            for mem_k in [0.1, 0.5, 1.0, 2.] {
-                for buffs in [8, 16, 32, 64] {
+            for mem_k in [0.1/*, 0.5, 1.0, 2.*/] {
+                for buffs in [32/*8, 16, 32, 64*/] {
                     if ctx.is_none() {
                         ctx = Some(UnsafeCell::new(CopyCtx::make_instance(mem_k, buffs)));
                     } else {
@@ -444,7 +515,7 @@ mod tests {
         let h2d_time = Arc::new(AtomicU64::new(0));
 
         let threads = 3;
-        let runs = 10;
+        let runs = 1;
 
         (0..threads)
             .map(|thread_i| {
@@ -536,7 +607,7 @@ mod tests {
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
-                unsafe { cu_ctx.alloc_pinned::<u8>(buf_size as usize).unwrap() },
+                PinnedHostBuffer::new(buf_size as usize).unwrap(),
                 cu_ctx.new_stream().unwrap(),
             )
         })));
@@ -600,7 +671,7 @@ mod tests {
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
-                unsafe { cu_ctx.alloc_pinned::<u8>(buf_size as usize).unwrap() },
+                PinnedHostBuffer::new(buf_size as usize).unwrap(),
                 cu_ctx.new_stream().unwrap(),
             )
         })));
@@ -653,7 +724,7 @@ mod tests {
         let buf_size = 1024usize;
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_| {
             (
-                unsafe { cu_ctx.alloc_pinned::<u8>(buf_size).unwrap() },
+                PinnedHostBuffer::new(buf_size).unwrap(),
                 cu_ctx.new_stream().unwrap(),
             )
         })));
