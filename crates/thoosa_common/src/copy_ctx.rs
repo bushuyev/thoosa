@@ -1,5 +1,5 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem, PinnedHostBuffer};
-use cudarc::driver::CudaContext;
+use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
 use log::debug;
 use std::fmt::{Debug, Formatter};
@@ -9,7 +9,7 @@ use tch::{Kind, Tensor};
 use tokio_utils::Pool;
 
 pub struct CopyCtx {
-    _cu_ctx: Arc<CudaContext>,
+    _cu_ctx: Arc<ThoCudaContext>,
     _buffs: usize,
     buf_size: usize,
     bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
@@ -25,7 +25,7 @@ impl Debug for CopyCtx {
 
 impl CopyCtx {
     pub fn new(buffs: usize, buf_size: usize) -> Self {
-        let cu_ctx = CudaContext::new(0).expect("failed to create CUDA context");
+        let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
         let bufs_pool = Self::build_pool(buffs, buf_size, &cu_ctx);
 
         Self {
@@ -39,7 +39,7 @@ impl CopyCtx {
     fn build_pool(
         buffs: usize,
         buf_size: usize,
-        cu_ctx: &Arc<CudaContext>,
+        cu_ctx: &Arc<ThoCudaContext>,
     ) -> Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>> {
         cu_ctx
             .bind_to_thread()
