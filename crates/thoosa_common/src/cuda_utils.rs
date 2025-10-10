@@ -1,4 +1,5 @@
 use cudarc::driver::{CudaStream, PinnedHostSlice, sys};
+use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
 use std::{iter, usize};
@@ -125,12 +126,13 @@ pub async fn copy_d2h_from_ptr_result(
 
                 let stream = buf_stream.1.clone();
                 // from cuda to pinned buffer
-                let r = cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
-                    buf_ptr as *mut _,
-                    src_off_ptr,
+                let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
+                    buf_ptr as *mut c_void,
+                    src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                     c_buf_size,
-                    stream.cu_stream(), // as CUstream
+                    stream.cu_stream() as *mut c_void,
                 );
+                let r: sys::CUresult = std::mem::transmute(raw);
                 if r != sys::CUresult::CUDA_SUCCESS {
                     return Err(MyError::SomethingElse(format!(
                         "cuMemcpyDtoHAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}"
@@ -274,12 +276,18 @@ pub async fn copy_h2d_from_ptr(
                 // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                 //----------------------------------------------------------
                 // task::spawn_blocking(move || {
-                let _ = sys::cuMemcpyHtoDAsync_v2(
-                    dst_off_ptr,
-                    buf_ptr as *const _,
+                let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
+                    dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
+                    buf_ptr as *const c_void,
                     c_buf_size,
-                    stream.cu_stream(),
+                    stream.cu_stream() as *mut c_void,
                 );
+                let r: sys::CUresult = std::mem::transmute(raw);
+                if r != sys::CUresult::CUDA_SUCCESS {
+                    panic!(
+                        "cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}"
+                    );
+                }
                 // })
                 // .await
                 // .unwrap();
