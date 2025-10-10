@@ -1,4 +1,4 @@
-use cudarc::driver::{CudaStream, sys};
+use cudarc::driver::sys;
 use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
@@ -9,6 +9,7 @@ use tch::{Device, Kind, Tensor};
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::task::JoinSet;
 use tokio_utils::Pool;
+use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 
 pub struct PinnedHostBuffer {
     ptr: *mut u8,
@@ -126,7 +127,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
     buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 ) -> Tensor {
 
     assert!(src_t.as_ref().device().ne(&Device::Cpu));
@@ -143,7 +144,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
 pub async fn copy_d2h_from_ptr_result(
     init_type: Kind,
     buf_size_bytes: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     src_ptr: usize,
     src_size: &[i64],
 ) -> Result<Tensor, ThoosaError> {
@@ -192,7 +193,7 @@ pub async fn copy_d2h_from_ptr_result(
                     buf_ptr as *mut c_void,
                     src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                     c_buf_size,
-                    stream.cu_stream() as *mut c_void,
+                    stream.as_mut_ptr(),
                 );
                 let r: sys::CUresult = std::mem::transmute(raw);
                 if r != sys::CUresult::CUDA_SUCCESS {
@@ -202,7 +203,7 @@ pub async fn copy_d2h_from_ptr_result(
                     .into());
                 }
 
-                buf_stream.1.synchronize().unwrap();
+                buf_stream.1.synchronize();
 
                 // from pinned buffer into the destination tensor
                 // task::spawn_blocking(move || {
@@ -231,7 +232,7 @@ pub async fn copy_d2h_from_ptr_result(
 pub async fn copy_d2h_from_ptr(
     init_type: Kind,
     buf_size_bytes: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     src_ptr: usize,
     src_size: &[i64],
 ) -> Tensor {
@@ -246,7 +247,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     init_type: Kind,
     src_t: &R,
     buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     dst_device_idx: usize,
 ) -> Tensor {
     assert!(src_t.as_ref().device().eq(&Cpu));
@@ -269,7 +270,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
 pub async fn copy_h2d_from_ptr(
     init_type: Kind,
     buf_size: usize,
-    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
+    bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
     dst_device_idx: usize,
     src_ptr: usize,
     size: &[i64],
@@ -342,7 +343,7 @@ pub async fn copy_h2d_from_ptr(
                     dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                     buf_ptr as *const c_void,
                     c_buf_size,
-                    stream.cu_stream() as *mut c_void,
+                    stream.as_mut_ptr(),
                 );
                 let r: sys::CUresult = std::mem::transmute(raw);
                 if r != sys::CUresult::CUDA_SUCCESS {
@@ -355,7 +356,7 @@ pub async fn copy_h2d_from_ptr(
                 // .unwrap();
 
                 // wait for GPU work to finish before recycling buffer
-                buf_stream.1.synchronize().unwrap();
+                buf_stream.1.synchronize();
                 drop(buf_stream); // return buffer/stream to pool
             }
         })
@@ -454,6 +455,7 @@ mod tests {
         PinnedHostBuffer,
     };
     use crate::utils::lin_for_size;
+    use cudarc::driver::CudaContext;
     use log::{debug, info};
     use rand::random_range;
     use std::cell::UnsafeCell;
@@ -484,8 +486,8 @@ mod tests {
 
             let mut ctx: Option<UnsafeCell<crate::copy_ctx::CopyCtx>> = None;
 
-            for mem_k in [0.1/*, 0.5, 1.0, 2.*/] {
-                for buffs in [32/*8, 16, 32, 64*/] {
+            for mem_k in [0.1, 0.5, 1.0, 2.] {
+                for buffs in [8, 16, 32, 64] {
                     if ctx.is_none() {
                         ctx = Some(UnsafeCell::new(CopyCtx::make_instance(mem_k, buffs)));
                     } else {
@@ -500,9 +502,6 @@ mod tests {
 
     #[allow(dead_code)]
     async fn run_test_copy_cudarc(ctx: &'static CopyCtx) {
-        use cudarc::driver::CudaContext;
-        let _cu_ctx = Arc::new(CudaContext::new(0).unwrap());
-
         let (free_mem, _total_mem) = cuda_mem();
 
         let init_type = Float;
@@ -515,7 +514,7 @@ mod tests {
         let h2d_time = Arc::new(AtomicU64::new(0));
 
         let threads = 3;
-        let runs = 1;
+        let runs = 3;
 
         (0..threads)
             .map(|thread_i| {
@@ -592,8 +591,8 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        use cudarc::driver::CudaContext;
-        let cu_ctx = Arc::new(CudaContext::new(0).unwrap());
+
+        let _cu_ctx = Arc::new(CudaContext::new(0).unwrap());
 
         let (free_mem, _total_mem) = cuda_mem();
 
@@ -608,7 +607,7 @@ mod tests {
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
                 PinnedHostBuffer::new(buf_size as usize).unwrap(),
-                cu_ctx.new_stream().unwrap(),
+                Arc::new(ThoCudaStream::new(0)),
             )
         })));
 
@@ -654,8 +653,8 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        use cudarc::driver::CudaContext;
-        let cu_ctx = Arc::new(CudaContext::new(0).unwrap());
+
+        let _cu_ctx = Arc::new(CudaContext::new(0).unwrap());
 
         let (free_mem, _total_mem) = cuda_mem();
 
@@ -672,7 +671,7 @@ mod tests {
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
                 PinnedHostBuffer::new(buf_size as usize).unwrap(),
-                cu_ctx.new_stream().unwrap(),
+                Arc::new(ThoCudaStream::new(0)),
             )
         })));
 
@@ -716,16 +715,15 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        use cudarc::driver::CudaContext;
+        let _cu_ctx = Arc::new(CudaContext::new(0).unwrap());
 
         // Setup a small pool
-        let cu_ctx = Arc::new(CudaContext::new(0).unwrap());
         let buffs = 2usize;
         let buf_size = 1024usize;
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_| {
             (
                 PinnedHostBuffer::new(buf_size).unwrap(),
-                cu_ctx.new_stream().unwrap(),
+                Arc::new(ThoCudaStream::new(0)),
             )
         })));
 
