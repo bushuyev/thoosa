@@ -1,5 +1,5 @@
-use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem};
-use cudarc::driver::{CudaContext, CudaStream, PinnedHostSlice};
+use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem, PinnedHostBuffer};
+use cudarc::driver::{CudaContext, CudaStream};
 use log::debug;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
@@ -11,7 +11,7 @@ use tokio_utils::Pool;
 pub struct CopyCtx {
     _buffs: usize,
     buf_size: usize,
-    bufs_pool: Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>>,
+    bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
 }
 
 impl Debug for CopyCtx {
@@ -40,10 +40,10 @@ impl CopyCtx {
         buffs: usize,
         buf_size: usize,
         cu_ctx: Arc<CudaContext>,
-    ) -> Arc<Pool<(PinnedHostSlice<u8>, Arc<CudaStream>)>> {
+    ) -> Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>> {
         Arc::new(Pool::from_iter((0..buffs).map(|_| {
             (
-                unsafe { cu_ctx.alloc_pinned::<u8>(buf_size).unwrap() },
+                PinnedHostBuffer::new(buf_size).unwrap(),
                 cu_ctx.new_stream().unwrap(),
             )
         })))
@@ -58,7 +58,7 @@ impl CopyCtx {
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool,
             Arc::new(Pool::from_vec(vec![(
-                unsafe { cu_ctx.alloc_pinned::<u8>(1).unwrap() },
+                PinnedHostBuffer::new(1).unwrap(),
                 cu_ctx.new_stream().unwrap(),
             )])),
         )));

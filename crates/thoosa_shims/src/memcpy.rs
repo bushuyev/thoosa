@@ -17,4 +17,12 @@ unsafe extern "C" {
         byte_count: usize,
         stream: *mut c_void,
     ) -> CuResult;
+
+    pub fn tho_cu_mem_host_alloc(
+        ptr: *mut *mut c_void,
+        byte_count: usize,
+        flags: u32,
+    ) -> CuResult;
+
+    pub fn tho_cu_mem_free_host(ptr: *mut c_void) -> CuResult;
 }
