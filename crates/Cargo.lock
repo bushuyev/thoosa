@@ -621,7 +621,7 @@ dependencies = [
  "num-traits",
  "serde",
  "wasm-bindgen",
- "windows-link 0.2.0",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -1855,7 +1855,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.0",
+ "windows-core",
 ]
 
 [[package]]
@@ -4681,6 +4681,7 @@ dependencies = [
  "futures",
  "futures-util",
  "lazy_static",
+ "libc",
  "libloading",
  "log",
  "mockall",
@@ -4736,6 +4737,7 @@ dependencies = [
  "thoosa_main",
  "thoosa_motifs",
  "thoosa_shared",
+ "thoosa_shims",
  "thoosa_store",
  "tokio",
  "torch-sys",
@@ -4792,6 +4794,7 @@ dependencies = [
  "thoosa_run_config_args",
  "thoosa_run_config_args_derive",
  "thoosa_shared",
+ "thoosa_shims",
  "thoosa_store",
  "tokio",
  "torch-sys",
@@ -4921,6 +4924,7 @@ name = "thoosa_shims"
 version = "0.1.0"
 dependencies = [
  "cmake",
+ "log",
  "torch-sys",
 ]
 
@@ -5663,7 +5667,7 @@ version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12342cb4d8e3b046f3d80effd474a7a02447231330ef77d71daa6fbc40681143"
 dependencies = [
- "windows-core 0.57.0",
+ "windows-core",
  "windows-targets 0.52.6",
 ]
 
@@ -5673,23 +5677,10 @@ version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ed2439a290666cd67ecce2b0ffaad89c2a56b976b736e6ece670297897832d"
 dependencies = [
- "windows-implement 0.57.0",
- "windows-interface 0.57.0",
- "windows-result 0.1.2",
+ "windows-implement",
+ "windows-interface",
+ "windows-result",
  "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.62.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57fe7168f7de578d2d8a05b07fd61870d2e73b4020e9f49aa00da8471723497c"
-dependencies = [
- "windows-implement 0.60.0",
- "windows-interface 0.59.1",
- "windows-link 0.2.0",
- "windows-result 0.4.0",
- "windows-strings",
 ]
 
 [[package]]
@@ -5697,17 +5688,6 @@ name = "windows-implement"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9107ddc059d5b6fbfbffdfa7a7fe3e22a226def0b2608f72e9d552763d3e1ad7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
-]
-
-[[package]]
-name = "windows-implement"
-version = "0.60.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a47fddd13af08290e67f4acabf4b459f647552718f683a7b415d290ac744a836"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5726,17 +5706,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-interface"
-version = "0.59.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd9211b69f8dcdfa817bfd14bf1c97c9188afa36f4750130fcdf3f400eca9fa8"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
-]
-
-[[package]]
 name = "windows-link"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5744,9 +5713,9 @@ checksum = "5e6ad25900d524eaabdbbb96d20b4311e1e7ae1699af4fb28c17ae66c80d798a"
 
 [[package]]
 name = "windows-link"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45e46c0661abb7180e7b9c281db115305d49ca1709ab8242adf09666d2173c65"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-result"
@@ -5755,24 +5724,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e383302e8ec8515204254685643de10811af0ed97ea37210dc26fb0032647f8"
 dependencies = [
  "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-result"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7084dcc306f89883455a206237404d3eaf961e5bd7e0f312f7c91f57eb44167f"
-dependencies = [
- "windows-link 0.2.0",
-]
-
-[[package]]
-name = "windows-strings"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7218c655a553b0bed4426cf54b20d7ba363ef543b52d515b3e48d7fd55318dda"
-dependencies = [
- "windows-link 0.2.0",
 ]
 
 [[package]]
@@ -5808,7 +5759,7 @@ version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e201184e40b2ede64bc2ea34968b28e33622acdbbf37104f0e4a33f7abe657aa"
 dependencies = [
- "windows-link 0.2.0",
+ "windows-link 0.2.1",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ thoosa_common = {path = "../thoosa_common" }
 thoosa_motifs = {path = "../thoosa_motifs" }
 thoosa_store = {path = "../thoosa_store" }
 thoosa_shared = {path = "../thoosa_shared" }
+thoosa_shims = {path = "../thoosa_shims" }
 caching_runner = {path = "../thoosa_runner/caching_runner"}
 torch_runner = {path = "../thoosa_runner/torch_runner"}
 tokio.workspace = true

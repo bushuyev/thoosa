@@ -37,7 +37,7 @@ impl CopyCtx {
     }
 
     fn build_pool(
-        buffs: usize,
+        num_buffs: usize,
         buf_size: usize,
         cu_ctx: &Arc<ThoCudaContext>,
     ) -> Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>> {
@@ -45,7 +45,7 @@ impl CopyCtx {
             .bind_to_thread()
             .expect("failed to bind CUDA context to thread");
         let device = cu_ctx.ordinal() as i32;
-        Arc::new(Pool::from_iter((0..buffs).map(|_| {
+        Arc::new(Pool::from_iter((0..num_buffs).map(|_| {
             (
                 PinnedHostBuffer::new(buf_size).unwrap(),
                 Arc::new(ThoCudaStream::new(device)),

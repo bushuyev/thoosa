@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
+use log::debug;
 
 type CuResult = i32;
 type CuDevice = i32;
@@ -80,6 +81,8 @@ impl ThoCudaContext {
 
     pub fn bind_to_thread(&self) -> Result<(), String> {
         unsafe {
+            debug!("ThoCudaContext::bind_to_thread: thread={:?}", std::thread::current().id());
+
             let mut current: CuContext = std::ptr::null_mut();
             check(tho_cu_ctx_get_current(&mut current), "cuCtxGetCurrent")?;
             if current != self.ctx {

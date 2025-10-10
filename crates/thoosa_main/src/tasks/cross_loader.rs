@@ -423,7 +423,7 @@ where
         let mut skip_0_i = 0;
 
         for (i_0, resource_0) in resources.iter().enumerate() {
-            info!("on resource_0={resource_0:?}");
+            info!("on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
                 .load(Arc::clone(resource_0), Arc::clone(&ctx))

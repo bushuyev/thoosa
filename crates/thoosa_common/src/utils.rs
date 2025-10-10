@@ -1983,3 +1983,13 @@ pub fn set_requires_grad_in_subpath(vsd: &VarStore, subpath: &str, requires_grad
         }
     }
 }
+
+
+#[inline]
+pub fn os_thread_id() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        // Works even if glibc doesn’t export gettid: call the syscall directly.
+        unsafe { libc::syscall(libc::SYS_gettid) as u64 }
+    }
+}
