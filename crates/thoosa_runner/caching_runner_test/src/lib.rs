@@ -615,7 +615,7 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: &Self::In<'static>,
             ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             self.run_count.fetch_add(1, Relaxed);
@@ -676,7 +676,7 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            _input: Arc<Self::In<'static>>,
+            _input: &Self::In<'static>,
             _ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             unimplemented!()
@@ -905,7 +905,7 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: &Self::In<'static>,
             ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             let loaded = Arc::clone(&self.loader)

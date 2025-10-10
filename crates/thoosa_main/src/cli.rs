@@ -1716,13 +1716,13 @@ async fn plot_motif(ws: &&Arc<RwLock<Box<dyn Workspace>>>, ctx: Arc<RwLock<RunCt
     let motif_id = Arc::new(DataId::from(motif_id as u32));
     let motif = MotifLoaderStage::run_cached(
         Arc::clone(&motif_loader_impl),
-        Arc::clone(&motif_id),
+        &motif_id,
         Arc::clone(&ctx),
     )
         .await?;
 
 
-    let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val| {
+    let dist = clc_dist.run_cached(&motif_id, ctx).await?.with_data_ref(0, None, |dist_val| {
         Ok(dist_val.value())
     }).await?;
 
@@ -2327,7 +2327,7 @@ pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
-    input: Arc<ST::In<'static>>,
+    input: &ST::In<'static>,
     // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
     // stage: Arc<ST>,
     // ws: &Arc<RwLock<Box<dyn Workspace>>>,

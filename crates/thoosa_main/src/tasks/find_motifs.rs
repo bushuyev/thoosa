@@ -233,7 +233,7 @@ where
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<ResourcesConfigInput<RC>>,
+        input: &ResourcesConfigInput<RC>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         let best = 0;
@@ -241,11 +241,11 @@ where
 
         for stage in self.run_config_stages.iter() {
             let ctx_arc = Arc::clone(&ctx);
-            let input_arc = Arc::clone(&input);
+            // let input_arc = Arc::clone(&input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
             js.spawn(async {
-                let out = cross_loader_arc.run(input_arc, ctx_arc).await?;
+                let out = cross_loader_arc.run(input, ctx_arc).await?;
 
                 Ok(out)
             });

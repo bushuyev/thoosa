@@ -343,7 +343,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: &Self::In<'static>,
             ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
@@ -587,7 +587,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: &Self::In<'static>,
             ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             let loaded = Arc::clone(&self.loader)

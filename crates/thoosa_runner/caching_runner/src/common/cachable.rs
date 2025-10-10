@@ -38,7 +38,7 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
+        input: &'static Self::In<'static>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
@@ -59,7 +59,7 @@ where
 
         let cache = Self::cache().await;
 
-        self.on_cached(input.as_ref(), &ctx);
+        self.on_cached(input, &ctx);
 
         GlobalCtx::global().do_age();
 

@@ -147,7 +147,7 @@ impl <SRC> Stage for MotifLoader <SRC>
 
     type Ctx = RunCtx2;
 
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(self: Arc<Self>, input: &Self::In<'static>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {
@@ -199,7 +199,7 @@ impl <SRC> Stage for MotifLoader <SRC>
         }
 
         Ok(MotifWithData::new(ThoTensor2::new(
-            input.deref().clone(),
+            input.clone(),
             Tensor::cat(
                 tmp_cache.take_all(device_idx).await.into_iter().map(|tt|tt.t()).collect::<Vec<Tensor>>().as_slice(), 
                 0
@@ -232,7 +232,7 @@ pub mod mock_motif_loader {
         >,
     >;
 
-    type RunCachedFn = dyn Fn(Arc<DataId>, Arc<RwLock<RunCtx2>>) -> RunCachedFuture + Send + Sync;
+    type RunCachedFn = dyn Fn(&DataId, Arc<RwLock<RunCtx2>>) -> RunCachedFuture + Send + Sync;
 
     #[derive(Clone)]
     pub struct MockMotifLoader {
@@ -251,7 +251,7 @@ pub mod mock_motif_loader {
 
         async fn run_cached(
             self: Arc<Self>,
-            input: Arc<DataId>,
+            input: &'static DataId,
             ctx: Arc<RwLock<RunCtx2>>,
         ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError> {
             (self.run_cached_fn)(input, ctx).await
@@ -265,7 +265,7 @@ pub mod mock_motif_loader {
     impl MockMotifLoaderBuilder {
         pub fn with_run_cached_fn<F, Fut>(mut self, f: F) -> Self
         where
-            F: Fn(Arc<DataId>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
+            F: Fn(&DataId, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
             Fut: Future<
                 Output = Result<Arc<DataCacheWrapper<MotifWithData>>, ThoosaError>,
             > + Send

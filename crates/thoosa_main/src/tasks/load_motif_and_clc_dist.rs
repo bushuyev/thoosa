@@ -30,7 +30,7 @@ pub trait MotifLoaderStage: Send + Sync + Debug {
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DataId>,
+        input: &'static DataId,
         ctx: Arc<RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError>;
 }
@@ -44,7 +44,7 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DataId>,
+        input: &'static DataId,
         ctx: Arc<RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError> {
         <Self as Cached>::run_cached(self, input, ctx).await
@@ -150,7 +150,7 @@ where
     type Ctx = RunCtx2;
 
 
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(self: Arc<Self>, input: &'static Self::In<'static>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {
@@ -319,9 +319,9 @@ mod tests {
             clc_stage,
         ));
 
-        let input_id = Arc::new(DataId::from(42u32));
+        let input_id = DataId::from(42u32);
         let result = stage
-            .run(Arc::clone(&input_id), Arc::clone(&ctx))
+            .run(&input_id, Arc::clone(&ctx))
             .await?;
 
         assert_eq!(result.value(), 20.0);

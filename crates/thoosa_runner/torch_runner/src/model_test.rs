@@ -298,7 +298,7 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: &'static Self::In<'static>,
             _ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
@@ -395,7 +395,7 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: &Self::In<'static>,
             ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             // Look up the files and labels by input id
@@ -736,12 +736,12 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: &Self::In<'static>,
             ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
-                .run_cached(Arc::clone(&input), Arc::clone(&ctx))
+                .run_cached(input, Arc::clone(&ctx))
                 .await?;
 
             let (device_idx, ctx_name) = {

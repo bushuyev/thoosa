@@ -395,7 +395,7 @@ where
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
+        input: &Self::In<'static>,
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         // let chunk_size = self.chunk_size;
