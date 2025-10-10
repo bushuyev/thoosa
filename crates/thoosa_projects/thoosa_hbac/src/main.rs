@@ -5,6 +5,7 @@ use std::time::Instant;
 use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_main::cli::run_cli;
+use thoosa_shims::context::ThoCudaContext;
 
 // #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
  fn main() {
@@ -22,6 +23,10 @@ use thoosa_main::cli::run_cli;
     // 4208|other
     // */
     let rt = tokio::runtime::Builder::new_multi_thread()
+        .on_thread_start(|| {
+            //runs cuCtxSetCurrent
+            ThoCudaContext::new(0).expect("Failed to create context");//TODO device
+        })
         .worker_threads(4) //std::thread::available_parallelism().expect("available_parallelism failed").into()) // async workers
         .max_blocking_threads(32)        // more threads for spawn_blocking jobs
         .enable_all()

@@ -33,6 +33,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
 use thoosa_common::cuda_utils::pack_bits_bool;
+use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
@@ -150,12 +151,17 @@ where
                             mask_makers.push(Tril);
                         }
 
+                        let motifs_stream = ThoCudaStream::new(0);
+                        let guard = StreamGuard::set(&motifs_stream);//TODO Device
+
                         let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
                             t_0,
                             t_1,
                             fixed_config.keep_slice_matches,//if true dists are returned
                             &mut mask_makers,
                         )?;
+                        drop(guard);
+
 
                         debug!("CrossBatchClc::do_run:  dists={dists:?}");
                         if mask.device().ne(&Cpu) {
@@ -163,6 +169,8 @@ where
                             Ok(
                                 tokio::task::block_in_place(|| {
                                     Handle::current().block_on(async {
+                                        motifs_stream.synchronize();
+
                                         DistsMask::new_async(mask, dists, true).await
 
                                     })

@@ -63,5 +63,6 @@ mockall_double.workspace = true
 ambassador.workspace = true
 tokio.workspace = true
 tokio-utils.workspace = true
+libc = "0.2.175"
 [build-dependencies]
 chrono.workspace = true
