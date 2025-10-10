@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+
 #[repr(C)]
 pub struct CudaStreamOpaque;
 pub type CudaStreamPtr = *mut CudaStreamOpaque;
@@ -31,6 +33,10 @@ impl ThoCudaStream {
     pub fn ptr(&self) -> CudaStreamPtr {
         self.ptr
     }
+
+    pub fn as_mut_ptr(&self) -> *mut c_void {
+        self.ptr.cast()
+    }
 }
 
 
@@ -46,6 +52,7 @@ pub struct StreamGuard {
 }
 
 unsafe impl Send for ThoCudaStream {}
+unsafe impl Sync for ThoCudaStream {}
 unsafe impl Send for StreamGuard{}
 impl StreamGuard {
     pub fn set(stream: &ThoCudaStream) -> Self {

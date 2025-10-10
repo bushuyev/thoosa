@@ -1,17 +1,18 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem, PinnedHostBuffer};
-use cudarc::driver::{CudaContext, CudaStream};
+use cudarc::driver::CudaContext;
+use thoosa_shims::stream::ThoCudaStream;
 use log::debug;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
-use tokio::runtime::Runtime;
 use tokio_utils::Pool;
 
 pub struct CopyCtx {
+    _cu_ctx: Arc<CudaContext>,
     _buffs: usize,
     buf_size: usize,
-    bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>>,
+    bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 }
 
 impl Debug for CopyCtx {
@@ -24,12 +25,11 @@ impl Debug for CopyCtx {
 
 impl CopyCtx {
     pub fn new(buffs: usize, buf_size: usize) -> Self {
-        use cudarc::driver::CudaContext;
-        let cu_ctx = CudaContext::new(0).unwrap();//TODO device!
-
-        let bufs_pool = Self::build_pool(buffs, buf_size, cu_ctx);
+        let cu_ctx = CudaContext::new(0).expect("failed to create CUDA context");
+        let bufs_pool = Self::build_pool(buffs, buf_size, &cu_ctx);
 
         Self {
+            _cu_ctx: cu_ctx,
             _buffs: buffs,
             buf_size,
             bufs_pool,
@@ -39,12 +39,16 @@ impl CopyCtx {
     fn build_pool(
         buffs: usize,
         buf_size: usize,
-        cu_ctx: Arc<CudaContext>,
-    ) -> Arc<Pool<(PinnedHostBuffer, Arc<CudaStream>)>> {
+        cu_ctx: &Arc<CudaContext>,
+    ) -> Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>> {
+        cu_ctx
+            .bind_to_thread()
+            .expect("failed to bind CUDA context to thread");
+        let device = cu_ctx.ordinal() as i32;
         Arc::new(Pool::from_iter((0..buffs).map(|_| {
             (
                 PinnedHostBuffer::new(buf_size).unwrap(),
-                cu_ctx.new_stream().unwrap(),
+                Arc::new(ThoCudaStream::new(device)),
             )
         })))
     }
@@ -53,19 +57,22 @@ impl CopyCtx {
     #[allow(dead_code)]
     pub fn rebuild(&mut self, mem_k: f64, buffs: usize) {
         assert_eq!(self.bufs_pool.remaining_capacity(), self._buffs);
-        let cu_ctx = CudaContext::new(0).unwrap();
+        self
+            ._cu_ctx
+            .bind_to_thread()
+            .expect("failed to bind CUDA context to thread");
 
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool,
             Arc::new(Pool::from_vec(vec![(
                 PinnedHostBuffer::new(1).unwrap(),
-                cu_ctx.new_stream().unwrap(),
+                Arc::new(ThoCudaStream::new(self._cu_ctx.ordinal() as i32)),
             )])),
         )));
 
         self._buffs = buffs;
         self.buf_size = Self::clc_buff_size(mem_k, buffs);
-        self.bufs_pool = Self::build_pool(buffs, self.buf_size, cu_ctx)
+        self.bufs_pool = Self::build_pool(buffs, self.buf_size, &self._cu_ctx)
     }
 
     pub fn instance() -> &'static CopyCtx {
