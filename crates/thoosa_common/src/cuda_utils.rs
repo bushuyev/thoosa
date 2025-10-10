@@ -9,7 +9,8 @@ use tch::{Device, Kind, Tensor};
 use thoosa_shared::{MyError, ThoosaError};
 use tokio::task::JoinSet;
 use tokio_utils::Pool;
-use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
+use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::stream::ThoCudaStream;
 
 pub struct PinnedHostBuffer {
     ptr: *mut u8,
@@ -76,16 +77,13 @@ impl Drop for PinnedHostBuffer {
 
 //free_mem, total_mem
 pub fn cuda_mem() -> (usize, usize) {
-    use cudarc::driver::CudaContext;
     use cust::sys::cuMemGetInfo_v2;
 
-    /*// 1. Initialise / retain the primary context on GPU 0.
-    //    The returned Arc is kept alive for the rest of this scope.
-    let _ctx = CudaContext::new(0).expect("failed to create CUDA context");
+    let ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
+    ctx
+        .bind_to_thread()
+        .expect("failed to bind CUDA context while querying memory usage");
 
-    // 2. Query memory usage via the safe runtime helper.
-    result::get_mem_info().expect("cudaMemGetInfo failed")*/
-    let _ctx = CudaContext::new(0).unwrap();
     let mut free: usize = 0;
     let mut total: usize = 0;
     unsafe {
@@ -455,7 +453,6 @@ mod tests {
         PinnedHostBuffer,
     };
     use crate::utils::lin_for_size;
-    use cudarc::driver::CudaContext;
     use log::{debug, info};
     use rand::random_range;
     use std::cell::UnsafeCell;
@@ -470,7 +467,7 @@ mod tests {
     use tokio::task::JoinSet;
     use tokio::time::Instant;
     use tokio_utils::Pool;
-    use thoosa_shims::stream::ThoCudaStream;
+    use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
 
     #[ctor::ctor]
     fn init() {
@@ -592,7 +589,10 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _cu_ctx = Arc::new(CudaContext::new(0).unwrap());
+        let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
+        cu_ctx
+            .bind_to_thread()
+            .expect("failed to bind CUDA context for test_small_one_copy_types");
 
         let (free_mem, _total_mem) = cuda_mem();
 
@@ -654,7 +654,10 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _cu_ctx = Arc::new(CudaContext::new(0).unwrap());
+        let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
+        cu_ctx
+            .bind_to_thread()
+            .expect("failed to bind CUDA context for heavy_one_copy_types");
 
         let (free_mem, _total_mem) = cuda_mem();
 
@@ -715,7 +718,10 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        let _cu_ctx = Arc::new(CudaContext::new(0).unwrap());
+        let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
+        cu_ctx
+            .bind_to_thread()
+            .expect("failed to bind CUDA context for error test");
 
         // Setup a small pool
         let buffs = 2usize;
