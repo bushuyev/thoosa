@@ -14,16 +14,16 @@ unsafe extern "C" {
 
 pub struct ThoCudaStream {
     ptr: CudaStreamPtr,
-    device: i32,
+    _device: i32,
 }
 impl ThoCudaStream {
     pub fn new(device: i32) -> Self {
         let ptr = unsafe { tho_get_stream_from_pool(device, false) };
-        Self { ptr, device }
+        Self { ptr, _device: device }
     }
 
     pub fn from_ptr(ptr: CudaStreamPtr) -> Self {
-        Self { ptr, device: 0 }
+        Self { ptr, _device: 0 }
     }
 
     pub fn synchronize(&self) {
