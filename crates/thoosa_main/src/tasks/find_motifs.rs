@@ -151,7 +151,7 @@ where
                             mask_makers.push(Tril);
                         }
 
-                        let motifs_stream = ThoCudaStream::new(0);
+                        let motifs_stream = ThoCudaStream::new(0);//TODO
                         let guard = StreamGuard::set(&motifs_stream);//TODO Device
 
                         let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(

@@ -389,10 +389,7 @@ where
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
 {
-    type In<'a>
-        = ResourcesConfigInput<ResC>
-    where
-        Self: 'a;
+    type In<'a> = ResourcesConfigInput<ResC> where Self: 'a;
     type Out = CrossResult;
     type Ctx = RunCtx2;
 
