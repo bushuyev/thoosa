@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 use tokio_utils::Pool;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
+use crate::utils::os_thread_id;
 
 pub struct PinnedHostBuffer {
     ptr: *mut u8,
@@ -181,7 +182,7 @@ pub async fn copy_d2h_from_ptr_result(
 
             let pool = Arc::clone(&bufs_pool);
             async move {
-                // println!("starting {i}");
+                debug!("starting {i} thread_name={:?}", os_thread_id());
                 let buf_stream = pool.acquire().await;
                 let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
 
@@ -315,10 +316,11 @@ pub async fn copy_h2d_from_ptr(
             let pool = Arc::clone(bufs_pool);
 
             async move {
+                debug!("starting {i} thread_name={:?}", os_thread_id());
                 // grab (pinned slice, stream) from the pool
                 let buf_stream = pool.acquire().await;
                 let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
-                let stream = buf_stream.1.clone();
+                // let stream = buf_stream.1.clone();
 
                 //----------------------------------------------------------
                 // 1. copy   CPU-tensor  →  pinned host buffer   (memcpy)
@@ -341,7 +343,7 @@ pub async fn copy_h2d_from_ptr(
                     dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                     buf_ptr as *const c_void,
                     c_buf_size,
-                    stream.as_mut_ptr(),
+                    buf_stream.1.as_mut_ptr(),
                 );
                 let r: sys::CUresult = std::mem::transmute(raw);
                 if r != sys::CUresult::CUDA_SUCCESS {
