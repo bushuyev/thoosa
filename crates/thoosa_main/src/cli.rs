@@ -345,13 +345,14 @@ where
                 "FindMotifs2: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?}"
             );
 
+            let input = ResourcesConfigInput::new(
+                SimpleId::from("resources"),
+                find_motifs_args.resource_config(),
+            );
             let run_ids = run_grid::<Simple, _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
-                Arc::new(ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
-                    find_motifs_args.resource_config(),
-                )),
+                &input,
                 &store,
                 true,
                 |run_configs| {
@@ -1713,16 +1714,16 @@ async fn run_plot_motif_slices(
 }
 
 async fn plot_motif(ws: &&Arc<RwLock<Box<dyn Workspace>>>, ctx: Arc<RwLock<RunCtx2>>, motif_id: usize, motif_loader_impl: &Arc<MotifLoader<RawTensorLoader>>, clc_dist: Arc<LoadMotifAndClcDistanceStage<AverageEuclideanDistanceStage>>) -> Result<(), ThoosaError> {
-    let motif_id = Arc::new(DataId::from(motif_id as u32));
+
     let motif = MotifLoaderStage::run_cached(
         Arc::clone(&motif_loader_impl),
-        &motif_id,
+        &DataId(motif_id as u32),
         Arc::clone(&ctx),
     )
         .await?;
 
 
-    let dist = clc_dist.run_cached(&motif_id, ctx).await?.with_data_ref(0, None, |dist_val| {
+    let dist = clc_dist.run_cached(&DataId(motif_id as u32), ctx).await?.with_data_ref(0, None, |dist_val| {
         Ok(dist_val.value())
     }).await?;
 
@@ -2323,11 +2324,11 @@ where
     }
 }
 
-pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
+pub async fn run_grid<'f, ResConf, RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
-    input: &ST::In<'static>,
+    input: &'f ST::In<'f>,
     // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
     // stage: Arc<ST>,
     // ws: &Arc<RwLock<Box<dyn Workspace>>>,

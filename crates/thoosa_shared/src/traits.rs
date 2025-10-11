@@ -218,7 +218,7 @@ impl From<&u32> for DataId {
 }
 
 impl From<u32> for DataId {
-    fn from(value: u32) -> Self {
+     fn from(value: u32) -> Self {
         DataId(value)
     }
 }

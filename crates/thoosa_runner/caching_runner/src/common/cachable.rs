@@ -23,14 +23,14 @@ use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
 
 #[async_trait]
-pub trait Cached: Stage
+pub trait Cached<'c>: Stage
 where
-    Self: 'static,
-    Self::In<'static>: WithId,
+        for <'i> Self::In<'i>: WithId,
+        <Self as Stage>::Out: 'c
 {
-    async fn cache() -> &'static DashMap<
+    async fn cache() -> &'c DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
+        Shared<BoxFuture<'c, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
     >
     where
         Self: Sized,
@@ -38,16 +38,16 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: &'static Self::In<'static>,
+        input: &'c Self::In<'c>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
         Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: Send + Sync,
+        <Self as Stage>::In<'c>: Send + Sync,
         <Self as Stage>::Out: Send + Sync,
-        <<Self as Stage>::Out as WithId>::ID: 'static,
-        <Self as Stage>::Out: 'static,
-        Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
+        <<Self as Stage>::Out as WithId>::ID: 'c,
+        <Self as Stage>::Out: 'c,
+        Self::Out: Data,
     {
         let key = self.out_id(input.id());
         let (cache_area, device_idx) = {

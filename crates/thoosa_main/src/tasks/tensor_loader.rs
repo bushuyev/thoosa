@@ -39,12 +39,14 @@ impl Stage for RawTensorLoader {
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
     type Ctx = RunCtx2;
 
-    async fn run(
+    async fn run<'f>(
         self: Arc<Self>,
-        _input: &Self::In<'static>,
-        _ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
-        Ok((self.loader_fn)(&_input, &self.device))
+        input: &'f Self::In<'f>,
+        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+    ) -> Result<Self::Out, ThoosaError>
+    where
+        Self::In<'f>: Send + Sync {
+        Ok((self.loader_fn)(&input, &self.device))
     }
 }
 
@@ -70,7 +72,7 @@ impl RawTensorLoader {
 pub trait TensorLoader: Send + Sync + Debug {
     async fn load(
         self: Arc<Self>,
-        resource: Arc<Resource>,
+        resource: &Resource,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>;
 }
@@ -80,7 +82,7 @@ impl TensorLoader for RawTensorLoader {
 
     async fn load(
         self: Arc<Self>,
-        resource: Arc<Resource>,
+        resource: &Resource,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
         <Self as Cached>::run_cached(self, resource, ctx).await
@@ -116,7 +118,7 @@ pub(crate) mod mock_tensor_loader {
         >,
     >;
 
-    type LoadFn = dyn Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> LoadFuture + Send + Sync;
+    type LoadFn = dyn Fn(&Resource, Arc<RwLock<RunCtx2>>) -> LoadFuture + Send + Sync;
 
     #[derive(Clone)]
     pub struct MockTensorLoader {
@@ -134,7 +136,7 @@ pub(crate) mod mock_tensor_loader {
 
         async fn load(
             self: Arc<Self>,
-            resource: Arc<Resource>,
+            resource: &Resource,
             ctx: Arc<RwLock<RunCtx2>>,
         ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>
         {
@@ -242,7 +244,7 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let loaded = loader
-            .run_cached(Arc::new(Resource::new(0, 0, "aaa".to_string(), 20)), ctx)
+            .run_cached(&Resource::new(0, 0, "aaa".to_string(), 20), ctx)
             .await
             .map_err(|e| ThoosaError::new("zzz"))?;
 

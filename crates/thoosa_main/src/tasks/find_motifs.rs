@@ -45,7 +45,7 @@ where
     cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
         >>
 }
 
@@ -59,7 +59,7 @@ where
         cross_loader: Arc<CrossLoader<
             RC,
             SRC,
-            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
+            CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync>, DistsMask, MeanDistsCtx>, DistsTracker,
         >>
     ) -> Self {
         Self {
@@ -117,7 +117,7 @@ where
 
                 let filter = run_config.slices_filter.clone();
 
-                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput<&Arc<Resource>>, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync >,
+                let cross_unfold_clc: CrossUnfoldClc<Box<dyn Fn(Tensor, Tensor, &CrossInput, &MeanDistsCtx) -> Result<DistsMask, ThoosaError> + Send + Sync >,
                     DistsMask,
                     MeanDistsCtx,
                 > = CrossUnfoldClc::new(
@@ -231,11 +231,14 @@ where
     type In<'a> = ResourcesConfigInput<RC> where Self: 'a;
     type Out = FindMotifsSavableResult;
 
-    async fn run(
+    async fn run<'f>(
         self: Arc<Self>,
-        input: &ResourcesConfigInput<RC>,
-        ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
+        input: &'f Self::In<'f>,
+        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+    ) -> Result<Self::Out, ThoosaError>
+    where
+        Self::In<'f>: Send + Sync
+    {
         let best = 0;
         let mut js: JoinSet<Result<CrossResult, ThoosaError>> = JoinSet::new();
 
@@ -470,7 +473,7 @@ mod tests {
             }"#,
             )
             .unwrap(),
-            Arc::new(ResourcesConfigInput::new(
+            &ResourcesConfigInput::new(
                 SimpleId::from("resources"),
                 Simple::new(ResourceType::List(
                     vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
@@ -478,7 +481,7 @@ mod tests {
                         .map(|v| v.to_string())
                         .collect(),
                 )),
-            )),
+            ),
             &store,
             true,
             |run_configs| {
@@ -508,10 +511,10 @@ mod tests {
         let motifs = store.read().list_motifs(run_ids[0])?;
 
         for motif_id in motifs {
-            let motif_id = Arc::new(DataId::from(motif_id as u32));
+            let motif_id = DataId::from(motif_id as u32);
             let motif = MotifLoaderStage::run_cached(
                 Arc::clone(&motif_loader_impl),
-                Arc::clone(&motif_id),
+                &motif_id,
                 Arc::clone(&ctx),
             )
                 .await?;
@@ -522,7 +525,7 @@ mod tests {
                 Ok(())
             }).await?;
 
-            let dist = Arc::clone(&clc_dist).run_cached(Arc::clone(&motif_id), Arc::clone(&ctx)).await?.with_data_ref(0, None, |dist_val| {
+            let dist = Arc::clone(&clc_dist).run_cached(&motif_id, Arc::clone(&ctx)).await?.with_data_ref(0, None, |dist_val| {
                 Ok(dist_val.value())
             }).await?;
 

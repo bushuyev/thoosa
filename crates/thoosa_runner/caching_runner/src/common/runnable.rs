@@ -10,40 +10,30 @@ use thoosa_shared::applicables_runner::{Input, Output};
 pub trait Stage: Debug {
     type Ctx: RunCtx;
 
-    type In<'a>: Input
-    where
-        Self: 'a;
+    type In<'i>: Input where Self: 'i;
 
     type Out: Output;
 
     //should implement either run for multistep or do_run for single step (can be oom-handled)
-    async fn run(
+    async fn run<'f>(
         self: Arc<Self>,
-        _input: &'static Self::In<'static>,
+        _input: &'f Self::In<'f>,
         _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError>
     where
-        for<'a> Self::In<'a>: Send + Sync,
+        Self::In<'f>: Send + Sync,
     {
         unimplemented!()
     }
 
-    fn do_run<'a>(
-        self: Arc<Self>,
-        _input: &Self::In<'a>,
-        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError>
+    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
         Self: Sized,
     {
         unimplemented!()
     }
 
-    fn consume<'a>(
-        self: Arc<Self>,
-        _input: Self::In<'a>,
-        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError>
+    fn consume<'f>(self: Arc<Self>, _input: Self::In<'f>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
         Self: Sized,
     {

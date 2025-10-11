@@ -43,71 +43,71 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
     }
 }
 
-pub trait InputContext<R>: Debug + Send + Sync
+pub trait InputContext<'a, R>: Debug + Send + Sync
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data,
 {
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
-    fn input_len(&self) -> &<<R as Stage>::In<'static> as Data>::Metrics;
+    fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
     fn build_final_output(self) -> R::Out;
 }
 
-#[cfg(test)]
-pub mod mock_input_context {
-    use crate::oom_handler::mock_runnable::MockRunnable;
-    use crate::oom_handler::test_types::TestOutput;
-    use mockall::mock;
-
-    mock! {
-        #[derive(Debug)]
-        pub InputContext {
-
-        }
-        impl super::InputContext<MockRunnable> for InputContext{
-            fn add_partial_output(&mut self, o: TestOutput);
-            fn all_done(&self) -> bool;
-            fn input_len(&self) -> &[usize; 1];
-            fn build_final_output(self) -> TestOutput;
-        }
-    }
-
-    pub struct InputContextBuilder {
-        mock: MockInputContext,
-    }
-
-    impl InputContextBuilder {
-        pub fn with_partial_output(mut self, inp: super::test_types::TestOutput) -> Self {
-            self.mock.expect_add_partial_output().call(inp);
-
-            self
-        }
-
-        pub fn with_build_final_output(mut self, inp: super::test_types::TestOutput) -> Self {
-            self.mock.expect_build_final_output().return_once(|| inp);
-            self
-        }
-
-        pub fn with_all_done(mut self, out: &[bool]) -> Self {
-            for v in out {
-                self.mock.expect_all_done().return_const(*v);
-            }
-
-            self
-        }
-
-        pub fn finish(self) -> MockInputContext {
-            self.mock
-        }
-    }
-
-    pub fn build() -> InputContextBuilder {
-        InputContextBuilder {
-            mock: MockInputContext::new(),
-        }
-    }
-}
+// #[cfg(test)]
+// pub mod mock_input_context {
+//     use crate::oom_handler::mock_runnable::MockRunnable;
+//     use crate::oom_handler::test_types::TestOutput;
+//     use mockall::mock;
+//
+//     mock! {
+//         #[derive(Debug)]
+//         pub InputContext {
+//
+//         }
+//         impl super::InputContext<MockRunnable> for InputContext<'_>{
+//             fn add_partial_output(&mut self, o: TestOutput);
+//             fn all_done(&self) -> bool;
+//             fn input_len(&self) -> &[usize; 1];
+//             fn build_final_output(self) -> TestOutput;
+//         }
+//     }
+//
+//     pub struct InputContextBuilder {
+//         mock: MockInputContext,
+//     }
+//
+//     impl InputContextBuilder {
+//         pub fn with_partial_output(mut self, inp: super::test_types::TestOutput) -> Self {
+//             self.mock.expect_add_partial_output().call(inp);
+//
+//             self
+//         }
+//
+//         pub fn with_build_final_output(mut self, inp: super::test_types::TestOutput) -> Self {
+//             self.mock.expect_build_final_output().return_once(|| inp);
+//             self
+//         }
+//
+//         pub fn with_all_done(mut self, out: &[bool]) -> Self {
+//             for v in out {
+//                 self.mock.expect_all_done().return_const(*v);
+//             }
+//
+//             self
+//         }
+//
+//         pub fn finish(self) -> MockInputContext {
+//             self.mock
+//         }
+//     }
+//
+//     pub fn build() -> InputContextBuilder {
+//         InputContextBuilder {
+//             mock: MockInputContext::new(),
+//         }
+//     }
+// }
 
 #[automock]
 pub trait RunnableContext: Debug {}
@@ -116,25 +116,25 @@ pub trait RunnableContext: Debug {}
 pub trait RunCtxContext: Debug {}
 
 #[derive(Debug)]
-pub struct Contexts<R, IC, RC, RCC>
+pub struct Contexts<'a, R, IC, RC, RCC>
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data,
+    IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
 {
     input: IC,
     runnable: RC,
     run_ctx: RCC,
-    pd: PhantomData<R>,
+    pd: PhantomData<&'a R>,
 }
 
-impl<R, IC, RC, RCC> Contexts<R, IC, RC, RCC>
+impl<'a, R, IC, RC, RCC> Contexts<'a, R, IC, RC, RCC>
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data,
+    IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
 {
@@ -151,12 +151,12 @@ where
 #[derive(Debug)]
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data + Select<S> + Debug,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data + Select<S> + Debug,
+    IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    <R as Stage>::In<'static>: Select<S>,
+    <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
     Input(Box<dyn Adjuster<IC, A =S> + 'a>),
@@ -166,17 +166,17 @@ where
 
 impl<'a, R, IC, RC, RCC, S> Adjusters<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + 'static,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'static>: Data + Debug,
+    <R as Stage>::In<'a>: Data + Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
-    <R as Stage>::In<'static>: Select<S>,
+    <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
-    fn degrade(&self, adjust_context: &mut Contexts<R, IC, RC, RCC>) -> bool {
+    fn degrade(&self, adjust_context: &mut Contexts<'a, R, IC, RC, RCC>) -> bool {
         match self {
             Adjusters::Input(v) => v.degrade(&mut adjust_context.input),
             Adjusters::Task(v) => v.degrade(&mut adjust_context.runnable),
@@ -186,13 +186,13 @@ where
 }
 
 #[derive(Debug)]
-pub struct NoopInputContext<R: Stage + 'static>(pub Option<R::Out>);
+pub struct NoopInputContext<'a, R: Stage + 'a>(pub Option<R::Out>, pub PhantomData<&'a()>);
 
-impl<R> InputContext<R> for NoopInputContext<R>
+impl<'a, R> InputContext<'a, R> for NoopInputContext<'a, R>
 where
-    <R as Stage>::In<'static>: Data,
+    <R as Stage>::In<'a>: Data,
     <R as Stage>::Out: Send + Sync,
-    R: Stage + 'static,
+    R: Stage + 'a,
 {
     fn add_partial_output(&mut self, o: R::Out) {
         self.0.replace(o);
@@ -202,7 +202,7 @@ where
         self.0.is_some()
     }
 
-    fn input_len(&self) -> &<<R as Stage>::In<'static> as Data>::Metrics {
+    fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
         unimplemented!()
     }
 
@@ -223,14 +223,14 @@ impl RunCtxContext for NoopRunCtxContext {}
 #[derive(Debug)]
 pub struct OOMHandler<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + Adjustable + OutId + 'static,
-    <R as Stage>::In<'static>: Data + WithId,
+    R: Stage + Adjustable + OutId + 'a,
     R::Ctx: Adjustable,
-    IC: InputContext<R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default,
-    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>>
+    IC: InputContext<'a, R> + Debug,
+    RC: RunnableContext + Debug,
+    RCC: RunCtxContext + Debug,
+    S: Adjustable + Debug + Clone + Default,//Selector (like range for a tensor)
+    <R as Stage>::In<'a>:  Debug + Data + CopyToDevice + Select<S, Output=<R as Stage>::In<'a>>, //Select<S... - something (ThoTensor) from what a part can be selected
+    for<'b> <R as Stage>::In<'b>: thoosa_shared::traits::WithId
 {
     adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
@@ -241,15 +241,14 @@ where
 
 impl<'a, R, IC, RC, RCC, S> OOMHandler<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + Adjustable + OutId + 'static,
-    <R as Stage>::In<'static>: Data + WithId,
-    <R as Stage>::In<'static>: Debug + Data + CopyToDevice,
+    R: Stage + Adjustable + OutId + 'a,
     R::Ctx: Adjustable,
-    IC: InputContext<R> + Debug,
+    IC: InputContext<'a, R> + Debug,
     RC: RunnableContext + Debug,
     RCC: RunCtxContext + Debug,
     S: Adjustable + Debug + Clone + Default,//Selector (like range for a tensor)
-    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>> //Select<S... - something (ThoTensor) from what a part can be selected
+    <R as Stage>::In<'a>: Debug + Data + CopyToDevice + Select<S, Output=<R as Stage>::In<'a>>, //Select<S... - something (ThoTensor) from what a part can be selected
+    for<'b> <R as Stage>::In<'b>: thoosa_shared::traits::WithId
 {
     pub fn new(
         adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
@@ -263,16 +262,17 @@ where
         }
     }
 
-    #[instrument]
+    // #[instrument]
     pub async fn run(
         &self,
         task: &Arc<R>,
-        input: Arc<DataCacheWrapper<<R as Stage>::In<'static>>>,
+        input: Arc<DataCacheWrapper<<R as Stage>::In<'a>>>,
         run_context: Arc<RwLock<R::Ctx>>,
-        mut contexts: Contexts<R, IC, RC, RCC>,
+        mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
     where
-        <R as Stage>::In<'static>: WithId +  Select<S, Output=<R as Stage>::In<'static>> + Send + Sync,
+        <R as Stage>::In<'a>:  Select<S, Output=<R as Stage>::In<'a>> + Send + Sync,
+        for<'b> <R as Stage>::In<'b>: thoosa_shared::traits::WithId
     {
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
@@ -683,44 +683,44 @@ pub(crate) mod mock_runnable {
 
 // removed unused TestInputContext test scaffolding
 
-#[cfg(test)]
-pub(crate) mod mock_input_adjuster {
-    use super::test_types::TestInput;
-    use super::*;
-    use crate::test_utils::MockDataWithId;
-    use mockall::mock;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    // use crate::common::mock_input_output::MockInput;
-
-    mock! {
-        #[derive(Debug)]
-        pub InputAdjuster {}
-        #[async_trait]
-        impl Adjuster<super::mock_input_context::MockInputContext> for InputAdjuster {
-            type A = std::ops::Range<<TestInput as Data>::Metrics>;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, ThoosaError>;
-            fn degrade(&self, adjust_context: &mut super::mock_input_context::MockInputContext) -> bool;
-        }
-    }
-
-    pub fn build<I>(inputs: I) -> (MockInputAdjuster, Arc<AtomicUsize>)
-    where
-        I: IntoIterator<Item = std::ops::Range<[usize; 1]>>,
-    {
-        let mut adj = MockInputAdjuster::new();
-        let calls = Arc::new(AtomicUsize::new(0));
-        for input in inputs {
-            let c = calls.clone();
-            adj.expect_adjust().times(1).return_once(move |_, _| {
-                c.fetch_add(1, Ordering::SeqCst);
-                Ok(input)
-            });
-        }
-        adj.expect_degrade().return_const(false);
-        (adj, calls)
-    }
-}
+// #[cfg(test)]
+// pub(crate) mod mock_input_adjuster {
+//     use super::test_types::TestInput;
+//     use super::*;
+//     use crate::test_utils::MockDataWithId;
+//     use mockall::mock;
+//     use std::sync::Arc;
+//     use std::sync::atomic::{AtomicUsize, Ordering};
+//     // use crate::common::mock_input_output::MockInput;
+//
+//     mock! {
+//         #[derive(Debug)]
+//         pub InputAdjuster {}
+//         #[async_trait]
+//         impl Adjuster<super::mock_input_context::MockInputContext> for InputAdjuster {
+//             type A = std::ops::Range<<TestInput as Data>::Metrics>;
+//             async fn adjust(&self, adjustable: &<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, ThoosaError>;
+//             fn degrade(&self, adjust_context: &mut super::mock_input_context::MockInputContext) -> bool;
+//         }
+//     }
+//
+//     pub fn build<I>(inputs: I) -> (MockInputAdjuster, Arc<AtomicUsize>)
+//     where
+//         I: IntoIterator<Item = std::ops::Range<[usize; 1]>>,
+//     {
+//         let mut adj = MockInputAdjuster::new();
+//         let calls = Arc::new(AtomicUsize::new(0));
+//         for input in inputs {
+//             let c = calls.clone();
+//             adj.expect_adjust().times(1).return_once(move |_, _| {
+//                 c.fetch_add(1, Ordering::SeqCst);
+//                 Ok(input)
+//             });
+//         }
+//         adj.expect_degrade().return_const(false);
+//         (adj, calls)
+//     }
+// }
 
 #[cfg(test)]
 pub(crate) mod mock_task_adjuster {
@@ -761,365 +761,370 @@ pub(crate) mod mock_task_adjuster {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod mock_context_adjuster {
-    use super::*;
-    use crate::common::MockRunCtx;
-    use mockall::mock;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    mock! {
-        #[derive(Debug)]
-        pub ContextAdjuster {}
-        #[async_trait]
-        impl Adjuster<MockRunCtxContext> for ContextAdjuster {
-            type A = Arc<RwLock<MockRunCtx>>;
-            async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, ThoosaError>;
-            fn degrade(&self, adjust_context: &mut MockRunCtxContext) -> bool;
-        }
-    }
-
-    pub fn build(times: usize) -> (MockContextAdjuster, Arc<AtomicUsize>) {
-        let mut adj = MockContextAdjuster::new();
-        let calls = Arc::new(AtomicUsize::new(0));
-        for _ in 0..times {
-            let c = calls.clone();
-            adj.expect_adjust().returning(move |rc, _ctx| {
-                c.fetch_add(1, Ordering::SeqCst);
-                Ok(rc.clone())
-            });
-        }
-        adj.expect_degrade().return_const(false);
-        (adj, calls)
-    }
-}
+// #[cfg(test)]
+// pub(crate) mod mock_context_adjuster {
+//     use super::*;
+//     use crate::common::MockRunCtx;
+//     use mockall::mock;
+//     use std::sync::Arc;
+//     use std::sync::atomic::{AtomicUsize, Ordering};
+//
+//     mock! {
+//         #[derive(Debug)]
+//         pub ContextAdjuster {}
+//         #[async_trait]
+//         impl Adjuster<MockRunCtxContext> for ContextAdjuster {
+//             type A = Arc<RwLock<MockRunCtx>>;
+//             async fn adjust(&self, adjustable: &<Self as Adjuster<MockRunCtxContext>>::A, adjust_context: &mut MockRunCtxContext) -> Result<<Self as Adjuster<MockRunCtxContext>>::A, ThoosaError>;
+//             fn degrade(&self, adjust_context: &mut MockRunCtxContext) -> bool;
+//         }
+//     }
+//
+//     pub fn build(times: usize) -> (MockContextAdjuster, Arc<AtomicUsize>) {
+//         let mut adj = MockContextAdjuster::new();
+//         let calls = Arc::new(AtomicUsize::new(0));
+//         for _ in 0..times {
+//             let c = calls.clone();
+//             adj.expect_adjust().returning(move |rc, _ctx| {
+//                 c.fetch_add(1, Ordering::SeqCst);
+//                 Ok(rc.clone())
+//             });
+//         }
+//         adj.expect_degrade().return_const(false);
+//         (adj, calls)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
-    use super::mock_context_adjuster::build as mock_context_adjuster;
-    use super::mock_input_adjuster::{MockInputAdjuster, build as mock_input_adjuster};
-    use super::mock_runnable::build as mock_runnable;
-    use super::mock_task_adjuster::build as mock_task_adjuster;
-    use super::test_types::{TestInput, TestOutput};
-    use super::{Adjustable, Adjusters, Contexts, OOMHandler};
-    use crate::common::cachable::DataCacheWrapper;
-    // use crate::common::runnable::Runnable;
-    use crate::common::{DropIf, MockRunCtx};
-    use crate::global_ctx;
-    use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
-    use parking_lot::RwLock;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use thoosa_shared::{MyError, ThoosaError};
+    // use super::mock_context_adjuster::build as mock_context_adjuster;
+    // use super::mock_input_adjuster::{MockInputAdjuster, build as mock_input_adjuster};
+    // use super::mock_runnable::build as mock_runnable;
+    // use super::mock_task_adjuster::build as mock_task_adjuster;
+    // use super::test_types::{TestInput, TestOutput};
+    // use super::{Adjustable, Adjusters, Contexts, OOMHandler};
+    // use crate::common::cachable::DataCacheWrapper;
+    // // use crate::common::runnable::Runnable;
+    // use crate::common::{DropIf, MockRunCtx};
+    // use crate::global_ctx;
+    // use crate::global_ctx::{MockGlobalCtx, mock_global_ctx};
+    // use parking_lot::RwLock;
+    // use std::sync::Arc;
+    // use std::sync::atomic::{AtomicUsize, Ordering};
+    // use thoosa_shared::{MyError, ThoosaError};
+    //
+    // impl Adjustable for MockRunCtx {}
+    //
+    // #[tokio::test]
+    // async fn test_input_task_context_once() {
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build()
+    //                 .with_age(0)
+    //                 .with_dump_all_to_cpu()
+    //                 .with_reset_all_on_cpu()
+    //                 .finish(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //
+    //     let input_adj_calls = Arc::new(AtomicUsize::new(0));
+    //     let mut input_adj = MockInputAdjuster::new();
+    //     {
+    //         let c = input_adj_calls.clone();
+    //
+    //         input_adj.expect_adjust().returning(move |i, _| {
+    //             c.fetch_add(1, Ordering::SeqCst);
+    //             Ok(i.clone())
+    //         });
+    //     }
+    //     input_adj.expect_degrade().times(1).return_const(false);
+    //
+    //     let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
+    //
+    //     let (init_task, init_calls) = mock_runnable([
+    //         Err(ThoosaError::from(MyError::OutOfMemory)), //no adjusters
+    //         Err(ThoosaError::from(MyError::OutOfMemory)), //input adjuster
+    //     ]);
+    //
+    //     let (adjusted_task, adjusted_calls) = mock_runnable([
+    //         Err(ThoosaError::from(MyError::OutOfMemory)), //task adjuster
+    //         Ok(TestOutput::new(111.)),                    //ctx adjuster
+    //     ]);
+    //
+    //     let (task_adj, task_adj_calls) = mock_task_adjuster([adjusted_task]);
+    //
+    //     let ctx_mock = crate::common::mock_run_ctx::build()
+    //         .with_device_idx(1)
+    //         .with_acquired_permits(1)
+    //         .with_drop_permits(vec![DropIf::IfNotMax])
+    //         .finish();
+    //
+    //     let oom_handler = OOMHandler::new(
+    //         vec![
+    //             Adjusters::Input(Box::new(input_adj)),
+    //             Adjusters::Task(Box::new(task_adj)),
+    //             Adjusters::RunContext(Box::new(ctx_adj)),
+    //         ],
+    //         None,
+    //     );
+    //
+    //     let out = oom_handler
+    //         .run(
+    //             &Arc::new(init_task),
+    //             Arc::new(DataCacheWrapper::new(TestInput::new(100), 1, 2, 0)),
+    //             Arc::new(RwLock::new(ctx_mock)),
+    //             Contexts::new(
+    //                 super::mock_input_context::build()
+    //                     .with_partial_output(TestOutput::new(111.))
+    //                     .with_all_done(&[true]) //TODO should
+    //                     .with_build_final_output(TestOutput::new(111.))
+    //                     .finish(),
+    //                 super::MockRunnableContext::new(),
+    //                 super::MockRunCtxContext::new(),
+    //             ),
+    //         )
+    //         .await
+    //         .unwrap();
+    //
+    //     assert_eq!(111., out.v.0);
+    //
+    //     assert_eq!(1, input_adj_calls.load(Ordering::SeqCst));
+    //     assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
+    //     assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
+    //
+    //     assert_eq!(2, init_calls.load(Ordering::SeqCst));
+    //     assert_eq!(2, adjusted_calls.load(Ordering::SeqCst));
+    // }
+    //
+    // #[tokio::test]
+    // async fn test_only_task_adjuster() {
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build()
+    //                 .with_age(0)
+    //                 .with_dump_all_to_cpu()
+    //                 .with_reset_all_on_cpu()
+    //                 .finish(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //
+    //     let (init_task, init_calls) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
+    //     let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
+    //     let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
+    //     let oom_handler = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
+    //
+    //     let ctx_mock = crate::common::mock_run_ctx::build()
+    //         .with_device_idx(1)
+    //         .with_acquired_permits(1)
+    //         .with_drop_permits(vec![DropIf::IfNotMax])
+    //         .finish();
+    //
+    //     let out = oom_handler
+    //         .run(
+    //             &Arc::new(init_task),
+    //             Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
+    //             Arc::new(RwLock::new(ctx_mock)),
+    //             Contexts::new(
+    //                 super::mock_input_context::build()
+    //                     .with_partial_output(TestOutput::new(10.))
+    //                     .with_all_done(&[true]) //TODO should
+    //                     .with_build_final_output(TestOutput::new(10.))
+    //                     .finish(),
+    //                 super::MockRunnableContext::new(),
+    //                 super::MockRunCtxContext::new(),
+    //             ),
+    //         )
+    //         .await
+    //         .unwrap();
+    //     assert_eq!(10., out.v.0);
+    //     assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
+    //     assert_eq!(1, init_calls.load(Ordering::SeqCst));
+    //     assert_eq!(1, final_calls.load(Ordering::SeqCst));
+    // }
+    //
+    // #[tokio::test]
+    // async fn test_only_input_adjuster() {
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build()
+    //                 .with_age(0)
+    //                 .with_dump_all_to_cpu()
+    //                 .with_reset_all_on_cpu()
+    //                 .finish(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //
+    //     let (task, task_calls) = mock_runnable([
+    //         Err(ThoosaError::from(MyError::OutOfMemory)),
+    //         Ok(TestOutput::new(10.)),
+    //     ]);
+    //     let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
+    //     let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
+    //     let ctx_mock = crate::common::mock_run_ctx::build()
+    //         .with_device_idx(1)
+    //         .with_acquired_permits(1)
+    //         .with_drop_permits(vec![DropIf::IfNotMax])
+    //         .finish();
+    //
+    //     let out = oom_handler
+    //         .run(
+    //             &Arc::new(task),
+    //             Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
+    //             Arc::new(RwLock::new(ctx_mock)),
+    //             Contexts::new(
+    //                 super::mock_input_context::build()
+    //                     .with_partial_output(TestOutput::new(10.))
+    //                     .with_all_done(&[true]) //TODO should
+    //                     .with_build_final_output(TestOutput::new(10.))
+    //                     .finish(),
+    //                 super::MockRunnableContext::new(),
+    //                 super::MockRunCtxContext::new(),
+    //             ),
+    //         )
+    //         .await
+    //         .unwrap();
+    //     assert_eq!(10., out.v.0);
+    //     assert_eq!(1, input_calls.load(Ordering::SeqCst));
+    //     assert_eq!(2, task_calls.load(Ordering::SeqCst));
+    // }
+    //
+    // #[tokio::test]
+    // async fn test_only_run_ctx_adjuster() {
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build()
+    //                 .with_age(0)
+    //                 .with_dump_all_to_cpu()
+    //                 .with_reset_all_on_cpu()
+    //                 .finish(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //
+    //     let (task, task_calls) = mock_runnable([
+    //         Err(ThoosaError::from(MyError::OutOfMemory)),
+    //         Ok(TestOutput::new(10.)),
+    //     ]);
+    //     let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
+    //
+    //     let oom_handler = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
+    //
+    //     let ctx_mock = crate::common::mock_run_ctx::build()
+    //         .with_device_idx(1)
+    //         .with_acquired_permits(1)
+    //         .with_drop_permits(vec![DropIf::IfNotMax])
+    //         .finish();
+    //
+    //     let out = oom_handler
+    //         .run(
+    //             &Arc::new(task),
+    //             Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
+    //             Arc::new(RwLock::new(ctx_mock)),
+    //             Contexts::new(
+    //                 super::mock_input_context::build()
+    //                     .with_partial_output(TestOutput::new(10.))
+    //                     .with_all_done(&[true]) //TODO should
+    //                     .with_build_final_output(TestOutput::new(10.))
+    //                     .finish(),
+    //                 super::MockRunnableContext::new(),
+    //                 super::MockRunCtxContext::new(),
+    //             ),
+    //         )
+    //         .await
+    //         .unwrap();
+    //     assert_eq!(10., out.v.0);
+    //     assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
+    //     assert_eq!(2, task_calls.load(Ordering::SeqCst));
+    // }
+    //
+    // #[tokio::test]
+    // async fn test_parallel_tasks() {
+    //     let ctx = MockGlobalCtx::global_context();
+    //     ctx.expect().returning(|| {
+    //         Box::leak(Box::new(
+    //             mock_global_ctx::build()
+    //                 .with_age(0)
+    //                 .with_dump_all_to_cpu()
+    //                 .with_reset_all_on_cpu()
+    //                 .finish(),
+    //         )) as &'static global_ctx::MockGlobalCtx
+    //     });
+    //
+    //     let (init_task1, init_calls1) =
+    //         mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
+    //     let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
+    //
+    //     let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
+    //
+    //     let (init_task2, init_calls2) =
+    //         mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
+    //     let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
+    //
+    //     let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
+    //
+    //     let init_task1_arc = Arc::new(init_task1);
+    //     let input_arc = Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0));
+    //
+    //     let ctx_mock = Arc::new(RwLock::new(
+    //         crate::common::mock_run_ctx::build()
+    //             .with_device_idx(1)
+    //             .with_acquired_permits(1)
+    //             .with_drop_permits(vec![DropIf::IfNotMax])
+    //             .finish(),
+    //     ));
+    //
+    //     let oom1 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj1))], None);
+    //
+    //     let h1 = oom1.run(
+    //         &init_task1_arc,
+    //         Arc::clone(&input_arc),
+    //         Arc::clone(&ctx_mock),
+    //         Contexts::new(
+    //             super::mock_input_context::build()
+    //                 .with_partial_output(TestOutput::new(5.))
+    //                 .with_all_done(&[true]) //TODO should
+    //                 .with_build_final_output(TestOutput::new(5.))
+    //                 .finish(),
+    //             super::MockRunnableContext::new(),
+    //             super::MockRunCtxContext::new(),
+    //         ),
+    //     );
+    //     let init_task2_arc = Arc::new(init_task2);
+    //
+    //     let oom2 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj2))], None);
+    //     let h2 = oom2.run(
+    //         &init_task2_arc,
+    //         Arc::clone(&input_arc),
+    //         Arc::clone(&ctx_mock),
+    //         Contexts::new(
+    //             super::mock_input_context::build()
+    //                 .with_partial_output(TestOutput::new(7.))
+    //                 .with_all_done(&[true]) //TODO should
+    //                 .with_build_final_output(TestOutput::new(7.))
+    //                 .finish(),
+    //             super::MockRunnableContext::new(),
+    //             super::MockRunCtxContext::new(),
+    //         ),
+    //     );
+    //     let (r1, r2) = tokio::join!(h1, h2);
+    //     assert_eq!(5., r1.unwrap().v.0);
+    //     assert_eq!(7., r2.unwrap().v.0);
+    //
+    //     assert_eq!(1, task_adj_calls1.load(Ordering::SeqCst));
+    //     assert_eq!(1, task_adj_calls2.load(Ordering::SeqCst));
+    //
+    //     assert_eq!(1, init_calls1.load(Ordering::SeqCst));
+    //     assert_eq!(1, init_calls2.load(Ordering::SeqCst));
+    //
+    //     assert_eq!(1, final_calls1.load(Ordering::SeqCst));
+    //     assert_eq!(1, final_calls2.load(Ordering::SeqCst));
+    // }
 
-    impl Adjustable for MockRunCtx {}
+    #[test]
+    fn test_0(){
 
-    #[tokio::test]
-    async fn test_input_task_context_once() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-
-        let input_adj_calls = Arc::new(AtomicUsize::new(0));
-        let mut input_adj = MockInputAdjuster::new();
-        {
-            let c = input_adj_calls.clone();
-
-            input_adj.expect_adjust().returning(move |i, _| {
-                c.fetch_add(1, Ordering::SeqCst);
-                Ok(i.clone())
-            });
-        }
-        input_adj.expect_degrade().times(1).return_const(false);
-
-        let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
-
-        let (init_task, init_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)), //no adjusters
-            Err(ThoosaError::from(MyError::OutOfMemory)), //input adjuster
-        ]);
-
-        let (adjusted_task, adjusted_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)), //task adjuster
-            Ok(TestOutput::new(111.)),                    //ctx adjuster
-        ]);
-
-        let (task_adj, task_adj_calls) = mock_task_adjuster([adjusted_task]);
-
-        let ctx_mock = crate::common::mock_run_ctx::build()
-            .with_device_idx(1)
-            .with_acquired_permits(1)
-            .with_drop_permits(vec![DropIf::IfNotMax])
-            .finish();
-
-        let oom_handler = OOMHandler::new(
-            vec![
-                Adjusters::Input(Box::new(input_adj)),
-                Adjusters::Task(Box::new(task_adj)),
-                Adjusters::RunContext(Box::new(ctx_adj)),
-            ],
-            None,
-        );
-
-        let out = oom_handler
-            .run(
-                &Arc::new(init_task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(100), 1, 2, 0)),
-                Arc::new(RwLock::new(ctx_mock)),
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(111.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(111.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(111., out.v.0);
-
-        assert_eq!(1, input_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
-
-        assert_eq!(2, init_calls.load(Ordering::SeqCst));
-        assert_eq!(2, adjusted_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_only_task_adjuster() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-
-        let (init_task, init_calls) = mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
-        let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
-        let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
-        let oom_handler = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
-
-        let ctx_mock = crate::common::mock_run_ctx::build()
-            .with_device_idx(1)
-            .with_acquired_permits(1)
-            .with_drop_permits(vec![DropIf::IfNotMax])
-            .finish();
-
-        let out = oom_handler
-            .run(
-                &Arc::new(init_task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
-                Arc::new(RwLock::new(ctx_mock)),
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(10., out.v.0);
-        assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(1, init_calls.load(Ordering::SeqCst));
-        assert_eq!(1, final_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_only_input_adjuster() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-
-        let (task, task_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)),
-            Ok(TestOutput::new(10.)),
-        ]);
-        let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
-        let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
-        let ctx_mock = crate::common::mock_run_ctx::build()
-            .with_device_idx(1)
-            .with_acquired_permits(1)
-            .with_drop_permits(vec![DropIf::IfNotMax])
-            .finish();
-
-        let out = oom_handler
-            .run(
-                &Arc::new(task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
-                Arc::new(RwLock::new(ctx_mock)),
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(10., out.v.0);
-        assert_eq!(1, input_calls.load(Ordering::SeqCst));
-        assert_eq!(2, task_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_only_run_ctx_adjuster() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-
-        let (task, task_calls) = mock_runnable([
-            Err(ThoosaError::from(MyError::OutOfMemory)),
-            Ok(TestOutput::new(10.)),
-        ]);
-        let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
-
-        let oom_handler = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
-
-        let ctx_mock = crate::common::mock_run_ctx::build()
-            .with_device_idx(1)
-            .with_acquired_permits(1)
-            .with_drop_permits(vec![DropIf::IfNotMax])
-            .finish();
-
-        let out = oom_handler
-            .run(
-                &Arc::new(task),
-                Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0)),
-                Arc::new(RwLock::new(ctx_mock)),
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(10., out.v.0);
-        assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(2, task_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_parallel_tasks() {
-        let ctx = MockGlobalCtx::global_context();
-        ctx.expect().returning(|| {
-            Box::leak(Box::new(
-                mock_global_ctx::build()
-                    .with_age(0)
-                    .with_dump_all_to_cpu()
-                    .with_reset_all_on_cpu()
-                    .finish(),
-            )) as &'static global_ctx::MockGlobalCtx
-        });
-
-        let (init_task1, init_calls1) =
-            mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
-        let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
-
-        let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
-
-        let (init_task2, init_calls2) =
-            mock_runnable([Err(ThoosaError::from(MyError::OutOfMemory))]);
-        let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
-
-        let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
-
-        let init_task1_arc = Arc::new(init_task1);
-        let input_arc = Arc::new(DataCacheWrapper::new(TestInput::new(1), 1, 2, 0));
-
-        let ctx_mock = Arc::new(RwLock::new(
-            crate::common::mock_run_ctx::build()
-                .with_device_idx(1)
-                .with_acquired_permits(1)
-                .with_drop_permits(vec![DropIf::IfNotMax])
-                .finish(),
-        ));
-
-        let oom1 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj1))], None);
-
-        let h1 = oom1.run(
-            &init_task1_arc,
-            Arc::clone(&input_arc),
-            Arc::clone(&ctx_mock),
-            Contexts::new(
-                super::mock_input_context::build()
-                    .with_partial_output(TestOutput::new(5.))
-                    .with_all_done(&[true]) //TODO should
-                    .with_build_final_output(TestOutput::new(5.))
-                    .finish(),
-                super::MockRunnableContext::new(),
-                super::MockRunCtxContext::new(),
-            ),
-        );
-        let init_task2_arc = Arc::new(init_task2);
-
-        let oom2 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj2))], None);
-        let h2 = oom2.run(
-            &init_task2_arc,
-            Arc::clone(&input_arc),
-            Arc::clone(&ctx_mock),
-            Contexts::new(
-                super::mock_input_context::build()
-                    .with_partial_output(TestOutput::new(7.))
-                    .with_all_done(&[true]) //TODO should
-                    .with_build_final_output(TestOutput::new(7.))
-                    .finish(),
-                super::MockRunnableContext::new(),
-                super::MockRunCtxContext::new(),
-            ),
-        );
-        let (r1, r2) = tokio::join!(h1, h2);
-        assert_eq!(5., r1.unwrap().v.0);
-        assert_eq!(7., r2.unwrap().v.0);
-
-        assert_eq!(1, task_adj_calls1.load(Ordering::SeqCst));
-        assert_eq!(1, task_adj_calls2.load(Ordering::SeqCst));
-
-        assert_eq!(1, init_calls1.load(Ordering::SeqCst));
-        assert_eq!(1, init_calls2.load(Ordering::SeqCst));
-
-        assert_eq!(1, final_calls1.load(Ordering::SeqCst));
-        assert_eq!(1, final_calls2.load(Ordering::SeqCst));
     }
 }

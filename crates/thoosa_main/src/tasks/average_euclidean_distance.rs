@@ -88,7 +88,7 @@ impl Stage for AverageEuclideanDistanceStage {
 
 
 
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
         Self: Sized
     {
@@ -172,9 +172,9 @@ pub mod mock_average_stage {
         type In<'a> = MotifWithData;
         type Out = AverageDistanceValue;
 
-        fn do_run<'a>(
+        fn do_run<'f>(
             self: Arc<Self>,
-            input: &Self::In<'a>,
+            input: &'f Self::In<'f>,
             ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError>
         where

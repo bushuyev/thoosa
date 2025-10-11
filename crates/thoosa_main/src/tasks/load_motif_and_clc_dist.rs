@@ -26,11 +26,11 @@ use crate::tasks::tensor_loader::TensorLoader;
 
 #[async_trait]
 pub trait MotifLoaderStage: Send + Sync + Debug {
-    type Output: ClcMotifInput + 'static;
+    type Output: ClcMotifInput;
 
-    async fn run_cached(
+    async fn run_cached<'f>(
         self: Arc<Self>,
-        input: &'static DataId,
+        input: &'f DataId,
         ctx: Arc<RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError>;
 }
@@ -38,13 +38,13 @@ pub trait MotifLoaderStage: Send + Sync + Debug {
 #[async_trait]
 impl<SRC> MotifLoaderStage for MotifLoader<SRC>
 where
-    SRC: TensorLoader + 'static,
+    SRC: TensorLoader,
 {
     type Output = MotifWithData;
 
-    async fn run_cached(
+    async fn run_cached<'f>(
         self: Arc<Self>,
-        input: &'static DataId,
+        input: &'f DataId,
         ctx: Arc<RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError> {
         <Self as Cached>::run_cached(self, input, ctx).await
@@ -150,13 +150,13 @@ where
     type Ctx = RunCtx2;
 
 
-    async fn run(self: Arc<Self>, input: &'static Self::In<'static>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run<'f>(self: Arc<Self>, _input: &'f Self::In<'f>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
-            for<'a> Self::In<'a>: Send + Sync
+            Self::In<'f>: Send + Sync
     {
-        let out_id = self.out_id(input.id());
+        let out_id = self.out_id(_input.id());
 
-        let motif = Arc::clone(&self.motif_loader).run_cached(input, Arc::clone(&ctx)).await?;
+        let motif = Arc::clone(&self.motif_loader).run_cached(_input, Arc::clone(&_ctx)).await?;
 
         let motif_size = motif.size();
 
@@ -173,7 +173,7 @@ where
             .run(
                 &self.clc_dist,
                 Arc::clone(&motif),
-                ctx,
+                _ctx,
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(motif_size.clone(), (self.output_builder)(out_id.clone()/*it should be dist id*/)),
                     NoopRunnableContext {},

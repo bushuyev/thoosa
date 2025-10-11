@@ -22,17 +22,17 @@ use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_loader::CrossClc;
 
 #[derive(Debug)]
-pub struct CrossInput<'a, R: AsRef<Resource>> {
+pub struct CrossInput<'a> {
     tensors: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
-    resources_0: &'a [R],
-    resources_1: &'a [R],
+    resources_0: &'a [&'a Resource],
+    resources_1: &'a [&'a Resource],
 }
 
-impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
+impl<'a> CrossInput<'a> {
     pub fn new(
         tensors: &'a [&'a ThoTensor2<ChannelsData2, SimpleId>],
-        b_0: &'a [R],
-        b_1: &'a [R],
+        b_0: &'a [&'a Resource],
+        b_1: &'a [&'a Resource],
     ) -> Self {
         Self { tensors, resources_0: b_0, resources_1: b_1 }
     }
@@ -41,16 +41,16 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         self.tensors
     }
 
-    pub fn batch_0(&self) -> &'a [R] {
+    pub fn batch_0(&self) -> &'a [&'a Resource] {
         self.resources_0
     }
 
-    pub fn batch_1(&self) -> &'a [R] {
+    pub fn batch_1(&self) -> &'a [&'a Resource] {
         self.resources_1
     }
 }
 
-impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Input for CrossInput<'a, R> {}
+impl<'a> Input for CrossInput<'a> {}
 
 #[derive(Debug)]
 pub(crate) struct UnfoldParams {
@@ -71,7 +71,7 @@ impl UnfoldParams {
 
 pub struct CrossUnfoldClc<F, R, CUC>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a>, &CUC) -> Result<R, ThoosaError>,
 {
     batch_clc_fn: F,
     cross_batch_ctx: CUC,
@@ -80,7 +80,7 @@ where
 
 impl<F, R, CUC> Debug for CrossUnfoldClc<F, R, CUC>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a>, &CUC) -> Result<R, ThoosaError>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossBatchClc").finish()
@@ -90,7 +90,7 @@ where
 
 impl<F, R, CUC> CrossUnfoldClc<F, R, CUC>
 where
-    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a>, &CUC) -> Result<R, ThoosaError>,
 {
     pub fn new(batch_clc: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
         Self {
@@ -150,18 +150,22 @@ impl<R: Debug> Output for CrossUnfoldClcOutput<R> {}
 #[async_trait]
 impl<F, R, CUC> Stage for CrossUnfoldClc<F, R, CUC>//CUC Cross Unfold Context
 where
-    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError> + 'a,
+    for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a>, &CUC) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
     for<'a> CUC: 'a,
 {
-    type In<'a> = CrossInput<'a, &'a Arc<Resource>> where F: 'a;
+    type In<'a> = CrossInput<'a> where F: 'a;
 
     type Out = CrossUnfoldClcOutput<R>;
     type Ctx = RunCtx2;
 
-    fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run<'f>(
+        self: Arc<Self>,
+        input: &'f Self::In<'f>,
+        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+    ) -> Result<Self::Out, ThoosaError>
     where
-        Self: Sized
+        Self::In<'f>: Send + Sync,
     {
         let mut batch_0_sizes = vec![];
 

@@ -13,14 +13,14 @@ use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep};
 
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::Stage;
-use log::debug;
+use log::{debug, error};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign, Range};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Relaxed;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::traits::{CachableIdTr, Named, WithId};
@@ -89,10 +89,7 @@ where
     ) -> Result<<R as Stage>::Out, ThoosaError>
     where
         R: Stage + Adjustable + 'static,
-        StageInStatic<R>: WithId
-            + Debug
-            + Adjustable
-            + Data,
+        StageInStatic<R>: Debug + Adjustable + Data,
         R::Out: Send + Sync,
         R::Ctx: Adjustable,
         R: OutId,
@@ -101,7 +98,8 @@ where
         StageInMetrics<R>: PartialOrd<i64>,
         for<'a, 'b> &'a StageInMetrics<R>: Add<&'b StageInMetrics<R>, Output = StageInMetrics<R>>,
         StageInMetrics<R>: PartialOrd,
-        <R as Stage>::In<'static>: Select<std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>, Output=<R as Stage>::In<'static>>
+        <R as Stage>::In<'static>: Select<std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>, Output=<R as Stage>::In<'static>>,
+        for<'i> <R as Stage>::In<'i>: WithId
     {
         let (device_idx, ctx_name) = {
             let guard = ctx.read();
@@ -113,10 +111,10 @@ where
         min_split_len /= 10;
 
         debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?} size={size:?}");
-        let out_id = runnable.out_id(input.id()); //.clone();
+        let out_id = runnable.out_id(input.id()).clone();
         let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
 
-        match self.config {
+/*        match self.config {
             OOMRunnerConfig::Permits { max, step } => {
                 OOMHandler::new(
                     vec![Adjusters::RunContext(Box::new(PermitsAdjuster::new(
@@ -131,7 +129,7 @@ where
                     input,
                     ctx,
                     Contexts::new(
-                        NoopInputContext(None),
+                        NoopInputContext(None, Default::default()),
                         NoopRunnableContext {},
                         PermitsAdjustContextImpl::new(ctx_name),
                     ),
@@ -193,7 +191,10 @@ where
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
                             *PermitStep::FIFTY,
-                            |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+                            |n| {
+                                let arc = out_key.clone();
+                                GlobalCtx::global().acquire_many(0/*device_idx*/, n, arc)
+                            },
                         ))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new())),
                         Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
@@ -218,6 +219,8 @@ where
                 .await
             }
         }
+*/
+    todo!()
     }
 }
 
@@ -230,7 +233,7 @@ pub enum OOMRunnerConfig {
     PermitsAndSplits { max: NumPermits, step: NumPermits },
 }
 
-pub async fn run_mul_task_invocations<R, F, CF>(
+pub async fn run_mul_task_invocations<'f, R, F, CF>(
     load_and_mul: Arc<R>,
     resources: &[&'static str],
     device_idx: usize,
@@ -238,13 +241,14 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     check: CF,
 ) -> Result<(), ThoosaError>
 where
-    R: Stage + Cached + OutId + Send + Sync + 'static,
+    R: Stage + Cached<'f> + OutId + Send + Sync + 'f,
     for<'a> <R as Stage>::In<'a>: Send + Sync,
     R::Out: Data + Send + Sync,
-    StageInStatic<R>: WithId + From<&'static str>,
-    F: Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
-    CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
+    StageIn<'f, R>: From<&'static str>,
+    F: Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'f,
+    CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'f,
     <R as Stage>::Out: Data,
+    for<'i> <R as Stage>::In<'i>: WithId
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -252,63 +256,80 @@ where
     let res_cnt = Arc::new(AtomicU32::new(0));
     let res_cnt_arc = Arc::clone(&res_cnt);
 
-    let r = resources
-        .iter()
-        .enumerate()
-        .map(|(idx, res)| {
-            let load_and_mul = Arc::clone(&load_and_mul);
-            let thread_ids = Arc::clone(&thread_ids);
-            let res = *res;
+    let mut js: JoinSet<Result<(), ThoosaError>> = JoinSet::new();
 
-            let check_arc = Arc::clone(&check_arc);
-            let ctx_fac_arc = Arc::clone(&ctx_fac_arc);
-            let res_cnt_arc = Arc::clone(&res_cnt_arc);
-            async move {
-                debug!(
+    for (idx, res) in resources.iter().enumerate() {
+        let load_and_mul = Arc::clone(&load_and_mul);
+        let thread_ids = Arc::clone(&thread_ids);
+        let res = *res;
+
+        let check_arc = Arc::clone(&check_arc);
+        let ctx_fac_arc = Arc::clone(&ctx_fac_arc);
+        let res_cnt_arc = Arc::clone(&res_cnt_arc);
+        js.spawn(async move {
+            debug!(
                     "task {idx}: device_idx={device_idx} thread id={:?}",
                     std::thread::current().id()
                 );
-                thread_ids.write().push(std::thread::current().id());
+            thread_ids.write().push(std::thread::current().id());
 
-                let name: &'static str = Box::leak(format!("task_{idx}({res})").into_boxed_str());
+            let name: &'static str = Box::leak(format!("task_{idx}({res})").into_boxed_str());
 
-                let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
-                let multed = load_and_mul
-                    .run_cached(
-                        Arc::new(<&str as Into<StageInStatic<R>>>::into(res)),
-                        ctx_device.clone(),
-                    )
-                    .await?;
+            let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
+            let multed = load_and_mul.run_cached(
+                &<&str as Into<StageIn<R>>>::into(res),
+                ctx_device.clone(),
+            )
+                .await?;
 
-                multed
-                    .with_data_ref(device_idx, None, |guard: &<R as Stage>::Out| {
-                        // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
+            multed
+                .with_data_ref(device_idx, None, |guard: &<R as Stage>::Out| {
+                    // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
-                        check_arc(res, &guard);
+                    check_arc(res, &guard);
 
-                        debug!(
+                    debug!(
                             "task {idx}: device_idx={device_idx} thread id={:?} done",
                             std::thread::current().id()
                         );
-                        debug!("task {idx}: multed=\n{:?}", guard);
+                    debug!("task {idx}: multed=\n{:?}", guard);
 
-                        res_cnt_arc.fetch_add(1, Relaxed);
+                    res_cnt_arc.fetch_add(1, Relaxed);
 
-                        Ok(())
-                    })
-                    .await?;
+                    Ok(())
+                })
+                .await?;
 
-                Ok::<_, ThoosaError>(())
+            Ok::<_, ThoosaError>(())
+        });
+
+        let mut results:Vec<()> = Vec::new();
+        while let Some(res) = js.join_next().await {
+            match res? {
+                Ok(r) => {
+                    results.push(r);
+                }
+                Err(e) => {
+                    error!("Find motifs failed: {e:?}");
+                }
             }
-        })
-        .collect::<JoinSet<_>>()
-        .join_all()
-        .await
-        .into_iter()
-        .collect::<Result<(), ThoosaError>>();
+        }
+    }
 
-    debug!("r={r:?} res_cnt={res_cnt:?}");
-    assert!(r.is_ok());
+    // let r = resources
+    //     .iter()
+    //     .enumerate()
+    //     .map(|(idx, res)| {
+    //
+    //     })
+    //     .collect::<JoinSet<_>>()
+    //     .join_all()
+    //     .await
+    //     .into_iter()
+    //     .collect::<Result<(), ThoosaError>>();
+
+    // debug!("r={r:?} res_cnt={res_cnt:?}");
+    // assert!(r.is_ok());
 
     assert_eq!(resources.len() as u32, res_cnt.load(Relaxed));
 
@@ -344,6 +365,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
+    use cached_derive::Cached;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Named, SimpleId, WithId};
@@ -489,18 +511,15 @@ mod tests {
     impl Adjustable for DLoadedTensor {}
 
     impl OutId for DummyLoader {
-        fn out_id(
-            &self,
-            input_id: &<Self::In<'static> as WithId>::ID,
-        ) -> <Self::Out as WithId>::ID {
+        fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
 
-        fn on_cached(
-            &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
-        ) {
+
+        fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        where
+            Self: 'a
+        {
             ctx.write()
                 .loaded_tensors_cached
                 .push(self.out_id(input.id()));
@@ -613,16 +632,19 @@ mod tests {
         type Out = DLoadedTensor;
         type Ctx = DummyRunCtx;
 
-        async fn run(
+        async fn run<'f>(
             self: Arc<Self>,
-            input: &Self::In<'static>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+            input: &'f Self::In<'f>,
+            ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+        ) -> Result<Self::Out, ThoosaError>
+        where
+            Self::In<'f>: Send + Sync
+        {
             self.run_count.fetch_add(1, Relaxed);
 
-            let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0)
+            let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input).0)
                 .unwrap_or(1.0) as f32;
-            let out_id = self.out_id(WithId::id(input.as_ref()));
+            let out_id = self.out_id(WithId::id(input));
 
             let _self_for_reload = Arc::clone(&self);
             let _ctx_for_reload = Arc::clone(&ctx);
@@ -674,13 +696,6 @@ mod tests {
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run(
-            self: Arc<Self>,
-            _input: &Self::In<'static>,
-            _ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
-            unimplemented!()
-        }
 
         fn do_run<'a>(
             self: Arc<Self>,
@@ -750,11 +765,10 @@ mod tests {
             DMulTaskOutputId(format!("multiplied_{}", input_id).leak())
         }
 
-        fn on_cached(
-            &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
-        ) {
+        fn on_cached<'a>(&self, input: &impl WithId<ID=<<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        where
+            Self: 'a
+        {
             ctx.write()
                 .multed_tensors_cached
                 .push(self.out_id(input.id()));
@@ -848,8 +862,7 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct DLoadAndMulTaskId(&'static str);
 
-    #[derive(Debug)]
-    #[allow(dead_code)]
+    #[derive(Debug, Cached)]
     struct DLoadAndMulTask {
         id: DLoadAndMulTaskId,
 
@@ -858,18 +871,18 @@ mod tests {
         mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>>,
     }
 
-    #[async_trait]
-    impl Cached for DLoadAndMulTask {
-        async fn cache() -> &'static DashMap<
-            <<Self as Stage>::Out as WithId>::ID,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
-        >
-        where
-            Self: Sized,
-        {
-            <DMulTask as Cached>::cache().await
-        }
-    }
+    // #[async_trait]
+    // impl Cached for DLoadAndMulTask {
+    //     async fn cache() -> &'static DashMap<
+    //         <<Self as Stage>::Out as WithId>::ID,
+    //         Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
+    //     >
+    //     where
+    //         Self: Sized,
+    //     {
+    //         <DMulTask as Cached>::cache().await
+    //     }
+    // }
 
     impl OutId for DLoadAndMulTask {
         fn out_id(
@@ -903,25 +916,27 @@ mod tests {
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
 
-        async fn run(
+        async fn run<'f>(
             self: Arc<Self>,
-            input: &Self::In<'static>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+            _input: &'f Self::In<'f>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+        ) -> Result<Self::Out, ThoosaError>
+        where
+            Self::In<'f>: Send + Sync {
             let loaded = Arc::clone(&self.loader)
-                .run_cached(input, Arc::clone(&ctx))
+                .run_cached(_input, Arc::clone(&_ctx))
                 .await?;
 
             debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
 
-            let _device_idx = ctx.read().device_idx();
+            let _device_idx = _ctx.read().device_idx();
 
             async move {
                 self.mul_oom_runner
                     .run(
                         &self.mul,
                         loaded,
-                        ctx,
+                        _ctx,
                         &HashMap::from([("", &HashSet::new())]),
                     )
                     .await
@@ -942,9 +957,9 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DLoaderInput {
+                &DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                },
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -953,9 +968,9 @@ mod tests {
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DLoaderInput {
+                &DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                },
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -974,9 +989,9 @@ mod tests {
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DLoaderInput {
+                &DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                },
                 Arc::clone(&ctx_device_1),
             )
             .await?;
@@ -1025,9 +1040,9 @@ mod tests {
 
         let multed = load_and_mut
             .run_cached(
-                Arc::new(DLoaderInput {
+                &DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                },
                 ctx_device_0,
             )
             .await?;
@@ -1204,7 +1219,7 @@ mod tests {
         let global_ctx = GlobalCtx::init_devices(2);
 
         let loader = Arc::new(DummyLoader::new(10));
-        let resource_1_arc = Arc::new(DLoaderInput::from("resource_1"));
+        let resource_1 = DLoaderInput::from("resource_1");
         let loader_cache = <DummyLoader as Cached>::cache().await;
 
         let device_idx = 1;
@@ -1218,7 +1233,7 @@ mod tests {
             "ctx_0",
         )));
         let resource_0_for_ctx_0 = Arc::clone(&loader)
-            .run_cached(resource_1_arc.clone(), ctx_0.clone())
+            .run_cached(&resource_1, ctx_0.clone())
             .await?;
 
         let cache_area_1 = global_ctx.next_cache_area()?;
@@ -1230,7 +1245,7 @@ mod tests {
             "ctx_1",
         )));
         let resource_0_for_ctx_1 = Arc::clone(&loader)
-            .run_cached(resource_1_arc.clone(), ctx_1.clone())
+            .run_cached(&resource_1, ctx_1.clone())
             .await?;
 
         debug!(

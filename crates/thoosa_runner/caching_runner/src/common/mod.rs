@@ -185,18 +185,14 @@ pub use mock_run_ctx::MockRunCtx;
 
 pub trait OutId: Stage
 where
-    Self: 'static,
-    <Self as Stage>::In<'static>: WithId,
+        for<'a> <Self as Stage>::In<'a>: WithId,
 {
-    fn out_id(
+    fn out_id<'a>(
         &self,
-        input_id: &<<Self as Stage>::In<'static> as WithId>::ID,
+        input_id: &<<Self as Stage>::In<'a> as WithId>::ID,
     ) -> <Self::Out as WithId>::ID;
 
-    fn on_cached(
-        &self,
-        _input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-        _ctx: &Arc<RwLock<Self::Ctx>>,
-    ) {
+    fn on_cached<'a>(&self, _input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, _ctx: &Arc<RwLock<Self::Ctx>>)
+    where Self: 'a {
     }
 }
