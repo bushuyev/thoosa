@@ -1,1 +1,1 @@
-mod band_pass;
+pub mod band_pass;

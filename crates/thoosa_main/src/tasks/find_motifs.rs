@@ -6,7 +6,7 @@ use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
-use caching_runner::common::RunCtx;
+use caching_runner::common::{OutId, RunCtx};
 use caching_runner::common::runnable::Stage;
 use futures_util::FutureExt;
 use log::{debug, error, info};
@@ -32,8 +32,14 @@ use thoosa_shared::ThoosaError;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
+use caching_runner::common::cachable::Cached;
 use thoosa_common::cuda_utils::pack_bits_bool;
+use thoosa_shared::traits::{SimpleId, WithId};
 use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
+use torch_runner::data::ThoTensor2;
+use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::filters::band_pass::BandPassFilter;
+use crate::tasks::stages_seq::StagesSeq;
 
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
@@ -64,7 +70,7 @@ where
     ) -> Self {
         Self {
             run_config,
-            cross_loader,
+            cross_loader
         }
     }
 }
@@ -99,7 +105,9 @@ where
 impl<RC, L> FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: TensorLoader + 'static,
+    L: TensorLoader  + Cached + OutId + 'static,
+    <L as Stage>::In<'static>: WithId,
+    <L as Stage>::Out: caching_runner::common::Data + Send + Sync + 'static,
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -109,6 +117,7 @@ where
         fixed_config: FixedFindMotifsConfig,
         device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
     ) -> Self {
+        let band_filter = Arc::new(BandPassFilter::new());
 
         let cross_loaders = run_configs
             .into_iter()
@@ -193,9 +202,12 @@ where
                     None,
                 ));
 
+                // let x  = Arc::new(StagesSeq::new(Arc::clone(&loader), band_filter));
+
                 FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
+                        // Arc::new(StagesSeq::new(Arc::clone(&loader), band_filter)),
                         Arc::clone(&loader),
                         &store,
                         Arc::new(cross_unfold_clc),
