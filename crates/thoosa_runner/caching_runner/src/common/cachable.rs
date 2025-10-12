@@ -150,7 +150,7 @@ where
 
 //when hidden behind a trait, impls for plain Ids and Data cause https://github.com/rust-lang/rust/issues/100013 so opting to enum
 #[derive(Debug)]
-pub struct DataCacheWrapper<O>
+pub struct DataCacheWrapper<O>//TODO rename to DeviceDataWrapper
 where
     O: WithId + Data + CopyToDevice + Send + Sync,
 {
