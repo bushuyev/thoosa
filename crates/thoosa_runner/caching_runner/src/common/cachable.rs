@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
+use thoosa_shared::applicables_runner::{Input, Output};
 
 #[async_trait]
 pub trait Cached: Stage
@@ -49,7 +50,7 @@ where
         <Self as Stage>::Out: 'static,
         Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
-        let key = self.out_id(input.id());
+        let key = self.out_id(WithId::id(input.as_ref()));
         let (cache_area, device_idx) = {
             let guard = ctx.read();
             (guard.cache_area(), guard.device_idx())
@@ -163,6 +164,47 @@ where
     on_cpu_since: parking_lot::RwLock<Option<u64>>,
     pd: PhantomData<O>,
 }
+
+
+impl <O> Input for DataCacheWrapper<O>
+where
+    O: WithId + Data + CopyToDevice + Send + Sync,
+
+{
+
+}
+
+impl <O> Output for DataCacheWrapper<O>
+where
+    O: WithId + Data + CopyToDevice + Send + Sync,
+
+{
+
+}
+
+impl <O> WithId for DataCacheWrapper<O>
+where
+    O: WithId + Data + CopyToDevice + Send + Sync,
+
+{
+    type ID = O::ID;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+// impl <O> WithId for Arc<DataCacheWrapper<O>>
+// where
+//     O: WithId + Data + CopyToDevice + Send + Sync,
+//
+// {
+//     type ID = O::ID;
+//
+//     fn id(&self) -> &Self::ID {
+//         &self.id
+//     }
+// }
 
 struct TracingWrapper<O, D>
 where
