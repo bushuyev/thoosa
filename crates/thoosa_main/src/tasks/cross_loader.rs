@@ -700,7 +700,7 @@ mod tests {
                     let map = Arc::clone(&loader_map);
                     async move {
                         Ok(map
-                            .get(&resource.id())
+                            .get(&resource.as_ref().id())
                             .cloned()
                             .expect("mock loader data should be present"))
                     }
@@ -721,8 +721,8 @@ mod tests {
                 .with_run_batch_fn(move |input, _ctx| {
                     let observation = Observation {
                         tensor_ids: input.tensors().iter().map(|t| t.id().0).collect(),
-                        batch_0_ids: input.batch_0().iter().map(|r| r.id()).collect(),
-                        batch_1_ids: input.batch_1().iter().map(|r| r.id()).collect(),
+                        batch_0_ids: input.batch_0().iter().map(|r| r.as_ref().id()).collect(),
+                        batch_1_ids: input.batch_1().iter().map(|r| r.as_ref().id()).collect(),
                     };
 
                     batch_observations.lock().unwrap().push(observation);

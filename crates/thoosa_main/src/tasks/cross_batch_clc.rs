@@ -224,14 +224,14 @@ where
             .resources_0
             .into_iter()
             .zip(batch_0_sizes.into_iter())
-            .map(|v| (v.0.id(), v.1 as usize))
+            .map(|v| (v.0.as_ref().id(), v.1 as usize))
             .collect();
 
         let resource_ids_sizes_1: Vec<_> = input
             .resources_1
             .into_iter()
             .zip(batch_1_sizes.into_iter())
-            .map(|v| (v.0.id(), v.1 as usize))
+            .map(|v| (v.0.as_ref().id(), v.1 as usize))
             .collect();
 
         debug!("resource_ids_sizes={resource_ids_sizes_0:?}");
