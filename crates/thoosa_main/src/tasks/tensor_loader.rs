@@ -17,6 +17,8 @@ use thoosa_shared::applicables_runner::{Input, Output, Runner, ToOrdinal};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
+use crate::tasks::filters::band_pass::BandPassFilter;
+use crate::tasks::stages_seq::StagesSeq;
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
@@ -86,6 +88,22 @@ impl TensorLoader for RawTensorLoader {
         <Self as Cached>::run_cached(self, resource, ctx).await
     }
 }
+
+#[async_trait]
+impl TensorLoader for StagesSeq<RawTensorLoader, BandPassFilter>
+where
+{
+
+    async fn load(
+        self: Arc<Self>,
+        resource: Arc<Resource>,
+        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
+    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
+        self.run(resource, ctx).await
+
+    }
+}
+
 
 #[cfg(test)]
 pub(crate) mod mock_tensor_loader {

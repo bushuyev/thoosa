@@ -11,21 +11,39 @@ use thoosa_shared::{CopyToDevice, ThoosaError};
 use thoosa_shared::traits::WithId;
 
 #[derive(Debug)]
-struct StagesSeq<SIn, SOut>
+pub struct StagesSeq<SIn, SOut>
 where
     SIn:Stage + Cached + OutId + Sync + Send + 'static,
     SOut: Stage<Ctx=SIn::Ctx> + Cached + OutId + Sync + Send + 'static,
     for <'a> SOut: Stage<In<'a>=DataCacheWrapper<SIn::Out>>,
-    SOut: Stage + Cached + Send + Sync + OutId + 'static,
+    // SOut: Stage + Cached + Send + Sync + OutId + 'static,
     <SIn as Stage>::In<'static>: WithId,
     <SOut as Stage>::In<'static>: WithId,
     <SIn as Stage>::Out: CopyToDevice + Data +  Send + Sync + 'static,
-    <SOut as Stage>::Out: CopyToDevice + Data + OutId + Send + Sync + 'static,
-    <<SOut as Stage>::Out as Stage>::In<'static>: WithId,
+    <SOut as Stage>::Out: CopyToDevice + Data + Send + Sync + 'static,
+    // <<SOut as Stage>::Out as Stage>::In<'static>: WithId,
     for <'a> <SOut as Stage>::In<'a>: Send + Sync + 'static,
 {
     stage_in: Arc<SIn>,
     stage_out: Arc<SOut>,
+}
+
+impl<SIn, SOut>  StagesSeq<SIn, SOut>
+where
+    SIn:Stage + Cached + OutId + Sync + Send + 'static,
+    SOut: Stage<Ctx=SIn::Ctx> + Cached + OutId + Sync + Send + 'static,
+    for <'a> SOut: Stage<In<'a>=DataCacheWrapper<SIn::Out>>,
+    // SOut: Stage + Cached + Send + Sync + OutId + 'static,
+    <SIn as Stage>::In<'static>: WithId,
+    <SOut as Stage>::In<'static>: WithId,
+    <SIn as Stage>::Out: CopyToDevice + Data +  Send + Sync + 'static,
+    <SOut as Stage>::Out: CopyToDevice + Data + Send + Sync + 'static,
+    // <<SOut as Stage>::Out as Stage>::In<'static>: WithId,
+    for <'a> <SOut as Stage>::In<'a>: Send + Sync + 'static,
+{
+    pub fn new(stage_in: Arc<SIn>, stage_out: Arc<SOut>) -> Self {
+        Self { stage_in, stage_out }
+    }
 }
 
 #[async_trait]
@@ -34,12 +52,12 @@ where
     SIn:Stage + Cached + OutId + Sync + Send + 'static,
     SOut: Stage<Ctx=SIn::Ctx> + Cached + OutId + Sync + Send + 'static,
     for <'a> SOut: Stage<In<'a>=DataCacheWrapper<SIn::Out>>,
-    SOut: Stage + Cached + Send + Sync + OutId + 'static,
+    // SOut: Stage + Cached + Send + Sync + OutId + 'static,
     <SIn as Stage>::In<'static>: WithId,
     <SOut as Stage>::In<'static>: WithId,
     <SIn as Stage>::Out: CopyToDevice + Data +  Send + Sync + 'static,
-    <SOut as Stage>::Out: CopyToDevice + Data + OutId + Send + Sync + 'static,
-    <<SOut as Stage>::Out as Stage>::In<'static>: WithId,
+    <SOut as Stage>::Out: CopyToDevice + Data  + Send + Sync + 'static,
+    // <<SOut as Stage>::Out as Stage>::In<'static>: WithId,
     for <'a> <SOut as Stage>::In<'a>: Send + Sync + 'static,
 {
     type Ctx = SIn::Ctx;
@@ -53,7 +71,6 @@ where
         let m = Arc::clone(&self.stage_in).run_cached(_input, Arc::clone(&_ctx)).await?;
 
         Arc::clone(&self.stage_out).run_cached(m, Arc::clone(&_ctx)).await
-        // todo!()
     }
 }
 

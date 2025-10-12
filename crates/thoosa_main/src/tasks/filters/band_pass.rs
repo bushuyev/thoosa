@@ -16,7 +16,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::TensorLoader;
 
 #[derive(Debug, Cached)]
-struct BandPassFilter {
+pub struct BandPassFilter {
 }
 
 impl BandPassFilter {
@@ -34,16 +34,17 @@ impl  OutId for BandPassFilter {
 #[async_trait]
 impl Stage for BandPassFilter {
     type Ctx = RunCtx2;
-    type In<'a> = ThoTensor2<ChannelsData2, SimpleId>;
+    type In<'a> = DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
 
     async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {
-        input.run_inner(|t|{
-            Ok(ThoTensor2::new(self.out_id(input.id()), t.shallow_clone()))
-        })
+        // input.run_inner(|t|{
+        //     Ok(ThoTensor2::new(self.out_id(input.id()), t.shallow_clone()))
+        // })
+        todo!()
 
     }
 }
