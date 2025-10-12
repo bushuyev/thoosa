@@ -233,15 +233,15 @@ where
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<ResourcesConfigInput<RC>>,
-        ctx: Arc<RwLock<Self::Ctx>>,
+        _input: &'static Self::In<'static>,
+        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         let best = 0;
         let mut js: JoinSet<Result<CrossResult, ThoosaError>> = JoinSet::new();
 
         for stage in self.run_config_stages.iter() {
-            let ctx_arc = Arc::clone(&ctx);
-            let input_arc = Arc::clone(&input);
+            let ctx_arc = Arc::clone(&_ctx);
+            let input_arc = Arc::clone(&_input);
             let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
             js.spawn(async {
@@ -470,7 +470,7 @@ mod tests {
             }"#,
             )
             .unwrap(),
-            Arc::new(ResourcesConfigInput::new(
+            &ResourcesConfigInput::new(
                 SimpleId::from("resources"),
                 Simple::new(ResourceType::List(
                     vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1"]
@@ -478,7 +478,7 @@ mod tests {
                         .map(|v| v.to_string())
                         .collect(),
                 )),
-            )),
+            ),
             &store,
             true,
             |run_configs| {

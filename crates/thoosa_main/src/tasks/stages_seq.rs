@@ -44,7 +44,7 @@ where
         C: 'a;
     type Out = O;
 
-    async fn run(self: Arc<Self>, _input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(self: Arc<Self>, _input: &'static Self::In<'static>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {

@@ -41,8 +41,8 @@ impl Stage for RawTensorLoader {
 
     async fn run(
         self: Arc<Self>,
-        _input: Arc<Self::In<'static>>,
-        _ctx: Arc<RwLock<Self::Ctx>>,
+        _input: &'static Self::In<'static>,
+        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         Ok((self.loader_fn)(&_input, &self.device))
     }

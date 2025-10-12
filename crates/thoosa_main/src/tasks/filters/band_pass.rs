@@ -37,12 +37,12 @@ impl Stage for BandPassFilter {
     type In<'a> = ThoTensor2<ChannelsData2, SimpleId>;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
 
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(self: Arc<Self>, _input: &'static Self::In<'static>, _ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {
-        input.run_inner(|t|{
-            Ok(ThoTensor2::new(self.out_id(input.id()), t.shallow_clone()))
+        _input.run_inner(|t|{
+            Ok(ThoTensor2::new(self.out_id(_input.id()), t.shallow_clone()))
         })
 
     }

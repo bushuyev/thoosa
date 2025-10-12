@@ -615,17 +615,17 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             self.run_count.fetch_add(1, Relaxed);
 
-            let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0)
+            let k = caching_runner::test_utils::parse_numeric_part(WithId::id(_input.as_ref()).0)
                 .unwrap_or(1.0) as f32;
-            let out_id = self.out_id(WithId::id(input.as_ref()));
+            let out_id = self.out_id(WithId::id(_input.as_ref()));
 
             let _self_for_reload = Arc::clone(&self);
-            let _ctx_for_reload = Arc::clone(&ctx);
+            let _ctx_for_reload = Arc::clone(&_ctx);
             // let input_for_reload = Arc::clone(&input);
 
             Ok(DLoadedTensor {
@@ -676,8 +676,8 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            _input: Arc<Self::In<'static>>,
-            _ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             unimplemented!()
         }
@@ -905,23 +905,23 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
-                .run_cached(input, Arc::clone(&ctx))
+                .run_cached(_input, Arc::clone(&_ctx))
                 .await?;
 
             debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
 
-            let _device_idx = ctx.read().device_idx();
+            let _device_idx = _ctx.read().device_idx();
 
             async move {
                 self.mul_oom_runner
                     .run(
                         &self.mul,
                         loaded,
-                        ctx,
+                        _ctx,
                         &HashMap::from([("", &HashSet::new())]),
                     )
                     .await

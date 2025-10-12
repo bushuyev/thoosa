@@ -298,14 +298,14 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            _ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
-            let idx = parse_numeric_part(input.id.0).unwrap_or(0.0) as i64;
+            let idx = parse_numeric_part(_input.id.0).unwrap_or(0.0) as i64;
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
             let x = Tensor::ones([self.input_len, self.feat], (self.kind, Device::Cpu)) * base;
-            let id = self.out_id(&input.id);
+            let id = self.out_id(&_input.id);
             Ok(ThoTensor2::new(id, x))
         }
     }
@@ -395,11 +395,11 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             // Look up the files and labels by input id
-            let id_key = format!("{}", input.id);
+            let id_key = format!("{}", _input.id);
             let files = registry()
                 .get(&id_key)
                 .ok_or_else(|| MyError::SomethingElse("file list not found".into()))?;
@@ -448,7 +448,7 @@ mod tests {
                 let feat = Arc::clone(&self.loader)
                     .run_cached(
                         Arc::new(<&str as Into<FileInput>>::into(f)),
-                        Arc::clone(&ctx),
+                        Arc::clone(&_ctx),
                     )
                     .await?;
                 feats.push(feat);
@@ -456,7 +456,7 @@ mod tests {
             }
 
             let (device_idx, _cache_area, _num_devices) = {
-                let g = ctx.read();
+                let g = _ctx.read();
                 (
                     g.device_idx(),
                     g.cache_area(),
@@ -468,7 +468,7 @@ mod tests {
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
             DataCacheWrapper::with_data_array(&feats, device_idx, None, |data| {
                 // data: &[&ThoTensor<ABData>] aligned with label_vec
-                let ax_id = SimpleId::from(format!("ax_{}", input.id));
+                let ax_id = SimpleId::from(format!("ax_{}", _input.id));
                 let first = data
                     .first()
                     .ok_or_else(|| MyError::SomethingElse("no tensors".into()))?;
@@ -736,16 +736,16 @@ mod tests {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
-                .run_cached(Arc::clone(&input), Arc::clone(&ctx))
+                .run_cached(Arc::clone(&_input), Arc::clone(&_ctx))
                 .await?;
 
             let (device_idx, ctx_name) = {
-                let guard = ctx.read();
+                let guard = _ctx.read();
                 (guard.device_idx(), guard.name())
             };
 
@@ -775,7 +775,7 @@ mod tests {
             .run(
                 &self.clf,
                 batched,
-                Arc::clone(&ctx),
+                Arc::clone(&_ctx),
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(
                         size,

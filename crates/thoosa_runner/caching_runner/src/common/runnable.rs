@@ -19,7 +19,7 @@ pub trait Stage: Debug {
     //should implement either run for multistep or do_run for single step (can be oom-handled)
     async fn run(
         self: Arc<Self>,
-        _input: Arc<Self::In<'static>>,
+        _input: &'static Self::In<'static>,
         _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError>
     where

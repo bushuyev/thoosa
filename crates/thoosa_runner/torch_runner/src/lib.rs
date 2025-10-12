@@ -343,18 +343,18 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
-            let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
+            let k = parse_numeric_part(WithId::id(_input.as_ref()).0).unwrap_or(1.0);
 
             Ok(ThoTensor2::new(
-                self.out_id(WithId::id(input.as_ref())),
+                self.out_id(WithId::id(_input.as_ref())),
                 lin_for_size(
                     k,
                     (&self.size).into(),
                     self.kind,
-                    &ThoDevice::from(ctx.read().device_idx),
+                    &ThoDevice::from(_ctx.read().device_idx),
                 ),
                 // LoadedTensor
             ))
@@ -587,11 +587,11 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
+            _input: &'static Self::In<'static>,
+            _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
-                .run_cached(input, Arc::clone(&ctx))
+                .run_cached(_input, Arc::clone(&_ctx))
                 .await?;
 
             let loaded_id = loaded.id().clone();
@@ -621,7 +621,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
 
             async move {
                 self.clc_oom_runner
-                    .run(&self.clc_task, loaded, ctx, &required_ids)
+                    .run(&self.clc_task, loaded, _ctx, &required_ids)
                     .await
             }
             .await

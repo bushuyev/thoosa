@@ -395,14 +395,14 @@ where
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
-        ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+        _input: &'static Self::In<'static>,
+        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
-        let device_idx = ctx.read().device_idx();
+        let device_idx = _ctx.read().device_idx();
 
-        let resources = input
+        let resources = _input
             .resources_config
             .to_resources(&self.store)?
             .into_iter()
@@ -423,7 +423,7 @@ where
             info!("on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
-                .load(Arc::clone(resource_0), Arc::clone(&ctx))
+                .load(Arc::clone(resource_0), Arc::clone(&_ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -442,7 +442,7 @@ where
                 //skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
-                    .load(Arc::clone(resource_1), Arc::clone(&ctx))
+                    .load(Arc::clone(resource_1), Arc::clone(&_ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -468,14 +468,14 @@ where
 
                         debug!("input={input:?}");
 
-                        Arc::clone(&self.batch_clc).run_clc(&input, Arc::clone(&ctx))
+                        Arc::clone(&self.batch_clc).run_clc(&input, Arc::clone(&_ctx))
 
                     },
                 )
                 .await?;
 
                 let receiver_arc = Arc::clone(&self.receiver);
-                let ctx_arc = Arc::clone(&ctx);
+                let ctx_arc = Arc::clone(&_ctx);
 
                 receiver_arc.consume(cross_clc_output, ctx_arc)?;
 
@@ -495,7 +495,7 @@ where
 
         (self.on_all_done)(&self.receiver).await;
 
-        Ok(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))
+        Ok(CrossResult::new(self.out_id(WithId::id(_input.as_ref()))))
     }
 }
 

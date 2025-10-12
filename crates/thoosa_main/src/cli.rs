@@ -348,10 +348,10 @@ where
             let run_ids = run_grid::<Simple, _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
-                Arc::new(ResourcesConfigInput::new(
-                    SimpleId::from("resources"),
+                ResourcesConfigInput::new(
+                    SimpleId("resources"),
                     find_motifs_args.resource_config(),
-                )),
+                ),
                 &store,
                 true,
                 |run_configs| {
@@ -1713,16 +1713,16 @@ async fn run_plot_motif_slices(
 }
 
 async fn plot_motif(ws: &&Arc<RwLock<Box<dyn Workspace>>>, ctx: Arc<RwLock<RunCtx2>>, motif_id: usize, motif_loader_impl: &Arc<MotifLoader<RawTensorLoader>>, clc_dist: Arc<LoadMotifAndClcDistanceStage<AverageEuclideanDistanceStage>>) -> Result<(), ThoosaError> {
-    let motif_id = Arc::new(DataId::from(motif_id as u32));
+    // let motif_id = Arc::new(DataId::from(motif_id as u32));
     let motif = MotifLoaderStage::run_cached(
         Arc::clone(&motif_loader_impl),
-        Arc::clone(&motif_id),
+        &DataId(motif_id as u32),
         Arc::clone(&ctx),
     )
         .await?;
 
 
-    let dist = clc_dist.run_cached(Arc::clone(&motif_id), ctx).await?.with_data_ref(0, None, |dist_val| {
+    let dist = clc_dist.run_cached(&DataId(motif_id as u32), ctx).await?.with_data_ref(0, None, |dist_val| {
         Ok(dist_val.value())
     }).await?;
 
@@ -2327,7 +2327,7 @@ pub async fn run_grid<ResConf, RCRV, F, RC, ST, CtxF>(
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     // fixed_config: FC,
-    input: Arc<ST::In<'static>>,
+    input: ST::In<'static>,
     // ctx:Arc<parking_lot::RwLock<ST::Ctx>>,
     // stage: Arc<ST>,
     // ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -2349,7 +2349,7 @@ where
     RCRV: GridRunConfigSource,
     // ResConf: ResourcesConfig,
     for<'c> <ST as Stage>::In<'c>: Send + Sync,
-    CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>,
+    CtxF: FnOnce() -> Arc<RwLock<<ST as Stage>::Ctx>>
 {
     let grid_run_configs = rcrv.grid_run_configs();
     debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
@@ -2372,7 +2372,7 @@ where
         RunCtx2::new(0, 0, "aa"),
     ));
 
-    stage.run(input, ctx_f()).await?;
+    stage.run(&input, ctx_f()).await?;
 
     Ok(run_ids)
 }
