@@ -35,6 +35,15 @@ pub trait Output: WithId + Debug {
     }
 }
 
+impl <O> WithId for Arc<O>  where O:WithId + Debug {
+    type ID = <O as WithId>::ID;
+
+    fn id(&self) -> &Self::ID {
+        self.as_ref().id()
+    }
+}
+impl <O> Output for Arc<O> where O:Output + Debug {}
+
 impl Named for (){
 
 }
@@ -72,6 +81,8 @@ pub trait ToOrdinal: Debug + Sync + Send {
 pub trait Runner {
     type Ctx: RunCtx;
 }
+
+
 
 impl Debug for FuturesRunner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
