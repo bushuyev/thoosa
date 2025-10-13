@@ -12,7 +12,7 @@ use caching_runner::oom_handler::{
 use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep};
 
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use log::debug;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -88,11 +88,9 @@ where
         required_ids: &HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
     ) -> Result<<R as Stage>::Out, ThoosaError>
     where
-        R: Stage + Adjustable + 'static,
-        StageInStatic<R>: WithId
-            + Debug
-            + Adjustable
-            + Data,
+        R: SyncStage + Adjustable + 'static,
+        StageInStatic<R>: Debug + Adjustable + Data,
+        for<'a> <R as Stage>::In<'a>: WithId,
         R::Out: Send + Sync,
         R::Ctx: Adjustable,
         R: OutId,
@@ -122,7 +120,7 @@ where
                     vec![Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                         max,
                         step,
-                        |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+                        move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                     )))],
                     None,
                 )
@@ -167,7 +165,7 @@ where
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
                             *PermitStep::TWENTY,
-                            |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+                            move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
                         Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
                             min_split_len,
@@ -193,7 +191,7 @@ where
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
                             *PermitStep::FIFTY,
-                            |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
+                            move |n| GlobalCtx::global().acquire_many(device_idx, n, out_key.clone()),
                         ))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new())),
                         Adjusters::Input(Box::new(SplitsAdjuster::<StageInStatic<R>, std::ops::Range<<<R as Stage>::In<'static> as Data>::Metrics>>::new(
@@ -238,10 +236,10 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     check: CF,
 ) -> Result<(), ThoosaError>
 where
-    R: Stage + Cached + OutId + Send + Sync + 'static,
-    for<'a> <R as Stage>::In<'a>: Send + Sync,
+    R: Cached + OutId + Send + Sync + 'static,
+    for<'a> <R as Stage>::In<'a>: Data + WithId+ Send + Sync,
     R::Out: Data + Send + Sync,
-    StageInStatic<R>: WithId + From<&'static str>,
+    StageInStatic<R>: From<&'static str>,
     F: Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
     <R as Stage>::Out: Data,
@@ -275,7 +273,7 @@ where
                 let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
                 let multed = load_and_mul
                     .run_cached(
-                        Arc::new(<&str as Into<StageInStatic<R>>>::into(res)),
+                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), 0, 2, 0)),
                         ctx_device.clone(),
                     )
                     .await?;
@@ -329,7 +327,7 @@ mod tests {
     use async_trait::async_trait;
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-    use caching_runner::common::runnable::Stage;
+    use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use caching_runner::common::{ambassador_impl_PermitsCtx, Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
@@ -341,9 +339,11 @@ mod tests {
     use parking_lot::RwLock;
     use std::mem;
     use std::ops::Range;
+    use std::pin::Pin;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock};
+    use cached_derive::Cached;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Named, SimpleId, WithId};
@@ -461,7 +461,7 @@ mod tests {
 
                 tokio::try_join!(
                     DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
-                    DMulTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
+                    DLoadAndMulTask::purge_gpu_cache_area(mul_output_cached, cache_area, device_idx)
                 )?;
 
                 Ok(())
@@ -496,15 +496,15 @@ mod tests {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
 
-        fn on_cached(
-            &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
-        ) {
-            ctx.write()
-                .loaded_tensors_cached
-                .push(self.out_id(input.id()));
-        }
+        // fn on_cached(
+        //     &self,
+        //     input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
+        //     ctx: &Arc<RwLock<Self::Ctx>>,
+        // ) {
+        //     ctx.write()
+        //         .loaded_tensors_cached
+        //         .push(self.out_id(input.id()));
+        // }
     }
 
     struct DLoadedTensor {
@@ -599,6 +599,26 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl CopyToDevice for DLoaderInput {
+        async fn copy_to_device(&self, dst_device: usize) -> Self {
+            todo!()
+        }
+    }
+
+    #[async_trait]
+    impl Data for DLoaderInput {
+        type Metrics = ();
+
+        fn size(&self) -> Self::Metrics {
+            ()
+        }
+
+        fn device(&self) -> usize {
+            0
+        }
+    }
+
     impl From<&'static str> for DLoaderInput {
         fn from(value: &'static str) -> Self {
             DLoaderInput {
@@ -607,17 +627,21 @@ mod tests {
         }
     }
 
-    #[async_trait]
+
     impl Stage for DummyLoader {
         type In<'a> = DLoaderInput;
         type Out = DLoadedTensor;
         type Ctx = DummyRunCtx;
+    }
+
+    #[async_trait]
+    impl AsyncStage for DummyLoader {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             self.run_count.fetch_add(1, Relaxed);
 
             let k = caching_runner::test_utils::parse_numeric_part(WithId::id(input.as_ref()).0)
@@ -628,24 +652,13 @@ mod tests {
             let _ctx_for_reload = Arc::clone(&ctx);
             // let input_for_reload = Arc::clone(&input);
 
-            Ok(DLoadedTensor {
+            Ok(Arc::new(DataCacheWrapper::new(DLoadedTensor {
                 id: out_id,
                 data: (0..self.len)
                     .map(|v| v as f32 * k)
                     .collect::<Vec<f32>>()
                     .into(),
-            })
-        }
-
-        fn do_run<'a>(
-            self: Arc<Self>,
-            _input: &Self::In<'a>,
-            _tx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError>
-        where
-            Self: Sized,
-        {
-            todo!()
+            }, 0, 2, 0)))
         }
     }
 
@@ -653,8 +666,7 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct DMulTaskId(&'static str);
 
-    #[derive(Debug, cached_derive::Cached)]
-    #[cache_name = "MulTaskOutputId"]
+    #[derive(Debug)]
     #[allow(dead_code)]
     struct DMulTask {
         id: DMulTaskId,
@@ -668,28 +680,15 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Stage for DMulTask {
         type In<'a> = DLoadedTensor;
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
+    }
 
-        async fn run(
-            self: Arc<Self>,
-            _input: Arc<Self::In<'static>>,
-            _ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
-            unimplemented!()
-        }
+    impl SyncStage for DMulTask {
 
-        fn do_run<'a>(
-            self: Arc<Self>,
-            input: &Self::In<'a>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError>
-        where
-            Self: Sized,
-        {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
 
             let deive_idx = ctx.read().device_idx;
@@ -750,15 +749,15 @@ mod tests {
             DMulTaskOutputId(format!("multiplied_{}", input_id).leak())
         }
 
-        fn on_cached(
-            &self,
-            input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-            ctx: &Arc<RwLock<Self::Ctx>>,
-        ) {
-            ctx.write()
-                .multed_tensors_cached
-                .push(self.out_id(input.id()));
-        }
+        // fn on_cached(
+        //     &self,
+        //     input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
+        //     ctx: &Arc<RwLock<Self::Ctx>>,
+        // ) {
+        //     ctx.write()
+        //         .multed_tensors_cached
+        //         .push(self.out_id(input.id()));
+        // }
     }
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -848,7 +847,8 @@ mod tests {
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
     struct DLoadAndMulTaskId(&'static str);
 
-    #[derive(Debug)]
+    #[derive(Debug, Cached)]
+    #[cache_name = "MulTaskOutputId"]
     #[allow(dead_code)]
     struct DLoadAndMulTask {
         id: DLoadAndMulTaskId,
@@ -856,19 +856,6 @@ mod tests {
         loader: Arc<DummyLoader>,
         mul: Arc<DMulTask>,
         mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>>,
-    }
-
-    #[async_trait]
-    impl Cached for DLoadAndMulTask {
-        async fn cache() -> &'static DashMap<
-            <<Self as Stage>::Out as WithId>::ID,
-            Shared<BoxFuture<'static, Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>>>,
-        >
-        where
-            Self: Sized,
-        {
-            <DMulTask as Cached>::cache().await
-        }
     }
 
     impl OutId for DLoadAndMulTask {
@@ -897,17 +884,18 @@ mod tests {
         }
     }
 
-    #[async_trait]
+
     impl Stage for DLoadAndMulTask {
         type In<'a> = DLoaderInput;
         type Out = DMulTaskOutput;
         type Ctx = DummyRunCtx;
+    }
 
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+    #[async_trait]
+    impl AsyncStage for DLoadAndMulTask {
+
+
+        async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, Arc::clone(&ctx))
                 .await?;
@@ -917,14 +905,14 @@ mod tests {
             let _device_idx = ctx.read().device_idx();
 
             async move {
-                self.mul_oom_runner
+                Ok(Arc::new(DataCacheWrapper::new(self.mul_oom_runner
                     .run(
                         &self.mul,
                         loaded,
                         ctx,
                         &HashMap::from([("", &HashSet::new())]),
                     )
-                    .await
+                    .await?, 0, 2, 0)))
             }
             .await
         }
@@ -942,9 +930,9 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DLoaderInput {
+                Arc::new(DataCacheWrapper::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                }, 0, 2, 0)),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -953,9 +941,9 @@ mod tests {
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DLoaderInput {
+                Arc::new(DataCacheWrapper::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                }, 0, 2, 0)),
                 Arc::clone(&ctx_device_0),
             )
             .await;
@@ -974,9 +962,9 @@ mod tests {
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DLoaderInput {
+                Arc::new(DataCacheWrapper::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                }, 0, 2, 0)),
                 Arc::clone(&ctx_device_1),
             )
             .await?;
@@ -1025,9 +1013,9 @@ mod tests {
 
         let multed = load_and_mut
             .run_cached(
-                Arc::new(DLoaderInput {
+                Arc::new(DataCacheWrapper::new(DLoaderInput {
                     id: DLoaderInputId("resource_1"),
-                }),
+                }, 0, 2, 0)),
                 ctx_device_0,
             )
             .await?;
@@ -1061,203 +1049,203 @@ mod tests {
         debug!("mul_check: multed_{res}={out:?}");
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_min_permits_dummy() -> Result<(), ThoosaError> {
-        let _global_ctx = GlobalCtx::init_devices(3);
+        #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+        async fn test_load_and_mul_oom_till_min_permits_dummy() -> Result<(), ThoosaError> {
+            let _global_ctx = GlobalCtx::init_devices(3);
 
-        let device_idx = 1;
-        const MUL_K: f32 = 2.;
+            let device_idx = 1;
+            const MUL_K: f32 = 2.;
 
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
-            MUL_K,
-            FailUntil::MinPermits(20),
-            100,
-            ClcOOMRunner::new(
-                OOMRunnerConfig::Permits { max: 20, step: 10 },
-                Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
-            ),
-        ));
+            let load_and_mut = Arc::new(DLoadAndMulTask::new(
+                DLoadAndMulTaskId("load_and_mul_id"),
+                MUL_K,
+                FailUntil::MinPermits(20),
+                100,
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::Permits { max: 20, step: 10 },
+                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                ),
+            ));
 
-        super::run_mul_task_invocations(
-            Arc::clone(&load_and_mut),
-            &["resource_1", "resource_2", "resource_3"],
-            device_idx,
-            |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
-            |res, out| {
-                mul_check(MUL_K, res, out);
-            },
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), ThoosaError> {
-        let _global_ctx = GlobalCtx::init_devices(2);
-
-        let device_idx = 1;
-
-        const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
-            MUL_K,
-            FailUntil::MinPermits(MAX_PERMITS),
-            100,
-            ClcOOMRunner::new(
-                OOMRunnerConfig::Permits {
-                    max: MAX_PERMITS,
-                    step: *PermitStep::TEN,
+            super::run_mul_task_invocations(
+                Arc::clone(&load_and_mut),
+                &["resource_1", "resource_2", "resource_3"],
+                device_idx,
+                |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
+                |res, out| {
+                    mul_check(MUL_K, res, out);
                 },
-                Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
-            ),
-        ));
-
-        run_mul_task_invocations(
-            Arc::clone(&load_and_mut),
-            &["resource_1", "resource_2", "resource_3"],
-            device_idx,
-            |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
-            |res, out| {
-                mul_check(MUL_K, res, out);
-            },
-        )
-        .await?;
-
-        Ok::<_, ThoosaError>(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_splits_dummy() -> Result<(), ThoosaError> {
-        let _global_ctx = GlobalCtx::init_devices(2);
-
-        let device_idx = 1;
-
-        const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
-            MUL_K,
-            FailUntil::MemLimit(12),
-            100,
-            ClcOOMRunner::new(
-                OOMRunnerConfig::Splits {},
-                Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
-            ),
-        ));
-
-        run_mul_task_invocations(
-            Arc::clone(&load_and_mut),
-            &[
-                "resource_1",
-                "resource_2",
-                "resource_3",
-                "resource_4",
-                "resource_5",
-            ], //,
-            device_idx,
-            |_device_idx, _cache_area, _name| DummyRunCtx::new(1, 0, "noname"),
-            move |res, out| {
-                mul_check(MUL_K, res, out);
-            },
-        )
-        .await?;
-
-        Ok::<_, ThoosaError>(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoosaError> {
-        let _ = *TELEMETRY;
-
-        let _global_ctx = GlobalCtx::init_devices(2);
-
-        let device_idx = 1;
-        const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
-            MUL_K,
-            FailUntil::DumpedToCpu,
-            100,
-            ClcOOMRunner::new(
-                OOMRunnerConfig::DumpedToCpu,
-                Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
-            ),
-        ));
-
-        super::run_mul_task_invocations(
-            Arc::clone(&load_and_mut),
-            &["resource_1", "resource_2", "resource_3"],
-            device_idx,
-            |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
-            |res, out| {
-                mul_check(MUL_K, res, out);
-            },
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_cache_areas() -> Result<(), ThoosaError> {
-        let global_ctx = GlobalCtx::init_devices(2);
-
-        let loader = Arc::new(DummyLoader::new(10));
-        let resource_1_arc = Arc::new(DLoaderInput::from("resource_1"));
-        let loader_cache = <DummyLoader as Cached>::cache().await;
-
-        let device_idx = 1;
-
-        let cache_area_0 = global_ctx.next_cache_area()?;
-        debug!("cache_area_0={:064b}", cache_area_0);
-
-        let ctx_0 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
-            device_idx,
-            cache_area_0,
-            "ctx_0",
-        )));
-        let resource_0_for_ctx_0 = Arc::clone(&loader)
-            .run_cached(resource_1_arc.clone(), ctx_0.clone())
+            )
             .await?;
 
-        let cache_area_1 = global_ctx.next_cache_area()?;
-        debug!("cache_area_1={:064b}", cache_area_1);
+            Ok(())
+        }
 
-        let ctx_1 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
-            device_idx,
-            cache_area_1,
-            "ctx_1",
-        )));
-        let resource_0_for_ctx_1 = Arc::clone(&loader)
-            .run_cached(resource_1_arc.clone(), ctx_1.clone())
+        #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+        async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), ThoosaError> {
+            let _global_ctx = GlobalCtx::init_devices(2);
+
+            let device_idx = 1;
+
+            const MUL_K: f32 = 2.;
+            let load_and_mut = Arc::new(DLoadAndMulTask::new(
+                DLoadAndMulTaskId("load_and_mul_id"),
+                MUL_K,
+                FailUntil::MinPermits(MAX_PERMITS),
+                100,
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::Permits {
+                        max: MAX_PERMITS,
+                        step: *PermitStep::TEN,
+                    },
+                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                ),
+            ));
+
+            run_mul_task_invocations(
+                Arc::clone(&load_and_mut),
+                &["resource_1", "resource_2", "resource_3"],
+                device_idx,
+                |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
+                |res, out| {
+                    mul_check(MUL_K, res, out);
+                },
+            )
             .await?;
 
-        debug!(
-            "cache_areas 0+1={:064b}",
-            resource_0_for_ctx_1.cache_areas()
-        );
+            Ok::<_, ThoosaError>(())
+        }
 
-        assert!(Arc::ptr_eq(&resource_0_for_ctx_0, &resource_0_for_ctx_1));
-        assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+        #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+        async fn test_load_and_mul_oom_splits_dummy() -> Result<(), ThoosaError> {
+            let _global_ctx = GlobalCtx::init_devices(2);
 
-        DummyRunCtx::purge_gpu_caches(ctx_0.clone()).await?;
-        debug!(
-            "cache_areas   1={:064b}",
-            resource_0_for_ctx_1.cache_areas()
-        );
-        assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+            let device_idx = 1;
 
-        DummyRunCtx::purge_gpu_caches(ctx_1.clone()).await?;
-        debug!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
-        assert_eq!(resource_0_for_ctx_1.cache_areas(), 0);
+            const MUL_K: f32 = 2.;
+            let load_and_mut = Arc::new(DLoadAndMulTask::new(
+                DLoadAndMulTaskId("load_and_mul_id"),
+                MUL_K,
+                FailUntil::MemLimit(12),
+                100,
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::Splits {},
+                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                ),
+            ));
 
-        assert_eq!(loader_cache.len(), 1);
+            run_mul_task_invocations(
+                Arc::clone(&load_and_mut),
+                &[
+                    "resource_1",
+                    "resource_2",
+                    "resource_3",
+                    "resource_4",
+                    "resource_5",
+                ], //,
+                device_idx,
+                |_device_idx, _cache_area, _name| DummyRunCtx::new(1, 0, "noname"),
+                move |res, out| {
+                    mul_check(MUL_K, res, out);
+                },
+            )
+            .await?;
 
-        global_ctx.purge_cpu(0).await;
-        debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
-        assert_eq!(loader_cache.len(), 0);
+            Ok::<_, ThoosaError>(())
+        }
 
-        Ok(())
-    }
+        #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+        async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoosaError> {
+            let _ = *TELEMETRY;
+
+            let _global_ctx = GlobalCtx::init_devices(2);
+
+            let device_idx = 1;
+            const MUL_K: f32 = 2.;
+            let load_and_mut = Arc::new(DLoadAndMulTask::new(
+                DLoadAndMulTaskId("load_and_mul_id"),
+                MUL_K,
+                FailUntil::DumpedToCpu,
+                100,
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::DumpedToCpu,
+                    Box::new(|id| Box::new(DMulTaskOutputBuilder::new(id))),
+                ),
+            ));
+
+            super::run_mul_task_invocations(
+                Arc::clone(&load_and_mut),
+                &["resource_1", "resource_2", "resource_3"],
+                device_idx,
+                |device_idx, cache_area, name| DummyRunCtx::new(device_idx, cache_area, name),
+                |res, out| {
+                    mul_check(MUL_K, res, out);
+                },
+            )
+            .await?;
+
+            Ok(())
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+        async fn test_cache_areas() -> Result<(), ThoosaError> {
+            let global_ctx = GlobalCtx::init_devices(2);
+
+            let loader = Arc::new(DummyLoader::new(10));
+            let resource_1_arc = DLoaderInput::from("resource_1");
+            let loader_cache = <DummyLoader as Cached>::cache().await;
+
+            let device_idx = 1;
+
+            let cache_area_0 = global_ctx.next_cache_area()?;
+            debug!("cache_area_0={:064b}", cache_area_0);
+
+            let ctx_0 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
+                device_idx,
+                cache_area_0,
+                "ctx_0",
+            )));
+            let resource_0_for_ctx_0 = Arc::clone(&loader)
+                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_0)), ctx_0.clone())
+                .await?;
+
+            let cache_area_1 = global_ctx.next_cache_area()?;
+            debug!("cache_area_1={:064b}", cache_area_1);
+
+            let ctx_1 = Arc::new(parking_lot::RwLock::new(DummyRunCtx::new(
+                device_idx,
+                cache_area_1,
+                "ctx_1",
+            )));
+            let resource_0_for_ctx_1 = Arc::clone(&loader)
+                .run_cached(Arc::new(DataCacheWrapper::new(resource_1_arc.clone(), device_idx, 2, cache_area_1)), ctx_1.clone())
+                .await?;
+
+            debug!(
+                "cache_areas 0+1={:064b}",
+                resource_0_for_ctx_1.cache_areas()
+            );
+
+            assert!(Arc::ptr_eq(&resource_0_for_ctx_0, &resource_0_for_ctx_1));
+            assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+
+            DummyRunCtx::purge_gpu_caches(ctx_0.clone()).await?;
+            debug!(
+                "cache_areas   1={:064b}",
+                resource_0_for_ctx_1.cache_areas()
+            );
+            assert_ne!(resource_0_for_ctx_1.cache_areas(), 0);
+
+            DummyRunCtx::purge_gpu_caches(ctx_1.clone()).await?;
+            debug!("cache_areas   ={:064b}", resource_0_for_ctx_1.cache_areas());
+            assert_eq!(resource_0_for_ctx_1.cache_areas(), 0);
+
+            assert_eq!(loader_cache.len(), 1);
+
+            global_ctx.purge_cpu(0).await;
+            debug!("loader_cache={loader_cache:?} len={}", loader_cache.len());
+            assert_eq!(loader_cache.len(), 0);
+
+            Ok(())
+        }
 }

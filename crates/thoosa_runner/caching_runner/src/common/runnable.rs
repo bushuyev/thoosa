@@ -30,13 +30,7 @@ where
 
 
     //should implement either run for multistep or do_run for single step (can be oom-handled)
-    async fn run(
-        self: Arc<Self>,
-        _input: Arc<DataCacheWrapper<Self::In<'static>>>,
-        _ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
-
-    {
+    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
         unimplemented!()
     }
 
