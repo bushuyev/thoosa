@@ -6,8 +6,8 @@ use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
-use caching_runner::common::{OutId, RunCtx};
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::{Data, OutId, RunCtx};
+use caching_runner::common::runnable::{AsyncStage, Stage};
 use futures_util::FutureExt;
 use log::{debug, error, info};
 use parking_lot::{Mutex, RwLock};
@@ -39,7 +39,7 @@ use thoosa_shims::stream::{StreamGuard, ThoCudaStream};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::filters::band_pass::BandPassFilter;
-use crate::tasks::stages_seq::StagesSeq;
+// use crate::tasks::stages_seq::StagesSeq;
 
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
@@ -107,7 +107,8 @@ where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
     L: TensorLoader  + Cached + OutId + 'static,
     <L as Stage>::In<'static>: WithId,
-    <L as Stage>::Out: caching_runner::common::Data + Send + Sync + 'static,
+    for<'i> <L as Stage>::In<'i>: WithId + Data + Send + Sync + 'static,
+    <L as Stage>::Out: Data + Send + Sync + 'static,
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -232,16 +233,25 @@ where
     }
 }
 
-
-#[async_trait]
 impl<RC, SRC> Stage for FindMotifsStage<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
     SRC: TensorLoader + 'static,
 {
     type Ctx = RunCtx2;
-    type In<'a> = ResourcesConfigInput<RC> where Self: 'a;
+    type In<'a> = ResourcesConfigInput<RC>
+    where
+        Self: 'a;
     type Out = FindMotifsSavableResult;
+}
+
+
+#[async_trait]
+impl<RC, SRC> AsyncStage for FindMotifsStage<RC, SRC>
+where
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    SRC: TensorLoader + 'static,
+{
 
     async fn run(
         self: Arc<Self>,

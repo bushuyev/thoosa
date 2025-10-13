@@ -11,7 +11,7 @@ use tch::kind::FLOAT_CPU;
 use tch::Tensor;
 use cached_derive::Cached;
 use caching_runner::common::{Data, OutId, RunCtx, Select};
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::tmp_cache::TmpCached;
 use thoosa_common::dims::Dims;
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
@@ -29,6 +29,7 @@ use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::thread_rng;
+use caching_runner::common::cachable::DataCacheWrapper;
 use caching_runner::oom_handler::Adjustable;
 
 #[derive(Debug, Cached)]
@@ -138,16 +139,21 @@ impl Data for MotifWithData {
 impl Input for MotifWithData {}
 impl Output for MotifWithData {}
 
-#[async_trait]
+
 impl <SRC> Stage for MotifLoader <SRC>
-    where SRC: TensorLoader + 'static
+where SRC: TensorLoader + 'static
 {
     type In<'a> = DataId;
     type Out = MotifWithData;
 
     type Ctx = RunCtx2;
+}
+#[async_trait]
+impl <SRC> AsyncStage for MotifLoader <SRC>
+    where SRC: TensorLoader + 'static
+{
 
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {
