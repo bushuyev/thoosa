@@ -1,7 +1,7 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::common::{Data, OutId};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -18,7 +18,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Named, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use crate::tasks::filters::band_pass::BandPassFilter;
-use crate::tasks::stages_seq::StagesSeq;
+// use crate::tasks::stages_seq::StagesSeq;
 
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
@@ -35,15 +35,19 @@ impl Debug for RawTensorLoader {
     }
 }
 
-#[async_trait]
+
 impl Stage for RawTensorLoader {
     type In<'a> = Resource;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
     type Ctx = RunCtx2;
+}
+
+#[async_trait]
+impl AsyncStage for RawTensorLoader {
 
     async fn run(
         self: Arc<Self>,
-        _input: Arc<Self::In<'static>>,
+        _input: Arc<DataCacheWrapper<Self::In<'static>>>,
         _ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Self::Out, ThoosaError> {
         Ok((self.loader_fn)(&_input, &self.device))
@@ -89,20 +93,20 @@ impl TensorLoader for RawTensorLoader {
     }
 }
 
-#[async_trait]
-impl TensorLoader for StagesSeq<RawTensorLoader, BandPassFilter>
-where
-{
-
-    async fn load(
-        self: Arc<Self>,
-        resource: Arc<Resource>,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
-        self.run(resource, ctx).await
-
-    }
-}
+// #[async_trait]
+// impl TensorLoader for StagesSeq<RawTensorLoader, BandPassFilter>
+// where
+// {
+//
+//     async fn load(
+//         self: Arc<Self>,
+//         resource: Arc<Resource>,
+//         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
+//     ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
+//         self.run(resource, ctx).await
+//
+//     }
+// }
 
 
 #[cfg(test)]

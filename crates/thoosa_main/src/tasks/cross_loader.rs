@@ -6,7 +6,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use caching_runner::common::{Data, OutId, RunCtx};
 use futures_util::future::BoxFuture;
 use log::{debug, info};
@@ -45,7 +45,7 @@ pub trait CrossClc: Send + Sync + std::fmt::Debug {
 
 impl<T> CrossClc for T
 where
-    T: for<'s> Stage<In<'s> = CrossInput<'s, &'s Arc<Resource>>, Ctx = RunCtx2> + Send + Sync + 'static,
+    T: for<'s> SyncStage<In<'s> = CrossInput<'s, &'s Arc<Resource>>, Ctx = RunCtx2> + Send + Sync + 'static,
     T::Out: Input + Output  + Sync + Send + Debug + 'static,
 {
     type Out = T::Out;
@@ -58,7 +58,7 @@ where
     where
         Self: 's,
     {
-        <Self as Stage>::do_run(self, input, ctx)
+        <Self as SyncStage>::do_run(self, input, ctx)
     }
 }
 
@@ -178,7 +178,7 @@ where
         inp: In,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<(), ThoosaError> {
-        <Self as Stage>::consume(self, inp, ctx).map(|_| ())
+        <Self as SyncStage>::consume(self, inp, ctx).map(|_| ())
     }
 }
 
@@ -380,7 +380,6 @@ impl CrossResult {
     }
 }
 
-#[async_trait]
 impl<ResC, L, CrossCLC, RSV> Stage for CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
@@ -389,20 +388,37 @@ where
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
 {
-    type In<'a> = ResourcesConfigInput<ResC> where Self: 'a;
-    type Out = CrossResult;
     type Ctx = RunCtx2;
 
+    type In<'a> = ResourcesConfigInput<ResC>
+    where
+        Self: 'a;
+    type Out = CrossResult;
+
+}
+
+#[async_trait]
+impl<ResC, L, CrossCLC, RSV> AsyncStage for CrossLoader<ResC, L, CrossCLC, RSV>
+where
+    for <'a> Self::In<'a>: Data + WithId + Send + Sync,
+    Self::Out: Data + WithId + Send + Sync,
+
+    ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
+    L: TensorLoader + 'static,
+    CrossCLC: CrossClc + 'static,
+    CrossCLC::Out: Input + Output + Send + Debug + 'static,
+    RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
+{
     async fn run(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
+        input: Arc<DataCacheWrapper<Self::In<'static>>>,
         ctx: Arc<parking_lot::RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
+    ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
         let device_idx = ctx.read().device_idx();
 
-        let resources = input
+        /*let resources = input
             .resources_config
             .to_resources(&self.store)?
             .into_iter()
@@ -495,7 +511,8 @@ where
 
         (self.on_all_done)(&self.receiver).await;
 
-        Ok(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))
+        Ok(CrossResult::new(self.out_id(WithId::id(input.as_ref()))))*/
+        todo!()
     }
 }
 
