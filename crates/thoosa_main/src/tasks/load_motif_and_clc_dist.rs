@@ -10,7 +10,7 @@ use cached_derive::Cached;
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::{Data, OutId, Select};
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{AsyncStage, Stage};
 use caching_runner::oom_handler::{Adjustable, Adjuster, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::dims::Dims;
 use thoosa_shared::applicables_runner::Output;
@@ -30,7 +30,7 @@ pub trait MotifLoaderStage: Send + Sync + Debug {
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DataId>,
+        input: Arc<DataCacheWrapper<DataId>>,
         ctx: Arc<RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError>;
 }
@@ -44,7 +44,7 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DataId>,
+        input: Arc<DataCacheWrapper<DataId>>,
         ctx: Arc<RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Output>>, ThoosaError> {
         <Self as Cached>::run_cached(self, input, ctx).await
@@ -137,20 +137,26 @@ where
 }
 
 
-#[async_trait]
+
 impl<CLC> Stage for LoadMotifAndClcDistanceStage<CLC>
 where
     CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
     for<'a> CLC::In<'a>: ClcMotifInput,
 {
-
     type In<'a> = DataId;
 
     type Out = AverageDistanceValue;
     type Ctx = RunCtx2;
+}
 
+#[async_trait]
+impl<CLC> AsyncStage for LoadMotifAndClcDistanceStage<CLC>
+where
+    CLC: Stage<Ctx = RunCtx2, Out = AverageDistanceValue> + Adjustable + OutId + Send + Sync + 'static,
+    for<'a> CLC::In<'a>: ClcMotifInput,
+{
 
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
+    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
             for<'a> Self::In<'a>: Send + Sync
     {

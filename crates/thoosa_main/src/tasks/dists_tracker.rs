@@ -3,7 +3,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::common::Data;
 use caching_runner::common::cachable::DataCacheWrapper;
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{Stage, SyncStage};
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use std::fmt::{Debug, Formatter};
@@ -185,20 +185,21 @@ impl DistsTracker {
     }
 }
 
-#[async_trait]
 impl Stage for DistsTracker {
+    type Ctx = RunCtx2;
+
     type In<'a> = CrossUnfoldClcOutput<DistsMask>;
     type Out = ();
-    type Ctx = RunCtx2;
+
+}
+
+impl SyncStage for DistsTracker {
 
     fn consume<'a>(
         self: Arc<Self>,
         input: Self::In<'a>,
         ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError>
-    where
-        Self: Sized,
-    {
+    ) -> Result<Self::Out, ThoosaError> {
 
 
         //TODO clone to resources ref

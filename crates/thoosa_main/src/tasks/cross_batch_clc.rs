@@ -4,7 +4,7 @@ use crate::tasks::run_ctx_2::RunCtx2;
 use crate::tasks::slices_iter::SlicesIter;
 use async_trait::async_trait;
 use caching_runner::common::cachable::DataCacheWrapper;
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{Stage, SyncStage};
 use log::{debug, trace};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -147,17 +147,26 @@ impl<R: Debug> Input for CrossUnfoldClcOutput<R> {}
 
 impl<R: Debug> Output for CrossUnfoldClcOutput<R> {}
 
-#[async_trait]
-impl<F, R, CUC> Stage for CrossUnfoldClc<F, R, CUC>//CUC Cross Unfold Context
+
+impl<F, R, CUC> Stage for CrossUnfoldClc<F, R, CUC>
+where
+    F: for<'a> Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError>,
+    R:Debug
+{
+    type In<'a> = CrossInput<'a, &'a Arc<Resource>> where F: 'a, R:'a, CUC:'a;
+
+    type Out = CrossUnfoldClcOutput<R>;
+    type Ctx = RunCtx2;
+}
+
+
+impl<F, R, CUC> SyncStage for CrossUnfoldClc<F, R, CUC>//CUC Cross Unfold Context
 where
     for<'a> F: Fn(Tensor, Tensor, &CrossInput<'a, &'a Arc<Resource>>, &CUC) -> Result<R, ThoosaError> + 'a,
     R: Debug + Output + Input + Send + 'static,
     for<'a> CUC: 'a,
 {
-    type In<'a> = CrossInput<'a, &'a Arc<Resource>> where F: 'a;
 
-    type Out = CrossUnfoldClcOutput<R>;
-    type Ctx = RunCtx2;
 
     fn do_run<'s>(self: Arc<Self>, input: &Self::In<'s>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where
