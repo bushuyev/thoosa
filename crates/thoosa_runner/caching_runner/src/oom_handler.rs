@@ -1,6 +1,6 @@
 use crate::common::{PermitsCtx, RunCtx, Select};
 use crate::common::cachable::DataCacheWrapper;
-use crate::common::runnable::Stage;
+use crate::common::runnable::{Stage, SyncStage};
 use crate::common::{Data, DropIf, OutId};
 #[double]
 use crate::global_ctx::GlobalCtx;
@@ -43,14 +43,14 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
     }
 }
 
-pub trait InputContext<R>: Debug + Send + Sync
+pub trait InputContext<'a, R>: Debug + Send + Sync
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data,
 {
     fn add_partial_output(&mut self, o: R::Out);
     fn all_done(&self) -> bool;
-    fn input_len(&self) -> &<<R as Stage>::In<'static> as Data>::Metrics;
+    fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics;
     fn build_final_output(self) -> R::Out;
 }
 
@@ -65,7 +65,7 @@ pub mod mock_input_context {
         pub InputContext {
 
         }
-        impl super::InputContext<MockRunnable> for InputContext{
+        impl super::InputContext<'static, MockRunnable> for InputContext{
             fn add_partial_output(&mut self, o: TestOutput);
             fn all_done(&self) -> bool;
             fn input_len(&self) -> &[usize; 1];
@@ -116,25 +116,25 @@ pub trait RunnableContext: Debug {}
 pub trait RunCtxContext: Debug {}
 
 #[derive(Debug)]
-pub struct Contexts<R, IC, RC, RCC>
+pub struct Contexts<'a, R, IC, RC, RCC>
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data,
+    IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
 {
     input: IC,
     runnable: RC,
     run_ctx: RCC,
-    pd: PhantomData<R>,
+    pd: PhantomData<&'a R>,
 }
 
-impl<R, IC, RC, RCC> Contexts<R, IC, RC, RCC>
+impl<'a, R, IC, RC, RCC> Contexts<'a, R, IC, RC, RCC>
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data,
+    IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
 {
@@ -151,12 +151,12 @@ where
 #[derive(Debug)]
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + 'static,
-    <R as Stage>::In<'static>: Data + Select<S> + Debug,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    <R as Stage>::In<'a>: Data + Select<S> + Debug,
+    IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    <R as Stage>::In<'static>: Select<S>,
+    <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
     Input(Box<dyn Adjuster<IC, A =S> + 'a>),
@@ -166,17 +166,17 @@ where
 
 impl<'a, R, IC, RC, RCC, S> Adjusters<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + 'static,
-    IC: InputContext<R>,
+    R: Stage + 'a,
+    IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'static>: Data + Debug,
+    <R as Stage>::In<'a>: Data + Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
-    <R as Stage>::In<'static>: Select<S>,
+    <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
-    fn degrade(&self, adjust_context: &mut Contexts<R, IC, RC, RCC>) -> bool {
+    fn degrade(&self, adjust_context: &mut Contexts<'a, R, IC, RC, RCC>) -> bool {
         match self {
             Adjusters::Input(v) => v.degrade(&mut adjust_context.input),
             Adjusters::Task(v) => v.degrade(&mut adjust_context.runnable),
@@ -188,11 +188,11 @@ where
 #[derive(Debug)]
 pub struct NoopInputContext<R: Stage + 'static>(pub Option<R::Out>);
 
-impl<R> InputContext<R> for NoopInputContext<R>
+impl<'a, R> InputContext<'a, R> for NoopInputContext<R>
 where
-    <R as Stage>::In<'static>: Data,
+    <R as Stage>::In<'a>: Data,
     <R as Stage>::Out: Send + Sync,
-    R: Stage + 'static,
+    R: Stage + 'a,
 {
     fn add_partial_output(&mut self, o: R::Out) {
         self.0.replace(o);
@@ -202,7 +202,7 @@ where
         self.0.is_some()
     }
 
-    fn input_len(&self) -> &<<R as Stage>::In<'static> as Data>::Metrics {
+    fn input_len(&self) -> &<<R as Stage>::In<'a> as Data>::Metrics {
         unimplemented!()
     }
 
@@ -223,14 +223,16 @@ impl RunCtxContext for NoopRunCtxContext {}
 #[derive(Debug)]
 pub struct OOMHandler<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + Adjustable + OutId + 'static,
-    <R as Stage>::In<'static>: Data + WithId,
+    R: SyncStage + Adjustable + OutId + 'a,
+    <R as Stage>::In<'a>: Data ,
     R::Ctx: Adjustable,
-    IC: InputContext<R>,
+    IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default,
-    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>>
+    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+
+    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
 {
     adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
@@ -241,15 +243,16 @@ where
 
 impl<'a, R, IC, RC, RCC, S> OOMHandler<'a, R, IC, RC, RCC, S>
 where
-    R: Stage + Adjustable + OutId + 'static,
-    <R as Stage>::In<'static>: Data + WithId,
-    <R as Stage>::In<'static>: Debug + Data + CopyToDevice,
+    R: SyncStage + Adjustable + OutId + 'a,
+    <R as Stage>::In<'a>: Data ,
     R::Ctx: Adjustable,
-    IC: InputContext<R> + Debug,
-    RC: RunnableContext + Debug,
-    RCC: RunCtxContext + Debug,
-    S: Adjustable + Debug + Clone + Default,//Selector (like range for a tensor)
-    <R as Stage>::In<'static>: Select<S, Output=<R as Stage>::In<'static>> //Select<S... - something (ThoTensor) from what a part can be selected
+    IC: InputContext<'a, R>,
+    RC: RunnableContext,
+    RCC: RunCtxContext,
+    S: Adjustable + Debug + Clone + Default,
+    <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
+
+    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
 {
     pub fn new(
         adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
@@ -267,12 +270,12 @@ where
     pub async fn run(
         &self,
         task: &Arc<R>,
-        input: Arc<DataCacheWrapper<<R as Stage>::In<'static>>>,
+        input: Arc<DataCacheWrapper<<R as Stage>::In<'a>>>,
         run_context: Arc<RwLock<R::Ctx>>,
-        mut contexts: Contexts<R, IC, RC, RCC>,
+        mut contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoosaError>
-    where
-        <R as Stage>::In<'static>: WithId +  Select<S, Output=<R as Stage>::In<'static>> + Send + Sync,
+    // where
+    //     <R as Stage>::In<'a>: WithId +  Select<S, Output=<R as Stage>::In<'a>> + Send + Sync,
     {
         let (device_idx, ctx_name) = {
             let guard = run_context.read();
@@ -628,18 +631,22 @@ pub(crate) mod mock_runnable {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::traits::WithId;
+    use crate::common::runnable::{Stage, AsyncStage, SyncStage};
 
     mock! {
         #[derive(Clone, Debug)]
         pub Runnable {}
-        #[async_trait]
+
         impl Stage for Runnable {
             type In<'a> = TestInput;
             type Out = TestOutput;
             type Ctx = MockRunCtx;
-
-            fn do_run<'a>(self: Arc<Self>, input:&<MockRunnable as Stage>::In<'a>, tx: Arc<RwLock<<MockRunnable as Stage>::Ctx>>) -> Result<<MockRunnable as Stage>::Out, ThoosaError> where Self:Sized;
         }
+
+        impl SyncStage for Runnable {
+            fn do_run<'f>(self: Arc<Self>, _input: &<Self as Stage>::In<'f>, _ctx: Arc<parking_lot::RwLock<<Self as Stage>::Ctx>>) -> Result<<Self as Stage>::Out, ThoosaError>;
+        }
+
     }
 
     impl Adjustable for MockRunnable {}

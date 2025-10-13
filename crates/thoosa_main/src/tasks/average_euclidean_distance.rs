@@ -2,7 +2,7 @@ use crate::tasks::cross_dims::MotifSlices;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::adjusters::splits::OutputBuilder;
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{Stage, SyncStage};
 use caching_runner::common::OutId;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -79,19 +79,15 @@ impl OutId for AverageEuclideanDistanceStage {
     }
 }
 
-#[async_trait]
+
 impl Stage for AverageEuclideanDistanceStage {
     type Ctx = RunCtx2;
     type In<'a> = MotifWithData;
     type Out = AverageDistanceValue;
+}
+impl SyncStage for AverageEuclideanDistanceStage {
 
-
-
-
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
-    where
-        Self: Sized
-    {
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError> {
 
         input.t().run_inner(|t|{
             Ok(AverageDistanceValue::new("todo".into(), average_euclidean_distance(t)?))
@@ -120,7 +116,7 @@ pub mod mock_average_stage {
     use log::debug;
     use parking_lot::{Mutex, RwLock};
     use caching_runner::common::OutId;
-    use caching_runner::common::runnable::Stage;
+    use caching_runner::common::runnable::{Stage, SyncStage};
     use caching_runner::oom_handler::Adjustable;
     use thoosa_shared::{MyError, ThoosaError};
     use thoosa_shared::traits::{DataId, SimpleId, WithId};
@@ -166,20 +162,18 @@ pub mod mock_average_stage {
         }
     }
 
-    #[async_trait]
     impl Stage for MockAverageStage {
         type Ctx = RunCtx2;
         type In<'a> = MotifWithData;
         type Out = AverageDistanceValue;
+    }
+    impl SyncStage for MockAverageStage {
 
         fn do_run<'a>(
             self: Arc<Self>,
             input: &Self::In<'a>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError>
-        where
-            Self: Sized,
-        {
+        ) -> Result<Self::Out, ThoosaError> {
             let _ = ctx;
             let call_idx = self.counter.fetch_add(1, Ordering::SeqCst);
             let metrics: MonoMetrics<0, 2> = input.t()

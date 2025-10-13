@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 use cached_derive::Cached;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::OutId;
-use caching_runner::common::runnable::Stage;
+use caching_runner::common::runnable::{AsyncStage, Stage};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::ThoosaError;
@@ -31,11 +31,13 @@ impl  OutId for BandPassFilter {
     }
 }
 
-#[async_trait]
 impl Stage for BandPassFilter {
     type Ctx = RunCtx2;
     type In<'a> = DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>;
     type Out = ThoTensor2<ChannelsData2, SimpleId>;
+}
+#[async_trait]
+impl AsyncStage for BandPassFilter {
 
     async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Arc<RwLock<Self::Ctx>>) -> Result<Self::Out, ThoosaError>
     where

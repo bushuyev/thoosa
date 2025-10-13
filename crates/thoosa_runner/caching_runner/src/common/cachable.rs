@@ -1,6 +1,6 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
-use crate::common::runnable::Stage;
+use crate::common::runnable::{AsyncStage, Stage};
 use crate::common::*;
 use crate::common::Select;
 #[double]
@@ -24,10 +24,10 @@ use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
 
 #[async_trait]
-pub trait Cached: Stage
+pub trait Cached: AsyncStage
 where
-    Self: 'static,
-    Self::In<'static>: WithId,
+    for <'i> Self::In<'i>: Data + WithId + Send + Sync,
+    <Self as Stage>::Out: Data + WithId + Send + Sync + 'static
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
@@ -39,7 +39,7 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
+        input: Arc<DataCacheWrapper<Self::In<'static>>>,
         ctx: Arc<RwLock<Self::Ctx>>,
     ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError>
     where
@@ -48,7 +48,7 @@ where
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
-        Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
+        Self::Out: Data // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
         let key = self.out_id(WithId::id(input.as_ref()));
         let (cache_area, device_idx) = {
@@ -83,12 +83,13 @@ where
                     .map(move |r| {
                         r.map(|v| {
                             // assert_eq!(v.device(), device_idx); - loaded to CPU, copied to GPU when used
-                            Arc::new(DataCacheWrapper::new(
-                                v,
-                                device_idx,
-                                GlobalCtx::global().device_count(),
-                                cache_area,
-                            ))
+                            // Arc::new(DataCacheWrapper::new(
+                            //     v,
+                            //     device_idx,
+                            //     GlobalCtx::global().device_count(),
+                            //     cache_area,
+                            // ))v
+                            v
                         })
                     })
                     .boxed()
@@ -146,6 +147,13 @@ where
 
         Ok(())
     }
+
+    fn on_cached<'a>(//TODO remove from here
+                     &self,
+                     _input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
+                     _ctx: &Arc<RwLock<Self::Ctx>>,
+    ) where Self:'a {
+    }
 }
 
 //when hidden behind a trait, impls for plain Ids and Data cause https://github.com/rust-lang/rust/issues/100013 so opting to enum
@@ -177,7 +185,6 @@ where
 impl <O> Output for DataCacheWrapper<O>
 where
     O: WithId + Data + CopyToDevice + Send + Sync,
-
 {
 
 }
