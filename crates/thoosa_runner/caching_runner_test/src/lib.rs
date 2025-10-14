@@ -240,7 +240,7 @@ where
     for<'a> <R as Stage>::In<'a>: Data + WithId+ Send + Sync,
     R::Out: Data + Send + Sync,
     StageInStatic<R>: From<&'static str>,
-    F: Fn(usize, u64, &'static str) -> <R as Stage>::Ctx + Send + Sync + 'static,
+    F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
     <R as Stage>::Out: Data,
 {
@@ -262,10 +262,7 @@ where
             let ctx_fac_arc = Arc::clone(&ctx_fac_arc);
             let res_cnt_arc = Arc::clone(&res_cnt_arc);
             async move {
-                debug!(
-                    "task {idx}: device_idx={device_idx} thread id={:?}",
-                    std::thread::current().id()
-                );
+                debug!("task {idx}: device_idx={device_idx} thread id={:?}",std::thread::current().id());
                 thread_ids.write().push(std::thread::current().id());
 
                 let name: &'static str = Box::leak(format!("task_{idx}({res})").into_boxed_str());
@@ -273,7 +270,7 @@ where
                 let ctx_device = Arc::new(RwLock::new(ctx_fac_arc(device_idx, 0, name)));
                 let multed = load_and_mul
                     .run_cached(
-                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), 0, 2, 0)),
+                        Arc::new(DataCacheWrapper::new(<&str as Into<StageInStatic<R>>>::into(res), device_idx, 2, 0)),
                         ctx_device.clone(),
                     )
                     .await?;
@@ -284,10 +281,7 @@ where
 
                         check_arc(res, &guard);
 
-                        debug!(
-                            "task {idx}: device_idx={device_idx} thread id={:?} done",
-                            std::thread::current().id()
-                        );
+                        debug!("task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
                         debug!("task {idx}: multed=\n{:?}", guard);
 
                         res_cnt_arc.fetch_add(1, Relaxed);
@@ -349,6 +343,11 @@ mod tests {
     use thoosa_shared::traits::{Named, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};
 
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
+
     static TELEMETRY: std::sync::LazyLock<()> = LazyLock::new(|| {
         console_subscriber::ConsoleLayer::builder()
             .retention(std::time::Duration::from_secs(60))
@@ -367,7 +366,7 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct DummyPermsCtx {
+    struct DummyPermsCtx {//TODO it's same as TorchPermsCtx, replace
         name: &'static str,
         permits: Vec<RunnerPerm>,
     }
@@ -455,9 +454,7 @@ mod tests {
                         mem::replace(&mut guard.multed_tensors_cached, Vec::new()),
                     )
                 };
-                debug!(
-                    "purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}"
-                );
+                debug!("purge_gpu_caches: device_idx={device_idx} loaded_tensors_cached={loaded_tensors_cached:?} mul_output_cached={mul_output_cached:?}");
 
                 tokio::try_join!(
                     DummyLoader::purge_gpu_cache_area(loaded_tensors_cached, cache_area, device_idx),
@@ -496,15 +493,6 @@ mod tests {
             SimpleId::from(format!("loaded_{}", input_id.0))
         }
 
-        // fn on_cached(
-        //     &self,
-        //     input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-        //     ctx: &Arc<RwLock<Self::Ctx>>,
-        // ) {
-        //     ctx.write()
-        //         .loaded_tensors_cached
-        //         .push(self.out_id(input.id()));
-        // }
     }
 
     struct DLoadedTensor {
@@ -602,7 +590,7 @@ mod tests {
     #[async_trait]
     impl CopyToDevice for DLoaderInput {
         async fn copy_to_device(&self, dst_device: usize) -> Self {
-            todo!()
+           self.clone()
         }
     }
 
@@ -648,9 +636,10 @@ mod tests {
                 .unwrap_or(1.0) as f32;
             let out_id = self.out_id(WithId::id(input.as_ref()));
 
-            let _self_for_reload = Arc::clone(&self);
-            let _ctx_for_reload = Arc::clone(&ctx);
-            // let input_for_reload = Arc::clone(&input);
+            let (device, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx, guard.cache_area)
+            };
 
             Ok(Arc::new(DataCacheWrapper::new(DLoadedTensor {
                 id: out_id,
@@ -658,7 +647,15 @@ mod tests {
                     .map(|v| v as f32 * k)
                     .collect::<Vec<f32>>()
                     .into(),
-            }, 0, 2, 0)))
+            }, device, 2, cache_area)))
+        }
+
+        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        where
+            Self:'a {
+            ctx.write()
+                .loaded_tensors_cached
+                .push(self.out_id(input.id()));
         }
     }
 
@@ -702,9 +699,7 @@ mod tests {
                 }
                 FailUntil::MinPermits(min_permits) => {
                     let acquired_permits = ctx.read().acquired_permits();
-                    debug!(
-                        "MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}"
-                    );
+                    debug!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
 
                     if acquired_permits < min_permits {
                         return Err(MyError::OutOfMemory.into());
@@ -713,11 +708,7 @@ mod tests {
 
                 FailUntil::DumpedToCpu => {
                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.read().device_idx());
-                    debug!(
-                        "MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",
-                        ctx.read().name(),
-                        ctx.read().device_idx()
-                    );
+                    debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",ctx.read().name(),ctx.read().device_idx());
 
                     if !is_all_on_cpu {
                         return Err(MyError::OutOfMemory.into());
@@ -725,6 +716,8 @@ mod tests {
                 }
                 FailUntil::Never => {}
             }
+
+            debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ",ctx.read().name(),ctx.read().device_idx());
 
             Ok(DMulTaskOutput {
                 id: self.out_id(Input::id(input)),
@@ -749,15 +742,6 @@ mod tests {
             DMulTaskOutputId(format!("multiplied_{}", input_id).leak())
         }
 
-        // fn on_cached(
-        //     &self,
-        //     input: &impl WithId<ID = <<Self as Stage>::In<'static> as WithId>::ID>,
-        //     ctx: &Arc<RwLock<Self::Ctx>>,
-        // ) {
-        //     ctx.write()
-        //         .multed_tensors_cached
-        //         .push(self.out_id(input.id()));
-        // }
     }
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -902,9 +886,13 @@ mod tests {
 
             debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
 
-            let _device_idx = ctx.read().device_idx();
+            let (device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
 
             async move {
+
                 Ok(Arc::new(DataCacheWrapper::new(self.mul_oom_runner
                     .run(
                         &self.mul,
@@ -912,9 +900,18 @@ mod tests {
                         ctx,
                         &HashMap::from([("", &HashSet::new())]),
                     )
-                    .await?, 0, 2, 0)))
+                    .await?, device_idx, 2, cache_area)))
             }
             .await
+        }
+
+        fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+        where
+            Self:'a
+        {
+            ctx.write()
+                .multed_tensors_cached
+                .push(self.out_id(input.id()));
         }
     }
 
@@ -1156,7 +1153,7 @@ mod tests {
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
         async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoosaError> {
-            let _ = *TELEMETRY;
+            // let _ = *TELEMETRY;
 
             let _global_ctx = GlobalCtx::init_devices(2);
 
