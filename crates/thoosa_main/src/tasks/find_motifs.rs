@@ -43,6 +43,8 @@ use crate::tasks::filters::band_pass::BandPassFilter;
 use crate::tasks::stages_seq::ABStage;
 // use crate::tasks::stages_seq::StagesSeq;
 
+type FilteredLoaderStage<L> = ABStage<L, BandPassFilter, RunCtx2>;
+
 #[derive(Debug)]
 struct FindMotifsStages<RC, SRC>
 where
@@ -98,16 +100,16 @@ impl MeanDistsCtx {
 pub struct FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
 {
-    run_config_stages: Vec<FindMotifsStages<RC, L>>,
-    pd: PhantomData<(RC)>,
+    run_config_stages: Vec<FindMotifsStages<RC, FilteredLoaderStage<L>>>,
+    pd: PhantomData<(RC, L)>,
 }
 
 impl<RC, L> FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>  + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>  + Cached + OutId + Send + Sync + 'static,
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -207,7 +209,11 @@ where
                 FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
-                        Arc::new(ABStage::new("ab".into(), Arc::clone(&loader), band_filter)),
+                        Arc::new(ABStage::new(
+                            SimpleId::from("ab"),
+                            Arc::clone(&loader),
+                            Arc::clone(&band_filter),
+                        )),
                         // Arc::clone(&loader),
                         &store,
                         Arc::new(cross_unfold_clc),
@@ -232,10 +238,11 @@ where
     }
 }
 
-impl<RC, SRC> Stage for FindMotifsStage<RC, SRC>
+impl<RC, L> Stage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
+    FilteredLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     type Ctx = RunCtx2;
     type In<'a> = ResourcesConfigInput<RC>
@@ -246,10 +253,11 @@ where
 
 
 #[async_trait]
-impl<RC, SRC> AsyncStage for FindMotifsStage<RC, SRC>
+impl<RC, L> AsyncStage for FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + Cached + OutId + Send + Sync + 'static,
+    FilteredLoaderStage<L>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
 {
 
     async fn run(
