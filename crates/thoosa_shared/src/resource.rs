@@ -1,12 +1,14 @@
-use crate::ThoosaError;
+use crate::{CopyToDevice, ThoosaError};
 use crate::applicables_runner::{CachableId, Input};
-use crate::traits::{Named, WithId};
+use crate::traits::{Data, Named, WithId};
 use log::trace;
 use mockall::automock;
 use parking_lot::RwLock;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::pin::Pin;
 use std::sync::Arc;
+use async_trait::async_trait;
 
 #[automock]
 pub trait ResourceStore {
@@ -126,6 +128,25 @@ pub type ResourceId = u32;
 impl AsRef<ResourceId> for Resource {
     fn as_ref(&self) -> &ResourceId {
         &self.id
+    }
+}
+
+#[async_trait]
+impl CopyToDevice for Resource {
+    async fn copy_to_device(&self, dst_device: usize) -> Self {
+        self.clone()
+    }
+}
+
+impl Data for Resource {
+    type Metrics = ();
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
     }
 }
 

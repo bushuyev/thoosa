@@ -2,7 +2,7 @@ use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::run_ctx_2::RunCtx2;
 use async_trait::async_trait;
 use caching_runner::common::runnable::{AsyncStage, Stage};
-use caching_runner::common::{Data, OutId};
+use caching_runner::common::{OutId, RunCtx};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -20,11 +20,13 @@ use torch_runner::data::ThoTensor2;
 use crate::tasks::filters::band_pass::BandPassFilter;
 // use crate::tasks::stages_seq::StagesSeq;
 
+type LoadFn = dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send;
+
 #[derive(cached_derive::Cached)]
 #[cache_name = "LoadedTensorId"]
 pub struct RawTensorLoader {
     device: ThoDevice,
-    loader_fn: Box<dyn Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Sync + Send>,
+    loader_fn: Box<LoadFn>,
 }
 
 impl Debug for RawTensorLoader {
@@ -45,12 +47,18 @@ impl Stage for RawTensorLoader {
 #[async_trait]
 impl AsyncStage for RawTensorLoader {
 
-    async fn run(
-        self: Arc<Self>,
-        _input: Arc<DataCacheWrapper<Self::In<'static>>>,
-        _ctx: Arc<RwLock<Self::Ctx>>,
-    ) -> Result<Self::Out, ThoosaError> {
-        Ok((self.loader_fn)(&_input, &self.device))
+    async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+        let (device, cache_area)= {
+            let guard = ctx.read();
+
+            (guard.device_idx(), guard.cache_area())
+        };
+        input.with_data_ref(0, None, |d|{
+            Ok(Arc::new(DataCacheWrapper::new(
+                (self.loader_fn)(d, &self.device), device, 0, cache_area
+            )))
+        }).await
+
     }
 }
 
@@ -76,7 +84,7 @@ impl RawTensorLoader {
 pub trait TensorLoader: Send + Sync + Debug {
     async fn load(
         self: Arc<Self>,
-        resource: Arc<Resource>,
+        resource: Arc<DataCacheWrapper<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>;
 }
@@ -86,7 +94,7 @@ impl TensorLoader for RawTensorLoader {
 
     async fn load(
         self: Arc<Self>,
-        resource: Arc<Resource>,
+        resource: Arc<DataCacheWrapper<Resource>>,
         ctx: Arc<parking_lot::RwLock<RunCtx2>>,
     ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
         <Self as Cached>::run_cached(self, resource, ctx).await
@@ -118,27 +126,19 @@ pub(crate) mod mock_tensor_loader {
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
-    use tch::Tensor;
+    use tch::{Device, Tensor};
+    use tch::Device::Cpu;
+    use tokio::runtime::Handle;
     use caching_runner::common::cachable::DataCacheWrapper;
-    use thoosa_shared::ThoosaError;
+    use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
     use torch_runner::data::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{mock_tensor_loader, TensorLoader};
+    use crate::tasks::tensor_loader::{mock_tensor_loader, LoadFn, TensorLoader};
 
-    type LoadFuture = Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>,
-                        ThoosaError,
-                    >,
-                > + Send,
-        >,
-    >;
 
-    type LoadFn = dyn Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> LoadFuture + Send + Sync;
+
 
     #[derive(Clone)]
     pub struct MockTensorLoader {
@@ -156,11 +156,15 @@ pub(crate) mod mock_tensor_loader {
 
         async fn load(
             self: Arc<Self>,
-            resource: Arc<Resource>,
+            resource: Arc<DataCacheWrapper<Resource>>,
             ctx: Arc<RwLock<RunCtx2>>,
         ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>
         {
-            (self.load_fn)(resource, ctx).await
+            resource.with_data_ref(0, None, |d|{
+                Ok(Arc::new(DataCacheWrapper::new(
+                    (self.load_fn)(d, &Cpu), 0, 0, 0
+                )))
+            }).await
         }
     }
 
@@ -185,33 +189,28 @@ pub(crate) mod mock_tensor_loader {
 
         pub fn with_data<H>(mut self, h:H ) -> Self
         where
-            H:Into<HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>> + Send + Sync{
+            H:Into<HashMap<u32, ThoTensor2<ChannelsData2, SimpleId>>> + Send + Sync{
 
-            let map:Arc<HashMap<u32, Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>>> = Arc::new(h.into());
+            let map:Arc<HashMap<u32, ThoTensor2<ChannelsData2, SimpleId>>> = Arc::new(h.into());
 
             self.with_load_fn(move |resource, _ctx| {
                     let map = Arc::clone(&map);
-                    async move {
-                        Ok(map
+
+                        map
                             .get(&resource.id())
-                            .cloned()
-                            .expect("mock loader data should be present"))
-                    }
+                            .map(|t|{
+                                Handle::current().block_on(t.copy_to_device(0))
+                            })
+                            .expect("mock loader data should be present")
+
             })
         }
 
-        pub fn with_load_fn<F, Fut>(mut self, f: F) -> Self
+        pub fn with_load_fn<F>(mut self, f: F) -> Self
         where
-            F: Fn(Arc<Resource>, Arc<RwLock<RunCtx2>>) -> Fut + Send + Sync + 'static,
-            Fut: Future<
-                    Output = Result<
-                        Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>,
-                        ThoosaError,
-                    >,
-                > + Send
-                + 'static,
+            F:Fn(&Resource, &Device) -> ThoTensor2<ChannelsData2, SimpleId> + Send + Sync + 'static,
         {
-            self.load_fn = Some(Arc::new(move |resource, ctx| Box::pin(f(resource, ctx))));
+            self.load_fn = Some(Arc::new(f));
             self
         }
 
@@ -232,7 +231,7 @@ pub(crate) mod mock_tensor_loader {
 mod tests {
     use crate::tasks::run_ctx_2::RunCtx2;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use caching_runner::common::cachable::Cached;
+    use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::global_ctx::GlobalCtx;
     use rand::Rng;
     use std::sync::Arc;
@@ -264,7 +263,7 @@ mod tests {
         let ctx = Arc::new(parking_lot::RwLock::new(RunCtx2::new(0, 0, "aa")));
 
         let loaded = loader
-            .run_cached(Arc::new(Resource::new(0, 0, "aaa".to_string(), 20)), ctx)
+            .run_cached(Arc::new(DataCacheWrapper::new(Resource::new(0, 0, "aaa".to_string(), 20), 0, 0, 0)), ctx)
             .await
             .map_err(|e| ThoosaError::new("zzz"))?;
 
