@@ -565,6 +565,7 @@ dependencies = [
  "cached_derive",
  "caching_runner",
  "console-subscriber",
+ "ctor 0.2.9",
  "dashmap 6.1.0",
  "futures-util",
  "log",
