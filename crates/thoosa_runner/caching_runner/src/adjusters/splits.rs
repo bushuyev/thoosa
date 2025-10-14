@@ -1,4 +1,3 @@
-use crate::common::Data;
 use crate::common::runnable::Stage;
 use crate::oom_handler::{Adjustable, Adjuster, InputContext};
 use ambassador::delegatable_trait;
@@ -8,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, DivAssign};
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{Metrics, MonoMetrics};
+use thoosa_shared::traits::{Data, Metrics, MonoMetrics};
 
 #[derive(Debug)]
 pub struct SplitsAdjuster<A, RA>

@@ -8,8 +8,9 @@ use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use log::debug;
 use uuid::uuid;
 use crate::applicables_runner::{CachableId, Input};
-use crate::ThoosaError;
+use crate::{CopyToDevice, ThoosaError};
 use uuid::Uuid;
+use async_trait::async_trait;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -451,4 +452,32 @@ impl <const Idx:usize, const Size:usize> From<&[i64; 2]> for MonoMetrics<Idx, Si
         me.dims[1] = value[1];
         me
     }
+}
+
+#[async_trait]
+#[delegatable_trait]
+#[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]
+pub trait Data: Debug + CopyToDevice {
+    type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
+
+    fn size(&self) -> Self::Metrics;
+
+    fn track_used_in(&self, _token: &'static str) {}
+
+    fn device(&self) -> usize;
+}
+
+
+#[async_trait]
+impl CopyToDevice for MockData {
+    async fn copy_to_device(&self, _dst_device: usize) -> Self {
+        MockData::new()
+    }
+}
+
+#[delegatable_trait]
+pub trait Select<S> {
+    type Output: CopyToDevice;
+
+    fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
 }

@@ -1,7 +1,6 @@
 use crate::ThoTensorView;
-use thoosa_shared::traits::MonoMetrics;
+use thoosa_shared::traits::{Data, MonoMetrics};
 use async_trait::async_trait;
-use caching_runner::common::Data;
 use log::debug;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;

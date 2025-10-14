@@ -17,7 +17,7 @@ mod tests {
     use caching_runner::common::ambassador_impl_PermitsCtx;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use caching_runner::common::{Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
+    use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::{
         Adjustable, Adjusters, Contexts, NoopRunnableContext, OOMHandler,
@@ -27,7 +27,7 @@ mod tests {
     use caching_runner::test_utils::parse_numeric_part;
 
     use crate::data::ThoTensor2;
-    use thoosa_shared::traits::MonoMetrics;
+    use thoosa_shared::traits::{Data, MonoMetrics, Select};
     use crate::tests::TorchRunCtx;
     use dashmap::DashMap as DMap;
     use log::debug;
