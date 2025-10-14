@@ -148,12 +148,6 @@ where
         Ok(())
     }
 
-    fn on_cached<'a>(//TODO remove from here
-                     &self,
-                     _input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>,
-                     _ctx: &Arc<RwLock<Self::Ctx>>,
-    ) where Self:'a {
-    }
 }
 
 //when hidden behind a trait, impls for plain Ids and Data cause https://github.com/rust-lang/rust/issues/100013 so opting to enum

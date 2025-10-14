@@ -2,6 +2,7 @@ use crate::common::{Data, RunCtx};
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
+use parking_lot::RwLock;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::WithId;
@@ -32,6 +33,15 @@ where
     //should implement either run for multistep or do_run for single step (can be oom-handled)
     async fn run(self: Arc<Self>, input: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<parking_lot::RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
         unimplemented!()
+    }
+
+
+    //should be in Cached, but it's implemented as derive macro
+    fn on_cached<'a>(&self, input: &impl WithId<ID = <<Self as Stage>::In<'a> as WithId>::ID>, ctx: &Arc<RwLock<Self::Ctx>>)
+    where
+        Self:'a
+    {
+
     }
 
 
