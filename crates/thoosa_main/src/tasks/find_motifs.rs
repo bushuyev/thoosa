@@ -4,7 +4,7 @@ use crate::tasks::cross_loader::{
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsTracker};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{RawTensorLoader, TensorLoader};
+use crate::tasks::tensor_loader::{RawTensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
@@ -47,7 +47,7 @@ use crate::tasks::stages_seq::ABStage;
 struct FindMotifsStages<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: TensorLoader + 'static,
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     run_config: FindMotifsRunConfig,
     cross_loader: Arc<CrossLoader<
@@ -60,7 +60,7 @@ where
 impl<RC, SRC> FindMotifsStages<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    SRC: TensorLoader + 'static,
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     pub fn new(
         run_config: FindMotifsRunConfig,
@@ -98,18 +98,16 @@ impl MeanDistsCtx {
 pub struct FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: TensorLoader + 'static + Debug,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>,
 {
     run_config_stages: Vec<FindMotifsStages<RC, L>>,
-    pd: PhantomData<(RC, L)>,
+    pd: PhantomData<(RC)>,
 }
 
 impl<RC, L> FindMotifsStage<RC, L>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: TensorLoader  + Cached + OutId + 'static,
-    for<'i> <L as Stage>::In<'i>: WithId + Data + Send + Sync + 'static,
-    <L as Stage>::Out: Data + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>  + Cached + OutId + 'static,
 {
     pub fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -209,8 +207,8 @@ where
                 FindMotifsStages::new(
                     run_config,
                     Arc::new(CrossLoader::new(
-                        // Arc::new(ABStage::new("ab".into(), Arc::clone(&loader), band_filter)),
-                        Arc::clone(&loader),
+                        Arc::new(ABStage::new("ab".into(), Arc::clone(&loader), band_filter)),
+                        // Arc::clone(&loader),
                         &store,
                         Arc::new(cross_unfold_clc),
                         receiver,
@@ -237,7 +235,7 @@ where
 impl<RC, SRC> Stage for FindMotifsStage<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    SRC: TensorLoader + 'static,
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
 {
     type Ctx = RunCtx2;
     type In<'a> = ResourcesConfigInput<RC>
@@ -251,7 +249,7 @@ where
 impl<RC, SRC> AsyncStage for FindMotifsStage<RC, SRC>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    SRC: TensorLoader + 'static,
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> +  'static,
 {
 
     async fn run(
