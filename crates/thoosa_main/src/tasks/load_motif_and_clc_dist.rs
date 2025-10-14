@@ -16,14 +16,14 @@ use caching_runner::oom_handler::{Adjustable, Adjuster, Adjusters, Contexts, Noo
 use thoosa_common::dims::Dims;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::{CopyToDevice, ThoosaError};
+use thoosa_shared::resource::Resource;
 use thoosa_shared::traits::{Data, DataId, Select, SimpleId, WithId};
 use torch_runner::data::ThoTensor2;
 use thoosa_shared::traits::MonoMetrics;
 use crate::tasks::average_euclidean_distance::{AverageDistanceValue, AverageEuclideanDistanceStage};
-use crate::tasks::cross_dims::MotifSlices;
+use crate::tasks::cross_dims::{ChannelsData2, MotifSlices};
 use crate::tasks::motif_loader::{MotifLoader, MotifWithData};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::TensorLoader;
 
 #[async_trait]
 pub trait MotifLoaderStage: Send + Sync + Debug {
@@ -37,9 +37,9 @@ pub trait MotifLoaderStage: Send + Sync + Debug {
 }
 
 #[async_trait]
-impl<SRC> MotifLoaderStage for MotifLoader<SRC>
+impl<SRC> MotifLoaderStage for MotifLoader<SRC, RunCtx2>
 where
-    SRC: TensorLoader + 'static,
+    SRC: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>  + 'static,
 {
     type Output = MotifWithData;
 
