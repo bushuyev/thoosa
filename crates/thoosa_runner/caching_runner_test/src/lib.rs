@@ -3,7 +3,7 @@ use caching_runner::adjusters::permits::{
     PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex,
 };
 use caching_runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use caching_runner::common::{Data, OutId, RunCtx, Select};
+use caching_runner::common::{OutId, RunCtx};
 use caching_runner::global_ctx::GlobalCtx;
 use caching_runner::oom_handler::{
     Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext,
@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use thoosa_shared::ThoosaError;
-use thoosa_shared::traits::{CachableIdTr, Named, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, Named, Select, WithId};
 use tokio::task::JoinSet;
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
@@ -324,7 +324,7 @@ mod tests {
     use caching_runner::adjusters::splits::OutputBuilder;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use caching_runner::common::{ambassador_impl_PermitsCtx, Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
+    use caching_runner::common::{ambassador_impl_PermitsCtx, DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -342,7 +342,7 @@ mod tests {
     use cached_derive::Cached;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Named, SimpleId, WithId};
+    use thoosa_shared::traits::{Data, Named, Select, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};
 
     #[ctor::ctor]

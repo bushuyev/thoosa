@@ -1,11 +1,11 @@
-use crate::common::{Data, RunCtx};
+use crate::common::{RunCtx};
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use thoosa_shared::ThoosaError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::WithId;
+use thoosa_shared::traits::{Data, WithId};
 use crate::common::cachable::DataCacheWrapper;
 
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output

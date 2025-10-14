@@ -24,14 +24,9 @@ pub struct ThoTensorView<'a, D: Dims, Id: Named + Clone> {
     t: Tensor,
     _owner: &'a ThoTensor2<D, Id>,
 }
-unsafe impl<'a, D: Dims, Id: Named + Clone> Sync
-    for ThoTensorView<'a, D, Id>
-{
-}
-unsafe impl<'a, D: Dims, Id: Named + Clone> Send
-    for ThoTensorView<'a, D, Id>
-{
-}
+unsafe impl<'a, D: Dims, Id: Named + Clone> Sync for ThoTensorView<'a, D, Id> {}
+unsafe impl<'a, D: Dims, Id: Named + Clone> Send for ThoTensorView<'a, D, Id> {}
+
 impl<'a, D: Dims, Id: Named + Clone> ThoTensorView<'a, D, Id> {
     pub fn select(self, dim: i64, index: i64) -> Self {
         Self {
@@ -100,12 +95,12 @@ impl PermitsCtx for TorchPermsCtx {
 mod tests {
     use super::output_builders::SingleDimTensorOutputBuilder;
     use crate::data::ThoTensor2;
-    use thoosa_shared::traits::MonoMetrics;
+    use thoosa_shared::traits::{Data, MonoMetrics, Select};
     use crate::output_builders::BuildAs;
     use async_trait::async_trait;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
     use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use caching_runner::common::{Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
+    use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::Adjustable;
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
@@ -313,7 +308,7 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
     type Output = ThoTensor2<LoadedTensor, SimpleId>;
 
     fn subview(&self, selector: std::ops::Range<MonoMetrics<1, 2>>) -> Result<Self::Output, ThoosaError> {
-        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.start, &selector.end).unwrap();//TODO unwrap
+        let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.start, &selector.end)?;//TODO unwrap
 
         let sub_tensor = self.t_ref().i((ranges[0].clone(), ranges[1].clone()));
 
@@ -450,24 +445,6 @@ impl Select<std::ops::Range<MonoMetrics<1, 2>>> for ThoTensor2<LoadedTensor, Sim
         }
     }
 
-    // #[async_trait]
-    // impl Data for ThoTensor2<ClcTaskOutput, SimpleId> {
-    //     type Metrics = TwoDimsMetrics;
-    //
-    //     type Sub = Self;
-    //     type SubSelect = std::ops::Range<Self::Metrics>;
-    //
-    //     fn size(&self) -> Self::Metrics {
-    //         self.size().try_into().expect("can't get size")
-    //     }
-    //     fn track_used_in(&self, _token: &'static str) {
-    //         // no-op for tests
-    //     }
-    //
-    //     fn device(&self) -> usize {
-    //         self.device()
-    //     }
-    // }
 
     impl OutId for ClcTask {
         fn out_id(

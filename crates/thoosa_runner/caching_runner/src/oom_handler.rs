@@ -1,7 +1,7 @@
-use crate::common::{PermitsCtx, RunCtx, Select};
+use crate::common::{PermitsCtx, RunCtx};
 use crate::common::cachable::DataCacheWrapper;
 use crate::common::runnable::{Stage, SyncStage};
-use crate::common::{Data, DropIf, OutId};
+use crate::common::{DropIf, OutId};
 #[double]
 use crate::global_ctx::GlobalCtx;
 use crate::permits::MAX_PERMITS;
@@ -19,7 +19,7 @@ use std::process::Output;
 use std::sync::Arc;
 use thoosa_shared::panic_to_err_async;
 use thoosa_shared::CopyToDevice;
-use thoosa_shared::traits::{CachableIdTr, Named, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, Named, Select, WithId};
 use thoosa_shared::{MyError, ThoosaError};
 use tracing::instrument;
 

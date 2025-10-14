@@ -2,7 +2,6 @@
 #![allow(async_fn_in_trait)]
 use crate::common::runnable::{AsyncStage, Stage};
 use crate::common::*;
-use crate::common::Select;
 #[double]
 use crate::global_ctx::GlobalCtx;
 use async_trait::async_trait;
@@ -22,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thoosa_shared::MyError;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::traits::{Data, Select};
 
 #[async_trait]
 pub trait Cached: AsyncStage

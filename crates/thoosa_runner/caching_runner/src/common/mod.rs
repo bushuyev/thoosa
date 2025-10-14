@@ -4,12 +4,11 @@ use crate::permits::{NumPermits, RunnerPerm};
 use ambassador::delegatable_trait;
 use futures_util::future::BoxFuture;
 use async_trait::async_trait;
-use mockall::automock;
 use parking_lot::RwLock;
 use runnable::Stage;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
-use std::ops::{Deref, Range};
+use std::ops::Deref;
 use std::sync::Arc;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoosaError;
@@ -19,34 +18,6 @@ pub mod cachable;
 pub mod runnable;
 
 
-#[async_trait]
-#[delegatable_trait]
-#[automock(type D=MockCopyToDevice; type Metrics=[usize;1]; type Sub=Self; type SubSelect=Range<<Self as Data>::Metrics>;)]
-pub trait Data: Debug + CopyToDevice {
-    type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
-
-    fn size(&self) -> Self::Metrics;
-
-    fn track_used_in(&self, _token: &'static str) {}
-
-    fn device(&self) -> usize;
-}
-
-#[delegatable_trait]
-pub trait Select<S> {
-    type Output: CopyToDevice;
-
-    fn subview(&self, selector: S) -> Result<Self::Output, ThoosaError>;
-}
-
-
-
-#[async_trait]
-impl CopyToDevice for MockData {
-    async fn copy_to_device(&self, _dst_device: usize) -> Self {
-        MockData::new()
-    }
-}
 
 #[derive(Debug)]
 pub enum DropIf {
