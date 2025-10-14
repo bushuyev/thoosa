@@ -16,11 +16,11 @@ mod tests {
     use ambassador::Delegate;
     use caching_runner::common::ambassador_impl_PermitsCtx;
     use caching_runner::common::cachable::{Cached, DataCacheWrapper};
-    use caching_runner::common::runnable::Stage;
-    use caching_runner::common::{DropIf, OutId, PermitsCtx, RunCtx, Select};
+    use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use caching_runner::common::{Data, DropIf, OutId, PermitsCtx, RunCtx, Select};
     use caching_runner::global_ctx::GlobalCtx;
     use caching_runner::oom_handler::{
-        Adjustable, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler,
+        Adjustable, Adjusters, Contexts, NoopRunnableContext, OOMHandler,
     };
     use caching_runner::permits::{MAX_PERMITS, NumPermits, PermitStep, RunnerPerm};
     use futures_util::future::BoxFuture;
@@ -35,9 +35,9 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
     use std::sync::OnceLock;
     use thoosa_common::applicables::ThoDevice;
-    use thoosa_common::dims::{AnyMetrics, AnySub, Dims};
+    use thoosa_common::dims::Dims;
     use thoosa_shared::CopyToDevice;
-    use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Metrics, Named, SimpleId, WithId};
     use thoosa_shared::{MyError, ThoosaError};
 
@@ -148,6 +148,39 @@ mod tests {
         fn from(s: &'static str) -> Self {
             Self { id: FileInputId(s) }
         }
+    }
+
+    #[async_trait]
+    impl CopyToDevice for FileInput {
+        async fn copy_to_device(&self, _dst_device: usize) -> Self {
+            self.clone()
+        }
+    }
+
+    #[async_trait]
+    impl Data for FileInput {
+        type Metrics = ();
+
+        fn size(&self) -> Self::Metrics {
+            ()
+        }
+
+        fn device(&self) -> usize {
+            0
+        }
+    }
+
+    fn new_file_input_cache(
+        value: impl Into<FileInput>,
+        device_idx: usize,
+        cache_area: u64,
+    ) -> Arc<DataCacheWrapper<FileInput>> {
+        Arc::new(DataCacheWrapper::new(
+            value.into(),
+            device_idx,
+            GlobalCtx::global().device_count(),
+            cache_area,
+        ))
     }
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -290,23 +323,37 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Stage for ABLoader {
         type In<'a> = FileInput;
         type Out = ThoTensor2<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
+    }
 
+    #[async_trait]
+    impl AsyncStage for ABLoader {
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
-            _ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            ctx: Arc<RwLock<Self::Ctx>>,
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             // Features derived from file name only (no label knowledge): even index => +1, odd => -1.
-            let idx = parse_numeric_part(input.id.0).unwrap_or(0.0) as i64;
+            let idx = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(0.0) as i64;
             let base = if idx % 2 == 0 { 1.0 } else { -1.0 };
             let x = Tensor::ones([self.input_len, self.feat], (self.kind, Device::Cpu)) * base;
-            let id = self.out_id(&input.id);
-            Ok(ThoTensor2::new(id, x))
+            let id = self.out_id(WithId::id(input.as_ref()));
+
+            let (device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+            let num_devices = GlobalCtx::global().device_count();
+
+            Ok(Arc::new(DataCacheWrapper::new(
+                ThoTensor2::new(id, x),
+                device_idx,
+                num_devices,
+                cache_area,
+            )))
         }
     }
 
@@ -387,19 +434,21 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Stage for BatchBuilder {
         type In<'a> = FileListInput;
         type Out = ThoTensor2<ABData, SimpleId>;
         type Ctx = TorchRunCtx;
+    }
 
+    #[async_trait]
+    impl AsyncStage for BatchBuilder {
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             // Look up the files and labels by input id
-            let id_key = format!("{}", input.id);
+            let id_key = format!("{}", input.id());
             let files = registry()
                 .get(&id_key)
                 .ok_or_else(|| MyError::SomethingElse("file list not found".into()))?;
@@ -443,11 +492,17 @@ mod tests {
             let mut label_vec: Vec<f64> = Vec::with_capacity(self.batch_size);
             let mut feats: Vec<Arc<DataCacheWrapper<ThoTensor2<ABData, SimpleId>>>> =
                 Vec::with_capacity(self.batch_size);
+
+            let (loader_device_idx, loader_cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+
             for &fi in &chosen {
                 let (f, lbl) = files[fi];
                 let feat = Arc::clone(&self.loader)
                     .run_cached(
-                        Arc::new(<&str as Into<FileInput>>::into(f)),
+                        new_file_input_cache(f, loader_device_idx, loader_cache_area),
                         Arc::clone(&ctx),
                     )
                     .await?;
@@ -455,20 +510,17 @@ mod tests {
                 label_vec.push(lbl);
             }
 
-            let (device_idx, _cache_area, _num_devices) = {
+            let (device_idx, cache_area) = {
                 let g = ctx.read();
-                (
-                    g.device_idx(),
-                    g.cache_area(),
-                    GlobalCtx::global().device_count(),
-                )
+                (g.device_idx(), g.cache_area())
             };
+            let num_devices = GlobalCtx::global().device_count();
 
             // Materialize all features to the target device and build a single stacked batch
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
-            DataCacheWrapper::with_data_array(&feats, device_idx, None, |data| {
+            let output = DataCacheWrapper::with_data_array(&feats, device_idx, None, |data| {
                 // data: &[&ThoTensor<ABData>] aligned with label_vec
-                let ax_id = SimpleId::from(format!("ax_{}", input.id));
+                let ax_id = SimpleId::from(format!("ax_{}", input.id()));
                 let first = data
                     .first()
                     .ok_or_else(|| MyError::SomethingElse("no tensors".into()))?;
@@ -503,7 +555,14 @@ mod tests {
                     &data[1..],
                 )
             })
-            .await
+            .await?;
+
+            Ok(Arc::new(DataCacheWrapper::new(
+                output,
+                device_idx,
+                num_devices,
+                cache_area,
+            )))
         }
     }
 
@@ -606,16 +665,17 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Stage for Classifier {
         type In<'a> = ThoTensor2<ABData, SimpleId>;
         type Out = ThoTensor2<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
+    }
 
+    impl SyncStage for Classifier {
         fn do_run<'a>(
             self: Arc<Self>,
             input: &Self::In<'a>,
-            _ctx: Arc<RwLock<Self::Ctx>>,
+            ctx: Arc<RwLock<Self::Ctx>>,
         ) -> Result<Self::Out, ThoosaError>
         where
             Self: Sized,
@@ -623,7 +683,7 @@ mod tests {
             // Split input into features and labels using scoped tensor access
             let feat = self.in_dim;
             let fails = &self.fail_until;
-            let ctx_clone = Arc::clone(&_ctx);
+            let ctx_clone = Arc::clone(&ctx);
 
             let out_id = self.out_id(input.id());
             Ok(
@@ -684,6 +744,37 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl AsyncStage for Classifier {
+        async fn run(
+            self: Arc<Self>,
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
+            ctx: Arc<RwLock<Self::Ctx>>,
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
+            let (device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+            let num_devices = GlobalCtx::global().device_count();
+
+            let stage = Arc::clone(&self);
+            let ctx_for_run = Arc::clone(&ctx);
+
+            let output = input
+                .with_data_ref(device_idx, None, move |tensor| {
+                    Arc::clone(&stage).do_run(tensor, Arc::clone(&ctx_for_run))
+                })
+                .await?;
+
+            Ok(Arc::new(DataCacheWrapper::new(
+                output,
+                device_idx,
+                num_devices,
+                cache_area,
+            )))
+        }
+    }
+
     // ---------------- Intermediary Join + Classify task ----------------
     #[derive(Debug)]
     struct FileListInput {
@@ -701,6 +792,42 @@ mod tests {
         fn id(&self) -> &Self::ID {
             &self.id
         }
+    }
+
+    #[async_trait]
+    impl CopyToDevice for FileListInput {
+        async fn copy_to_device(&self, _dst_device: usize) -> Self {
+            Self {
+                files: self.files.clone(),
+                id: self.id.clone(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Data for FileListInput {
+        type Metrics = ();
+
+        fn size(&self) -> Self::Metrics {
+            ()
+        }
+
+        fn device(&self) -> usize {
+            0
+        }
+    }
+
+    fn new_file_list_input_cache(
+        input: FileListInput,
+        device_idx: usize,
+        cache_area: u64,
+    ) -> Arc<DataCacheWrapper<FileListInput>> {
+        Arc::new(DataCacheWrapper::new(
+            input,
+            device_idx,
+            GlobalCtx::global().device_count(),
+            cache_area,
+        ))
     }
 
     #[derive(Debug, cached_derive::Cached)]
@@ -728,17 +855,19 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Stage for JoinAndClassifyTask {
         type In<'a> = FileListInput;
         type Out = ThoTensor2<ClsOut, SimpleId>;
         type Ctx = TorchRunCtx;
+    }
 
+    #[async_trait]
+    impl AsyncStage for JoinAndClassifyTask {
         async fn run(
             self: Arc<Self>,
-            input: Arc<Self::In<'static>>,
+            input: Arc<DataCacheWrapper<Self::In<'static>>>,
             ctx: Arc<RwLock<Self::Ctx>>,
-        ) -> Result<Self::Out, ThoosaError> {
+        ) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
                 .run_cached(Arc::clone(&input), Arc::clone(&ctx))
@@ -759,7 +888,7 @@ mod tests {
                 dim_0: 32,
                 dim_1: 0,
             };
-            OOMHandler::new(
+            let result = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                         MAX_PERMITS,
@@ -791,7 +920,20 @@ mod tests {
                     PermitsAdjustContextImpl::new(ctx_name),
                 ),
             )
-            .await
+            .await?;
+
+            let (final_device_idx, cache_area) = {
+                let guard = ctx.read();
+                (guard.device_idx(), guard.cache_area())
+            };
+            let num_devices = GlobalCtx::global().device_count();
+
+            Ok(Arc::new(DataCacheWrapper::new(
+                result,
+                final_device_idx,
+                num_devices,
+                cache_area,
+            )))
         }
     }
 
@@ -825,8 +967,13 @@ mod tests {
         let files = vec![("file_0", 1.0), ("file_1", 0.0)];
         registry().insert("files_0_1".to_string(), files.clone());
         let input = FileListInput::new(files, SimpleId::from("files_0_1"));
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+        let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(Arc::new(input), Arc::clone(&ctx))
+            .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
         debug!("acc={acc:?}");
@@ -877,9 +1024,13 @@ mod tests {
         ];
         registry().insert("files_0_1_2_3".to_string(), files.clone());
         let input = FileListInput::new(files, SimpleId::from("files_0_1_2_3"));
-
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+        let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(Arc::new(input), Arc::clone(&ctx))
+            .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
         acc.with_data_ref(1, None, |acc| {
@@ -928,13 +1079,18 @@ mod tests {
                     Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str,
                     if i % 2 == 0 { 1.0 } else { 0.0 },
                 )
-            })
-            .collect();
+        })
+        .collect();
         registry().insert("files_oom_permits".to_string(), files.clone());
         let input = FileListInput::new(files, SimpleId::from("files_oom_permits"));
+        let (device_idx, cache_area) = {
+            let guard = ctx.read();
+            (guard.device_idx(), guard.cache_area())
+        };
+        let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
 
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(Arc::new(input), Arc::clone(&ctx))
+            .run_cached(input_cache, Arc::clone(&ctx))
             .await?;
 
         acc.with_data_ref(1, None, |acc| {
