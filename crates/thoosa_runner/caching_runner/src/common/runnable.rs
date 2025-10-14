@@ -23,7 +23,7 @@ pub trait Stage: Debug {
 
 
 #[async_trait]
-pub trait AsyncStage:Stage + Debug
+pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
         for <'a> Self::In<'a>: Data + WithId + Send + Sync,
         Self::Out: Data + WithId + Send + Sync

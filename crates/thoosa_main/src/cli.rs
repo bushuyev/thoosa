@@ -1707,7 +1707,7 @@ async fn run_plot_motif_slices(
                 if let Err(e)  = plot_motif(&ws, Arc::clone(&ctx), motif_id, &motif_loader_impl, Arc::clone(&clc_dist)).await {
                         error!("motif {motif_id} failed: e={e:?}");
                 };
-                MotifLoader::<RawTensorLoader>::cache().await.clear();
+                MotifLoader::<RawTensorLoader, RunCtx2>::cache().await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 10 == 0 {
@@ -1726,7 +1726,7 @@ async fn plot_motif(
     ws: &&Arc<RwLock<Box<dyn Workspace>>>,
     ctx: Arc<RwLock<RunCtx2>>,
     motif_id: usize,
-    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader>>,
+    motif_loader_impl: &Arc<MotifLoader<RawTensorLoader, RunCtx2>>,
     clc_dist: Arc<LoadMotifAndClcDistanceStage<AverageEuclideanDistanceStage>>,
 ) -> Result<(), ThoosaError> {
     let cache_area = ctx.read().cache_area();

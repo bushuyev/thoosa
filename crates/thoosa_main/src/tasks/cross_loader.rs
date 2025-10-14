@@ -3,7 +3,7 @@ use crate::tasks::cross_batch_clc::CrossInput;
 use crate::tasks::cross_batch_clc::CrossUnfoldClc;
 use crate::tasks::cross_dims::{ChannelsData2};
 use crate::tasks::run_ctx_2::RunCtx2;
-use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader, TensorLoader};
+use crate::tasks::tensor_loader::{wrap_resource_for_cache, RawTensorLoader};
 use async_trait::async_trait;
 use caching_runner::common::cachable::{Cached, DataCacheWrapper};
 use caching_runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -270,7 +270,7 @@ pub(crate) mod mock_cross_loader_receiver {
 pub struct CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: TensorLoader + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
     CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
@@ -287,7 +287,7 @@ where
 impl<ResC, L, CrossCLC, RSV> Debug for CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: TensorLoader + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2>,
     CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
@@ -300,7 +300,7 @@ where
 impl<ResC, L, CrossCLC, RSV> CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug,
-    L: TensorLoader + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
     CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
@@ -331,7 +331,7 @@ where
 impl<ResC, L, CrossCLC, RSV> OutId for CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: TensorLoader + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
     CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
@@ -430,7 +430,7 @@ impl Data for CrossResult {
 impl<ResC, L, CrossCLC, RSV> Stage for CrossLoader<ResC, L, CrossCLC, RSV>
 where
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: TensorLoader + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
     CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
@@ -451,7 +451,7 @@ where
     Self::Out: Data + WithId + Send + Sync,
 
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + 'static,
-    L: TensorLoader + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor2<ChannelsData2, SimpleId>, Ctx=RunCtx2> + 'static,
     CrossCLC: CrossClc + 'static,
     CrossCLC::Out: Input + Output + Send + Debug + 'static,
     RSV: CrossLoaderReceiver<CrossCLC::Out> + 'static,
@@ -489,7 +489,7 @@ where
             info!("on i_0={i_0} resource_0={resource_0:?}");
 
             let t_0 = Arc::clone(&self.loader)
-                .load(Arc::clone(&wrap_resource_for_cache(resource_0.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
+                .run(Arc::clone(&wrap_resource_for_cache(resource_0.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -508,7 +508,7 @@ where
                 //skipping lower triangle
 
                 let t_1 = Arc::clone(&self.loader)
-                    .load(Arc::clone(&wrap_resource_for_cache(resource_1.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
+                    .run(Arc::clone(&wrap_resource_for_cache(resource_1.as_ref().clone(), 2, 0)), Arc::clone(&ctx))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -754,7 +754,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_with_mocks() -> Result<(), ThoosaError> {
         GlobalCtx::init_devices(2);
-        
+
         let resource_a: Resource = (1, 1, "resource_a", 2).into();
         let resource_b: Resource = (2, 1, "resource_b", 2).into();
         let resources = vec![resource_a.clone(), resource_b.clone()];

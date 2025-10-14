@@ -103,28 +103,6 @@ pub fn wrap_resource_for_cache(
     ))
 }
 
-#[async_trait]
-pub trait TensorLoader: Send + Sync + Debug {
-    async fn load(
-        self: Arc<Self>,
-        resource: Arc<DataCacheWrapper<Resource>>,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>;
-}
-
-#[async_trait]
-impl TensorLoader for RawTensorLoader {
-
-    async fn load(
-        self: Arc<Self>,
-        resource: Arc<DataCacheWrapper<Resource>>,
-        ctx: Arc<parking_lot::RwLock<RunCtx2>>,
-    ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError> {
-        <Self as Cached>::run_cached(self, resource, ctx).await
-    }
-}
-
-
 
 #[cfg(test)]
 pub(crate) mod mock_tensor_loader {
@@ -140,12 +118,14 @@ pub(crate) mod mock_tensor_loader {
     use tokio::runtime::Handle;
     use tokio::task::block_in_place;
     use caching_runner::common::cachable::DataCacheWrapper;
+    use caching_runner::common::MockRunCtx;
+    use caching_runner::common::runnable::{AsyncStage, Stage};
     use thoosa_shared::{CopyToDevice, ThoosaError};
     use thoosa_shared::resource::Resource;
     use thoosa_shared::traits::SimpleId;
     use torch_runner::data::ThoTensor2;
     use crate::tasks::run_ctx_2::RunCtx2;
-    use crate::tasks::tensor_loader::{mock_tensor_loader, LoadFn, TensorLoader};
+    use crate::tasks::tensor_loader::{mock_tensor_loader, LoadFn};
 
 
 
@@ -160,16 +140,21 @@ pub(crate) mod mock_tensor_loader {
             f.debug_struct("MockCrossLoaderTensorSource").finish()
         }
     }
+    impl Stage for MockTensorLoader {
+        type Ctx = RunCtx2;
+        type In<'a>
+        where
+            Self: 'a
+        = Resource;
+        type Out = ThoTensor2<ChannelsData2, SimpleId>;
+    }
 
     #[async_trait]
-    impl TensorLoader for MockTensorLoader {
+    impl AsyncStage for MockTensorLoader {
 
-        async fn load(
-            self: Arc<Self>,
-            resource: Arc<DataCacheWrapper<Resource>>,
-            ctx: Arc<RwLock<RunCtx2>>,
-        ) -> Result<Arc<DataCacheWrapper<ThoTensor2<ChannelsData2, SimpleId>>>, ThoosaError>
-        {
+
+
+        async fn run(self: Arc<Self>, resource: Arc<DataCacheWrapper<Self::In<'static>>>, ctx: Arc<RwLock<Self::Ctx>>) -> Result<Arc<DataCacheWrapper<Self::Out>>, ThoosaError> {
             resource.with_data_ref(0, None, |d|{
                 Ok(Arc::new(DataCacheWrapper::new(
                     (self.load_fn)(d, &Cpu), 0, 2, 0
